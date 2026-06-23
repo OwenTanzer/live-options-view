@@ -75,7 +75,6 @@ PRICE_TICKERS: dict[str, str] = {
     "SMH":     "SMH",
     "IGV":     "IGV",
     "10Y":     "$TNX.X",      # CBOE 10-year Treasury yield index (value = yield × 10)
-    "5Y":      "$FVX.X",      # CBOE 5-year Treasury yield index
     "JPY/USD": "/6J:XCME",    # CME yen futures, USD-per-JPY; inverted for display
     "BTC/USD": "BTC/USD:CXERX",
     "META":    "META",
@@ -94,7 +93,6 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "SMH":     "SMH",
     "IGV":     "IGV",
     "10Y":     "^TNX",       # value = yield × 10; display as (val/10).toFixed(2) + '%'
-    "5Y":      "^FVX",
     "JPY/USD": "JPYUSD=X",
     "BTC/USD": "BTC-USD",
     "META":    "META",
