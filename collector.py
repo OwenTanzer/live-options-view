@@ -493,11 +493,11 @@ class DXLinkFeed:
                 "type": "FEED_SETUP", "channel": 1,
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
-                    "Quote":    ["eventSymbol", "bidPrice", "askPrice"],
-                    "Summary":  ["eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice"],
-                    "Trade":    ["eventSymbol", "dayVolume", "price"],
-                    "TradeETH": ["eventSymbol", "price"],
-                    "Greeks":   ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
+                    "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice"],
+                    "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice"],
+                    "Trade":    ["eventType", "eventSymbol", "dayVolume", "price"],
+                    "TradeETH": ["eventType", "eventSymbol", "price"],
+                    "Greeks":   ["eventType", "eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
                 },
             })
 
