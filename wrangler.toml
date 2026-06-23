@@ -1,0 +1,5 @@
+name = "live-options-view"
+compatibility_date = "2026-06-23"
+
+[assets]
+directory = "docs"
