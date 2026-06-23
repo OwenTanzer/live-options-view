@@ -375,7 +375,7 @@ class DXLinkFeed:
             for event_type in ("Quote", "Summary", "Trade", "Greeks"):
                 self._subs.append({"type": event_type, "symbol": sym})
         for sym in price_symbols:
-            for event_type in ("Quote", "Trade", "Summary"):
+            for event_type in ("Quote", "Trade", "TradeETH", "Summary"):
                 self._subs.append({"type": event_type, "symbol": sym})
 
     def get_state(self) -> dict[str, dict]:
@@ -464,10 +464,11 @@ class DXLinkFeed:
                 "type": "FEED_SETUP", "channel": 1,
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
-                    "Quote":   ["eventSymbol", "bidPrice", "askPrice"],
-                    "Summary": ["eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice"],
-                    "Trade":   ["eventSymbol", "dayVolume", "price"],
-                    "Greeks":  ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
+                    "Quote":    ["eventSymbol", "bidPrice", "askPrice"],
+                    "Summary":  ["eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice"],
+                    "Trade":    ["eventSymbol", "dayVolume", "price"],
+                    "TradeETH": ["eventSymbol", "price"],
+                    "Greeks":   ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
                 },
             })
             if self._subs:
@@ -517,6 +518,10 @@ class DXLinkFeed:
                     if event.get("dayVolume") is not None:
                         s["volume"] = int(event["dayVolume"])
                     if event.get("price") is not None:
+                        s["last"] = event["price"]
+                elif et == "TradeETH":
+                    # Extended-hours last trade price; only overwrite if no regular last
+                    if event.get("price") is not None and s.get("last") is None:
                         s["last"] = event["price"]
                 elif et == "Greeks":
                     for field in ("volatility", "delta", "gamma", "theta", "vega"):
@@ -988,8 +993,17 @@ def _run_session(login: str):
     if not feed.wait_ready(timeout=30):
         log.warning("DXLink channel not open after 30s -- proceeding anyway")
 
-    log.info("waiting 20s for initial data flush...")
-    time.sleep(20)
+    log.info("waiting for initial data flush (up to 90s)...")
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        time.sleep(5)
+        qqq_d = feed.get_state().get(TICKER, {})
+        if qqq_d.get("bid") is not None or qqq_d.get("last") is not None:
+            elapsed = 90 - max(0, deadline - time.monotonic())
+            log.info(f"QQQ price data received after {elapsed:.0f}s -- proceeding")
+            break
+    else:
+        log.warning("QQQ price data not received within 90s -- proceeding anyway")
 
     _log_ticker_health(feed)
 
