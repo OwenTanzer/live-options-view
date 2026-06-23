@@ -63,7 +63,7 @@ This classification is written into every `health.json` for the duration of the 
 
 #### 6. Archive CSV key overwrite — Fixed
 
-Archive keys changed from `snapshot_HHMM.csv` to `snapshot_HHMMSS.csv`. A restart within the same minute now writes a distinct key. The forensic record is preserved.
+Archive keys changed from `snapshot_HHMM.csv` to `snapshot_HHMMSSffffff.csv`. A restart or forced redeploy inside the same minute, and even inside the same second, now writes a distinct key. The forensic record is preserved.
 
 #### 7. Log encoding — Fixed
 
@@ -112,6 +112,68 @@ The last 9 characters of `run_id` are shown at the right edge. If the run_id cha
 
 ---
 
+## Review Stage 2 Execution — Premarket / Intraday Deployment Readiness
+
+Stage 2 was executed after the response patch to verify that the tool can be safely changed and redeployed during an active premarket or regular session.
+
+### Stage 2 Changes
+
+1. **Session-window helper functions added:** `_session_bounds()`, `_inside_session_window()`, and `_next_session_start()` make the collector's deployment timing behavior testable without sleeping.
+2. **Pre-06:00 ET launch bug fixed:** a collector started before 06:00 ET now waits until same-day 06:00 ET, not next-day 06:00 ET.
+3. **Post-close behavior preserved:** a collector started at or after 16:15 ET waits until next-day 06:00 ET and does not exit, preventing Railway restart loops.
+4. **Archive uniqueness tightened:** archived snapshot keys now use microsecond precision: `snapshot_HHMMSSffffff.csv`.
+5. **Repeatable local verification added:** `tests/stage2_verification.py` covers timing, startup classification, DXLink ingest freshness, stale price flags, health schema/counters, and archive key uniqueness.
+
+### Stage 2 Verification Results
+
+Executed locally:
+
+```powershell
+python -m py_compile collector.py tests\stage2_verification.py
+python tests\stage2_verification.py
+$s = Get-Content -Raw docs\live.html; $m = [regex]::Match($s, '<script>([\s\S]*)</script>'); if (-not $m.Success) { 'script_missing' } else { $m.Groups[1].Value | node --check }
+```
+
+Results:
+
+| Check | Status | Evidence |
+|---|---:|---|
+| Collector and Stage 2 script compile | Passed | `python -m py_compile collector.py tests\stage2_verification.py` returned exit code 0. |
+| Browser JavaScript syntax | Passed | Extracted inline script passed `node --check`. |
+| Session-window timing | Passed | 05:00 ET waits for same-day 06:00; 06:00 through 16:14 ET is active; 16:15 and 17:00 ET wait for next-day 06:00. |
+| Startup classification | Passed | Fixture cases returned `clean_start`, `recovery_after_crash`, and `recovery_after_gap` as expected. |
+| DXLink ingest freshness | Passed | Fixture events update state and `last_feed_event_time`. |
+| Price stale/fresh flags | Passed | `prices.json` marks stale events as `feed_stale: true` and recent events as `false`. |
+| Health schema and counters | Passed | `health.json` fixture includes required top-level sections and upload counters. |
+| Archive key uniqueness | Passed | Two rapid snapshot writes produced two distinct CSV keys. |
+
+### Deployment Flexibility Guidance
+
+The collector is now suitable for redeploying during an ongoing premarket or daily session with these expectations:
+
+- **Before 06:00 ET:** the process stays alive and waits until same-day 06:00 ET.
+- **06:00-16:14 ET:** the process starts a live session immediately.
+- **At or after 16:15 ET:** the process stays alive and sleeps until next-day 06:00 ET.
+- **During an active redeploy:** a new `run_id` appears in `health.json`; startup classification should become `recovery_after_crash` if the previous run had not marked `past_stop`.
+- **After redeploy:** treat the first post-redeploy snapshot as resumed current-state data, not continuous tick history.
+
+### Stage 2 Remaining Live Gates
+
+These still require credentials and deployed infrastructure:
+
+1. Confirm tastytrade auth and DXLink authorization in Railway logs.
+2. Confirm `$VIX.X`, `/6J:XCME`, and `BTC/USD:CXERX` produce data or adjust symbols.
+3. Confirm `health.json`, `prices.json`, and `latest.json` are all writable to R2.
+4. Confirm browser can fetch all three artifacts through R2 CORS.
+5. Force one Railway redeploy during the active window and verify `run_id` changes plus recovery classification.
+6. Let the service cross 16:15 ET once and verify it sleeps instead of exiting/restart-looping.
+
+### Stage 2 Recommendation
+
+**Recommendation:** Go for monitored premarket or intraday smoke deployment. The code now supports on-the-fly deployment during the active session window, and the local deterministic verification suite is repeatable before each rapid change. Do not call it production-grade until the live gates above are observed at least once.
+
+---
+
 ## Executive Finding
 
 *(Original — superseded by the response above for deployment purposes)*
@@ -130,7 +192,7 @@ This review is being validated through computational checks where the local envi
 - **Failed:** executed locally and exposed a defect or environment mismatch.
 - **Blocked:** could not be executed in this environment because it requires credentials, network access, live market data, or deployment infrastructure.
 
-Current status will be updated as verification progresses.
+This section records the original pre-fix verification pass. The current post-fix Stage 2 verification status is recorded above.
 
 ### Verification Results
 
@@ -395,7 +457,7 @@ Without this layer, any downstream model or operator will be forced to infer lif
 4. Add startup classification by reading the previous `health.json`.
 5. Surface health classification in `docs/live.html`, separate from snapshot age.
 6. Fix post-close lifecycle behavior: either keep the process sleeping until the next session or change Railway restart policy so normal stop is not treated as a crash.
-7. Make archived CSV keys unique at second or run-sequence granularity.
+7. Make archived CSV keys unique at microsecond or run-sequence granularity.
 8. Replace Unicode operational log markers with ASCII or force UTF-8-safe logging.
 9. Fail visibly if `OIranges.csv` cannot load; do not silently bucket all nonzero OI as level 5.
 10. Add basic tests for DXLink event ingestion, snapshot payload shape, stale classification, OIranges failure handling, and post-close restart behavior.

@@ -6,7 +6,7 @@ Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
 DXLink websocket, and uploads snapshots to R2 every 11 minutes.
 
 R2 output:
-  intraday/YYYYMMDD/snapshot_HHMMSS.csv  -- archived snapshots (second-precision key)
+  intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
   intraday/latest.json                   -- live feed for the web viewer
   intraday/prices.json                   -- macro price strip (every 30s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
@@ -760,7 +760,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     df.to_csv(csv_buf, index=False)
 
     date_str = today.strftime("%Y%m%d")
-    time_str = ts_et.strftime("%H%M%S")   # second-precision prevents overwrite on restart
+    time_str = ts_et.strftime("%H%M%S%f")   # microsecond precision prevents overwrite on rapid restart
     csv_key  = f"intraday/{date_str}/snapshot_{time_str}.csv"
 
     try:
@@ -810,21 +810,45 @@ def past_stop() -> bool:
     return (et.hour, et.minute) >= (STOP_HOUR, STOP_MIN)
 
 
+def _session_bounds(et: datetime) -> tuple[datetime, datetime]:
+    """Return the session start/stop bounds for the ET date of ``et``."""
+    session_date = et.date()
+    start = ET.localize(datetime(
+        session_date.year, session_date.month, session_date.day,
+        PREMARKET_HOUR, 0, 0,
+    ))
+    stop = ET.localize(datetime(
+        session_date.year, session_date.month, session_date.day,
+        STOP_HOUR, STOP_MIN, 0,
+    ))
+    return start, stop
+
+
+def _inside_session_window(et: datetime) -> bool:
+    start, stop = _session_bounds(et)
+    return start <= et < stop
+
+
+def _next_session_start(et: datetime) -> datetime:
+    start, stop = _session_bounds(et)
+    if et < stop:
+        return start
+    next_day = et.date() + timedelta(days=1)
+    return ET.localize(datetime(
+        next_day.year, next_day.month, next_day.day,
+        PREMARKET_HOUR, 0, 0,
+    ))
+
+
 def wait_for_premarket():
     """Block until inside the valid session window (06:00-16:15 ET).
     If called post-close, sleeps until next day to prevent Railway restart-loops."""
     while True:
-        et        = datetime.now(ET)
-        in_window = (
-            PREMARKET_HOUR <= et.hour < STOP_HOUR or
-            (et.hour == STOP_HOUR and et.minute < STOP_MIN)
-        )
-        if in_window:
+        et = datetime.now(ET)
+        if _inside_session_window(et):
             return
-        next_date = (et.date() + timedelta(days=1))
-        base      = ET.localize(datetime(next_date.year, next_date.month, next_date.day,
-                                         PREMARKET_HOUR, 0, 0))
-        delay     = (base - et).total_seconds()
+        base = _next_session_start(et)
+        delay = (base - et).total_seconds()
         log.info(
             f"outside trading window -- sleeping "
             f"{int(delay // 3600)}h {int((delay % 3600) // 60)}m "
