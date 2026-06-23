@@ -1095,6 +1095,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         log.warning("snapshot empty -- state not populated yet")
         return
 
+    bid_count = sum(1 for r in rows if r.get("Bid") is not None)
+
     df      = pd.DataFrame(rows)
     csv_buf = io.StringIO()
     df.to_csv(csv_buf, index=False)
@@ -1110,11 +1112,15 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             ContentType="text/csv",
         )
         counters.inc_csv()
-        log.info(f"-> {csv_key}  ({len(rows)} rows,  underlying={underlying})")
+        log.info(f"-> {csv_key}  ({len(rows)} rows,  underlying={underlying},  bids={bid_count})")
     except Exception as e:
         log.error(f"CSV upload failed: {e}")
         counters.inc_failure()
         raise
+
+    if bid_count == 0:
+        log.warning("latest.json NOT updated -- no option data (DXLink feed down)")
+        return
 
     payload = {
         "timestamp":        ts_utc.isoformat(),

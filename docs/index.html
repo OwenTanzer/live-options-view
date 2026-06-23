@@ -588,8 +588,13 @@ async function fetchLatest() {
     renderHeatmap(data);
 
     const snapAge = Math.round((Date.now() - new Date(lastTs).getTime()) / 1000 / 60);
-    setStatus('live', `Live · last snap ${data.snapshot_time}`);
-    if (snapAge > 15) setStatus('stale', `Stale · last snap ${data.snapshot_time} (${snapAge}m ago)`);
+    const hasBids = data.rows.some(r => r.Bid != null);
+    if (snapAge > 2 || !hasBids) {
+      const reason = !hasBids ? 'feed reconnecting' : `${snapAge}m ago`;
+      setStatus('stale', `Cached · ${data.snapshot_time} (${reason})`);
+    } else {
+      setStatus('live', `Live · last snap ${data.snapshot_time}`);
+    }
 
   } catch (e) {
     setStatus('stale', `Error: ${e.message}`);
