@@ -407,6 +407,7 @@ class DXLinkFeed:
         self._channel_open        = False
         self._reconnect_count     = 0
         self._first_connect_seen  = False
+        self._auth_fail_count     = 0
         self._last_error: Optional[str]  = None
         self._last_close_code: Optional[int] = None
         self._last_event_time: Optional[datetime] = None
@@ -435,6 +436,18 @@ class DXLinkFeed:
                 "last_close_code":      self._last_close_code,
                 "last_feed_event_time": self._last_event_time,
             }
+
+    def needs_reauth(self) -> bool:
+        with self._lock:
+            return self._auth_fail_count >= 3
+
+    def update_token(self, new_token: str):
+        """Replace the streamer token and force a reconnect to use it."""
+        with self._lock:
+            self._token = new_token
+            self._auth_fail_count = 0
+        if self._ws:
+            self._ws.close()  # triggers reconnect via run_forever(reconnect=5)
 
     def wait_ready(self, timeout: float = 60.0) -> bool:
         return self._ready.wait(timeout=timeout)
@@ -500,6 +513,7 @@ class DXLinkFeed:
             if state == "AUTHORIZED":
                 with self._lock:
                     self._authorized = True
+                    self._auth_fail_count = 0
                 log.info("DXLink authorized -- requesting channel")
                 self._send({
                     "type": "CHANNEL_REQUEST", "channel": 1,
@@ -507,7 +521,9 @@ class DXLinkFeed:
                     "parameters": {"contract": "AUTO"},
                 })
             else:
-                log.error(f"DXLink auth failed: {msg}")
+                with self._lock:
+                    self._auth_fail_count += 1
+                log.error(f"DXLink auth failed (attempt {self._auth_fail_count}): {msg}")
 
         elif mtype == "CHANNEL_OPENED":
             with self._lock:
@@ -1234,6 +1250,15 @@ def _run_session(login: str):
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS}s, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
     while not past_stop():
+        if feed.needs_reauth():
+            log.warning("DXLink auth failed 3+ times -- re-fetching streamer token")
+            try:
+                new_auth = tasty_auth(login, s3)
+                feed.update_token(new_auth["streamer_token"])
+                log.info("streamer token refreshed -- reconnecting")
+            except Exception as e:
+                log.error(f"token refresh failed: {e}")
+
         tracker.check_missed()
         try:
             take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
