@@ -295,15 +295,33 @@ def tasty_auth(login: str, s3) -> dict:
 
 # -- option chain structure ---------------------------------------------------
 
+def _strike_str(strike: float) -> str:
+    """dxFeed strike format: 713.0 -> '713', 713.5 -> '71350'."""
+    if strike == int(strike):
+        return str(int(strike))
+    return f"{strike * 100:.0f}".rstrip("0")
+
+
 def _dxlink_symbol(occ_symbol: str) -> str:
-    return "." + occ_symbol.replace(" ", "")
+    """Convert OCC symbol to dxFeed streamer format.
+    QQQ260623C00713000 -> .QQQ260623C713
+    The OCC strike field is 8 digits representing price * 1000.
+    """
+    occ = occ_symbol.replace(" ", "")
+    i = 0
+    while i < len(occ) and not occ[i].isdigit():
+        i += 1
+    underlying = occ[:i]
+    date_part  = occ[i:i+6]
+    side       = occ[i+6]
+    strike     = int(occ[i+7:]) / 1000.0
+    return f".{underlying}{date_part}{side}{_strike_str(strike)}"
 
 
 def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
     yy, mm, dd = exp_date[2:4], exp_date[5:7], exp_date[8:10]
     side = "C" if option_type.lower() == "call" else "P"
-    strike_int = int(round(strike * 1000))
-    return f".{TICKER}{yy}{mm}{dd}{side}{strike_int:08d}"
+    return f".{TICKER}{yy}{mm}{dd}{side}{_strike_str(strike)}"
 
 
 def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
