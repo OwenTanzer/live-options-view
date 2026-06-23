@@ -414,6 +414,15 @@ class DXLinkFeed:
     def wait_ready(self, timeout: float = 60.0) -> bool:
         return self._ready.wait(timeout=timeout)
 
+    def wait_first_data(self, timeout: float = 15.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._last_event_time is not None:
+                    return True
+            time.sleep(0.5)
+        return False
+
     def start(self):
         self._ws = websocket.WebSocketApp(
             self._url,
@@ -1058,17 +1067,11 @@ def _run_session(login: str):
     if not feed.wait_ready(timeout=30):
         log.warning("DXLink channel not open after 30s -- proceeding anyway")
 
-    log.info("waiting for initial data flush (up to 90s)...")
-    deadline = time.monotonic() + 90
-    while time.monotonic() < deadline:
-        time.sleep(5)
-        qqq_d = feed.get_state().get(TICKER, {})
-        if qqq_d.get("bid") is not None or qqq_d.get("last") is not None:
-            elapsed = 90 - max(0, deadline - time.monotonic())
-            log.info(f"QQQ price data received after {elapsed:.0f}s -- proceeding")
-            break
+    log.info("waiting for first option data event (up to 15s)...")
+    if feed.wait_first_data(timeout=15):
+        log.info("option data flowing -- proceeding to snapshot")
     else:
-        log.warning("QQQ price data not received within 90s -- proceeding anyway")
+        log.warning("no feed data within 15s -- proceeding anyway")
 
     _log_ticker_health(feed)
 
@@ -1087,7 +1090,7 @@ def _run_session(login: str):
     health_thread.start()
     log.info(f"health thread started (every {HEALTH_SECS}s)")
 
-    log.info(f"snapshot loop started (every {SNAPSHOT_SECS // 60}m, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
+    log.info(f"snapshot loop started (every {SNAPSHOT_SECS}s, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
     while not past_stop():
         tracker.check_missed()
