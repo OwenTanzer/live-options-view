@@ -552,6 +552,26 @@ class DXLinkFeed:
         elif mtype == "ERROR":
             log.error(f"DXLink server error: {msg}")
 
+    @staticmethod
+    def _to_int(val):
+        """Convert val to int, returning None for NaN / non-numeric strings."""
+        try:
+            f = float(val)
+            import math
+            return None if math.isnan(f) else int(f)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_float(val):
+        """Convert val to float, returning None for NaN / non-numeric strings."""
+        try:
+            import math
+            f = float(val)
+            return None if math.isnan(f) else f
+        except (TypeError, ValueError):
+            return None
+
     def _ingest(self, data):
         if not isinstance(data, list):
             return
@@ -567,30 +587,38 @@ class DXLinkFeed:
                 self._last_event_time = now
                 s = self._state.setdefault(sym, {})
                 if et == "Quote":
-                    if event.get("bidPrice") is not None:
-                        s["bid"] = event["bidPrice"]
-                    if event.get("askPrice") is not None:
-                        s["ask"] = event["askPrice"]
+                    b = self._to_float(event.get("bidPrice"))
+                    a = self._to_float(event.get("askPrice"))
+                    if b is not None:
+                        s["bid"] = b
+                    if a is not None:
+                        s["ask"] = a
                 elif et == "Summary":
-                    if event.get("openInterest") is not None:
-                        s["oi"] = int(event["openInterest"])
-                    if event.get("prevDayClosePrice") is not None:
-                        s["prev_close"] = event["prevDayClosePrice"]
-                    if event.get("dayOpenPrice") is not None:
-                        s["day_open"] = event["dayOpenPrice"]
+                    oi = self._to_int(event.get("openInterest"))
+                    if oi is not None:
+                        s["oi"] = oi
+                    pc = self._to_float(event.get("prevDayClosePrice"))
+                    if pc is not None:
+                        s["prev_close"] = pc
+                    do = self._to_float(event.get("dayOpenPrice"))
+                    if do is not None:
+                        s["day_open"] = do
                 elif et == "Trade":
-                    if event.get("dayVolume") is not None:
-                        s["volume"] = int(event["dayVolume"])
-                    if event.get("price") is not None:
-                        s["last"] = event["price"]
+                    vol = self._to_int(event.get("dayVolume"))
+                    if vol is not None:
+                        s["volume"] = vol
+                    px = self._to_float(event.get("price"))
+                    if px is not None:
+                        s["last"] = px
                 elif et == "TradeETH":
-                    # Extended-hours last trade price; only overwrite if no regular last
-                    if event.get("price") is not None and s.get("last") is None:
-                        s["last"] = event["price"]
+                    px = self._to_float(event.get("price"))
+                    if px is not None and s.get("last") is None:
+                        s["last"] = px
                 elif et == "Greeks":
                     for field in ("volatility", "delta", "gamma", "theta", "vega"):
-                        if event.get(field) is not None:
-                            s[field] = event[field]
+                        v = self._to_float(event.get(field))
+                        if v is not None:
+                            s[field] = v
 
     def _on_error(self, ws, error):
         with self._lock:
