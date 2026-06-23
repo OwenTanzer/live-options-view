@@ -180,22 +180,76 @@ def _save_remember_token(s3, token: str):
     log.info("remember-token rotated and saved to R2")
 
 
+def _complete_device_challenge(login: str, password: str, challenge_token: str) -> requests.Response:
+    import pyotp
+    requests.post(
+        f"{TASTY_BASE}/device-challenge",
+        headers={"Content-Type": "application/json", "X-Tastyworks-Challenge-Token": challenge_token},
+        timeout=10,
+    )
+    otp = pyotp.TOTP(os.environ["TASTY_TOTP_SECRET"]).now()
+    log.info("device challenge: submitting TOTP")
+    return requests.post(
+        f"{TASTY_BASE}/sessions",
+        json={"login": login, "password": password, "remember-me": True},
+        headers={
+            "Content-Type": "application/json",
+            "X-Tastyworks-Challenge-Token": challenge_token,
+            "X-Tastyworks-OTP": otp,
+        },
+        timeout=15,
+    )
+
+
 def tasty_auth(login: str, s3) -> dict:
     remember_token = _load_remember_token(s3)
     if remember_token:
-        body = {"login": login, "remember-token": remember_token, "remember-me": True}
-        log.info("tasty_auth -- using remember-token")
-    else:
-        password = os.environ["TASTY_PASSWORD"]
-        body = {"login": login, "password": password, "remember-me": True}
-        log.info("tasty_auth -- using password (no remember-token found)")
+        log.info("tasty_auth -- trying remember-token")
+        resp = requests.post(
+            f"{TASTY_BASE}/sessions",
+            json={"login": login, "remember-token": remember_token, "remember-me": True},
+            headers={"Content-Type": "application/json"},
+            timeout=15,
+        )
+        if resp.status_code == 201:
+            data      = resp.json()["data"]
+            new_token = data.get("remember-token")
+            log.info("tastytrade session established via remember-token")
+            if new_token:
+                _save_remember_token(s3, new_token)
+            resp2 = requests.get(
+                f"{TASTY_BASE}/api-quote-tokens",
+                headers={"Authorization": data["session-token"]},
+                timeout=10,
+            )
+            resp2.raise_for_status()
+            d = resp2.json()["data"]
+            streamer_token = d["token"]
+            streamer_url   = (d.get("dxlink-url") or d.get("websocket-url") or
+                              "wss://tasty-openapi-ws.dxfeed.com/realtime")
+            log.info(f"streamer token obtained  url={streamer_url}")
+            return {
+                "session_token":  data["session-token"],
+                "streamer_token": streamer_token,
+                "streamer_url":   streamer_url,
+            }
+        log.warning(f"remember-token rejected ({resp.status_code}), falling back to password+TOTP")
 
+    password = os.environ["TASTY_PASSWORD"]
+    log.info("tasty_auth -- using password")
     resp = requests.post(
         f"{TASTY_BASE}/sessions",
-        json=body,
+        json={"login": login, "password": password, "remember-me": True},
         headers={"Content-Type": "application/json"},
         timeout=15,
     )
+    if resp.status_code == 403:
+        challenge_token = resp.headers.get("X-Tastyworks-Challenge-Token")
+        if not challenge_token:
+            resp.raise_for_status()
+        log.info("device challenge required -- completing automatically")
+        resp = _complete_device_challenge(login, password, challenge_token)
+
     resp.raise_for_status()
     data          = resp.json()["data"]
     session_token = data["session-token"]
