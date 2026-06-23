@@ -3,7 +3,7 @@
 collector.py -- QQQ 0DTE live chain snapshot service.
 
 Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
-DXLink websocket, and uploads snapshots to R2 every 11 minutes.
+DXLink websocket, and uploads snapshots to R2 every minute.
 
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
@@ -59,7 +59,7 @@ ET              = pytz.timezone("America/New_York")
 TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
 STRIKE_WINDOW   = 33
-SNAPSHOT_SECS   = 11 * 60
+SNAPSHOT_SECS   = 60
 PRICES_SECS     = 30
 HEALTH_SECS     = 15
 PREMARKET_HOUR  = 6
