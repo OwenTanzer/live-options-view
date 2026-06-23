@@ -950,6 +950,65 @@ _last_spot: list = [None]         # [float|None] — yfinance fallback for under
 _last_prices: dict = {}           # label -> price float, updated by push_prices
 
 
+def restore_state(s3, today: date) -> None:
+    """Seed _prev_vol, _last_spot, and _last_prices from the most recent R2 snapshot.
+
+    Called at session start so a redeploy doesn't blank VolDelta for one beat
+    or lose price context.
+    """
+    date_str = today.strftime("%Y%m%d")
+    try:
+        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=f"intraday/{date_str}/")
+        csvs = sorted(
+            [o for o in resp.get("Contents", []) if o["Key"].endswith(".csv")],
+            key=lambda o: o["Key"],
+        )
+        if not csvs:
+            log.info("restore_state: no snapshots found for today, starting fresh")
+            return
+
+        latest_key = csvs[-1]["Key"]
+        body = s3.get_object(Bucket=R2_BUCKET, Key=latest_key)["Body"].read().decode()
+        df = pd.read_csv(io.StringIO(body))
+
+        # Restore _prev_vol from Volume column keyed by OptionSymbol
+        if "OptionSymbol" in df.columns and "Volume" in df.columns:
+            for _, row in df.iterrows():
+                sym = row.get("OptionSymbol")
+                vol = row.get("Volume")
+                if sym and pd.notna(vol):
+                    # Convert OCC symbol back to dxFeed format used as state key
+                    try:
+                        dx_sym = _dxlink_symbol(str(sym))
+                        _prev_vol[dx_sym] = int(vol)
+                    except Exception:
+                        pass
+
+        # Restore _last_spot
+        if "UnderlyingPrice" in df.columns:
+            spot = df["UnderlyingPrice"].dropna().iloc[-1] if not df["UnderlyingPrice"].dropna().empty else None
+            if spot:
+                _last_spot[0] = float(spot)
+
+        # Restore _last_prices from price columns (any col not in core option fields)
+        core_cols = {"TradeDate","Expiration","Strike","Type","OptionSymbol","DTE",
+                     "OpenInterest","Volume","VolDelta","Bid","Mid","Ask","Last",
+                     "IV","Delta","Gamma","Theta","Vega","UnderlyingPrice"}
+        for col in df.columns:
+            if col not in core_cols:
+                val = df[col].dropna().iloc[-1] if not df[col].dropna().empty else None
+                if val is not None:
+                    label = col.replace("_", "/") if col in ("JPY_USD", "BTC_USD") else col
+                    _last_prices[label] = float(val)
+
+        log.info(
+            f"restore_state: loaded {latest_key.split('/')[-1]} -- "
+            f"vol_keys={len(_prev_vol)}  spot={_last_spot[0]}  prices={len(_last_prices)}"
+        )
+    except Exception as e:
+        log.warning(f"restore_state failed (non-fatal): {e}")
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker):
@@ -1123,8 +1182,10 @@ def _run_session(login: str):
     classification = _classify_startup(s3, process_start)
     log.info(f"startup classification: {classification}")
 
-    auth    = tasty_auth(login, s3)
     today   = date.today()
+    restore_state(s3, today)
+
+    auth    = tasty_auth(login, s3)
     tier    = classify_tier(today)
     log.info(f"session date={today}  tier={tier}")
 
