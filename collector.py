@@ -821,6 +821,8 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
     if dead:
         log.warning(f"prices.json -- no data for: {', '.join(dead)}")
 
+    _last_prices.update({lbl: d["price"] for lbl, d in prices.items()})
+
     payload = json.dumps({
         "timestamp":     ts_utc.isoformat(),
         "snapshot_time": ts_et.strftime("%H:%M ET"),
@@ -839,34 +841,6 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
     except Exception as e:
         counters.inc_failure()
         raise
-
-    # append row to daily prices CSV
-    try:
-        csv_key = f"intraday/{ts_utc.strftime('%Y%m%d')}/prices.csv"
-        new_row = {"timestamp": ts_utc.isoformat(), "time_et": ts_et.strftime("%H:%M")}
-        for label, d in prices.items():
-            safe = label.replace("/", "_")
-            new_row[f"{safe}_price"]   = d["price"]
-            new_row[f"{safe}_chg_pct"] = d["chg_pct"]
-            new_row[f"{safe}_volume"]  = d["volume"]
-
-        try:
-            existing = s3.get_object(Bucket=R2_BUCKET, Key=csv_key)["Body"].read().decode()
-            df = pd.read_csv(io.StringIO(existing))
-        except Exception:
-            df = pd.DataFrame()
-
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        csv_buf = io.StringIO()
-        df.to_csv(csv_buf, index=False)
-        s3.put_object(
-            Bucket=R2_BUCKET, Key=csv_key,
-            Body=csv_buf.getvalue().encode(),
-            ContentType="text/csv",
-            CacheControl="no-cache, max-age=0",
-        )
-    except Exception as e:
-        log.warning(f"prices CSV append failed: {e}")
 
 
 def prices_loop(s3, feed: DXLinkFeed, counters: Counters):
@@ -967,6 +941,7 @@ def _fmt_oi(v: int) -> str:
 
 _prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
 _last_spot: list = [None]         # [float|None] — yfinance fallback for underlying price
+_last_prices: dict = {}           # label -> price float, updated by push_prices
 
 
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
@@ -1000,6 +975,10 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             vol  = data.get("volume", 0) or 0
             vol_delta = max(0, vol - _prev_vol.get(sym, vol))
             _prev_vol[sym] = vol
+            price_cols = {
+                lbl.replace("/", "_"): _last_prices.get(lbl)
+                for lbl in _last_prices
+            }
             rows.append({
                 "TradeDate":       today.isoformat(),
                 "Expiration":      exp_date,
@@ -1020,6 +999,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                 "Theta":           data.get("theta"),
                 "Vega":            data.get("vega"),
                 "UnderlyingPrice": underlying,
+                **price_cols,
             })
 
     if not rows:
