@@ -318,15 +318,23 @@ def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
 
     strikes = []
     for s in target.get("strikes", []):
-        strike   = float(s.get("strike-price", 0))
-        c        = s.get("call", {})
-        p        = s.get("put",  {})
-        call_occ = c.get("symbol", "")
-        put_occ  = p.get("symbol", "")
-        call_sym = (c.get("streamer-symbol") or
-                    (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")))
-        put_sym  = (p.get("streamer-symbol") or
-                    (_dxlink_symbol(put_occ)  if put_occ  else _build_symbol(strike, exp_date, "put")))
+        strike = float(s.get("strike-price", 0))
+        c = s.get("call", {})
+        p = s.get("put",  {})
+        if isinstance(c, str):
+            call_occ = c.replace(" ", "")
+            call_sym = _dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")
+        else:
+            call_occ = c.get("symbol", "")
+            call_sym = (c.get("streamer-symbol") or
+                        (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")))
+        if isinstance(p, str):
+            put_occ = p.replace(" ", "")
+            put_sym = _dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")
+        else:
+            put_occ  = p.get("symbol", "")
+            put_sym  = (p.get("streamer-symbol") or
+                        (_dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")))
         strikes.append({
             "strike":   strike,
             "call_sym": call_sym,
