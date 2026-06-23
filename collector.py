@@ -840,6 +840,34 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
         counters.inc_failure()
         raise
 
+    # append row to daily prices CSV
+    try:
+        csv_key = f"intraday/{ts_utc.strftime('%Y%m%d')}/prices.csv"
+        new_row = {"timestamp": ts_utc.isoformat(), "time_et": ts_et.strftime("%H:%M")}
+        for label, d in prices.items():
+            safe = label.replace("/", "_")
+            new_row[f"{safe}_price"]   = d["price"]
+            new_row[f"{safe}_chg_pct"] = d["chg_pct"]
+            new_row[f"{safe}_volume"]  = d["volume"]
+
+        try:
+            existing = s3.get_object(Bucket=R2_BUCKET, Key=csv_key)["Body"].read().decode()
+            df = pd.read_csv(io.StringIO(existing))
+        except Exception:
+            df = pd.DataFrame()
+
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        csv_buf = io.StringIO()
+        df.to_csv(csv_buf, index=False)
+        s3.put_object(
+            Bucket=R2_BUCKET, Key=csv_key,
+            Body=csv_buf.getvalue().encode(),
+            ContentType="text/csv",
+            CacheControl="no-cache, max-age=0",
+        )
+    except Exception as e:
+        log.warning(f"prices CSV append failed: {e}")
+
 
 def prices_loop(s3, feed: DXLinkFeed, counters: Counters):
     while not past_stop():
