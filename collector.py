@@ -376,6 +376,7 @@ class DXLinkFeed:
         self._ready = threading.Event()
         self._subs: list[dict] = []
         self._subscribed          = False
+        self._data_logged         = False
         # lifecycle telemetry
         self._connected           = False
         self._authorized          = False
@@ -446,7 +447,8 @@ class DXLinkFeed:
     def _on_open(self, ws):
         with self._lock:
             self._connected = True
-            self._subscribed = False  # reset so FEED_CONFIG re-subscribes after reconnect
+            self._subscribed  = False  # reset so FEED_CONFIG re-subscribes after reconnect
+            self._data_logged = False
             if self._first_connect_seen:
                 self._reconnect_count += 1
             self._first_connect_seen = True
@@ -519,7 +521,12 @@ class DXLinkFeed:
             self._ready.set()
 
         elif mtype == "FEED_DATA":
-            self._ingest(msg.get("data", []))
+            data = msg.get("data", [])
+            with self._lock:
+                if not self._data_logged:
+                    self._data_logged = True
+                    log.info(f"FEED_DATA sample (first message): {str(data[:3])[:500]}")
+            self._ingest(data)
 
         elif mtype == "KEEPALIVE":
             self._send({"type": "KEEPALIVE", "channel": 0})
