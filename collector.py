@@ -487,6 +487,10 @@ class DXLinkFeed:
                     "Greeks":   ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
                 },
             })
+
+        elif mtype == "FEED_CONFIG":
+            # Server has acknowledged FEED_SETUP — now safe to subscribe
+            log.info("DXLink feed configured -- sending subscriptions")
             if self._subs:
                 self._send({
                     "type": "FEED_SUBSCRIPTION", "channel": 1,
