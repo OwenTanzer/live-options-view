@@ -813,6 +813,9 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
                 filled.append(f"{lbl}={yf_price}")
         if filled:
             log.info(f"prices -- yfinance filled: {', '.join(filled)}")
+        qqq_yf = yf_data.get("QQQ")
+        if qqq_yf is not None:
+            _last_spot[0] = qqq_yf
 
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
@@ -934,7 +937,8 @@ def _fmt_oi(v: int) -> str:
     return f"{v//1000}K"
 
 
-_prev_vol: dict[str, int] = {}  # persists across calls to compute per-minute delta
+_prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
+_last_spot: list = [None]         # [float|None] — yfinance fallback for underlying price
 
 
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
@@ -947,6 +951,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     qqq = state.get(TICKER, {})
     bid, ask = qqq.get("bid"), qqq.get("ask")
     underlying = round((bid + ask) / 2, 2) if bid and ask else (qqq.get("last") or None)
+    if underlying is None and _last_spot[0] is not None:
+        underlying = round(_last_spot[0], 2)
     atm = round(underlying) if underlying else None
 
     rows = []

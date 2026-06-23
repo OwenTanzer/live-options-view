@@ -482,6 +482,11 @@ function renderHeatmap(data) {
   const { rows, underlying_price, tier, snapshot_time, expiration } = data;
   const spot = underlying_price;
 
+  if (!spot) {
+    setStatus('stale', `Feed down — snap ${snapshot_time}, awaiting DXLink reconnect`);
+    return;
+  }
+
   // Index rows by strike+type
   const byStrike = {};
   for (const r of rows) {
