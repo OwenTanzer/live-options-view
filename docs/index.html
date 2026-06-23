@@ -92,10 +92,12 @@
     padding: 2px 4px;
     text-align: center;
     width: 80px;
-    height: 28px;
+    height: 38px;
     font-weight: 700;
     font-size: 0.68rem;
     position: relative;
+    line-height: 1.1;
+    vertical-align: middle;
   }
   td.strike-cell {
     color: var(--fg);
@@ -144,6 +146,16 @@
     line-height: 1;
   }
   td.c5 .vol, td.p5 .vol { color: rgba(0,0,0,0.55); }
+
+  /* bid×ask quote line */
+  .quote {
+    display: block;
+    font-size: 0.54rem;
+    font-weight: 400;
+    color: rgba(255,255,255,0.5);
+    letter-spacing: 0.01em;
+  }
+  td.c5 .quote, td.p5 .quote { color: rgba(0,0,0,0.45); }
 
   /* flow delta — contracts traded since last snapshot */
   .flow {
@@ -195,7 +207,7 @@
   .price-group + .price-group::before {
     content: '';
     width: 1px;
-    height: 28px;
+    height: 38px;
     background: var(--border);
     align-self: center;
   }
@@ -462,6 +474,17 @@ function fmtVol(v) {
 }
 
 // flow level 0–4 based on contracts-per-minute delta
+function fmtQ(v) {
+  if (v == null) return '';
+  return v < 10 ? v.toFixed(2) : v.toFixed(1);
+}
+function quoteHtml(bid, ask) {
+  if (bid == null && ask == null) return '';
+  const b = bid != null ? fmtQ(bid) : '—';
+  const a = ask != null ? fmtQ(ask) : '—';
+  return `<span class="quote">${b} × ${a}</span>`;
+}
+
 function flowLevel(d) {
   if (d <= 0)   return 0;
   if (d < 20)   return 1;
@@ -519,6 +542,10 @@ function renderHeatmap(data) {
     const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
     const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
     const putDelta  = parseInt(putRow?.VolDelta   ?? 0) || 0;
+    const callBid   = callRow?.Bid  ?? null;
+    const callAsk   = callRow?.Ask  ?? null;
+    const putBid    = putRow?.Bid   ?? null;
+    const putAsk    = putRow?.Ask   ?? null;
 
     const ct = getThresh(tier || '0DTE_Regular', offset, 'call');
     const pt = getThresh(tier || '0DTE_Regular', offset, 'put');
@@ -532,6 +559,7 @@ function renderHeatmap(data) {
     const callTd = document.createElement('td');
     callTd.className = `call-cell c${cb}`;
     callTd.innerHTML = fmtOI(callOI) +
+      quoteHtml(callBid, callAsk) +
       (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
       flowHtml(callDelta);
     tr.appendChild(callTd);
@@ -547,6 +575,7 @@ function renderHeatmap(data) {
     const putTd = document.createElement('td');
     putTd.className = `put-cell p${pb}`;
     putTd.innerHTML = fmtOI(putOI) +
+      quoteHtml(putBid, putAsk) +
       (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
       flowHtml(putDelta);
     tr.appendChild(putTd);
