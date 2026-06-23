@@ -158,16 +158,52 @@ class SnapshotTracker:
 
 # -- tastytrade auth ----------------------------------------------------------
 
-def tasty_auth(login: str, password: str) -> dict:
+R2_REMEMBER_TOKEN_KEY = "auth/remember_token.json"
+
+
+def _load_remember_token(s3) -> str | None:
+    try:
+        body = s3.get_object(Bucket=os.environ["R2_BUCKET_NAME"], Key=R2_REMEMBER_TOKEN_KEY)["Body"].read()
+        return json.loads(body)["remember_token"]
+    except Exception:
+        pass
+    return os.environ.get("TASTY_REMEMBER_TOKEN")
+
+
+def _save_remember_token(s3, token: str):
+    s3.put_object(
+        Bucket=os.environ["R2_BUCKET_NAME"],
+        Key=R2_REMEMBER_TOKEN_KEY,
+        Body=json.dumps({"remember_token": token, "updated_at": datetime.now(timezone.utc).isoformat()}).encode(),
+        ContentType="application/json",
+    )
+    log.info("remember-token rotated and saved to R2")
+
+
+def tasty_auth(login: str, s3) -> dict:
+    remember_token = _load_remember_token(s3)
+    if remember_token:
+        body = {"login": login, "remember-token": remember_token, "remember-me": True}
+        log.info("tasty_auth -- using remember-token")
+    else:
+        password = os.environ["TASTY_PASSWORD"]
+        body = {"login": login, "password": password, "remember-me": True}
+        log.info("tasty_auth -- using password (no remember-token found)")
+
     resp = requests.post(
         f"{TASTY_BASE}/sessions",
-        json={"login": login, "password": password, "remember-me": True},
+        json=body,
         headers={"Content-Type": "application/json"},
         timeout=15,
     )
     resp.raise_for_status()
-    session_token = resp.json()["data"]["session-token"]
+    data          = resp.json()["data"]
+    session_token = data["session-token"]
+    new_token     = data.get("remember-token")
     log.info("tastytrade session established")
+
+    if new_token:
+        _save_remember_token(s3, new_token)
 
     resp2 = requests.get(
         f"{TASTY_BASE}/api-quote-tokens",
@@ -857,7 +893,7 @@ def wait_for_premarket():
         time.sleep(min(delay, 3600))
 
 
-def _run_session(login: str, password: str):
+def _run_session(login: str):
     run_id        = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
     process_start = datetime.now(timezone.utc)
     log.info(f"session start  run_id={run_id}")
@@ -866,7 +902,7 @@ def _run_session(login: str, password: str):
     classification = _classify_startup(s3, process_start)
     log.info(f"startup classification: {classification}")
 
-    auth    = tasty_auth(login, password)
+    auth    = tasty_auth(login, s3)
     today   = date.today()
     tier    = classify_tier(today)
     log.info(f"session date={today}  tier={tier}")
@@ -939,15 +975,15 @@ def _run_session(login: str, password: str):
 
 
 def main():
-    login    = os.environ["TASTY_LOGIN"]
-    password = os.environ["TASTY_PASSWORD"]
+    login = os.environ["TASTY_LOGIN"]
 
     while True:
         wait_for_premarket()
         try:
-            _run_session(login, password)
+            _run_session(login)
         except Exception as e:
             log.error(f"session failed: {e}", exc_info=True)
+            time.sleep(60)
         # After session end or crash, wait_for_premarket() handles sleeping until
         # the next window -- process never exits, Railway never restart-loops
 
