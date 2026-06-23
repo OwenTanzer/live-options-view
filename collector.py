@@ -36,6 +36,7 @@ import pandas as pd
 import pytz
 import requests
 import websocket
+import yfinance as yf
 
 # Force UTF-8 stdout to avoid UnicodeEncodeError on non-UTF-8 terminals/Railway
 if hasattr(sys.stdout, "reconfigure"):
@@ -75,6 +76,21 @@ PRICE_TICKERS: dict[str, str] = {
     "IGV":     "IGV",
     "JPY/USD": "/6J:XCME",    # CME yen futures, USD-per-JPY; inverted for display
     "BTC/USD": "BTC/USD:CXERX",
+    "META":    "META",
+    "GOOGL":   "GOOGL",
+    "AMZN":    "AMZN",
+    "TSLA":    "TSLA",
+}
+
+# Yahoo Finance symbols for the same tickers (fallback when DXLink has no data)
+YF_SYMBOL_MAP: dict[str, str] = {
+    "QQQ":     "QQQ",
+    "USO":     "USO",
+    "VIX":     "^VIX",       # pre-market: None expected (CBOE only calculates at open)
+    "SMH":     "SMH",
+    "IGV":     "IGV",
+    "JPY/USD": "JPYUSD=X",
+    "BTC/USD": "BTC-USD",
     "META":    "META",
     "GOOGL":   "GOOGL",
     "AMZN":    "AMZN",
@@ -654,6 +670,28 @@ def _log_ticker_health(feed: DXLinkFeed):
 
 # -- prices.json upload (every 30s) ------------------------------------------
 
+def fetch_yf_prices() -> dict[str, Optional[float]]:
+    """Fetch current prices from Yahoo Finance. Supports pre/post-market."""
+    result: dict[str, Optional[float]] = {k: None for k in YF_SYMBOL_MAP}
+    try:
+        tickers = yf.Tickers(" ".join(YF_SYMBOL_MAP.values()))
+        for label, sym in YF_SYMBOL_MAP.items():
+            try:
+                fi = tickers.tickers[sym].fast_info
+                price = None
+                for attr in ("pre_market_price", "last_price", "post_market_price"):
+                    val = getattr(fi, attr, None)
+                    if val is not None and float(val) > 0:
+                        price = float(val)
+                        break
+                result[label] = price
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"yfinance fetch failed: {e}")
+    return result
+
+
 def push_prices(s3, feed: DXLinkFeed, counters: Counters):
     state      = feed.get_state()
     fh         = feed.get_health()
@@ -686,6 +724,19 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
             "chg_pct":    chg_pct,
             "volume":     d.get("volume"),
         }
+
+    # yfinance fallback for any tickers DXLink didn't populate
+    yf_missing = [lbl for lbl, d in prices.items() if d["price"] is None]
+    if yf_missing:
+        yf_data = fetch_yf_prices()
+        filled = []
+        for lbl in yf_missing:
+            yf_price = yf_data.get(lbl)
+            if yf_price is not None:
+                prices[lbl]["price"] = yf_price
+                filled.append(f"{lbl}={yf_price}")
+        if filled:
+            log.info(f"prices -- yfinance filled: {', '.join(filled)}")
 
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
