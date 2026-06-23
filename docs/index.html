@@ -92,7 +92,7 @@
     padding: 2px 4px;
     text-align: center;
     width: 80px;
-    height: 22px;
+    height: 28px;
     font-weight: 700;
     font-size: 0.68rem;
     position: relative;
@@ -144,6 +144,24 @@
     line-height: 1;
   }
   td.c5 .vol, td.p5 .vol { color: rgba(0,0,0,0.55); }
+
+  /* flow delta — contracts traded since last snapshot */
+  .flow {
+    position: absolute;
+    bottom: 2px; right: 3px;
+    font-size: 0.52rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .flow-0  { display: none; }
+  .flow-1  { color: rgba(255,255,255,0.28); }
+  .flow-2  { color: #c8a84b; }
+  .flow-3  { color: #ff8c00; }
+  .flow-4  { color: #ffffff; text-shadow: 0 0 6px #ff8c00; }
+  td.c5 .flow-1, td.p5 .flow-1 { color: rgba(0,0,0,0.28); }
+  td.c5 .flow-2, td.p5 .flow-2 { color: #7a5c00; }
+  td.c5 .flow-3, td.p5 .flow-3 { color: #8b3a00; }
+  td.c5 .flow-4, td.p5 .flow-4 { color: #000; text-shadow: none; }
 
   /* ── legend ──────────────────────────────────────────────────────────── */
   #legend {
@@ -355,8 +373,8 @@
 </div>
 
 <div id="footer">
-  OI color = calibrated historical percentile (OIranges.csv, tier-adjusted). Number in cell = OI · superscript = intraday volume.<br>
-  Data: tastytrade / DXLink. Snapshots every 11 min. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
+  OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
+  Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
 </div>
 
 <script>
@@ -443,6 +461,22 @@ function fmtVol(v) {
   return Math.floor(v / 1000) + 'k';
 }
 
+// flow level 0–4 based on contracts-per-minute delta
+function flowLevel(d) {
+  if (d <= 0)   return 0;
+  if (d < 20)   return 1;
+  if (d < 100)  return 2;
+  if (d < 500)  return 3;
+  return 4;
+}
+
+function flowHtml(delta) {
+  const lvl = flowLevel(delta);
+  if (lvl === 0) return '';
+  const label = delta < 1000 ? `+${delta}` : `+${(delta/1000).toFixed(1)}k`;
+  return `<span class="flow flow-${lvl}">${label}</span>`;
+}
+
 // ── render heatmap ────────────────────────────────────────────────────────────
 function renderHeatmap(data) {
   const { rows, underlying_price, tier, snapshot_time, expiration } = data;
@@ -474,10 +508,12 @@ function renderHeatmap(data) {
     const putRow  = byStrike[strKey]?.put;
     const isAtm   = offset === 0;
 
-    const callOI  = parseInt(callRow?.OpenInterest ?? 0) || 0;
-    const putOI   = parseInt(putRow?.OpenInterest  ?? 0) || 0;
-    const callVol = parseInt(callRow?.Volume ?? 0) || 0;
-    const putVol  = parseInt(putRow?.Volume  ?? 0) || 0;
+    const callOI    = parseInt(callRow?.OpenInterest ?? 0) || 0;
+    const putOI     = parseInt(putRow?.OpenInterest  ?? 0) || 0;
+    const callVol   = parseInt(callRow?.Volume    ?? 0) || 0;
+    const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
+    const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
+    const putDelta  = parseInt(putRow?.VolDelta   ?? 0) || 0;
 
     const ct = getThresh(tier || '0DTE_Regular', offset, 'call');
     const pt = getThresh(tier || '0DTE_Regular', offset, 'put');
@@ -491,7 +527,8 @@ function renderHeatmap(data) {
     const callTd = document.createElement('td');
     callTd.className = `call-cell c${cb}`;
     callTd.innerHTML = fmtOI(callOI) +
-      (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '');
+      (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
+      flowHtml(callDelta);
     tr.appendChild(callTd);
 
     // Strike cell
@@ -505,7 +542,8 @@ function renderHeatmap(data) {
     const putTd = document.createElement('td');
     putTd.className = `put-cell p${pb}`;
     putTd.innerHTML = fmtOI(putOI) +
-      (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '');
+      (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
+      flowHtml(putDelta);
     tr.appendChild(putTd);
 
     tbody.appendChild(tr);

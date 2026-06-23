@@ -934,6 +934,9 @@ def _fmt_oi(v: int) -> str:
     return f"{v//1000}K"
 
 
+_prev_vol: dict[str, int] = {}  # persists across calls to compute per-minute delta
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker):
@@ -960,6 +963,9 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             b    = data.get("bid")
             a    = data.get("ask")
             mid  = round((b + a) / 2, 4) if b is not None and a is not None else None
+            vol  = data.get("volume", 0) or 0
+            vol_delta = max(0, vol - _prev_vol.get(sym, vol))
+            _prev_vol[sym] = vol
             rows.append({
                 "TradeDate":       today.isoformat(),
                 "Expiration":      exp_date,
@@ -968,7 +974,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                 "OptionSymbol":    s[occ_key],
                 "DTE":             0,
                 "OpenInterest":    data.get("oi", 0) or 0,
-                "Volume":          data.get("volume", 0) or 0,
+                "Volume":          vol,
+                "VolDelta":        vol_delta,
                 "Bid":             b,
                 "Mid":             mid,
                 "Ask":             a,
