@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-collector.py — QQQ 0DTE live chain snapshot service.
+collector.py -- QQQ 0DTE live chain snapshot service.
 
 Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
-DXLink websocket, and uploads a snapshot to R2 every 11 minutes.
+DXLink websocket, and uploads snapshots to R2 every 11 minutes.
 
 R2 output:
-  intraday/YYYYMMDD/snapshot_HHMM.csv   — archived snapshots
-  intraday/latest.json                   — live feed for the web viewer
+  intraday/YYYYMMDD/snapshot_HHMMSS.csv  -- archived snapshots (second-precision key)
+  intraday/latest.json                   -- live feed for the web viewer
+  intraday/prices.json                   -- macro price strip (every 30s)
+  intraday/health.json                   -- lifecycle telemetry (every 15s)
 
 Environment variables (set in Railway dashboard):
   TASTY_LOGIN            tastytrade username
@@ -22,10 +24,11 @@ import io
 import json
 import logging
 import os
+import secrets
 import sys
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import boto3
@@ -34,7 +37,12 @@ import pytz
 import requests
 import websocket
 
-# ── logging ────────────────────────────────────────────────────────────────────
+# Force UTF-8 stdout to avoid UnicodeEncodeError on non-UTF-8 terminals/Railway
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,40 +52,113 @@ logging.basicConfig(
 )
 log = logging.getLogger("collector")
 
-# ── config ─────────────────────────────────────────────────────────────────────
+# -- config -------------------------------------------------------------------
 
-ET             = pytz.timezone("America/New_York")
-TASTY_BASE     = "https://api.tastyworks.com"
-TICKER         = "QQQ"
-STRIKE_WINDOW  = 33
-SNAPSHOT_SECS  = 11 * 60
-PRICES_SECS    = 30          # how often to push prices.json
-PREMARKET_HOUR = 6           # start at 6:00 AM ET
-STOP_HOUR      = 16
-STOP_MIN       = 15
-R2_BUCKET      = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
+ET              = pytz.timezone("America/New_York")
+TASTY_BASE      = "https://api.tastyworks.com"
+TICKER          = "QQQ"
+STRIKE_WINDOW   = 33
+SNAPSHOT_SECS   = 11 * 60
+PRICES_SECS     = 30
+HEALTH_SECS     = 15
+PREMARKET_HOUR  = 6
+STOP_HOUR       = 16
+STOP_MIN        = 15
+STALE_FEED_SECS = 120   # warn if no feed event for this many seconds
+R2_BUCKET       = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
 
-# Display label → DXLink symbol
-# VIX index is $VIX.X in dxfeed; BTC/USD via Coinbase on tastytrade
 PRICE_TICKERS: dict[str, str] = {
-    "QQQ":    "QQQ",
-    "USO":    "USO",
-    "VIX":    "$VIX.X",
-    "SMH":    "SMH",
-    "IGV":    "IGV",
-    "JPY/USD": "/6J:XCME",   # CME yen futures, quoted USD-per-JPY → invert for ¥/$ display
+    "QQQ":     "QQQ",
+    "USO":     "USO",
+    "VIX":     "$VIX.X",
+    "SMH":     "SMH",
+    "IGV":     "IGV",
+    "JPY/USD": "/6J:XCME",    # CME yen futures, USD-per-JPY; inverted for display
     "BTC/USD": "BTC/USD:CXERX",
-    "META":   "META",
-    "GOOGL":  "GOOGL",
-    "AMZN":   "AMZN",
-    "TSLA":   "TSLA",
+    "META":    "META",
+    "GOOGL":   "GOOGL",
+    "AMZN":    "AMZN",
+    "TSLA":    "TSLA",
 }
 
 
-# ── tastytrade auth ────────────────────────────────────────────────────────────
+# -- upload counters ----------------------------------------------------------
+
+class Counters:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.prices_ok   = 0
+        self.snapshot_ok = 0
+        self.csv_ok      = 0
+        self.failures    = 0
+        self.last_price_time    = None
+        self.last_snapshot_time = None
+
+    def inc_prices(self, ts: str):
+        with self._lock:
+            self.prices_ok += 1
+            self.last_price_time = ts
+
+    def inc_snapshot(self, ts: str):
+        with self._lock:
+            self.snapshot_ok += 1
+            self.last_snapshot_time = ts
+
+    def inc_csv(self):
+        with self._lock:
+            self.csv_ok += 1
+
+    def inc_failure(self):
+        with self._lock:
+            self.failures += 1
+
+    def get(self) -> dict:
+        with self._lock:
+            return {
+                "prices_ok":          self.prices_ok,
+                "snapshot_ok":        self.snapshot_ok,
+                "csv_ok":             self.csv_ok,
+                "failures":           self.failures,
+                "last_price_time":    self.last_price_time,
+                "last_snapshot_time": self.last_snapshot_time,
+            }
+
+
+# -- snapshot cadence tracker -------------------------------------------------
+
+class SnapshotTracker:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.seq                             = 0
+        self.expected_next: Optional[datetime] = None
+        self.missed                          = 0
+
+    def record(self):
+        with self._lock:
+            self.seq += 1
+            self.expected_next = datetime.now(timezone.utc) + timedelta(seconds=SNAPSHOT_SECS)
+
+    def check_missed(self):
+        with self._lock:
+            if (self.expected_next is not None and
+                    datetime.now(timezone.utc) > self.expected_next + timedelta(seconds=60)):
+                self.missed += 1
+                log.warning(f"missed snapshot (expected by {self.expected_next.isoformat()})")
+                self.expected_next = None
+
+    def get(self) -> dict:
+        with self._lock:
+            return {
+                "snapshot_sequence":          self.seq,
+                "expected_next_snapshot_time": (self.expected_next.isoformat()
+                                                if self.expected_next else None),
+                "missed_snapshot_count":      self.missed,
+            }
+
+
+# -- tastytrade auth ----------------------------------------------------------
 
 def tasty_auth(login: str, password: str) -> dict:
-    """Authenticate and return {session_token, streamer_token, streamer_url}."""
     resp = requests.post(
         f"{TASTY_BASE}/sessions",
         json={"login": login, "password": password, "remember-me": True},
@@ -96,8 +177,8 @@ def tasty_auth(login: str, password: str) -> dict:
     resp2.raise_for_status()
     d = resp2.json()["data"]
     streamer_token = d["token"]
-    streamer_url   = d.get("dxlink-url") or d.get("websocket-url") or \
-                     "wss://tasty-openapi-ws.dxfeed.com/realtime"
+    streamer_url   = (d.get("dxlink-url") or d.get("websocket-url") or
+                      "wss://tasty-openapi-ws.dxfeed.com/realtime")
     log.info(f"streamer token obtained  url={streamer_url}")
     return {
         "session_token":  session_token,
@@ -106,15 +187,13 @@ def tasty_auth(login: str, password: str) -> dict:
     }
 
 
-# ── option chain structure ─────────────────────────────────────────────────────
+# -- option chain structure ---------------------------------------------------
 
 def _dxlink_symbol(occ_symbol: str) -> str:
-    """Convert OCC symbol to DXLink format: 'QQQ   260623C00480000' → '.QQQ260623C00480000'"""
     return "." + occ_symbol.replace(" ", "")
 
 
 def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
-    """Build DXLink symbol from components when streamer-symbol is missing."""
     yy, mm, dd = exp_date[2:4], exp_date[5:7], exp_date[8:10]
     side = "C" if option_type.lower() == "call" else "P"
     strike_int = int(round(strike * 1000))
@@ -122,12 +201,6 @@ def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
 
 
 def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
-    """
-    Returns (strikes, expiration_date_str).
-    Each strike: {"strike": float, "call_sym": str, "put_sym": str,
-                  "call_occ": str, "put_occ": str}
-    Picks today's expiration, or the nearest upcoming one pre-market.
-    """
     resp = requests.get(
         f"{TASTY_BASE}/option-chains/{TICKER}/nested",
         headers={"Authorization": session_token},
@@ -139,10 +212,9 @@ def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
     if not items:
         raise RuntimeError("empty option chain response")
 
-    today_str = today.isoformat()
+    today_str   = today.isoformat()
     expirations = items[0].get("expirations", [])
 
-    # Pick today's expiry, or nearest future
     target = None
     for exp in sorted(expirations, key=lambda e: e.get("expiration-date", "")):
         if exp.get("expiration-date", "") >= today_str:
@@ -156,16 +228,15 @@ def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
 
     strikes = []
     for s in target.get("strikes", []):
-        strike = float(s.get("strike-price", 0))
-        c = s.get("call", {})
-        p = s.get("put",  {})
-
+        strike   = float(s.get("strike-price", 0))
+        c        = s.get("call", {})
+        p        = s.get("put",  {})
         call_occ = c.get("symbol", "")
         put_occ  = p.get("symbol", "")
-        call_sym = c.get("streamer-symbol") or (_dxlink_symbol(call_occ) if call_occ else
-                                                 _build_symbol(strike, exp_date, "call"))
-        put_sym  = p.get("streamer-symbol") or (_dxlink_symbol(put_occ) if put_occ else
-                                                 _build_symbol(strike, exp_date, "put"))
+        call_sym = (c.get("streamer-symbol") or
+                    (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")))
+        put_sym  = (p.get("streamer-symbol") or
+                    (_dxlink_symbol(put_occ)  if put_occ  else _build_symbol(strike, exp_date, "put")))
         strikes.append({
             "strike":   strike,
             "call_sym": call_sym,
@@ -177,32 +248,30 @@ def load_chain(session_token: str, today: date) -> tuple[list[dict], str]:
     return strikes, exp_date
 
 
-# ── DXLink websocket feed ──────────────────────────────────────────────────────
+# -- DXLink websocket feed ----------------------------------------------------
 
 class DXLinkFeed:
-    """
-    Maintains latest market data for subscribed symbols.
-    Runs the websocket in a background thread; thread-safe reads via get_state().
-    """
-
     _DXLINK_VERSION = "0.1-js/1.0.0"
 
     def __init__(self, url: str, token: str):
-        self._url      = url
-        self._token    = token
+        self._url   = url
+        self._token = token
         self._state: dict[str, dict] = {}
-        self._lock     = threading.Lock()
+        self._lock  = threading.Lock()
         self._ws: Optional[websocket.WebSocketApp] = None
-        self._ready    = threading.Event()
+        self._ready = threading.Event()
         self._subs: list[dict] = []
-
-    # ── public API ─────────────────────────────────────────────────────────────
+        # lifecycle telemetry
+        self._connected           = False
+        self._authorized          = False
+        self._channel_open        = False
+        self._reconnect_count     = 0
+        self._first_connect_seen  = False
+        self._last_error: Optional[str]  = None
+        self._last_close_code: Optional[int] = None
+        self._last_event_time: Optional[datetime] = None
 
     def set_subscriptions(self, option_symbols: list[str], price_symbols: list[str]):
-        """
-        option_symbols: full options chain — Quote, Summary, Trade, Greeks
-        price_symbols:  equity/index tickers — Quote, Trade, Summary (for prev close)
-        """
         self._subs = []
         for sym in option_symbols:
             for event_type in ("Quote", "Summary", "Trade", "Greeks"):
@@ -215,6 +284,18 @@ class DXLinkFeed:
         with self._lock:
             return {k: dict(v) for k, v in self._state.items()}
 
+    def get_health(self) -> dict:
+        with self._lock:
+            return {
+                "connected":            self._connected,
+                "authorized":           self._authorized,
+                "channel_open":         self._channel_open,
+                "reconnect_count":      self._reconnect_count,
+                "last_error":           self._last_error,
+                "last_close_code":      self._last_close_code,
+                "last_feed_event_time": self._last_event_time,
+            }
+
     def wait_ready(self, timeout: float = 60.0) -> bool:
         return self._ready.wait(timeout=timeout)
 
@@ -226,11 +307,7 @@ class DXLinkFeed:
             on_error=self._on_error,
             on_close=self._on_close,
         )
-        t = threading.Thread(
-            target=self._ws.run_forever,
-            kwargs={"reconnect": 5},
-            daemon=True,
-        )
+        t = threading.Thread(target=self._ws.run_forever, kwargs={"reconnect": 5}, daemon=True)
         t.start()
         log.info("DXLink feed thread started")
 
@@ -238,14 +315,17 @@ class DXLinkFeed:
         if self._ws:
             self._ws.close()
 
-    # ── websocket handlers ─────────────────────────────────────────────────────
-
     def _send(self, msg: dict):
         if self._ws:
             self._ws.send(json.dumps(msg))
 
     def _on_open(self, ws):
-        log.info("DXLink connected — sending SETUP")
+        with self._lock:
+            self._connected = True
+            if self._first_connect_seen:
+                self._reconnect_count += 1
+            self._first_connect_seen = True
+        log.info("DXLink connected -- sending SETUP")
         self._send({
             "type": "SETUP", "channel": 0,
             "version": self._DXLINK_VERSION,
@@ -267,7 +347,9 @@ class DXLinkFeed:
         elif mtype == "AUTH_STATE":
             state = msg.get("state")
             if state == "AUTHORIZED":
-                log.info("DXLink authorized — requesting channel")
+                with self._lock:
+                    self._authorized = True
+                log.info("DXLink authorized -- requesting channel")
                 self._send({
                     "type": "CHANNEL_REQUEST", "channel": 1,
                     "service": "FEED",
@@ -277,7 +359,9 @@ class DXLinkFeed:
                 log.error(f"DXLink auth failed: {msg}")
 
         elif mtype == "CHANNEL_OPENED":
-            log.info("DXLink channel 1 open — sending FEED_SETUP")
+            with self._lock:
+                self._channel_open = True
+            log.info("DXLink channel 1 open -- sending FEED_SETUP")
             self._send({
                 "type": "FEED_SETUP", "channel": 1,
                 "acceptDataFormat": "FULL",
@@ -308,6 +392,7 @@ class DXLinkFeed:
     def _ingest(self, data):
         if not isinstance(data, list):
             return
+        now = datetime.now(timezone.utc)
         for event in data:
             if not isinstance(event, dict):
                 continue
@@ -316,6 +401,7 @@ class DXLinkFeed:
             if not sym:
                 continue
             with self._lock:
+                self._last_event_time = now
                 s = self._state.setdefault(sym, {})
                 if et == "Quote":
                     if event.get("bidPrice") is not None:
@@ -340,20 +426,26 @@ class DXLinkFeed:
                             s[field] = event[field]
 
     def _on_error(self, ws, error):
+        with self._lock:
+            self._last_error = str(error)
         log.error(f"DXLink error: {error}")
 
     def _on_close(self, ws, code, msg):
+        with self._lock:
+            self._connected    = False
+            self._authorized   = False
+            self._channel_open = False
+            self._last_close_code = code
         log.warning(f"DXLink closed: code={code}")
         self._ready.clear()
 
 
-# ── tier classification (mirrors oi_viewer.py) ─────────────────────────────────
+# -- tier classification (mirrors oi_viewer.py) -------------------------------
 
 def _load_calendar():
     try:
         import pandas_market_calendars as mcal
-        nyse = mcal.get_calendar("NYSE")
-        from datetime import timedelta
+        nyse  = mcal.get_calendar("NYSE")
         start = date.today()
         end   = start + timedelta(days=90)
         return {d.date() for d in nyse.valid_days(start_date=start.isoformat(),
@@ -363,7 +455,6 @@ def _load_calendar():
 
 
 def classify_tier(today: date) -> str:
-    from datetime import timedelta
     import calendar as _cal
 
     valid = _load_calendar()
@@ -382,12 +473,11 @@ def classify_tier(today: date) -> str:
     def nominal_fri(d):
         return d + timedelta(days=(4 - d.weekday()) % 7)
 
-    eow = prior_td(nominal_fri(today))
+    eow    = prior_td(nominal_fri(today))
     plus1d = next_td(today)
     if plus1d != eow:
         return "0DTE_Regular"
 
-    # It's a Thursday (or Wed-before-holiday Friday) — check if monthly OpEx
     count, opex = 0, None
     for day in range(1, _cal.monthrange(plus1d.year, plus1d.month)[1] + 1):
         if date(plus1d.year, plus1d.month, day).weekday() == 4:
@@ -398,88 +488,7 @@ def classify_tier(today: date) -> str:
     return "0DTE_Monthly" if plus1d == opex else "0DTE_Weekly"
 
 
-# ── ticker health diagnostics ──────────────────────────────────────────────────
-
-def _log_ticker_health(feed: DXLinkFeed):
-    """Log OK/WARN for every price ticker after the initial data flush."""
-    state = feed.get_state()
-    dead = []
-    log.info("── price ticker health check ──────────────────────────────")
-    for label, dxlink_sym in PRICE_TICKERS.items():
-        d     = state.get(dxlink_sym, {})
-        price = d.get("last") or (
-            round((d["bid"] + d["ask"]) / 2, 4)
-            if d.get("bid") is not None and d.get("ask") is not None else None
-        )
-        if price is not None:
-            log.info(f"  OK    {label:<10} ({dxlink_sym})  price={price}")
-        else:
-            log.warning(f"  WARN  {label:<10} ({dxlink_sym})  NO DATA — symbol may be wrong or not subscribed")
-            dead.append(label)
-    if dead:
-        log.warning(f"  {len(dead)} ticker(s) with no data: {', '.join(dead)}")
-    else:
-        log.info("  all price tickers returning data")
-    log.info("───────────────────────────────────────────────────────────")
-
-
-# ── prices.json upload (every 30s) ────────────────────────────────────────────
-
-def push_prices(s3, feed: DXLinkFeed):
-    state = feed.get_state()
-    ts_et  = datetime.now(ET)
-    ts_utc = datetime.now(timezone.utc)
-
-    prices = {}
-    for label, dxlink_sym in PRICE_TICKERS.items():
-        d = state.get(dxlink_sym, {})
-        bid  = d.get("bid")
-        ask  = d.get("ask")
-        last = d.get("last")
-        mid  = round((bid + ask) / 2, 4) if bid is not None and ask is not None else None
-        price = last or mid
-        prev  = d.get("prev_close")
-        chg_pct = None
-        if price and prev and prev != 0:
-            chg_pct = round((price - prev) / prev * 100, 2)
-        prices[label] = {
-            "price":    price,
-            "bid":      bid,
-            "ask":      ask,
-            "prev_close": prev,
-            "chg_pct":  chg_pct,
-            "volume":   d.get("volume"),
-        }
-
-    dead = [label for label, d in prices.items() if d["price"] is None]
-    if dead:
-        log.warning(f"prices.json — no data for: {', '.join(dead)}")
-
-    payload = json.dumps({
-        "timestamp":     ts_utc.isoformat(),
-        "snapshot_time": ts_et.strftime("%H:%M ET"),
-        "prices":        prices,
-    }, default=str)
-
-    s3.put_object(
-        Bucket=R2_BUCKET, Key="intraday/prices.json",
-        Body=payload.encode(),
-        ContentType="application/json",
-        CacheControl="no-cache, max-age=0",
-    )
-
-
-def prices_loop(s3, feed: DXLinkFeed):
-    while not past_stop():
-        try:
-            push_prices(s3, feed)
-        except Exception as e:
-            log.error(f"prices.json error: {e}")
-        time.sleep(PRICES_SECS)
-    log.info("prices loop stopped")
-
-
-# ── snapshot upload ────────────────────────────────────────────────────────────
+# -- R2 client ----------------------------------------------------------------
 
 def make_s3():
     return boto3.client(
@@ -491,6 +500,203 @@ def make_s3():
     )
 
 
+# -- startup classification ---------------------------------------------------
+
+def _classify_startup(s3, process_start: datetime) -> str:
+    """Read prior health.json to classify this startup."""
+    try:
+        resp  = s3.get_object(Bucket=R2_BUCKET, Key="intraday/health.json")
+        prior = json.loads(resp["Body"].read())
+    except Exception:
+        return "clean_start"
+
+    if prior.get("collector", {}).get("past_stop", False):
+        return "clean_start"
+
+    prior_updated = prior.get("updated_at")
+    if prior_updated:
+        try:
+            prior_dt  = datetime.fromisoformat(prior_updated.replace("Z", "+00:00"))
+            gap_mins  = (process_start - prior_dt).total_seconds() / 60
+            return "recovery_after_crash" if gap_mins < 120 else "recovery_after_gap"
+        except Exception:
+            pass
+
+    return "unknown"
+
+
+# -- ticker health diagnostics ------------------------------------------------
+
+def _log_ticker_health(feed: DXLinkFeed):
+    state = feed.get_state()
+    dead  = []
+    log.info("-- price ticker health check ------------------------------------")
+    for label, dxlink_sym in PRICE_TICKERS.items():
+        d     = state.get(dxlink_sym, {})
+        price = d.get("last") or (
+            round((d["bid"] + d["ask"]) / 2, 4)
+            if d.get("bid") is not None and d.get("ask") is not None else None
+        )
+        if price is not None:
+            log.info(f"  OK    {label:<10} ({dxlink_sym})  price={price}")
+        else:
+            log.warning(f"  WARN  {label:<10} ({dxlink_sym})  NO DATA -- symbol may be wrong")
+            dead.append(label)
+    if dead:
+        log.warning(f"  {len(dead)} ticker(s) with no data: {', '.join(dead)}")
+    else:
+        log.info("  all price tickers returning data")
+    log.info("-----------------------------------------------------------------")
+
+
+# -- prices.json upload (every 30s) ------------------------------------------
+
+def push_prices(s3, feed: DXLinkFeed, counters: Counters):
+    state      = feed.get_state()
+    fh         = feed.get_health()
+    ts_et      = datetime.now(ET)
+    ts_utc     = datetime.now(timezone.utc)
+
+    last_event = fh["last_feed_event_time"]
+    feed_stale = (last_event is None or
+                  (ts_utc - last_event).total_seconds() > STALE_FEED_SECS)
+    if feed_stale:
+        log.warning(f"prices.json -- feed stale (last event: {last_event})")
+
+    prices = {}
+    for label, dxlink_sym in PRICE_TICKERS.items():
+        d       = state.get(dxlink_sym, {})
+        bid     = d.get("bid")
+        ask     = d.get("ask")
+        last    = d.get("last")
+        mid     = round((bid + ask) / 2, 4) if bid is not None and ask is not None else None
+        price   = last or mid
+        prev    = d.get("prev_close")
+        chg_pct = None
+        if price and prev and prev != 0:
+            chg_pct = round((price - prev) / prev * 100, 2)
+        prices[label] = {
+            "price":      price,
+            "bid":        bid,
+            "ask":        ask,
+            "prev_close": prev,
+            "chg_pct":    chg_pct,
+            "volume":     d.get("volume"),
+        }
+
+    dead = [label for label, d in prices.items() if d["price"] is None]
+    if dead:
+        log.warning(f"prices.json -- no data for: {', '.join(dead)}")
+
+    payload = json.dumps({
+        "timestamp":     ts_utc.isoformat(),
+        "snapshot_time": ts_et.strftime("%H:%M ET"),
+        "feed_stale":    feed_stale,
+        "prices":        prices,
+    }, default=str)
+
+    try:
+        s3.put_object(
+            Bucket=R2_BUCKET, Key="intraday/prices.json",
+            Body=payload.encode(),
+            ContentType="application/json",
+            CacheControl="no-cache, max-age=0",
+        )
+        counters.inc_prices(ts_utc.isoformat())
+    except Exception as e:
+        counters.inc_failure()
+        raise
+
+
+def prices_loop(s3, feed: DXLinkFeed, counters: Counters):
+    while not past_stop():
+        try:
+            push_prices(s3, feed, counters)
+        except Exception as e:
+            log.error(f"prices.json error: {e}")
+        time.sleep(PRICES_SECS)
+    log.info("prices loop stopped")
+
+
+# -- health.json upload (every 15s) ------------------------------------------
+
+def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
+                run_id: str, process_start: datetime, classification: str, today: date):
+    fh   = feed.get_health()
+    ctr  = counters.get()
+    trk  = tracker.get()
+    now  = datetime.now(timezone.utc)
+
+    last_event = fh["last_feed_event_time"]
+    feed_stale = (last_event is None or (now - last_event).total_seconds() > STALE_FEED_SECS)
+
+    state     = feed.get_state()
+    no_data   = [label for label, sym in PRICE_TICKERS.items()
+                 if state.get(sym, {}).get("last") is None and state.get(sym, {}).get("bid") is None]
+    with_data = len(PRICE_TICKERS) - len(no_data)
+
+    payload = json.dumps({
+        "run_id":             run_id,
+        "trade_date":         today.isoformat(),
+        "process_start_time": process_start.isoformat(),
+        "updated_at":         now.isoformat(),
+        "classification":     classification,
+        "collector": {
+            "past_stop":      past_stop(),
+            "loop_alive":     True,
+            "last_loop_time": now.isoformat(),
+        },
+        "feed": {
+            "connected":            fh["connected"],
+            "authorized":           fh["authorized"],
+            "channel_open":         fh["channel_open"],
+            "reconnect_count":      fh["reconnect_count"],
+            "last_feed_event_time": last_event.isoformat() if last_event else None,
+            "feed_stale":           feed_stale,
+            "last_error":           fh["last_error"],
+            "last_close_code":      fh["last_close_code"],
+        },
+        "uploads": {
+            "prices_success_count":      ctr["prices_ok"],
+            "snapshot_success_count":    ctr["snapshot_ok"],
+            "csv_success_count":         ctr["csv_ok"],
+            "failure_count":             ctr["failures"],
+            "last_price_upload_time":    ctr["last_price_time"],
+            "last_snapshot_upload_time": ctr["last_snapshot_time"],
+        },
+        "cadence": trk,
+        "symbols": {
+            "expected_price_symbols":  len(PRICE_TICKERS),
+            "price_symbols_with_data": with_data,
+            "no_data_symbols":         no_data,
+        },
+    }, default=str)
+
+    try:
+        s3.put_object(
+            Bucket=R2_BUCKET, Key="intraday/health.json",
+            Body=payload.encode(),
+            ContentType="application/json",
+            CacheControl="no-cache, max-age=0",
+        )
+    except Exception as e:
+        log.error(f"health.json upload failed: {e}")
+        counters.inc_failure()
+
+
+def health_loop(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
+                run_id: str, process_start: datetime, classification: str, today: date):
+    while not past_stop():
+        try:
+            push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+        except Exception as e:
+            log.error(f"health loop error: {e}")
+        time.sleep(HEALTH_SECS)
+    log.info("health loop stopped")
+
+
+# -- snapshot upload ----------------------------------------------------------
+
 def _fmt_oi(v: int) -> str:
     if v == 0:    return ""
     if v < 1000:  return str(v)
@@ -499,17 +705,15 @@ def _fmt_oi(v: int) -> str:
 
 
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
-                  exp_date: str, tier: str, today: date):
-    state = feed.get_state()
-    ts_et = datetime.now(ET)
+                  exp_date: str, tier: str, today: date,
+                  counters: Counters, tracker: SnapshotTracker):
+    state  = feed.get_state()
+    ts_et  = datetime.now(ET)
     ts_utc = datetime.now(timezone.utc)
 
-    # Underlying price from QQQ quote
     qqq = state.get(TICKER, {})
     bid, ask = qqq.get("bid"), qqq.get("ask")
     underlying = round((bid + ask) / 2, 2) if bid and ask else (qqq.get("last") or None)
-
-    # ATM from underlying price
     atm = round(underlying) if underlying else None
 
     rows = []
@@ -548,26 +752,30 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             })
 
     if not rows:
-        log.warning("snapshot empty — state not populated yet")
+        log.warning("snapshot empty -- state not populated yet")
         return
 
-    # Upload CSV
-    df = pd.DataFrame(rows)
+    df      = pd.DataFrame(rows)
     csv_buf = io.StringIO()
     df.to_csv(csv_buf, index=False)
 
     date_str = today.strftime("%Y%m%d")
-    time_str = ts_et.strftime("%H%M")
+    time_str = ts_et.strftime("%H%M%S")   # second-precision prevents overwrite on restart
     csv_key  = f"intraday/{date_str}/snapshot_{time_str}.csv"
 
-    s3.put_object(
-        Bucket=R2_BUCKET, Key=csv_key,
-        Body=csv_buf.getvalue().encode(),
-        ContentType="text/csv",
-    )
-    log.info(f"→ {csv_key}  ({len(rows)} rows,  underlying={underlying})")
+    try:
+        s3.put_object(
+            Bucket=R2_BUCKET, Key=csv_key,
+            Body=csv_buf.getvalue().encode(),
+            ContentType="text/csv",
+        )
+        counters.inc_csv()
+        log.info(f"-> {csv_key}  ({len(rows)} rows,  underlying={underlying})")
+    except Exception as e:
+        log.error(f"CSV upload failed: {e}")
+        counters.inc_failure()
+        raise
 
-    # Upload latest.json
     payload = {
         "timestamp":        ts_utc.isoformat(),
         "snapshot_time":    ts_et.strftime("%H:%M ET"),
@@ -578,16 +786,24 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "snapshot_key":     csv_key,
         "rows":             rows,
     }
-    s3.put_object(
-        Bucket=R2_BUCKET, Key="intraday/latest.json",
-        Body=json.dumps(payload, default=str).encode(),
-        ContentType="application/json",
-        CacheControl="no-cache, max-age=0",
-    )
-    log.info("→ intraday/latest.json updated")
+
+    try:
+        s3.put_object(
+            Bucket=R2_BUCKET, Key="intraday/latest.json",
+            Body=json.dumps(payload, default=str).encode(),
+            ContentType="application/json",
+            CacheControl="no-cache, max-age=0",
+        )
+        counters.inc_snapshot(ts_utc.isoformat())
+        tracker.record()
+        log.info("-> intraday/latest.json updated")
+    except Exception as e:
+        log.error(f"latest.json upload failed: {e}")
+        counters.inc_failure()
+        raise
 
 
-# ── main ───────────────────────────────────────────────────────────────────────
+# -- session lifecycle --------------------------------------------------------
 
 def past_stop() -> bool:
     et = datetime.now(ET)
@@ -595,23 +811,40 @@ def past_stop() -> bool:
 
 
 def wait_for_premarket():
+    """Block until inside the valid session window (06:00-16:15 ET).
+    If called post-close, sleeps until next day to prevent Railway restart-loops."""
     while True:
-        et = datetime.now(ET)
-        if et.hour >= PREMARKET_HOUR:
+        et        = datetime.now(ET)
+        in_window = (
+            PREMARKET_HOUR <= et.hour < STOP_HOUR or
+            (et.hour == STOP_HOUR and et.minute < STOP_MIN)
+        )
+        if in_window:
             return
-        log.info(f"waiting for {PREMARKET_HOUR:02d}:00 ET pre-market window")
-        time.sleep(60)
+        next_date = (et.date() + timedelta(days=1))
+        base      = ET.localize(datetime(next_date.year, next_date.month, next_date.day,
+                                         PREMARKET_HOUR, 0, 0))
+        delay     = (base - et).total_seconds()
+        log.info(
+            f"outside trading window -- sleeping "
+            f"{int(delay // 3600)}h {int((delay % 3600) // 60)}m "
+            f"until {base.strftime('%Y-%m-%d %H:%M ET')}"
+        )
+        time.sleep(min(delay, 3600))
 
 
-def main():
-    login    = os.environ["TASTY_LOGIN"]
-    password = os.environ["TASTY_PASSWORD"]
+def _run_session(login: str, password: str):
+    run_id        = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
+    process_start = datetime.now(timezone.utc)
+    log.info(f"session start  run_id={run_id}")
 
-    wait_for_premarket()
+    s3             = make_s3()
+    classification = _classify_startup(s3, process_start)
+    log.info(f"startup classification: {classification}")
 
-    auth = tasty_auth(login, password)
-    today = date.today()
-    tier  = classify_tier(today)
+    auth    = tasty_auth(login, password)
+    today   = date.today()
+    tier    = classify_tier(today)
     log.info(f"session date={today}  tier={tier}")
 
     strikes, exp_date = load_chain(auth["session_token"], today)
@@ -624,38 +857,75 @@ def main():
     price_syms = list(PRICE_TICKERS.values())
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
     for label, sym in PRICE_TICKERS.items():
-        log.info(f"  price ticker  {label:<10} → {sym}")
+        log.info(f"  price ticker  {label:<10} -> {sym}")
 
     feed = DXLinkFeed(auth["streamer_url"], auth["streamer_token"])
     feed.set_subscriptions(option_syms, price_syms)
     feed.start()
 
     if not feed.wait_ready(timeout=30):
-        log.warning("DXLink channel not open after 30s — proceeding anyway")
+        log.warning("DXLink channel not open after 30s -- proceeding anyway")
 
     log.info("waiting 20s for initial data flush...")
     time.sleep(20)
 
     _log_ticker_health(feed)
 
-    s3 = make_s3()
+    counters = Counters()
+    tracker  = SnapshotTracker()
 
-    # Start prices.json refresh thread (every 30s)
-    prices_thread = threading.Thread(target=prices_loop, args=(s3, feed), daemon=True)
+    prices_thread = threading.Thread(target=prices_loop, args=(s3, feed, counters), daemon=True)
     prices_thread.start()
     log.info(f"prices thread started (every {PRICES_SECS}s)")
+
+    health_thread = threading.Thread(
+        target=health_loop,
+        args=(s3, feed, counters, tracker, run_id, process_start, classification, today),
+        daemon=True,
+    )
+    health_thread.start()
+    log.info(f"health thread started (every {HEALTH_SECS}s)")
 
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS // 60}m, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
     while not past_stop():
+        tracker.check_missed()
         try:
-            take_snapshot(s3, feed, strikes, exp_date, tier, today)
+            take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
         except Exception as e:
             log.error(f"snapshot error: {e}")
         time.sleep(SNAPSHOT_SECS)
 
-    log.info("past stop time — shutting down")
+    trk = tracker.get()
+    ctr = counters.get()
+    log.info(
+        f"session complete  run_id={run_id}  "
+        f"snapshots={trk['snapshot_sequence']}  "
+        f"missed={trk['missed_snapshot_count']}  "
+        f"failures={ctr['failures']}"
+    )
+
+    # Write final health.json with past_stop=True so next startup classifies as clean_start
+    try:
+        push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+    except Exception:
+        pass
+
     feed.stop()
+
+
+def main():
+    login    = os.environ["TASTY_LOGIN"]
+    password = os.environ["TASTY_PASSWORD"]
+
+    while True:
+        wait_for_premarket()
+        try:
+            _run_session(login, password)
+        except Exception as e:
+            log.error(f"session failed: {e}", exc_info=True)
+        # After session end or crash, wait_for_premarket() handles sleeping until
+        # the next window -- process never exits, Railway never restart-loops
 
 
 if __name__ == "__main__":

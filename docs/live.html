@@ -229,6 +229,46 @@
   .flash-up   { animation: flash-up   0.6s ease; }
   .flash-down { animation: flash-down 0.6s ease; }
 
+  /* ── health bar ─────────────────────────────────────────────────────── */
+  #health-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    font-size: 0.68rem;
+    color: var(--dim);
+    margin-bottom: 0.6rem;
+    padding: 4px 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  #health-bar.hidden { display: none; }
+  .h-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .h-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--dim); flex-shrink: 0;
+  }
+  .h-dot.ok    { background: #00cc55; }
+  .h-dot.warn  { background: #e8c84b; }
+  .h-dot.bad   { background: #ee3300; }
+
+  /* ── calibration error banner ────────────────────────────────────────── */
+  #cal-error {
+    display: none;
+    padding: 6px 10px;
+    margin-bottom: 0.6rem;
+    background: #2a0808;
+    border: 1px solid #ee3300;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: #ffaa88;
+  }
+
   /* ── no-data state ───────────────────────────────────────────────────── */
   #no-data {
     padding: 3rem;
@@ -262,6 +302,16 @@
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
   <span id="countdown"></span>
+</div>
+
+<div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
+
+<div id="health-bar" class="hidden">
+  <span style="color:var(--dim);letter-spacing:0.04em;">COLLECTOR</span>
+  <span class="h-pill"><span class="h-dot" id="h-feed-dot"></span><span id="h-feed-txt">feed</span></span>
+  <span class="h-pill"><span class="h-dot" id="h-upload-dot"></span><span id="h-upload-txt">uploads</span></span>
+  <span class="h-pill"><span class="h-dot" id="h-class-dot"></span><span id="h-class-txt">—</span></span>
+  <span id="h-run-id" style="color:var(--dim);font-size:0.62rem;margin-left:auto;opacity:0.6"></span>
 </div>
 
 <div id="price-strip">
@@ -335,7 +385,7 @@ function parseCsv(text) {
 async function loadRanges() {
   try {
     const resp = await fetch(`${R2}/derived/OIranges.csv`);
-    if (!resp.ok) return;
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const rows = parseCsv(await resp.text());
     const out = {};
     for (const r of rows) {
@@ -352,6 +402,7 @@ async function loadRanges() {
     ranges = out;
   } catch (e) {
     console.warn('OIranges load failed:', e);
+    document.getElementById('cal-error').style.display = 'block';
   }
 }
 
@@ -593,8 +644,54 @@ async function fetchPrices() {
     if (!resp.ok) return;
     const data = await resp.json();
     updatePriceStrip(data.prices || {});
+    if (data.feed_stale) {
+      setStatus('stale', 'Feed stale — collector connected but no recent market events');
+    }
   } catch (e) {
     console.warn('prices.json fetch failed:', e);
+  }
+}
+
+// ── health.json fetch (every 15s) ─────────────────────────────────────────────
+async function fetchHealth() {
+  try {
+    const resp = await fetch(`${R2}/intraday/health.json?_=${Date.now()}`);
+    if (!resp.ok) return;
+    const h = await resp.json();
+
+    document.getElementById('health-bar').classList.remove('hidden');
+
+    // Feed dot
+    const feedDot = document.getElementById('h-feed-dot');
+    const feedTxt = document.getElementById('h-feed-txt');
+    const feedStale = h.feed?.feed_stale;
+    const connected = h.feed?.connected && h.feed?.channel_open;
+    feedDot.className = 'h-dot ' + (feedStale ? 'bad' : connected ? 'ok' : 'warn');
+    const recons = h.feed?.reconnect_count || 0;
+    feedTxt.textContent = feedStale ? 'feed stale' : connected ? `feed live${recons ? ' ('+recons+' reconn)' : ''}` : 'feed down';
+
+    // Upload dot
+    const upDot = document.getElementById('h-upload-dot');
+    const upTxt = document.getElementById('h-upload-txt');
+    const fails = h.uploads?.failure_count || 0;
+    const ok    = h.uploads?.prices_success_count || 0;
+    upDot.className = 'h-dot ' + (fails > 0 ? 'warn' : ok > 0 ? 'ok' : 'warn');
+    upTxt.textContent = `${ok} pushes${fails ? ' · '+fails+' err' : ''}`;
+
+    // Classification dot
+    const clDot = document.getElementById('h-class-dot');
+    const clTxt = document.getElementById('h-class-txt');
+    const cls   = h.classification || 'unknown';
+    const clsColor = { clean_start: 'ok', recovery_after_crash: 'warn', recovery_after_gap: 'warn', unknown: 'warn' };
+    clDot.className = 'h-dot ' + (clsColor[cls] || 'warn');
+    clTxt.textContent = cls.replace(/_/g, ' ');
+
+    // Run ID (short)
+    const runId = h.run_id || '';
+    document.getElementById('h-run-id').textContent = runId ? 'run ' + runId.slice(-9) : '';
+
+  } catch (e) {
+    // health.json not yet available (pre-deployment) — don't surface an error
   }
 }
 
@@ -606,13 +703,16 @@ async function fetchPrices() {
   await loadRanges();
 
   setStatus('', 'Fetching live snapshot…');
-  await Promise.all([fetchLatest(), fetchPrices()]);
+  await Promise.all([fetchLatest(), fetchPrices(), fetchHealth()]);
 
   // OI heatmap: 60s refresh cycle
   startCountdown();
 
   // Price strip: 30s independent interval
   setInterval(fetchPrices, 30_000);
+
+  // Health telemetry: 15s interval
+  setInterval(fetchHealth, 15_000);
 })();
 </script>
 </body>
