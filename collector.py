@@ -489,14 +489,18 @@ class DXLinkFeed:
             })
 
         elif mtype == "FEED_CONFIG":
-            # Server has acknowledged FEED_SETUP — now safe to subscribe
+            # Server has acknowledged FEED_SETUP — now safe to subscribe.
+            # Split into batches to stay under the 65536-byte frame limit.
             log.info("DXLink feed configured -- sending subscriptions")
             if self._subs:
-                self._send({
-                    "type": "FEED_SUBSCRIPTION", "channel": 1,
-                    "reset": True, "add": self._subs,
-                })
-                log.info(f"subscribed to {len(self._subs)} event/symbol pairs")
+                batch_size = 200
+                for i in range(0, len(self._subs), batch_size):
+                    batch = self._subs[i:i + batch_size]
+                    self._send({
+                        "type": "FEED_SUBSCRIPTION", "channel": 1,
+                        "reset": i == 0, "add": batch,
+                    })
+                log.info(f"subscribed to {len(self._subs)} event/symbol pairs ({batch_size}/batch)")
             self._ready.set()
 
         elif mtype == "FEED_DATA":
