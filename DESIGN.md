@@ -1,149 +1,234 @@
 # Product Design Document — MOO-13: Live OI Viewer + Intraday Chain Pipeline
 
-**Status:** Pre-deployment review  
-**Date:** 2026-06-23  
-**Repo:** `live-options-view` — github.com/OwenTanzer/live-options-view  
+**Status:** Live / Active development
+**Last updated:** 2026-06-23
+**Repo:** `live-options-view` — github.com/OwenTanzer/live-options-view
+**Live URL:** `options.moopertonic.net`
 **Related:** Desktop OI viewer lives separately in `OwenTanzer/options-view`
 
 ---
 
 ## 1. Problem Statement
 
-The existing desktop app (`OptionsView`) shows only the **morning snapshot** of QQQ's 0DTE options chain, sourced once per day at open. This is useful for identifying OI walls at the start of the session, but gives no visibility into how the chain evolves intraday — which strikes are seeing volume flow, where gamma is being bought or sold, and whether the morning's OI structure is being tested or reinforced as price moves.
+The existing desktop app (`OptionsView`) shows only the **morning snapshot** of QQQ's 0DTE options chain, sourced once per day at open. This gives no visibility into how the chain evolves intraday — which strikes are seeing volume flow, where gamma is being bought or sold, and whether the morning's OI structure is being tested or reinforced as price moves.
 
 In high-volatility sessions (elevated KOSPI selloffs, JPY flight, NASDAQ double-tops), this blind spot is a material risk gap. We need intraday resolution.
 
-Additionally, the existing product is a desktop download. A web-accessible live view removes the distribution friction and reaches users who are in-session with no time to install anything.
+The product is a live web view at `options.moopertonic.net`, accessible from any device with no installation required.
 
 ---
 
-## 2. Product Scope (MOO-13)
-
-Two tightly coupled deliverables:
-
-| Deliverable | Description |
-|---|---|
-| **Intraday chain collector** | Runs on Railway. Authenticates with tastytrade, subscribes to QQQ 0DTE chain + 10 macro tickers via DXLink websocket. Uploads snapshots to Cloudflare R2 every 11 minutes throughout the session. |
-| **Live web viewer** | Static page on `moopertonic.net`. Reads R2 directly. Renders the calibrated OI heatmap (same color scheme as the desktop app) with live volume overlaid. Also shows a live price strip for 10 macro indicators, refreshing every 30 seconds. |
-
-**Out of scope for this release:** historical intraday replay, WebSocket push to the browser (uses polling), multi-symbol heatmaps, authentication/access control.
-
----
-
-## 3. Architecture
+## 2. Architecture
 
 ```
-┌─────────────────────────────┐
-│  tastytrade / DXLink        │
-│  (websocket, real-time)     │
-└────────────┬────────────────┘
-             │ Quote, Trade, Summary, Greeks events
-             ▼
-┌─────────────────────────────┐
-│  Railway — collector.py     │  ← runs 6:00 AM – 4:15 PM ET daily
-│                             │
-│  • QQQ 0DTE chain (±33)    │──▶ intraday/YYYYMMDD/snapshot_HHMM.csv
-│  • 10 macro price tickers  │──▶ intraday/latest.json          (11 min)
-│                             │──▶ intraday/prices.json          (30 sec)
-└─────────────────────────────┘
-             │
-             ▼ S3-compatible PUT
-┌─────────────────────────────┐
-│  Cloudflare R2 (public)     │
-│  pub-4d5c916b8cb74ffb8c0…  │
-│                             │
-│  intraday/latest.json       │  OI heatmap data + metadata
-│  intraday/prices.json       │  live price strip data
-│  intraday/YYYYMMDD/*.csv   │  archived per-session snapshots
-│  derived/OIranges.csv       │  (existing) calibration thresholds
-└──────────────┬──────────────┘
-               │ public HTTP GET
-               ▼
-┌─────────────────────────────┐
-│  Cloudflare Pages           │
-│  moopertonic.net/live.html  │
-│                             │
-│  • Price strip  (30s poll) │
-│  • OI heatmap  (60s poll)  │
-│  • No server-side logic    │
-└─────────────────────────────┘
+┌─────────────────────────────────┐
+│  tastytrade / DXLink            │
+│  (websocket, real-time)         │
+└───────────────┬─────────────────┘
+                │ Quote, Trade, Summary, Greeks, TradeETH events
+                ▼
+┌─────────────────────────────────┐
+│  Railway — collector.py         │  ← runs 6:00 AM – 4:15 PM ET daily
+│                                 │
+│  • QQQ 0DTE chain (±67 strikes)│──▶ intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  (60s)
+│  • 14 macro/indicator tickers  │──▶ intraday/latest.json                          (60s)
+│  • yfinance fallback for all   │──▶ intraday/prices.json                          (30s)
+│                                 │──▶ intraday/health.json                          (15s)
+└─────────────────────────────────┘
+                │ S3-compatible PUT
+                ▼
+┌─────────────────────────────────┐
+│  Cloudflare R2                  │
+│  bucket: qqq-options-chain-data │
+│                                 │
+│  intraday/latest.json           │  OI heatmap data + metadata (last good snapshot)
+│  intraday/prices.json           │  live macro price strip
+│  intraday/health.json           │  collector lifecycle telemetry
+│  intraday/YYYYMMDD/*.csv        │  archived per-session snapshots (every 60s)
+│  derived/OIranges.csv           │  OI color calibration thresholds
+│  auth/remember_token.json       │  rotated tastytrade remember-me token
+└───────────────┬─────────────────┘
+                │ public HTTP GET (via Cloudflare Worker)
+                ▼
+┌─────────────────────────────────┐
+│  options.moopertonic.net        │
+│  docs/index.html (static)       │
+│                                 │
+│  • Price strip    (30s poll)   │
+│  • OI heatmap     (60s poll)   │
+│  • No server-side logic        │
+└─────────────────────────────────┘
 ```
 
 ---
 
-## 4. Data Pipeline Detail
+## 3. Auth Flow
 
-### 4.1 Auth flow
+### 3.1 tastytrade session
 
-1. `POST /sessions` → `session-token` (tastytrade credentials in Railway env vars)
-2. `GET /api-quote-tokens` → `streamer-token` + `streamer-url` (DXLink websocket endpoint)
-3. DXLink SETUP → AUTH → CHANNEL_REQUEST → FEED_SETUP → FEED_SUBSCRIPTION
+1. Try R2-persisted remember-token first (`auth/remember_token.json`)
+2. If rejected (403) or missing, fall back to `POST /sessions` with `TASTY_LOGIN` + `TASTY_PASSWORD`
+3. If MFA challenge required, complete automatically using `TASTY_TOTP_SECRET` via `pyotp`
+4. `GET /api-quote-tokens` → `streamer-token` + `streamer-url` (DXLink WebSocket endpoint)
+5. Rotate and save new remember-token to R2 after each successful auth
 
-Session established once at startup. No scheduled refresh — if the session expires (24h), Railway restarts the process and re-authenticates.
+Session is established once at startup. The token is rotated on every auth, persisted to R2, and reused on the next deployment to avoid repeated TOTP challenges.
 
-### 4.2 Option chain sourcing
+### 3.2 DXLink connection sequence
 
-Chain structure is loaded once at startup via `GET /option-chains/QQQ/nested` (tastytrade REST). This returns all strikes + expirations with their DXLink streamer symbols (`.QQQ260623C00480000` format). The collector picks today's expiration; pre-market, it falls back to the nearest upcoming expiry.
+```
+SETUP → (server) AUTH_STATE:UNAUTHORIZED → AUTH (with streamer-token)
+      → AUTH_STATE:AUTHORIZED → CHANNEL_REQUEST
+      → CHANNEL_OPENED → FEED_SETUP (with acceptEventFields)
+      → FEED_CONFIG → FEED_SUBSCRIPTION (batched, ≤200/message)
+      → streaming FEED_DATA events
+```
 
-Live quote/Greeks data flows via DXLink — the REST chain call provides structure only.
+**Critical protocol details:**
+- `acceptEventFields` must include `"eventType"` as the first field in every event type list, or the server strips it and all events become unclassifiable
+- Subscriptions must wait for `FEED_CONFIG` before being sent, or the server silently drops them
+- `FEED_CONFIG` is sent after each subscription batch; a `_subscribed` flag prevents the batch from being re-sent on subsequent `FEED_CONFIG` messages
+- All subscriptions are batched at ≤200 per `FEED_SUBSCRIPTION` message to stay under the 65,536-byte WebSocket frame limit
+- The DXLink server sends string `"NaN"` for `openInterest` and `dayVolume` on some options; all numeric fields go through `_to_int()` / `_to_float()` converters that handle this
 
-### 4.3 DXLink subscriptions
+### 3.3 Automatic token refresh
 
-| Symbol class | Event types | Fields |
+If DXLink auth fails 3+ consecutive times (server returns `UNAUTHORIZED`), the snapshot loop re-fetches a fresh streamer token from tastytrade and calls `feed.update_token()`. The `run_forever(reconnect=5)` loop then reconnects with the new token on the next natural retry. A `restart_if_dead()` check runs each snapshot loop iteration to revive the WebSocket thread if `ws.close()` ever killed it.
+
+---
+
+## 4. Option Chain Sourcing
+
+### 4.1 Symbol format
+
+DXLink requires its own option symbol format, **not** OCC format:
+
+| Format | Example | Notes |
 |---|---|---|
-| QQQ option chain (±33 strikes × 2 sides) | Quote, Summary, Trade, Greeks | bid, ask, openInterest, prevDayClosePrice, dayVolume, price, volatility, delta, gamma, theta, vega |
-| Price tickers (10 symbols) | Quote, Trade, Summary | bid, ask, price (last), dayVolume, prevDayClosePrice, dayOpenPrice |
+| OCC | `QQQ260623C00713000` | Used in REST chain API |
+| OCC-dot (wrong) | `.QQQ260623C00713000` | Silently returns 0 events |
+| **dxFeed (correct)** | `.QQQ260623C713` | Plain numeric strike, no padding |
 
-### 4.4 Snapshot cadence
+Strike encoding: integer strikes use the integer directly (`713`); half-strikes use `strike × 100` with trailing zeros stripped (`713.5` → `71350`).
 
-| Output | Cadence | Contents |
+### 4.2 Chain load
+
+`GET /option-chains/QQQ` (flat endpoint, not `/nested`) is used because only the flat endpoint returns `streamer-symbol`. The collector builds dxFeed symbols via `_build_symbol()` rather than relying on the API's `streamer-symbol` field.
+
+---
+
+## 5. Data Pipeline
+
+### 5.1 DXLink subscriptions
+
+| Symbol class | Event types | Key fields |
 |---|---|---|
-| `intraday/latest.json` | Every 11 minutes | Full OI/volume chain snapshot + metadata (tier, expiration, underlying price) |
-| `intraday/prices.json` | Every 30 seconds | Price, bid/ask, % change from prev close for all 10 tickers |
-| `intraday/YYYYMMDD/snapshot_HHMM.csv` | Every 11 minutes | Archived CSV in same schema as daily files |
+| QQQ 0DTE chain (±67 strikes × 2 sides = up to 268 symbols) | Quote, Summary, Trade, Greeks | eventType, bidPrice, askPrice, openInterest, prevDayClosePrice, dayOpenPrice, dayVolume, price, volatility, delta, gamma, theta, vega |
+| Price tickers (14 symbols) | Quote, Trade, TradeETH, Summary | eventType, bidPrice, askPrice, price, dayVolume, prevDayClosePrice |
 
-### 4.5 CSV schema (intraday snapshots)
+DXLink does not deliver equity Quote events for ETFs/equities in the standard feed. All 14 price tickers fall back to yfinance.
 
-Identical to the existing daily backfill schema for compatibility with future ML pipeline (MOO-12):
+### 5.2 yfinance fallback
+
+Every price ticker is filled by yfinance if DXLink has no data. This covers pre-market and any DXLink outage. The most recent yfinance QQQ price is cached in `_last_spot` and used as the underlying price fallback for ATM centering in snapshots.
+
+### 5.3 Snapshot cadence
+
+| Output | Cadence | Guard |
+|---|---|---|
+| `intraday/YYYYMMDD/snapshot_*.csv` | Every 60s | Always written |
+| `intraday/latest.json` | Every 60s | **Only written when bid_count > 0** — preserves last good snapshot during outages |
+| `intraday/prices.json` | Every 30s | Always written |
+| `intraday/health.json` | Every 15s | Always written |
+
+The `latest.json` guard is critical for display continuity: when DXLink is down, `latest.json` retains the last snapshot with real option data rather than being overwritten with null bids.
+
+### 5.4 Startup state restoration
+
+On every session start (including redeployments), `restore_state()` reads the most recent today's snapshot CSV from R2 and seeds:
+- `_prev_vol` — per-symbol cumulative volume baseline, so `VolDelta` is accurate from the first snapshot without a one-beat gap
+- `_last_spot` — underlying price fallback
+- `_last_prices` — all 14 macro prices for CSV columns
+
+### 5.5 CSV schema
 
 ```
 TradeDate, Expiration, Strike, Type, OptionSymbol, DTE,
-OpenInterest, Volume, Bid, Mid, Ask, Last,
-IV, Delta, Gamma, Theta, Vega, UnderlyingPrice
+OpenInterest, Volume, VolDelta,
+Bid, Mid, Ask, Last,
+IV, Delta, Gamma, Theta, Vega,
+UnderlyingPrice,
+QQQ, USO, VIX, SMH, IGV, 10Y, JPY_USD, BTC_USD, META, GOOGL, AMZN, TSLA, MU, SPCX, Silver
 ```
 
-> **Important:** `OpenInterest` in intraday snapshots reflects the prior day's settled OI (OCC doesn't publish real-time OI intraday — this is a market structure limitation, not a pipeline bug). `Volume` is the live intraday accumulation and is the primary real-time signal.
+The 14 macro price columns are repeated on every row (denormalized). This allows any snapshot CSV to be loaded as a standalone DataFrame with full macro context for that timestamp.
 
-### 4.6 Tier classification
+`VolDelta` = `Volume - prev_snapshot_volume` (clamped ≥0), giving contracts traded in the last 60-second window.
 
-The collector classifies today as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` using the same holiday-corrected NYSE calendar logic as the desktop app. Tier is embedded in `latest.json` and used by the web viewer to apply the correct OI threshold multipliers from `OIranges.csv`.
+> **Note:** `OpenInterest` reflects prior-day settled OI. OCC does not publish real-time intraday OI — this is a market structure limitation. `Volume` and `VolDelta` are the live intraday signals.
+
+### 5.6 Tier classification
+
+Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` using a holiday-corrected NYSE calendar. Tier is embedded in `latest.json` and drives OI threshold multipliers in the viewer.
 
 ---
 
-## 5. Web Viewer Feature Spec
+## 6. Price Ticker Reference
 
-### 5.1 Price strip
+### Main strip (large tiles)
 
-Located at the top of `moopertonic.net/live.html`.
+| Display label | DXLink symbol | yfinance fallback | Notes |
+|---|---|---|---|
+| QQQ | `QQQ` | `QQQ` | Underlying |
+| USO | `USO` | `USO` | Oil ETF |
+| VIX | `$VIX.X` | `^VIX` | CBOE VIX index |
+| SMH | `SMH` | `SMH` | Semiconductor ETF |
+| IGV | `IGV` | `IGV` | Software ETF |
+| 10Y | `$TNX.X` | `^TNX` | CBOE 10-year yield index; value ÷ 10 = % |
+| JPY/USD | `/6J:XCME` | `JPYUSD=X` | CME yen futures; displayed inverted as `¥155.3` |
 
-**Main row (large):** QQQ · USO · VIX · SMH · IGV · JPY/USD  
-**Secondary row (small):** BTC/USD · META · GOOGL · AMZN · TSLA
+### Secondary strip (small tiles)
 
-Each tile shows:
-- Ticker label
-- Current price (last trade; bid/ask mid if no trade yet)
-- % change from prior close (sourced from DXLink `Summary.prevDayClosePrice`)
-- Green/red flash animation on price tick
-- Special formatting: JPY/USD displays as `¥155.3` (USD/JPY handle, inverted from raw CME quote); BTC as integer; VIX to 2dp
+| Display label | DXLink symbol | yfinance fallback | Notes |
+|---|---|---|---|
+| BTC/USD | `BTC/USD:CXERX` | `BTC-USD` | Coinbase spot via tastytrade crypto feed |
+| META | `META` | `META` | Equity |
+| GOOGL | `GOOGL` | `GOOGL` | Equity |
+| AMZN | `AMZN` | `AMZN` | Equity |
+| TSLA | `TSLA` | `TSLA` | Equity |
+| MU | `MU` | `MU` | Micron Technology |
+| SPCX | `SPCX` | `SPCX` | Space industry ETF |
+| Silver | `/SI:XCME` | `SI=F` | CME silver futures, $/troy oz |
 
-Polling: `intraday/prices.json` every **30 seconds** (independent of heatmap cycle).  
-Pre-market behavior: equities and JPY/USD available from ~6:00–6:30 AM ET. BTC/USD is 24/7. VIX may be flat until ~6:30 AM ET.
+---
 
-### 5.2 OI heatmap
+## 7. Web Viewer (`docs/index.html`)
 
-Renders ±20 strikes from ATM (same default window as the desktop app).
+### 7.1 Price strip
 
-**Cell background color:** OI bucket level (0–5), calibrated using `OIranges.csv` with tier-adjusted thresholds. Same 6-level green/red palette as the desktop app.
+Two rows of ticker tiles at the top of the page.
+
+- **Main row (large):** QQQ · USO · VIX · SMH · IGV · 10Y · JPY/USD
+- **Secondary row (small):** BTC/USD · META · GOOGL · AMZN · TSLA · MU · SPCX · Silver
+
+Each tile shows ticker label, current price, and % change from prior close. Special formatting:
+- `JPY/USD` — displayed as `¥155.3` (USD/JPY handle, inverted from raw CME quote)
+- `BTC/USD` — integer with comma separator
+- `VIX`, `10Y` — 2 decimal places; 10Y divides raw value by 10 to show `4.48%`
+
+Source: `intraday/prices.json`, polled every 30 seconds.
+
+### 7.2 OI heatmap
+
+Three-column table: Calls | Strike | Puts, ±67 strikes centered on ATM.
+
+**Cell contents (per option cell):**
+- OI value (bold, abbreviated: `12.5K`) — primary display
+- `bid × ask` (small, dimmed) — quote line below OI
+- Volume (small superscript, top-right) — cumulative intraday volume
+- Flow indicator (color-coded, bottom-right) — `VolDelta` contracts in last 60s
+
+**Cell background:** OI bucket (0–5), calibrated via `derived/OIranges.csv` with tier multipliers.
 
 | Level | Calls | Puts |
 |---|---|---|
@@ -154,140 +239,73 @@ Renders ±20 strikes from ATM (same default window as the desktop app).
 | 4 — p75–p90 | `#00cc55` | `#ee3300` |
 | 5 — > p90 (wall) | `#88ffcc` | `#ffaa88` |
 
-**Cell text:** OI value (abbreviated: `12.5K`). Volume shown as superscript in top-right of cell.
+**Flow indicator levels (VolDelta):**
 
-**Strike column:** Displays as offset from ATM (`+3`, `ATM`, `-2`). Hover shows absolute strike price.
+| Level | Threshold | Display |
+|---|---|---|
+| 0 | 0 contracts | Hidden |
+| 1 | < 20 | Dimmed white |
+| 2 | 20–99 | Gold |
+| 3 | 100–499 | Orange |
+| 4 | ≥ 500 | White + orange glow |
 
-**Header:** QQQ price · expiration date · tier badge (Regular / Weekly / Monthly, color-coded).
+**Strike column:** Shows actual strike price (e.g., `717`). ATM row shows `717 ★`. Tooltip shows offset from ATM.
 
-**Status bar:** Live dot (green), last snapshot time, countdown to next refresh.
+**Status bar:**
+- Green / "Live · last snap 13:25 ET" — data is fresh with bids
+- Red / "Cached · 13:25 ET (feed reconnecting)" — DXLink down, showing last good snapshot
+- Red / "Cached · 13:25 ET (3m ago)" — snapshot older than 2 minutes
 
-Polling: `intraday/latest.json` every **60 seconds**.
+Source: `intraday/latest.json`, polled every 60 seconds.
 
 ---
 
-## 6. Price Ticker Symbol Reference
+## 8. Infrastructure
 
-| Display label | DXLink symbol | Notes |
-|---|---|---|
-| QQQ | `QQQ` | ETF equity |
-| USO | `USO` | Oil ETF |
-| VIX | `$VIX.X` | CBOE VIX index (dxfeed format) |
-| SMH | `SMH` | Semiconductor ETF |
-| IGV | `IGV` | Software ETF |
-| JPY/USD | `/6J:XCME` | CME yen futures, USD-per-JPY; displayed inverted as `¥155.3` |
-| BTC/USD | `BTC/USD:CXERX` | Coinbase spot via tastytrade crypto feed |
-| META | `META` | Equity |
-| GOOGL | `GOOGL` | Equity |
-| AMZN | `AMZN` | Equity |
-| TSLA | `TSLA` | Equity |
+### 8.1 Railway environment variables
 
-### Symbol risk
-
-Three symbols have non-standard formats and need verification on first deploy:
-
-| Symbol | Risk | Fallback to check |
-|---|---|---|
-| `$VIX.X` | dxfeed index format — tastytrade may use a different prefix | `VIX.XO`, `VIX` |
-| `/6J:XCME` | CME front-month format — may require active contract suffix | `/6JU6:XCME` (Sep), `/6JZ6:XCME` (Dec) |
-| `BTC/USD:CXERX` | Exchange routing code may differ | `BTC/USD`, `BTC/USD:XCBT` |
-
-The collector logs `WARN {label} ({symbol}) NO DATA` immediately after the 20-second flush, and repeats the warning in every `prices.json` push cycle. Railway logs are the diagnostic surface.
-
----
-
-## 7. Infrastructure Requirements
-
-### 7.1 Railway environment variables
-
-| Variable | Value |
+| Variable | Purpose |
 |---|---|
 | `TASTY_LOGIN` | tastytrade username |
 | `TASTY_PASSWORD` | tastytrade password |
-| `R2_ACCOUNT_ID` | Cloudflare account ID (from R2 dashboard) |
-| `R2_ACCESS_KEY_ID` | R2 API token access key (write-enabled) |
+| `TASTY_TOTP_SECRET` | Base32 TOTP secret for MFA auto-completion |
+| `R2_ACCOUNT_ID` | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | R2 API token access key (read+write) |
 | `R2_SECRET_ACCESS_KEY` | R2 API token secret |
-| `R2_BUCKET_NAME` | `pub-4d5c916b8cb74ffb8c0abd7dfadb02cf` |
+| `R2_BUCKET_NAME` | `qqq-options-chain-data` |
 
-### 7.2 Cloudflare R2 — CORS configuration
+### 8.2 Cloudflare R2
 
-Required for `moopertonic.net` to fetch `latest.json` and `prices.json` from the browser.
+- Bucket: `qqq-options-chain-data`
+- Public access via Cloudflare Worker (not direct R2 public URL)
+- CORS must allow `options.moopertonic.net` and `localhost` for browser fetch
 
-In R2 dashboard → bucket → Settings → CORS:
+### 8.3 Web hosting
 
-```json
-[
-  {
-    "AllowedOrigins": ["https://moopertonic.net", "http://localhost"],
-    "AllowedMethods": ["GET"],
-    "AllowedHeaders": ["*"],
-    "MaxAgeSeconds": 60
-  }
-]
-```
-
-Without this, the web page silently fails to load data (CORS block in browser console).
-
-### 7.3 Cloudflare Pages
-
-- **New Pages project** required — separate from the `options-view` project (desktop download page)
-- Source: `OwenTanzer/live-options-view`, build output directory: `docs`
-- `live.html` deploys automatically on every push to `master`
-- No build command required (pure static HTML)
-- Accessible at the Cloudflare Pages URL (or a custom subdomain of moopertonic.net)
-
-### 7.4 R2 write permissions
-
-The R2 API token must have **Object Read & Write** on the target bucket. The existing token may be read-only (used historically for the public manifest). A new token with write access may need to be generated in the Cloudflare dashboard.
+- Static `docs/index.html` served via Cloudflare Worker at `options.moopertonic.net`
+- Auto-deploys on every push to `master`
+- No build step required
 
 ---
 
-## 8. Known Limitations
+## 9. Known Limitations
 
 | Limitation | Impact | Notes |
 |---|---|---|
-| OI is prior-day settled | OI walls are static until next morning | By design — OCC doesn't publish live OI. Volume is the live intraday signal. |
-| 11-minute snapshot granularity | Intraday events can't be pinpointed to the minute | Acceptable for v1; future work to log continuous DXLink events to R2 |
-| No access control on `live.html` | Anyone with the URL can see the live feed | Acceptable for now; Cloudflare Access can gate it if needed |
-| Railway restarts lose session mid-session | Re-auth adds ~30s gap in data | DXLink reconnect is automatic; gap shows as a missing snapshot file |
-| Pre-market option chain availability | Today's 0DTE expiry may not appear in the chain until near-open | Collector falls back to nearest future expiry; snapshots labeled correctly |
-| Single 0DTE expiration shown | On Thursdays, there may also be a Friday chain of interest | Out of scope for v1 |
+| OI is prior-day settled | OI walls are static until next morning | OCC doesn't publish real-time OI — by design. Volume/VolDelta are the live signals. |
+| DXLink doesn't deliver equity Quote events | ETF/equity bid/ask not available via DXLink | All 14 price tickers use yfinance as primary source |
+| 60-second snapshot granularity | Sub-minute flow not captured | VolDelta per 60s window is the resolution floor |
+| DXLink intermittent 502s | Option data blanks during outages | `latest.json` guard preserves last good snapshot; viewer shows "Cached" status |
+| No access control | Anyone with the URL can view | Cloudflare Access can gate it if needed |
+| Single 0DTE expiration | Thursday dual-expiry (0DTE + Friday) not shown | Out of scope |
 
 ---
 
-## 9. Pre-Deployment Checklist
+## 10. Future Work
 
-### Credentials
-- [ ] tastytrade credentials confirmed active and not MFA-blocked for API access
-- [ ] R2 write-enabled API token created (separate from existing read-only token)
-- [ ] All Railway env vars entered and saved
-
-### Infrastructure
-- [ ] Railway service created, repo `live-options-view`, root directory `/`, start command `python collector.py`
-- [ ] R2 CORS rule applied (verify with browser DevTools → Network on `live.html`)
-- [ ] New Cloudflare Pages project created for `live-options-view` (separate from `options-view`), serving from `docs/`
-
-### First-run validation (pre-market)
-- [ ] Railway logs show tastytrade session established
-- [ ] DXLink channel opens and AUTHORIZED message appears
-- [ ] Post-flush health check: all 11 tickers (10 price + QQQ underlying) show `OK` or known `WARN`s are investigated
-- [ ] `intraday/prices.json` appears in R2 within 30 seconds of startup
-- [ ] `moopertonic.net/live.html` price strip populates (not showing `—` across the board)
-- [ ] Any `WARN` symbols identified → correct DXLink symbol in `PRICE_TICKERS` → redeploy
-
-### At-open validation
-- [ ] `intraday/latest.json` appears in R2 after first 11-minute mark
-- [ ] OI heatmap renders on `live.html` with color and OI values
-- [ ] ATM row highlighted correctly vs. current QQQ price
-- [ ] Volume superscripts updating across snapshots
-- [ ] CSV archived at `intraday/YYYYMMDD/snapshot_HHMM.csv`
-
----
-
-## 10. Future Work (post v1)
-
-- **Continuous intraday logging** — write every DXLink event to R2 at tick level rather than polling snapshots; enables minute-by-minute replay
+- **Continuous tick logging** — write every DXLink event to R2 at tick level for sub-minute replay
 - **Multi-expiry view** — show EoW alongside 0DTE in a side-by-side panel
-- **MOO-12 integration** — feed intraday snapshots to ML associator for chain-evolution-based signals
-- **Access control** — gate `live.html` behind Cloudflare Access for subscriber-only distribution
-- **Alert system** — detect when a strike crosses from p75 to p90 OI bucket and push a notification
+- **MOO-12 integration** — feed intraday snapshots to ML associator for chain-evolution signals
+- **Alert system** — detect strike crossing from p75 → p90 OI bucket and push notification
+- **Access control** — gate behind Cloudflare Access for subscriber-only distribution
+- **Historical replay** — scrub through today's intraday snapshots in the viewer
