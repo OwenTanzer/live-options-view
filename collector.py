@@ -83,6 +83,7 @@ PRICE_TICKERS: dict[str, str] = {
     "TSLA":    "TSLA",
     "MU":      "MU",
     "SPCX":    "SPCX",
+    "Silver":  "/SI:XCME",    # CME silver futures, $/troy oz
 }
 
 # Yahoo Finance symbols for the same tickers (fallback when DXLink has no data)
@@ -101,6 +102,7 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "TSLA":    "TSLA",
     "MU":      "MU",
     "SPCX":    "SPCX",
+    "Silver":  "SI=F",
 }
 
 
