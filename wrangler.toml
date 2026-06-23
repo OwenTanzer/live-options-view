@@ -1,5 +1,7 @@
 name = "live-options-view"
+main = "worker.js"
 compatibility_date = "2026-06-23"
 
 [assets]
 directory = "docs"
+binding = "ASSETS"
