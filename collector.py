@@ -375,6 +375,7 @@ class DXLinkFeed:
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ready = threading.Event()
         self._subs: list[dict] = []
+        self._subscribed          = False
         # lifecycle telemetry
         self._connected           = False
         self._authorized          = False
@@ -436,6 +437,7 @@ class DXLinkFeed:
     def _on_open(self, ws):
         with self._lock:
             self._connected = True
+            self._subscribed = False  # reset so FEED_CONFIG re-subscribes after reconnect
             if self._first_connect_seen:
                 self._reconnect_count += 1
             self._first_connect_seen = True
@@ -489,8 +491,12 @@ class DXLinkFeed:
             })
 
         elif mtype == "FEED_CONFIG":
-            # Server has acknowledged FEED_SETUP — now safe to subscribe.
-            # Split into batches to stay under the 65536-byte frame limit.
+            # Server acknowledged FEED_SETUP. Subscribe once only — server
+            # may send multiple FEED_CONFIGs (one per batch ack), so guard
+            # with a flag to avoid repeated resets.
+            if self._subscribed:
+                return
+            self._subscribed = True
             log.info("DXLink feed configured -- sending subscriptions")
             if self._subs:
                 batch_size = 200
