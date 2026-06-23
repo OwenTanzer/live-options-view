@@ -442,12 +442,16 @@ class DXLinkFeed:
             return self._auth_fail_count >= 3
 
     def update_token(self, new_token: str):
-        """Replace the streamer token and force a reconnect to use it."""
+        """Replace the streamer token. The next reconnect will use it automatically."""
         with self._lock:
             self._token = new_token
             self._auth_fail_count = 0
-        if self._ws:
-            self._ws.close()  # triggers reconnect via run_forever(reconnect=5)
+
+    def restart_if_dead(self):
+        """Restart the WS thread if run_forever exited (e.g. after a ws.close() call)."""
+        if self._thread is None or not self._thread.is_alive():
+            log.warning("DXLink thread is dead -- restarting")
+            self._start_thread()
 
     def wait_ready(self, timeout: float = 60.0) -> bool:
         return self._ready.wait(timeout=timeout)
@@ -461,7 +465,7 @@ class DXLinkFeed:
             time.sleep(0.5)
         return False
 
-    def start(self):
+    def _start_thread(self):
         self._ws = websocket.WebSocketApp(
             self._url,
             on_open=self._on_open,
@@ -469,9 +473,13 @@ class DXLinkFeed:
             on_error=self._on_error,
             on_close=self._on_close,
         )
-        t = threading.Thread(target=self._ws.run_forever, kwargs={"reconnect": 5}, daemon=True)
-        t.start()
+        self._thread = threading.Thread(target=self._ws.run_forever, kwargs={"reconnect": 5}, daemon=True)
+        self._thread.start()
         log.info("DXLink feed thread started")
+
+    def start(self):
+        self._thread: Optional[threading.Thread] = None
+        self._start_thread()
 
     def stop(self):
         if self._ws:
@@ -1255,9 +1263,10 @@ def _run_session(login: str):
             try:
                 new_auth = tasty_auth(login, s3)
                 feed.update_token(new_auth["streamer_token"])
-                log.info("streamer token refreshed -- reconnecting")
+                log.info("streamer token refreshed")
             except Exception as e:
                 log.error(f"token refresh failed: {e}")
+        feed.restart_if_dead()
 
         tracker.check_missed()
         try:
