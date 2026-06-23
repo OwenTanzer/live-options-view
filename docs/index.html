@@ -101,7 +101,7 @@
     color: var(--fg);
     font-size: 0.72rem;
     font-weight: 400;
-    width: 56px;
+    width: 70px;
     background: var(--panel);
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
@@ -539,8 +539,8 @@ function renderHeatmap(data) {
     // Strike cell
     const strikeTd = document.createElement('td');
     strikeTd.className = 'strike-cell' + (isAtm ? ' atm' : '');
-    strikeTd.textContent = isAtm ? 'ATM' : `${offset > 0 ? '+' : ''}${offset}`;
-    strikeTd.title = `$${strike.toFixed(0)}`;
+    strikeTd.textContent = isAtm ? `${strike} ★` : `${strike}`;
+    strikeTd.title = `${offset > 0 ? '+' : ''}${offset} from ATM`;
     tr.appendChild(strikeTd);
 
     // Put cell
