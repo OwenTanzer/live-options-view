@@ -2,7 +2,8 @@
 
 **Status:** Pre-deployment review  
 **Date:** 2026-06-23  
-**Repo:** `qqq-0dte-viewer` — `live/` directory + `docs/live.html`
+**Repo:** `live-options-view` — github.com/OwenTanzer/live-options-view  
+**Related:** Desktop OI viewer lives separately in `OwenTanzer/options-view`
 
 ---
 
@@ -229,10 +230,11 @@ Without this, the web page silently fails to load data (CORS block in browser co
 
 ### 7.3 Cloudflare Pages
 
-- Source: this repo's `docs/` directory
-- `live.html` deploys automatically on push to `master`
-- No build step required (pure static HTML)
-- Accessible at `moopertonic.net/live.html`
+- **New Pages project** required — separate from the `options-view` project (desktop download page)
+- Source: `OwenTanzer/live-options-view`, build output directory: `docs`
+- `live.html` deploys automatically on every push to `master`
+- No build command required (pure static HTML)
+- Accessible at the Cloudflare Pages URL (or a custom subdomain of moopertonic.net)
 
 ### 7.4 R2 write permissions
 
@@ -261,9 +263,9 @@ The R2 API token must have **Object Read & Write** on the target bucket. The exi
 - [ ] All Railway env vars entered and saved
 
 ### Infrastructure
-- [ ] Railway service created, pointing to `live/` as root directory, `python collector.py` as start command
+- [ ] Railway service created, repo `live-options-view`, root directory `/`, start command `python collector.py`
 - [ ] R2 CORS rule applied (verify with browser DevTools → Network on `live.html`)
-- [ ] Cloudflare Pages auto-deploy confirmed for `docs/`
+- [ ] New Cloudflare Pages project created for `live-options-view` (separate from `options-view`), serving from `docs/`
 
 ### First-run validation (pre-market)
 - [ ] Railway logs show tastytrade session established
