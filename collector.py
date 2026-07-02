@@ -93,7 +93,7 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "VIX":     "^VIX",       # pre-market: None expected (CBOE only calculates at open)
     "SMH":     "SMH",
     "IGV":     "IGV",
-    "10Y":     "^TNX",       # value = yield × 10; display as (val/10).toFixed(2) + '%'
+    "10Y":     "^TNX",       # yields the rate directly (e.g. 4.485), NOT × 10
     "JPY/USD": "JPYUSD=X",
     "BTC/USD": "BTC-USD",
     "META":    "META",
