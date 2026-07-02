@@ -778,6 +778,14 @@ def _log_ticker_health(feed: DXLinkFeed):
 
 # -- prices.json upload (every 30s) ------------------------------------------
 
+# yfinance can degrade to ~10s per symbol when Yahoo's API is down, turning one
+# fill into a multi-minute stall of the prices loop. Bound each fill with a
+# timeout and back off for a cooldown after a failure.
+YF_FETCH_TIMEOUT_SECS = 20
+YF_COOLDOWN_SECS      = 300
+_yf_cooldown_until: list = [None]   # [datetime|None]
+
+
 def fetch_yf_prices() -> dict[str, Optional[float]]:
     """Fetch current prices from Yahoo Finance. Supports pre/post-market."""
     result: dict[str, Optional[float]] = {k: None for k in YF_SYMBOL_MAP}
@@ -798,6 +806,44 @@ def fetch_yf_prices() -> dict[str, Optional[float]]:
     except Exception as e:
         log.warning(f"yfinance fetch failed: {e}")
     return result
+
+
+def fetch_yf_prices_bounded() -> dict[str, Optional[float]]:
+    """fetch_yf_prices with a hard deadline and outage cooldown.
+
+    Returns all-None immediately while in cooldown, or if the fetch exceeds
+    YF_FETCH_TIMEOUT_SECS / returns no data (both open a new cooldown).
+    """
+    empty: dict[str, Optional[float]] = {k: None for k in YF_SYMBOL_MAP}
+    now = datetime.now(timezone.utc)
+    until = _yf_cooldown_until[0]
+    if until is not None and now < until:
+        return empty
+    box: list = [None]
+
+    def _worker():
+        try:
+            box[0] = fetch_yf_prices()
+        except Exception as e:
+            log.warning(f"yfinance fetch failed: {e}")
+
+    # daemon thread (not ThreadPoolExecutor) so a hung Yahoo call can't block
+    # interpreter shutdown; a stranded thread just dies with the process
+    t = threading.Thread(target=_worker, name="yf-fetch", daemon=True)
+    t.start()
+    t.join(timeout=YF_FETCH_TIMEOUT_SECS)
+    if t.is_alive():
+        _yf_cooldown_until[0] = now + timedelta(seconds=YF_COOLDOWN_SECS)
+        log.warning(f"yfinance timed out after {YF_FETCH_TIMEOUT_SECS}s -- "
+                    f"cooling down for {YF_COOLDOWN_SECS}s")
+        return empty
+    result = box[0]
+    if result is None or all(v is None for v in result.values()):
+        _yf_cooldown_until[0] = now + timedelta(seconds=YF_COOLDOWN_SECS)
+        log.warning(f"yfinance returned no data -- cooling down for {YF_COOLDOWN_SECS}s")
+    else:
+        _yf_cooldown_until[0] = None
+    return result if result is not None else empty
 
 
 def push_prices(s3, feed: DXLinkFeed, counters: Counters):
@@ -836,7 +882,7 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
     # yfinance fallback for any tickers DXLink didn't populate
     yf_missing = [lbl for lbl, d in prices.items() if d["price"] is None]
     if yf_missing:
-        yf_data = fetch_yf_prices()
+        yf_data = fetch_yf_prices_bounded()
         filled = []
         for lbl in yf_missing:
             yf_price = yf_data.get(lbl)
@@ -849,11 +895,22 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
         if qqq_yf is not None:
             _last_spot[0] = qqq_yf
 
+    _last_prices.update({lbl: d["price"] for lbl, d in prices.items()
+                         if d["price"] is not None})
+
+    # last-known-value fallback for anything still missing
+    stale_filled = []
+    for lbl, d in prices.items():
+        if d["price"] is None and _last_prices.get(lbl) is not None:
+            d["price"] = _last_prices[lbl]
+            d["stale"] = True
+            stale_filled.append(lbl)
+    if stale_filled:
+        log.warning(f"prices -- serving last-known values for: {', '.join(stale_filled)}")
+
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
         log.warning(f"prices.json -- no data for: {', '.join(dead)}")
-
-    _last_prices.update({lbl: d["price"] for lbl, d in prices.items()})
 
     payload = json.dumps({
         "timestamp":     ts_utc.isoformat(),
@@ -974,6 +1031,7 @@ def _fmt_oi(v: int) -> str:
 _prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
 _last_spot: list = [None]         # [float|None] — yfinance fallback for underlying price
 _last_prices: dict = {}           # label -> price float, updated by push_prices
+_first_snapshot_written: bool = False  # guard so first.csv is only written once per session
 
 
 def restore_state(s3, today: date) -> None:
@@ -992,6 +1050,9 @@ def restore_state(s3, today: date) -> None:
         if not csvs:
             log.info("restore_state: no snapshots found for today, starting fresh")
             return
+
+        global _first_snapshot_written
+        _first_snapshot_written = True  # prior snapshots exist; first.csv already written
 
         latest_key = csvs[-1]["Key"]
         body = s3.get_object(Bucket=R2_BUCKET, Key=latest_key)["Body"].read().decode()
@@ -1119,6 +1180,20 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         log.error(f"CSV upload failed: {e}")
         counters.inc_failure()
         raise
+
+    global _first_snapshot_written
+    if not _first_snapshot_written:
+        first_key = f"intraday/{date_str}/first.csv"
+        try:
+            s3.put_object(
+                Bucket=R2_BUCKET, Key=first_key,
+                Body=csv_buf.getvalue().encode(),
+                ContentType="text/csv",
+            )
+            _first_snapshot_written = True
+            log.info(f"-> {first_key}  (session-open snapshot, mirrors {csv_key})")
+        except Exception as e:
+            log.warning(f"first.csv upload failed (non-fatal): {e}")
 
     if bid_count == 0:
         log.warning("latest.json NOT updated -- no option data (DXLink feed down)")
