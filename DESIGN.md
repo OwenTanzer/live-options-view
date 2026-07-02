@@ -32,7 +32,7 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 │                                 │
 │  • QQQ 0DTE chain (±67 strikes)│──▶ intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  (60s)
 │  • 14 macro/indicator tickers  │──▶ intraday/latest.json                          (60s)
-│  • yfinance fallback for all   │──▶ intraday/prices.json                          (30s)
+│  • yfinance fallback for all   │──▶ intraday/prices.json                          (60s)
 │                                 │──▶ intraday/health.json                          (15s)
 └─────────────────────────────────┘
                 │ S3-compatible PUT
@@ -54,7 +54,7 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 │  options.moopertonic.net        │
 │  docs/index.html (static)       │
 │                                 │
-│  • Price strip    (30s poll)   │
+│  • Price strip    (60s poll)   │
 │  • OI heatmap     (60s poll)   │
 │  • No server-side logic        │
 └─────────────────────────────────┘
@@ -138,7 +138,7 @@ Every price ticker is filled by yfinance if DXLink has no data. This covers pre-
 |---|---|---|
 | `intraday/YYYYMMDD/snapshot_*.csv` | Every 60s | Always written |
 | `intraday/latest.json` | Every 60s | **Only written when bid_count > 0** — preserves last good snapshot during outages |
-| `intraday/prices.json` | Every 30s | Always written |
+| `intraday/prices.json` | Every 60s | Always written |
 | `intraday/health.json` | Every 15s | Always written |
 
 The `latest.json` guard is critical for display continuity: when DXLink is down, `latest.json` retains the last snapshot with real option data rather than being overwritten with null bids.
@@ -216,7 +216,7 @@ Each tile shows ticker label, current price, and % change from prior close. Spec
 - `BTC/USD` — integer with comma separator
 - `VIX`, `10Y` — 2 decimal places; 10Y divides raw value by 10 to show `4.48%`
 
-Source: `intraday/prices.json`, polled every 30 seconds.
+Source: `intraday/prices.json`, polled every 60 seconds.
 
 ### 7.2 OI heatmap
 

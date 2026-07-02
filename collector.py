@@ -8,7 +8,7 @@ DXLink websocket, and uploads snapshots to R2 every minute.
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
   intraday/latest.json                   -- live feed for the web viewer
-  intraday/prices.json                   -- macro price strip (every 30s)
+  intraday/prices.json                   -- macro price strip (every 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
 
 Environment variables (set in Railway dashboard):
@@ -60,7 +60,7 @@ TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
 STRIKE_WINDOW   = 33
 SNAPSHOT_SECS   = 60
-PRICES_SECS     = 30
+PRICES_SECS     = 60
 HEALTH_SECS     = 15
 PREMARKET_HOUR  = 6
 STOP_HOUR       = 16
@@ -776,7 +776,7 @@ def _log_ticker_health(feed: DXLinkFeed):
     log.info("-----------------------------------------------------------------")
 
 
-# -- prices.json upload (every 30s) ------------------------------------------
+# -- prices.json upload (every 60s) ------------------------------------------
 
 # yfinance can degrade to ~10s per symbol when Yahoo's API is down, turning one
 # fill into a multi-minute stall of the prices loop. Bound each fill with a

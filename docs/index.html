@@ -1111,8 +1111,8 @@ async function fetchHealth() {
   // OI heatmap: 60s refresh cycle
   startCountdown();
 
-  // Price strip: 30s independent interval
-  setInterval(fetchPrices, 30_000);
+  // Price strip: 60s independent interval
+  setInterval(fetchPrices, 60_000);
 
   // Health telemetry: 15s interval
   setInterval(fetchHealth, 15_000);
