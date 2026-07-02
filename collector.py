@@ -8,7 +8,7 @@ DXLink websocket, and uploads snapshots to R2 every minute.
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
   intraday/latest.json                   -- live feed for the web viewer
-  intraday/prices.json                   -- macro price strip (every 60s)
+  intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
 
 Environment variables (set in Railway dashboard):
@@ -60,7 +60,7 @@ TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
 STRIKE_WINDOW   = 33
 SNAPSHOT_SECS   = 60
-PRICES_SECS     = 60
+PRICES_SECS     = 10
 HEALTH_SECS     = 15
 PREMARKET_HOUR  = 6
 STOP_HOUR       = 16
@@ -776,14 +776,18 @@ def _log_ticker_health(feed: DXLinkFeed):
     log.info("-----------------------------------------------------------------")
 
 
-# -- prices.json upload (every 60s) ------------------------------------------
+# -- prices.json upload (every PRICES_SECS) -----------------------------------
 
 # yfinance can degrade to ~10s per symbol when Yahoo's API is down, turning one
 # fill into a multi-minute stall of the prices loop. Bound each fill with a
-# timeout and back off for a cooldown after a failure.
-YF_FETCH_TIMEOUT_SECS = 20
-YF_COOLDOWN_SECS      = 300
+# timeout and back off for a cooldown after a failure. Successful results are
+# cached so Yahoo is hit at most once per YF_MIN_INTERVAL_SECS even though the
+# prices loop runs faster.
+YF_FETCH_TIMEOUT_SECS   = 20
+YF_COOLDOWN_SECS        = 300
+YF_MIN_INTERVAL_SECS    = 60
 _yf_cooldown_until: list = [None]   # [datetime|None]
+_yf_cache: dict = {"ts": None, "data": None}
 
 
 def fetch_yf_prices() -> dict[str, Optional[float]]:
@@ -809,13 +813,17 @@ def fetch_yf_prices() -> dict[str, Optional[float]]:
 
 
 def fetch_yf_prices_bounded() -> dict[str, Optional[float]]:
-    """fetch_yf_prices with a hard deadline and outage cooldown.
+    """fetch_yf_prices with a result cache, hard deadline, and outage cooldown.
 
-    Returns all-None immediately while in cooldown, or if the fetch exceeds
+    Returns the cached result if fetched within YF_MIN_INTERVAL_SECS. Returns
+    all-None immediately while in cooldown, or if the fetch exceeds
     YF_FETCH_TIMEOUT_SECS / returns no data (both open a new cooldown).
     """
     empty: dict[str, Optional[float]] = {k: None for k in YF_SYMBOL_MAP}
     now = datetime.now(timezone.utc)
+    if (_yf_cache["ts"] is not None and
+            (now - _yf_cache["ts"]).total_seconds() < YF_MIN_INTERVAL_SECS):
+        return _yf_cache["data"]
     until = _yf_cooldown_until[0]
     if until is not None and now < until:
         return empty
@@ -843,6 +851,8 @@ def fetch_yf_prices_bounded() -> dict[str, Optional[float]]:
         log.warning(f"yfinance returned no data -- cooling down for {YF_COOLDOWN_SECS}s")
     else:
         _yf_cooldown_until[0] = None
+        _yf_cache["ts"] = now
+        _yf_cache["data"] = result
     return result if result is not None else empty
 
 
