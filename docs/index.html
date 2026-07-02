@@ -309,6 +309,102 @@
   #no-data.hidden { display: none; }
   #heatmap-wrap.hidden { display: none; }
 
+  /* ── paper trading ───────────────────────────────────────────────────── */
+  td.tradable { cursor: pointer; }
+  td.tradable:hover { outline: 2px solid #58a6ff; outline-offset: -2px; }
+  .pos-badge {
+    position: absolute;
+    top: 2px; left: 3px;
+    font-size: 0.52rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: #58a6ff;
+    background: rgba(13,17,23,0.6);
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+  #trade-ticket {
+    position: absolute;
+    z-index: 50;
+    background: var(--panel);
+    border: 1px solid #58a6ff;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  }
+  #trade-ticket .t-head { font-weight: 700; color: var(--bright); margin-bottom: 6px; }
+  #trade-ticket .t-row { display: flex; gap: 6px; align-items: center; }
+  #trade-ticket input {
+    width: 46px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 0.72rem;
+    text-align: center;
+  }
+  #trade-ticket button {
+    border: none;
+    border-radius: 4px;
+    padding: 4px 9px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+    color: #fff;
+  }
+  #trade-ticket button:disabled { opacity: 0.4; cursor: default; }
+  .btn-buy  { background: #007730; }
+  .btn-sell { background: #881100; }
+  #paper-panel {
+    margin-top: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.72rem;
+    max-width: 560px;
+  }
+  #paper-panel h3 {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  #paper-summary { color: var(--fg); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  #paper-hint { color: var(--dim); font-size: 0.68rem; }
+  #paper-panel table { min-width: 0; width: 100%; }
+  #paper-panel th, #paper-panel td {
+    width: auto; height: auto;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-align: right;
+  }
+  #paper-panel th { text-transform: none; letter-spacing: 0.02em; }
+  #paper-panel th:first-child, #paper-panel td:first-child { text-align: left; }
+  .pnl-up   { color: #00cc55; }
+  .pnl-down { color: #ee3300; }
+  .paper-btn {
+    background: #1c2128;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 2px 7px;
+    cursor: pointer;
+    font-size: 0.64rem;
+  }
+  #paper-clear { margin-left: auto; }
+  #paper-log { margin-top: 6px; color: var(--dim); font-size: 0.66rem; }
+  #paper-log summary { cursor: pointer; }
+  #paper-log-body { margin-top: 4px; line-height: 1.7; max-height: 180px; overflow-y: auto; }
+
   /* ── footer ──────────────────────────────────────────────────────────── */
   #footer {
     font-size: 0.68rem;
@@ -382,6 +478,19 @@
     </thead>
     <tbody id="heatmap-body"></tbody>
   </table>
+</div>
+
+<div id="paper-panel">
+  <h3>Paper Trading
+    <span id="paper-summary"></span>
+    <button id="paper-clear" class="paper-btn">reset</button>
+  </h3>
+  <div id="paper-hint">Click any option cell to buy/sell. Fills at ask (buy) / bid (sell), ×100 multiplier. Positions persist in this browser.</div>
+  <div id="paper-positions"></div>
+  <details id="paper-log">
+    <summary>Trade log</summary>
+    <div id="paper-log-body"></div>
+  </details>
 </div>
 
 <div id="footer">
@@ -529,6 +638,8 @@ function renderHeatmap(data) {
   const tbody = document.getElementById('heatmap-body');
   tbody.innerHTML = '';
 
+  const book = computeBook();
+
   for (const offset of offsets) {
     const strike = atm + offset;
     const strKey = `${strike}`;
@@ -558,10 +669,16 @@ function renderHeatmap(data) {
     // Call cell
     const callTd = document.createElement('td');
     callTd.className = `call-cell c${cb}`;
+    const callPos = book[callRow?.OptionSymbol]?.pos || 0;
     callTd.innerHTML = fmtOI(callOI) +
       quoteHtml(callBid, callAsk) +
       (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
-      flowHtml(callDelta);
+      flowHtml(callDelta) +
+      (callPos ? `<span class="pos-badge">${callPos > 0 ? '+' : ''}${callPos}</span>` : '');
+    if (callRow?.OptionSymbol) {
+      callTd.classList.add('tradable');
+      callTd.onclick = (e) => openTicket(e, callRow);
+    }
     tr.appendChild(callTd);
 
     // Strike cell
@@ -574,10 +691,16 @@ function renderHeatmap(data) {
     // Put cell
     const putTd = document.createElement('td');
     putTd.className = `put-cell p${pb}`;
+    const putPos = book[putRow?.OptionSymbol]?.pos || 0;
     putTd.innerHTML = fmtOI(putOI) +
       quoteHtml(putBid, putAsk) +
       (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
-      flowHtml(putDelta);
+      flowHtml(putDelta) +
+      (putPos ? `<span class="pos-badge">${putPos > 0 ? '+' : ''}${putPos}</span>` : '');
+    if (putRow?.OptionSymbol) {
+      putTd.classList.add('tradable');
+      putTd.onclick = (e) => openTicket(e, putRow);
+    }
     tr.appendChild(putTd);
 
     tbody.appendChild(tr);
@@ -601,6 +724,196 @@ function renderHeatmap(data) {
   document.getElementById('heatmap-wrap').classList.remove('hidden');
 }
 
+// ── paper trading ─────────────────────────────────────────────────────────────
+// Trades: {ts, sym, strike, type, exp, side, qty, price, note?}. Positions and
+// PnL are derived from the trade list (average-cost basis, ×100 multiplier).
+const PAPER_KEY = 'paperbook_v1';
+let paper = { trades: [], marks: {} };
+try {
+  const saved = JSON.parse(localStorage.getItem(PAPER_KEY));
+  if (saved && Array.isArray(saved.trades)) paper = { trades: saved.trades, marks: saved.marks || {} };
+} catch (e) { /* corrupt store — start fresh */ }
+
+let quotes = {};        // OptionSymbol -> {bid, ask, mid, strike, type, exp}
+let lastData = null;
+let lastDataDate = null;
+let ticketEl = null;
+
+function savePaper() {
+  try { localStorage.setItem(PAPER_KEY, JSON.stringify(paper)); } catch (e) {}
+}
+
+function updateQuotes(data) {
+  lastDataDate = data.date || lastDataDate;
+  const book = computeBook();
+  for (const r of (data.rows || [])) {
+    if (!r.OptionSymbol) continue;
+    const bid = r.Bid ?? null, ask = r.Ask ?? null;
+    const mid = (bid != null && ask != null) ? (bid + ask) / 2 : (r.Mid ?? null);
+    quotes[r.OptionSymbol] = { bid, ask, mid, strike: +r.Strike, type: r.Type, exp: r.Expiration };
+    // remember last mark for symbols we hold, so expiry settlement has a price
+    if (mid != null && book[r.OptionSymbol] && book[r.OptionSymbol].pos !== 0) {
+      paper.marks[r.OptionSymbol] = mid;
+    }
+  }
+  savePaper();
+}
+
+// Average-cost position book: sym -> {pos, avg, realized, strike, type, exp}
+function computeBook() {
+  const book = {};
+  for (const t of paper.trades) {
+    const b = book[t.sym] ?? (book[t.sym] = { pos: 0, avg: 0, realized: 0, strike: t.strike, type: t.type, exp: t.exp });
+    const q = t.side === 'buy' ? t.qty : -t.qty;
+    if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
+      b.avg = (b.avg * Math.abs(b.pos) + t.price * Math.abs(q)) / (Math.abs(b.pos) + Math.abs(q));
+      b.pos += q;
+    } else {
+      const closing = Math.min(Math.abs(q), Math.abs(b.pos));
+      b.realized += (t.price - b.avg) * closing * 100 * Math.sign(b.pos);
+      b.pos += q;
+      if (b.pos === 0) b.avg = 0;
+      else if (Math.sign(b.pos) === Math.sign(q)) b.avg = t.price;  // flipped through zero
+    }
+  }
+  return book;
+}
+
+function executeTrade(info, side, qty, price) {
+  qty = Math.round(+qty);
+  if (!qty || qty < 1 || price == null) return;
+  paper.trades.push({
+    ts: new Date().toISOString(),
+    sym: info.sym, strike: info.strike, type: info.type, exp: info.exp,
+    side, qty, price: +price,
+    ...(info.note ? { note: info.note } : {}),
+  });
+  savePaper();
+  closeTicket();
+  renderPaper();
+  if (lastData) renderHeatmap(lastData);  // refresh position badges
+}
+
+// Expired (past-date) open positions settle at their last recorded mark
+function settleExpired() {
+  if (!lastDataDate) return;
+  const book = computeBook();
+  let changed = false;
+  for (const [sym, b] of Object.entries(book)) {
+    if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
+      paper.trades.push({
+        ts: new Date().toISOString(),
+        sym, strike: b.strike, type: b.type, exp: b.exp,
+        side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
+        price: paper.marks[sym] ?? b.avg, note: 'expired',
+      });
+      changed = true;
+    }
+  }
+  if (changed) savePaper();
+}
+
+function closePosition(sym) {
+  const b = computeBook()[sym];
+  if (!b || b.pos === 0) return;
+  const q = quotes[sym] || {};
+  const px = b.pos > 0 ? (q.bid ?? q.mid ?? paper.marks[sym]) : (q.ask ?? q.mid ?? paper.marks[sym]);
+  if (px == null) return;
+  executeTrade({ sym, strike: b.strike, type: b.type, exp: b.exp }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos), px);
+}
+
+function contractLabel(b) { return `QQQ ${b.strike} ${b.type === 'call' ? 'C' : 'P'}`; }
+
+function fmtMoney(v) {
+  const sign = v < 0 ? '−' : v > 0 ? '+' : '';
+  return `${sign}$${Math.abs(v).toFixed(2)}`;
+}
+function pnlClass(v) { return v > 0 ? 'pnl-up' : v < 0 ? 'pnl-down' : ''; }
+
+function renderPaper() {
+  settleExpired();
+  const book = computeBook();
+  const open = Object.entries(book).filter(([, b]) => b.pos !== 0);
+  const realized = Object.values(book).reduce((s, b) => s + b.realized, 0);
+  let unreal = 0;
+
+  const posDiv = document.getElementById('paper-positions');
+  if (open.length === 0) {
+    posDiv.innerHTML = '';
+  } else {
+    let html = '<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
+    for (const [sym, b] of open) {
+      const mark = quotes[sym]?.mid ?? paper.marks[sym] ?? null;
+      const pnl  = mark != null ? (mark - b.avg) * b.pos * 100 : null;
+      if (pnl != null) unreal += pnl;
+      html += `<tr>
+        <td>${contractLabel(b)}</td>
+        <td>${b.pos > 0 ? '+' : ''}${b.pos}</td>
+        <td>${fmtQ(b.avg)}</td>
+        <td>${mark != null ? fmtQ(mark) : '—'}</td>
+        <td class="${pnl != null ? pnlClass(pnl) : ''}">${pnl != null ? fmtMoney(pnl) : '—'}</td>
+        <td><button class="paper-btn" data-sym="${sym}">close</button></td>
+      </tr>`;
+    }
+    posDiv.innerHTML = html + '</table>';
+    posDiv.querySelectorAll('.paper-btn').forEach(btn => btn.onclick = () => closePosition(btn.dataset.sym));
+  }
+
+  const total = realized + unreal;
+  document.getElementById('paper-summary').innerHTML =
+    paper.trades.length
+      ? `Realized <span class="${pnlClass(realized)}">${fmtMoney(realized)}</span>
+         · Open <span class="${pnlClass(unreal)}">${fmtMoney(unreal)}</span>
+         · Total <span class="${pnlClass(total)}">${fmtMoney(total)}</span>`
+      : '';
+  document.getElementById('paper-hint').style.display = paper.trades.length ? 'none' : '';
+
+  document.getElementById('paper-log-body').innerHTML =
+    paper.trades.slice().reverse().map(t => {
+      const time = new Date(t.ts).toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/New_York' });
+      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${t.note ? ` (${t.note})` : ''}</div>`;
+    }).join('') || '<div>No trades yet.</div>';
+}
+
+// ── trade ticket popover ──────────────────────────────────────────────────────
+function closeTicket() {
+  if (ticketEl) { ticketEl.remove(); ticketEl = null; }
+}
+document.addEventListener('click', (e) => {
+  if (ticketEl && !ticketEl.contains(e.target)) closeTicket();
+});
+
+function openTicket(e, row) {
+  e.stopPropagation();
+  closeTicket();
+  const sym  = row.OptionSymbol;
+  const q    = quotes[sym] || {};
+  const info = { sym, strike: +row.Strike, type: row.Type, exp: row.Expiration };
+  const buyPx  = q.ask ?? q.mid ?? null;
+  const sellPx = q.bid ?? q.mid ?? null;
+
+  const t = document.createElement('div');
+  t.id = 'trade-ticket';
+  t.innerHTML = `
+    <div class="t-head">${contractLabel(info)} · ${q.bid != null ? fmtQ(q.bid) : '—'} × ${q.ask != null ? fmtQ(q.ask) : '—'}</div>
+    <div class="t-row">
+      <input type="number" min="1" step="1" value="1" id="t-qty" aria-label="quantity">
+      <button class="btn-buy"  ${buyPx  == null ? 'disabled' : ''}>Buy @ ${buyPx  != null ? fmtQ(buyPx)  : '—'}</button>
+      <button class="btn-sell" ${sellPx == null ? 'disabled' : ''}>Sell @ ${sellPx != null ? fmtQ(sellPx) : '—'}</button>
+    </div>`;
+  document.body.appendChild(t);
+
+  const r = e.currentTarget.getBoundingClientRect();
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - t.offsetWidth - 12;
+  t.style.left = Math.max(4, Math.min(r.left + window.scrollX, maxLeft)) + 'px';
+  t.style.top  = (r.bottom + window.scrollY + 4) + 'px';
+
+  const qtyEl = t.querySelector('#t-qty');
+  t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy',  qtyEl.value, buyPx);
+  t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value, sellPx);
+  ticketEl = t;
+}
+
 // ── data fetch cycle ──────────────────────────────────────────────────────────
 async function fetchLatest() {
   try {
@@ -614,7 +927,10 @@ async function fetchLatest() {
     }
 
     lastTs = data.timestamp;
+    lastData = data;
+    updateQuotes(data);
     renderHeatmap(data);
+    renderPaper();
 
     const snapAge = Math.round((Date.now() - new Date(lastTs).getTime()) / 1000 / 60);
     const hasBids = data.rows.some(r => r.Bid != null);
@@ -776,6 +1092,15 @@ async function fetchHealth() {
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
   initPriceStrip();
+  renderPaper();
+  document.getElementById('paper-clear').onclick = () => {
+    if (!paper.trades.length || confirm('Clear all paper trades and PnL?')) {
+      paper = { trades: [], marks: {} };
+      savePaper();
+      renderPaper();
+      if (lastData) renderHeatmap(lastData);
+    }
+  };
 
   setStatus('', 'Loading calibration data…');
   await loadRanges();
