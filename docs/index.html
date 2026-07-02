@@ -400,7 +400,8 @@
     cursor: pointer;
     font-size: 0.64rem;
   }
-  #paper-clear { margin-left: auto; }
+  #paper-actions { margin-left: auto; display: flex; gap: 4px; }
+  select.paper-btn { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--bright); }
   #paper-log { margin-top: 6px; color: var(--dim); font-size: 0.66rem; }
   #paper-log summary { cursor: pointer; }
   #paper-log-body { margin-top: 4px; line-height: 1.7; max-height: 180px; overflow-y: auto; }
@@ -482,8 +483,13 @@
 
 <div id="paper-panel">
   <h3>Paper Trading
+    <select id="paper-acct" class="paper-btn" title="active account"></select>
+    <button id="paper-new" class="paper-btn" title="new account for a separate strategy">+ account</button>
     <span id="paper-summary"></span>
-    <button id="paper-clear" class="paper-btn">reset</button>
+    <span id="paper-actions">
+      <button id="paper-clear" class="paper-btn">reset</button>
+      <button id="paper-del" class="paper-btn" title="delete this account">del</button>
+    </span>
   </h3>
   <div id="paper-hint">Click any option cell to buy/sell. Fills at ask (buy) / bid (sell), ×100 multiplier. Positions persist in this browser.</div>
   <div id="paper-positions"></div>
@@ -727,12 +733,24 @@ function renderHeatmap(data) {
 // ── paper trading ─────────────────────────────────────────────────────────────
 // Trades: {ts, sym, strike, type, exp, side, qty, price, note?}. Positions and
 // PnL are derived from the trade list (average-cost basis, ×100 multiplier).
-const PAPER_KEY = 'paperbook_v1';
-let paper = { trades: [], marks: {} };
+// Multiple named accounts, each with an independent book, for separating
+// strategies. store = { accounts: {id: {name, trades, marks}}, active: id }.
+const PAPER_KEY = 'paperbook_v2';
+let store = { accounts: { a1: { name: 'Main', trades: [], marks: {} } }, active: 'a1' };
 try {
-  const saved = JSON.parse(localStorage.getItem(PAPER_KEY));
-  if (saved && Array.isArray(saved.trades)) paper = { trades: saved.trades, marks: saved.marks || {} };
+  const v2 = JSON.parse(localStorage.getItem(PAPER_KEY));
+  if (v2 && v2.accounts && v2.active in v2.accounts) {
+    store = v2;
+  } else {
+    // migrate single-book v1 store if present
+    const v1 = JSON.parse(localStorage.getItem('paperbook_v1'));
+    if (v1 && Array.isArray(v1.trades)) {
+      store.accounts.a1 = { name: 'Main', trades: v1.trades, marks: v1.marks || {} };
+    }
+  }
 } catch (e) { /* corrupt store — start fresh */ }
+
+function acct() { return store.accounts[store.active]; }
 
 let quotes = {};        // OptionSymbol -> {bid, ask, mid, strike, type, exp}
 let lastData = null;
@@ -740,29 +758,31 @@ let lastDataDate = null;
 let ticketEl = null;
 
 function savePaper() {
-  try { localStorage.setItem(PAPER_KEY, JSON.stringify(paper)); } catch (e) {}
+  try { localStorage.setItem(PAPER_KEY, JSON.stringify(store)); } catch (e) {}
 }
 
 function updateQuotes(data) {
   lastDataDate = data.date || lastDataDate;
-  const book = computeBook();
+  const books = Object.fromEntries(Object.entries(store.accounts).map(([id, a]) => [id, computeBook(a)]));
   for (const r of (data.rows || [])) {
     if (!r.OptionSymbol) continue;
     const bid = r.Bid ?? null, ask = r.Ask ?? null;
     const mid = (bid != null && ask != null) ? (bid + ask) / 2 : (r.Mid ?? null);
     quotes[r.OptionSymbol] = { bid, ask, mid, strike: +r.Strike, type: r.Type, exp: r.Expiration };
-    // remember last mark for symbols we hold, so expiry settlement has a price
-    if (mid != null && book[r.OptionSymbol] && book[r.OptionSymbol].pos !== 0) {
-      paper.marks[r.OptionSymbol] = mid;
+    // remember last mark for symbols any account holds, so expiry settlement has a price
+    if (mid != null) {
+      for (const [id, a] of Object.entries(store.accounts)) {
+        if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = mid;
+      }
     }
   }
   savePaper();
 }
 
 // Average-cost position book: sym -> {pos, avg, realized, strike, type, exp}
-function computeBook() {
+function computeBook(account = acct()) {
   const book = {};
-  for (const t of paper.trades) {
+  for (const t of account.trades) {
     const b = book[t.sym] ?? (book[t.sym] = { pos: 0, avg: 0, realized: 0, strike: t.strike, type: t.type, exp: t.exp });
     const q = t.side === 'buy' ? t.qty : -t.qty;
     if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
@@ -782,7 +802,7 @@ function computeBook() {
 function executeTrade(info, side, qty, price) {
   qty = Math.round(+qty);
   if (!qty || qty < 1 || price == null) return;
-  paper.trades.push({
+  acct().trades.push({
     ts: new Date().toISOString(),
     sym: info.sym, strike: info.strike, type: info.type, exp: info.exp,
     side, qty, price: +price,
@@ -794,20 +814,22 @@ function executeTrade(info, side, qty, price) {
   if (lastData) renderHeatmap(lastData);  // refresh position badges
 }
 
-// Expired (past-date) open positions settle at their last recorded mark
+// Expired (past-date) open positions settle at their last recorded mark,
+// across every account
 function settleExpired() {
   if (!lastDataDate) return;
-  const book = computeBook();
   let changed = false;
-  for (const [sym, b] of Object.entries(book)) {
-    if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
-      paper.trades.push({
-        ts: new Date().toISOString(),
-        sym, strike: b.strike, type: b.type, exp: b.exp,
-        side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
-        price: paper.marks[sym] ?? b.avg, note: 'expired',
-      });
-      changed = true;
+  for (const a of Object.values(store.accounts)) {
+    for (const [sym, b] of Object.entries(computeBook(a))) {
+      if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
+        a.trades.push({
+          ts: new Date().toISOString(),
+          sym, strike: b.strike, type: b.type, exp: b.exp,
+          side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
+          price: a.marks[sym] ?? b.avg, note: 'expired',
+        });
+        changed = true;
+      }
     }
   }
   if (changed) savePaper();
@@ -817,7 +839,7 @@ function closePosition(sym) {
   const b = computeBook()[sym];
   if (!b || b.pos === 0) return;
   const q = quotes[sym] || {};
-  const px = b.pos > 0 ? (q.bid ?? q.mid ?? paper.marks[sym]) : (q.ask ?? q.mid ?? paper.marks[sym]);
+  const px = b.pos > 0 ? (q.bid ?? q.mid ?? acct().marks[sym]) : (q.ask ?? q.mid ?? acct().marks[sym]);
   if (px == null) return;
   executeTrade({ sym, strike: b.strike, type: b.type, exp: b.exp }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos), px);
 }
@@ -829,6 +851,22 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`;
 }
 function pnlClass(v) { return v > 0 ? 'pnl-up' : v < 0 ? 'pnl-down' : ''; }
+
+function renderAccounts() {
+  const sel = document.getElementById('paper-acct');
+  sel.innerHTML = Object.entries(store.accounts)
+    .map(([id, a]) => `<option value="${id}" ${id === store.active ? 'selected' : ''}>${a.name}</option>`)
+    .join('');
+}
+
+function switchAccount(id) {
+  if (!(id in store.accounts)) return;
+  store.active = id;
+  savePaper();
+  renderAccounts();
+  renderPaper();
+  if (lastData) renderHeatmap(lastData);
+}
 
 function renderPaper() {
   settleExpired();
@@ -843,7 +881,7 @@ function renderPaper() {
   } else {
     let html = '<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
     for (const [sym, b] of open) {
-      const mark = quotes[sym]?.mid ?? paper.marks[sym] ?? null;
+      const mark = quotes[sym]?.mid ?? acct().marks[sym] ?? null;
       const pnl  = mark != null ? (mark - b.avg) * b.pos * 100 : null;
       if (pnl != null) unreal += pnl;
       html += `<tr>
@@ -861,15 +899,15 @@ function renderPaper() {
 
   const total = realized + unreal;
   document.getElementById('paper-summary').innerHTML =
-    paper.trades.length
+    acct().trades.length
       ? `Realized <span class="${pnlClass(realized)}">${fmtMoney(realized)}</span>
          · Open <span class="${pnlClass(unreal)}">${fmtMoney(unreal)}</span>
          · Total <span class="${pnlClass(total)}">${fmtMoney(total)}</span>`
       : '';
-  document.getElementById('paper-hint').style.display = paper.trades.length ? 'none' : '';
+  document.getElementById('paper-hint').style.display = acct().trades.length ? 'none' : '';
 
   document.getElementById('paper-log-body').innerHTML =
-    paper.trades.slice().reverse().map(t => {
+    acct().trades.slice().reverse().map(t => {
       const time = new Date(t.ts).toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/New_York' });
       return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${t.note ? ` (${t.note})` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
@@ -1094,14 +1132,32 @@ async function fetchHealth() {
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
   initPriceStrip();
+  renderAccounts();
   renderPaper();
+  document.getElementById('paper-acct').onchange = (e) => switchAccount(e.target.value);
+  document.getElementById('paper-new').onclick = () => {
+    const name = prompt('Account name (e.g. a strategy label):',
+                        `Strategy ${Object.keys(store.accounts).length + 1}`);
+    if (!name || !name.trim()) return;
+    const id = 'a' + Date.now();
+    store.accounts[id] = { name: name.trim(), trades: [], marks: {} };
+    switchAccount(id);
+  };
   document.getElementById('paper-clear').onclick = () => {
-    if (!paper.trades.length || confirm('Clear all paper trades and PnL?')) {
-      paper = { trades: [], marks: {} };
+    if (!acct().trades.length || confirm(`Clear all trades and PnL in "${acct().name}"?`)) {
+      acct().trades = [];
+      acct().marks = {};
       savePaper();
       renderPaper();
       if (lastData) renderHeatmap(lastData);
     }
+  };
+  document.getElementById('paper-del').onclick = () => {
+    const ids = Object.keys(store.accounts);
+    if (ids.length <= 1) { alert('Cannot delete the last account.'); return; }
+    if (!confirm(`Delete account "${acct().name}" and its trade history?`)) return;
+    delete store.accounts[store.active];
+    switchAccount(Object.keys(store.accounts)[0]);
   };
 
   setStatus('', 'Loading calibration data…');
