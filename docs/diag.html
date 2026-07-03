@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>R2 fetch diagnostic</title>
+<style>
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 1.25rem;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.1rem; color: #f0f6fc; margin-bottom: 0.5rem; }
+  .origin { color: #6e7681; font-size: 0.8rem; margin-bottom: 1.5rem; }
+  .test {
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .test h2 { font-size: 0.85rem; color: #f0f6fc; margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; }
+  .label { color: #6e7681; min-width: 130px; flex-shrink: 0; }
+  .pending { color: #e8c84b; }
+  .pass { color: #00cc55; font-weight: 600; }
+  .fail { color: #ee3300; font-weight: 600; }
+  .detail { color: #6e7681; font-size: 0.78rem; word-break: break-all; }
+  #verdict {
+    margin-top: 1.5rem;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>R2 fetch diagnostic</h1>
+<div class="origin">Running from: <span id="origin-label"></span></div>
+
+<div id="tests"></div>
+<div id="verdict">Running tests…</div>
+
+<script>
+const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
+const TARGETS = [
+  { name: "manifest.json", path: "manifest.json" },
+  { name: "OIranges.csv",  path: "derived/OIranges.csv" },
+  { name: "latest.json",   path: "intraday/latest.json" },
+];
+
+document.getElementById('origin-label').textContent = window.location.origin;
+
+function row(label, cls, text) {
+  return `<div class="row"><span class="label">${label}</span><span class="${cls}">${text}</span></div>`;
+}
+
+async function testCors(url) {
+  const start = performance.now();
+  try {
+    const resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
+    const ms = Math.round(performance.now() - start);
+    return { ok: true, detail: `HTTP ${resp.status} · ${ms}ms · type=${resp.type}` };
+  } catch (e) {
+    const ms = Math.round(performance.now() - start);
+    return { ok: false, detail: `${e.name}: ${e.message} · ${ms}ms` };
+  }
+}
+
+async function testNoCors(url) {
+  const start = performance.now();
+  try {
+    // no-cors mode never throws for a CORS block — it only throws for
+    // actual network/DNS/TLS failures. An opaque (type: 'opaque') response
+    // here means the request reached the server fine regardless of CORS.
+    const resp = await fetch(url, { mode: 'no-cors', cache: 'no-store' });
+    const ms = Math.round(performance.now() - start);
+    return { ok: true, detail: `reached server (opaque) · ${ms}ms` };
+  } catch (e) {
+    const ms = Math.round(performance.now() - start);
+    return { ok: false, detail: `${e.name}: ${e.message} · ${ms}ms` };
+  }
+}
+
+function testImg(url) {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    const img = new Image();
+    const done = (ok) => resolve({ ok, detail: `${ok ? 'loaded' : 'errored'} · ${Math.round(performance.now() - start)}ms` });
+    img.onload = () => done(true);
+    img.onerror = () => done(true); // onerror still fires after the network request completes — a non-image response counts as "reached"
+    img.src = url + (url.includes('?') ? '&' : '?') + 'imgtest=' + Date.now();
+    setTimeout(() => resolve({ ok: false, detail: 'timed out after 8s (never reached server)' }), 8000);
+  });
+}
+
+(async function run() {
+  const testsEl = document.getElementById('tests');
+  const results = [];
+
+  for (const t of TARGETS) {
+    const url = `${R2}/${t.path}`;
+    const div = document.createElement('div');
+    div.className = 'test';
+    div.innerHTML = `<h2>${t.name}</h2>
+      <div class="row"><span class="label">cors fetch</span><span class="pending" data-k="cors">running…</span></div>
+      <div class="row"><span class="label">no-cors fetch</span><span class="pending" data-k="nocors">running…</span></div>
+      <div class="row"><span class="label">img load</span><span class="pending" data-k="img">running…</span></div>`;
+    testsEl.appendChild(div);
+
+    const [cors, nocors, img] = await Promise.all([
+      testCors(url), testNoCors(url), testImg(url + '.png'),
+    ]);
+
+    const setResult = (key, r) => {
+      const el = div.querySelector(`[data-k="${key}"]`);
+      el.className = r.ok ? 'pass' : 'fail';
+      el.textContent = r.ok ? 'OK' : 'FAILED';
+      el.insertAdjacentHTML('afterend', `<span class="detail"> — ${r.detail}</span>`);
+    };
+    setResult('cors', cors);
+    setResult('nocors', nocors);
+    setResult('img', img);
+
+    results.push({ name: t.name, cors: cors.ok, nocors: nocors.ok });
+  }
+
+  const verdict = document.getElementById('verdict');
+  const allCorsFail = results.every(r => !r.cors);
+  const allNoCorsOk  = results.every(r => r.nocors);
+  const allFail      = results.every(r => !r.cors && !r.nocors);
+
+  if (allFail) {
+    verdict.innerHTML = "<b>Nothing reached the server</b> (no-cors also failed) — this points to a network/DNS block on this device/connection, not CORS. Check DNS profiles, VPNs, or carrier filtering for r2.dev.";
+  } else if (allCorsFail && allNoCorsOk) {
+    verdict.innerHTML = "<b>Confirmed: CORS is blocking this</b> — no-cors reached the server fine, but the CORS-checked fetch failed on every target. The response isn't carrying a matching Access-Control-Allow-Origin header for this exact origin/device.";
+  } else if (!allCorsFail) {
+    verdict.innerHTML = "<b>cors fetch succeeded here</b> — if the live site is still failing for you right now, something else is going on (timing, a transient network blip, or the live site's exact request differs from this test). Try reloading the live site again.";
+  } else {
+    verdict.innerHTML = "Mixed results — see details above per target.";
+  }
+})();
+</script>
+</body>
+</html>
