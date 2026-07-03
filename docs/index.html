@@ -467,6 +467,41 @@
   #hist-no-data.hidden { display: none; }
   #hist-heatmap-wrap { overflow-x: auto; margin-bottom: 1rem; }
   #hist-heatmap-wrap.hidden { display: none; }
+
+  /* ── touch targets ───────────────────────────────────────────────────────
+     Scoped to coarse pointers (touch) only — desktop/mouse density is
+     unaffected. Bumps tap areas toward the ~44px baseline and raises form
+     control font-size to 16px, since iOS Safari auto-zooms the page on
+     focusing any input/select rendered below that size. */
+  @media (pointer: coarse) {
+    .tab-btn {
+      min-height: 44px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+    }
+    #hist-date, #hist-exp {
+      min-height: 44px;
+      padding: 8px 10px;
+      font-size: 1rem;
+    }
+    td.tradable { height: 44px; }
+    #trade-ticket input {
+      min-height: 40px;
+      width: 56px;
+      font-size: 1rem;
+    }
+    #trade-ticket button {
+      min-height: 40px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+    }
+    .paper-btn {
+      min-height: 36px;
+      padding: 5px 10px;
+      font-size: 0.72rem;
+    }
+    select.paper-btn { font-size: 1rem; }
+  }
 </style>
 </head>
 <body>
