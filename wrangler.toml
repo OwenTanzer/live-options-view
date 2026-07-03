@@ -1,6 +1,7 @@
 name = "live-options-view"
 main = "worker.js"
 compatibility_date = "2026-06-23"
+account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 
 [assets]
 directory = "docs"
