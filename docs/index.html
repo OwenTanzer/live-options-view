@@ -176,7 +176,7 @@
   td.c5 .flow-4, td.p5 .flow-4 { color: #000; text-shadow: none; }
 
   /* ── legend ──────────────────────────────────────────────────────────── */
-  #legend {
+  #legend, .legend {
     display: flex;
     gap: 1.5rem;
     flex-wrap: wrap;
@@ -414,9 +414,69 @@
     line-height: 1.8;
   }
   #footer a { color: #58a6ff; text-decoration: none; }
+
+  /* ── tabs ────────────────────────────────────────────────────────────── */
+  #tab-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 0.9rem;
+  }
+  .tab-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 6px;
+    padding: 5px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
+  #live-panel.hidden, #history-panel.hidden { display: none; }
+
+  /* ── historical panel ────────────────────────────────────────────────── */
+  #hist-header {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+  #hist-title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
+  #hist-date, #hist-exp {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.76rem;
+  }
+  #hist-price { font-size: 1.3rem; font-weight: 700; color: var(--bright); }
+  #hist-tier-badge {
+    font-size: 0.72rem; font-weight: 600;
+    padding: 2px 8px; border-radius: 4px;
+    background: #1c2128; border: 1px solid var(--border);
+  }
+  #hist-status { font-size: 0.76rem; color: var(--dim); }
+  #hist-no-data {
+    padding: 3rem;
+    text-align: center;
+    color: var(--dim);
+    font-size: 0.9rem;
+  }
+  #hist-no-data.hidden { display: none; }
+  #hist-heatmap-wrap { overflow-x: auto; margin-bottom: 1rem; }
+  #hist-heatmap-wrap.hidden { display: none; }
 </style>
 </head>
 <body>
+
+<div id="tab-bar">
+  <button id="tab-live" class="tab-btn active">Live</button>
+  <button id="tab-history" class="tab-btn">Historical</button>
+</div>
+
+<div id="live-panel">
 
 <div id="header">
   <span id="title">QQQ 0DTE Live OI</span>
@@ -498,6 +558,52 @@
     <div id="paper-log-body"></div>
   </details>
 </div>
+
+</div> <!-- /live-panel -->
+
+<div id="history-panel" class="hidden">
+
+  <div id="hist-header">
+    <span id="hist-title">Historical OI</span>
+    <select id="hist-date"></select>
+    <select id="hist-exp"></select>
+    <span id="hist-price">—</span>
+    <span id="hist-tier-badge" style="display:none"></span>
+    <span id="hist-status">Loading archive…</span>
+  </div>
+
+  <div class="legend">
+    <span style="color:var(--dim);font-size:0.7rem;">CALLS</span>
+    <div class="legend-group"><div class="swatch" style="background:#0a1f14"></div><span>&lt;p25</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#0a3020"></div><span>p25–50</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#007730"></div><span>p50–75</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#00cc55"></div><span>p75–90</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#88ffcc"></div><span>&gt;p90</span></div>
+    <span style="color:var(--dim);margin-left:1rem;font-size:0.7rem;">PUTS</span>
+    <div class="legend-group"><div class="swatch" style="background:#1a0d0d"></div><span>&lt;p25</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#2a0a0a"></div><span>p25–50</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#881100"></div><span>p50–75</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#ee3300"></div><span>p75–90</span></div>
+    <div class="legend-group"><div class="swatch" style="background:#ffaa88"></div><span>&gt;p90</span></div>
+    <span style="color:var(--dim);margin-left:1rem;">OI color only — no live quote/vol/flow in historical snapshots</span>
+  </div>
+
+  <div id="hist-no-data">Loading historical archive…</div>
+
+  <div id="hist-heatmap-wrap" class="hidden">
+    <table id="hist-heatmap">
+      <thead>
+        <tr>
+          <th style="text-align:right">Calls</th>
+          <th>Strike</th>
+          <th style="text-align:left">Puts</th>
+        </tr>
+      </thead>
+      <tbody id="hist-heatmap-body"></tbody>
+    </table>
+  </div>
+
+</div> <!-- /history-panel -->
 
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
@@ -615,15 +721,20 @@ function flowHtml(delta) {
   return `<span class="flow flow-${lvl}">${label}</span>`;
 }
 
-// ── render heatmap ────────────────────────────────────────────────────────────
-function renderHeatmap(data) {
-  const { rows, underlying_price, tier, snapshot_time, expiration } = data;
-  const spot = underlying_price;
+// ── shared heatmap row builder ─────────────────────────────────────────────────
+// Used by both the live panel (tradable, paper-trading enabled) and the
+// historical panel (read-only) — takes the same {rows, underlying_price, tier}
+// shape regardless of whether it came from live JSON or a parsed archive CSV.
+const TIER_COLORS = {
+  '0DTE_Regular': '#4a90d9',
+  '0DTE_Weekly':  '#e8c84b',
+  '0DTE_Monthly': '#e8604b',
+};
 
-  if (!spot) {
-    setStatus('stale', `Feed down — snap ${snapshot_time}, awaiting DXLink reconnect`);
-    return;
-  }
+function buildHeatmapRows(tbody, data, { tradable }) {
+  const { rows, underlying_price: spot, tier } = data;
+  tbody.innerHTML = '';
+  if (!spot || !rows || !rows.length) return false;
 
   // Index rows by strike+type
   const byStrike = {};
@@ -635,16 +746,14 @@ function renderHeatmap(data) {
 
   // ATM
   const strikes = [...new Set(rows.map(r => r.Strike))].sort((a, b) => a - b);
+  if (!strikes.length) return false;
   const atm = strikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikes[0]);
 
   // Build display range ±DISPLAY around ATM
   const offsets = [];
   for (let o = DISPLAY; o >= -DISPLAY; o--) offsets.push(o);
 
-  const tbody = document.getElementById('heatmap-body');
-  tbody.innerHTML = '';
-
-  const book = computeBook();
+  const book = tradable ? computeBook() : null;
 
   for (const offset of offsets) {
     const strike = atm + offset;
@@ -675,13 +784,13 @@ function renderHeatmap(data) {
     // Call cell
     const callTd = document.createElement('td');
     callTd.className = `call-cell c${cb}`;
-    const callPos = book[callRow?.OptionSymbol]?.pos || 0;
+    const callPos = book ? (book[callRow?.OptionSymbol]?.pos || 0) : 0;
     callTd.innerHTML = fmtOI(callOI) +
       quoteHtml(callBid, callAsk) +
       (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
       flowHtml(callDelta) +
       (callPos ? `<span class="pos-badge">${callPos > 0 ? '+' : ''}${callPos}</span>` : '');
-    if (callRow?.OptionSymbol) {
+    if (tradable && callRow?.OptionSymbol) {
       callTd.classList.add('tradable');
       callTd.onclick = (e) => openTicket(e, callRow);
     }
@@ -697,13 +806,13 @@ function renderHeatmap(data) {
     // Put cell
     const putTd = document.createElement('td');
     putTd.className = `put-cell p${pb}`;
-    const putPos = book[putRow?.OptionSymbol]?.pos || 0;
+    const putPos = book ? (book[putRow?.OptionSymbol]?.pos || 0) : 0;
     putTd.innerHTML = fmtOI(putOI) +
       quoteHtml(putBid, putAsk) +
       (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
       flowHtml(putDelta) +
       (putPos ? `<span class="pos-badge">${putPos > 0 ? '+' : ''}${putPos}</span>` : '');
-    if (putRow?.OptionSymbol) {
+    if (tradable && putRow?.OptionSymbol) {
       putTd.classList.add('tradable');
       putTd.onclick = (e) => openTicket(e, putRow);
     }
@@ -712,16 +821,26 @@ function renderHeatmap(data) {
     tbody.appendChild(tr);
   }
 
+  return true;
+}
+
+// ── render heatmap (live panel) ─────────────────────────────────────────────────
+function renderHeatmap(data) {
+  const { underlying_price, tier, snapshot_time, expiration } = data;
+  const spot = underlying_price;
+
+  if (!spot) {
+    setStatus('stale', `Feed down — snap ${snapshot_time}, awaiting DXLink reconnect`);
+    return;
+  }
+
+  buildHeatmapRows(document.getElementById('heatmap-body'), data, { tradable: true });
+
   // Header
   document.getElementById('price').textContent = `$${spot?.toFixed(2) ?? '—'}`;
-  const tierColors = {
-    '0DTE_Regular': '#4a90d9',
-    '0DTE_Weekly':  '#e8c84b',
-    '0DTE_Monthly': '#e8604b',
-  };
   const tierBadge = document.getElementById('tier-badge');
   tierBadge.textContent = (tier || '').replace('0DTE_', '');
-  tierBadge.style.color  = tierColors[tier] || '#c9d1d9';
+  tierBadge.style.color  = TIER_COLORS[tier] || '#c9d1d9';
   tierBadge.style.display = '';
   document.getElementById('meta').textContent =
     `exp ${expiration}  ·  snap ${snapshot_time}`;
@@ -1129,6 +1248,156 @@ async function fetchHealth() {
   }
 }
 
+// ── tab switching ────────────────────────────────────────────────────────────
+let historyLoaded = false;
+
+function showTab(tab) {
+  const isLive = tab === 'live';
+  document.getElementById('live-panel').classList.toggle('hidden', !isLive);
+  document.getElementById('history-panel').classList.toggle('hidden', isLive);
+  document.getElementById('tab-live').classList.toggle('active', isLive);
+  document.getElementById('tab-history').classList.toggle('active', !isLive);
+  if (!isLive && !historyLoaded) {
+    historyLoaded = true;
+    loadHistoryManifest();
+  }
+}
+
+// ── historical panel ─────────────────────────────────────────────────────────
+// Reads the same R2 bucket the live view polls, but pulls the settled daily
+// chain archive (raw/qqq_chain_{date}.csv, or raw/opex/qqq_chain_{date}.csv
+// for pre-pipeline seeded dates) instead of intraday/latest.json.
+let histManifestDates = [];
+const histCsvCache = {};   // date 'YYYY-MM-DD' -> normalized rows
+
+function setHistStatus(text) {
+  document.getElementById('hist-status').textContent = text;
+}
+
+// Tier classification from the expiration date alone (Friday = weekly,
+// 3rd Friday of month = monthly opex) — avoids needing a full NYSE holiday
+// calendar in the browser; matches classify_tier in the desktop viewer for
+// the vast majority of dates (holiday-rollback edge cases excepted).
+function classifyTierSimple(expDateStr) {
+  const d = new Date(`${expDateStr}T00:00:00Z`);
+  if (isNaN(d)) return '0DTE_Regular';
+  if (d.getUTCDay() !== 5) return '0DTE_Regular';
+  const dom = d.getUTCDate();
+  return (dom >= 15 && dom <= 21) ? '0DTE_Monthly' : '0DTE_Weekly';
+}
+
+function normalizeHistRow(r) {
+  return {
+    ...r,
+    Strike:          +r.Strike,
+    OpenInterest:    +r.OpenInterest || 0,
+    Volume:          +r.Volume || 0,
+    Bid:             r.Bid  !== '' && r.Bid  != null ? +r.Bid  : null,
+    Ask:             r.Ask  !== '' && r.Ask  != null ? +r.Ask  : null,
+    UnderlyingPrice: +r.UnderlyingPrice,
+    DTE:             +r.DTE,
+  };
+}
+
+async function loadHistoryManifest() {
+  setHistStatus('Loading archive index…');
+  try {
+    const resp = await fetch(`${R2}/manifest.json?_=${Date.now()}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const m = await resp.json();
+    histManifestDates = (m.dates || []).slice().sort();
+    if (!histManifestDates.length) {
+      setHistStatus('Archive is empty.');
+      return;
+    }
+    const sel = document.getElementById('hist-date');
+    sel.innerHTML = histManifestDates.map(d => `<option value="${d}">${d}</option>`).join('');
+    const latest = histManifestDates[histManifestDates.length - 1];
+    sel.value = latest;
+    await loadHistoryDate(latest);
+  } catch (e) {
+    setHistStatus(`Failed to load archive index: ${e.message}`);
+    document.getElementById('hist-no-data').textContent = 'Could not load historical archive.';
+  }
+}
+
+async function loadHistoryDate(dateStr) {
+  setHistStatus(`Loading ${dateStr}…`);
+  document.getElementById('hist-heatmap-wrap').classList.add('hidden');
+  document.getElementById('hist-no-data').classList.remove('hidden');
+  try {
+    let rows = histCsvCache[dateStr];
+    if (!rows) {
+      const key = dateStr.replace(/-/g, '');
+      let resp = await fetch(`${R2}/raw/qqq_chain_${key}.csv?_=${Date.now()}`);
+      if (!resp.ok) resp = await fetch(`${R2}/raw/opex/qqq_chain_${key}.csv?_=${Date.now()}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      rows = parseCsv(await resp.text()).map(normalizeHistRow);
+      histCsvCache[dateStr] = rows;
+    }
+    populateExpirationSelect(rows, dateStr);
+  } catch (e) {
+    setHistStatus(`Error loading ${dateStr}: ${e.message}`);
+    document.getElementById('hist-no-data').textContent = `No archived chain for ${dateStr}.`;
+  }
+}
+
+function populateExpirationSelect(rows, tradeDate) {
+  const byExp = new Map();
+  for (const r of rows) {
+    if (!r.Expiration) continue;
+    if (!byExp.has(r.Expiration)) byExp.set(r.Expiration, r.DTE || 0);
+  }
+  const exps = [...byExp.entries()].sort((a, b) => a[1] - b[1]);
+  if (!exps.length) {
+    setHistStatus(`No expirations found for ${tradeDate}.`);
+    return;
+  }
+
+  const sel = document.getElementById('hist-exp');
+  sel.innerHTML = exps.map(([exp, dte]) => `<option value="${exp}">${exp} (DTE ${dte})</option>`).join('');
+  const preferred = exps.find(([, dte]) => dte > 0) || exps[0];
+  sel.value = preferred[0];
+
+  renderSelectedExpiration(rows, tradeDate);
+}
+
+function renderSelectedExpiration(rows, tradeDate) {
+  const exp = document.getElementById('hist-exp').value;
+  const sub = rows.filter(r => r.Expiration === exp);
+  if (!sub.length) {
+    setHistStatus(`No rows for expiration ${exp}.`);
+    document.getElementById('hist-heatmap-wrap').classList.add('hidden');
+    document.getElementById('hist-no-data').classList.remove('hidden');
+    return;
+  }
+  const spot = sub[0].UnderlyingPrice || null;
+  const tier = classifyTierSimple(exp);
+  renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: exp, snapshot_time: tradeDate });
+}
+
+function renderHistoryHeatmap(data) {
+  const { underlying_price: spot, tier, expiration, snapshot_time } = data;
+
+  const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, { tradable: false });
+  if (!ok) {
+    setHistStatus(`No usable spot/strike data for ${snapshot_time} · exp ${expiration}.`);
+    document.getElementById('hist-heatmap-wrap').classList.add('hidden');
+    document.getElementById('hist-no-data').classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('hist-price').textContent = spot ? `$${spot.toFixed(2)}` : '—';
+  const tierBadge = document.getElementById('hist-tier-badge');
+  tierBadge.textContent = (tier || '').replace('0DTE_', '');
+  tierBadge.style.color = TIER_COLORS[tier] || '#c9d1d9';
+  tierBadge.style.display = '';
+
+  document.getElementById('hist-no-data').classList.add('hidden');
+  document.getElementById('hist-heatmap-wrap').classList.remove('hidden');
+  setHistStatus(`Trade date ${snapshot_time} · exp ${expiration}`);
+}
+
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
   initPriceStrip();
@@ -1158,6 +1427,15 @@ async function fetchHealth() {
     if (!confirm(`Delete account "${acct().name}" and its trade history?`)) return;
     delete store.accounts[store.active];
     switchAccount(Object.keys(store.accounts)[0]);
+  };
+
+  document.getElementById('tab-live').onclick    = () => showTab('live');
+  document.getElementById('tab-history').onclick = () => showTab('history');
+  document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
+  document.getElementById('hist-exp').onchange   = () => {
+    const dateStr = document.getElementById('hist-date').value;
+    const rows = histCsvCache[dateStr];
+    if (rows) renderSelectedExpiration(rows, dateStr);
   };
 
   setStatus('', 'Loading calibration data…');
