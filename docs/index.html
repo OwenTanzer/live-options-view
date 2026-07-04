@@ -43,7 +43,6 @@
   }
   #title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
   #price { font-size: 1.6rem; font-weight: 700; color: var(--bright); letter-spacing: -0.02em; }
-  #meta  { font-size: 0.78rem; color: var(--dim); }
   #tier-badge {
     font-size: 0.72rem; font-weight: 600;
     padding: 2px 8px; border-radius: 4px;
@@ -175,22 +174,6 @@
   td.c5 .flow-3, td.p5 .flow-3 { color: #8b3a00; }
   td.c5 .flow-4, td.p5 .flow-4 { color: #000; text-shadow: none; }
 
-  /* ── legend ──────────────────────────────────────────────────────────── */
-  #legend, .legend {
-    display: flex;
-    gap: 1.5rem;
-    flex-wrap: wrap;
-    font-size: 0.68rem;
-    color: var(--dim);
-    margin-bottom: 0.75rem;
-    align-items: center;
-  }
-  .legend-group { display: flex; gap: 4px; align-items: center; }
-  .swatch {
-    width: 14px; height: 14px; border-radius: 2px;
-    border: 1px solid rgba(255,255,255,0.08);
-  }
-
   /* ── price strip ─────────────────────────────────────────────────────── */
   #price-strip {
     display: flex;
@@ -258,34 +241,6 @@
   @keyframes flash-down { 0%,100%{background:var(--panel)} 30%{background:#330808} }
   .flash-up   { animation: flash-up   0.6s ease; }
   .flash-down { animation: flash-down 0.6s ease; }
-
-  /* ── health bar ─────────────────────────────────────────────────────── */
-  #health-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    font-size: 0.68rem;
-    color: var(--dim);
-    margin-bottom: 0.6rem;
-    padding: 4px 8px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-  }
-  #health-bar.hidden { display: none; }
-  .h-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .h-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--dim); flex-shrink: 0;
-  }
-  .h-dot.ok    { background: #00cc55; }
-  .h-dot.warn  { background: #e8c84b; }
-  .h-dot.bad   { background: #ee3300; }
 
   /* ── calibration error banner ────────────────────────────────────────── */
   #cal-error {
@@ -568,24 +523,14 @@
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
   <span id="tier-badge" style="display:none"></span>
-  <span id="meta"></span>
 </div>
 
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
-  <span id="countdown"></span>
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
-
-<div id="health-bar" class="hidden">
-  <span style="color:var(--dim);letter-spacing:0.04em;">COLLECTOR</span>
-  <span class="h-pill"><span class="h-dot" id="h-feed-dot"></span><span id="h-feed-txt">feed</span></span>
-  <span class="h-pill"><span class="h-dot" id="h-upload-dot"></span><span id="h-upload-txt">uploads</span></span>
-  <span class="h-pill"><span class="h-dot" id="h-class-dot"></span><span id="h-class-txt">—</span></span>
-  <span id="h-run-id" style="color:var(--dim);font-size:0.62rem;margin-left:auto;opacity:0.6"></span>
-</div>
 
 <div id="price-strip">
   <div class="price-group" id="px-main">
@@ -594,22 +539,6 @@
   <div class="price-group" id="px-secondary">
     <!-- BTC/USD META GOOGL AMZN TSLA — small -->
   </div>
-</div>
-
-<div id="legend">
-  <span style="color:var(--dim);font-size:0.7rem;">CALLS</span>
-  <div class="legend-group"><div class="swatch" style="background:#0a1f14"></div><span>&lt;p25</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#0a3020"></div><span>p25–50</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#007730"></div><span>p50–75</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#00cc55"></div><span>p75–90</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#88ffcc"></div><span>&gt;p90</span></div>
-  <span style="color:var(--dim);margin-left:1rem;font-size:0.7rem;">PUTS</span>
-  <div class="legend-group"><div class="swatch" style="background:#1a0d0d"></div><span>&lt;p25</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#2a0a0a"></div><span>p25–50</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#881100"></div><span>p50–75</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#ee3300"></div><span>p75–90</span></div>
-  <div class="legend-group"><div class="swatch" style="background:#ffaa88"></div><span>&gt;p90</span></div>
-  <span style="color:var(--dim);margin-left:1rem;">OI color · Vol number (superscript)</span>
 </div>
 
 <div id="no-data">No live data yet. The collector starts each session day and uploads the first snapshot ~11 minutes after pre-market opens.</div>
@@ -655,22 +584,6 @@
     <span id="hist-price">—</span>
     <span id="hist-tier-badge" style="display:none"></span>
     <span id="hist-status">Loading archive…</span>
-  </div>
-
-  <div class="legend">
-    <span style="color:var(--dim);font-size:0.7rem;">CALLS</span>
-    <div class="legend-group"><div class="swatch" style="background:#0a1f14"></div><span>&lt;p25</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#0a3020"></div><span>p25–50</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#007730"></div><span>p50–75</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#00cc55"></div><span>p75–90</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#88ffcc"></div><span>&gt;p90</span></div>
-    <span style="color:var(--dim);margin-left:1rem;font-size:0.7rem;">PUTS</span>
-    <div class="legend-group"><div class="swatch" style="background:#1a0d0d"></div><span>&lt;p25</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#2a0a0a"></div><span>p25–50</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#881100"></div><span>p50–75</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#ee3300"></div><span>p75–90</span></div>
-    <div class="legend-group"><div class="swatch" style="background:#ffaa88"></div><span>&gt;p90</span></div>
-    <span style="color:var(--dim);margin-left:1rem;">OI color only — no live quote/vol/flow in historical snapshots</span>
   </div>
 
   <div id="hist-no-data">Loading historical archive…</div>
@@ -757,7 +670,6 @@ document.addEventListener('visibilitychange', () => {
   // for whatever's left of the next 60/10/15s cycle.
   fetchLatest();
   fetchPrices();
-  fetchHealth();
   if (!ranges) loadRanges();
 });
 setInterval(checkForNewBuild, 5 * 60 * 1000);
@@ -792,11 +704,11 @@ async function loadRanges() {
 
 // ── render heatmap (live panel) ─────────────────────────────────────────────────
 function renderHeatmap(data) {
-  const { underlying_price, tier, snapshot_time, expiration } = data;
+  const { underlying_price, tier, snapshot_time } = data;
   const spot = underlying_price;
 
   if (!spot) {
-    setStatus('stale', `Feed down — snap ${snapshot_time}, awaiting DXLink reconnect`);
+    setStatus('stale', snapshot_time);
     return;
   }
 
@@ -812,8 +724,6 @@ function renderHeatmap(data) {
   tierBadge.textContent = (tier || '').replace('0DTE_', '');
   tierBadge.style.color  = TIER_COLORS[tier] || '#c9d1d9';
   tierBadge.style.display = '';
-  document.getElementById('meta').textContent =
-    `exp ${expiration}  ·  snap ${snapshot_time}`;
 
   document.getElementById('no-data').classList.add('hidden');
   document.getElementById('heatmap-wrap').classList.remove('hidden');
@@ -1049,7 +959,7 @@ async function fetchLatest() {
     const data = await resp.json();
 
     if (!data.rows || data.rows.length === 0) {
-      setStatus('stale', 'No rows in snapshot');
+      setStatus('stale', '—');
       return;
     }
 
@@ -1061,15 +971,12 @@ async function fetchLatest() {
 
     const snapAge = Math.round((Date.now() - new Date(lastTs).getTime()) / 1000 / 60);
     const hasBids = data.rows.some(r => r.Bid != null);
-    if (snapAge > 2 || !hasBids) {
-      const reason = !hasBids ? 'feed reconnecting' : `${snapAge}m ago`;
-      setStatus('stale', `Cached · ${data.snapshot_time} (${reason})`);
-    } else {
-      setStatus('live', `Live · last snap ${data.snapshot_time}`);
-    }
+    // Dot color carries live/stale; text is just a small timestamp note —
+    // deeper diagnosis lives in diag.html, not the main view.
+    setStatus(snapAge > 2 || !hasBids ? 'stale' : 'live', data.snapshot_time);
 
   } catch (e) {
-    setStatus('stale', `Error: ${e.message}`);
+    setStatus('stale', lastData?.snapshot_time || '—');
     console.error(e);
   }
 }
@@ -1087,8 +994,6 @@ function startCountdown() {
   clearInterval(timerHandle);
   timerHandle = setInterval(() => {
     countdown--;
-    document.getElementById('countdown').textContent =
-      countdown > 0 ? `· refresh in ${countdown}s` : '';
     if (countdown <= 0) {
       fetchLatest();
       countdown = REFRESH;
@@ -1167,54 +1072,8 @@ async function fetchPrices() {
     if (!resp.ok) return;
     const data = await resp.json();
     updatePriceStrip(data.prices || {});
-    if (data.feed_stale) {
-      setStatus('stale', 'Feed stale — collector connected but no recent market events');
-    }
   } catch (e) {
     console.warn('prices.json fetch failed:', e);
-  }
-}
-
-// ── health.json fetch (every 15s) ─────────────────────────────────────────────
-async function fetchHealth() {
-  try {
-    const resp = await fetch(`${R2}/intraday/health.json?_=${Date.now()}`);
-    if (!resp.ok) return;
-    const h = await resp.json();
-
-    document.getElementById('health-bar').classList.remove('hidden');
-
-    // Feed dot
-    const feedDot = document.getElementById('h-feed-dot');
-    const feedTxt = document.getElementById('h-feed-txt');
-    const feedStale = h.feed?.feed_stale;
-    const connected = h.feed?.connected && h.feed?.channel_open;
-    feedDot.className = 'h-dot ' + (feedStale ? 'bad' : connected ? 'ok' : 'warn');
-    const recons = h.feed?.reconnect_count || 0;
-    feedTxt.textContent = feedStale ? 'feed stale' : connected ? `feed live${recons ? ' ('+recons+' reconn)' : ''}` : 'feed down';
-
-    // Upload dot
-    const upDot = document.getElementById('h-upload-dot');
-    const upTxt = document.getElementById('h-upload-txt');
-    const fails = h.uploads?.failure_count || 0;
-    const ok    = h.uploads?.prices_success_count || 0;
-    upDot.className = 'h-dot ' + (fails > 0 ? 'warn' : ok > 0 ? 'ok' : 'warn');
-    upTxt.textContent = `${ok} pushes${fails ? ' · '+fails+' err' : ''}`;
-
-    // Classification dot
-    const clDot = document.getElementById('h-class-dot');
-    const clTxt = document.getElementById('h-class-txt');
-    const cls   = h.classification || 'unknown';
-    const clsColor = { clean_start: 'ok', recovery_after_crash: 'warn', recovery_after_gap: 'warn', unknown: 'warn' };
-    clDot.className = 'h-dot ' + (clsColor[cls] || 'warn');
-    clTxt.textContent = cls.replace(/_/g, ' ');
-
-    // Run ID (short)
-    const runId = h.run_id || '';
-    document.getElementById('h-run-id').textContent = runId ? 'run ' + runId.slice(-9) : '';
-
-  } catch (e) {
-    // health.json not yet available (pre-deployment) — don't surface an error
   }
 }
 
@@ -1759,16 +1618,13 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   await loadRanges();
 
   setStatus('', 'Fetching live snapshot…');
-  await Promise.all([fetchLatest(), fetchPrices(), fetchHealth()]);
+  await Promise.all([fetchLatest(), fetchPrices()]);
 
   // OI heatmap: 60s refresh cycle
   startCountdown();
 
   // Price strip: 10s independent interval
   setInterval(fetchPrices, 10_000);
-
-  // Health telemetry: 15s interval
-  setInterval(fetchHealth, 15_000);
 
   // Calibration data has no periodic retry of its own — safety net in case the
   // visibility handler above never fires (e.g. the tab was never backgrounded,
