@@ -1,7 +1,25 @@
+const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
+
 export default {
   async fetch(request, env) {
-    const response = await env.ASSETS.fetch(request);
     const url = new URL(request.url);
+
+    // Same-origin passthrough to the R2 bucket, fetched edge-to-edge by
+    // Cloudflare rather than over the client's own network. Exists so
+    // diag.html can compare "direct to the r2.dev subdomain" against "same
+    // origin as the page" — if a client's network/DNS/carrier treats the two
+    // hostnames differently, this tells them apart instead of leaving it a
+    // guess. Not used by the main app yet.
+    if (url.pathname.startsWith("/r2-proxy/")) {
+      const key = url.pathname.slice("/r2-proxy/".length);
+      const upstream = await fetch(`${R2_ORIGIN}/${key}${url.search}`, { cf: { cacheTtl: 0 } });
+      const proxied = new Response(upstream.body, upstream);
+      proxied.headers.set("Cache-Control", "no-store");
+      proxied.headers.set("Access-Control-Allow-Origin", "*");
+      return proxied;
+    }
+
+    const response = await env.ASSETS.fetch(request);
 
     // HTML documents (the single-file app + diagnostic page) must never be
     // cached — a stale cached copy silently keeps serving old JS against a

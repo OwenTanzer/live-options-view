@@ -14,7 +14,8 @@
     line-height: 1.5;
   }
   h1 { font-size: 1.1rem; color: #f0f6fc; margin-bottom: 0.5rem; }
-  .origin { color: #6e7681; font-size: 0.8rem; margin-bottom: 1.5rem; }
+  h2.section { font-size: 0.95rem; color: #f0f6fc; margin: 1.5rem 0 0.5rem; }
+  .origin, .subtext { color: #6e7681; font-size: 0.8rem; margin-bottom: 0.75rem; }
   .test {
     border: 1px solid #30363d;
     border-radius: 6px;
@@ -22,43 +23,120 @@
     margin-bottom: 12px;
   }
   .test h2 { font-size: 0.85rem; color: #f0f6fc; margin-bottom: 6px; }
-  .row { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; }
+  .row { display: flex; gap: 8px; align-items: baseline; margin: 3px 0; flex-wrap: wrap; }
   .label { color: #6e7681; min-width: 130px; flex-shrink: 0; }
   .pending { color: #e8c84b; }
   .pass { color: #00cc55; font-weight: 600; }
   .fail { color: #ee3300; font-weight: 600; }
   .detail { color: #6e7681; font-size: 0.78rem; word-break: break-all; }
   #verdict {
-    margin-top: 1.5rem;
+    margin-top: 0.75rem;
     padding: 10px 12px;
     border-radius: 6px;
     background: #161b22;
     border: 1px solid #30363d;
     font-size: 0.85rem;
   }
+  #netinfo {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    font-size: 0.78rem;
+    color: #6e7681;
+    margin-bottom: 0.5rem;
+  }
+  button {
+    background: #1c2128;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: #58a6ff; }
+  #monitor-log {
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 0.5rem;
+  }
+  #monitor-log .row { font-size: 0.78rem; }
+  #burst-result { margin-top: 0.5rem; font-size: 0.85rem; }
 </style>
 </head>
 <body>
 
 <h1>R2 fetch diagnostic</h1>
 <div class="origin">Running from: <span id="origin-label"></span></div>
+<div id="netinfo">Loading network info…</div>
 
+<h2 class="section">1. One-shot reachability (direct R2 vs same-origin Worker proxy)</h2>
+<div class="subtext">Runs once, right now. A clean pass here doesn't rule out something intermittent — see the live monitor below for that.</div>
 <div id="tests"></div>
 <div id="verdict">Running tests…</div>
 
+<h2 class="section">2. Live monitor</h2>
+<div class="subtext">
+  Polls the exact same URL pattern the live app uses (cache-busted, no-store) every 5s,
+  against both the direct R2 path and the same-origin proxy path, and keeps a running log
+  (persisted across reloads) with network conditions at the time of each attempt. Leave
+  this running in the background during normal use — when "Load failed" happens again,
+  come back here and the log will show exactly when, on which path, and what the network
+  looked like at that moment.
+</div>
+<button id="monitor-toggle">Start monitor</button>
+<button id="monitor-clear">Clear log</button>
+<div id="monitor-log"></div>
+
+<h2 class="section">3. Burst / concurrency test</h2>
+<div class="subtext">
+  Fires 6 concurrent requests on each path (12 total) at once, mimicking how the live app
+  fires several fetches together on boot — isolates whether concurrent load (not a single
+  request in isolation) is what triggers failures.
+</div>
+<button id="burst-run">Run burst test</button>
+<div id="burst-result"></div>
+
 <script>
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
-const TARGETS = [
-  { name: "manifest.json", path: "manifest.json" },
-  { name: "OIranges.csv",  path: "derived/OIranges.csv" },
-  { name: "latest.json",   path: "intraday/latest.json" },
-];
+const PROXY = `${location.origin}/r2-proxy`;
 
 document.getElementById('origin-label').textContent = window.location.origin;
 
-function row(label, cls, text) {
-  return `<div class="row"><span class="label">${label}</span><span class="${cls}">${text}</span></div>`;
+// ── network info ─────────────────────────────────────────────────────────────
+function renderNetInfo() {
+  const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const parts = [`online=${navigator.onLine}`];
+  if (c) {
+    if (c.effectiveType) parts.push(`effectiveType=${c.effectiveType}`);
+    if (c.downlink != null) parts.push(`downlink=${c.downlink}Mbps`);
+    if (c.rtt != null) parts.push(`rtt=${c.rtt}ms`);
+    if (c.saveData) parts.push('saveData=on');
+  } else {
+    parts.push('connection API unavailable (Safari)');
+  }
+  document.getElementById('netinfo').textContent = parts.join(' · ');
 }
+function netSnapshot() {
+  const c = navigator.connection;
+  return c ? `${c.effectiveType || '?'}/${c.downlink ?? '?'}Mbps/rtt${c.rtt ?? '?'}` : 'n/a';
+}
+window.addEventListener('online', renderNetInfo);
+window.addEventListener('offline', renderNetInfo);
+if (navigator.connection) navigator.connection.addEventListener('change', renderNetInfo);
+renderNetInfo();
+
+// ── section 1: one-shot reachability ──────────────────────────────────────────
+const ONE_SHOT_TARGETS = [
+  { name: "manifest.json (direct R2)",  url: `${R2}/manifest.json` },
+  { name: "OIranges.csv (direct R2)",   url: `${R2}/derived/OIranges.csv` },
+  { name: "latest.json (direct R2)",    url: `${R2}/intraday/latest.json` },
+  { name: "manifest.json (via Worker proxy, same-origin)", url: `${PROXY}/manifest.json` },
+];
 
 async function testCors(url) {
   const start = performance.now();
@@ -99,12 +177,11 @@ function testImg(url) {
   });
 }
 
-(async function run() {
+(async function runOneShot() {
   const testsEl = document.getElementById('tests');
   const results = [];
 
-  for (const t of TARGETS) {
-    const url = `${R2}/${t.path}`;
+  for (const t of ONE_SHOT_TARGETS) {
     const div = document.createElement('div');
     div.className = 'test';
     div.innerHTML = `<h2>${t.name}</h2>
@@ -114,7 +191,7 @@ function testImg(url) {
     testsEl.appendChild(div);
 
     const [cors, nocors, img] = await Promise.all([
-      testCors(url), testNoCors(url), testImg(url + '.png'),
+      testCors(t.url), testNoCors(t.url), testImg(t.url + '.png'),
     ]);
 
     const setResult = (key, r) => {
@@ -131,20 +208,92 @@ function testImg(url) {
   }
 
   const verdict = document.getElementById('verdict');
-  const allCorsFail = results.every(r => !r.cors);
-  const allNoCorsOk  = results.every(r => r.nocors);
-  const allFail      = results.every(r => !r.cors && !r.nocors);
+  const direct = results.filter(r => !r.name.includes('proxy'));
+  const proxy  = results.filter(r => r.name.includes('proxy'));
+  const allDirectFail = direct.every(r => !r.cors);
+  const allDirectNoCorsOk = direct.every(r => r.nocors);
+  const proxyOk = proxy.every(r => r.cors);
 
-  if (allFail) {
-    verdict.innerHTML = "<b>Nothing reached the server</b> (no-cors also failed) — this points to a network/DNS block on this device/connection, not CORS. Check DNS profiles, VPNs, or carrier filtering for r2.dev.";
-  } else if (allCorsFail && allNoCorsOk) {
-    verdict.innerHTML = "<b>Confirmed: CORS is blocking this</b> — no-cors reached the server fine, but the CORS-checked fetch failed on every target. The response isn't carrying a matching Access-Control-Allow-Origin header for this exact origin/device.";
-  } else if (!allCorsFail) {
-    verdict.innerHTML = "<b>cors fetch succeeded here</b> — if the live site is still failing for you right now, something else is going on (timing, a transient network blip, or the live site's exact request differs from this test). Try reloading the live site again.";
+  if (direct.every(r => !r.cors && !r.nocors)) {
+    verdict.innerHTML = "<b>Nothing reached the direct-R2 server</b> (no-cors also failed) — points to a network/DNS block on this device/connection for the r2.dev hostname specifically, not CORS. Check DNS profiles, VPNs, or carrier filtering." + (proxyOk ? " The same-origin proxy path <b>did</b> succeed — same data, reached through this site's own domain instead of r2.dev." : "");
+  } else if (allDirectFail && allDirectNoCorsOk) {
+    verdict.innerHTML = "<b>Confirmed: CORS is blocking direct R2 access</b> — no-cors reached the server fine, but the CORS-checked fetch failed on every direct target." + (proxyOk ? " The same-origin proxy path succeeded, which sidesteps this entirely." : "");
+  } else if (!allDirectFail) {
+    verdict.innerHTML = "<b>Direct R2 fetch succeeded here</b> — if the live site is still failing for you right now, this was a one-time snapshot and won't catch something intermittent. Start the live monitor below and leave it running until it happens again.";
   } else {
     verdict.innerHTML = "Mixed results — see details above per target.";
   }
 })();
+
+// ── section 2: live monitor (catches intermittent failures over time) ───────
+const LOG_KEY = 'diag_log_v1';
+const MONITOR_TARGETS = [
+  { name: 'direct R2',  mk: () => `${R2}/intraday/latest.json?_=${Date.now()}` },
+  { name: 'proxy',      mk: () => `${PROXY}/intraday/latest.json?_=${Date.now()}` },
+];
+let monitorTimer = null;
+
+function loadLog() {
+  try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch (e) { return []; }
+}
+function saveLog(log) {
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(log.slice(-300))); } catch (e) {}
+}
+function renderLog() {
+  const log = loadLog();
+  const el = document.getElementById('monitor-log');
+  el.innerHTML = log.slice().reverse().map(e =>
+    `<div class="row"><span class="label">${e.t}</span><span class="${e.ok ? 'pass' : 'fail'}">${e.name}</span><span class="detail">${e.detail}</span></div>`
+  ).join('') || '<div class="detail">No entries yet — start the monitor.</div>';
+}
+
+async function monitorTick() {
+  const log = loadLog();
+  const net = netSnapshot();
+  for (const t of MONITOR_TARGETS) {
+    const start = performance.now();
+    try {
+      const resp = await fetch(t.mk(), { cache: 'no-store' });
+      const ms = Math.round(performance.now() - start);
+      log.push({ t: new Date().toLocaleTimeString(), name: t.name, ok: resp.ok, detail: `HTTP ${resp.status} · ${ms}ms · net=${net}` });
+    } catch (e) {
+      const ms = Math.round(performance.now() - start);
+      log.push({ t: new Date().toLocaleTimeString(), name: t.name, ok: false, detail: `${e.name}: ${e.message} · ${ms}ms · net=${net}` });
+    }
+  }
+  saveLog(log);
+  renderLog();
+}
+
+function startMonitor() {
+  if (monitorTimer) return;
+  monitorTick();
+  monitorTimer = setInterval(monitorTick, 5000);
+  document.getElementById('monitor-toggle').textContent = 'Stop monitor';
+}
+function stopMonitor() {
+  clearInterval(monitorTimer);
+  monitorTimer = null;
+  document.getElementById('monitor-toggle').textContent = 'Start monitor';
+}
+
+document.getElementById('monitor-toggle').onclick = () => monitorTimer ? stopMonitor() : startMonitor();
+document.getElementById('monitor-clear').onclick = () => { saveLog([]); renderLog(); };
+renderLog();
+
+// ── section 3: burst / concurrency test ──────────────────────────────────────
+document.getElementById('burst-run').onclick = async () => {
+  const el = document.getElementById('burst-result');
+  el.textContent = 'Running burst (12 concurrent requests across both paths)…';
+  const attempts = [];
+  for (let i = 0; i < 6; i++) {
+    attempts.push(fetch(`${R2}/intraday/latest.json?_=${Date.now()}_${i}a`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
+    attempts.push(fetch(`${PROXY}/intraday/latest.json?_=${Date.now()}_${i}b`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
+  }
+  const results = await Promise.all(attempts);
+  const okCount = results.filter(Boolean).length;
+  el.textContent = `${okCount}/${results.length} succeeded under concurrent load (net: ${netSnapshot()}).`;
+};
 </script>
 </body>
 </html>
