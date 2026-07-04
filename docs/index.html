@@ -747,7 +747,19 @@ window.addEventListener('pageshow', (e) => {
   if (e.persisted) location.reload();
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') checkForNewBuild();
+  if (document.visibilityState !== 'visible') return;
+  checkForNewBuild();
+  // Mobile browsers throttle/suspend setInterval timers while a tab is
+  // backgrounded, and the network interface is frequently mid-reconnect right
+  // when a tab regains focus — that combination is the classic cause of a
+  // single "Load failed" appearing to hang around for up to a minute after
+  // unlocking the phone, even though the data itself was never actually
+  // broken. Refetch immediately on regaining visibility instead of waiting
+  // for whatever's left of the next 60/10/15s cycle.
+  fetchLatest();
+  fetchPrices();
+  fetchHealth();
+  if (!ranges) loadRanges();
 });
 setInterval(checkForNewBuild, 5 * 60 * 1000);
 
@@ -764,11 +776,17 @@ let timerHandle = null;
 // TIER_COLORS / fmt*/quoteHtml/flowHtml live in shared.js (also used by diag.html).
 async function loadRanges() {
   try {
-    const resp = await fetch(`${R2}/derived/OIranges.csv`);
+    const resp = await fetch(`${R2}/derived/OIranges.csv`, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     ranges = parseRangesCsv(await resp.text());
+    document.getElementById('cal-error').style.display = 'none';
   } catch (e) {
     console.warn('OIranges load failed:', e);
+    // No periodic timer of its own (unlike the heatmap/prices/health fetches) —
+    // a single transient failure here used to mean the calibration banner (and
+    // "wall" coloring for every nonzero cell) stayed broken for the rest of the
+    // session. Retried from the visibility handler below and a slow safety-net
+    // interval so a one-off blip self-heals instead of needing a manual reload.
     document.getElementById('cal-error').style.display = 'block';
   }
 }
@@ -1776,6 +1794,11 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   // Health telemetry: 15s interval
   setInterval(fetchHealth, 15_000);
+
+  // Calibration data has no periodic retry of its own — safety net in case the
+  // visibility handler above never fires (e.g. the tab was never backgrounded,
+  // just had one bad fetch at boot).
+  setInterval(() => { if (!ranges) loadRanges(); }, 60_000);
 })();
 </script>
 </body>
