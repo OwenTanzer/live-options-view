@@ -718,6 +718,38 @@
 </div>
 
 <script>
+// ── stale-page protection ──────────────────────────────────────────────────────
+// Cache-Control: no-store (set by the Worker) stops new responses from being
+// cached, but it can't evict a copy a device already cached before that header
+// existed, and it does nothing for iOS Safari's back-forward cache (bfcache),
+// which can restore a frozen page snapshot with zero network request. Both show
+// up as "stuck on an old version" on mobile, so this page self-heals instead of
+// relying on the user finding a hard-refresh. BUILD_ID is stamped by the deploy
+// workflow (sed-replaced from the literal placeholder below); left as the
+// placeholder in local/dev checkouts, where it harmlessly never mismatches.
+const BUILD_ID = "__BUILD_ID__";
+
+function checkForNewBuild() {
+  fetch(`${location.pathname}?_=${Date.now()}`, { cache: 'no-store' })
+    .then(r => r.text())
+    .then(html => {
+      const m = html.match(/const BUILD_ID = "([^"]+)"/);
+      if (m && m[1] !== BUILD_ID) location.reload();
+    })
+    .catch(() => {});
+}
+
+// Safari (and other browsers) can restore a page from bfcache instead of loading
+// it fresh — event.persisted is true only on that restore path, never on a normal
+// first load, so this can't cause a reload loop.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) location.reload();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkForNewBuild();
+});
+setInterval(checkForNewBuild, 5 * 60 * 1000);
+
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 const DISPLAY = 20;   // ±N strikes shown
 const REFRESH  = 60;  // seconds between data refreshes

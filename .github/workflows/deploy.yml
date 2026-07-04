@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp build ID (for client-side stale-page detection)
+        run: |
+          BUILD_ID="$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)"
+          sed -i "s/__BUILD_ID__/${BUILD_ID}/" docs/index.html
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
