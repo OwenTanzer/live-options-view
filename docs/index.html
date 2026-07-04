@@ -446,6 +446,13 @@
     text-transform: uppercase;
     color: var(--dim);
     margin-bottom: 6px;
+    /* A touch-and-hold right over the title (easy to do when the canvas
+       right below it is meant for touch-scrubbing) shouldn't kick off text
+       selection or iOS's copy/lookup callout instead of the intended
+       tooltip interaction. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .hist-widget canvas { display: block; width: 100%; touch-action: none; }
   .canvas-tooltip {
