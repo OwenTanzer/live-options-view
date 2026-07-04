@@ -443,7 +443,7 @@
     margin-bottom: 0.75rem;
   }
   #hist-title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
-  #hist-date, #hist-exp {
+  #hist-date {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--fg);
@@ -530,7 +530,7 @@
       padding: 8px 16px;
       font-size: 0.85rem;
     }
-    #hist-date, #hist-exp {
+    #hist-date {
       min-height: 44px;
       padding: 8px 10px;
       font-size: 1rem;
@@ -652,7 +652,6 @@
   <div id="hist-header">
     <span id="hist-title">Historical OI</span>
     <select id="hist-date"></select>
-    <select id="hist-exp"></select>
     <span id="hist-price">—</span>
     <span id="hist-tier-badge" style="display:none"></span>
     <span id="hist-status">Loading archive…</span>
@@ -1306,60 +1305,41 @@ async function fetchChainCsv(dateStr) {
   return rows;
 }
 
+// Only the trade date's own same-day (0DTE) chain is shown — no expiration
+// picker, no timeframe slider. Mirrors the desktop app's design (oi_viewer.py
+// has no expiration selector either; its similarity index always builds its
+// feature vector from the capture date's own same-day expiration). A chain
+// CSV can contain other expirations' rows too, but those aren't surfaced
+// here — extending to other timeframes is a deliberate future step, not an
+// oversight.
 async function loadHistoryDate(dateStr) {
   setHistStatus(`Loading ${dateStr}…`);
   document.getElementById('hist-heatmap-wrap').classList.add('hidden');
   document.getElementById('hist-no-data').classList.remove('hidden');
   try {
     const rows = await fetchChainCsv(dateStr);
-    populateExpirationSelect(rows, dateStr);
+    const sub = rows.filter(r => r.Expiration === dateStr);
+    if (!sub.length) {
+      setHistStatus(`No 0DTE chain found for ${dateStr}.`);
+      document.getElementById('hist-no-data').textContent = `No 0DTE chain for ${dateStr}.`;
+      return;
+    }
+    const spot = sub[0].UnderlyingPrice || null;
+    const tier = classifyTierSimple(dateStr);
+    const ok = renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: dateStr, snapshot_time: dateStr });
+    if (ok) renderHistWidgets(sub, spot, tier, dateStr);
   } catch (e) {
     setHistStatus(`Error loading ${dateStr}: ${e.message}`);
     document.getElementById('hist-no-data').textContent = `No archived chain for ${dateStr}.`;
   }
 }
 
-function populateExpirationSelect(rows, tradeDate) {
-  const byExp = new Map();
-  for (const r of rows) {
-    if (!r.Expiration) continue;
-    if (!byExp.has(r.Expiration)) byExp.set(r.Expiration, r.DTE || 0);
-  }
-  const exps = [...byExp.entries()].sort((a, b) => a[1] - b[1]);
-  if (!exps.length) {
-    setHistStatus(`No expirations found for ${tradeDate}.`);
-    return;
-  }
-
-  const sel = document.getElementById('hist-exp');
-  sel.innerHTML = exps.map(([exp, dte]) => `<option value="${exp}">${exp} (DTE ${dte})</option>`).join('');
-  const preferred = exps.find(([, dte]) => dte > 0) || exps[0];
-  sel.value = preferred[0];
-
-  renderSelectedExpiration(rows, tradeDate);
-}
-
-function renderSelectedExpiration(rows, tradeDate) {
-  const exp = document.getElementById('hist-exp').value;
-  const sub = rows.filter(r => r.Expiration === exp);
-  if (!sub.length) {
-    setHistStatus(`No rows for expiration ${exp}.`);
-    document.getElementById('hist-heatmap-wrap').classList.add('hidden');
-    document.getElementById('hist-no-data').classList.remove('hidden');
-    return;
-  }
-  const spot = sub[0].UnderlyingPrice || null;
-  const tier = classifyTierSimple(exp);
-  const ok = renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: exp, snapshot_time: tradeDate });
-  if (ok) renderHistWidgets(sub, spot, tier, tradeDate);
-}
-
 function renderHistoryHeatmap(data) {
-  const { underlying_price: spot, tier, expiration, snapshot_time } = data;
+  const { underlying_price: spot, tier, snapshot_time } = data;
 
   const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, ranges);
   if (!ok) {
-    setHistStatus(`No usable spot/strike data for ${snapshot_time} · exp ${expiration}.`);
+    setHistStatus(`No usable spot/strike data for ${snapshot_time}.`);
     document.getElementById('hist-heatmap-wrap').classList.add('hidden');
     document.getElementById('hist-no-data').classList.remove('hidden');
     return false;
@@ -1373,7 +1353,7 @@ function renderHistoryHeatmap(data) {
 
   document.getElementById('hist-no-data').classList.add('hidden');
   document.getElementById('hist-heatmap-wrap').classList.remove('hidden');
-  setHistStatus(`Trade date ${snapshot_time} · exp ${expiration}`);
+  setHistStatus(`Trade date ${snapshot_time}`);
   return true;
 }
 
@@ -1774,11 +1754,6 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   document.getElementById('tab-live').onclick    = () => showTab('live');
   document.getElementById('tab-history').onclick = () => showTab('history');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
-  document.getElementById('hist-exp').onchange   = () => {
-    const dateStr = document.getElementById('hist-date').value;
-    const rows = histCsvCache[dateStr];
-    if (rows) renderSelectedExpiration(rows, dateStr);
-  };
 
   setStatus('', 'Loading calibration data…');
   await loadRanges();
