@@ -447,7 +447,23 @@
     color: var(--dim);
     margin-bottom: 6px;
   }
-  .hist-widget canvas { display: block; width: 100%; }
+  .hist-widget canvas { display: block; width: 100%; touch-action: none; }
+  .canvas-tooltip {
+    position: absolute;
+    z-index: 70;
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: var(--fg);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .canvas-tooltip .tt-title { color: var(--dim); font-size: 0.64rem; margin-bottom: 2px; }
   .hist-widget .widget-empty { color: var(--dim); font-size: 0.7rem; padding: 1.5rem 0; text-align: center; }
   #similar-list { display: flex; flex-direction: column; gap: 4px; }
   .similar-row {
@@ -1352,6 +1368,79 @@ async function nextDayMove(dateStr) {
   return (nextSpot - curSpot) / curSpot * 100;
 }
 
+// ── canvas hover/touch tooltip ────────────────────────────────────────────────
+// Shared by all three canvas widgets (Top 5, Intraday, Daily). Pointer Events
+// unify mouse and touch into one code path: for a mouse, pointermove fires on
+// any hover; for touch, it only fires while a finger is down and dragging
+// (touch has no hover concept), so the same handler gives desktop hover and
+// mobile touch-and-drag ("scrub the chart") for free. A tap alone (no drag)
+// is covered by also handling pointerdown. `hitTest(x, y)` receives
+// canvas-pixel coordinates and returns tooltip HTML for whatever's under that
+// point, or null/empty to hide it.
+//
+// Each widget's canvas is re-rendered (new bars/positions) every time the
+// selected date changes, but it's the same <canvas> element throughout — so
+// listeners are bound to it exactly once (guarded by _tooltipBound) and every
+// later call just swaps in a fresh hitTest closure via _hitTest, rather than
+// accumulating a new set of listeners (and a new floating tooltip div) on
+// every render.
+function attachCanvasTooltip(canvas, hitTest) {
+  canvas._hitTest = hitTest;
+  if (canvas._tooltipBound) return;
+  canvas._tooltipBound = true;
+
+  let tip = null;
+  function ensureTip() {
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'canvas-tooltip';
+      document.body.appendChild(tip);
+    }
+    return tip;
+  }
+  function show(clientX, clientY, html) {
+    const t = ensureTip();
+    t.innerHTML = html;
+    t.style.display = 'block';
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - t.offsetWidth - 8;
+    t.style.left = Math.min(clientX + window.scrollX + 14, maxLeft) + 'px';
+    t.style.top  = (clientY + window.scrollY + 14) + 'px';
+  }
+  function hide() { if (tip) tip.style.display = 'none'; }
+
+  function onPointer(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const html = canvas._hitTest ? canvas._hitTest(x, y) : null;
+    if (html) show(e.clientX, e.clientY, html);
+    else hide();
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') e.preventDefault();   // don't let the tap scroll/zoom the page
+    onPointer(e);
+  });
+  canvas.addEventListener('pointermove', onPointer);
+  canvas.addEventListener('pointerup', hide);
+  canvas.addEventListener('pointercancel', hide);
+  canvas.addEventListener('pointerleave', hide);
+}
+
+// datetime string ("2026-06-25T09:30:00") -> "9:30"; passes through anything
+// that isn't a recognizable timestamp (e.g. already just a label).
+function fmtBarTime(t) {
+  if (!t) return '';
+  const m = String(t).match(/T?(\d{1,2}):(\d{2})/);
+  return m ? `${+m[1]}:${m[2]}` : String(t);
+}
+
+function candleTooltipHtml(b) {
+  const label = b.label || fmtBarTime(b.t);
+  return `<div class="tt-title">${label}</div>` +
+    `O <b>${b.o.toFixed(2)}</b>&nbsp;&nbsp;H <b>${b.h.toFixed(2)}</b><br>` +
+    `L <b>${b.l.toFixed(2)}</b>&nbsp;&nbsp;C <b>${b.c.toFixed(2)}</b>`;
+}
+
 // Shared candle renderer for both the Intraday and Daily-context widgets (the desktop
 // app duplicates this drawing logic across render_intraday/render_daily_context —
 // collapsed into one function here instead of porting the duplication).
@@ -1366,6 +1455,7 @@ function renderCandles(canvas, bars, opts = {}) {
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('no data', W / 2, H / 2);
+    canvas._hitTest = null;   // clear any tooltip data from a previous render with data
     return;
   }
   const n = bars.length;
@@ -1409,6 +1499,12 @@ function renderCandles(canvas, bars, opts = {}) {
       if (bars[i]?.label) ctx.fillText(bars[i].label, padX + slot * i + slot / 2, H - 1);
     });
   }
+
+  attachCanvasTooltip(canvas, (x, y) => {
+    if (x < padX || x > W - padX) return null;
+    const idx = Math.max(0, Math.min(n - 1, Math.round((x - padX - slot / 2) / slot)));
+    return candleTooltipHtml(bars[idx]);
+  });
 }
 
 // Port of render_top5 (oi_viewer.py:518-603): bubble scatter of the 5 highest-OI
@@ -1426,6 +1522,7 @@ function renderTop5Widget(rows, spot) {
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('no data', W / 2, H / 2);
+    canvas._hitTest = null;   // clear any tooltip data from a previous render with data
     return;
   }
 
@@ -1487,13 +1584,14 @@ function renderTop5Widget(rows, spot) {
   ctx.textBaseline = 'alphabetic';
   [-maxAbs, 0, maxAbs].forEach(v => ctx.fillText(`${v > 0 ? '+' : ''}${v}%`, x(v), H - 4));
 
-  canvas.onmousemove = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (W / rect.width);
-    const my = (e.clientY - rect.top) * (H / rect.height);
-    const hit = placed.find(p => Math.hypot(mx - x(p.pct), my - (H - padY - 8 - p.bump * rowGap)) <= radius(p.oi) + 1);
-    canvas.title = hit ? `${hit.strike} ${hit.type.toUpperCase()} · OI ${fmtOI(hit.oi)}` : '';
-  };
+  attachCanvasTooltip(canvas, (mx, my) => {
+    // +6px tolerance beyond the drawn radius so touch taps (less precise
+    // than a mouse pointer) still land on a bubble.
+    const hit = placed.find(p =>
+      Math.hypot(mx - x(p.pct), my - (H - padY - 8 - p.bump * rowGap)) <= radius(p.oi) + 6);
+    if (!hit) return null;
+    return `<div class="tt-title">Strike ${hit.strike} · ${hit.type.toUpperCase()}</div>OI <b>${fmtOI(hit.oi)}</b>`;
+  });
 }
 
 async function renderIntradayWidget(dateStr) {
