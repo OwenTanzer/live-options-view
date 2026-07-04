@@ -589,19 +589,6 @@
   <div id="hist-no-data">Loading historical archive…</div>
 
   <div id="hist-body">
-    <div id="hist-heatmap-wrap" class="hidden">
-      <table id="hist-heatmap">
-        <thead>
-          <tr>
-            <th style="text-align:right">Calls</th>
-            <th>Strike</th>
-            <th style="text-align:left">Puts</th>
-          </tr>
-        </thead>
-        <tbody id="hist-heatmap-body"></tbody>
-      </table>
-    </div>
-
     <div id="hist-sidebar">
       <div class="hist-widget">
         <h4>Top 5 Open Interest</h4>
@@ -619,6 +606,19 @@
         <h4>Similar Sessions</h4>
         <div id="similar-list"></div>
       </div>
+    </div>
+
+    <div id="hist-heatmap-wrap" class="hidden">
+      <table id="hist-heatmap">
+        <thead>
+          <tr>
+            <th style="text-align:right">Calls</th>
+            <th>Strike</th>
+            <th style="text-align:left">Puts</th>
+          </tr>
+        </thead>
+        <tbody id="hist-heatmap-body"></tbody>
+      </table>
     </div>
   </div>
 
@@ -1004,7 +1004,7 @@ function startCountdown() {
 // ── price strip ───────────────────────────────────────────────────────────────
 
 const MAIN_TICKERS = ['QQQ', 'VIX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
-const SMALL_TICKERS = ['BTC/USD', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL'];
+const SMALL_TICKERS = ['AAPL', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'BTC/USD'];
 let prevPrices = {};
 
 function fmtPrice(v, sym) {
