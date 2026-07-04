@@ -76,6 +76,13 @@ PRICE_TICKERS: dict[str, str] = {
     "IGV":     "IGV",
     "10Y":     "$TNX.X",      # CBOE 10-year Treasury yield index (value = yield × 10)
     "JPY/USD": "/6J:XCME",    # CME yen futures, USD-per-JPY; inverted for display
+    # KOSPI Composite Index — tastytrade/dxFeed is a US-brokerage feed and may
+    # not carry this at all; unverified guess at the dxFeed index-symbol
+    # convention (cf. $VIX.X/$TNX.X above). If it's wrong this ticker simply
+    # never gets DXLink data and always falls through to the yfinance path
+    # below, which is a real, working symbol — same graceful-degradation
+    # behavior every ticker already has pre-market.
+    "KOSPI":   "$KOSPI.X",
     "BTC/USD": "BTC/USD:CXERX",
     "META":    "META",
     "GOOGL":   "GOOGL",
@@ -83,7 +90,7 @@ PRICE_TICKERS: dict[str, str] = {
     "TSLA":    "TSLA",
     "MU":      "MU",
     "SPCX":    "SPCX",
-    "Silver":  "/SI:XCME",    # CME silver futures, $/troy oz
+    "AAPL":    "AAPL",
 }
 
 # Yahoo Finance symbols for the same tickers (fallback when DXLink has no data)
@@ -95,6 +102,7 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "IGV":     "IGV",
     "10Y":     "^TNX",       # yields the rate directly (e.g. 4.485), NOT × 10
     "JPY/USD": "JPYUSD=X",
+    "KOSPI":   "^KS11",      # KOSPI Composite Index
     "BTC/USD": "BTC-USD",
     "META":    "META",
     "GOOGL":   "GOOGL",
@@ -102,7 +110,7 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "TSLA":    "TSLA",
     "MU":      "MU",
     "SPCX":    "SPCX",
-    "Silver":  "SI=F",
+    "AAPL":    "AAPL",
 }
 
 

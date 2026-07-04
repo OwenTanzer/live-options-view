@@ -31,7 +31,7 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 │  Railway — collector.py         │  ← runs 6:00 AM – 4:15 PM ET daily
 │                                 │
 │  • QQQ 0DTE chain (±67 strikes)│──▶ intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  (60s)
-│  • 14 macro/indicator tickers  │──▶ intraday/latest.json                          (60s)
+│  • 16 macro/indicator tickers  │──▶ intraday/latest.json                          (60s)
 │  • yfinance fallback for all   │──▶ intraday/prices.json                          (10s)
 │                                 │──▶ intraday/health.json                          (15s)
 └─────────────────────────────────┘
@@ -124,9 +124,9 @@ Strike encoding: integer strikes use the integer directly (`713`); half-strikes 
 | Symbol class | Event types | Key fields |
 |---|---|---|
 | QQQ 0DTE chain (±67 strikes × 2 sides = up to 268 symbols) | Quote, Summary, Trade, Greeks | eventType, bidPrice, askPrice, openInterest, prevDayClosePrice, dayOpenPrice, dayVolume, price, volatility, delta, gamma, theta, vega |
-| Price tickers (14 symbols) | Quote, Trade, TradeETH, Summary | eventType, bidPrice, askPrice, price, dayVolume, prevDayClosePrice |
+| Price tickers (16 symbols) | Quote, Trade, TradeETH, Summary | eventType, bidPrice, askPrice, price, dayVolume, prevDayClosePrice |
 
-DXLink does not deliver equity Quote events for ETFs/equities in the standard feed. All 14 price tickers fall back to yfinance.
+DXLink does not deliver equity Quote events for ETFs/equities in the standard feed. All 16 price tickers fall back to yfinance.
 
 ### 5.2 yfinance fallback
 
@@ -148,7 +148,7 @@ The `latest.json` guard is critical for display continuity: when DXLink is down,
 On every session start (including redeployments), `restore_state()` reads the most recent today's snapshot CSV from R2 and seeds:
 - `_prev_vol` — per-symbol cumulative volume baseline, so `VolDelta` is accurate from the first snapshot without a one-beat gap
 - `_last_spot` — underlying price fallback
-- `_last_prices` — all 14 macro prices for CSV columns
+- `_last_prices` — all 16 macro prices for CSV columns
 
 ### 5.5 CSV schema
 
@@ -158,10 +158,10 @@ OpenInterest, Volume, VolDelta,
 Bid, Mid, Ask, Last,
 IV, Delta, Gamma, Theta, Vega,
 UnderlyingPrice,
-QQQ, USO, VIX, SMH, IGV, 10Y, JPY_USD, BTC_USD, META, GOOGL, AMZN, TSLA, MU, SPCX, Silver
+QQQ, USO, VIX, SMH, IGV, 10Y, JPY_USD, KOSPI, BTC_USD, META, GOOGL, AMZN, TSLA, MU, SPCX, AAPL
 ```
 
-The 14 macro price columns are repeated on every row (denormalized). This allows any snapshot CSV to be loaded as a standalone DataFrame with full macro context for that timestamp.
+The 16 macro price columns are repeated on every row (denormalized). This allows any snapshot CSV to be loaded as a standalone DataFrame with full macro context for that timestamp.
 
 `VolDelta` = `Volume - prev_snapshot_volume` (clamped ≥0), giving contracts traded in the last 60-second window.
 
@@ -180,12 +180,13 @@ Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` u
 | Display label | DXLink symbol | yfinance fallback | Notes |
 |---|---|---|---|
 | QQQ | `QQQ` | `QQQ` | Underlying |
-| USO | `USO` | `USO` | Oil ETF |
 | VIX | `$VIX.X` | `^VIX` | CBOE VIX index |
 | SMH | `SMH` | `SMH` | Semiconductor ETF |
 | IGV | `IGV` | `IGV` | Software ETF |
-| 10Y | `$TNX.X` | `^TNX` | CBOE 10-year yield index; value ÷ 10 = % |
 | JPY/USD | `/6J:XCME` | `JPYUSD=X` | CME yen futures; displayed inverted as `¥155.3` |
+| KOSPI | `$KOSPI.X` (unverified) | `^KS11` | Korea Composite Stock Price Index; tastytrade/dxFeed may not carry this at all, in which case it always falls through to yfinance |
+| USO | `USO` | `USO` | Oil ETF |
+| 10Y | `$TNX.X` | `^TNX` | CBOE 10-year yield index; value ÷ 10 = % |
 
 ### Secondary strip (small tiles)
 
@@ -198,7 +199,7 @@ Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` u
 | TSLA | `TSLA` | `TSLA` | Equity |
 | MU | `MU` | `MU` | Micron Technology |
 | SPCX | `SPCX` | `SPCX` | Space industry ETF |
-| Silver | `/SI:XCME` | `SI=F` | CME silver futures, $/troy oz |
+| AAPL | `AAPL` | `AAPL` | Equity |
 
 ---
 
@@ -208,8 +209,8 @@ Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` u
 
 Two rows of ticker tiles at the top of the page.
 
-- **Main row (large):** QQQ · USO · VIX · SMH · IGV · 10Y · JPY/USD
-- **Secondary row (small):** BTC/USD · META · GOOGL · AMZN · TSLA · MU · SPCX · Silver
+- **Main row (large):** QQQ · VIX · SMH · IGV · JPY/USD · KOSPI · USO · 10Y
+- **Secondary row (small):** BTC/USD · META · GOOGL · AMZN · TSLA · MU · SPCX · AAPL
 
 Each tile shows ticker label, current price, and % change from prior close. Special formatting:
 - `JPY/USD` — displayed as `¥155.3` (USD/JPY handle, inverted from raw CME quote)
@@ -293,7 +294,7 @@ Source: `intraday/latest.json`, polled every 60 seconds.
 | Limitation | Impact | Notes |
 |---|---|---|
 | OI is prior-day settled | OI walls are static until next morning | OCC doesn't publish real-time OI — by design. Volume/VolDelta are the live signals. |
-| DXLink doesn't deliver equity Quote events | ETF/equity bid/ask not available via DXLink | All 14 price tickers use yfinance as primary source |
+| DXLink doesn't deliver equity Quote events | ETF/equity bid/ask not available via DXLink | All 16 price tickers use yfinance as primary source |
 | 60-second snapshot granularity | Sub-minute flow not captured | VolDelta per 60s window is the resolution floor |
 | DXLink intermittent 502s | Option data blanks during outages | `latest.json` guard preserves last good snapshot; viewer shows "Cached" status |
 | No access control | Anyone with the URL can view | Cloudflare Access can gate it if needed |
