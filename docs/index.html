@@ -438,6 +438,14 @@
     border-radius: 6px;
     padding: 8px 10px;
     font-size: 0.72rem;
+    /* A touch-and-hold anywhere on one of these cards (title, canvas,
+       labels, the Similar Sessions list) is easy to do since the canvas is
+       meant for touch-scrubbing — shouldn't kick off text selection or
+       iOS's copy/lookup callout instead of the intended tooltip
+       interaction, so the whole card opts out, not just the title. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .hist-widget h4 {
     font-size: 0.68rem;
@@ -446,13 +454,6 @@
     text-transform: uppercase;
     color: var(--dim);
     margin-bottom: 6px;
-    /* A touch-and-hold right over the title (easy to do when the canvas
-       right below it is meant for touch-scrubbing) shouldn't kick off text
-       selection or iOS's copy/lookup callout instead of the intended
-       tooltip interaction. */
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
   }
   .hist-widget canvas { display: block; width: 100%; touch-action: none; }
   .canvas-tooltip {
