@@ -66,6 +66,22 @@
   }
   #monitor-log .row { font-size: 0.78rem; }
   #burst-result { margin-top: 0.5rem; font-size: 0.85rem; }
+  .preview-table { font-size: 0.7rem; border-collapse: collapse; margin-top: 6px; }
+  .preview-table td { padding: 2px 6px; border: 1px solid #30363d; }
+  #report-text {
+    width: 100%;
+    height: 220px;
+    background: #0d1117;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.68rem;
+    padding: 8px;
+    margin-top: 0.5rem;
+    resize: vertical;
+  }
+  #copy-status { color: #00cc55; font-size: 0.8rem; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -78,6 +94,18 @@
 <div class="subtext">Runs once, right now. A clean pass here doesn't rule out something intermittent — see the live monitor below for that.</div>
 <div id="tests"></div>
 <div id="verdict">Running tests…</div>
+
+<h2 class="section">1.5. Full pipeline (fetch → parse → validate shape → render)</h2>
+<div class="subtext">
+  Section 1 only checks that a request reaches the server. This runs the exact
+  production code (shared.js — the same file the live app loads) against real
+  fetched data: parses OIranges.csv into thresholds, parses latest.json, checks
+  both have the shape the app expects, then actually calls the app's real
+  <code>buildHeatmapRows()</code> and shows the rendered rows. If any stage
+  fails or throws, it's shown here rather than surfacing as a generic "Load
+  failed" with no indication of which layer broke.
+</div>
+<div id="pipeline-tests"></div>
 
 <h2 class="section">2. Live monitor</h2>
 <div class="subtext">
@@ -101,9 +129,19 @@
 <button id="burst-run">Run burst test</button>
 <div id="burst-result"></div>
 
+<h2 class="section">4. Full diagnostic report</h2>
+<div class="subtext">Snapshots everything above into one plain-text block you can paste anywhere (a message, an issue, back to whoever's debugging this with you).</div>
+<button id="copy-report">Copy full report</button>
+<span id="copy-status"></span>
+<textarea id="report-text" readonly placeholder="Click &quot;Copy full report&quot; to generate…"></textarea>
+
+<script src="shared.js"></script>
 <script>
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 const PROXY = `${location.origin}/r2-proxy`;
+let oneShotResults = [];
+let pipelineResults = [];
+let lastBurstText = '(burst test not run yet)';
 
 document.getElementById('origin-label').textContent = window.location.origin;
 
@@ -179,7 +217,7 @@ function testImg(url) {
 
 (async function runOneShot() {
   const testsEl = document.getElementById('tests');
-  const results = [];
+  const results = oneShotResults;
 
   for (const t of ONE_SHOT_TARGETS) {
     const div = document.createElement('div');
@@ -222,6 +260,118 @@ function testImg(url) {
     verdict.innerHTML = "<b>Direct R2 fetch succeeded here</b> — if the live site is still failing for you right now, this was a one-time snapshot and won't catch something intermittent. Start the live monitor below and leave it running until it happens again.";
   } else {
     verdict.innerHTML = "Mixed results — see details above per target.";
+  }
+})();
+
+// ── section 1.5: full pipeline (fetch → parse → validate → render) ──────────
+// Uses shared.js's real parseRangesCsv/getThresh/oiBucket/buildHeatmapRows —
+// the exact code the live app runs — instead of a second hand-rolled check
+// that could drift out of sync with it.
+const PIPELINE_PATHS = [
+  { name: 'direct R2', rangesUrl: `${R2}/derived/OIranges.csv`, dataUrl: `${R2}/intraday/latest.json` },
+  { name: 'proxy (same-origin)', rangesUrl: `${PROXY}/derived/OIranges.csv`, dataUrl: `${PROXY}/intraday/latest.json` },
+];
+
+async function fetchText(url) {
+  const resp = await fetch(url, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.text();
+}
+
+async function runPipelineTest(path) {
+  const stages = {};
+  let ranges = null, data = null;
+
+  try {
+    const text = await fetchText(path.rangesUrl);
+    stages.fetchRanges = { ok: true, detail: `${text.length} bytes` };
+    try {
+      ranges = parseRangesCsv(text);
+      const offsetCount = Object.keys(ranges['0DTE_Regular'] || {}).length;
+      stages.parseRanges = offsetCount > 0
+        ? { ok: true, detail: `${Object.keys(ranges).length} tier(s), 0DTE_Regular has ${offsetCount} offset(s)` }
+        : { ok: false, detail: 'parsed but missing 0DTE_Regular tier/offsets — getThresh() would return all zeros' };
+    } catch (e) {
+      stages.parseRanges = { ok: false, detail: `THREW: ${e.name}: ${e.message}` };
+    }
+  } catch (e) {
+    stages.fetchRanges = { ok: false, detail: `${e.name}: ${e.message}` };
+  }
+
+  try {
+    const text = await fetchText(path.dataUrl);
+    stages.fetchData = { ok: true, detail: `${text.length} bytes` };
+    try {
+      data = JSON.parse(text);
+      stages.parseData = { ok: true, detail: 'valid JSON' };
+      const shapeOk = Array.isArray(data.rows) && 'underlying_price' in data && 'tier' in data;
+      stages.shape = shapeOk
+        ? { ok: true, detail: `rows=${data.rows.length}, underlying_price=${data.underlying_price}, tier=${data.tier}` }
+        : { ok: false, detail: `unexpected shape — top-level keys: ${Object.keys(data).join(', ')}` };
+    } catch (e) {
+      stages.parseData = { ok: false, detail: `THREW: ${e.name}: ${e.message}` };
+    }
+  } catch (e) {
+    stages.fetchData = { ok: false, detail: `${e.name}: ${e.message}` };
+  }
+
+  if (ranges && data && data.rows && data.rows.length && stages.shape?.ok) {
+    try {
+      const tbody = document.createElement('tbody');
+      const ok = buildHeatmapRows(tbody, data, ranges);
+      stages.render = ok
+        ? { ok: true, detail: `rendered ${tbody.children.length} rows without error`, tbody }
+        : { ok: false, detail: 'buildHeatmapRows() returned false — no usable spot/strike data' };
+    } catch (e) {
+      stages.render = { ok: false, detail: `THREW: ${e.name}: ${e.message}` };
+    }
+  } else {
+    stages.render = { ok: false, detail: 'skipped — an earlier stage failed' };
+  }
+
+  return stages;
+}
+
+(async function runFullPipeline() {
+  const container = document.getElementById('pipeline-tests');
+  const STAGE_LABELS = [
+    ['fetchRanges', 'fetch OIranges.csv'],
+    ['parseRanges', 'parse + validate ranges'],
+    ['fetchData',   'fetch latest.json'],
+    ['parseData',   'parse JSON'],
+    ['shape',       'validate shape'],
+    ['render',      'render (real buildHeatmapRows)'],
+  ];
+
+  for (const path of PIPELINE_PATHS) {
+    const div = document.createElement('div');
+    div.className = 'test';
+    div.innerHTML = `<h2>${path.name}</h2><div class="row"><span class="label">running…</span></div>`;
+    container.appendChild(div);
+
+    const stages = await runPipelineTest(path);
+    pipelineResults.push({ name: path.name, stages });
+
+    div.innerHTML = `<h2>${path.name}</h2>` + STAGE_LABELS.map(([key, label]) => {
+      const r = stages[key];
+      if (!r) return '';
+      return `<div class="row"><span class="label">${label}</span><span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'OK' : 'FAILED'}</span><span class="detail"> — ${r.detail}</span></div>`;
+    }).join('');
+
+    if (stages.render?.ok && stages.render.tbody) {
+      const rowsArr = Array.from(stages.render.tbody.children);
+      const mid = Math.floor(rowsArr.length / 2);
+      const sample = rowsArr.slice(Math.max(0, mid - 2), mid + 3);
+      const previewNote = document.createElement('div');
+      previewNote.className = 'subtext';
+      previewNote.style.marginTop = '8px';
+      previewNote.textContent = 'Live render preview (5 rows nearest ATM, real data):';
+      div.appendChild(previewNote);
+      const previewTable = document.createElement('table');
+      previewTable.className = 'preview-table';
+      sample.forEach(r => previewTable.appendChild(r.cloneNode(true)));
+      div.appendChild(previewTable);
+    }
   }
 })();
 
@@ -292,8 +442,69 @@ document.getElementById('burst-run').onclick = async () => {
   }
   const results = await Promise.all(attempts);
   const okCount = results.filter(Boolean).length;
-  el.textContent = `${okCount}/${results.length} succeeded under concurrent load (net: ${netSnapshot()}).`;
+  lastBurstText = `${okCount}/${results.length} succeeded under concurrent load (net: ${netSnapshot()})`;
+  el.textContent = lastBurstText;
 };
+
+// ── section 4: copyable full report ──────────────────────────────────────────
+function buildReportText() {
+  const lines = [];
+  lines.push(`R2 fetch diagnostic report — ${new Date().toString()}`);
+  lines.push(`Origin: ${location.origin}`);
+  lines.push(`Network: ${netSnapshot()} · online=${navigator.onLine}`);
+  lines.push(`User-Agent: ${navigator.userAgent}`);
+  lines.push('');
+
+  lines.push('== Section 1: One-shot reachability ==');
+  if (!oneShotResults.length) lines.push('(not finished running yet)');
+  for (const r of oneShotResults) {
+    lines.push(`  ${r.name}: cors=${r.cors ? 'OK' : 'FAIL'} · no-cors=${r.nocors ? 'OK' : 'FAIL'}`);
+  }
+  lines.push('');
+
+  lines.push('== Section 1.5: Full pipeline (fetch/parse/validate/render) ==');
+  if (!pipelineResults.length) lines.push('(not finished running yet)');
+  const STAGE_LABELS = [
+    ['fetchRanges', 'fetch OIranges.csv'], ['parseRanges', 'parse+validate ranges'],
+    ['fetchData', 'fetch latest.json'], ['parseData', 'parse JSON'],
+    ['shape', 'validate shape'], ['render', 'render'],
+  ];
+  for (const p of pipelineResults) {
+    lines.push(`  -- ${p.name} --`);
+    for (const [key, label] of STAGE_LABELS) {
+      const r = p.stages[key];
+      if (r) lines.push(`    ${label}: ${r.ok ? 'OK' : 'FAILED'} — ${r.detail}`);
+    }
+  }
+  lines.push('');
+
+  lines.push('== Section 2: Live monitor log ==');
+  const log = loadLog();
+  if (!log.length) lines.push('(no entries — monitor not run)');
+  for (const e of log) lines.push(`  ${e.t} [${e.ok ? 'OK' : 'FAIL'}] ${e.name}: ${e.detail}`);
+  lines.push('');
+
+  lines.push('== Section 3: Burst test ==');
+  lines.push(`  ${lastBurstText}`);
+
+  return lines.join('\n');
+}
+
+async function copyReport() {
+  const text = buildReportText();
+  const ta = document.getElementById('report-text');
+  ta.value = text;
+  const status = document.getElementById('copy-status');
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = 'Copied to clipboard!';
+  } catch (e) {
+    ta.select();
+    status.textContent = 'Could not auto-copy — text is selected below, copy manually (Cmd/Ctrl+C).';
+  }
+  setTimeout(() => { status.textContent = ''; }, 5000);
+}
+document.getElementById('copy-report').onclick = copyReport;
 </script>
 </body>
 </html>

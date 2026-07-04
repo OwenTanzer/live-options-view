@@ -717,6 +717,7 @@
   Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
 </div>
 
+<script src="shared.js"></script>
 <script>
 // ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being
@@ -751,7 +752,6 @@ document.addEventListener('visibilitychange', () => {
 setInterval(checkForNewBuild, 5 * 60 * 1000);
 
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
-const DISPLAY = 20;   // ±N strikes shown
 const REFRESH  = 60;  // seconds between data refreshes
 
 let ranges = null;    // OIranges parsed: { tier: { offset: { call:[p25,p50,p75,p90], put:[...] } } }
@@ -759,208 +759,18 @@ let lastTs  = null;
 let countdown = REFRESH;
 let timerHandle = null;
 
-// ── CSV parser ────────────────────────────────────────────────────────────────
-function parseCsv(text) {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(',').map(h => h.trim());
-  return lines.slice(1).map(line => {
-    const vals = line.split(',');
-    const obj = {};
-    headers.forEach((h, i) => obj[h] = vals[i]?.trim() ?? '');
-    return obj;
-  });
-}
-
 // ── OIranges loader ───────────────────────────────────────────────────────────
+// parseRangesCsv / parseCsv / getThresh / oiBucket / buildHeatmapRows / DISPLAY /
+// TIER_COLORS / fmt*/quoteHtml/flowHtml live in shared.js (also used by diag.html).
 async function loadRanges() {
   try {
     const resp = await fetch(`${R2}/derived/OIranges.csv`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const rows = parseCsv(await resp.text());
-    const out = {};
-    for (const r of rows) {
-      const tier   = r.Tier;
-      const offset = parseInt(r.StrikeOffset);
-      if (!out[tier]) out[tier] = {};
-      out[tier][offset] = {
-        call: [+r.Call_p25, +r.Call_p50, +r.Call_p75, +r.Call_p90],
-        put:  [+r.Put_p25,  +r.Put_p50,  +r.Put_p75,  +r.Put_p90],
-        call_adj: +r.Call_adj || 1.0,
-        put_adj:  +r.Put_adj  || 1.0,
-      };
-    }
-    ranges = out;
+    ranges = parseRangesCsv(await resp.text());
   } catch (e) {
     console.warn('OIranges load failed:', e);
     document.getElementById('cal-error').style.display = 'block';
   }
-}
-
-// ── threshold lookup (mirrors oi_viewer.py effective_thresholds) ──────────────
-function getThresh(tier, offset, side) {
-  if (!ranges) return [0, 0, 0, 0];
-  const reg = ranges['0DTE_Regular']?.[offset];
-  if (!reg) return [0, 0, 0, 0];
-  const base = reg[side];
-  if (tier === '0DTE_Regular') return base;
-  const adj_key = side === 'call' ? 'call_adj' : 'put_adj';
-  const t = ranges[tier]?.[offset];
-  const mult = t ? (t[adj_key] || 1.0) : 1.0;
-  return base.map(v => v * mult);
-}
-
-function oiBucket(oi, thresh) {
-  if (oi === 0) return 0;
-  const [p25, p50, p75, p90] = thresh;
-  if (oi < p25) return 1;
-  if (oi < p50) return 2;
-  if (oi < p75) return 3;
-  if (oi < p90) return 4;
-  return 5;
-}
-
-function fmtOI(v) {
-  if (!v || v === 0) return '';
-  if (v < 1000)  return String(v);
-  if (v < 10000) return (v / 1000).toFixed(1) + 'K';
-  return Math.floor(v / 1000) + 'K';
-}
-
-function fmtVol(v) {
-  if (!v || v === 0) return '';
-  if (v < 1000)  return String(v);
-  if (v < 10000) return (v / 1000).toFixed(1) + 'k';
-  return Math.floor(v / 1000) + 'k';
-}
-
-// flow level 0–4 based on contracts-per-minute delta
-function fmtQ(v) {
-  if (v == null) return '';
-  return v < 10 ? v.toFixed(2) : v.toFixed(1);
-}
-function quoteHtml(bid, ask) {
-  if (bid == null && ask == null) return '';
-  const b = bid != null ? fmtQ(bid) : '—';
-  const a = ask != null ? fmtQ(ask) : '—';
-  return `<span class="quote">${b} × ${a}</span>`;
-}
-
-function flowLevel(d) {
-  if (d <= 0)   return 0;
-  if (d < 20)   return 1;
-  if (d < 100)  return 2;
-  if (d < 500)  return 3;
-  return 4;
-}
-
-function flowHtml(delta) {
-  const lvl = flowLevel(delta);
-  if (lvl === 0) return '';
-  const label = delta < 1000 ? `+${delta}` : `+${(delta/1000).toFixed(1)}k`;
-  return `<span class="flow flow-${lvl}">${label}</span>`;
-}
-
-// ── shared heatmap row builder ─────────────────────────────────────────────────
-// Used by both the live panel (tradable, paper-trading enabled) and the
-// historical panel (read-only) — takes the same {rows, underlying_price, tier}
-// shape regardless of whether it came from live JSON or a parsed archive CSV.
-const TIER_COLORS = {
-  '0DTE_Regular': '#4a90d9',
-  '0DTE_Weekly':  '#e8c84b',
-  '0DTE_Monthly': '#e8604b',
-};
-
-function buildHeatmapRows(tbody, data, { tradable }) {
-  const { rows, underlying_price: spot, tier } = data;
-  tbody.innerHTML = '';
-  if (!spot || !rows || !rows.length) return false;
-
-  // Index rows by strike+type
-  const byStrike = {};
-  for (const r of rows) {
-    const key = `${r.Strike}`;
-    if (!byStrike[key]) byStrike[key] = {};
-    byStrike[key][r.Type] = r;
-  }
-
-  // ATM
-  const strikes = [...new Set(rows.map(r => r.Strike))].sort((a, b) => a - b);
-  if (!strikes.length) return false;
-  const atm = strikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikes[0]);
-
-  // Build display range ±DISPLAY around ATM
-  const offsets = [];
-  for (let o = DISPLAY; o >= -DISPLAY; o--) offsets.push(o);
-
-  const book = tradable ? computeBook() : null;
-
-  for (const offset of offsets) {
-    const strike = atm + offset;
-    const strKey = `${strike}`;
-    const callRow = byStrike[strKey]?.call;
-    const putRow  = byStrike[strKey]?.put;
-    const isAtm   = offset === 0;
-
-    const callOI    = parseInt(callRow?.OpenInterest ?? 0) || 0;
-    const putOI     = parseInt(putRow?.OpenInterest  ?? 0) || 0;
-    const callVol   = parseInt(callRow?.Volume    ?? 0) || 0;
-    const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
-    const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
-    const putDelta  = parseInt(putRow?.VolDelta   ?? 0) || 0;
-    const callBid   = callRow?.Bid  ?? null;
-    const callAsk   = callRow?.Ask  ?? null;
-    const putBid    = putRow?.Bid   ?? null;
-    const putAsk    = putRow?.Ask   ?? null;
-
-    const ct = getThresh(tier || '0DTE_Regular', offset, 'call');
-    const pt = getThresh(tier || '0DTE_Regular', offset, 'put');
-    const cb = oiBucket(callOI, ct);
-    const pb = oiBucket(putOI,  pt);
-
-    const tr = document.createElement('tr');
-    if (isAtm) tr.classList.add('atm-row');
-
-    // Call cell
-    const callTd = document.createElement('td');
-    callTd.className = `call-cell c${cb}`;
-    const callPos = book ? (book[callRow?.OptionSymbol]?.pos || 0) : 0;
-    callTd.innerHTML = fmtOI(callOI) +
-      quoteHtml(callBid, callAsk) +
-      (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
-      flowHtml(callDelta) +
-      (callPos ? `<span class="pos-badge">${callPos > 0 ? '+' : ''}${callPos}</span>` : '');
-    if (tradable && callRow?.OptionSymbol) {
-      callTd.classList.add('tradable');
-      callTd.onclick = (e) => openTicket(e, callRow);
-    }
-    tr.appendChild(callTd);
-
-    // Strike cell
-    const strikeTd = document.createElement('td');
-    strikeTd.className = 'strike-cell' + (isAtm ? ' atm' : '');
-    strikeTd.textContent = isAtm ? `${strike} ★` : `${strike}`;
-    strikeTd.title = `${offset > 0 ? '+' : ''}${offset} from ATM`;
-    tr.appendChild(strikeTd);
-
-    // Put cell
-    const putTd = document.createElement('td');
-    putTd.className = `put-cell p${pb}`;
-    const putPos = book ? (book[putRow?.OptionSymbol]?.pos || 0) : 0;
-    putTd.innerHTML = fmtOI(putOI) +
-      quoteHtml(putBid, putAsk) +
-      (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
-      flowHtml(putDelta) +
-      (putPos ? `<span class="pos-badge">${putPos > 0 ? '+' : ''}${putPos}</span>` : '');
-    if (tradable && putRow?.OptionSymbol) {
-      putTd.classList.add('tradable');
-      putTd.onclick = (e) => openTicket(e, putRow);
-    }
-    tr.appendChild(putTd);
-
-    tbody.appendChild(tr);
-  }
-
-  return true;
 }
 
 // ── render heatmap (live panel) ─────────────────────────────────────────────────
@@ -973,7 +783,11 @@ function renderHeatmap(data) {
     return;
   }
 
-  buildHeatmapRows(document.getElementById('heatmap-body'), data, { tradable: true });
+  const book = computeBook();   // computed once per render, not per-cell
+  buildHeatmapRows(document.getElementById('heatmap-body'), data, ranges, {
+    getPosition: (sym) => book[sym]?.pos || 0,
+    onCellClick: (e, row) => openTicket(e, row),
+  });
 
   // Header
   document.getElementById('price').textContent = `$${spot?.toFixed(2) ?? '—'}`;
@@ -1525,7 +1339,7 @@ function renderSelectedExpiration(rows, tradeDate) {
 function renderHistoryHeatmap(data) {
   const { underlying_price: spot, tier, expiration, snapshot_time } = data;
 
-  const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, { tradable: false });
+  const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, ranges);
   if (!ok) {
     setHistStatus(`No usable spot/strike data for ${snapshot_time} · exp ${expiration}.`);
     document.getElementById('hist-heatmap-wrap').classList.add('hidden');
@@ -1613,8 +1427,8 @@ function buildFeatureVector(rows, tier) {
     const sk = atm + o;
     const coi = byStrike[sk]?.call ? (+byStrike[sk].call.OpenInterest || 0) : 0;
     const poi = byStrike[sk]?.put  ? (+byStrike[sk].put.OpenInterest  || 0) : 0;
-    callBuckets.push(oiBucket(coi, getThresh(tier || '0DTE_Regular', o, 'call')));
-    putBuckets.push(oiBucket(poi, getThresh(tier || '0DTE_Regular', o, 'put')));
+    callBuckets.push(oiBucket(coi, getThresh(ranges, tier || '0DTE_Regular', o, 'call')));
+    putBuckets.push(oiBucket(poi, getThresh(ranges, tier || '0DTE_Regular', o, 'put')));
   }
   return callBuckets.concat(putBuckets);
 }
