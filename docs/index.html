@@ -1402,9 +1402,15 @@ function attachCanvasTooltip(canvas, hitTest) {
     const t = ensureTip();
     t.innerHTML = html;
     t.style.display = 'block';
+    const pad = 14;
     const maxLeft = window.scrollX + document.documentElement.clientWidth - t.offsetWidth - 8;
-    t.style.left = Math.min(clientX + window.scrollX + 14, maxLeft) + 'px';
-    t.style.top  = (clientY + window.scrollY + 14) + 'px';
+    t.style.left = Math.min(clientX + window.scrollX + pad, maxLeft) + 'px';
+    // Above the pointer/finger, not below — on touch, the finger itself sits
+    // right at (and covers) the point below it, so anchoring downward hides
+    // the tooltip under the very thing pointing at it. Falls back to below
+    // only if there isn't room above (near the top of the viewport).
+    const above = clientY + window.scrollY - t.offsetHeight - pad;
+    t.style.top = (above < window.scrollY + 4 ? clientY + window.scrollY + pad : above) + 'px';
   }
   function hide() { if (tip) tip.style.display = 'none'; }
 
