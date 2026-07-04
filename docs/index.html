@@ -465,8 +465,59 @@
     font-size: 0.9rem;
   }
   #hist-no-data.hidden { display: none; }
+  #hist-body { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
   #hist-heatmap-wrap { overflow-x: auto; margin-bottom: 1rem; }
   #hist-heatmap-wrap.hidden { display: none; }
+
+  /* ── historical sidebar widgets ──────────────────────────────────────── */
+  #hist-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 260px;
+    flex-shrink: 0;
+  }
+  .hist-widget {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+  }
+  .hist-widget h4 {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .hist-widget canvas { display: block; width: 100%; }
+  .hist-widget .widget-empty { color: var(--dim); font-size: 0.7rem; padding: 1.5rem 0; text-align: center; }
+  #similar-list { display: flex; flex-direction: column; gap: 4px; }
+  .similar-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 3px;
+    cursor: default;
+  }
+  .similar-row:hover { background: #1c2128; }
+  .similar-date { color: var(--fg); }
+  .similar-score { color: var(--dim); }
+  .similar-move.up { color: #00cc55; }
+  .similar-move.down { color: #ee3300; }
+  #similar-popup {
+    position: absolute;
+    z-index: 60;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  }
+  #similar-popup canvas { display: block; }
 
   /* ── touch targets ───────────────────────────────────────────────────────
      Scoped to coarse pointers (touch) only — desktop/mouse density is
@@ -625,17 +676,38 @@
 
   <div id="hist-no-data">Loading historical archive…</div>
 
-  <div id="hist-heatmap-wrap" class="hidden">
-    <table id="hist-heatmap">
-      <thead>
-        <tr>
-          <th style="text-align:right">Calls</th>
-          <th>Strike</th>
-          <th style="text-align:left">Puts</th>
-        </tr>
-      </thead>
-      <tbody id="hist-heatmap-body"></tbody>
-    </table>
+  <div id="hist-body">
+    <div id="hist-heatmap-wrap" class="hidden">
+      <table id="hist-heatmap">
+        <thead>
+          <tr>
+            <th style="text-align:right">Calls</th>
+            <th>Strike</th>
+            <th style="text-align:left">Puts</th>
+          </tr>
+        </thead>
+        <tbody id="hist-heatmap-body"></tbody>
+      </table>
+    </div>
+
+    <div id="hist-sidebar">
+      <div class="hist-widget">
+        <h4>Top 5 Open Interest</h4>
+        <canvas id="widget-top5" width="240" height="110"></canvas>
+      </div>
+      <div class="hist-widget">
+        <h4>Intraday <span id="widget-intraday-label" style="text-transform:none;font-weight:400;"></span></h4>
+        <canvas id="widget-intraday" width="240" height="90"></canvas>
+      </div>
+      <div class="hist-widget">
+        <h4>Daily</h4>
+        <canvas id="widget-daily" width="240" height="90"></canvas>
+      </div>
+      <div class="hist-widget">
+        <h4>Similar Sessions</h4>
+        <div id="similar-list"></div>
+      </div>
+    </div>
   </div>
 
 </div> <!-- /history-panel -->
@@ -1356,20 +1428,26 @@ async function loadHistoryManifest() {
   }
 }
 
+// Fetch + cache one date's full chain CSV (all expirations for that trade date).
+// Shared by the date-select flow and the sidebar widgets (intraday/daily/similarity),
+// which need other dates' chains besides the one currently on screen.
+async function fetchChainCsv(dateStr) {
+  if (histCsvCache[dateStr]) return histCsvCache[dateStr];
+  const key = dateStr.replace(/-/g, '');
+  let resp = await fetch(`${R2}/raw/qqq_chain_${key}.csv?_=${Date.now()}`);
+  if (!resp.ok) resp = await fetch(`${R2}/raw/opex/qqq_chain_${key}.csv?_=${Date.now()}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const rows = parseCsv(await resp.text()).map(normalizeHistRow);
+  histCsvCache[dateStr] = rows;
+  return rows;
+}
+
 async function loadHistoryDate(dateStr) {
   setHistStatus(`Loading ${dateStr}…`);
   document.getElementById('hist-heatmap-wrap').classList.add('hidden');
   document.getElementById('hist-no-data').classList.remove('hidden');
   try {
-    let rows = histCsvCache[dateStr];
-    if (!rows) {
-      const key = dateStr.replace(/-/g, '');
-      let resp = await fetch(`${R2}/raw/qqq_chain_${key}.csv?_=${Date.now()}`);
-      if (!resp.ok) resp = await fetch(`${R2}/raw/opex/qqq_chain_${key}.csv?_=${Date.now()}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      rows = parseCsv(await resp.text()).map(normalizeHistRow);
-      histCsvCache[dateStr] = rows;
-    }
+    const rows = await fetchChainCsv(dateStr);
     populateExpirationSelect(rows, dateStr);
   } catch (e) {
     setHistStatus(`Error loading ${dateStr}: ${e.message}`);
@@ -1408,7 +1486,8 @@ function renderSelectedExpiration(rows, tradeDate) {
   }
   const spot = sub[0].UnderlyingPrice || null;
   const tier = classifyTierSimple(exp);
-  renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: exp, snapshot_time: tradeDate });
+  const ok = renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: exp, snapshot_time: tradeDate });
+  if (ok) renderHistWidgets(sub, spot, tier, tradeDate);
 }
 
 function renderHistoryHeatmap(data) {
@@ -1419,7 +1498,7 @@ function renderHistoryHeatmap(data) {
     setHistStatus(`No usable spot/strike data for ${snapshot_time} · exp ${expiration}.`);
     document.getElementById('hist-heatmap-wrap').classList.add('hidden');
     document.getElementById('hist-no-data').classList.remove('hidden');
-    return;
+    return false;
   }
 
   document.getElementById('hist-price').textContent = spot ? `$${spot.toFixed(2)}` : '—';
@@ -1431,6 +1510,370 @@ function renderHistoryHeatmap(data) {
   document.getElementById('hist-no-data').classList.add('hidden');
   document.getElementById('hist-heatmap-wrap').classList.remove('hidden');
   setHistStatus(`Trade date ${snapshot_time} · exp ${expiration}`);
+  return true;
+}
+
+// ── sidebar widgets: Top 5 OI, Intraday, Daily context, Similar Sessions ──────
+// Ported from the desktop app's oi_viewer.py sidebar (render_top5, render_intraday,
+// render_daily_context, SimilarityIndex). Each widget fetches/derives its data from
+// R2 keys qqq-data-pipeline already writes — no new pipeline output required.
+const intradayCache = {};   // dateStr -> [{t,o,h,l,c}] 5-min bars
+
+async function loadIntradayPrices(dateStr) {
+  if (intradayCache[dateStr]) return intradayCache[dateStr];
+  const key = dateStr.replace(/-/g, '');
+  const resp = await fetch(`${R2}/prices/qqq_intraday_${key}.csv?_=${Date.now()}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const rows = parseCsv(await resp.text());
+  const bars = rows
+    .map(r => ({ t: r.datetime, o: +r.open, h: +r.high, l: +r.low, c: +r.close }))
+    .filter(b => [b.o, b.h, b.l, b.c].every(Number.isFinite));
+  intradayCache[dateStr] = bars;
+  return bars;
+}
+
+function aggregateDailyOHLC(bars) {
+  if (!bars || !bars.length) return null;
+  return {
+    o: bars[0].o,
+    h: Math.max(...bars.map(b => b.h)),
+    l: Math.min(...bars.map(b => b.l)),
+    c: bars[bars.length - 1].c,
+  };
+}
+
+// ±window trading days around centerDateStr, using the manifest's date list (not
+// calendar days) so weekends/holidays are naturally skipped — mirrors load_daily_window
+// in oi_viewer.py but keyed off dates we know have archives rather than a yfinance range.
+async function loadDailyWindow(centerDateStr, window = 2) {
+  const idx = histManifestDates.indexOf(centerDateStr);
+  if (idx === -1) return { candles: [], centerIndex: -1 };
+  const lo = Math.max(0, idx - window);
+  const hi = Math.min(histManifestDates.length - 1, idx + window);
+  const windowDates = histManifestDates.slice(lo, hi + 1);
+  const candles = [];
+  for (const d of windowDates) {
+    try {
+      const agg = aggregateDailyOHLC(await loadIntradayPrices(d));
+      if (agg) candles.push({ ...agg, label: d.slice(5).replace('-', '/'), date: d });
+    } catch (e) { /* no intraday archive for this day — skip it */ }
+  }
+  return { candles, centerIndex: candles.findIndex(c => c.date === centerDateStr) };
+}
+
+// Port of build_feature_vector (oi_viewer.py:313-334): 46-element vector, bucket
+// values for offsets +11..-11, calls then puts. Reuses the same getThresh()/oiBucket()
+// the live heatmap already uses for coloring — no separate threshold logic.
+function buildFeatureVector(rows, tier) {
+  if (!rows || !rows.length) return null;
+  const spot = rows[0].UnderlyingPrice;
+  if (!spot) return null;
+  const strikes = [...new Set(rows.map(r => r.Strike))].sort((a, b) => a - b);
+  if (!strikes.length) return null;
+  const atm = strikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikes[0]);
+  const byStrike = {};
+  for (const r of rows) {
+    if (!byStrike[r.Strike]) byStrike[r.Strike] = {};
+    byStrike[r.Strike][r.Type] = r;
+  }
+  const callBuckets = [], putBuckets = [];
+  for (let o = 11; o >= -11; o--) {
+    const sk = atm + o;
+    const coi = byStrike[sk]?.call ? (+byStrike[sk].call.OpenInterest || 0) : 0;
+    const poi = byStrike[sk]?.put  ? (+byStrike[sk].put.OpenInterest  || 0) : 0;
+    callBuckets.push(oiBucket(coi, getThresh(tier || '0DTE_Regular', o, 'call')));
+    putBuckets.push(oiBucket(poi, getThresh(tier || '0DTE_Regular', o, 'put')));
+  }
+  return callBuckets.concat(putBuckets);
+}
+
+// Vectors are cached forever in localStorage — a settled historical date's OI never
+// changes, so once built a vector is valid indefinitely (mirrors the desktop's
+// similarity_cache.json). Grown lazily/opportunistically rather than bulk-bootstrapped,
+// so opening the Historical tab doesn't trigger fetching every archived date at once.
+const SIM_KEY = 'sim_vectors_v1';
+let simVectors = {};
+try { simVectors = JSON.parse(localStorage.getItem(SIM_KEY)) || {}; } catch (e) { simVectors = {}; }
+function saveSimVectors() { try { localStorage.setItem(SIM_KEY, JSON.stringify(simVectors)); } catch (e) {} }
+
+async function ensureVector(dateStr) {
+  if (simVectors[dateStr]) return simVectors[dateStr];
+  const rows = await fetchChainCsv(dateStr);
+  const sub = rows.filter(r => r.Expiration === dateStr);   // that day's own 0DTE chain
+  if (!sub.length) return null;
+  const vec = buildFeatureVector(sub, classifyTierSimple(dateStr));
+  if (vec) { simVectors[dateStr] = vec; saveSimVectors(); }
+  return vec;
+}
+
+function cosineSim(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return (na === 0 || nb === 0) ? 0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+async function queryTopSimilar(dateStr, n = 5) {
+  const target = await ensureVector(dateStr);
+  if (!target) return [];
+
+  // Grow the corpus toward nearby uncached dates. Awaited (not fire-and-forget) so a
+  // cold cache — e.g. the very first Historical-tab visit — still returns real matches
+  // instead of an empty list; scoped to a handful of dates so it stays fast.
+  const idx = histManifestDates.indexOf(dateStr);
+  if (idx !== -1) {
+    const toFetch = [];
+    for (let d = 1; d <= 6; d++) {
+      for (const j of [idx - d, idx + d]) {
+        const cd = histManifestDates[j];
+        if (cd && !simVectors[cd]) toFetch.push(ensureVector(cd).catch(() => {}));
+      }
+    }
+    await Promise.all(toFetch);
+  }
+
+  return Object.entries(simVectors)
+    .filter(([d]) => d !== dateStr)
+    .map(([d, v]) => ({ date: d, score: cosineSim(target, v) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+}
+
+async function nextDayMove(dateStr) {
+  const idx = histManifestDates.indexOf(dateStr);
+  if (idx === -1 || idx === histManifestDates.length - 1) return null;
+  const nextDate = histManifestDates[idx + 1];
+  const [curRows, nextRows] = await Promise.all([fetchChainCsv(dateStr), fetchChainCsv(nextDate)]);
+  const curSpot  = curRows.find(r => r.Expiration === dateStr)?.UnderlyingPrice;
+  const nextSpot = nextRows[0]?.UnderlyingPrice;
+  if (!curSpot || !nextSpot) return null;
+  return (nextSpot - curSpot) / curSpot * 100;
+}
+
+// Shared candle renderer for both the Intraday and Daily-context widgets (the desktop
+// app duplicates this drawing logic across render_intraday/render_daily_context —
+// collapsed into one function here instead of porting the duplication).
+function renderCandles(canvas, bars, opts = {}) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+  if (!bars || !bars.length) {
+    ctx.fillStyle = '#6e7681';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('no data', W / 2, H / 2);
+    return;
+  }
+  const n = bars.length;
+  const labelH = opts.labels ? 11 : 0;
+  const lo0 = Math.min(...bars.map(b => b.l));
+  const hi0 = Math.max(...bars.map(b => b.h));
+  const pad = (hi0 - lo0) * 0.08 || 1;
+  const lo = lo0 - pad, hi = hi0 + pad;
+  const padX = 3, padY = 3;
+  const plotW = W - padX * 2, plotH = H - padY * 2 - labelH;
+  const slot = plotW / n;
+  const cw = Math.max(1, slot * 0.6);
+  const y = v => padY + (hi - v) / (hi - lo) * plotH;
+
+  bars.forEach((b, i) => {
+    const cx = padX + slot * i + slot / 2;
+    const color = b.c >= b.o ? '#00cc55' : '#ee3300';
+    ctx.globalAlpha = (opts.highlightIndex != null && i !== opts.highlightIndex) ? 0.4 : 1;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, y(b.h));
+    ctx.lineTo(cx, y(b.l));
+    ctx.stroke();
+    const top = y(Math.max(b.o, b.c));
+    const bh = Math.max(1, Math.abs(y(b.o) - y(b.c)));
+    ctx.fillRect(cx - cw / 2, top, cw, bh);
+    ctx.globalAlpha = 1;
+    if (i === opts.highlightIndex) {
+      ctx.strokeStyle = '#cccccc';
+      ctx.strokeRect(cx - cw / 2 - 1, top - 1, cw + 2, bh + 2);
+    }
+  });
+
+  if (opts.labels) {
+    ctx.fillStyle = '#6e7681';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    [0, Math.floor((n - 1) / 2), n - 1].forEach(i => {
+      if (bars[i]?.label) ctx.fillText(bars[i].label, padX + slot * i + slot / 2, H - 1);
+    });
+  }
+}
+
+// Port of render_top5 (oi_viewer.py:518-603): bubble scatter of the 5 highest-OI
+// strikes, positioned by % distance from spot, sized by OI, with a rank number and a
+// simple collision bump for overlapping x positions.
+function renderTop5Widget(rows, spot) {
+  const canvas = document.getElementById('widget-top5');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+  if (!rows || !rows.length || !spot) {
+    ctx.fillStyle = '#6e7681';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('no data', W / 2, H / 2);
+    return;
+  }
+
+  const top5 = rows.slice().sort((a, b) => b.OpenInterest - a.OpenInterest).slice(0, 5);
+  const pts = top5.map((r, i) => ({
+    rank: i + 1, strike: r.Strike, type: r.Type, oi: r.OpenInterest,
+    pct: (r.Strike - spot) / spot * 100,
+  }));
+  const maxAbs = Math.max(6, Math.ceil(Math.max(...pts.map(p => Math.abs(p.pct)))));
+  const padX = 14, padY = 16;
+  const plotW = W - padX * 2, plotH = H - padY * 2;
+  const x = pct => padX + (pct + maxAbs) / (2 * maxAbs) * plotW;
+
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padX, H - padY); ctx.lineTo(W - padX, H - padY); ctx.stroke();
+  ctx.strokeStyle = '#6e7681';
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath(); ctx.moveTo(x(0), padY / 2); ctx.lineTo(x(0), H - padY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const collThr = maxAbs * 0.22;
+  const placed = [];
+  for (const p of pts.slice().sort((a, b) => a.pct - b.pct)) {
+    let bump = 0;
+    while (placed.some(q => Math.abs(q.pct - p.pct) < collThr && q.bump === bump)) bump++;
+    placed.push({ ...p, bump });
+  }
+  const maxBump = Math.max(...placed.map(p => p.bump));
+  const rowGap = maxBump > 0 ? (plotH - 20) / (maxBump + 1) : 0;
+
+  const oiVals = placed.map(p => p.oi);
+  const minOi = Math.min(...oiVals), maxOi = Math.max(...oiVals);
+  const rMin = 6, rMax = 13;
+  const radius = oi => maxOi === minOi ? (rMin + rMax) / 2 : rMin + (oi - minOi) / (maxOi - minOi) * (rMax - rMin);
+
+  placed.forEach(p => {
+    const cx = x(p.pct);
+    const cy = H - padY - 8 - p.bump * rowGap;
+    const color = p.type === 'call' ? '#00cc55' : '#ee3300';
+    const r = radius(p.oi);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = color + '33';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(p.rank), cx, cy);
+  });
+
+  ctx.fillStyle = '#6e7681';
+  ctx.font = '8px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  [-maxAbs, 0, maxAbs].forEach(v => ctx.fillText(`${v > 0 ? '+' : ''}${v}%`, x(v), H - 4));
+
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W / rect.width);
+    const my = (e.clientY - rect.top) * (H / rect.height);
+    const hit = placed.find(p => Math.hypot(mx - x(p.pct), my - (H - padY - 8 - p.bump * rowGap)) <= radius(p.oi) + 1);
+    canvas.title = hit ? `${hit.strike} ${hit.type.toUpperCase()} · OI ${fmtOI(hit.oi)}` : '';
+  };
+}
+
+async function renderIntradayWidget(dateStr) {
+  document.getElementById('widget-intraday-label').textContent = dateStr;
+  const canvas = document.getElementById('widget-intraday');
+  try {
+    renderCandles(canvas, await loadIntradayPrices(dateStr));
+  } catch (e) {
+    renderCandles(canvas, []);
+  }
+}
+
+async function renderDailyWidget(dateStr) {
+  const canvas = document.getElementById('widget-daily');
+  try {
+    const { candles, centerIndex } = await loadDailyWindow(dateStr, 2);
+    renderCandles(canvas, candles, { highlightIndex: centerIndex >= 0 ? centerIndex : null, labels: true });
+  } catch (e) {
+    renderCandles(canvas, []);
+  }
+}
+
+let simPopupEl = null;
+function hideSimilarPopup() {
+  if (simPopupEl) { simPopupEl.remove(); simPopupEl = null; }
+}
+async function showSimilarPopup(e, dateStr) {
+  hideSimilarPopup();
+  const div = document.createElement('div');
+  div.id = 'similar-popup';
+  div.innerHTML = '<canvas width="180" height="70"></canvas>';
+  document.body.appendChild(div);
+  const r = e.currentTarget.getBoundingClientRect();
+  div.style.left = (r.right + window.scrollX + 6) + 'px';
+  div.style.top  = (r.top + window.scrollY) + 'px';
+  simPopupEl = div;
+  try {
+    const bars = await loadIntradayPrices(dateStr);
+    if (simPopupEl === div) renderCandles(div.querySelector('canvas'), bars);
+  } catch (e2) {
+    if (simPopupEl === div) renderCandles(div.querySelector('canvas'), []);
+  }
+}
+
+// Port of the Similar Sessions panel (oi_viewer.py SimilarityIndex + _sim_popup):
+// top-5 historically similar 0DTE sessions by cosine similarity of the bucketed OI
+// shape, each with its next-day % move and a hover popup of that day's intraday chart.
+async function renderSimilarWidget(dateStr) {
+  const listEl = document.getElementById('similar-list');
+  listEl.innerHTML = '<div class="widget-empty">Loading…</div>';
+  try {
+    const matches = await queryTopSimilar(dateStr, 5);
+    if (!matches.length) {
+      listEl.innerHTML = '<div class="widget-empty">Not enough historical sessions cached yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const m of matches) {
+      const row = document.createElement('div');
+      row.className = 'similar-row';
+      row.innerHTML = `<span class="similar-date">${m.date}</span><span class="similar-score">${(m.score * 100).toFixed(0)}%</span><span class="similar-move">…</span>`;
+      row.onmouseenter = (e) => showSimilarPopup(e, m.date);
+      row.onmouseleave = hideSimilarPopup;
+      listEl.appendChild(row);
+      const moveEl = row.querySelector('.similar-move');
+      nextDayMove(m.date).then(mv => {
+        if (mv == null) { moveEl.textContent = '—'; return; }
+        moveEl.textContent = `${mv >= 0 ? '+' : ''}${mv.toFixed(2)}%`;
+        moveEl.classList.add(mv >= 0 ? 'up' : 'down');
+      }).catch(() => { moveEl.textContent = '—'; });
+    }
+  } catch (e) {
+    listEl.innerHTML = '<div class="widget-empty">Similarity unavailable.</div>';
+  }
+}
+
+// Each widget degrades independently — a missing intraday archive for an old date
+// shouldn't blank out the heatmap or the other widgets.
+function renderHistWidgets(sub, spot, tier, dateStr) {
+  try { renderTop5Widget(sub, spot); } catch (e) { console.warn('top5 widget failed', e); }
+  renderIntradayWidget(dateStr).catch(e => console.warn('intraday widget failed', e));
+  renderDailyWidget(dateStr).catch(e => console.warn('daily widget failed', e));
+  renderSimilarWidget(dateStr).catch(e => console.warn('similar widget failed', e));
 }
 
 // ── boot ──────────────────────────────────────────────────────────────────────
