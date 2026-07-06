@@ -1,4 +1,6 @@
 const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
+const ALLOWED_ORIGINS = ['https://options.moopertonic.net', 'http://localhost:8787'];
+const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this leaves ample headroom
 
 export default {
   async fetch(request, env) {
@@ -42,10 +44,34 @@ export default {
 
 // Records one paper-trading fill per object under paper-trades/YYYYMMDD/ —
 // avoids read-modify-write races when multiple browsers/accounts trade at once.
+//
+// This is a write-capable public endpoint, so it's guarded by an Origin
+// allowlist and a hard body-size cap. Origin checking is not real auth (a
+// non-browser client can forge the header) — it only blocks ordinary
+// cross-site abuse from other pages' scripts. Good enough for a private tool
+// with no sensitive data at stake, not a substitute for real auth if that
+// ever changes.
 async function handlePaperTrade(request, env) {
+  const origin = request.headers.get('Origin');
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  const contentLength = Number(request.headers.get('Content-Length') || 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return new Response('Payload too large', { status: 413 });
+  }
+
+  let raw;
+  try {
+    raw = await readLimited(request, MAX_BODY_BYTES);
+  } catch (e) {
+    return new Response('Payload too large', { status: 413 });
+  }
+
   let body;
   try {
-    body = await request.json();
+    body = JSON.parse(raw);
   } catch (e) {
     return new Response('Invalid JSON', { status: 400 });
   }
@@ -65,4 +91,31 @@ async function handlePaperTrade(request, env) {
   });
 
   return new Response(null, { status: 204 });
+}
+
+// Reads the request body up to `limit` bytes, aborting the stream and
+// throwing if exceeded. Content-Length alone isn't trustworthy (absent on
+// chunked requests, or simply lied about), so this is the real enforcement.
+async function readLimited(request, limit) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limit) {
+      await reader.cancel();
+      throw new Error('Payload too large');
+    }
+    chunks.push(value);
+  }
+  const buf = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(buf);
 }
