@@ -6,3 +6,7 @@ account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 [assets]
 directory = "docs"
 binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "PAPER_TRADES"
+bucket_name = "qqq-options-chain-data"

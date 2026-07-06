@@ -259,6 +259,22 @@ Three-column table: Calls | Strike | Puts, ±67 strikes centered on ATM.
 
 Source: `intraday/latest.json`, polled every 60 seconds.
 
+### 7.3 Paper trading
+
+Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Every fill (manual buy/sell and synthetic expiry settlement) is also POSTed best-effort to `/api/paper-trade`, handled by the Worker (`worker.js`), which writes one JSON object per trade to R2 under `paper-trades/YYYYMMDD/` (one object per fill avoids read-modify-write races across concurrent browsers/accounts). Each record is tagged with `account_id`, `account_name`, and a per-browser `install_id` (random, persisted in `localStorage`) so trades from different devices/strategies can be told apart during analysis. Upload failures are swallowed — R2 durability is a nice-to-have log, not required for the UI to function.
+
+**Expiration settlement** (`settlementPrice()` / `settleExpired()`) is asymmetric between long and short:
+- **Long** positions held past expiration always settle at $0, regardless of moneyness. This book has no margin to exercise, so there's no realistic way to capture intrinsic value on an ITM long — the honest simulation of "held it, didn't close it" is that it expires worthless. Realizing intrinsic value requires closing before expiration, same constraint a real no-exercise-capacity account would face.
+- **Short** positions don't get that same pass: a real market-maker/OCC counterparty will exercise an ITM option against a short seller regardless of what this account can or can't do, so modeling short ITM options as free premium would be unrealistic in the other direction. Short positions settle at intrinsic value — `max(spot − strike, 0)` for calls, `max(strike − spot, 0)` for puts — using the last underlying price recorded for that expiration date (`store.spotMarks[date]`, captured each snapshot in `updateQuotes()`). If no spot was ever recorded for that date, it falls back to worthless.
+
+**Write-endpoint hardening** (`/api/paper-trade` is a public write-capable surface, layered defenses, none individually sufficient on their own):
+- Shared token — client sends `X-Paper-Trade-Key` (hardcoded in `docs/index.html` as `PAPER_TRADE_KEY`), Worker checks it against the `PAPER_TRADE_KEY` secret (set via `wrangler secret put PAPER_TRADE_KEY`, not committed to the repo). This token is visible to anyone viewing page source — it's a deterrent against casual/scripted abuse, not real auth.
+- Origin allowlist (`ALLOWED_ORIGINS` in `worker.js`) — blocks ordinary cross-site browser abuse; forgeable by non-browser clients.
+- Cloudflare rate limiting rule (zone-level, dashboard-configured, not in this repo) — 10 requests / 10s per IP on `POST /api/paper-trade`, block for 10s. Free-plan rate limiting rules cap both windows at 10s; still enough to keep a script from sustaining throughput above the human-usage ceiling.
+- Hard body-size cap (`MAX_BODY_BYTES`, enforced by actually reading the stream, not trusting `Content-Length`).
+
+> **New Worker environments (staging, a fork, an account migration, etc.):** the Worker rejects every `/api/paper-trade` request with 403 until `PAPER_TRADE_KEY` is set to match the value hardcoded in `docs/index.html` — this is deliberate fail-closed behavior, not a bug (see the write-endpoint hardening above). Nothing else in the deploy pipeline provisions this secret automatically; `wrangler secret put PAPER_TRADE_KEY` (or the dashboard equivalent) has to be run by hand against any new Worker before paper-trade uploads will work there. `wrangler deploy` / the CI `wrangler-action` won't clear an existing secret on redeploy, so this is a one-time step per environment, not per deploy.
+
 ---
 
 ## 8. Infrastructure
@@ -280,6 +296,7 @@ Source: `intraday/latest.json`, polled every 60 seconds.
 - Bucket: `qqq-options-chain-data`
 - Public access via Cloudflare Worker (not direct R2 public URL)
 - CORS must allow `options.moopertonic.net` and `localhost` for browser fetch
+- `worker.js` (the `live-options-view` Worker) also holds a direct R2 binding (`PAPER_TRADES`, see `wrangler.toml`) so it can write paper-trade fills to `paper-trades/YYYYMMDD/` — same-origin POST from `docs/index.html`, no separate credentials needed in the browser
 
 ### 8.3 Web hosting
 
