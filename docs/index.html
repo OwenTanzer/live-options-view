@@ -827,7 +827,9 @@ function updateQuotes(data) {
     const bid = r.Bid ?? null, ask = r.Ask ?? null;
     const mid = (bid != null && ask != null) ? (bid + ask) / 2 : (r.Mid ?? null);
     quotes[r.OptionSymbol] = { bid, ask, mid, strike: +r.Strike, type: r.Type, exp: r.Expiration };
-    // remember last mark for symbols any account holds, so expiry settlement has a price
+    // remember last mark for symbols any account holds, as a display/unrealized-PnL
+    // fallback once a symbol drops out of the live quote feed (e.g. after hours).
+    // Not used for expiry settlement -- that always marks to $0, see settleExpired().
     if (mid != null) {
       for (const [id, a] of Object.entries(store.accounts)) {
         if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = mid;
@@ -874,8 +876,13 @@ function executeTrade(info, side, qty, price) {
   if (lastData) renderHeatmap(lastData);  // refresh position badges
 }
 
-// Expired (past-date) open positions settle at their last recorded mark,
-// across every account
+// Expired (past-date) open positions always settle at $0, across every
+// account. This book has no margin to actually exercise/take assignment, so
+// there's no realistic way to capture intrinsic value on an ITM position held
+// to expiration -- the honest simulation of "held it, didn't close it out" is
+// that it settles worthless, same as an OTM option. Close the position before
+// expiration (like a real account without exercise capacity would have to)
+// if you want to realize intrinsic value.
 function settleExpired() {
   if (!lastDataDate) return;
   let changed = false;
@@ -886,7 +893,7 @@ function settleExpired() {
           ts: new Date().toISOString(),
           sym, strike: b.strike, type: b.type, exp: b.exp,
           side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
-          price: a.marks[sym] ?? b.avg, note: 'expired',
+          price: 0, note: 'expired worthless',
         };
         a.trades.push(trade);
         uploadTrade(trade, id, a.name);
