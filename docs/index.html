@@ -809,7 +809,9 @@ function uploadTrade(trade, accountId = store.active, accountName = acct().name)
     headers: { 'Content-Type': 'application/json', 'X-Paper-Trade-Key': PAPER_TRADE_KEY },
     body: JSON.stringify(payload),
     keepalive: true,
-  }).catch(() => {});
+  })
+    .then(r => { if (!r.ok) console.warn('paper trade upload failed', r.status); })
+    .catch(() => {});
 }
 
 let quotes = {};        // OptionSymbol -> {bid, ask, mid, strike, type, exp}
