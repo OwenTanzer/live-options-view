@@ -19,6 +19,10 @@ export default {
       return proxied;
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/paper-trade') {
+      return handlePaperTrade(request, env);
+    }
+
     const response = await env.ASSETS.fetch(request);
 
     // HTML documents (the single-file app + diagnostic page) must never be
@@ -34,4 +38,30 @@ export default {
 
     return response;
   }
+}
+
+// Records one paper-trading fill per object under paper-trades/YYYYMMDD/ —
+// avoids read-modify-write races when multiple browsers/accounts trade at once.
+async function handlePaperTrade(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return new Response('Invalid JSON', { status: 400 });
+  }
+  if (!body || typeof body !== 'object' || !body.sym || !body.side || !body.qty || body.price == null) {
+    return new Response('Missing required trade fields', { status: 400 });
+  }
+
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const installId = String(body.install_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
+  const accountId = String(body.account_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
+  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}.json`;
+
+  await env.PAPER_TRADES.put(key, JSON.stringify({ ...body, received_at: now.toISOString() }), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+
+  return new Response(null, { status: 204 });
 }

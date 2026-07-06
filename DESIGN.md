@@ -259,6 +259,10 @@ Three-column table: Calls | Strike | Puts, ±67 strikes centered on ATM.
 
 Source: `intraday/latest.json`, polled every 60 seconds.
 
+### 7.3 Paper trading
+
+Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Every fill (manual buy/sell and synthetic expiry settlement) is also POSTed best-effort to `/api/paper-trade`, handled by the Worker (`worker.js`), which writes one JSON object per trade to R2 under `paper-trades/YYYYMMDD/` (one object per fill avoids read-modify-write races across concurrent browsers/accounts). Each record is tagged with `account_id`, `account_name`, and a per-browser `install_id` (random, persisted in `localStorage`) so trades from different devices/strategies can be told apart during analysis. Upload failures are swallowed — R2 durability is a nice-to-have log, not required for the UI to function.
+
 ---
 
 ## 8. Infrastructure
@@ -280,6 +284,7 @@ Source: `intraday/latest.json`, polled every 60 seconds.
 - Bucket: `qqq-options-chain-data`
 - Public access via Cloudflare Worker (not direct R2 public URL)
 - CORS must allow `options.moopertonic.net` and `localhost` for browser fetch
+- `worker.js` (the `live-options-view` Worker) also holds a direct R2 binding (`PAPER_TRADES`, see `wrangler.toml`) so it can write paper-trade fills to `paper-trades/YYYYMMDD/` — same-origin POST from `docs/index.html`, no separate credentials needed in the browser
 
 ### 8.3 Web hosting
 

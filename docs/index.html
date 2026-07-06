@@ -775,6 +775,28 @@ try {
 
 function acct() { return store.accounts[store.active]; }
 
+// Per-browser id so trades from different devices/browsers don't collide once
+// uploaded to R2 (account ids like 'a1' are reused across fresh installs).
+const INSTALL_KEY = 'paperbook_install_id';
+let installId = localStorage.getItem(INSTALL_KEY);
+if (!installId) {
+  installId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try { localStorage.setItem(INSTALL_KEY, installId); } catch (e) {}
+}
+
+// Best-effort upload of every fill to R2 (via the Worker) so trades across all
+// strategies/accounts/devices are durably logged for later analysis. Local
+// localStorage remains the source of truth for the live UI.
+function uploadTrade(trade, accountId = store.active, accountName = acct().name) {
+  const payload = { ...trade, account_id: accountId, account_name: accountName, install_id: installId };
+  fetch('/api/paper-trade', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 let quotes = {};        // OptionSymbol -> {bid, ask, mid, strike, type, exp}
 let lastData = null;
 let lastDataDate = null;
@@ -825,13 +847,15 @@ function computeBook(account = acct()) {
 function executeTrade(info, side, qty, price) {
   qty = Math.round(+qty);
   if (!qty || qty < 1 || price == null) return;
-  acct().trades.push({
+  const trade = {
     ts: new Date().toISOString(),
     sym: info.sym, strike: info.strike, type: info.type, exp: info.exp,
     side, qty, price: +price,
     ...(info.note ? { note: info.note } : {}),
-  });
+  };
+  acct().trades.push(trade);
   savePaper();
+  uploadTrade(trade);
   closeTicket();
   renderPaper();
   if (lastData) renderHeatmap(lastData);  // refresh position badges
@@ -842,15 +866,17 @@ function executeTrade(info, side, qty, price) {
 function settleExpired() {
   if (!lastDataDate) return;
   let changed = false;
-  for (const a of Object.values(store.accounts)) {
+  for (const [id, a] of Object.entries(store.accounts)) {
     for (const [sym, b] of Object.entries(computeBook(a))) {
       if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
-        a.trades.push({
+        const trade = {
           ts: new Date().toISOString(),
           sym, strike: b.strike, type: b.type, exp: b.exp,
           side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
           price: a.marks[sym] ?? b.avg, note: 'expired',
-        });
+        };
+        a.trades.push(trade);
+        uploadTrade(trade, id, a.name);
         changed = true;
       }
     }
