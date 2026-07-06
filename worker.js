@@ -53,8 +53,8 @@ export default {
 // bar past casual/scripted abuse. Fine for a private tool with no sensitive
 // data at stake; would need real auth if that ever changes.
 async function handlePaperTrade(request, env) {
-  const key = request.headers.get('X-Paper-Trade-Key');
-  if (!env.PAPER_TRADE_KEY || key !== env.PAPER_TRADE_KEY) {
+  const authKey = request.headers.get('X-Paper-Trade-Key');
+  if (!env.PAPER_TRADE_KEY || authKey !== env.PAPER_TRADE_KEY) {
     return new Response('Forbidden', { status: 403 });
   }
 
@@ -81,8 +81,9 @@ async function handlePaperTrade(request, env) {
   } catch (e) {
     return new Response('Invalid JSON', { status: 400 });
   }
-  if (!body || typeof body !== 'object' || !body.sym || !body.side || !body.qty || body.price == null) {
-    return new Response('Missing required trade fields', { status: 400 });
+  const validationError = validateTrade(body);
+  if (validationError) {
+    return new Response(validationError, { status: 400 });
   }
 
   const now = new Date();
@@ -97,6 +98,55 @@ async function handlePaperTrade(request, env) {
   });
 
   return new Response(null, { status: 204 });
+}
+
+const MAX_STRING_LEN = 64;
+const MAX_NOTE_LEN = 200;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Schema check for a trade record before it's written to R2. This log is
+// meant to become cross-strategy analysis data, so loose validation here
+// (accepting non-numeric prices, negative quantities, arbitrary side/type
+// strings, unbounded text fields) is how the dataset silently rots — a
+// malformed record parses fine as JSON but breaks downstream analysis with
+// no visible failure in the UI. Returns an error string, or null if valid.
+function validateTrade(body) {
+  if (!body || typeof body !== 'object') return 'Body must be a JSON object';
+
+  if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
+    return 'sym must be a non-empty string';
+  }
+  if (body.side !== 'buy' && body.side !== 'sell') {
+    return 'side must be "buy" or "sell"';
+  }
+  if (!Number.isInteger(body.qty) || body.qty <= 0 || body.qty > 100_000) {
+    return 'qty must be a positive integer';
+  }
+  if (typeof body.price !== 'number' || !Number.isFinite(body.price) || body.price < 0) {
+    return 'price must be a non-negative number';
+  }
+  if (body.strike != null && (typeof body.strike !== 'number' || !Number.isFinite(body.strike) || body.strike <= 0)) {
+    return 'strike must be a positive number';
+  }
+  if (body.type != null && body.type !== 'call' && body.type !== 'put') {
+    return 'type must be "call" or "put"';
+  }
+  if (body.exp != null && (typeof body.exp !== 'string' || !ISO_DATE.test(body.exp))) {
+    return 'exp must be a YYYY-MM-DD date string';
+  }
+  if (body.ts != null && (typeof body.ts !== 'string' || Number.isNaN(Date.parse(body.ts)))) {
+    return 'ts must be a valid date string';
+  }
+  if (body.note != null && (typeof body.note !== 'string' || body.note.length > MAX_NOTE_LEN)) {
+    return `note must be a string under ${MAX_NOTE_LEN} chars`;
+  }
+  for (const field of ['account_id', 'account_name', 'install_id']) {
+    if (body[field] != null && (typeof body[field] !== 'string' || body[field].length > MAX_STRING_LEN)) {
+      return `${field} must be a string under ${MAX_STRING_LEN} chars`;
+    }
+  }
+
+  return null;
 }
 
 // Reads the request body up to `limit` bytes, aborting the stream and
