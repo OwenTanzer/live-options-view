@@ -273,6 +273,8 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 - Cloudflare rate limiting rule (zone-level, dashboard-configured, not in this repo) — 10 requests / 10s per IP on `POST /api/paper-trade`, block for 10s. Free-plan rate limiting rules cap both windows at 10s; still enough to keep a script from sustaining throughput above the human-usage ceiling.
 - Hard body-size cap (`MAX_BODY_BYTES`, enforced by actually reading the stream, not trusting `Content-Length`).
 
+> **New Worker environments (staging, a fork, an account migration, etc.):** the Worker rejects every `/api/paper-trade` request with 403 until `PAPER_TRADE_KEY` is set to match the value hardcoded in `docs/index.html` — this is deliberate fail-closed behavior, not a bug (see the write-endpoint hardening above). Nothing else in the deploy pipeline provisions this secret automatically; `wrangler secret put PAPER_TRADE_KEY` (or the dashboard equivalent) has to be run by hand against any new Worker before paper-trade uploads will work there. `wrangler deploy` / the CI `wrangler-action` won't clear an existing secret on redeploy, so this is a one-time step per environment, not per deploy.
+
 ---
 
 ## 8. Infrastructure
