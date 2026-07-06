@@ -759,7 +759,7 @@ function renderHeatmap(data) {
 // Multiple named accounts, each with an independent book, for separating
 // strategies. store = { accounts: {id: {name, trades, marks}}, active: id }.
 const PAPER_KEY = 'paperbook_v2';
-let store = { accounts: { a1: { name: 'Main', trades: [], marks: {} } }, active: 'a1' };
+let store = { accounts: { a1: { name: 'Main', trades: [], marks: {} } }, active: 'a1', spotMarks: {} };
 try {
   const v2 = JSON.parse(localStorage.getItem(PAPER_KEY));
   if (v2 && v2.accounts && v2.active in v2.accounts) {
@@ -772,6 +772,8 @@ try {
     }
   }
 } catch (e) { /* corrupt store — start fresh */ }
+// account for stores saved before spotMarks existed
+if (!store.spotMarks) store.spotMarks = {};
 
 function acct() { return store.accounts[store.active]; }
 
@@ -821,6 +823,12 @@ function savePaper() {
 
 function updateQuotes(data) {
   lastDataDate = data.date || lastDataDate;
+  // Last known underlying price for this date, kept so settleExpired() can
+  // determine ITM/OTM for short positions once the option itself is no longer
+  // in the live quote feed (see settlementPrice()).
+  if (lastDataDate && data.underlying_price != null) {
+    store.spotMarks[lastDataDate] = data.underlying_price;
+  }
   const books = Object.fromEntries(Object.entries(store.accounts).map(([id, a]) => [id, computeBook(a)]));
   for (const r of (data.rows || [])) {
     if (!r.OptionSymbol) continue;
@@ -829,7 +837,7 @@ function updateQuotes(data) {
     quotes[r.OptionSymbol] = { bid, ask, mid, strike: +r.Strike, type: r.Type, exp: r.Expiration };
     // remember last mark for symbols any account holds, as a display/unrealized-PnL
     // fallback once a symbol drops out of the live quote feed (e.g. after hours).
-    // Not used for expiry settlement -- that always marks to $0, see settleExpired().
+    // Not used for expiry settlement -- see settlementPrice().
     if (mid != null) {
       for (const [id, a] of Object.entries(store.accounts)) {
         if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = mid;
@@ -876,24 +884,41 @@ function executeTrade(info, side, qty, price) {
   if (lastData) renderHeatmap(lastData);  // refresh position badges
 }
 
-// Expired (past-date) open positions always settle at $0, across every
-// account. This book has no margin to actually exercise/take assignment, so
-// there's no realistic way to capture intrinsic value on an ITM position held
-// to expiration -- the honest simulation of "held it, didn't close it out" is
-// that it settles worthless, same as an OTM option. Close the position before
-// expiration (like a real account without exercise capacity would have to)
-// if you want to realize intrinsic value.
+// Settlement price for a position held past expiration.
+//
+// Long positions always settle at $0: this book has no margin to actually
+// exercise, so there's no realistic way to capture intrinsic value on an ITM
+// long held to expiration -- it must be closed beforehand to realize that
+// value, same constraint a real no-exercise-capacity account would face.
+//
+// Short positions don't get that same free pass, though: this account isn't
+// the only party on the contract, and a real market-maker/OCC counterparty
+// *will* exercise an ITM option against a short seller regardless of what
+// this account can or can't do. Modeling short ITM options as free premium
+// would be unrealistic in the other direction -- so short positions settle
+// at intrinsic value, using the last recorded underlying price for that
+// expiration date (store.spotMarks). If no spot was ever recorded for that
+// date (e.g. the position was opened and the tab never reloaded before
+// expiry), ITM/OTM can't be determined and it falls back to worthless.
+function settlementPrice(b) {
+  if (b.pos > 0) return 0;
+  const spot = store.spotMarks[b.exp];
+  if (spot == null) return 0;
+  return b.type === 'call' ? Math.max(spot - b.strike, 0) : Math.max(b.strike - spot, 0);
+}
+
 function settleExpired() {
   if (!lastDataDate) return;
   let changed = false;
   for (const [id, a] of Object.entries(store.accounts)) {
     for (const [sym, b] of Object.entries(computeBook(a))) {
       if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
+        const price = settlementPrice(b);
         const trade = {
           ts: new Date().toISOString(),
           sym, strike: b.strike, type: b.type, exp: b.exp,
           side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
-          price: 0, note: 'expired worthless',
+          price, note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
         };
         a.trades.push(trade);
         uploadTrade(trade, id, a.name);
