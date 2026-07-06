@@ -778,10 +778,18 @@ function acct() { return store.accounts[store.active]; }
 // Per-browser id so trades from different devices/browsers don't collide once
 // uploaded to R2 (account ids like 'a1' are reused across fresh installs).
 const INSTALL_KEY = 'paperbook_install_id';
-let installId = localStorage.getItem(INSTALL_KEY);
-if (!installId) {
-  installId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  try { localStorage.setItem(INSTALL_KEY, installId); } catch (e) {}
+let installId;
+try {
+  installId = localStorage.getItem(INSTALL_KEY);
+  if (!installId) {
+    installId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    localStorage.setItem(INSTALL_KEY, installId);
+  }
+} catch (e) {
+  // storage inaccessible (private browsing, disabled cookies, etc.) — fall
+  // back to a session-only id rather than letting this throw before the
+  // rest of the script (and the live UI) initializes
+  installId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 // Best-effort upload of every fill to R2 (via the Worker) so trades across all
