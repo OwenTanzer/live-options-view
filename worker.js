@@ -57,7 +57,8 @@ async function handlePaperTrade(request, env) {
   const day = now.toISOString().slice(0, 10).replace(/-/g, '');
   const installId = String(body.install_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
   const accountId = String(body.account_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
-  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}.json`;
+  const rand = crypto.randomUUID().slice(0, 8);
+  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}_${rand}.json`;
 
   await env.PAPER_TRADES.put(key, JSON.stringify({ ...body, received_at: now.toISOString() }), {
     httpMetadata: { contentType: 'application/json' },
