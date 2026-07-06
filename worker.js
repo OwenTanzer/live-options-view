@@ -45,13 +45,19 @@ export default {
 // Records one paper-trading fill per object under paper-trades/YYYYMMDD/ —
 // avoids read-modify-write races when multiple browsers/accounts trade at once.
 //
-// This is a write-capable public endpoint, so it's guarded by an Origin
-// allowlist and a hard body-size cap. Origin checking is not real auth (a
-// non-browser client can forge the header) — it only blocks ordinary
-// cross-site abuse from other pages' scripts. Good enough for a private tool
-// with no sensitive data at stake, not a substitute for real auth if that
-// ever changes.
+// This is a write-capable public endpoint, so it's guarded by a shared token,
+// an Origin allowlist, a Cloudflare rate limiting rule (configured at the
+// zone level, not in this file), and a hard body-size cap. None of these are
+// real auth — the token lives in public client JS (docs/index.html) and the
+// Origin header can be forged by any non-browser client — they just raise the
+// bar past casual/scripted abuse. Fine for a private tool with no sensitive
+// data at stake; would need real auth if that ever changes.
 async function handlePaperTrade(request, env) {
+  const key = request.headers.get('X-Paper-Trade-Key');
+  if (!env.PAPER_TRADE_KEY || key !== env.PAPER_TRADE_KEY) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
   const origin = request.headers.get('Origin');
   if (origin && !ALLOWED_ORIGINS.includes(origin)) {
     return new Response('Forbidden', { status: 403 });

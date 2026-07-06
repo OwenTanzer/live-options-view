@@ -787,11 +787,16 @@ if (!installId) {
 // Best-effort upload of every fill to R2 (via the Worker) so trades across all
 // strategies/accounts/devices are durably logged for later analysis. Local
 // localStorage remains the source of truth for the live UI.
+// Shared token matching the Worker's PAPER_TRADE_KEY secret. This is public —
+// anyone viewing page source can read it — so it's a deterrent against casual
+// scripted abuse, not real auth.
+const PAPER_TRADE_KEY = 'ledump';
+
 function uploadTrade(trade, accountId = store.active, accountName = acct().name) {
   const payload = { ...trade, account_id: accountId, account_name: accountName, install_id: installId };
   fetch('/api/paper-trade', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Paper-Trade-Key': PAPER_TRADE_KEY },
     body: JSON.stringify(payload),
     keepalive: true,
   }).catch(() => {});

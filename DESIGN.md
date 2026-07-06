@@ -263,6 +263,12 @@ Source: `intraday/latest.json`, polled every 60 seconds.
 
 Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Every fill (manual buy/sell and synthetic expiry settlement) is also POSTed best-effort to `/api/paper-trade`, handled by the Worker (`worker.js`), which writes one JSON object per trade to R2 under `paper-trades/YYYYMMDD/` (one object per fill avoids read-modify-write races across concurrent browsers/accounts). Each record is tagged with `account_id`, `account_name`, and a per-browser `install_id` (random, persisted in `localStorage`) so trades from different devices/strategies can be told apart during analysis. Upload failures are swallowed — R2 durability is a nice-to-have log, not required for the UI to function.
 
+**Write-endpoint hardening** (`/api/paper-trade` is a public write-capable surface, layered defenses, none individually sufficient on their own):
+- Shared token — client sends `X-Paper-Trade-Key` (hardcoded in `docs/index.html` as `PAPER_TRADE_KEY`), Worker checks it against the `PAPER_TRADE_KEY` secret (set via `wrangler secret put PAPER_TRADE_KEY`, not committed to the repo). This token is visible to anyone viewing page source — it's a deterrent against casual/scripted abuse, not real auth.
+- Origin allowlist (`ALLOWED_ORIGINS` in `worker.js`) — blocks ordinary cross-site browser abuse; forgeable by non-browser clients.
+- Cloudflare rate limiting rule (zone-level, dashboard-configured, not in this repo) — 10 requests / 10s per IP on `POST /api/paper-trade`, block for 10s. Free-plan rate limiting rules cap both windows at 10s; still enough to keep a script from sustaining throughput above the human-usage ceiling.
+- Hard body-size cap (`MAX_BODY_BYTES`, enforced by actually reading the stream, not trusting `Content-Length`).
+
 ---
 
 ## 8. Infrastructure
