@@ -45,8 +45,7 @@ class LiveQuoteService {
         source,
       });
     }
-    this._prune();
-    this.listeners.forEach(listener => listener());
+    this._notify();
   }
 
   get(symbol) {
@@ -62,11 +61,23 @@ class LiveQuoteService {
     return new Set([...this.visibleContracts, ...this.openPositions]);
   }
 
+  // Interest-set changes (a contract scrolling out of view, a position
+  // closing) drop quotes just like a stale publish would, so subscribers need
+  // the same notification either way.
   _prune() {
     const wanted = this._wanted();
+    let changed = false;
     for (const symbol of this.quotes.keys()) {
-      if (!wanted.has(symbol)) this.quotes.delete(symbol);
+      if (!wanted.has(symbol)) {
+        this.quotes.delete(symbol);
+        changed = true;
+      }
     }
+    if (changed) this._notify();
+  }
+
+  _notify() {
+    this.listeners.forEach(listener => listener());
   }
 }
 
@@ -174,6 +185,20 @@ function flowHtml(delta) {
   return `<span class="flow flow-${lvl}">${label}</span>`;
 }
 
+// ATM strike + the ±display window around it, for a given {rows, spot} shape.
+// Shared by buildHeatmapRows (what's rendered) and the live app's quote
+// interest tracking (what LiveQuoteService keeps around), so the two windows
+// can't drift out of sync with each other.
+function computeAtmWindow(rows, spot, display = DISPLAY) {
+  const strikeValues = [...new Set((rows || []).map(r => +r.Strike).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!strikeValues.length || spot == null) return { atm: null, offsets: [], strikes: new Set() };
+  const atm = strikeValues.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikeValues[0]);
+  const offsets = [];
+  for (let o = display; o >= -display; o--) offsets.push(o);
+  const strikes = new Set(offsets.map(o => atm + o));
+  return { atm, offsets, strikes };
+}
+
 // ── shared heatmap row builder ─────────────────────────────────────────────────
 // Used by the live panel, the historical panel, and diag.html's full-pipeline
 // test — takes the same {rows, underlying_price, tier} shape regardless of
@@ -195,14 +220,8 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     byStrike[key][r.Type] = r;
   }
 
-  // ATM
-  const strikes = [...new Set(rows.map(r => r.Strike))].sort((a, b) => a - b);
-  if (!strikes.length) return false;
-  const atm = strikes.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikes[0]);
-
-  // Build display range ±DISPLAY around ATM
-  const offsets = [];
-  for (let o = DISPLAY; o >= -DISPLAY; o--) offsets.push(o);
+  const { atm, offsets } = computeAtmWindow(rows, spot);
+  if (atm == null) return false;
 
   for (const offset of offsets) {
     const strike = atm + offset;
@@ -275,4 +294,4 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
   return true;
 }
 
-if (typeof module !== 'undefined') module.exports = { LiveQuoteService };
+if (typeof module !== 'undefined') module.exports = { LiveQuoteService, computeAtmWindow };

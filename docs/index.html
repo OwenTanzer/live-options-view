@@ -834,15 +834,16 @@ function openPositionSymbols() {
   return symbols;
 }
 
+// Same ±DISPLAY window buildHeatmapRows() renders, via the shared helper in
+// shared.js — computed separately here would risk silently drifting out of
+// sync with what's actually on screen.
 function visibleContractSymbols(data) {
   const rows = data?.rows || [];
   const spot = data?.underlying_price;
   if (!rows.length || spot == null) return [];
-  const strikes = [...new Set(rows.map(row => +row.Strike).filter(Number.isFinite))].sort((a, b) => a - b);
-  if (!strikes.length) return [];
-  const atm = strikes.reduce((best, strike) => Math.abs(strike - spot) < Math.abs(best - spot) ? strike : best, strikes[0]);
-  const visibleStrikes = new Set(Array.from({ length: DISPLAY * 2 + 1 }, (_, index) => atm + DISPLAY - index));
-  return rows.filter(row => visibleStrikes.has(+row.Strike) && row.OptionSymbol).map(row => row.OptionSymbol);
+  const { atm, strikes } = computeAtmWindow(rows, spot);
+  if (atm == null) return [];
+  return rows.filter(row => strikes.has(+row.Strike) && row.OptionSymbol).map(row => row.OptionSymbol);
 }
 
 function updateQuoteInterests(data = lastData) {
@@ -858,6 +859,10 @@ function ingestSnapshotQuotes(data) {
   if (lastDataDate && data.underlying_price != null) {
     store.spotMarks[lastDataDate] = data.underlying_price;
   }
+  // Settle before computing open positions for interest-tracking, so a
+  // position that expired as of this snapshot's date doesn't count as "open"
+  // and keep its now-stale quote alive for an extra cycle.
+  settleExpired();
   updateQuoteInterests(data);
   const snapshotQuotes = (data.rows || []).map(row => ({
     symbol: row.OptionSymbol,

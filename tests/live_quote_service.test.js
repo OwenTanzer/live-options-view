@@ -22,8 +22,14 @@ assert.equal(notifications, 1);
 service.setVisibleContracts([]);
 assert.equal(service.get('VISIBLE'), null);
 assert.equal(service.get('OPEN').mid, 2.2);
+assert.equal(notifications, 2, 'dropping a contract via setVisibleContracts should notify subscribers');
 
 service.setOpenPositions([]);
 assert.equal(service.get('OPEN'), null);
+assert.equal(notifications, 3, 'dropping a contract via setOpenPositions should notify subscribers');
+
+// Interest-set changes that prune nothing shouldn't fire a spurious notification.
+service.setVisibleContracts([]);
+assert.equal(notifications, 3, 'a no-op prune should not notify subscribers');
 
 console.log('PASS live quote service interests, metadata, notifications, and pruning');
