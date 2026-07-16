@@ -6,6 +6,70 @@
 // exercise the exact same parse/threshold/render code the live app runs,
 // without dragging in unrelated app state.
 
+// Ephemeral quote state shared by the live table, trade ticket, and open
+// positions. Durable snapshots are one producer today; a faster poller or
+// stream can publish through the same interface later without coupling display
+// consumers to R2.
+class LiveQuoteService {
+  constructor() {
+    this.quotes = new Map();
+    this.visibleContracts = new Set();
+    this.openPositions = new Set();
+    this.listeners = new Set();
+  }
+
+  setVisibleContracts(symbols) {
+    this.visibleContracts = new Set(symbols || []);
+    this._prune();
+  }
+
+  setOpenPositions(symbols) {
+    this.openPositions = new Set(symbols || []);
+    this._prune();
+  }
+
+  publish(quotes, { source = 'unknown', observedAt = new Date().toISOString() } = {}) {
+    const wanted = this._wanted();
+    for (const quote of (quotes || [])) {
+      const symbol = quote.symbol;
+      if (!symbol || !wanted.has(symbol)) continue;
+      const bid = quote.bid ?? null;
+      const ask = quote.ask ?? null;
+      const mid = bid != null && ask != null ? (bid + ask) / 2 : (quote.mid ?? null);
+      this.quotes.set(symbol, {
+        bid, ask, mid,
+        strike: +quote.strike,
+        type: quote.type,
+        exp: quote.exp,
+        observedAt,
+        source,
+      });
+    }
+    this._prune();
+    this.listeners.forEach(listener => listener());
+  }
+
+  get(symbol) {
+    return this.quotes.get(symbol) || null;
+  }
+
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  _wanted() {
+    return new Set([...this.visibleContracts, ...this.openPositions]);
+  }
+
+  _prune() {
+    const wanted = this._wanted();
+    for (const symbol of this.quotes.keys()) {
+      if (!wanted.has(symbol)) this.quotes.delete(symbol);
+    }
+  }
+}
+
 const DISPLAY = 20;   // ±N strikes shown
 
 const TIER_COLORS = {
@@ -118,7 +182,7 @@ function flowHtml(delta) {
 // callers with no notion of positions (historical panel, diagnostics) don't
 // need to fake any of that.
 function buildHeatmapRows(tbody, data, ranges, opts = {}) {
-  const { getPosition, onCellClick } = opts;
+  const { getPosition, getQuote, onCellClick } = opts;
   const { rows, underlying_price: spot, tier } = data;
   tbody.innerHTML = '';
   if (!spot || !rows || !rows.length) return false;
@@ -153,10 +217,12 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
     const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
     const putDelta  = parseInt(putRow?.VolDelta   ?? 0) || 0;
-    const callBid   = callRow?.Bid  ?? null;
-    const callAsk   = callRow?.Ask  ?? null;
-    const putBid    = putRow?.Bid   ?? null;
-    const putAsk    = putRow?.Ask   ?? null;
+    const callQuote = callRow?.OptionSymbol && getQuote ? getQuote(callRow.OptionSymbol) : null;
+    const putQuote  = putRow?.OptionSymbol && getQuote ? getQuote(putRow.OptionSymbol) : null;
+    const callBid   = getQuote ? (callQuote?.bid ?? null) : (callRow?.Bid ?? null);
+    const callAsk   = getQuote ? (callQuote?.ask ?? null) : (callRow?.Ask ?? null);
+    const putBid    = getQuote ? (putQuote?.bid ?? null) : (putRow?.Bid ?? null);
+    const putAsk    = getQuote ? (putQuote?.ask ?? null) : (putRow?.Ask ?? null);
 
     const ct = getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
     const pt = getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
@@ -208,3 +274,5 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 
   return true;
 }
+
+if (typeof module !== 'undefined') module.exports = { LiveQuoteService };

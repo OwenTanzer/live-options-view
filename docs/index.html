@@ -739,6 +739,7 @@ function renderHeatmap(data) {
   const book = computeBook();   // computed once per render, not per-cell
   buildHeatmapRows(document.getElementById('heatmap-body'), data, ranges, {
     getPosition: (sym) => book[sym]?.pos || 0,
+    getQuote: (sym) => liveQuotes.get(sym),
     onCellClick: (e, row) => openTicket(e, row),
   });
 
@@ -814,7 +815,7 @@ function uploadTrade(trade, accountId = store.active, accountName = acct().name)
     .catch(() => {});
 }
 
-let quotes = {};        // OptionSymbol -> {bid, ask, mid, strike, type, exp}
+const liveQuotes = new LiveQuoteService();
 let lastData = null;
 let lastDataDate = null;
 let ticketEl = null;
@@ -823,7 +824,33 @@ function savePaper() {
   try { localStorage.setItem(PAPER_KEY, JSON.stringify(store)); } catch (e) {}
 }
 
-function updateQuotes(data) {
+function openPositionSymbols() {
+  const symbols = new Set();
+  for (const account of Object.values(store.accounts)) {
+    for (const [sym, position] of Object.entries(computeBook(account))) {
+      if (position.pos) symbols.add(sym);
+    }
+  }
+  return symbols;
+}
+
+function visibleContractSymbols(data) {
+  const rows = data?.rows || [];
+  const spot = data?.underlying_price;
+  if (!rows.length || spot == null) return [];
+  const strikes = [...new Set(rows.map(row => +row.Strike).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!strikes.length) return [];
+  const atm = strikes.reduce((best, strike) => Math.abs(strike - spot) < Math.abs(best - spot) ? strike : best, strikes[0]);
+  const visibleStrikes = new Set(Array.from({ length: DISPLAY * 2 + 1 }, (_, index) => atm + DISPLAY - index));
+  return rows.filter(row => visibleStrikes.has(+row.Strike) && row.OptionSymbol).map(row => row.OptionSymbol);
+}
+
+function updateQuoteInterests(data = lastData) {
+  liveQuotes.setOpenPositions(openPositionSymbols());
+  liveQuotes.setVisibleContracts(visibleContractSymbols(data));
+}
+
+function ingestSnapshotQuotes(data) {
   lastDataDate = data.date || lastDataDate;
   // Last known underlying price for this date, kept so settleExpired() can
   // determine ITM/OTM for short positions once the option itself is no longer
@@ -831,18 +858,26 @@ function updateQuotes(data) {
   if (lastDataDate && data.underlying_price != null) {
     store.spotMarks[lastDataDate] = data.underlying_price;
   }
+  updateQuoteInterests(data);
+  const snapshotQuotes = (data.rows || []).map(row => ({
+    symbol: row.OptionSymbol,
+    bid: row.Bid,
+    ask: row.Ask,
+    mid: row.Mid,
+    strike: row.Strike,
+    type: row.Type,
+    exp: row.Expiration,
+  }));
+  liveQuotes.publish(snapshotQuotes, { source: 'r2-snapshot', observedAt: data.timestamp });
   const books = Object.fromEntries(Object.entries(store.accounts).map(([id, a]) => [id, computeBook(a)]));
   for (const r of (data.rows || [])) {
-    if (!r.OptionSymbol) continue;
-    const bid = r.Bid ?? null, ask = r.Ask ?? null;
-    const mid = (bid != null && ask != null) ? (bid + ask) / 2 : (r.Mid ?? null);
-    quotes[r.OptionSymbol] = { bid, ask, mid, strike: +r.Strike, type: r.Type, exp: r.Expiration };
+    const quote = liveQuotes.get(r.OptionSymbol);
     // remember last mark for symbols any account holds, as a display/unrealized-PnL
     // fallback once a symbol drops out of the live quote feed (e.g. after hours).
     // Not used for expiry settlement -- see settlementPrice().
-    if (mid != null) {
+    if (quote?.mid != null) {
       for (const [id, a] of Object.entries(store.accounts)) {
-        if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = mid;
+        if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = quote.mid;
       }
     }
   }
@@ -879,6 +914,7 @@ function executeTrade(info, side, qty, price) {
     ...(info.note ? { note: info.note } : {}),
   };
   acct().trades.push(trade);
+  updateQuoteInterests();
   savePaper();
   uploadTrade(trade);
   closeTicket();
@@ -934,7 +970,7 @@ function settleExpired() {
 function closePosition(sym) {
   const b = computeBook()[sym];
   if (!b || b.pos === 0) return;
-  const q = quotes[sym] || {};
+  const q = liveQuotes.get(sym) || {};
   const px = b.pos > 0 ? (q.bid ?? q.mid ?? acct().marks[sym]) : (q.ask ?? q.mid ?? acct().marks[sym]);
   if (px == null) return;
   executeTrade({ sym, strike: b.strike, type: b.type, exp: b.exp }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos), px);
@@ -966,6 +1002,7 @@ function switchAccount(id) {
 
 function renderPaper() {
   settleExpired();
+  updateQuoteInterests();
   const book = computeBook();
   const open = Object.entries(book).filter(([, b]) => b.pos !== 0);
   const realized = Object.values(book).reduce((s, b) => s + b.realized, 0);
@@ -977,7 +1014,7 @@ function renderPaper() {
   } else {
     let html = '<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
     for (const [sym, b] of open) {
-      const mark = quotes[sym]?.mid ?? acct().marks[sym] ?? null;
+      const mark = liveQuotes.get(sym)?.mid ?? acct().marks[sym] ?? null;
       const pnl  = mark != null ? (mark - b.avg) * b.pos * 100 : null;
       if (pnl != null) unreal += pnl;
       html += `<tr>
@@ -1021,7 +1058,7 @@ function openTicket(e, row) {
   e.stopPropagation();
   closeTicket();
   const sym  = row.OptionSymbol;
-  const q    = quotes[sym] || {};
+  const q    = liveQuotes.get(sym) || {};
   const info = { sym, strike: +row.Strike, type: row.Type, exp: row.Expiration };
   const buyPx  = q.ask ?? q.mid ?? null;
   const sellPx = q.bid ?? q.mid ?? null;
@@ -1062,7 +1099,7 @@ async function fetchLatest() {
 
     lastTs = data.timestamp;
     lastData = data;
-    updateQuotes(data);
+    ingestSnapshotQuotes(data);
     renderHeatmap(data);
     renderPaper();
 

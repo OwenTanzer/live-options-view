@@ -259,13 +259,21 @@ Three-column table: Calls | Strike | Puts, ±67 strikes centered on ATM.
 
 Source: `intraday/latest.json`, polled every 60 seconds.
 
+The browser does not expose the R2 snapshot object as its quote store. Snapshot
+rows are ingested into a shared, ephemeral `LiveQuoteService`, scoped to the
+contracts currently visible in the heatmap plus contracts held by any open
+paper position. The heatmap, trade ticket, and position marks all read through
+that service. R2 is currently the service's producer, but this boundary allows
+a faster poller or stream to replace it without changing the durable 60-second
+snapshot cadence or the display consumers.
+
 ### 7.3 Paper trading
 
 Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Every fill (manual buy/sell and synthetic expiry settlement) is also POSTed best-effort to `/api/paper-trade`, handled by the Worker (`worker.js`), which writes one JSON object per trade to R2 under `paper-trades/YYYYMMDD/` (one object per fill avoids read-modify-write races across concurrent browsers/accounts). Each record is tagged with `account_id`, `account_name`, and a per-browser `install_id` (random, persisted in `localStorage`) so trades from different devices/strategies can be told apart during analysis. Upload failures are swallowed — R2 durability is a nice-to-have log, not required for the UI to function.
 
 **Expiration settlement** (`settlementPrice()` / `settleExpired()`) is asymmetric between long and short:
 - **Long** positions held past expiration always settle at $0, regardless of moneyness. This book has no margin to exercise, so there's no realistic way to capture intrinsic value on an ITM long — the honest simulation of "held it, didn't close it" is that it expires worthless. Realizing intrinsic value requires closing before expiration, same constraint a real no-exercise-capacity account would face.
-- **Short** positions don't get that same pass: a real market-maker/OCC counterparty will exercise an ITM option against a short seller regardless of what this account can or can't do, so modeling short ITM options as free premium would be unrealistic in the other direction. Short positions settle at intrinsic value — `max(spot − strike, 0)` for calls, `max(strike − spot, 0)` for puts — using the last underlying price recorded for that expiration date (`store.spotMarks[date]`, captured each snapshot in `updateQuotes()`). If no spot was ever recorded for that date, it falls back to worthless.
+- **Short** positions don't get that same pass: a real market-maker/OCC counterparty will exercise an ITM option against a short seller regardless of what this account can or can't do, so modeling short ITM options as free premium would be unrealistic in the other direction. Short positions settle at intrinsic value — `max(spot − strike, 0)` for calls, `max(strike − spot, 0)` for puts — using the last underlying price recorded for that expiration date (`store.spotMarks[date]`, captured each snapshot in `ingestSnapshotQuotes()`). If no spot was ever recorded for that date, it falls back to worthless.
 
 **Write-endpoint hardening** (`/api/paper-trade` is a public write-capable surface, layered defenses, none individually sufficient on their own):
 - Shared token — client sends `X-Paper-Trade-Key` (hardcoded in `docs/index.html` as `PAPER_TRADE_KEY`), Worker checks it against the `PAPER_TRADE_KEY` secret (set via `wrangler secret put PAPER_TRADE_KEY`, not committed to the repo). This token is visible to anyone viewing page source — it's a deterrent against casual/scripted abuse, not real auth.
