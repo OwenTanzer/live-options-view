@@ -71,6 +71,11 @@ tickers.publish([
 assert.equal(tickers.get('VIX').state, 'fallback', 'YFinance retrieval cannot imply a live market event');
 tickers.publishFallback({ QQQ: { price: 490 } }, '2026-07-17T12:00:00Z');
 assert.equal(tickers.get('QQQ').price, 500, 'fallback must not replace a healthy live quote');
+tickers.publish([
+  { symbol: 'QQQ', price: 490, source: 'yfinance', quote_ts: null },
+]);
+assert.equal(tickers.get('QQQ').price, 500, 'undated YFinance must not replace fresh DXLink');
+assert.equal(tickers.get('QQQ').source, 'dxlink', 'fresh live source retains priority');
 
 (async () => {
   const live = new LiveQuoteService();

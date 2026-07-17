@@ -156,6 +156,15 @@ class TickerStateStore {
       const fallbackSource = ['r2-snapshot', 'last-known', 'yfinance'].includes(quote.source);
       const quoteAt = quote.quote_ts ?? (fallbackSource ? null : observedAt);
       const current = this.quotes.get(symbol);
+      const currentIsFallback = current &&
+        ['r2-snapshot', 'last-known', 'yfinance'].includes(current.source);
+      if (current && fallbackSource && !currentIsFallback) {
+        const currentAge = this.nowFn() - Date.parse(current.observedAt);
+        if (Number.isFinite(currentAge) && currentAge <= this.staleAfterMs) continue;
+      }
+      // With no provider observation time there is no evidence that one
+      // fallback is newer than another, so retain the value already shown.
+      if (current && fallbackSource && currentIsFallback && !quoteAt) continue;
       if (current && quoteAt && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
       this.quotes.set(symbol, {
         price: quote.price, bid: quote.bid ?? null, ask: quote.ask ?? null,
