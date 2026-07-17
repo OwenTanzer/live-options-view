@@ -66,10 +66,11 @@
   }
   #status-dot.live { background: #00cc55; }
   #status-dot.stale { background: #ee3300; }
-  #quote-health { margin-left: auto; color: var(--dim); }
-  #quote-health.live { color: #00a844; }
-  #quote-health.stale, #quote-health.rate-limited { color: #d49a00; }
-  #quote-health.backing-off, #quote-health.unavailable { color: #ee3300; }
+  #quote-health { margin-left: auto; }
+  .transport-health { color: var(--dim); }
+  .transport-health.live { color: #00a844; }
+  .transport-health.stale, .transport-health.rate-limited { color: #d49a00; }
+  .transport-health.backing-off, .transport-health.unavailable { color: #ee3300; }
 
   /* ── heatmap table ───────────────────────────────────────────────────── */
   #heatmap-wrap {
@@ -236,6 +237,16 @@
     line-height: 1;
     margin-top: 1px;
   }
+  .ticker-btn .market-state {
+    font-size: 0.48rem;
+    color: var(--dim);
+    line-height: 1;
+    margin-top: 2px;
+    text-transform: uppercase;
+  }
+  .ticker-btn[data-state="live"] { border-color: #167a3f; }
+  .ticker-btn[data-state="extended"] { border-color: #9a6a18; }
+  .ticker-btn[data-state="stale"], .ticker-btn[data-state="fallback"] { opacity: 0.72; }
   .chg.up   { color: #00cc55; }
   .chg.down { color: #ee3300; }
   .chg.flat { color: var(--dim); }
@@ -556,7 +567,8 @@
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
-  <span id="quote-health" class="idle">Quotes: waiting</span>
+  <span id="quote-health" class="transport-health idle">Options: waiting</span>
+  <span id="ticker-health" class="transport-health idle">Tickers: waiting</span>
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
@@ -689,6 +701,7 @@ window.addEventListener('pageshow', (e) => {
 });
 document.addEventListener('visibilitychange', () => {
   if (liveQuotePoller) liveQuotePoller.kick();
+  if (tickerPoller) tickerPoller.kick();
   if (document.visibilityState !== 'visible') return;
   checkForNewBuild();
   // Mobile browsers throttle/suspend setInterval timers while a tab is
@@ -878,8 +891,8 @@ function updateQuoteInterests(data = lastData) {
   liveQuotes.setVisibleContracts(visibleContractSymbols(data));
 }
 
-function renderQuoteHealth(health) {
-  const el = document.getElementById('quote-health');
+function renderTransportHealth(elementId, label, health) {
+  const el = document.getElementById(elementId);
   if (!el) return;
   let detail = '';
   if (health.state === 'live' && health.quoteAgeMs != null) {
@@ -894,9 +907,13 @@ function renderQuoteHealth(health) {
     idle: 'waiting', connecting: 'connecting', live: 'live', stale: 'stale',
     'backing-off': 'backing off', 'rate-limited': 'rate limited', unavailable: 'unavailable',
   };
-  el.className = health.state;
-  el.textContent = `Quotes: ${labels[health.state] || health.state}${detail ? ` · ${detail}` : ''}`;
+  el.className = `transport-health ${health.state}`;
+  el.textContent = `${label}: ${labels[health.state] || health.state}${detail ? ` · ${detail}` : ''}`;
   el.title = health.message || '';
+}
+
+function renderQuoteHealth(health) {
+  renderTransportHealth('quote-health', 'Options', health);
 }
 
 liveQuotes.subscribe(() => {
@@ -1232,6 +1249,14 @@ function startCountdown() {
 
 const MAIN_TICKERS = ['QQQ', 'VIX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
 const SMALL_TICKERS = ['AAPL', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'BTC/USD'];
+const TICKER_CLASSES = {
+  QQQ:'equity', VIX:'index', SMH:'equity', IGV:'equity', 'JPY/USD':'futures',
+  KOSPI:'international', USO:'equity', '10Y':'yield', AAPL:'equity', META:'equity',
+  GOOGL:'equity', AMZN:'equity', TSLA:'equity', MU:'equity', SPCX:'equity',
+  'BTC/USD':'crypto',
+};
+const tickerState = new TickerStateStore(TICKER_CLASSES);
+let tickerPoller = null;
 let prevPrices = {};
 
 function fmtPrice(v, sym) {
@@ -1249,7 +1274,7 @@ function buildTickerEl(sym, isSmall) {
   const el = document.createElement('div');
   el.className = 'ticker-btn' + (isSmall ? ' sm' : '');
   el.id = `tk-${sym.replace('/', '-')}`;
-  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span>`;
+  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">fallback</span>`;
   return el;
 }
 
@@ -1270,6 +1295,7 @@ function updatePriceStrip(pricesData) {
     const px = d.price;
     const pxEl  = el.querySelector('.px');
     const chgEl = el.querySelector('.chg');
+    const stateEl = el.querySelector('.market-state');
 
     const prev = prevPrices[sym];
     if (px != null && prev != null && px !== prev) {
@@ -1290,6 +1316,10 @@ function updatePriceStrip(pricesData) {
       chgEl.textContent = '';
       chgEl.className = 'chg flat';
     }
+    const state = d.state || 'fallback';
+    el.dataset.state = state;
+    stateEl.textContent = state;
+    el.title = `${state} · ${d.source || 'unknown'} · ${d.observedAt || 'timestamp unavailable'}`;
   }
 }
 
@@ -1298,7 +1328,7 @@ async function fetchPrices() {
     const resp = await fetch(`${R2}/intraday/prices.json?_=${Date.now()}`);
     if (!resp.ok) return;
     const data = await resp.json();
-    updatePriceStrip(data.prices || {});
+    tickerState.publishFallback(data.prices || {}, data.timestamp || new Date().toISOString());
   } catch (e) {
     console.warn('prices.json fetch failed:', e);
   }
@@ -1938,12 +1968,17 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   liveQuotePoller = new LiveQuotePoller(liveQuotes);
   liveQuotePoller.subscribeHealth(renderQuoteHealth);
   liveQuotePoller.start();
+  tickerState.subscribe(() => updatePriceStrip(tickerState.snapshot()));
+  updatePriceStrip(tickerState.snapshot());
+  tickerPoller = new LiveQuotePoller(tickerState, { maxQuoteAgeMs: 30_000 });
+  tickerPoller.subscribeHealth(health => renderTransportHealth('ticker-health', 'Tickers', health));
+  tickerPoller.start();
 
   // OI heatmap: 60s refresh cycle
   startCountdown();
 
-  // Price strip: 10s independent interval
-  setInterval(fetchPrices, 10_000);
+  // prices.json remains a fallback and retains its existing producer cadence.
+  setInterval(fetchPrices, 60_000);
 
   // Calibration data has no periodic retry of its own — safety net in case the
   // visibility handler above never fires (e.g. the tab was never backgrounded,

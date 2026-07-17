@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
-const { LiveQuoteService, LiveQuotePoller, parseRetryAfter } = require('../docs/shared.js');
+const {
+  LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState, parseRetryAfter,
+} = require('../docs/shared.js');
 
 const service = new LiveQuoteService();
 let notifications = 0;
@@ -39,6 +41,41 @@ assert.equal(notifications, 3, 'a no-op prune should not notify subscribers');
 
 assert.equal(parseRetryAfter('5', 0), 5000);
 assert.equal(parseRetryAfter('Thu, 01 Jan 1970 00:00:10 GMT', 2000), 8000);
+
+const regular = Date.parse('2026-07-17T14:30:00Z'); // 10:30 ET
+const premarket = Date.parse('2026-07-17T12:00:00Z'); // 08:00 ET
+assert.equal(tickerSessionState('equity', regular), 'live');
+assert.equal(tickerSessionState('equity', premarket), 'extended');
+assert.equal(tickerSessionState('index', premarket), 'closed');
+assert.equal(tickerSessionState('crypto', premarket), 'live');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-17T21:01:00Z')), 'closed', 'Friday after 17:00 ET');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-19T21:59:00Z')), 'closed', 'Sunday before reopen');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-19T22:01:00Z')), 'live', 'Sunday after reopen');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-20T21:30:00Z')), 'closed', 'weekday maintenance');
+
+const tickers = new TickerStateStore(
+  { QQQ: 'equity', VIX: 'index', 'BTC/USD': 'crypto' },
+  { nowFn: () => premarket, staleAfterMs: 30_000 },
+);
+tickers.publish([
+  { symbol: 'QQQ', price: 500, source: 'dxlink', quote_ts: '2026-07-17T11:59:59Z' },
+  { symbol: 'VIX', price: 18, source: 'dxlink', quote_ts: '2026-07-17T11:58:00Z' },
+  { symbol: 'BTC/USD', price: 120000, source: 'dxlink', quote_ts: '2026-07-17T11:59:59Z' },
+]);
+assert.equal(tickers.get('QQQ').state, 'extended');
+assert.equal(tickers.get('VIX').state, 'stale', 'one stale symbol must not change another ticker');
+assert.equal(tickers.get('BTC/USD').state, 'live');
+tickers.publish([
+  { symbol: 'VIX', price: 17.5, source: 'yfinance', quote_ts: null },
+]);
+assert.equal(tickers.get('VIX').state, 'fallback', 'YFinance retrieval cannot imply a live market event');
+tickers.publishFallback({ QQQ: { price: 490 } }, '2026-07-17T12:00:00Z');
+assert.equal(tickers.get('QQQ').price, 500, 'fallback must not replace a healthy live quote');
+tickers.publish([
+  { symbol: 'QQQ', price: 490, source: 'yfinance', quote_ts: null },
+]);
+assert.equal(tickers.get('QQQ').price, 500, 'undated YFinance must not replace fresh DXLink');
+assert.equal(tickers.get('QQQ').source, 'dxlink', 'fresh live source retains priority');
 
 (async () => {
   const live = new LiveQuoteService();
