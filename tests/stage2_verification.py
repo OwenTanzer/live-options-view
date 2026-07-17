@@ -205,6 +205,34 @@ def test_prices_feed_stale_flags():
     assert_equal(fresh_s3.json_objects("intraday/prices.json")[-1]["feed_stale"], False, "fresh price flag")
 
 
+def test_last_known_price_preserves_observation_time():
+    original_prices = dict(collector._last_prices)
+    original_fetch = collector.fetch_yf_prices_bounded
+    observed = "2026-07-17T12:00:00+00:00"
+    try:
+        collector._last_prices.clear()
+        collector._last_prices["QQQ"] = {"price": 499.5, "quote_ts": observed}
+        collector.fetch_yf_prices_bounded = lambda: {
+            label: None for label in collector.PRICE_TICKERS
+        }
+        state = {
+            symbol: {"bid": 100.0, "ask": 100.2, "bid_ts": observed, "ask_ts": observed}
+            for label, symbol in collector.PRICE_TICKERS.items() if label != "QQQ"
+        }
+        s3 = FakeS3()
+        collector.push_prices(
+            s3, FakeFeed(state=state, last_event_time=datetime.now(timezone.utc)),
+            collector.Counters(),
+        )
+        qqq = s3.json_objects("intraday/prices.json")[-1]["prices"]["QQQ"]
+        assert_equal(qqq["source"], "last-known", "missing provider uses last-known source")
+        assert_equal(qqq["quote_ts"], observed, "last-known observation time is unchanged")
+    finally:
+        collector._last_prices.clear()
+        collector._last_prices.update(original_prices)
+        collector.fetch_yf_prices_bounded = original_fetch
+
+
 def test_health_schema_and_counters():
     now = datetime.now(timezone.utc)
     counters = collector.Counters()
@@ -264,6 +292,7 @@ def run():
         test_dxlink_ingest_health,
         test_per_side_quote_timestamps_and_registry_lifecycle,
         test_prices_feed_stale_flags,
+        test_last_known_price_preserves_observation_time,
         test_health_schema_and_counters,
         test_snapshot_archive_key_uniqueness,
     ]

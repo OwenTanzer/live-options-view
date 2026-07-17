@@ -48,6 +48,10 @@ assert.equal(tickerSessionState('equity', regular), 'live');
 assert.equal(tickerSessionState('equity', premarket), 'extended');
 assert.equal(tickerSessionState('index', premarket), 'closed');
 assert.equal(tickerSessionState('crypto', premarket), 'live');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-17T21:01:00Z')), 'closed', 'Friday after 17:00 ET');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-19T21:59:00Z')), 'closed', 'Sunday before reopen');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-19T22:01:00Z')), 'live', 'Sunday after reopen');
+assert.equal(tickerSessionState('futures', Date.parse('2026-07-20T21:30:00Z')), 'closed', 'weekday maintenance');
 
 const tickers = new TickerStateStore(
   { QQQ: 'equity', VIX: 'index', 'BTC/USD': 'crypto' },
@@ -61,6 +65,10 @@ tickers.publish([
 assert.equal(tickers.get('QQQ').state, 'extended');
 assert.equal(tickers.get('VIX').state, 'stale', 'one stale symbol must not change another ticker');
 assert.equal(tickers.get('BTC/USD').state, 'live');
+tickers.publish([
+  { symbol: 'VIX', price: 17.5, source: 'yfinance', quote_ts: null },
+]);
+assert.equal(tickers.get('VIX').state, 'fallback', 'YFinance retrieval cannot imply a live market event');
 tickers.publishFallback({ QQQ: { price: 490 } }, '2026-07-17T12:00:00Z');
 assert.equal(tickers.get('QQQ').price, 500, 'fallback must not replace a healthy live quote');
 

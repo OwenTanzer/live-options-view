@@ -717,7 +717,7 @@ class LiveQuoteRegistry:
     def update_ticker_fallbacks(self, prices: dict[str, dict], observed_at: str):
         with self._lock:
             self._ticker_fallbacks = {
-                symbol: {**quote, "quote_ts": quote.get("quote_ts") or observed_at}
+                symbol: {**quote, "quote_ts": quote.get("quote_ts")}
                 for symbol, quote in prices.items()
             }
 
@@ -1097,7 +1097,10 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
             if yf_price is not None:
                 prices[lbl]["price"] = yf_price
                 prices[lbl]["source"] = "yfinance"
-                prices[lbl]["quote_ts"] = ts_utc.isoformat()
+                # yfinance's simple last-price response has no trustworthy
+                # provider event timestamp. Retrieval time must not masquerade
+                # as market observation time.
+                prices[lbl]["quote_ts"] = None
                 filled.append(f"{lbl}={yf_price}")
         if filled:
             log.info(f"prices -- yfinance filled: {', '.join(filled)}")
@@ -1105,17 +1108,22 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
         if qqq_yf is not None:
             _last_spot[0] = qqq_yf
 
-    _last_prices.update({lbl: d["price"] for lbl, d in prices.items()
-                         if d["price"] is not None})
+    for lbl, d in prices.items():
+        if d["price"] is not None:
+            _last_prices[lbl] = {
+                "price": d["price"],
+                "quote_ts": d.get("quote_ts"),
+            }
 
     # last-known-value fallback for anything still missing
     stale_filled = []
     for lbl, d in prices.items():
-        if d["price"] is None and _last_prices.get(lbl) is not None:
-            d["price"] = _last_prices[lbl]
+        remembered = _last_prices.get(lbl)
+        if d["price"] is None and remembered is not None:
+            d["price"] = remembered["price"]
             d["stale"] = True
             d["source"] = "last-known"
-            d["quote_ts"] = ts_utc.isoformat()
+            d["quote_ts"] = remembered.get("quote_ts")
             stale_filled.append(lbl)
     if stale_filled:
         log.warning(f"prices -- serving last-known values for: {', '.join(stale_filled)}")
@@ -1246,7 +1254,7 @@ def _fmt_oi(v: int) -> str:
 
 _prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
 _last_spot: list = [None]         # [float|None] — yfinance fallback for underlying price
-_last_prices: dict = {}           # label -> price float, updated by push_prices
+_last_prices: dict[str, dict] = {}  # label -> {price, quote_ts}; timestamp never refreshed by fallback
 _first_snapshot_written: bool = False  # guard so first.csv is only written once per session
 
 
@@ -1302,7 +1310,7 @@ def restore_state(s3, today: date) -> None:
                 val = df[col].dropna().iloc[-1] if not df[col].dropna().empty else None
                 if val is not None:
                     label = col.replace("_", "/") if col in ("JPY_USD", "BTC_USD") else col
-                    _last_prices[label] = float(val)
+                    _last_prices[label] = {"price": float(val), "quote_ts": None}
 
         log.info(
             f"restore_state: loaded {latest_key.split('/')[-1]} -- "
@@ -1344,8 +1352,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             vol_delta = max(0, vol - _prev_vol.get(sym, vol))
             _prev_vol[sym] = vol
             price_cols = {
-                lbl.replace("/", "_"): _last_prices.get(lbl)
-                for lbl in _last_prices
+                lbl.replace("/", "_"): remembered.get("price")
+                for lbl, remembered in _last_prices.items()
             }
             rows.append({
                 "TradeDate":       today.isoformat(),

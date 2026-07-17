@@ -119,8 +119,13 @@ function tickerSessionState(instrumentClass, nowMs = Date.now()) {
   }).formatToParts(new Date(nowMs)).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
   const weekday = !['Sat', 'Sun'].includes(parts.weekday);
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  if (instrumentClass === 'futures') {
+    if (parts.weekday === 'Sat') return 'closed';
+    if (parts.weekday === 'Sun') return minutes >= 18 * 60 ? 'live' : 'closed';
+    if (parts.weekday === 'Fri') return minutes >= 17 * 60 ? 'closed' : 'live';
+    return minutes >= 17 * 60 && minutes < 18 * 60 ? 'closed' : 'live';
+  }
   if (!weekday) return 'closed';
-  if (instrumentClass === 'futures') return minutes >= 17 * 60 && minutes < 18 * 60 ? 'closed' : 'live';
   if (instrumentClass === 'international') return 'live'; // source freshness is the session authority
   if (minutes >= 570 && minutes < 960) return 'live';
   if (instrumentClass === 'equity' && minutes >= 240 && minutes < 1200) return 'extended';
@@ -148,9 +153,10 @@ class TickerStateStore {
     for (const quote of (quotes || [])) {
       const symbol = quote.symbol;
       if (!this.symbolClasses[symbol] || quote.price == null) continue;
-      const quoteAt = quote.quote_ts || observedAt;
+      const fallbackSource = ['r2-snapshot', 'last-known', 'yfinance'].includes(quote.source);
+      const quoteAt = quote.quote_ts ?? (fallbackSource ? null : observedAt);
       const current = this.quotes.get(symbol);
-      if (current && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
+      if (current && quoteAt && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
       this.quotes.set(symbol, {
         price: quote.price, bid: quote.bid ?? null, ask: quote.ask ?? null,
         prev_close: quote.prev_close ?? null, chg_pct: quote.chg_pct ?? null,
@@ -176,7 +182,7 @@ class TickerStateStore {
     if (!quote) return null;
     const age = this.nowFn() - Date.parse(quote.observedAt);
     let state;
-    if (quote.source === 'r2-snapshot' || quote.source === 'last-known') state = 'fallback';
+    if (['r2-snapshot', 'last-known', 'yfinance'].includes(quote.source)) state = 'fallback';
     else if (!Number.isFinite(age) || age > this.staleAfterMs || age < -30_000) state = 'stale';
     else state = tickerSessionState(quote.instrumentClass, this.nowFn());
     return { ...quote, state, ageMs: age };

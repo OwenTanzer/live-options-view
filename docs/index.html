@@ -66,10 +66,11 @@
   }
   #status-dot.live { background: #00cc55; }
   #status-dot.stale { background: #ee3300; }
-  #quote-health { margin-left: auto; color: var(--dim); }
-  #quote-health.live { color: #00a844; }
-  #quote-health.stale, #quote-health.rate-limited { color: #d49a00; }
-  #quote-health.backing-off, #quote-health.unavailable { color: #ee3300; }
+  #quote-health { margin-left: auto; }
+  .transport-health { color: var(--dim); }
+  .transport-health.live { color: #00a844; }
+  .transport-health.stale, .transport-health.rate-limited { color: #d49a00; }
+  .transport-health.backing-off, .transport-health.unavailable { color: #ee3300; }
 
   /* ── heatmap table ───────────────────────────────────────────────────── */
   #heatmap-wrap {
@@ -566,7 +567,8 @@
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
-  <span id="quote-health" class="idle">Quotes: waiting</span>
+  <span id="quote-health" class="transport-health idle">Options: waiting</span>
+  <span id="ticker-health" class="transport-health idle">Tickers: waiting</span>
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
@@ -889,8 +891,8 @@ function updateQuoteInterests(data = lastData) {
   liveQuotes.setVisibleContracts(visibleContractSymbols(data));
 }
 
-function renderQuoteHealth(health) {
-  const el = document.getElementById('quote-health');
+function renderTransportHealth(elementId, label, health) {
+  const el = document.getElementById(elementId);
   if (!el) return;
   let detail = '';
   if (health.state === 'live' && health.quoteAgeMs != null) {
@@ -905,9 +907,13 @@ function renderQuoteHealth(health) {
     idle: 'waiting', connecting: 'connecting', live: 'live', stale: 'stale',
     'backing-off': 'backing off', 'rate-limited': 'rate limited', unavailable: 'unavailable',
   };
-  el.className = health.state;
-  el.textContent = `Quotes: ${labels[health.state] || health.state}${detail ? ` · ${detail}` : ''}`;
+  el.className = `transport-health ${health.state}`;
+  el.textContent = `${label}: ${labels[health.state] || health.state}${detail ? ` · ${detail}` : ''}`;
   el.title = health.message || '';
+}
+
+function renderQuoteHealth(health) {
+  renderTransportHealth('quote-health', 'Options', health);
 }
 
 liveQuotes.subscribe(() => {
@@ -1965,6 +1971,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   tickerState.subscribe(() => updatePriceStrip(tickerState.snapshot()));
   updatePriceStrip(tickerState.snapshot());
   tickerPoller = new LiveQuotePoller(tickerState, { maxQuoteAgeMs: 30_000 });
+  tickerPoller.subscribeHealth(health => renderTransportHealth('ticker-health', 'Tickers', health));
   tickerPoller.start();
 
   // OI heatmap: 60s refresh cycle
