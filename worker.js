@@ -1,6 +1,8 @@
 const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 const ALLOWED_ORIGINS = ['https://options.moopertonic.net', 'http://localhost:8787'];
 const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this leaves ample headroom
+const MAX_QUOTE_AGE_MS = 2 * 60 * 1000;
+const MAX_QUOTE_FUTURE_MS = 30 * 1000;
 
 export default {
   async fetch(request, env) {
@@ -81,27 +83,66 @@ async function handlePaperTrade(request, env) {
   } catch (e) {
     return new Response('Invalid JSON', { status: 400 });
   }
-  const validationError = validateTrade(body);
+  const validationError = validateTradeIntent(body);
   if (validationError) {
     return new Response(validationError, { status: 400 });
   }
 
   const now = new Date();
+  let snapshot;
+  try {
+    const quoteResponse = await fetch(`${R2_ORIGIN}/intraday/latest.json?_=${now.getTime()}`, {
+      cf: { cacheTtl: 0, cacheEverything: false },
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    if (!quoteResponse.ok) throw new Error(`quote source returned HTTP ${quoteResponse.status}`);
+    snapshot = await quoteResponse.json();
+  } catch (error) {
+    return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
+  }
+
+  const quoteResult = exactContractQuote(snapshot, body.sym, now.getTime());
+  if (quoteResult.error) {
+    return jsonResponse({ error: quoteResult.error }, quoteResult.status);
+  }
+
+  const executionId = crypto.randomUUID();
+  const trade = Object.freeze({
+    execution_id: executionId,
+    ts: now.toISOString(),
+    quote_ts: quoteResult.quoteTs,
+    sym: body.sym,
+    strike: quoteResult.strike,
+    type: quoteResult.type,
+    exp: quoteResult.exp,
+    side: body.side,
+    qty: body.qty,
+    bid: quoteResult.bid,
+    ask: quoteResult.ask,
+    price: body.side === 'buy' ? quoteResult.ask : quoteResult.bid,
+    account_id: body.account_id,
+    account_name: body.account_name,
+    install_id: body.install_id,
+  });
+
   const day = now.toISOString().slice(0, 10).replace(/-/g, '');
   const installId = String(body.install_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
   const accountId = String(body.account_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
-  const rand = crypto.randomUUID().slice(0, 8);
-  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}_${rand}.json`;
+  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}_${executionId}.json`;
 
-  await env.PAPER_TRADES.put(key, JSON.stringify({ ...body, received_at: now.toISOString() }), {
-    httpMetadata: { contentType: 'application/json' },
-  });
+  try {
+    await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
+      httpMetadata: { contentType: 'application/json' },
+      customMetadata: { executionId },
+    });
+  } catch (error) {
+    return jsonResponse({ error: 'Execution could not be recorded' }, 503);
+  }
 
-  return new Response(null, { status: 204 });
+  return jsonResponse(trade, 201);
 }
 
 const MAX_STRING_LEN = 64;
-const MAX_NOTE_LEN = 200;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Schema check for a trade record before it's written to R2. This log is
@@ -110,7 +151,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // strings, unbounded text fields) is how the dataset silently rots — a
 // malformed record parses fine as JSON but breaks downstream analysis with
 // no visible failure in the UI. Returns an error string, or null if valid.
-function validateTrade(body) {
+function validateTradeIntent(body) {
   if (!body || typeof body !== 'object') return 'Body must be a JSON object';
 
   if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
@@ -122,31 +163,45 @@ function validateTrade(body) {
   if (!Number.isInteger(body.qty) || body.qty <= 0 || body.qty > 100_000) {
     return 'qty must be a positive integer';
   }
-  if (typeof body.price !== 'number' || !Number.isFinite(body.price) || body.price < 0) {
-    return 'price must be a non-negative number';
-  }
-  if (body.strike != null && (typeof body.strike !== 'number' || !Number.isFinite(body.strike) || body.strike <= 0)) {
-    return 'strike must be a positive number';
-  }
-  if (body.type != null && body.type !== 'call' && body.type !== 'put') {
-    return 'type must be "call" or "put"';
-  }
-  if (body.exp != null && (typeof body.exp !== 'string' || !ISO_DATE.test(body.exp))) {
-    return 'exp must be a YYYY-MM-DD date string';
-  }
-  if (body.ts != null && (typeof body.ts !== 'string' || Number.isNaN(Date.parse(body.ts)))) {
-    return 'ts must be a valid date string';
-  }
-  if (body.note != null && (typeof body.note !== 'string' || body.note.length > MAX_NOTE_LEN)) {
-    return `note must be a string under ${MAX_NOTE_LEN} chars`;
-  }
   for (const field of ['account_id', 'account_name', 'install_id']) {
-    if (body[field] != null && (typeof body[field] !== 'string' || body[field].length > MAX_STRING_LEN)) {
-      return `${field} must be a string under ${MAX_STRING_LEN} chars`;
+    if (typeof body[field] !== 'string' || !body[field].trim() || body[field].length > MAX_STRING_LEN) {
+      return `${field} must be a non-empty string under ${MAX_STRING_LEN} chars`;
     }
   }
 
   return null;
+}
+
+function exactContractQuote(snapshot, symbol, nowMs) {
+  const quoteMs = Date.parse(snapshot?.timestamp);
+  if (!Number.isFinite(quoteMs)) return { error: 'Quote has no valid timestamp', status: 503 };
+  const age = nowMs - quoteMs;
+  if (age > MAX_QUOTE_AGE_MS || age < -MAX_QUOTE_FUTURE_MS) {
+    return { error: 'Quote is stale', status: 409 };
+  }
+  const row = Array.isArray(snapshot.rows)
+    ? snapshot.rows.find(candidate => candidate.OptionSymbol === symbol)
+    : null;
+  if (!row) return { error: 'Exact contract quote not found', status: 409 };
+  const bid = row.Bid;
+  const ask = row.Ask;
+  if (typeof bid !== 'number' || typeof ask !== 'number' ||
+      !Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask < 0 || bid > ask) {
+    return { error: 'Exact contract quote is invalid', status: 409 };
+  }
+  const strike = Number(row.Strike);
+  if (!Number.isFinite(strike) || strike <= 0 || !['call', 'put'].includes(row.Type) ||
+      typeof row.Expiration !== 'string' || !ISO_DATE.test(row.Expiration)) {
+    return { error: 'Exact contract metadata is invalid', status: 409 };
+  }
+  return { bid, ask, strike, type: row.Type, exp: row.Expiration, quoteTs: new Date(quoteMs).toISOString() };
+}
+
+function jsonResponse(value, status) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
 }
 
 // Reads the request body up to `limit` bytes, aborting the stream and

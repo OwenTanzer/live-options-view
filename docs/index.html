@@ -795,30 +795,29 @@ try {
   installId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-// Best-effort upload of every fill to R2 (via the Worker) so trades across all
-// strategies/accounts/devices are durably logged for later analysis. Local
-// localStorage remains the source of truth for the live UI.
+// The Worker is the execution authority: it fetches and validates a fresh exact-
+// contract quote, persists the canonical fill, then returns it for the local book.
 // Shared token matching the Worker's PAPER_TRADE_KEY secret. This is public —
 // anyone viewing page source can read it — so it's a deterrent against casual
 // scripted abuse, not real auth.
 const PAPER_TRADE_KEY = 'ledump';
 
-function uploadTrade(trade, accountId = store.active, accountName = acct().name) {
-  const payload = { ...trade, account_id: accountId, account_name: accountName, install_id: installId };
-  fetch('/api/paper-trade', {
+async function requestExecution(info, side, qty, accountId, accountName) {
+  const response = await fetch('/api/paper-trade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Paper-Trade-Key': PAPER_TRADE_KEY },
-    body: JSON.stringify(payload),
-    keepalive: true,
-  })
-    .then(r => { if (!r.ok) console.warn('paper trade upload failed', r.status); })
-    .catch(() => {});
+    body: JSON.stringify({ sym: info.sym, side, qty, account_id: accountId, account_name: accountName, install_id: installId }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Execution failed (HTTP ${response.status})`);
+  return Object.freeze(result);
 }
 
 const liveQuotes = new LiveQuoteService();
 let lastData = null;
 let lastDataDate = null;
 let ticketEl = null;
+const pendingExecutions = new Set();
 
 function savePaper() {
   try { localStorage.setItem(PAPER_KEY, JSON.stringify(store)); } catch (e) {}
@@ -909,22 +908,49 @@ function computeBook(account = acct()) {
   return book;
 }
 
-function executeTrade(info, side, qty, price) {
+async function executeTrade(info, side, qty) {
   qty = Math.round(+qty);
-  if (!qty || qty < 1 || price == null) return;
-  const trade = {
-    ts: new Date().toISOString(),
-    sym: info.sym, strike: info.strike, type: info.type, exp: info.exp,
-    side, qty, price: +price,
-    ...(info.note ? { note: info.note } : {}),
-  };
-  acct().trades.push(trade);
+  if (!qty || qty < 1 || pendingExecutions.has(info.sym)) return;
+  const accountId = store.active;
+  const account = store.accounts[accountId];
+  if (!account) return;
+  pendingExecutions.add(info.sym);
+  setTradePending(true, 'Fetching fresh quote…');
+  let trade;
+  try {
+    trade = await requestExecution(info, side, qty, accountId, account.name);
+  } catch (error) {
+    setTradePending(false, error.message);
+    showExecutionError(error.message);
+    return;
+  } finally {
+    pendingExecutions.delete(info.sym);
+  }
+  account.trades.push(trade);
   updateQuoteInterests();
   savePaper();
-  uploadTrade(trade);
   closeTicket();
   renderPaper();
   if (lastData) renderHeatmap(lastData);  // refresh position badges
+}
+
+function showExecutionError(message) {
+  if (ticketEl) return;
+  const hint = document.getElementById('paper-hint');
+  hint.textContent = `Execution rejected: ${message}`;
+  hint.style.display = '';
+}
+
+function setTradePending(pending, message = '') {
+  if (!ticketEl) return;
+  ticketEl.querySelectorAll('button').forEach(button => button.disabled = pending);
+  let status = ticketEl.querySelector('.t-status');
+  if (!status) {
+    status = document.createElement('div');
+    status.className = 't-status';
+    ticketEl.appendChild(status);
+  }
+  status.textContent = message;
 }
 
 // Settlement price for a position held past expiration.
@@ -963,8 +989,7 @@ function settleExpired() {
           side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
           price, note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
         };
-        a.trades.push(trade);
-        uploadTrade(trade, id, a.name);
+        a.trades.push(Object.freeze(trade));
         changed = true;
       }
     }
@@ -975,10 +1000,7 @@ function settleExpired() {
 function closePosition(sym) {
   const b = computeBook()[sym];
   if (!b || b.pos === 0) return;
-  const q = liveQuotes.get(sym) || {};
-  const px = b.pos > 0 ? (q.bid ?? q.mid ?? acct().marks[sym]) : (q.ask ?? q.mid ?? acct().marks[sym]);
-  if (px == null) return;
-  executeTrade({ sym, strike: b.strike, type: b.type, exp: b.exp }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos), px);
+  executeTrade({ sym, strike: b.strike, type: b.type, exp: b.exp }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos));
 }
 
 function contractLabel(b) { return `QQQ ${b.strike} ${b.type === 'call' ? 'C' : 'P'}`; }
@@ -1047,7 +1069,8 @@ function renderPaper() {
   document.getElementById('paper-log-body').innerHTML =
     acct().trades.slice().reverse().map(t => {
       const time = new Date(t.ts).toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/New_York' });
-      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${t.note ? ` (${t.note})` : ''}</div>`;
+      const market = t.bid != null && t.ask != null ? ` [${fmtQ(t.bid)} × ${fmtQ(t.ask)}]` : '';
+      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${market}${t.note ? ` (${t.note})` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
 }
 
@@ -1085,8 +1108,8 @@ function openTicket(e, row) {
   t.style.top  = (r.bottom + window.scrollY + 4) + 'px';
 
   const qtyEl = t.querySelector('#t-qty');
-  t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy',  qtyEl.value, buyPx);
-  t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value, sellPx);
+  t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy',  qtyEl.value);
+  t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value);
   ticketEl = t;
 }
 
