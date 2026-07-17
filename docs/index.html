@@ -278,6 +278,9 @@
   }
   #no-data.hidden { display: none; }
   #heatmap-wrap.hidden { display: none; }
+  #auth-panel.hidden { display: none; }
+  #paper-panel.hidden { display: none; }
+  #margin-call-screen.hidden { display: none; }
 
   /* ── paper trading ───────────────────────────────────────────────────── */
   td.tradable { cursor: pointer; }
@@ -358,6 +361,55 @@
     text-align: right;
   }
   #paper-panel th { text-transform: none; letter-spacing: 0.02em; }
+  #auth-panel {
+    margin-top: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 0.78rem;
+    max-width: 320px;
+  }
+  #auth-panel h3 {
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 10px;
+  }
+  #auth-panel form { display: flex; flex-direction: column; gap: 8px; }
+  #auth-panel input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--bright);
+    border-radius: 4px; padding: 6px 8px; font-size: 0.78rem;
+  }
+  #auth-panel button {
+    border: none; border-radius: 4px; padding: 6px 9px; font-size: 0.74rem;
+    font-weight: 700; cursor: pointer; color: #fff; background: #007730;
+  }
+  #auth-panel button:disabled { opacity: 0.4; cursor: default; }
+  #auth-toggle {
+    background: none; color: var(--dim); font-weight: 400; text-decoration: underline;
+    padding: 2px 0; margin-top: 2px; align-self: flex-start;
+  }
+  #auth-warning { color: #ee9955; font-size: 0.68rem; line-height: 1.4; }
+  #auth-error { color: #ff6666; font-size: 0.7rem; min-height: 1em; }
+  #user-bar { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--dim); }
+  #user-bar button.paper-btn { margin-left: 4px; }
+  #margin-call-screen {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(13,17,23,0.96);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 20px; text-align: center;
+  }
+  #margin-call-screen img {
+    max-width: min(480px, 90vw); max-height: 55vh; border-radius: 8px;
+    border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  }
+  #margin-call-screen h2 {
+    color: #ee3300; font-size: 1.6rem; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  #margin-call-screen p { color: var(--fg); font-size: 0.85rem; max-width: 460px; }
+  #margin-call-screen button {
+    border: none; border-radius: 4px; padding: 8px 16px; font-size: 0.8rem;
+    font-weight: 700; cursor: pointer; color: #fff; background: #007730; margin-top: 8px;
+  }
   #paper-panel th:first-child, #paper-panel td:first-child { text-align: left; }
   .pnl-up   { color: #00cc55; }
   .pnl-down { color: #ee3300; }
@@ -597,17 +649,26 @@
   </table>
 </div>
 
-<div id="paper-panel">
+<div id="auth-panel" class="hidden">
+  <h3 id="auth-heading">Log In</h3>
+  <div id="auth-error"></div>
+  <form id="auth-form">
+    <input type="text" id="auth-username" placeholder="Username" autocomplete="username" maxlength="20" required>
+    <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password" maxlength="256" required>
+    <div id="auth-warning" class="hidden">There is no password recovery. If you lose your password, this account and its $10,000 balance are gone for good — write it down somewhere safe.</div>
+    <button type="submit" id="auth-submit">Log In</button>
+    <button type="button" id="auth-toggle">Need an account? Register</button>
+  </form>
+</div>
+
+<div id="paper-panel" class="hidden">
   <h3>Paper Trading
-    <select id="paper-acct" class="paper-btn" title="active account"></select>
-    <button id="paper-new" class="paper-btn" title="new account for a separate strategy">+ account</button>
     <span id="paper-summary"></span>
     <span id="paper-actions">
-      <button id="paper-clear" class="paper-btn">reset</button>
-      <button id="paper-del" class="paper-btn" title="delete this account">del</button>
+      <span id="user-bar"><span id="user-name"></span><button id="auth-logout" class="paper-btn">log out</button></span>
     </span>
   </h3>
-  <div id="paper-hint">Click any option cell to buy/sell. Fills at ask (buy) / bid (sell), ×100 multiplier. Positions persist in this browser.</div>
+  <div id="paper-hint">Click any option cell to buy/sell. Fills at ask (buy) / bid (sell), ×100 multiplier. Balance persists to your account across devices.</div>
   <div id="paper-positions"></div>
   <details id="paper-log">
     <summary>Trade log</summary>
@@ -616,6 +677,13 @@
 </div>
 
 </div> <!-- /live-panel -->
+
+<div id="margin-call-screen" class="hidden">
+  <img src="margin-call.png" alt="Margin call">
+  <h2>Margin Call</h2>
+  <p id="margin-call-reason"></p>
+  <button id="margin-call-continue">Back to login</button>
+</div>
 
 <div id="history-panel" class="hidden">
 
@@ -777,50 +845,27 @@ function renderHeatmap(data) {
 // ── paper trading ─────────────────────────────────────────────────────────────
 // Trades: {ts, sym, strike, type, exp, side, qty, price, note?}. Positions and
 // PnL are derived from the trade list (average-cost basis, ×100 multiplier).
-// Multiple named accounts, each with an independent book, for separating
-// strategies. store = { accounts: {id: {name, trades, marks}}, active: id }.
-const PAPER_KEY = 'paperbook_v2';
-let store = { accounts: { a1: { name: 'Main', trades: [], marks: {} } }, active: 'a1', spotMarks: {} };
-try {
-  const v2 = JSON.parse(localStorage.getItem(PAPER_KEY));
-  if (v2 && v2.accounts && v2.active in v2.accounts) {
-    store = v2;
-  } else {
-    // migrate single-book v1 store if present
-    const v1 = JSON.parse(localStorage.getItem('paperbook_v1'));
-    if (v1 && Array.isArray(v1.trades)) {
-      store.accounts.a1 = { name: 'Main', trades: v1.trades, marks: v1.marks || {} };
-    }
-  }
-} catch (e) { /* corrupt store — start fresh */ }
-// account for stores saved before spotMarks existed
-if (!store.spotMarks) store.spotMarks = {};
+//
+// Balances are server-authoritative, tied to a logged-in username, so they
+// follow a trader across devices instead of resetting per-browser. `session`
+// is the hydrated server state ({username, balance_cash, trades}) or null
+// when logged out. `spotMarks` (underlying price per expiration date) stays
+// client-local display state, uploaded to /api/settle only when needed to
+// price a settlement.
+let session = null;
+let spotMarks = {};
 
-function acct() { return store.accounts[store.active]; }
+const SESSION_CACHE_KEY = 'paperbook_session_cache';
 
-// Per-browser id so trades from different devices/browsers don't collide once
-// uploaded to R2 (account ids like 'a1' are reused across fresh installs).
-const INSTALL_KEY = 'paperbook_install_id';
-let installId;
-try {
-  installId = localStorage.getItem(INSTALL_KEY);
-  if (!installId) {
-    installId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    localStorage.setItem(INSTALL_KEY, installId);
-  }
-} catch (e) {
-  // storage inaccessible (private browsing, disabled cookies, etc.) — fall
-  // back to a session-only id rather than letting this throw before the
-  // rest of the script (and the live UI) initializes
-  installId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+// Display-only cache so a reload shows something instantly before /api/me
+// resolves. Never treated as authoritative -- always overwritten by the next
+// server response.
+function cacheSessionDisplay() {
+  try { localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(session)); } catch (e) {}
 }
-
-// The Worker is the execution authority: it fetches and validates a fresh exact-
-// contract quote, persists the canonical fill, then returns it for the local book.
-// Shared token matching the Worker's PAPER_TRADE_KEY secret. This is public —
-// anyone viewing page source can read it — so it's a deterrent against casual
-// scripted abuse, not real auth.
-const PAPER_TRADE_KEY = 'ledump';
+function readSessionDisplayCache() {
+  try { return JSON.parse(localStorage.getItem(SESSION_CACHE_KEY)); } catch (e) { return null; }
+}
 
 function newExecutionRequestId() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -830,15 +875,16 @@ function newExecutionRequestId() {
   });
 }
 
-async function requestExecution(info, side, qty, accountId, accountName, executionRequestId) {
+// The Worker is the execution authority: it fetches and validates a fresh
+// exact-contract quote, persists the canonical fill and the balance
+// mutation, then returns both for the local display. Auth rides the
+// same-origin session cookie automatically -- no manual header needed.
+async function requestExecution(info, side, qty, executionRequestId) {
   const options = {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Paper-Trade-Key': PAPER_TRADE_KEY },
-    body: JSON.stringify({
-      execution_request_id: executionRequestId,
-      sym: info.sym, side, qty, account_id: accountId,
-      account_name: accountName, install_id: installId,
-    }),
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ execution_request_id: executionRequestId, sym: info.sym, side, qty }),
   };
   let response;
   try {
@@ -859,17 +905,13 @@ let lastData = null;
 let lastDataDate = null;
 let ticketEl = null;
 const pendingExecutions = new Set();
-
-function savePaper() {
-  try { localStorage.setItem(PAPER_KEY, JSON.stringify(store)); } catch (e) {}
-}
+let positionMarks = {};
 
 function openPositionSymbols() {
   const symbols = new Set();
-  for (const account of Object.values(store.accounts)) {
-    for (const [sym, position] of Object.entries(computeBook(account))) {
-      if (position.pos) symbols.add(sym);
-    }
+  if (!session) return symbols;
+  for (const [sym, position] of Object.entries(computeBook(session.trades))) {
+    if (position.pos) symbols.add(sym);
   }
   return symbols;
 }
@@ -917,16 +959,13 @@ function renderQuoteHealth(health) {
 }
 
 liveQuotes.subscribe(() => {
-  if (!lastData) return;
-  for (const [accountId, account] of Object.entries(store.accounts)) {
-    const book = computeBook(account);
-    for (const [symbol, position] of Object.entries(book)) {
-      if (!position.pos) continue;
-      const quote = liveQuotes.get(symbol);
-      if (quote?.mid != null) account.marks[symbol] = quote.mid;
-    }
+  if (!lastData || !session) return;
+  const book = computeBook(session.trades);
+  for (const [symbol, position] of Object.entries(book)) {
+    if (!position.pos) continue;
+    const quote = liveQuotes.get(symbol);
+    if (quote?.mid != null) positionMarks[symbol] = quote.mid;
   }
-  savePaper();
   renderHeatmap(lastData);
   renderPaper();
 });
@@ -937,7 +976,7 @@ function ingestSnapshotQuotes(data) {
   // determine ITM/OTM for short positions once the option itself is no longer
   // in the live quote feed (see settlementPrice()).
   if (lastDataDate && data.underlying_price != null) {
-    store.spotMarks[lastDataDate] = data.underlying_price;
+    spotMarks[lastDataDate] = data.underlying_price;
   }
   // Settle before computing open positions for interest-tracking, so a
   // position that expired as of this snapshot's date doesn't count as "open"
@@ -954,25 +993,22 @@ function ingestSnapshotQuotes(data) {
     exp: row.Expiration,
   }));
   liveQuotes.publish(snapshotQuotes, { source: 'r2-snapshot', observedAt: data.timestamp });
-  const books = Object.fromEntries(Object.entries(store.accounts).map(([id, a]) => [id, computeBook(a)]));
-  for (const r of (data.rows || [])) {
-    const quote = liveQuotes.get(r.OptionSymbol);
-    // remember last mark for symbols any account holds, as a display/unrealized-PnL
-    // fallback once a symbol drops out of the live quote feed (e.g. after hours).
-    // Not used for expiry settlement -- see settlementPrice().
-    if (quote?.mid != null) {
-      for (const [id, a] of Object.entries(store.accounts)) {
-        if (books[id][r.OptionSymbol]?.pos) a.marks[r.OptionSymbol] = quote.mid;
-      }
+  if (session) {
+    const book = computeBook(session.trades);
+    for (const r of (data.rows || [])) {
+      const quote = liveQuotes.get(r.OptionSymbol);
+      // remember last mark for a held symbol, as a display/unrealized-PnL
+      // fallback once it drops out of the live quote feed (e.g. after hours).
+      // Not used for expiry settlement -- see settlementPrice().
+      if (quote?.mid != null && book[r.OptionSymbol]?.pos) positionMarks[r.OptionSymbol] = quote.mid;
     }
   }
-  savePaper();
 }
 
 // Average-cost position book: sym -> {pos, avg, realized, strike, type, exp}
-function computeBook(account = acct()) {
+function computeBook(trades = session?.trades || []) {
   const book = {};
-  for (const t of account.trades) {
+  for (const t of trades) {
     const b = book[t.sym] ?? (book[t.sym] = { pos: 0, avg: 0, realized: 0, strike: t.strike, type: t.type, exp: t.exp });
     const q = t.side === 'buy' ? t.qty : -t.qty;
     if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
@@ -991,16 +1027,13 @@ function computeBook(account = acct()) {
 
 async function executeTrade(info, side, qty) {
   qty = Math.round(+qty);
-  if (!qty || qty < 1 || pendingExecutions.has(info.sym)) return;
-  const accountId = store.active;
-  const account = store.accounts[accountId];
-  if (!account) return;
+  if (!qty || qty < 1 || pendingExecutions.has(info.sym) || !session) return;
   pendingExecutions.add(info.sym);
   setTradePending(true, 'Fetching fresh quote…');
   let trade;
   const executionRequestId = newExecutionRequestId();
   try {
-    trade = await requestExecution(info, side, qty, accountId, account.name, executionRequestId);
+    trade = await requestExecution(info, side, qty, executionRequestId);
   } catch (error) {
     setTradePending(false, error.message);
     showExecutionError(error.message);
@@ -1008,9 +1041,10 @@ async function executeTrade(info, side, qty) {
   } finally {
     pendingExecutions.delete(info.sym);
   }
-  account.trades.push(trade);
+  session.trades.push(trade);
+  session.balance_cash = trade.balance_cash;
+  cacheSessionDisplay();
   updateQuoteInterests();
-  savePaper();
   closeTicket();
   renderPaper();
   if (lastData) renderHeatmap(lastData);  // refresh position badges
@@ -1035,48 +1069,50 @@ function setTradePending(pending, message = '') {
   status.textContent = message;
 }
 
-// Settlement price for a position held past expiration.
-//
-// Long positions always settle at $0: this book has no margin to actually
-// exercise, so there's no realistic way to capture intrinsic value on an ITM
-// long held to expiration -- it must be closed beforehand to realize that
-// value, same constraint a real no-exercise-capacity account would face.
-//
-// Short positions don't get that same free pass, though: this account isn't
-// the only party on the contract, and a real market-maker/OCC counterparty
-// *will* exercise an ITM option against a short seller regardless of what
-// this account can or can't do. Modeling short ITM options as free premium
-// would be unrealistic in the other direction -- so short positions settle
-// at intrinsic value, using the last recorded underlying price for that
-// expiration date (store.spotMarks). If no spot was ever recorded for that
-// date (e.g. the position was opened and the tab never reloaded before
-// expiry), ITM/OTM can't be determined and it falls back to worthless.
-function settlementPrice(b) {
-  if (b.pos > 0) return 0;
-  const spot = store.spotMarks[b.exp];
-  if (spot == null) return 0;
-  return b.type === 'call' ? Math.max(spot - b.strike, 0) : Math.max(b.strike - spot, 0);
+// Settlement for positions held past expiration is now a server round trip
+// (POST /api/settle) rather than a local mutation: balances are
+// server-authoritative, and an under-collateralized short assignment can
+// wipe the account (see showMarginCallScreen below), which has to happen
+// server-side where the balance actually lives. This function still decides
+// *whether* there's anything to settle (using the same no-exercise-capacity
+// long / intrinsic-value short logic the server ports), so a normal render
+// cycle with nothing expired never makes a network call.
+let settling = false;
+
+function hasExpiredPositions() {
+  if (!session || !lastDataDate) return false;
+  return Object.values(computeBook(session.trades)).some(b => b.pos !== 0 && b.exp && b.exp < lastDataDate);
 }
 
-function settleExpired() {
-  if (!lastDataDate) return;
-  let changed = false;
-  for (const [id, a] of Object.entries(store.accounts)) {
-    for (const [sym, b] of Object.entries(computeBook(a))) {
-      if (b.pos !== 0 && b.exp && b.exp < lastDataDate) {
-        const price = settlementPrice(b);
-        const trade = {
-          ts: new Date().toISOString(),
-          sym, strike: b.strike, type: b.type, exp: b.exp,
-          side: b.pos > 0 ? 'sell' : 'buy', qty: Math.abs(b.pos),
-          price, note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
-        };
-        a.trades.push(Object.freeze(trade));
-        changed = true;
-      }
+async function settleExpired() {
+  if (!session || !lastDataDate || settling || !hasExpiredPositions()) return;
+  settling = true;
+  try {
+    const response = await fetch('/api/settle', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ as_of: lastDataDate, spot_marks: spotMarks }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (response.status === 410) {
+      showMarginCallScreen(result.reason || 'A settlement obligation exceeded the account balance');
+      return;
     }
+    if (!response.ok) return; // transient failure -- retried on the next render cycle
+    if (result.settled?.length) {
+      session.trades.push(...result.settled);
+      session.balance_cash = result.balance_cash;
+      cacheSessionDisplay();
+      updateQuoteInterests();
+      renderPaper();
+      if (lastData) renderHeatmap(lastData);
+    }
+  } catch (error) {
+    // network hiccup -- retried on the next render cycle
+  } finally {
+    settling = false;
   }
-  if (changed) savePaper();
 }
 
 function closePosition(sym) {
@@ -1093,26 +1129,11 @@ function fmtMoney(v) {
 }
 function pnlClass(v) { return v > 0 ? 'pnl-up' : v < 0 ? 'pnl-down' : ''; }
 
-function renderAccounts() {
-  const sel = document.getElementById('paper-acct');
-  sel.innerHTML = Object.entries(store.accounts)
-    .map(([id, a]) => `<option value="${id}" ${id === store.active ? 'selected' : ''}>${a.name}</option>`)
-    .join('');
-}
-
-function switchAccount(id) {
-  if (!(id in store.accounts)) return;
-  store.active = id;
-  savePaper();
-  renderAccounts();
-  renderPaper();
-  if (lastData) renderHeatmap(lastData);
-}
-
 function renderPaper() {
+  if (!session) return;
   settleExpired();
   updateQuoteInterests();
-  const book = computeBook();
+  const book = computeBook(session.trades);
   const open = Object.entries(book).filter(([, b]) => b.pos !== 0);
   const realized = Object.values(book).reduce((s, b) => s + b.realized, 0);
   let unreal = 0;
@@ -1123,7 +1144,7 @@ function renderPaper() {
   } else {
     let html = '<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
     for (const [sym, b] of open) {
-      const mark = liveQuotes.get(sym)?.mid ?? acct().marks[sym] ?? null;
+      const mark = liveQuotes.get(sym)?.mid ?? positionMarks[sym] ?? null;
       const pnl  = mark != null ? (mark - b.avg) * b.pos * 100 : null;
       if (pnl != null) unreal += pnl;
       html += `<tr>
@@ -1141,19 +1162,82 @@ function renderPaper() {
 
   const total = realized + unreal;
   document.getElementById('paper-summary').innerHTML =
-    acct().trades.length
-      ? `Realized <span class="${pnlClass(realized)}">${fmtMoney(realized)}</span>
+    `Cash <span>${fmtMoney(session.balance_cash)}</span>` +
+    (session.trades.length
+      ? ` · Realized <span class="${pnlClass(realized)}">${fmtMoney(realized)}</span>
          · Open <span class="${pnlClass(unreal)}">${fmtMoney(unreal)}</span>
          · Total <span class="${pnlClass(total)}">${fmtMoney(total)}</span>`
-      : '';
-  document.getElementById('paper-hint').style.display = acct().trades.length ? 'none' : '';
+      : '');
+  document.getElementById('paper-hint').style.display = session.trades.length ? 'none' : '';
 
   document.getElementById('paper-log-body').innerHTML =
-    acct().trades.slice().reverse().map(t => {
+    session.trades.slice().reverse().map(t => {
       const time = new Date(t.ts).toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/New_York' });
       const market = t.bid != null && t.ask != null ? ` [${fmtQ(t.bid)} × ${fmtQ(t.ask)}]` : '';
       return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${market}${t.note ? ` (${t.note})` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
+
+  document.getElementById('user-name').textContent = session.username;
+}
+
+// ── auth ───────────────────────────────────────────────────────────────────────
+let authMode = 'login';
+
+function renderAuthGate() {
+  const authPanel = document.getElementById('auth-panel');
+  const paperPanel = document.getElementById('paper-panel');
+  if (session) {
+    authPanel.classList.add('hidden');
+    paperPanel.classList.remove('hidden');
+  } else {
+    authPanel.classList.remove('hidden');
+    paperPanel.classList.add('hidden');
+    document.getElementById('auth-heading').textContent = authMode === 'login' ? 'Log In' : 'Register';
+    document.getElementById('auth-submit').textContent = authMode === 'login' ? 'Log In' : 'Create Account';
+    document.getElementById('auth-toggle').textContent =
+      authMode === 'login' ? 'Need an account? Register' : 'Have an account? Log in';
+    document.getElementById('auth-warning').classList.toggle('hidden', authMode !== 'register');
+    document.getElementById('auth-password').autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
+    document.getElementById('auth-error').textContent = '';
+  }
+}
+
+function showMarginCallScreen(reason) {
+  session = null;
+  try { localStorage.removeItem(SESSION_CACHE_KEY); } catch (e) {}
+  document.getElementById('margin-call-reason').textContent = reason;
+  document.getElementById('margin-call-screen').classList.remove('hidden');
+  renderAuthGate();
+}
+
+function hideMarginCallScreen() {
+  document.getElementById('margin-call-screen').classList.add('hidden');
+  authMode = 'login';
+  renderAuthGate();
+}
+
+async function submitAuth(username, password) {
+  const endpoint = authMode === 'login' ? '/api/login' : '/api/register';
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Request failed (HTTP ${response.status})`);
+  return result;
+}
+
+async function refreshSessionFromServer() {
+  try {
+    const response = await fetch('/api/me', { credentials: 'same-origin' });
+    if (!response.ok) { session = null; return; }
+    session = await response.json();
+    cacheSessionDisplay();
+  } catch (error) {
+    session = null;
+  }
 }
 
 // ── trade ticket popover ──────────────────────────────────────────────────────
@@ -1927,33 +2011,47 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
   initPriceStrip();
-  renderAccounts();
-  renderPaper();
-  document.getElementById('paper-acct').onchange = (e) => switchAccount(e.target.value);
-  document.getElementById('paper-new').onclick = () => {
-    const name = prompt('Account name (e.g. a strategy label):',
-                        `Strategy ${Object.keys(store.accounts).length + 1}`);
-    if (!name || !name.trim()) return;
-    const id = 'a' + Date.now();
-    store.accounts[id] = { name: name.trim(), trades: [], marks: {} };
-    switchAccount(id);
-  };
-  document.getElementById('paper-clear').onclick = () => {
-    if (!acct().trades.length || confirm(`Clear all trades and PnL in "${acct().name}"?`)) {
-      acct().trades = [];
-      acct().marks = {};
-      savePaper();
+
+  // Show a cached last-known session instantly (display-only), then
+  // hydrate the authoritative state from the server below.
+  session = readSessionDisplayCache();
+  renderAuthGate();
+  if (session) renderPaper();
+
+  document.getElementById('auth-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('auth-username').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const errorEl = document.getElementById('auth-error');
+    const submitBtn = document.getElementById('auth-submit');
+    errorEl.textContent = '';
+    submitBtn.disabled = true;
+    try {
+      session = await submitAuth(username, password);
+      cacheSessionDisplay();
+      document.getElementById('auth-form').reset();
+      renderAuthGate();
+      updateQuoteInterests();
       renderPaper();
       if (lastData) renderHeatmap(lastData);
+    } catch (error) {
+      errorEl.textContent = error.message;
+    } finally {
+      submitBtn.disabled = false;
     }
   };
-  document.getElementById('paper-del').onclick = () => {
-    const ids = Object.keys(store.accounts);
-    if (ids.length <= 1) { alert('Cannot delete the last account.'); return; }
-    if (!confirm(`Delete account "${acct().name}" and its trade history?`)) return;
-    delete store.accounts[store.active];
-    switchAccount(Object.keys(store.accounts)[0]);
+  document.getElementById('auth-toggle').onclick = () => {
+    authMode = authMode === 'login' ? 'register' : 'login';
+    renderAuthGate();
   };
+  document.getElementById('auth-logout').onclick = async () => {
+    try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+    session = null;
+    try { localStorage.removeItem(SESSION_CACHE_KEY); } catch (e) {}
+    renderAuthGate();
+    if (lastData) renderHeatmap(lastData);
+  };
+  document.getElementById('margin-call-continue').onclick = hideMarginCallScreen;
 
   document.getElementById('tab-live').onclick    = () => showTab('live');
   document.getElementById('tab-history').onclick = () => showTab('history');
@@ -1963,7 +2061,11 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   await loadRanges();
 
   setStatus('', 'Fetching live snapshot…');
-  await Promise.all([fetchLatest(), fetchPrices()]);
+  await Promise.all([fetchLatest(), fetchPrices(), refreshSessionFromServer()]);
+  renderAuthGate();
+  updateQuoteInterests();
+  if (session) renderPaper();
+  if (lastData) renderHeatmap(lastData);
 
   liveQuotePoller = new LiveQuotePoller(liveQuotes);
   liveQuotePoller.subscribeHealth(renderQuoteHealth);

@@ -5,6 +5,16 @@ const MAX_QUOTE_AGE_MS = 15 * 1000;
 const MAX_QUOTE_FUTURE_MS = 30 * 1000;
 const MAX_LIVE_QUOTE_SYMBOLS = 100;
 
+const SESSION_COOKIE = 'session';
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+const PBKDF2_ITERATIONS = 100_000;
+export const STARTING_BALANCE = 10_000;
+export const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
+export const MIN_PASSWORD_LEN = 8;
+export const MAX_PASSWORD_LEN = 256;
+const MAX_KV_WRITE_ATTEMPTS = 5;
+const SETTLEMENT_ID_PREFIX = 'settle';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -24,8 +34,28 @@ export default {
       return proxied;
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/register') {
+      return handleRegister(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/login') {
+      return handleLogin(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/logout') {
+      return handleLogout(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/me') {
+      return handleMe(request, env);
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/paper-trade') {
       return handlePaperTrade(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settle') {
+      return handleSettle(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
@@ -91,27 +121,281 @@ function parseRequestedSymbols(value) {
   return symbols;
 }
 
-// Records one paper-trading fill per client-generated request id under
-// paper-trades/requests/. The deterministic key makes retries idempotent and
-// avoids read-modify-write races between unrelated browsers/accounts.
-//
-// This is a write-capable public endpoint, so it's guarded by a shared token,
-// an Origin allowlist, a Cloudflare rate limiting rule (configured at the
-// zone level, not in this file), and a hard body-size cap. None of these are
-// real auth — the token lives in public client JS (docs/index.html) and the
-// Origin header can be forged by any non-browser client — they just raise the
-// bar past casual/scripted abuse. Fine for a private tool with no sensitive
-// data at stake; would need real auth if that ever changes.
-async function handlePaperTrade(request, env) {
-  const authKey = request.headers.get('X-Paper-Trade-Key');
-  if (!env.PAPER_TRADE_KEY || authKey !== env.PAPER_TRADE_KEY) {
-    return new Response('Forbidden', { status: 403 });
-  }
+// ---------------------------------------------------------------------------
+// Auth: username/password accounts backed by the USERS KV namespace, opaque
+// session tokens backed by SESSIONS. Real auth (unlike the old shared-token
+// deterrent below) because a user's balance now needs to follow them across
+// devices rather than living in one browser's localStorage.
+// ---------------------------------------------------------------------------
 
+function userKey(username) {
+  return `user:${username.toLowerCase()}`;
+}
+
+function sessionKey(token) {
+  return `sess:${token}`;
+}
+
+function isSecureRequest(request) {
+  return new URL(request.url).protocol === 'https:';
+}
+
+// `Secure` cookies never round-trip over plain http://, which the dev origin
+// (http://localhost:8787) already in ALLOWED_ORIGINS relies on -- so the
+// flag is conditional on the actual request scheme rather than always on.
+function sessionCookieHeader(request, token, maxAgeSeconds) {
+  const secure = isSecureRequest(request) ? '; Secure' : '';
+  return `${SESSION_COOKIE}=${token}; HttpOnly${secure}; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearedSessionCookieHeader(request) {
+  return sessionCookieHeader(request, '', 0);
+}
+
+export function parseCookies(request) {
+  const header = request.headers.get('Cookie');
+  const cookies = {};
+  if (!header) return cookies;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const name = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (name) cookies[name] = value;
+  }
+  return cookies;
+}
+
+export function randomSaltBase64() {
+  return bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+export async function derivePasswordHash(password, saltBase64, iterations = PBKDF2_ITERATIONS) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: base64ToBytes(saltBase64), iterations },
+    keyMaterial,
+    256,
+  );
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// Workers' WebCrypto has no built-in timing-safe string compare. Both inputs
+// here are fixed-length base64 of a 256-bit digest, so the length check
+// leaks nothing secret; the byte comparison itself doesn't short-circuit.
+export function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function readJsonBody(request) {
+  const contentLength = Number(request.headers.get('Content-Length') || 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return { error: new Response('Payload too large', { status: 413 }) };
+  }
+  let raw;
+  try {
+    raw = await readLimited(request, MAX_BODY_BYTES);
+  } catch (e) {
+    return { error: new Response('Payload too large', { status: 413 }) };
+  }
+  try {
+    return { body: JSON.parse(raw) };
+  } catch (e) {
+    return { error: new Response('Invalid JSON', { status: 400 }) };
+  }
+}
+
+function checkOrigin(request) {
   const origin = request.headers.get('Origin');
   if (origin && !ALLOWED_ORIGINS.includes(origin)) {
     return new Response('Forbidden', { status: 403 });
   }
+  return null;
+}
+
+async function startSession(request, env, record, status) {
+  const token = crypto.randomUUID();
+  await env.SESSIONS.put(
+    sessionKey(token),
+    JSON.stringify({ username: record.username, createdAt: new Date().toISOString() }),
+    { expirationTtl: SESSION_TTL_SECONDS },
+  );
+  return jsonResponse(
+    { username: record.username, balance_cash: record.balance_cash, trades: record.trades },
+    status,
+    { 'Set-Cookie': sessionCookieHeader(request, token, SESSION_TTL_SECONDS) },
+  );
+}
+
+async function handleRegister(request, env) {
+  const originError = checkOrigin(request);
+  if (originError) return originError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const { username, password } = bodyResult.body || {};
+
+  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+    return jsonResponse({ error: 'Username must be 3-20 characters: letters, numbers, underscore' }, 400);
+  }
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN) {
+    return jsonResponse({ error: `Password must be ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN} characters` }, 400);
+  }
+
+  const key = userKey(username);
+  // KV has no conditional-create, so two simultaneous registrations of the
+  // same username can both pass this check and the second put() wins --
+  // accepted given this app's low-stakes, low-concurrency usage.
+  const existing = await env.USERS.get(key);
+  if (existing) return jsonResponse({ error: 'Username already taken' }, 409);
+
+  const salt = randomSaltBase64();
+  const hash = await derivePasswordHash(password, salt);
+  const record = {
+    username,
+    salt,
+    hash,
+    iterations: PBKDF2_ITERATIONS,
+    balance_cash: STARTING_BALANCE,
+    trades: [],
+    createdAt: new Date().toISOString(),
+    version: 0,
+  };
+  await env.USERS.put(key, JSON.stringify(record));
+
+  return startSession(request, env, record, 201);
+}
+
+async function handleLogin(request, env) {
+  const originError = checkOrigin(request);
+  if (originError) return originError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const { username, password } = bodyResult.body || {};
+
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return jsonResponse({ error: 'Invalid username or password' }, 401);
+  }
+
+  const raw = await env.USERS.get(userKey(username));
+  if (!raw) return jsonResponse({ error: 'Invalid username or password' }, 401);
+  const record = JSON.parse(raw);
+
+  const candidateHash = await derivePasswordHash(password, record.salt, record.iterations);
+  if (!constantTimeEqual(candidateHash, record.hash)) {
+    return jsonResponse({ error: 'Invalid username or password' }, 401);
+  }
+
+  return startSession(request, env, record, 200);
+}
+
+async function handleLogout(request, env) {
+  const cookies = parseCookies(request);
+  const token = cookies[SESSION_COOKIE];
+  if (token) await env.SESSIONS.delete(sessionKey(token));
+  return new Response(null, { status: 204, headers: { 'Set-Cookie': clearedSessionCookieHeader(request) } });
+}
+
+async function handleMe(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) return jsonResponse({ error: 'Not logged in' }, 401);
+  return jsonResponse(
+    { username: session.username, balance_cash: session.record.balance_cash, trades: session.record.trades },
+    200,
+  );
+}
+
+// Resolves the session cookie to a live user record. Returns null on any
+// break in the chain, including a session that still exists but whose
+// account was since deleted (e.g. liquidated by /api/settle from another
+// device) -- that account is gone, not just logged out.
+async function requireSession(request, env) {
+  const cookies = parseCookies(request);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return null;
+  const sessionRaw = await env.SESSIONS.get(sessionKey(token));
+  if (!sessionRaw) return null;
+  const session = JSON.parse(sessionRaw);
+  const userRaw = await env.USERS.get(userKey(session.username));
+  if (!userRaw) return null;
+  return { token, username: session.username, record: JSON.parse(userRaw) };
+}
+
+// Applies `mutate(record)` to a user's KV record and writes the result back.
+// KV has no compare-and-swap, so this is optimistic concurrency: read,
+// mutate, write a bumped `version`, then re-read to check the write actually
+// stuck before trusting it; retries from a fresh read on a version mismatch.
+// Good enough given this app's single-user-at-a-time usage pattern -- not a
+// true CAS, and KV's eventual consistency means the confirming re-read is a
+// best-effort check, not a guarantee.
+//
+// `mutate` returns one of:
+//   { error }             -- reject, no write (e.g. insufficient balance)
+//   { result }             -- no-op (e.g. idempotent replay), no write
+//   { record, result }     -- write `record` (version is added automatically)
+async function withUserRecord(env, username, mutate) {
+  const key = userKey(username);
+  for (let attempt = 0; attempt < MAX_KV_WRITE_ATTEMPTS; attempt++) {
+    const raw = await env.USERS.get(key);
+    if (!raw) return { error: 'not_found' };
+    const record = JSON.parse(raw);
+    const outcome = mutate(record);
+    if (outcome.error) return outcome;
+    if (!outcome.record) return outcome;
+
+    const nextVersion = record.version + 1;
+    const nextRecord = { ...outcome.record, version: nextVersion };
+    await env.USERS.put(key, JSON.stringify(nextRecord));
+
+    const confirmRaw = await env.USERS.get(key);
+    const confirmed = confirmRaw ? JSON.parse(confirmRaw) : null;
+    if (confirmed && confirmed.version === nextVersion) {
+      return { record: nextRecord, result: outcome.result };
+    }
+    await sleep(10 + Math.floor(Math.random() * 40));
+  }
+  return { error: 'conflict' };
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// Trade execution
+// ---------------------------------------------------------------------------
+
+// Records one paper-trading fill per client-generated request id under
+// paper-trades/requests/. The deterministic key makes retries idempotent and
+// avoids read-modify-write races between unrelated accounts.
+//
+// Auth is now a real session (see requireSession above), not the shared
+// static token this endpoint used to check. The Origin allowlist, a
+// Cloudflare rate limiting rule (configured at the zone level, not in this
+// file), and the body-size cap remain as defense in depth.
+async function handlePaperTrade(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) return new Response('Forbidden', { status: 401 });
+
+  const originError = checkOrigin(request);
+  if (originError) return originError;
 
   const contentLength = Number(request.headers.get('Content-Length') || 0);
   if (contentLength > MAX_BODY_BYTES) {
@@ -161,6 +445,13 @@ async function handlePaperTrade(request, env) {
   }
 
   const executedAt = new Date();
+  const price = body.side === 'buy' ? quoteResult.ask : quoteResult.bid;
+  // Buys debit cash and are capped by balance below; sells credit cash
+  // unconditionally -- this book has no margin model for opening a short
+  // (mirrors the existing no-margin design elsewhere in the app). The
+  // consequence of an uncovered short lands at settlement instead: see
+  // handleSettle's insolvency/liquidation path.
+  const cashDelta = body.side === 'buy' ? -(price * body.qty * 100) : (price * body.qty * 100);
   const trade = Object.freeze({
     execution_id: executionId,
     execution_request_id: executionId,
@@ -177,11 +468,31 @@ async function handlePaperTrade(request, env) {
     qty: body.qty,
     bid: quoteResult.bid,
     ask: quoteResult.ask,
-    price: body.side === 'buy' ? quoteResult.ask : quoteResult.bid,
-    account_id: body.account_id,
-    account_name: body.account_name,
-    install_id: body.install_id,
+    price,
+    username: session.username,
   });
+
+  const kvOutcome = await withUserRecord(env, session.username, (record) => {
+    const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
+    if (existingTrade) {
+      return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
+    }
+    if (body.side === 'buy' && -cashDelta > record.balance_cash) {
+      return { error: 'insufficient_balance' };
+    }
+    const balance_cash = record.balance_cash + cashDelta;
+    return {
+      record: { ...record, balance_cash, trades: [...record.trades, trade] },
+      result: { trade, balance_cash },
+    };
+  });
+
+  if (kvOutcome.error === 'insufficient_balance') {
+    return jsonResponse({ error: 'Insufficient balance' }, 400);
+  }
+  if (kvOutcome.error) {
+    return jsonResponse({ error: 'Balance could not be updated, try again' }, 503);
+  }
 
   try {
     const stored = await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
@@ -190,9 +501,14 @@ async function handlePaperTrade(request, env) {
       customMetadata: { executionId, executedAt: executedAt.toISOString() },
     });
     if (!stored) {
-      // Another request with the same client-generated identity won the
-      // conditional create. R2 is strongly consistent, so return that exact
-      // canonical fill rather than this request's independently fetched quote.
+      // Another request with the same client-generated identity won the R2
+      // conditional create. The KV balance mutation above already applied
+      // using this request's own independently fetched quote, which may
+      // differ slightly (e.g. timestamps) from the winning R2 record's quote
+      // -- an accepted, documented inconsistency for the rare concurrent-
+      // duplicate-id case, since KV has no cross-store transaction with R2.
+      // The execution_request_id is present in KV either way, so any further
+      // retry of this same id is idempotent from here on.
       const existing = await env.PAPER_TRADES.get(key);
       if (!existing) throw new Error('Canonical execution missing after conditional write');
       return existingExecutionResponse(await existing.json(), body);
@@ -201,7 +517,136 @@ async function handlePaperTrade(request, env) {
     return jsonResponse({ error: 'Execution could not be recorded' }, 503);
   }
 
-  return jsonResponse(trade, 201);
+  return jsonResponse({ ...trade, balance_cash: kvOutcome.result.balance_cash }, 201);
+}
+
+// ---------------------------------------------------------------------------
+// Settlement: server-side port of docs/index.html's settleExpired()/
+// settlementPrice(), now that trades are server-authoritative in KV rather
+// than a client-local array. The client still supplies spot_marks (the
+// underlying prices it's observed) since this Worker doesn't track
+// underlying spot itself -- those values are used only to price settlement,
+// never trusted for anything else.
+// ---------------------------------------------------------------------------
+
+export function computeBookFromTrades(trades) {
+  const book = {};
+  for (const t of trades) {
+    const b = book[t.sym] ?? (book[t.sym] = { pos: 0, avg: 0, realized: 0, strike: t.strike, type: t.type, exp: t.exp });
+    const q = t.side === 'buy' ? t.qty : -t.qty;
+    if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
+      b.avg = (b.avg * Math.abs(b.pos) + t.price * Math.abs(q)) / (Math.abs(b.pos) + Math.abs(q));
+      b.pos += q;
+    } else {
+      const closing = Math.min(Math.abs(q), Math.abs(b.pos));
+      b.realized += (t.price - b.avg) * closing * 100 * Math.sign(b.pos);
+      b.pos += q;
+      if (b.pos === 0) b.avg = 0;
+      else if (Math.sign(b.pos) === Math.sign(q)) b.avg = t.price;
+    }
+  }
+  return book;
+}
+
+// Longs settle worthless -- this book has no exercise capacity, so an ITM
+// long must be closed before expiration to realize value. Shorts don't get
+// that same free pass: a real counterparty will exercise an ITM option
+// against a short seller regardless of what this account can cover, so
+// shorts settle at intrinsic value using the caller-supplied spot for that
+// expiration.
+export function settlementPriceServer(b, spotMarks) {
+  if (b.pos > 0) return 0;
+  const spot = spotMarks[b.exp];
+  if (spot == null) return 0;
+  return b.type === 'call' ? Math.max(spot - b.strike, 0) : Math.max(b.strike - spot, 0);
+}
+
+export function validateSettleRequest(body) {
+  if (!body || typeof body !== 'object') return 'Body must be a JSON object';
+  if (typeof body.as_of !== 'string' || !ISO_DATE.test(body.as_of)) return 'as_of must be an ISO date string';
+  if (!body.spot_marks || typeof body.spot_marks !== 'object' || Array.isArray(body.spot_marks)) {
+    return 'spot_marks must be an object';
+  }
+  for (const [exp, spot] of Object.entries(body.spot_marks)) {
+    if (!ISO_DATE.test(exp)) return 'spot_marks keys must be ISO dates';
+    if (typeof spot !== 'number' || !Number.isFinite(spot) || spot < 0) return 'spot_marks values must be non-negative numbers';
+  }
+  return null;
+}
+
+async function handleSettle(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) return new Response('Forbidden', { status: 401 });
+
+  const originError = checkOrigin(request);
+  if (originError) return originError;
+
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+
+  const validationError = validateSettleRequest(bodyResult.body);
+  if (validationError) return new Response(validationError, { status: 400 });
+
+  const { as_of, spot_marks } = bodyResult.body;
+
+  const kvOutcome = await withUserRecord(env, session.username, (record) => {
+    const book = computeBookFromTrades(record.trades);
+    const expired = Object.entries(book).filter(([, b]) => b.pos !== 0 && b.exp && b.exp < as_of);
+    const alreadySettled = new Set(record.trades.map(t => t.execution_request_id));
+    const pending = expired.filter(([sym, b]) => !alreadySettled.has(`${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`));
+
+    if (!pending.length) {
+      return { result: { settled: [], balance_cash: record.balance_cash, liquidated: false } };
+    }
+
+    let balance_cash = record.balance_cash;
+    const newTrades = [...record.trades];
+    const settled = [];
+
+    for (const [sym, b] of pending) {
+      const price = settlementPriceServer(b, spot_marks);
+      const side = b.pos > 0 ? 'sell' : 'buy';
+      const cashDelta = side === 'sell' ? price * Math.abs(b.pos) * 100 : -(price * Math.abs(b.pos) * 100);
+      // An ITM short whose payout exceeds what's left in the account is an
+      // obligation this book can't meet -- rather than clamp or partially
+      // apply it, the whole account is liquidated (see handleSettle below).
+      if (balance_cash + cashDelta < 0) {
+        return { error: 'insolvent' };
+      }
+      balance_cash += cashDelta;
+      const trade = Object.freeze({
+        execution_id: `${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`,
+        execution_request_id: `${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`,
+        ts: new Date().toISOString(),
+        sym, strike: b.strike, type: b.type, exp: b.exp,
+        side, qty: Math.abs(b.pos), price,
+        note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
+        username: session.username,
+      });
+      newTrades.push(trade);
+      settled.push(trade);
+    }
+
+    return {
+      record: { ...record, balance_cash, trades: newTrades },
+      result: { settled, balance_cash, liquidated: false },
+    };
+  });
+
+  if (kvOutcome.error === 'insolvent') {
+    await env.USERS.delete(userKey(session.username));
+    await env.SESSIONS.delete(sessionKey(session.token));
+    return jsonResponse(
+      { error: 'account_liquidated', reason: 'A settlement obligation exceeded the account balance' },
+      410,
+      { 'Set-Cookie': clearedSessionCookieHeader(request) },
+    );
+  }
+  if (kvOutcome.error) {
+    return jsonResponse({ error: 'Settlement could not be recorded, try again' }, 503);
+  }
+
+  return jsonResponse(kvOutcome.result, 200);
 }
 
 const MAX_STRING_LEN = 64;
@@ -213,7 +658,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // strings, unbounded text fields) is how the dataset silently rots — a
 // malformed record parses fine as JSON but breaks downstream analysis with
 // no visible failure in the UI. Returns an error string, or null if valid.
-function validateTradeIntent(body) {
+export function validateTradeIntent(body) {
   if (!body || typeof body !== 'object') return 'Body must be a JSON object';
 
   if (typeof body.execution_request_id !== 'string' ||
@@ -229,23 +674,15 @@ function validateTradeIntent(body) {
   if (!Number.isInteger(body.qty) || body.qty <= 0 || body.qty > 100_000) {
     return 'qty must be a positive integer';
   }
-  for (const field of ['account_id', 'account_name', 'install_id']) {
-    if (typeof body[field] !== 'string' || !body[field].trim() || body[field].length > MAX_STRING_LEN) {
-      return `${field} must be a non-empty string under ${MAX_STRING_LEN} chars`;
-    }
-  }
 
   return null;
 }
 
-function executionIntentMatches(trade, intent) {
+export function executionIntentMatches(trade, intent) {
   return trade?.execution_request_id === intent.execution_request_id &&
     trade?.sym === intent.sym &&
     trade?.side === intent.side &&
-    trade?.qty === intent.qty &&
-    trade?.account_id === intent.account_id &&
-    trade?.account_name === intent.account_name &&
-    trade?.install_id === intent.install_id;
+    trade?.qty === intent.qty;
 }
 
 function existingExecutionResponse(trade, intent) {
