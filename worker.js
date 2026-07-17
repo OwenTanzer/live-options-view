@@ -182,10 +182,19 @@ async function handlePaperTrade(request, env) {
   });
 
   try {
-    await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
+    const stored = await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
+      onlyIf: { etagDoesNotMatch: '*' },
       httpMetadata: { contentType: 'application/json' },
       customMetadata: { executionId, executedAt: executedAt.toISOString() },
     });
+    if (!stored) {
+      // Another request with the same client-generated identity won the
+      // conditional create. R2 is strongly consistent, so return that exact
+      // canonical fill rather than this request's independently fetched quote.
+      const existing = await env.PAPER_TRADES.get(key);
+      if (!existing) throw new Error('Canonical execution missing after conditional write');
+      return jsonResponse(await existing.json(), 200);
+    }
   } catch (error) {
     return jsonResponse({ error: 'Execution could not be recorded' }, 503);
   }
