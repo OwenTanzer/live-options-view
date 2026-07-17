@@ -140,7 +140,7 @@ async function handlePaperTrade(request, env) {
   const key = `paper-trades/requests/${executionId}.json`;
   try {
     const existing = await env.PAPER_TRADES.get(key);
-    if (existing) return jsonResponse(await existing.json(), 200);
+    if (existing) return existingExecutionResponse(await existing.json(), body);
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
   }
@@ -148,14 +148,14 @@ async function handlePaperTrade(request, env) {
   let quotePayload;
   try {
     const quoteResponse = await fetchLiveQuotes([body.sym], env);
-    if (!quoteResponse.ok) throw new Error(`quote source returned HTTP ${quoteResponse.status}`);
+    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
     quotePayload = await quoteResponse.json();
   } catch (error) {
     return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
   }
   const quoteReceivedAt = new Date();
 
-  const quoteResult = exactContractQuote(quotePayload, body.sym, quoteReceivedAt.getTime());
+  const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
@@ -167,6 +167,8 @@ async function handlePaperTrade(request, env) {
     ts: executedAt.toISOString(),
     quote_received_ts: quoteReceivedAt.toISOString(),
     quote_ts: quoteResult.quoteTs,
+    bid_ts: quoteResult.bidTs,
+    ask_ts: quoteResult.askTs,
     sym: body.sym,
     strike: quoteResult.strike,
     type: quoteResult.type,
@@ -193,7 +195,7 @@ async function handlePaperTrade(request, env) {
       // canonical fill rather than this request's independently fetched quote.
       const existing = await env.PAPER_TRADES.get(key);
       if (!existing) throw new Error('Canonical execution missing after conditional write');
-      return jsonResponse(await existing.json(), 200);
+      return existingExecutionResponse(await existing.json(), body);
     }
   } catch (error) {
     return jsonResponse({ error: 'Execution could not be recorded' }, 503);
@@ -236,16 +238,53 @@ function validateTradeIntent(body) {
   return null;
 }
 
-function exactContractQuote(payload, symbol, nowMs) {
+function executionIntentMatches(trade, intent) {
+  return trade?.execution_request_id === intent.execution_request_id &&
+    trade?.sym === intent.sym &&
+    trade?.side === intent.side &&
+    trade?.qty === intent.qty &&
+    trade?.account_id === intent.account_id &&
+    trade?.account_name === intent.account_name &&
+    trade?.install_id === intent.install_id;
+}
+
+function existingExecutionResponse(trade, intent) {
+  if (!executionIntentMatches(trade, intent)) {
+    return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
+  }
+  return jsonResponse(trade, 200);
+}
+
+async function quoteProviderErrorResponse(response) {
+  const status = response.status >= 400 && response.status <= 599 ? response.status : 503;
+  let upstream = {};
+  try {
+    upstream = await response.json();
+  } catch (error) {
+    // Keep the public error stable even if the provider returns non-JSON.
+  }
+  const headers = {};
+  const retryAfter = response.headers.get('Retry-After');
+  if (retryAfter) headers['Retry-After'] = retryAfter;
+  return jsonResponse(
+    { error: upstream.error || 'Fresh quote unavailable', provider_status: status },
+    status,
+    headers,
+  );
+}
+
+function exactContractQuote(payload, symbol, side, nowMs) {
   const row = Array.isArray(payload?.quotes)
     ? payload.quotes.find(candidate => candidate.symbol === symbol)
     : null;
   if (!row) return { error: 'Exact contract quote not found', status: 409 };
-  const quoteMs = Date.parse(row.quote_ts);
-  if (!Number.isFinite(quoteMs)) return { error: 'Quote has no valid timestamp', status: 503 };
-  const age = nowMs - quoteMs;
+  const bidMs = Date.parse(row.bid_ts);
+  const askMs = Date.parse(row.ask_ts);
+  const sideMs = side === 'buy' ? askMs : bidMs;
+  if (!Number.isFinite(sideMs)) return { error: `Quote has no valid ${side} timestamp`, status: 503 };
+  const age = nowMs - sideMs;
   if (age > MAX_QUOTE_AGE_MS || age < -MAX_QUOTE_FUTURE_MS) {
-    return { error: 'Quote is stale', status: 409 };
+    return { error: `${side === 'buy' ? 'Ask' : 'Bid'} quote is stale`, status: 409 };
   }
   const bid = row.bid;
   const ask = row.ask;
@@ -258,13 +297,18 @@ function exactContractQuote(payload, symbol, nowMs) {
       typeof row.exp !== 'string' || !ISO_DATE.test(row.exp)) {
     return { error: 'Exact contract metadata is invalid', status: 409 };
   }
-  return { bid, ask, strike, type: row.type, exp: row.exp, quoteTs: new Date(quoteMs).toISOString() };
+  return {
+    bid, ask, strike, type: row.type, exp: row.exp,
+    bidTs: Number.isFinite(bidMs) ? new Date(bidMs).toISOString() : null,
+    askTs: Number.isFinite(askMs) ? new Date(askMs).toISOString() : null,
+    quoteTs: new Date(sideMs).toISOString(),
+  };
 }
 
-function jsonResponse(value, status) {
+function jsonResponse(value, status, extraHeaders = {}) {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extraHeaders },
   });
 }
 
