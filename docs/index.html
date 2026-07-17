@@ -66,6 +66,10 @@
   }
   #status-dot.live { background: #00cc55; }
   #status-dot.stale { background: #ee3300; }
+  #quote-health { margin-left: auto; color: var(--dim); }
+  #quote-health.live { color: #00a844; }
+  #quote-health.stale, #quote-health.rate-limited { color: #d49a00; }
+  #quote-health.backing-off, #quote-health.unavailable { color: #ee3300; }
 
   /* ── heatmap table ───────────────────────────────────────────────────── */
   #heatmap-wrap {
@@ -552,6 +556,7 @@
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
+  <span id="quote-health" class="idle">Quotes: waiting</span>
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
@@ -683,6 +688,7 @@ window.addEventListener('pageshow', (e) => {
   if (e.persisted) location.reload();
 });
 document.addEventListener('visibilitychange', () => {
+  if (liveQuotePoller) liveQuotePoller.kick();
   if (document.visibilityState !== 'visible') return;
   checkForNewBuild();
   // Mobile browsers throttle/suspend setInterval timers while a tab is
@@ -700,6 +706,7 @@ setInterval(checkForNewBuild, 5 * 60 * 1000);
 
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 const REFRESH  = 60;  // seconds between data refreshes
+let liveQuotePoller = null;
 
 let ranges = null;    // OIranges parsed: { tier: { offset: { call:[p25,p50,p75,p90], put:[...] } } }
 let lastTs  = null;
@@ -802,12 +809,33 @@ try {
 // scripted abuse, not real auth.
 const PAPER_TRADE_KEY = 'ledump';
 
-async function requestExecution(info, side, qty, accountId, accountName) {
-  const response = await fetch('/api/paper-trade', {
+function newExecutionRequestId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16);
+  });
+}
+
+async function requestExecution(info, side, qty, accountId, accountName, executionRequestId) {
+  const options = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Paper-Trade-Key': PAPER_TRADE_KEY },
-    body: JSON.stringify({ sym: info.sym, side, qty, account_id: accountId, account_name: accountName, install_id: installId }),
-  });
+    body: JSON.stringify({
+      execution_request_id: executionRequestId,
+      sym: info.sym, side, qty, account_id: accountId,
+      account_name: accountName, install_id: installId,
+    }),
+  };
+  let response;
+  try {
+    response = await fetch('/api/paper-trade', options);
+  } catch (error) {
+    // A lost response may happen after the Worker durably wrote the execution.
+    // Retry once with the same durable identity; the Worker returns the
+    // existing record instead of creating a second fill.
+    response = await fetch('/api/paper-trade', options);
+  }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Execution failed (HTTP ${response.status})`);
   return Object.freeze(result);
@@ -849,6 +877,42 @@ function updateQuoteInterests(data = lastData) {
   liveQuotes.setOpenPositions(openPositionSymbols());
   liveQuotes.setVisibleContracts(visibleContractSymbols(data));
 }
+
+function renderQuoteHealth(health) {
+  const el = document.getElementById('quote-health');
+  if (!el) return;
+  let detail = '';
+  if (health.state === 'live' && health.quoteAgeMs != null) {
+    detail = `${Math.max(0, Math.round(health.quoteAgeMs / 1000))}s`;
+  } else if (health.state === 'stale') {
+    detail = `${health.returned}/${health.requested}`;
+  } else if (health.retryAt) {
+    const seconds = Math.max(0, Math.ceil((Date.parse(health.retryAt) - Date.now()) / 1000));
+    detail = `retry ${seconds}s`;
+  }
+  const labels = {
+    idle: 'waiting', connecting: 'connecting', live: 'live', stale: 'stale',
+    'backing-off': 'backing off', 'rate-limited': 'rate limited', unavailable: 'unavailable',
+  };
+  el.className = health.state;
+  el.textContent = `Quotes: ${labels[health.state] || health.state}${detail ? ` · ${detail}` : ''}`;
+  el.title = health.message || '';
+}
+
+liveQuotes.subscribe(() => {
+  if (!lastData) return;
+  for (const [accountId, account] of Object.entries(store.accounts)) {
+    const book = computeBook(account);
+    for (const [symbol, position] of Object.entries(book)) {
+      if (!position.pos) continue;
+      const quote = liveQuotes.get(symbol);
+      if (quote?.mid != null) account.marks[symbol] = quote.mid;
+    }
+  }
+  savePaper();
+  renderHeatmap(lastData);
+  renderPaper();
+});
 
 function ingestSnapshotQuotes(data) {
   lastDataDate = data.date || lastDataDate;
@@ -917,8 +981,9 @@ async function executeTrade(info, side, qty) {
   pendingExecutions.add(info.sym);
   setTradePending(true, 'Fetching fresh quote…');
   let trade;
+  const executionRequestId = newExecutionRequestId();
   try {
-    trade = await requestExecution(info, side, qty, accountId, account.name);
+    trade = await requestExecution(info, side, qty, accountId, account.name, executionRequestId);
   } catch (error) {
     setTradePending(false, error.message);
     showExecutionError(error.message);
@@ -1869,6 +1934,10 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   setStatus('', 'Fetching live snapshot…');
   await Promise.all([fetchLatest(), fetchPrices()]);
+
+  liveQuotePoller = new LiveQuotePoller(liveQuotes);
+  liveQuotePoller.subscribeHealth(renderQuoteHealth);
+  liveQuotePoller.start();
 
   // OI heatmap: 60s refresh cycle
   startCountdown();

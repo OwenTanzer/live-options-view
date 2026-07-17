@@ -1,8 +1,9 @@
 const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 const ALLOWED_ORIGINS = ['https://options.moopertonic.net', 'http://localhost:8787'];
 const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this leaves ample headroom
-const MAX_QUOTE_AGE_MS = 2 * 60 * 1000;
+const MAX_QUOTE_AGE_MS = 15 * 1000;
 const MAX_QUOTE_FUTURE_MS = 30 * 1000;
+const MAX_LIVE_QUOTE_SYMBOLS = 100;
 
 export default {
   async fetch(request, env) {
@@ -27,6 +28,10 @@ export default {
       return handlePaperTrade(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
+      return handleLiveQuotes(url, env);
+    }
+
     const response = await env.ASSETS.fetch(request);
 
     // HTML documents (the single-file app + diagnostic page) must never be
@@ -44,8 +49,51 @@ export default {
   }
 }
 
-// Records one paper-trading fill per object under paper-trades/YYYYMMDD/ —
-// avoids read-modify-write races when multiple browsers/accounts trade at once.
+async function handleLiveQuotes(url, env) {
+  const symbols = parseRequestedSymbols(url.searchParams.get('symbols'));
+  if (!symbols) {
+    return jsonResponse({ error: `Request 1-${MAX_LIVE_QUOTE_SYMBOLS} valid symbols` }, 400);
+  }
+  try {
+    const upstream = await fetchLiveQuotes(symbols, env);
+    const response = new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        'Content-Type': upstream.headers.get('Content-Type') || 'application/json',
+        'Cache-Control': 'no-store',
+      },
+    });
+    const retryAfter = upstream.headers.get('Retry-After');
+    if (retryAfter) response.headers.set('Retry-After', retryAfter);
+    return response;
+  } catch (error) {
+    return jsonResponse({ error: 'Live quote service unavailable' }, 503);
+  }
+}
+
+function fetchLiveQuotes(symbols, env) {
+  if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) {
+    throw new Error('Live quote service is not configured');
+  }
+  const upstreamUrl = new URL('/live-quotes', env.LIVE_QUOTE_ORIGIN);
+  upstreamUrl.searchParams.set('symbols', symbols.join(','));
+  return fetch(upstreamUrl, {
+    headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY },
+    cf: { cacheTtl: 0, cacheEverything: false },
+  });
+}
+
+function parseRequestedSymbols(value) {
+  if (!value) return null;
+  const symbols = [...new Set(value.split(',').map(symbol => symbol.trim().replace(/\s/g, '')).filter(Boolean))];
+  if (!symbols.length || symbols.length > MAX_LIVE_QUOTE_SYMBOLS) return null;
+  if (symbols.some(symbol => symbol.length > 64 || !/^[A-Za-z0-9._/:+-]+$/.test(symbol))) return null;
+  return symbols;
+}
+
+// Records one paper-trading fill per client-generated request id under
+// paper-trades/requests/. The deterministic key makes retries idempotent and
+// avoids read-modify-write races between unrelated browsers/accounts.
 //
 // This is a write-capable public endpoint, so it's guarded by a shared token,
 // an Origin allowlist, a Cloudflare rate limiting rule (configured at the
@@ -88,28 +136,36 @@ async function handlePaperTrade(request, env) {
     return new Response(validationError, { status: 400 });
   }
 
-  const now = new Date();
-  let snapshot;
+  const executionId = body.execution_request_id;
+  const key = `paper-trades/requests/${executionId}.json`;
   try {
-    const quoteResponse = await fetch(`${R2_ORIGIN}/intraday/latest.json?_=${now.getTime()}`, {
-      cf: { cacheTtl: 0, cacheEverything: false },
-      headers: { 'Cache-Control': 'no-cache' },
-    });
+    const existing = await env.PAPER_TRADES.get(key);
+    if (existing) return jsonResponse(await existing.json(), 200);
+  } catch (error) {
+    return jsonResponse({ error: 'Execution state unavailable' }, 503);
+  }
+
+  let quotePayload;
+  try {
+    const quoteResponse = await fetchLiveQuotes([body.sym], env);
     if (!quoteResponse.ok) throw new Error(`quote source returned HTTP ${quoteResponse.status}`);
-    snapshot = await quoteResponse.json();
+    quotePayload = await quoteResponse.json();
   } catch (error) {
     return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
   }
+  const quoteReceivedAt = new Date();
 
-  const quoteResult = exactContractQuote(snapshot, body.sym, now.getTime());
+  const quoteResult = exactContractQuote(quotePayload, body.sym, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
 
-  const executionId = crypto.randomUUID();
+  const executedAt = new Date();
   const trade = Object.freeze({
     execution_id: executionId,
-    ts: now.toISOString(),
+    execution_request_id: executionId,
+    ts: executedAt.toISOString(),
+    quote_received_ts: quoteReceivedAt.toISOString(),
     quote_ts: quoteResult.quoteTs,
     sym: body.sym,
     strike: quoteResult.strike,
@@ -125,15 +181,10 @@ async function handlePaperTrade(request, env) {
     install_id: body.install_id,
   });
 
-  const day = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const installId = String(body.install_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
-  const accountId = String(body.account_id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
-  const key = `paper-trades/${day}/${now.toISOString().replace(/[:.]/g, '-')}_${installId}_${accountId}_${executionId}.json`;
-
   try {
     await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
       httpMetadata: { contentType: 'application/json' },
-      customMetadata: { executionId },
+      customMetadata: { executionId, executedAt: executedAt.toISOString() },
     });
   } catch (error) {
     return jsonResponse({ error: 'Execution could not be recorded' }, 503);
@@ -154,6 +205,10 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 function validateTradeIntent(body) {
   if (!body || typeof body !== 'object') return 'Body must be a JSON object';
 
+  if (typeof body.execution_request_id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.execution_request_id)) {
+    return 'execution_request_id must be a UUID';
+  }
   if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
     return 'sym must be a non-empty string';
   }
@@ -172,29 +227,29 @@ function validateTradeIntent(body) {
   return null;
 }
 
-function exactContractQuote(snapshot, symbol, nowMs) {
-  const quoteMs = Date.parse(snapshot?.timestamp);
+function exactContractQuote(payload, symbol, nowMs) {
+  const row = Array.isArray(payload?.quotes)
+    ? payload.quotes.find(candidate => candidate.symbol === symbol)
+    : null;
+  if (!row) return { error: 'Exact contract quote not found', status: 409 };
+  const quoteMs = Date.parse(row.quote_ts);
   if (!Number.isFinite(quoteMs)) return { error: 'Quote has no valid timestamp', status: 503 };
   const age = nowMs - quoteMs;
   if (age > MAX_QUOTE_AGE_MS || age < -MAX_QUOTE_FUTURE_MS) {
     return { error: 'Quote is stale', status: 409 };
   }
-  const row = Array.isArray(snapshot.rows)
-    ? snapshot.rows.find(candidate => candidate.OptionSymbol === symbol)
-    : null;
-  if (!row) return { error: 'Exact contract quote not found', status: 409 };
-  const bid = row.Bid;
-  const ask = row.Ask;
+  const bid = row.bid;
+  const ask = row.ask;
   if (typeof bid !== 'number' || typeof ask !== 'number' ||
       !Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask < 0 || bid > ask) {
     return { error: 'Exact contract quote is invalid', status: 409 };
   }
-  const strike = Number(row.Strike);
-  if (!Number.isFinite(strike) || strike <= 0 || !['call', 'put'].includes(row.Type) ||
-      typeof row.Expiration !== 'string' || !ISO_DATE.test(row.Expiration)) {
+  const strike = Number(row.strike);
+  if (!Number.isFinite(strike) || strike <= 0 || !['call', 'put'].includes(row.type) ||
+      typeof row.exp !== 'string' || !ISO_DATE.test(row.exp)) {
     return { error: 'Exact contract metadata is invalid', status: 409 };
   }
-  return { bid, ask, strike, type: row.Type, exp: row.Expiration, quoteTs: new Date(quoteMs).toISOString() };
+  return { bid, ask, strike, type: row.type, exp: row.exp, quoteTs: new Date(quoteMs).toISOString() };
 }
 
 function jsonResponse(value, status) {

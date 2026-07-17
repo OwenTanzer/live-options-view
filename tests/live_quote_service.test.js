@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { LiveQuoteService } = require('../docs/shared.js');
+const { LiveQuoteService, LiveQuotePoller, parseRetryAfter } = require('../docs/shared.js');
 
 const service = new LiveQuoteService();
 let notifications = 0;
@@ -19,6 +19,11 @@ assert.equal(service.get('VISIBLE').observedAt, '2026-07-16T12:00:00Z');
 assert.equal(service.get('IGNORED'), null);
 assert.equal(notifications, 1);
 
+service.publish([
+  { symbol: 'VISIBLE', bid: 0.5, ask: 0.7, strike: 500, type: 'call', exp: '2026-07-16' },
+], { source: 'older-snapshot', observedAt: '2026-07-16T11:59:00Z' });
+assert.equal(service.get('VISIBLE').bid, 1, 'an older snapshot must not overwrite a newer quote');
+
 service.setVisibleContracts([]);
 assert.equal(service.get('VISIBLE'), null);
 assert.equal(service.get('OPEN').mid, 2.2);
@@ -32,4 +37,54 @@ assert.equal(notifications, 3, 'dropping a contract via setOpenPositions should 
 service.setVisibleContracts([]);
 assert.equal(notifications, 3, 'a no-op prune should not notify subscribers');
 
-console.log('PASS live quote service interests, metadata, notifications, and pruning');
+assert.equal(parseRetryAfter('5', 0), 5000);
+assert.equal(parseRetryAfter('Thu, 01 Jan 1970 00:00:10 GMT', 2000), 8000);
+
+(async () => {
+  const live = new LiveQuoteService();
+  live.setVisibleContracts(['QQQ260717C00600000']);
+  let resolveFetch;
+  let calls = 0;
+  const responsePromise = new Promise(resolve => { resolveFetch = resolve; });
+  const poller = new LiveQuotePoller(live, {
+    fetchFn: () => {
+      calls++;
+      return responsePromise;
+    },
+    nowFn: () => Date.parse('2026-07-17T14:30:05Z'),
+    randomFn: () => 0.5,
+    isHidden: () => false,
+  });
+  poller.running = true;
+  const first = poller.poll();
+  poller.poll();
+  assert.equal(calls, 1, 'overlapping poll calls should share one in-flight request');
+  resolveFetch({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => ({
+      server_ts: '2026-07-17T14:30:05Z',
+      quotes: [{
+        symbol: 'QQQ260717C00600000', bid: 1, ask: 1.2, strike: 600,
+        type: 'call', exp: '2026-07-17', quote_ts: '2026-07-17T14:30:04Z',
+      }],
+    }),
+  });
+  await first;
+  assert.equal(live.get('QQQ260717C00600000').source, 'dxlink-live');
+  assert.equal(live.get('QQQ260717C00600000').observedAt, '2026-07-17T14:30:04Z');
+  assert.equal(poller.health.state, 'live');
+  assert.equal(poller.health.quoteAgeMs, 1000);
+  assert.equal(poller._normalInterval(), 5000);
+  poller.stop();
+
+  const hiddenPoller = new LiveQuotePoller(new LiveQuoteService(), { isHidden: () => true });
+  assert.equal(hiddenPoller._normalInterval(), 60_000);
+  hiddenPoller.dispose();
+
+  console.log('PASS live quote service polling, interests, health, and deduplication');
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

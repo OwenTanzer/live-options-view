@@ -18,6 +18,8 @@ Environment variables (set in Railway dashboard):
   R2_ACCESS_KEY_ID       R2 access key
   R2_SECRET_ACCESS_KEY   R2 secret key
   R2_BUCKET_NAME         bucket name (default: pub-4d5c916b8cb74ffb8c0abd7dfadb02cf)
+  LIVE_QUOTE_KEY         shared key for the Worker's read-only quote proxy
+  PORT                   Railway HTTP port (default: 8080 locally)
 """
 
 import io
@@ -29,7 +31,9 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import boto3
 import pandas as pd
@@ -66,7 +70,10 @@ PREMARKET_HOUR  = 6
 STOP_HOUR       = 16
 STOP_MIN        = 15
 STALE_FEED_SECS = 120   # warn if no feed event for this many seconds
+LIVE_QUOTE_PORT = int(os.environ.get("PORT", "8080"))
+MAX_LIVE_QUOTE_SYMBOLS = 100
 R2_BUCKET       = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
+_active_quote_server = None
 
 PRICE_TICKERS: dict[str, str] = {
     "QQQ":     "QQQ",
@@ -633,6 +640,8 @@ class DXLinkFeed:
                         s["bid"] = b
                     if a is not None:
                         s["ask"] = a
+                    if b is not None or a is not None:
+                        s["quote_ts"] = now.isoformat()
                 elif et == "Summary":
                     oi = self._to_int(event.get("openInterest"))
                     if oi is not None:
@@ -673,6 +682,96 @@ class DXLinkFeed:
             self._last_close_code = code
         log.warning(f"DXLink closed: code={code}")
         self._ready.clear()
+
+
+# -- ephemeral live quote HTTP service ----------------------------------------
+
+def _live_quote_payload(feed: DXLinkFeed, contracts: dict[str, dict], symbols: list[str]) -> dict:
+    state = feed.get_state()
+    quotes = []
+    for symbol in symbols:
+        contract = contracts.get(symbol)
+        if not contract:
+            continue
+        quote = state.get(contract["streamer_symbol"], {})
+        bid = quote.get("bid")
+        ask = quote.get("ask")
+        quote_ts = quote.get("quote_ts")
+        if bid is None or ask is None or quote_ts is None:
+            continue
+        quotes.append({
+            "symbol": symbol,
+            "bid": bid,
+            "ask": ask,
+            "strike": contract["strike"],
+            "type": contract["type"],
+            "exp": contract["exp"],
+            "quote_ts": quote_ts,
+        })
+    return {
+        "quotes": quotes,
+        "requested": len(symbols),
+        "returned": len(quotes),
+        "server_ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def start_live_quote_server(feed: DXLinkFeed, contracts: dict[str, dict]):
+    global _active_quote_server
+    access_key = os.environ.get("LIVE_QUOTE_KEY", "")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/health":
+                self._json(200, {"ok": True})
+                return
+            if parsed.path != "/live-quotes":
+                self._json(404, {"error": "Not found"})
+                return
+            if not access_key or self.headers.get("X-Live-Quote-Key") != access_key:
+                self._json(403, {"error": "Forbidden"})
+                return
+            raw_symbols = parse_qs(parsed.query).get("symbols", [""])[0]
+            symbols = list(dict.fromkeys(
+                symbol.strip().replace(" ", "")
+                for symbol in raw_symbols.split(",")
+                if symbol.strip()
+            ))
+            if not symbols or len(symbols) > MAX_LIVE_QUOTE_SYMBOLS:
+                self._json(400, {"error": f"Request 1-{MAX_LIVE_QUOTE_SYMBOLS} symbols"})
+                return
+            self._json(200, _live_quote_payload(feed, contracts, symbols))
+
+        def _json(self, status: int, value: dict):
+            body = json.dumps(value, separators=(",", ":")).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            log.debug("live quote HTTP: " + format, *args)
+
+    server = ThreadingHTTPServer(("0.0.0.0", LIVE_QUOTE_PORT), Handler)
+    _active_quote_server = server
+    thread = threading.Thread(target=server.serve_forever, name="live-quote-http", daemon=True)
+    thread.start()
+    log.info(f"live quote HTTP service started on port {LIVE_QUOTE_PORT}")
+    return server
+
+
+def stop_live_quote_server(server=None):
+    global _active_quote_server
+    target = server or _active_quote_server
+    if target is None:
+        return
+    target.shutdown()
+    target.server_close()
+    if target is _active_quote_server:
+        _active_quote_server = None
 
 
 # -- tier classification (mirrors oi_viewer.py) -------------------------------
@@ -1317,9 +1416,20 @@ def _run_session(login: str):
     strikes, exp_date = load_chain(auth["session_token"], today)
 
     option_syms = []
+    contracts = {}
     for s in strikes:
         option_syms.append(s["call_sym"])
         option_syms.append(s["put_sym"])
+        if s["call_occ"]:
+            contracts[s["call_occ"].replace(" ", "")] = {
+                "streamer_symbol": s["call_sym"], "strike": s["strike"],
+                "type": "call", "exp": exp_date,
+            }
+        if s["put_occ"]:
+            contracts[s["put_occ"].replace(" ", "")] = {
+                "streamer_symbol": s["put_sym"], "strike": s["strike"],
+                "type": "put", "exp": exp_date,
+            }
 
     price_syms = list(PRICE_TICKERS.values())
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
@@ -1329,6 +1439,7 @@ def _run_session(login: str):
     feed = DXLinkFeed(auth["streamer_url"], auth["streamer_token"])
     feed.set_subscriptions(option_syms, price_syms)
     feed.start()
+    quote_server = start_live_quote_server(feed, contracts)
 
     if not feed.wait_ready(timeout=30):
         log.warning("DXLink channel not open after 30s -- proceeding anyway")
@@ -1392,6 +1503,7 @@ def _run_session(login: str):
         pass
 
     feed.stop()
+    stop_live_quote_server(quote_server)
 
 
 def main():
@@ -1402,6 +1514,7 @@ def main():
         try:
             _run_session(login)
         except Exception as e:
+            stop_live_quote_server()
             log.error(f"session failed: {e}", exc_info=True)
             time.sleep(60)
         # After session end or crash, wait_for_premarket() handles sleeping until

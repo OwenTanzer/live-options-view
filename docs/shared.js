@@ -16,36 +16,52 @@ class LiveQuoteService {
     this.visibleContracts = new Set();
     this.openPositions = new Set();
     this.listeners = new Set();
+    this.interestListeners = new Set();
   }
 
   setVisibleContracts(symbols) {
-    this.visibleContracts = new Set(symbols || []);
+    const next = new Set(symbols || []);
+    const changed = !sameSet(this.visibleContracts, next);
+    this.visibleContracts = next;
     this._prune();
+    if (changed) this._notifyInterests();
   }
 
   setOpenPositions(symbols) {
-    this.openPositions = new Set(symbols || []);
+    const next = new Set(symbols || []);
+    const changed = !sameSet(this.openPositions, next);
+    this.openPositions = next;
     this._prune();
+    if (changed) this._notifyInterests();
   }
 
   publish(quotes, { source = 'unknown', observedAt = new Date().toISOString() } = {}) {
     const wanted = this._wanted();
+    let changed = false;
     for (const quote of (quotes || [])) {
       const symbol = quote.symbol;
       if (!symbol || !wanted.has(symbol)) continue;
       const bid = quote.bid ?? null;
       const ask = quote.ask ?? null;
       const mid = bid != null && ask != null ? (bid + ask) / 2 : (quote.mid ?? null);
+      const quoteObservedAt = quote.quote_ts || observedAt;
+      const currentObservedMs = Date.parse(this.quotes.get(symbol)?.observedAt);
+      const nextObservedMs = Date.parse(quoteObservedAt);
+      if (Number.isFinite(currentObservedMs) && Number.isFinite(nextObservedMs) &&
+          nextObservedMs < currentObservedMs) {
+        continue;
+      }
       this.quotes.set(symbol, {
         bid, ask, mid,
         strike: +quote.strike,
         type: quote.type,
         exp: quote.exp,
-        observedAt,
+        observedAt: quoteObservedAt,
         source,
       });
+      changed = true;
     }
-    this._notify();
+    if (changed) this._notify();
   }
 
   get(symbol) {
@@ -55,6 +71,15 @@ class LiveQuoteService {
   subscribe(listener) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeInterests(listener) {
+    this.interestListeners.add(listener);
+    return () => this.interestListeners.delete(listener);
+  }
+
+  interestSymbols() {
+    return [...this._wanted()].sort();
   }
 
   _wanted() {
@@ -79,6 +104,197 @@ class LiveQuoteService {
   _notify() {
     this.listeners.forEach(listener => listener());
   }
+
+  _notifyInterests() {
+    const symbols = this.interestSymbols();
+    this.interestListeners.forEach(listener => listener(symbols));
+  }
+}
+
+function sameSet(a, b) {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
+
+class LiveQuotePoller {
+  constructor(service, {
+    fetchFn = (...args) => fetch(...args),
+    endpoint = '/api/live-quotes',
+    foregroundIntervalMs = 5_000,
+    hiddenIntervalMs = 60_000,
+    maxQuoteAgeMs = 15_000,
+    requestTimeoutMs = 8_000,
+    maxBackoffMs = 120_000,
+    randomFn = Math.random,
+    nowFn = Date.now,
+    isHidden = () => typeof document !== 'undefined' && document.visibilityState !== 'visible',
+  } = {}) {
+    this.service = service;
+    this.fetchFn = fetchFn;
+    this.endpoint = endpoint;
+    this.foregroundIntervalMs = foregroundIntervalMs;
+    this.hiddenIntervalMs = hiddenIntervalMs;
+    this.maxQuoteAgeMs = maxQuoteAgeMs;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.maxBackoffMs = maxBackoffMs;
+    this.randomFn = randomFn;
+    this.nowFn = nowFn;
+    this.isHidden = isHidden;
+    this.timer = null;
+    this.inFlight = null;
+    this.failureCount = 0;
+    this.running = false;
+    this.healthListeners = new Set();
+    this.health = {
+      state: 'idle', lastAttemptAt: null, lastSuccessAt: null,
+      retryAt: null, quoteAgeMs: null, requested: 0, returned: 0,
+      httpStatus: null, message: 'Waiting for quote interests',
+    };
+    this.unsubscribeInterests = service.subscribeInterests(() => this.kick());
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.kick();
+  }
+
+  stop() {
+    this.running = false;
+    clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  dispose() {
+    this.stop();
+    this.unsubscribeInterests();
+    this.healthListeners.clear();
+  }
+
+  subscribeHealth(listener) {
+    this.healthListeners.add(listener);
+    listener({ ...this.health });
+    return () => this.healthListeners.delete(listener);
+  }
+
+  kick() {
+    if (!this.running || this.inFlight) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.poll(), 0);
+  }
+
+  async poll() {
+    if (!this.running || this.inFlight) return this.inFlight;
+    const symbols = this.service.interestSymbols();
+    if (!symbols.length) {
+      this._setHealth({
+        state: 'idle', requested: 0, returned: 0, retryAt: null,
+        message: 'Waiting for quote interests',
+      });
+      this._schedule(this._normalInterval());
+      return null;
+    }
+
+    const startedAt = this.nowFn();
+    this._setHealth({
+      state: this.failureCount ? 'backing-off' : 'connecting',
+      lastAttemptAt: new Date(startedAt).toISOString(),
+      requested: symbols.length,
+      retryAt: null,
+      message: 'Fetching live quotes',
+    });
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), this.requestTimeoutMs) : null;
+    const url = `${this.endpoint}?symbols=${encodeURIComponent(symbols.join(','))}`;
+    this.inFlight = this.fetchFn(url, {
+      cache: 'no-store',
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+
+    try {
+      const response = await this.inFlight;
+      if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.retryAfter = response.headers?.get?.('Retry-After');
+        throw error;
+      }
+      const payload = await response.json();
+      const quotes = Array.isArray(payload.quotes) ? payload.quotes : [];
+      if (!quotes.length) throw new Error('No live quotes returned');
+
+      const now = this.nowFn();
+      const ages = quotes.map(quote => now - Date.parse(quote.quote_ts)).filter(Number.isFinite);
+      const oldestAge = ages.length ? Math.max(...ages) : Infinity;
+      this.service.publish(quotes, {
+        source: 'dxlink-live',
+        observedAt: payload.server_ts || new Date(now).toISOString(),
+      });
+      this.failureCount = 0;
+      const partial = quotes.length < symbols.length;
+      const stale = oldestAge > this.maxQuoteAgeMs || oldestAge < -30_000;
+      const state = stale || partial ? 'stale' : 'live';
+      this._setHealth({
+        state,
+        lastSuccessAt: new Date(now).toISOString(),
+        quoteAgeMs: Number.isFinite(oldestAge) ? oldestAge : null,
+        requested: symbols.length,
+        returned: quotes.length,
+        httpStatus: 200,
+        message: stale ? 'Live quotes are stale' : partial ? 'Some live quotes are unavailable' : 'Live quotes healthy',
+      });
+      this._schedule(this._normalInterval());
+    } catch (error) {
+      this.failureCount += 1;
+      const retryMs = this._retryDelay(error);
+      const rateLimited = error.status === 429;
+      const unavailable = !rateLimited && this.failureCount === 1;
+      this._setHealth({
+        state: rateLimited ? 'rate-limited' : unavailable ? 'unavailable' : 'backing-off',
+        returned: 0,
+        httpStatus: error.status || null,
+        retryAt: new Date(this.nowFn() + retryMs).toISOString(),
+        message: rateLimited ? 'Live quotes rate limited' : 'Live quotes unavailable',
+      });
+      this._schedule(retryMs);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      this.inFlight = null;
+    }
+    return null;
+  }
+
+  _normalInterval() {
+    return this.isHidden() ? this.hiddenIntervalMs : this.foregroundIntervalMs;
+  }
+
+  _retryDelay(error) {
+    const retryAfterMs = parseRetryAfter(error.retryAfter, this.nowFn());
+    if (retryAfterMs != null) return Math.min(retryAfterMs, this.maxBackoffMs);
+    const base = Math.min(this.foregroundIntervalMs * (2 ** (this.failureCount - 1)), this.maxBackoffMs);
+    return Math.round(base * (0.75 + this.randomFn() * 0.5));
+  }
+
+  _schedule(delayMs) {
+    if (!this.running) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.poll(), delayMs);
+  }
+
+  _setHealth(patch) {
+    this.health = { ...this.health, ...patch };
+    const snapshot = { ...this.health };
+    this.healthListeners.forEach(listener => listener(snapshot));
+  }
+}
+
+function parseRetryAfter(value, nowMs = Date.now()) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - nowMs) : null;
 }
 
 const DISPLAY = 20;   // ±N strikes shown
@@ -294,4 +510,6 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
   return true;
 }
 
-if (typeof module !== 'undefined') module.exports = { LiveQuoteService, computeAtmWindow };
+if (typeof module !== 'undefined') {
+  module.exports = { LiveQuoteService, LiveQuotePoller, parseRetryAfter, computeAtmWindow };
+}
