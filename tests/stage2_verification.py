@@ -116,11 +116,69 @@ def test_dxlink_ingest_health():
     assert_equal(state["last"], 100.1, "trade ingest")
     assert_equal(state["oi"], 123, "summary ingest")
     assert_equal(state["gamma"], 0.01, "greeks ingest")
+    assert_true(state["bid_ts"] is not None, "bid timestamp set")
+    assert_true(state["ask_ts"] is not None, "ask timestamp set")
     assert_true(feed.get_health()["last_feed_event_time"] is not None, "last event time set")
 
 
+def test_per_side_quote_timestamps_and_registry_lifecycle():
+    feed = collector.DXLinkFeed("ws://example.invalid", "token")
+    feed._ingest([
+        {"eventType": "Quote", "eventSymbol": ".QQQ260717C600", "bidPrice": 1.0, "askPrice": 1.2},
+    ])
+    first = feed.get_state()[".QQQ260717C600"]
+    first_bid_ts = first["bid_ts"]
+    first_ask_ts = first["ask_ts"]
+    time.sleep(0.002)
+    feed._ingest([
+        {"eventType": "Quote", "eventSymbol": ".QQQ260717C600", "askPrice": 1.3},
+    ])
+    second = feed.get_state()[".QQQ260717C600"]
+    assert_equal(second["bid_ts"], first_bid_ts, "ask-only event must not refresh bid timestamp")
+    assert_true(second["ask_ts"] > first_ask_ts, "ask-only event refreshes ask timestamp")
+
+    registry = collector.LiveQuoteRegistry()
+    assert_equal(registry.health()["state"], "offline", "registry starts offline")
+    contracts = {
+        "QQQ260717C00600000": {
+            "streamer_symbol": ".QQQ260717C600",
+            "strike": 600.0,
+            "type": "call",
+            "exp": "2026-07-17",
+        },
+    }
+    live_feed = FakeFeed(
+        state={".QQQ260717C600": second},
+        last_event_time=datetime.now(timezone.utc),
+    )
+    connecting_feed = FakeFeed(
+        health={"connected": False, "authorized": False, "channel_open": False},
+    )
+    registry.set_session(connecting_feed, contracts)
+    assert_equal(registry.health()["state"], "connecting", "unready feed reports connecting")
+    stale_feed = FakeFeed(
+        state={".QQQ260717C600": second},
+        last_event_time=datetime.now(timezone.utc) - timedelta(seconds=collector.STALE_FEED_SECS + 1),
+    )
+    registry.set_session(stale_feed, contracts)
+    assert_equal(registry.health()["state"], "stale", "old feed reports stale")
+    registry.set_session(live_feed, contracts)
+    assert_equal(registry.health()["state"], "live", "ready feed reports live")
+    payload = registry.quote_payload(["QQQ260717C00600000"])
+    assert_equal(payload["returned"], 1, "registry returns exact requested contract")
+    assert_equal(payload["quotes"][0]["bid_ts"], first_bid_ts, "registry preserves bid timestamp")
+    assert_equal(payload["quotes"][0]["ask_ts"], second["ask_ts"], "registry preserves ask timestamp")
+    registry.clear_session()
+    assert_equal(registry.health()["state"], "offline", "cleared session reports offline")
+
+
 def test_prices_feed_stale_flags():
-    state = {"QQQ": {"bid": 100.0, "ask": 100.2, "prev_close": 99.0}}
+    # Populate every configured DXLink ticker so this unit test never reaches
+    # the external yfinance fallback.
+    state = {
+        symbol: {"bid": 100.0, "ask": 100.2, "prev_close": 99.0}
+        for symbol in collector.PRICE_TICKERS.values()
+    }
 
     stale_s3 = FakeS3()
     collector.push_prices(
@@ -184,8 +242,11 @@ def test_snapshot_archive_key_uniqueness():
     collector.take_snapshot(s3, feed, strikes, "2026-06-23", "0DTE_Regular", datetime(2026, 6, 23).date(), counters, tracker)
     collector.take_snapshot(s3, feed, strikes, "2026-06-23", "0DTE_Regular", datetime(2026, 6, 23).date(), counters, tracker)
     csv_keys = [obj["Key"] for obj in s3.objects if obj["Key"].endswith(".csv")]
-    assert_equal(len(csv_keys), 2, "two csv writes")
-    assert_equal(len(set(csv_keys)), 2, "unique csv keys")
+    snapshot_keys = [key for key in csv_keys if "/snapshot_" in key]
+    first_keys = [key for key in csv_keys if key.endswith("/first.csv")]
+    assert_equal(len(snapshot_keys), 2, "two timestamped snapshot writes")
+    assert_equal(len(set(snapshot_keys)), 2, "unique timestamped snapshot keys")
+    assert_equal(len(first_keys), 1, "one session-open first.csv mirror")
 
 
 def run():
@@ -193,6 +254,7 @@ def run():
         test_session_window_timing,
         test_startup_classification,
         test_dxlink_ingest_health,
+        test_per_side_quote_timestamps_and_registry_lifecycle,
         test_prices_feed_stale_flags,
         test_health_schema_and_counters,
         test_snapshot_archive_key_uniqueness,

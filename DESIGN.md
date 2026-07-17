@@ -34,6 +34,7 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 │  • 16 macro/indicator tickers  │──▶ intraday/latest.json                          (60s)
 │  • yfinance fallback for all   │──▶ intraday/prices.json                          (10s)
 │                                 │──▶ intraday/health.json                          (15s)
+│  • live quote HTTP service     │──▶ current in-memory DXLink quotes (no R2 write)
 └─────────────────────────────────┘
                 │ S3-compatible PUT
                 ▼
@@ -56,7 +57,7 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 │                                 │
 │  • Price strip    (10s poll)   │
 │  • OI heatmap     (60s poll)   │
-│  • No server-side logic        │
+│  • Live quotes     (5s poll)    │
 └─────────────────────────────────┘
 ```
 
@@ -257,19 +258,29 @@ Three-column table: Calls | Strike | Puts, ±67 strikes centered on ATM.
 - Red / "Cached · 13:25 ET (feed reconnecting)" — DXLink down, showing last good snapshot
 - Red / "Cached · 13:25 ET (3m ago)" — snapshot older than 2 minutes
 
-Source: `intraday/latest.json`, polled every 60 seconds.
+Open interest, volume, contract metadata, and recovery state come from
+`intraday/latest.json`, polled every 60 seconds. Bid/ask display is refreshed
+independently from the collector's in-memory DXLink state.
 
 The browser does not expose the R2 snapshot object as its quote store. Snapshot
 rows are ingested into a shared, ephemeral `LiveQuoteService`, scoped to the
 contracts currently visible in the heatmap plus contracts held by any open
 paper position. The heatmap, trade ticket, and position marks all read through
-that service. R2 is currently the service's producer, but this boundary allows
-a faster poller or stream to replace it without changing the durable 60-second
-snapshot cadence or the display consumers.
+that service. R2 snapshot ingestion seeds the service for display continuity.
+A separate `LiveQuotePoller` requests only the union of visible contracts and
+open positions from the same-origin `/api/live-quotes` Worker route every five
+seconds while visible and every 60 seconds while hidden. The Worker proxies to
+the Railway collector's process-lifetime read-only HTTP server. A thread-safe
+registry swaps the active feed and contract map as market sessions start,
+restart, and stop; `/health` remains available throughout and reports
+`offline`, `connecting`, `live`, or `stale`. This path never writes R2. The
+poller permits one in-flight request, deduplicates symbols,
+exponentially backs off with jitter, honors `Retry-After`, and exposes
+live/stale/backing-off/rate-limited/unavailable health in the status bar.
 
 ### 7.3 Paper trading
 
-Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Every fill (manual buy/sell and synthetic expiry settlement) is also POSTed best-effort to `/api/paper-trade`, handled by the Worker (`worker.js`), which writes one JSON object per trade to R2 under `paper-trades/YYYYMMDD/` (one object per fill avoids read-modify-write races across concurrent browsers/accounts). Each record is tagged with `account_id`, `account_name`, and a per-browser `install_id` (random, persisted in `localStorage`) so trades from different devices/strategies can be told apart during analysis. Upload failures are swallowed — R2 durability is a nice-to-have log, not required for the UI to function.
+Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Manual buys and sells send only an execution intent to `/api/paper-trade`. The Worker requests the exact contract from the collector's current in-memory DXLink state. Bid and ask carry independent receive timestamps: buys require a fresh `ask_ts`, while sells require a fresh `bid_ts`, preventing an update on one side from refreshing the opposite side. The selected side must have been received within 15 seconds. The Worker validates the market, fills buys at ask and sells at bid, and writes the canonical execution to R2 before returning success. Quote-provider errors preserve meaningful HTTP status and `Retry-After` diagnostics. The client changes its local book only after that response. The client supplies an `execution_request_id`; R2 stores the fill at the deterministic `paper-trades/requests/<id>.json` key using a conditional create (`etagDoesNotMatch: '*'`). Concurrent or sequential retries therefore return the one winning canonical execution rather than overwriting it or creating a duplicate. Replay first verifies symbol, side, quantity, account identity/name, and browser installation against the stored intent; a conflicting reuse returns 409. Each object records that identity, execution timestamp, Worker quote-receipt timestamp, selected-side quote timestamp, independent bid/ask timestamps, bid, ask, fill price, contract metadata, account identity, and browser install identity. Quote-source failures, stale/missing contracts, invalid/crossed markets, and R2 write failures reject the execution without changing the local book. Synthetic expiry settlement remains a separate local bookkeeping operation because it is not a market buy/sell.
 
 **Expiration settlement** (`settlementPrice()` / `settleExpired()`) is asymmetric between long and short:
 - **Long** positions held past expiration always settle at $0, regardless of moneyness. This book has no margin to exercise, so there's no realistic way to capture intrinsic value on an ITM long — the honest simulation of "held it, didn't close it" is that it expires worthless. Realizing intrinsic value requires closing before expiration, same constraint a real no-exercise-capacity account would face.
@@ -294,6 +305,7 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 | `TASTY_LOGIN` | tastytrade username |
 | `TASTY_PASSWORD` | tastytrade password |
 | `TASTY_TOTP_SECRET` | Base32 TOTP secret for MFA auto-completion |
+| `LIVE_QUOTE_KEY` | Shared collector/Worker key protecting the live quote endpoint |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 API token access key (read+write) |
 | `R2_SECRET_ACCESS_KEY` | R2 API token secret |
@@ -304,7 +316,10 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 - Bucket: `qqq-options-chain-data`
 - Public access via Cloudflare Worker (not direct R2 public URL)
 - CORS must allow `options.moopertonic.net` and `localhost` for browser fetch
-- `worker.js` (the `live-options-view` Worker) also holds a direct R2 binding (`PAPER_TRADES`, see `wrangler.toml`) so it can write paper-trade fills to `paper-trades/YYYYMMDD/` — same-origin POST from `docs/index.html`, no separate credentials needed in the browser
+- `worker.js` (the `live-options-view` Worker) also holds a direct R2 binding (`PAPER_TRADES`, see `wrangler.toml`) so it can write idempotent paper-trade fills to `paper-trades/requests/` — same-origin POST from `docs/index.html`, no separate credentials needed in the browser
+- The Worker requires `LIVE_QUOTE_ORIGIN` (the Railway public origin) and the
+  same `LIVE_QUOTE_KEY` as one-time environment configuration. Normal deploys
+  retain both values.
 
 ### 8.3 Web hosting
 
