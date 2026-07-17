@@ -111,6 +111,78 @@ class LiveQuoteService {
   }
 }
 
+function tickerSessionState(instrumentClass, nowMs = Date.now()) {
+  if (instrumentClass === 'crypto') return 'live';
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', hour: '2-digit',
+    minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(nowMs)).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  const weekday = !['Sat', 'Sun'].includes(parts.weekday);
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  if (!weekday) return 'closed';
+  if (instrumentClass === 'futures') return minutes >= 17 * 60 && minutes < 18 * 60 ? 'closed' : 'live';
+  if (instrumentClass === 'international') return 'live'; // source freshness is the session authority
+  if (minutes >= 570 && minutes < 960) return 'live';
+  if (instrumentClass === 'equity' && minutes >= 240 && minutes < 1200) return 'extended';
+  return 'closed';
+}
+
+class TickerStateStore {
+  constructor(symbolClasses, { nowFn = Date.now, staleAfterMs = 30_000 } = {}) {
+    this.symbolClasses = { ...(symbolClasses || {}) };
+    this.nowFn = nowFn;
+    this.staleAfterMs = staleAfterMs;
+    this.quotes = new Map();
+    this.listeners = new Set();
+    this.interestListeners = new Set();
+  }
+
+  interestSymbols() { return Object.keys(this.symbolClasses).sort(); }
+  subscribeInterests(listener) { this.interestListeners.add(listener); return () => this.interestListeners.delete(listener); }
+  subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  get(symbol) { return this._decorate(symbol, this.quotes.get(symbol)); }
+  snapshot() { return Object.fromEntries(this.interestSymbols().map(s => [s, this.get(s)]).filter(([, v]) => v)); }
+
+  publish(quotes, { observedAt = new Date(this.nowFn()).toISOString() } = {}) {
+    let changed = false;
+    for (const quote of (quotes || [])) {
+      const symbol = quote.symbol;
+      if (!this.symbolClasses[symbol] || quote.price == null) continue;
+      const quoteAt = quote.quote_ts || observedAt;
+      const current = this.quotes.get(symbol);
+      if (current && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
+      this.quotes.set(symbol, {
+        price: quote.price, bid: quote.bid ?? null, ask: quote.ask ?? null,
+        prev_close: quote.prev_close ?? null, chg_pct: quote.chg_pct ?? null,
+        source: quote.source || 'unknown', observedAt: quoteAt,
+        instrumentClass: quote.instrument_class || this.symbolClasses[symbol],
+      });
+      changed = true;
+    }
+    if (changed) this.listeners.forEach(listener => listener());
+  }
+
+  publishFallback(prices, observedAt) {
+    const eligible = Object.entries(prices || {}).filter(([symbol]) => {
+      const current = this.quotes.get(symbol);
+      return !current || this.nowFn() - Date.parse(current.observedAt) > this.staleAfterMs;
+    });
+    this.publish(eligible.map(([symbol, value]) => ({
+      symbol, ...value, source: 'r2-snapshot', quote_ts: observedAt,
+    })), { observedAt });
+  }
+
+  _decorate(symbol, quote) {
+    if (!quote) return null;
+    const age = this.nowFn() - Date.parse(quote.observedAt);
+    let state;
+    if (quote.source === 'r2-snapshot' || quote.source === 'last-known') state = 'fallback';
+    else if (!Number.isFinite(age) || age > this.staleAfterMs || age < -30_000) state = 'stale';
+    else state = tickerSessionState(quote.instrumentClass, this.nowFn());
+    return { ...quote, state, ageMs: age };
+  }
+}
+
 function sameSet(a, b) {
   if (a.size !== b.size) return false;
   for (const value of a) if (!b.has(value)) return false;
@@ -511,5 +583,8 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { LiveQuoteService, LiveQuotePoller, parseRetryAfter, computeAtmWindow };
+  module.exports = {
+    LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
+    parseRetryAfter, computeAtmWindow,
+  };
 }

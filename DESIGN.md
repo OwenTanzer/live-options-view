@@ -278,6 +278,19 @@ poller permits one in-flight request, deduplicates symbols,
 exponentially backs off with jitter, honors `Retry-After`, and exposes
 live/stale/backing-off/rate-limited/unavailable health in the status bar.
 
+The price strip reuses that transport with one batched request for its fixed
+ticker registry. Each ticker response carries its own source, observation
+timestamp, and small instrument class (`equity`, `futures`, `crypto`, `index`,
+`yield`, or `international`). A shared browser `TickerStateStore` rejects
+out-of-order updates and classifies each symbol independently as live,
+extended, closed, stale, or fallback. The classification deliberately encodes
+only the session distinctions needed by the display rather than pretending to
+be a complete exchange-holiday calendar. `intraday/prices.json` remains on its
+existing producer cadence and is used only to seed or recover symbols without
+a healthy live quote; it cannot overwrite a fresh live value. A partial
+upstream response therefore degrades only the missing ticker instead of making
+one active market cosmetically revive every symbol.
+
 ### 7.3 Paper trading
 
 Client-side paper trading (average-cost book, multiple named accounts for separating strategies) persists to `localStorage` per browser and drives the live UI. Manual buys and sells send only an execution intent to `/api/paper-trade`. The Worker requests the exact contract from the collector's current in-memory DXLink state. Bid and ask carry independent receive timestamps: buys require a fresh `ask_ts`, while sells require a fresh `bid_ts`, preventing an update on one side from refreshing the opposite side. The selected side must have been received within 15 seconds. The Worker validates the market, fills buys at ask and sells at bid, and writes the canonical execution to R2 before returning success. Quote-provider errors preserve meaningful HTTP status and `Retry-After` diagnostics. The client changes its local book only after that response. The client supplies an `execution_request_id`; R2 stores the fill at the deterministic `paper-trades/requests/<id>.json` key using a conditional create (`etagDoesNotMatch: '*'`). Concurrent or sequential retries therefore return the one winning canonical execution rather than overwriting it or creating a duplicate. Replay first verifies symbol, side, quantity, account identity/name, and browser installation against the stored intent; a conflicting reuse returns 409. Each object records that identity, execution timestamp, Worker quote-receipt timestamp, selected-side quote timestamp, independent bid/ask timestamps, bid, ask, fill price, contract metadata, account identity, and browser install identity. Quote-source failures, stale/missing contracts, invalid/crossed markets, and R2 write failures reject the execution without changing the local book. Synthetic expiry settlement remains a separate local bookkeeping operation because it is not a market buy/sell.

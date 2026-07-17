@@ -99,6 +99,14 @@ PRICE_TICKERS: dict[str, str] = {
     "AAPL":    "AAPL",
 }
 
+TICKER_CLASSES: dict[str, str] = {
+    "QQQ": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
+    "META": "equity", "GOOGL": "equity", "AMZN": "equity", "TSLA": "equity",
+    "MU": "equity", "SPCX": "equity", "AAPL": "equity",
+    "VIX": "index", "10Y": "yield", "JPY/USD": "futures",
+    "KOSPI": "international", "BTC/USD": "crypto",
+}
+
 # Yahoo Finance symbols for the same tickers (fallback when DXLink has no data)
 YF_SYMBOL_MAP: dict[str, str] = {
     "QQQ":     "QQQ",
@@ -658,10 +666,12 @@ class DXLinkFeed:
                     px = self._to_float(event.get("price"))
                     if px is not None:
                         s["last"] = px
+                        s["last_ts"] = now.isoformat()
                 elif et == "TradeETH":
                     px = self._to_float(event.get("price"))
-                    if px is not None and s.get("last") is None:
+                    if px is not None:
                         s["last"] = px
+                        s["last_ts"] = now.isoformat()
                 elif et == "Greeks":
                     for field in ("volatility", "delta", "gamma", "theta", "vega"):
                         v = self._to_float(event.get(field))
@@ -692,6 +702,7 @@ class LiveQuoteRegistry:
         self._lock = threading.Lock()
         self._feed: Optional[DXLinkFeed] = None
         self._contracts: dict[str, dict] = {}
+        self._ticker_fallbacks: dict[str, dict] = {}
 
     def set_session(self, feed: DXLinkFeed, contracts: dict[str, dict]):
         with self._lock:
@@ -702,6 +713,13 @@ class LiveQuoteRegistry:
         with self._lock:
             self._feed = None
             self._contracts = {}
+
+    def update_ticker_fallbacks(self, prices: dict[str, dict], observed_at: str):
+        with self._lock:
+            self._ticker_fallbacks = {
+                symbol: {**quote, "quote_ts": quote.get("quote_ts") or observed_at}
+                for symbol, quote in prices.items()
+            }
 
     def health(self) -> dict:
         with self._lock:
@@ -729,10 +747,32 @@ class LiveQuoteRegistry:
         with self._lock:
             feed = self._feed
             contracts = dict(self._contracts)
+            ticker_fallbacks = dict(self._ticker_fallbacks)
         health = self.health()
         state = feed.get_state() if feed is not None else {}
         quotes = []
         for symbol in symbols:
+            if symbol in PRICE_TICKERS:
+                raw = state.get(PRICE_TICKERS[symbol], {})
+                bid, ask, last = raw.get("bid"), raw.get("ask"), raw.get("last")
+                mid = (bid + ask) / 2 if bid is not None and ask is not None else None
+                price = last if last is not None else mid
+                observed = [ts for ts in (raw.get("last_ts"), raw.get("bid_ts"), raw.get("ask_ts")) if ts]
+                if price is not None and observed:
+                    prev = raw.get("prev_close")
+                    quotes.append({
+                        "kind": "ticker", "symbol": symbol, "price": price,
+                        "bid": bid, "ask": ask, "prev_close": prev,
+                        "chg_pct": round((price - prev) / prev * 100, 2) if prev else None,
+                        "quote_ts": max(observed), "source": "dxlink",
+                        "instrument_class": TICKER_CLASSES[symbol],
+                    })
+                elif ticker_fallbacks.get(symbol, {}).get("price") is not None:
+                    quotes.append({
+                        **ticker_fallbacks[symbol], "kind": "ticker", "symbol": symbol,
+                        "instrument_class": TICKER_CLASSES[symbol],
+                    })
+                continue
             contract = contracts.get(symbol)
             if not contract:
                 continue
@@ -745,6 +785,7 @@ class LiveQuoteRegistry:
             if bid is None or ask is None or not observed:
                 continue
             quotes.append({
+                "kind": "option",
                 "symbol": symbol,
                 "bid": bid,
                 "ask": ask,
@@ -789,7 +830,8 @@ def start_live_quote_server(registry: LiveQuoteRegistry):
                 self._json(400, {"error": f"Request 1-{MAX_LIVE_QUOTE_SYMBOLS} symbols"})
                 return
             health = registry.health()
-            if health["state"] in {"offline", "connecting"}:
+            has_tickers = any(symbol in PRICE_TICKERS for symbol in symbols)
+            if health["state"] in {"offline", "connecting"} and not has_tickers:
                 self._json(
                     503,
                     {"error": "Live quote feed unavailable", "health": health},
@@ -1008,7 +1050,8 @@ def fetch_yf_prices_bounded() -> dict[str, Optional[float]]:
     return result if result is not None else empty
 
 
-def push_prices(s3, feed: DXLinkFeed, counters: Counters):
+def push_prices(s3, feed: DXLinkFeed, counters: Counters,
+                quote_registry: Optional[LiveQuoteRegistry] = None):
     state      = feed.get_state()
     fh         = feed.get_health()
     ts_et      = datetime.now(ET)
@@ -1039,6 +1082,9 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
             "prev_close": prev,
             "chg_pct":    chg_pct,
             "volume":     d.get("volume"),
+            "source":     "dxlink" if price is not None else None,
+            "quote_ts":   max([v for v in (d.get("last_ts"), d.get("bid_ts"), d.get("ask_ts")) if v],
+                              default=None),
         }
 
     # yfinance fallback for any tickers DXLink didn't populate
@@ -1050,6 +1096,8 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
             yf_price = yf_data.get(lbl)
             if yf_price is not None:
                 prices[lbl]["price"] = yf_price
+                prices[lbl]["source"] = "yfinance"
+                prices[lbl]["quote_ts"] = ts_utc.isoformat()
                 filled.append(f"{lbl}={yf_price}")
         if filled:
             log.info(f"prices -- yfinance filled: {', '.join(filled)}")
@@ -1066,6 +1114,8 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
         if d["price"] is None and _last_prices.get(lbl) is not None:
             d["price"] = _last_prices[lbl]
             d["stale"] = True
+            d["source"] = "last-known"
+            d["quote_ts"] = ts_utc.isoformat()
             stale_filled.append(lbl)
     if stale_filled:
         log.warning(f"prices -- serving last-known values for: {', '.join(stale_filled)}")
@@ -1073,6 +1123,9 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
         log.warning(f"prices.json -- no data for: {', '.join(dead)}")
+
+    if quote_registry is not None:
+        quote_registry.update_ticker_fallbacks(prices, ts_utc.isoformat())
 
     payload = json.dumps({
         "timestamp":     ts_utc.isoformat(),
@@ -1094,10 +1147,11 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters):
         raise
 
 
-def prices_loop(s3, feed: DXLinkFeed, counters: Counters):
+def prices_loop(s3, feed: DXLinkFeed, counters: Counters,
+                quote_registry: Optional[LiveQuoteRegistry] = None):
     while not past_stop():
         try:
-            push_prices(s3, feed, counters)
+            push_prices(s3, feed, counters, quote_registry)
         except Exception as e:
             log.error(f"prices.json error: {e}")
         time.sleep(PRICES_SECS)
@@ -1500,7 +1554,8 @@ def _run_session(login: str, quote_registry: LiveQuoteRegistry):
     counters = Counters()
     tracker  = SnapshotTracker()
 
-    prices_thread = threading.Thread(target=prices_loop, args=(s3, feed, counters), daemon=True)
+    prices_thread = threading.Thread(
+        target=prices_loop, args=(s3, feed, counters, quote_registry), daemon=True)
     prices_thread.start()
     log.info(f"prices thread started (every {PRICES_SECS}s)")
 
