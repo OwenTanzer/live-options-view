@@ -173,7 +173,12 @@ def test_per_side_quote_timestamps_and_registry_lifecycle():
 
 
 def test_prices_feed_stale_flags():
-    state = {"QQQ": {"bid": 100.0, "ask": 100.2, "prev_close": 99.0}}
+    # Populate every configured DXLink ticker so this unit test never reaches
+    # the external yfinance fallback.
+    state = {
+        symbol: {"bid": 100.0, "ask": 100.2, "prev_close": 99.0}
+        for symbol in collector.PRICE_TICKERS.values()
+    }
 
     stale_s3 = FakeS3()
     collector.push_prices(
@@ -237,8 +242,11 @@ def test_snapshot_archive_key_uniqueness():
     collector.take_snapshot(s3, feed, strikes, "2026-06-23", "0DTE_Regular", datetime(2026, 6, 23).date(), counters, tracker)
     collector.take_snapshot(s3, feed, strikes, "2026-06-23", "0DTE_Regular", datetime(2026, 6, 23).date(), counters, tracker)
     csv_keys = [obj["Key"] for obj in s3.objects if obj["Key"].endswith(".csv")]
-    assert_equal(len(csv_keys), 2, "two csv writes")
-    assert_equal(len(set(csv_keys)), 2, "unique csv keys")
+    snapshot_keys = [key for key in csv_keys if "/snapshot_" in key]
+    first_keys = [key for key in csv_keys if key.endswith("/first.csv")]
+    assert_equal(len(snapshot_keys), 2, "two timestamped snapshot writes")
+    assert_equal(len(set(snapshot_keys)), 2, "unique timestamped snapshot keys")
+    assert_equal(len(first_keys), 1, "one session-open first.csv mirror")
 
 
 def run():
