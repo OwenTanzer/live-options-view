@@ -10,3 +10,15 @@ binding = "ASSETS"
 [[r2_buckets]]
 binding = "PAPER_TRADES"
 bucket_name = "qqq-options-chain-data"
+
+# Run `wrangler kv namespace create USERS` and `wrangler kv namespace create
+# SESSIONS`, then replace the placeholder ids below with the ones printed by
+# those commands. Required for /api/register, /api/login, /api/logout,
+# /api/me, and the session-authenticated /api/paper-trade and /api/settle.
+[[kv_namespaces]]
+binding = "USERS"
+id = "REPLACE_WITH_USERS_KV_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "REPLACE_WITH_SESSIONS_KV_NAMESPACE_ID"
