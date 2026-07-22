@@ -104,7 +104,8 @@ class DecisionLedger:
         return str(uuid.uuid4())
 
     def find_by_execution_request_id(self, execution_request_id: str) -> dict[str, Any] | None:
-        """Idempotency check for crash recovery.
+        """Idempotency check for crash recovery -- returns the *most recent*
+        record for this execution, not just any record.
 
         A crash can land between a durable ledger write and clearing the
         in-flight intent file on disk. Without this, the next recovery pass
@@ -112,20 +113,37 @@ class DecisionLedger:
         write a second ledger record for something already recorded once.
         Scans every run's ledger file, not just the current run's, since the
         crash may have happened in a previous process lifetime.
+
+        An `ambiguous` outcome deliberately does *not* finalize its intent,
+        so the same execution_request_id can legitimately accumulate more
+        than one record across recovery attempts before it resolves --
+        returning the first match found would keep reporting a stale
+        `ambiguous` record forever and never notice the later `filled`. Scan
+        every file (oldest to newest by mtime, an approximation of run
+        order across restarts) and every line within it, keeping the last
+        match seen.
         """
-        for path in sorted(self.paths.ledger.parent.glob("decisions-*.jsonl")):
+        found: dict[str, Any] | None = None
+        paths = sorted(
+            self.paths.ledger.parent.glob("decisions-*.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for path in paths:
             try:
                 with open(path, encoding="utf-8") as fh:
                     for line in fh:
                         line = line.strip()
                         if not line:
                             continue
-                        rec = json.loads(line)
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
                         if rec.get("execution_request_id") == execution_request_id:
-                            return rec
-            except (OSError, json.JSONDecodeError):
+                            found = rec
+            except OSError:
                 continue
-        return None
+        return found
 
     def record(
         self,

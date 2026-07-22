@@ -60,10 +60,22 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 class Mock:
     """Runs the mock Worker for the duration of one scenario."""
 
-    def __init__(self, fault: str | None = None, count: int = 1):
+    def __init__(
+        self,
+        fault: str | None = None,
+        count: int = 1,
+        me_fault: str | None = None,
+        me_count: int = 1,
+        me_skip: int = 0,
+    ):
         self.args = [sys.executable, str(MOCK), "--port", str(PORT)]
         if fault:
             self.args += ["--fault", fault, "--fault-count", str(count)]
+        if me_fault:
+            self.args += [
+                "--me-fault", me_fault, "--me-fault-count", str(me_count),
+                "--me-fault-skip", str(me_skip),
+            ]
 
     def __enter__(self):
         self.proc = subprocess.Popen(self.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -483,6 +495,73 @@ def scenario_recovery_idempotent_after_ledger_write(tmp: Path) -> None:
               len(runner.sessions[account.alias].me().trades) == before_trade_count)
 
 
+def scenario_ambiguous_stays_pending_until_reconciled(tmp: Path) -> None:
+    """An unresolved `ambiguous` outcome must not be finalized -- it isn't done.
+
+    `Runner._run_account` used to call `executor.finalize()` unconditionally
+    after every `executor.submit()`, including when retries were exhausted
+    with the outcome still `ambiguous`. That deleted the only recovery
+    marker for a trade whose fate genuinely isn't known yet, defeating the
+    crash-safety invariant from scenario 1.
+
+    Constructed so the ambiguity is genuine, not self-resolving: the
+    `unreachable` paper-trade fault records nothing server-side (unlike
+    `timeout`, where a retry would immediately discover the fill via the
+    idempotent-replay path), and `--me-fault 503` makes /api/me
+    simultaneously unavailable for the reconciliation attempts inside
+    `submit()`'s retry loop -- so the account genuinely cannot tell whether
+    its order landed until the server recovers.
+    """
+    print("\n13. Ambiguous execution stays pending until it's actually reconciled")
+    from crassus.runner import Runner
+
+    # me-fault-skip lets the two `/api/me` calls that happen before any
+    # order is placed -- login's ensure_session() and _run_account's own
+    # pre-decision reconcile -- succeed normally. The fault then covers
+    # exactly the two reconciliation attempts inside submit()'s retries.
+    with Mock(fault="unreachable", count=2, me_fault="503", me_count=2, me_skip=2):
+        account = Account(alias="Pending", username=f"pending_{uuid.uuid4().hex[:6]}",
+                          password="pw", strategy_id=STRATEGY_ID)
+        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+                        ledger_dir=tmp / "pending-logs", state_dir=tmp / "pending-state")
+        # Keep the test fast: default backoff/timeout are tuned for a real
+        # deployment, not a sleeping fault in a unit test.
+        runner.sessions[account.alias].timeout_s = 2.0
+        executor = runner.executors[account.alias]
+        executor.max_attempts = 2
+        executor.backoff_base_s = 0.1
+
+        runner.startup()
+        snapshot = runner.snapshots.read()
+        runner._run_account(account, snapshot, phase="open")
+
+        intent = executor.pending_intent()
+        check("Intent survives _run_account() with retries exhausted ambiguous",
+              intent is not None)
+
+        lines = runner.ledger.paths.ledger.read_text().strip().split("\n")
+        records = [json.loads(l) for l in lines]
+        check("The unresolved outcome was still recorded, not silently dropped",
+              any(r["outcome_class"] == Outcome.AMBIGUOUS for r in records), str(records))
+
+        # The server recovers (both faults are exhausted by now); a later
+        # recovery pass must reconcile this exactly once.
+        request_id = intent["execution_request_id"]
+        handled = runner._recover_pending(account)
+        check("Recovery reconciles the previously-ambiguous intent", handled)
+        check("Intent finalized once the outcome actually resolved",
+              executor.pending_intent() is None)
+
+        matching = [json.loads(l) for l in runner.ledger.paths.ledger.read_text().strip().split("\n")
+                    if json.loads(l).get("execution_request_id") == request_id]
+        check("Ledger shows the ambiguous attempt and the eventual resolution, not a silent overwrite",
+              len(matching) == 2 and matching[-1]["outcome_class"] == Outcome.FILLED,
+              str([r["outcome_class"] for r in matching]))
+        check("No duplicate fill -- the order never actually reached the server the first time",
+              len(runner.sessions[account.alias].me().trades) == 1,
+              len(runner.sessions[account.alias].me().trades))
+
+
 def scenario_strategy_config_validation(tmp: Path) -> None:
     """An unregistered strategy_id must be a startup error, not a mid-run crash.
 
@@ -491,7 +570,7 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
     six in accounts.example.json used to be) would raise `KeyError` deep in
     `_run_account` and take the whole process down, Ankit's fill included.
     """
-    print("\n13. Strategy config validation: unregistered strategy_id fails at startup")
+    print("\n14. Strategy config validation: unregistered strategy_id fails at startup")
     from crassus.config import load_accounts
     from crassus.runner import Runner
 
@@ -537,6 +616,7 @@ def main() -> int:
             scenario_quote_rate_limit,
             scenario_liquidation, scenario_ledger, scenario_strategy_contract, scenario_book_math,
             scenario_p1_closed_loop, scenario_recovery_idempotent_after_ledger_write,
+            scenario_ambiguous_stays_pending_until_reconciled,
             scenario_strategy_config_validation,
         ):
             scenario(tmp)

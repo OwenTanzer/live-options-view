@@ -22,7 +22,7 @@ record of what the bot saw, decided, and did.
 | Phase | | |
 |---|---|---|
 | **P0** deployment smoke test | 🔴 **Blocked** | Account endpoints are absent from the deployed Worker — see below |
-| **P1** single-account closed loop | 🟢 Implemented, verified against a mock | 60/60 invariant checks pass |
+| **P1** single-account closed loop | 🟢 Implemented, verified against a mock | 66/66 invariant checks pass |
 | **P2** multi-account supervisor | 🟡 Runtime supports it; unexercised against a real server | |
 | **P3** strategy ecology | ⚪ Not started | Only the smoke strategy exists |
 | **P4** evaluation & hardening | ⚪ Not started | |
@@ -92,7 +92,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/runner.py` | The loop |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
-| `scripts/verify_invariants.py` | 60 checks across 14 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
+| `scripts/verify_invariants.py` | 66 checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
 
 ## Integrity invariants
 

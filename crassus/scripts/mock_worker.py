@@ -13,15 +13,28 @@ and settlement that deletes an insolvent user outright.
 
 Fault injection lets the recovery paths be tested on demand:
 
-    --fault timeout    hang past the client timeout, but still record the fill
-    --fault 500        record the fill, then return a 500
-    --fault 429        reply 429 with Retry-After on /api/paper-trade
-    --fault 410        delete the account mid-flight (margin call)
-    --fault quote_429  reply 429 with Retry-After on /api/live-quotes
+    --fault timeout      hang past the client timeout, but still record the fill
+    --fault 500          record the fill, then return a 500
+    --fault 429          reply 429 with Retry-After on /api/paper-trade
+    --fault 410          delete the account mid-flight (margin call)
+    --fault quote_429    reply 429 with Retry-After on /api/live-quotes
+    --fault unreachable  hang past the client timeout; records NOTHING (unlike
+                         `timeout`) -- simulates the request never reaching
+                         the server at all, not "processed but unconfirmed"
+    --me-fault 503       independent of --fault: GET /api/me also returns 503
+                         for --me-fault-count calls, so a paper-trade fault
+                         and a simultaneously-unavailable /api/me can be
+                         combined to construct a genuinely unresolvable
+                         execution (see verify_invariants.py's
+                         scenario_ambiguous_stays_pending_until_reconciled)
 
-`timeout` and `500` are the interesting ones: both leave the server holding a
-trade the client never got confirmation of, which is exactly the ambiguity the
-persisted execution_request_id is meant to resolve.
+`timeout` and `500` leave the server holding a trade the client never got
+confirmation of -- exactly the ambiguity the persisted execution_request_id
+is meant to resolve, and on its own a retry against the same id immediately
+discovers the fill via the idempotent-replay path below. `unreachable` is
+different: paired with `--me-fault`, neither the execution nor the
+reconciliation read can tell the client anything, so the ambiguity survives
+every retry instead of self-resolving on the second attempt.
 """
 
 from __future__ import annotations
@@ -42,6 +55,10 @@ USERS: dict[str, dict] = {}
 SESSIONS: dict[str, str] = {}
 LOCK = threading.Lock()
 FAULT = {"mode": None, "remaining": 0}
+# Independent of FAULT: lets /api/me be unavailable *at the same time* as a
+# paper-trade fault, which is what a genuinely unresolvable execution needs --
+# see --fault unreachable and --me-fault below.
+ME_FAULT = {"mode": None, "remaining": 0, "skip": 0}
 QUOTES: dict[str, dict] = {}
 SNAPSHOT_BYTES: bytes = b"{}"
 
@@ -63,6 +80,23 @@ def take_fault(*expected_modes: str) -> str | None:
             FAULT["remaining"] -= 1
             return FAULT["mode"]
     return None
+
+
+def take_me_fault() -> bool:
+    """Independent fault axis for GET /api/me -- see ME_FAULT above.
+
+    `skip` lets the first N calls (e.g. the initial login/reconcile reads
+    that happen before an order is even placed) succeed normally, so the
+    fault applies only to the reconciliation reads that come later.
+    """
+    with LOCK:
+        if ME_FAULT["skip"] > 0:
+            ME_FAULT["skip"] -= 1
+            return False
+        if ME_FAULT["mode"] and ME_FAULT["remaining"] > 0:
+            ME_FAULT["remaining"] -= 1
+            return True
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/me":
+            if take_me_fault():
+                return self._json(503, {"error": "temporarily_unavailable"})
+
             user = self._session_user()
             if not user:
                 return self._json(403, {"error": "not_authenticated"})
@@ -212,9 +249,19 @@ class Handler(BaseHTTPRequestHandler):
         if not all([request_id, sym, side, qty]):
             return self._json(400, {"error": "invalid_intent"})
 
-        fault = take_fault("timeout", "500", "429", "410")
+        fault = take_fault("timeout", "500", "429", "410", "unreachable")
         if fault == "429":
             return self._json(429, {"error": "rate_limited"}, {"Retry-After": "2"})
+
+        if fault == "unreachable":
+            # Unlike `timeout`, nothing is recorded here at all -- this
+            # simulates the request never reaching the server (a network
+            # partition), not "processed but the response was lost". A
+            # replay of the same execution_request_id will find no trade
+            # and genuinely retry, rather than discovering an idempotent
+            # fill on the very next attempt.
+            time.sleep(30)
+            return
 
         with LOCK:
             if user not in USERS:
@@ -259,8 +306,14 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
-    ap.add_argument("--fault", choices=["timeout", "500", "429", "410", "quote_429"])
+    ap.add_argument("--fault", choices=["timeout", "500", "429", "410", "quote_429", "unreachable"])
     ap.add_argument("--fault-count", type=int, default=1)
+    ap.add_argument("--me-fault", choices=["503"], help="Independent fault for GET /api/me -- see module docstring")
+    ap.add_argument("--me-fault-count", type=int, default=1)
+    ap.add_argument(
+        "--me-fault-skip", type=int, default=0,
+        help="Let this many /api/me calls succeed before the fault kicks in",
+    )
     ap.add_argument(
         "--snapshot", type=Path, default=DEFAULT_SNAPSHOT_FIXTURE,
         help="Local JSON fixture served at /intraday/latest.json (default: bundled fixture)",
@@ -269,13 +322,18 @@ def main() -> int:
 
     if args.fault:
         FAULT["mode"], FAULT["remaining"] = args.fault, args.fault_count
+    if args.me_fault:
+        ME_FAULT["mode"], ME_FAULT["remaining"], ME_FAULT["skip"] = (
+            args.me_fault, args.me_fault_count, args.me_fault_skip,
+        )
 
     global SNAPSHOT_BYTES
     SNAPSHOT_BYTES = args.snapshot.read_bytes()
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"mock worker on http://127.0.0.1:{args.port}"
-          + (f" (fault={args.fault} x{args.fault_count})" if args.fault else ""))
+          + (f" (fault={args.fault} x{args.fault_count})" if args.fault else "")
+          + (f" (me-fault={args.me_fault} x{args.me_fault_count})" if args.me_fault else ""))
     server.serve_forever()
     return 0
 

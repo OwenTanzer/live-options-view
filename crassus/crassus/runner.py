@@ -64,6 +64,19 @@ def _validate_strategy_ids(accounts: list[Any]) -> None:
         )
 
 
+def _unresolved(outcome_class: str) -> bool:
+    """Whether an outcome still needs reconciliation before its intent can
+    be considered acknowledged.
+
+    `ambiguous` specifically means "retries exhausted, still unknown
+    whether the trade happened" -- the intent that carries the only
+    recovery marker for it must survive so a later cycle or restart can
+    reconcile against `/api/me`, rather than being finalized alongside a
+    resolved outcome like `filled` or `rejected`.
+    """
+    return outcome_class == Outcome.AMBIGUOUS
+
+
 class Runner:
     def __init__(
         self,
@@ -176,10 +189,15 @@ class Runner:
 
         request_id = intent.get("execution_request_id")
         existing = self.ledger.find_by_execution_request_id(request_id) if request_id else None
-        if existing:
+        if existing and not _unresolved(existing.get("outcome_class")):
+            # A *resolved* record already exists for this execution -- the
+            # crash happened between that ledger write and clearing the
+            # intent. An `ambiguous` existing record does not count: that
+            # was deliberately left unresolved and still needs another
+            # recovery attempt, not to be waved through as already handled.
             log.warning(
-                "%s: intent %s already durably recorded (decision_id=%s); clearing stale marker.",
-                account.alias, request_id, existing.get("decision_id"),
+                "%s: intent %s already durably recorded (decision_id=%s, outcome=%s); clearing stale marker.",
+                account.alias, request_id, existing.get("decision_id"), existing.get("outcome_class"),
             )
             executor.finalize(request_id)
             return True
@@ -206,8 +224,17 @@ class Runner:
             latency_ms=recovered.latency_ms,
             account_state_after=recovered.state_after.summary() if recovered.state_after else None,
         )
-        # Only cleared now that the outcome is durably on disk in the ledger.
-        executor.finalize(recovered.execution_request_id)
+        if _unresolved(recovered.outcome_class):
+            # The replay itself ended ambiguous again -- still don't know
+            # whether it happened, so the envelope must survive for the
+            # next recovery pass rather than being finalized here.
+            log.warning(
+                "%s: replay still ambiguous after recovery; intent retained for the next pass.",
+                account.alias,
+            )
+        else:
+            # Only cleared now that the outcome is durably on disk in the ledger.
+            executor.finalize(recovered.execution_request_id)
         return True
 
     def run(self) -> None:
@@ -397,8 +424,18 @@ class Runner:
             note=result.note,
             quote_rate_limit_note=self.quotes.last_retry_note,
         )
-        # Only cleared now that the outcome is durably recorded in the ledger.
-        executor.finalize(result.execution_request_id)
+        if _unresolved(result.outcome_class):
+            # Retries exhausted with the outcome still ambiguous -- the
+            # intent must survive on disk so a later cycle or restart can
+            # reconcile it against /api/me, rather than being finalized
+            # alongside a resolved outcome like `filled` or `rejected`.
+            log.warning(
+                "%s: ambiguous execution unresolved after retries; intent retained for reconciliation.",
+                alias,
+            )
+        else:
+            # Only cleared now that the outcome is durably recorded in the ledger.
+            executor.finalize(result.execution_request_id)
         log.info("%s: -> %s (http=%s)", alias, result.outcome_class, result.http_status)
 
     def _record_liquidation(
