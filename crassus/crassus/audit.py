@@ -103,6 +103,30 @@ class DecisionLedger:
     def new_decision_id(self) -> str:
         return str(uuid.uuid4())
 
+    def find_by_execution_request_id(self, execution_request_id: str) -> dict[str, Any] | None:
+        """Idempotency check for crash recovery.
+
+        A crash can land between a durable ledger write and clearing the
+        in-flight intent file on disk. Without this, the next recovery pass
+        would see the stale intent, find the trade again via `/api/me`, and
+        write a second ledger record for something already recorded once.
+        Scans every run's ledger file, not just the current run's, since the
+        crash may have happened in a previous process lifetime.
+        """
+        for path in sorted(self.paths.ledger.parent.glob("decisions-*.jsonl")):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        rec = json.loads(line)
+                        if rec.get("execution_request_id") == execution_request_id:
+                            return rec
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
+
     def record(
         self,
         *,

@@ -46,6 +46,14 @@ class AccountLiquidated(CrassusError):
     Terminal and unrecoverable for this login: the account no longer exists
     server-side. Permitted as an experiment, but it must be recorded as a
     margin call rather than surfacing as a generic HTTP failure.
+
+    NOTE: this is verified against the documented contract (the mock
+    Worker), not the real deployed Worker. `worker.js`'s settlement path
+    currently deletes the user record outright rather than leaving a
+    tombstone, so a session resolved *after* liquidation reports a plain
+    401, not 410 -- this detector has never actually seen that happen. See
+    `crassus/README.md` ("Known gaps") before treating this as validated
+    end-to-end.
     """
 
     outcome_class = Outcome.ACCOUNT_LIQUIDATED
@@ -391,6 +399,21 @@ class ExecutionClient:
     def _clear_intent(self) -> None:
         self._inflight_path.unlink(missing_ok=True)
 
+    def finalize(self, execution_request_id: str) -> None:
+        """Clear the persisted intent -- but only once its outcome is durably
+        recorded elsewhere (the decision ledger).
+
+        `submit()` deliberately does *not* clear the intent itself on a
+        terminal outcome: if the caller crashed between receiving that
+        outcome and writing it to the ledger, the causal record would be
+        gone with nothing on disk to reconstruct it. The caller is
+        responsible for writing the ledger record first and calling this
+        only after that write has returned.
+        """
+        intent = self.pending_intent()
+        if intent and intent.get("execution_request_id") == execution_request_id:
+            self._clear_intent()
+
     def pending_intent(self) -> dict[str, Any] | None:
         if not self._inflight_path.exists():
             return None
@@ -419,9 +442,14 @@ class ExecutionClient:
         """Resolve an intent left in flight by a crash or timeout.
 
         Follows the MOO-24 recovery procedure exactly: reload the persisted
-        id, ask the server what it knows, and only replay if the trade is
-        genuinely absent. A found trade is authoritative and is never
+        envelope, ask the server what it knows, and only replay if the trade
+        is genuinely absent. A found trade is authoritative and is never
         resubmitted -- that is the whole point of persisting the id first.
+
+        Does NOT clear the intent itself -- the caller must durably record
+        the outcome (the decision ledger) and only then call `finalize()`.
+        A crash between this returning and that write leaves the envelope on
+        disk, so the next recovery pass can retry the write, not lose it.
         """
         intent = self.pending_intent()
         if not intent:
@@ -431,7 +459,6 @@ class ExecutionClient:
         state = self.session.me()
         found = self.find_trade(request_id, state)
         if found:
-            self._clear_intent()
             return ExecutionResult(
                 outcome_class=Outcome.RECONCILED_AFTER_AMBIGUITY,
                 execution_request_id=request_id,
@@ -445,6 +472,14 @@ class ExecutionClient:
             side=intent["side"],
             quantity=intent["quantity"],
             execution_request_id=request_id,
+            decision_id=intent.get("decision_id"),
+            strategy_id=intent.get("strategy_id"),
+            strategy_version=intent.get("strategy_version"),
+            reason=intent.get("reason"),
+            decision=intent.get("decision"),
+            market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
+            market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
+            account_state_before=intent.get("account_state_before"),
         )
         result.note = "Replayed a persisted in-flight intent that the server had not recorded."
         return result
@@ -459,11 +494,25 @@ class ExecutionClient:
         quantity: int,
         execution_request_id: str | None = None,
         decision_id: str | None = None,
+        strategy_id: str | None = None,
+        strategy_version: str | None = None,
+        reason: str | None = None,
+        decision: dict[str, Any] | None = None,
+        market_snapshot_timestamp: str | None = None,
+        market_snapshot_url_or_hash: str | None = None,
+        account_state_before: dict[str, Any] | None = None,
     ) -> ExecutionResult:
         """Execute one intent, with bounded retry and mandatory reconciliation.
 
         Serialized per account: the Worker has no compare-and-swap, so two
         concurrent mutations on one login can interleave and lose a write.
+
+        The persisted intent carries the *complete decision envelope*, not
+        just the execution id -- everything the decision ledger needs to
+        record this outcome. If the process dies after a terminal outcome
+        but before the ledger write, the envelope on disk is enough to
+        reconstruct that ledger record on the next recovery pass rather than
+        just noticing a trade happened with no reason attached to it.
         """
         request_id = execution_request_id or str(uuid.uuid4())
 
@@ -474,6 +523,13 @@ class ExecutionClient:
                 "side": side,
                 "quantity": quantity,
                 "decision_id": decision_id,
+                "strategy_id": strategy_id,
+                "strategy_version": strategy_version,
+                "reason": reason,
+                "decision": decision,
+                "market_snapshot_timestamp": market_snapshot_timestamp,
+                "market_snapshot_url_or_hash": market_snapshot_url_or_hash,
+                "account_state_before": account_state_before,
                 "created_utc": clock.iso_utc(),
             }
             self._persist_intent(intent)  # invariant 1: persist before sending
@@ -491,7 +547,9 @@ class ExecutionClient:
                 try:
                     resp = self.session._request("POST", "/api/paper-trade", json=body)
                 except AccountLiquidated:
-                    self._clear_intent()
+                    # Terminal, but not yet acknowledged -- the caller must
+                    # record the margin call in the ledger and call
+                    # `finalize()` before this intent is cleared.
                     raise
                 except AmbiguousExecution as exc:
                     # Invariant 3: never retry blind after a timeout -- ask the
@@ -523,7 +581,8 @@ class ExecutionClient:
                 payload = self._body(resp)
 
                 if resp.status_code < 300:
-                    self._clear_intent()
+                    # Not cleared here -- the caller records this in the
+                    # ledger first and clears via `finalize()` afterwards.
                     return ExecutionResult(
                         outcome_class=Outcome.FILLED,
                         execution_request_id=request_id,
@@ -562,7 +621,7 @@ class ExecutionClient:
 
                 # 4xx: the server made a decision and it was "no". A stale
                 # quote or a duplicate id is a rejection, not an ambiguity.
-                self._clear_intent()
+                # Not cleared here -- see `finalize()`.
                 return ExecutionResult(
                     outcome_class=Outcome.REJECTED,
                     execution_request_id=request_id,
@@ -590,7 +649,7 @@ class ExecutionClient:
         found = self.find_trade(request_id, state)
         if not found:
             return None
-        self._clear_intent()
+        # Not cleared here -- see `finalize()`.
         return ExecutionResult(
             outcome_class=Outcome.RECONCILED_AFTER_AMBIGUITY,
             execution_request_id=request_id,

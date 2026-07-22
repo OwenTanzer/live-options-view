@@ -145,12 +145,44 @@ class SnapshotReader:
         return snapshot
 
 
-class QuoteReader:
-    """Fetches ephemeral quotes. Needs no session -- this endpoint is public."""
+class QuoteRateLimited(Exception):
+    """Quote-side 429s exhausted their retries against the shared budget.
 
-    def __init__(self, base_url: str, timeout_s: float = 10.0):
+    Kept distinct from a bare `requests.HTTPError` so the runner can
+    classify this as `rate_limited` rather than letting it surface as a
+    generic, unclassified strategy exception.
+    """
+
+    def __init__(self, message: str, retries: int):
+        super().__init__(message)
+        self.retries = retries
+
+
+class QuoteReader:
+    """Fetches ephemeral quotes. Needs no session -- this endpoint is public.
+
+    Shares the same process-wide `RateLimiter` as account traffic. The limit
+    that binds is per-IP (see `client.RateLimiter`), so a quote poll and an
+    account mutation draw from one budget, not two -- six bot accounts
+    plus their quote reads must not be able to collectively trip a 429 that
+    each individually stayed under.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        rate_limiter: Any = None,
+        timeout_s: float = 10.0,
+        max_attempts: int = 3,
+    ):
         self.base_url = base_url.rstrip("/")
+        self.rate_limiter = rate_limiter
         self.timeout_s = timeout_s
+        self.max_attempts = max_attempts
+        # Set by the most recent call to `quotes()`; the runner reads this to
+        # fold retry history into the decision ledger's audit record instead
+        # of dropping it once the call finally succeeds.
+        self.last_retry_note: str | None = None
 
     def quotes(self, symbols: Iterable[str]) -> dict[str, Quote]:
         symbols = list(dict.fromkeys(symbols))  # de-dupe, preserve order
@@ -161,21 +193,44 @@ class QuoteReader:
                 f"/api/live-quotes accepts at most {MAX_QUOTE_SYMBOLS} symbols, got {len(symbols)}"
             )
 
-        resp = requests.get(
-            f"{self.base_url}/api/live-quotes",
-            params={"symbols": ",".join(symbols)},
-            timeout=self.timeout_s,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-        server_ts = payload.get("server_ts")
-        return {
-            q["symbol"]: Quote(
-                symbol=q["symbol"],
-                bid=q.get("bid"),
-                ask=q.get("ask"),
-                quote_ts=q.get("quote_ts"),
-                server_ts=server_ts,
+        self.last_retry_note = None
+        retries = 0
+        for attempt in range(1, self.max_attempts + 1):
+            if self.rate_limiter is not None:
+                self.rate_limiter.acquire()
+
+            resp = requests.get(
+                f"{self.base_url}/api/live-quotes",
+                params={"symbols": ",".join(symbols)},
+                timeout=self.timeout_s,
             )
-            for q in payload.get("quotes", [])
-        }
+
+            if resp.status_code == 429:
+                retries += 1
+                retry_after = float(resp.headers.get("Retry-After", 5))
+                if self.rate_limiter is not None:
+                    # Honored globally: the next `acquire()` from *any*
+                    # account or quote read will wait out this pause too.
+                    self.rate_limiter.penalize(retry_after)
+                self.last_retry_note = (
+                    f"Quote request rate-limited ({retries} "
+                    f"retr{'y' if retries == 1 else 'ies'}); Retry-After="
+                    f"{retry_after}s honored globally."
+                )
+                if attempt < self.max_attempts:
+                    continue
+                raise QuoteRateLimited(self.last_retry_note, retries)
+
+            resp.raise_for_status()
+            payload = resp.json()
+            server_ts = payload.get("server_ts")
+            return {
+                q["symbol"]: Quote(
+                    symbol=q["symbol"],
+                    bid=q.get("bid"),
+                    ask=q.get("ask"),
+                    quote_ts=q.get("quote_ts"),
+                    server_ts=server_ts,
+                )
+                for q in payload.get("quotes", [])
+            }

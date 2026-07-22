@@ -35,13 +35,14 @@ from crassus.client import (  # noqa: E402
     RateLimiter,
 )
 from crassus.config import Account  # noqa: E402
-from crassus.market import Quote  # noqa: E402
+from crassus.market import Quote, QuoteRateLimited, QuoteReader  # noqa: E402
 from crassus.strategies.smoke import STRATEGY_ID, smoke_atm_roundtrip  # noqa: E402
 from crassus.strategy import Decision, StrategyContext  # noqa: E402
 
 MOCK = Path(__file__).parent / "mock_worker.py"
 PORT = 8791
 BASE = f"http://127.0.0.1:{PORT}"
+MOCK_SNAPSHOT_URL = f"{BASE}/intraday/latest.json"
 
 passed, failed = 0, 0
 
@@ -101,7 +102,10 @@ def scenario_happy_path(tmp: Path) -> None:
         before = session.me()
         result = ex.submit(symbol=SYM, side="buy", quantity=1)
         check("Fill classified as `filled`", result.outcome_class == Outcome.FILLED, result.outcome_class)
-        check("In-flight intent cleared after confirmed fill", ex.pending_intent() is None)
+        check("Intent retained until the caller acknowledges the outcome",
+              ex.pending_intent() is not None)
+        ex.finalize(result.execution_request_id)
+        check("In-flight intent cleared once finalized", ex.pending_intent() is None)
 
         after = session.me()
         check("Trade visible in /api/me", len(after.trades) == len(before.trades) + 1)
@@ -139,7 +143,10 @@ def scenario_ambiguous_timeout(tmp: Path) -> None:
         book = Book(session.me().trades)
         check("No duplicate fill after recovery", book.position(SYM).quantity == 1,
               f"qty={book.position(SYM).quantity}")
-        check("In-flight intent cleared once reconciled", ex.pending_intent() is None)
+        check("Intent retained until the caller acknowledges the outcome",
+              ex.pending_intent() is not None)
+        ex.finalize(result.execution_request_id)
+        check("In-flight intent cleared once finalized", ex.pending_intent() is None)
 
 
 def scenario_ambiguous_500(tmp: Path) -> None:
@@ -197,8 +204,61 @@ def scenario_rate_limit(tmp: Path) -> None:
         check("Backed off before retrying", elapsed >= 0.1, f"{elapsed:.2f}s")
 
 
+def scenario_quote_rate_limit(tmp: Path) -> None:
+    """The quote side of the process must share the account RateLimiter.
+
+    Previously QuoteReader used a raw `requests.get`: a quote-side 429 never
+    honored Retry-After and surfaced as a generic, unclassified strategy
+    exception. This proves the shared limiter is actually shared -- a 429 on
+    /api/live-quotes pauses the *account* limiter too -- and that exhausting
+    quote retries raises a classifiable `QuoteRateLimited`, not a bare
+    HTTPError.
+    """
+    print("\n6b. Quote-side rate limiting: shared budget, classified 429")
+    # count=2: the Mock harness's own readiness probe hits /api/live-quotes
+    # once and consumes the first fault, so this leaves exactly one 429 for
+    # the scenario's own request.
+    with Mock(fault="quote_429", count=2):
+        limiter = RateLimiter(capacity=50, refill_per_s=50)
+        reader = QuoteReader(BASE, rate_limiter=limiter, max_attempts=3)
+
+        quotes = reader.quotes([SYM])
+        check("Recovers from a quote-side 429 and returns quotes", SYM in quotes, list(quotes))
+        check("Retry history is preserved on the reader for the audit trail",
+              reader.last_retry_note is not None and "rate-limited" in reader.last_retry_note,
+              reader.last_retry_note)
+
+        # The penalty from the quote-side 429 must be visible to account
+        # traffic sharing the same limiter -- prove the pause actually
+        # propagated rather than being scoped to the quote reader alone.
+        started = time.monotonic()
+        limiter.acquire()
+        check("Account-side acquire() also waited out the quote-side penalty",
+              time.monotonic() - started > 0.0)
+
+    with Mock(fault="quote_429", count=5):
+        reader2 = QuoteReader(BASE, rate_limiter=RateLimiter(capacity=50, refill_per_s=50), max_attempts=2)
+        raised = False
+        try:
+            reader2.quotes([SYM])
+        except QuoteRateLimited:
+            raised = True
+        check("Exhausted quote retries raise a classifiable QuoteRateLimited", raised)
+
+
 def scenario_liquidation(tmp: Path) -> None:
-    print("\n7. Liquidation: 410 is terminal and recorded as a margin call")
+    """Proves the client handles a 410 correctly *if the server sends one*.
+
+    This is NOT proof that liquidation detection works against the real
+    deployed Worker. The mock fabricates 410 from /api/me and
+    /api/paper-trade on demand, matching the documented contract -- but
+    `worker.js`'s settlement path deletes the user record outright on
+    insolvency rather than leaving a tombstone, so a session resolved after
+    liquidation gets a generic 401 there, not 410. See
+    crassus/README.md ("Known gaps") for the real-server gap this doesn't
+    close.
+    """
+    print("\n7. Liquidation: 410 is terminal and recorded as a margin call (mock contract only)")
     with Mock(fault="410", count=1):
         session, ex = make_client(tmp)
         raised = False
@@ -208,14 +268,21 @@ def scenario_liquidation(tmp: Path) -> None:
             raised = True
         check("410 raises AccountLiquidated", raised)
         check("Session marked liquidated", session.liquidated)
+        pending = ex.pending_intent()
+        check("Intent retained until the margin call is durably recorded",
+              pending is not None)
 
         ledger = DecisionLedger(tmp, run_id="liq")
         rec = ledger.record(
             decision_id="d1", account_alias="TestAcct", strategy_id=STRATEGY_ID,
             strategy_version="1.0.0", outcome_class=Outcome.ACCOUNT_LIQUIDATED,
             reason="MARGIN CALL -- account liquidated and deleted by the Worker",
+            execution_request_id=pending.get("execution_request_id") if pending else None,
             http_status=410, margin_called=True,
         )
+        if pending:
+            ex.finalize(pending["execution_request_id"])
+        check("Intent cleared once the margin call is finalized", ex.pending_intent() is None)
         check("Audit record carries an explicit margin-call annotation",
               rec["margin_called"] is True and "MARGIN CALL" in rec["reason"])
 
@@ -331,7 +398,7 @@ def scenario_p1_closed_loop(tmp: Path) -> None:
                           password="pw", strategy_id=STRATEGY_ID)
         ledger_dir, state_dir = tmp / "p1-logs", tmp / "p1-state"
 
-        runner = Runner([account], base_url=BASE, ledger_dir=ledger_dir, state_dir=state_dir)
+        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
         runner.startup()
         snapshot = runner.snapshots.read()
 
@@ -353,12 +420,111 @@ def scenario_p1_closed_loop(tmp: Path) -> None:
               str(Book(state.trades).summary()))
 
         # Restart: a fresh Runner over the same state and account.
-        restarted = Runner([account], base_url=BASE, ledger_dir=ledger_dir, state_dir=state_dir)
+        restarted = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
         restarted.startup()
         rebuilt = Book(restarted.sessions[account.alias].me().trades)
         check("Restart reconstructs state from server history without duplicate fills",
               len(state.trades) == 2 and rebuilt.is_flat,
               f"{len(state.trades)} trades, flat={rebuilt.is_flat}")
+
+
+def scenario_recovery_idempotent_after_ledger_write(tmp: Path) -> None:
+    """A crash between the ledger write and clearing the intent must not
+    turn into a second ledger record for the same execution.
+
+    This is the gap a confirmed fill could previously fall into: `submit()`
+    used to clear the intent itself on a terminal outcome, uncoupled from
+    whether the ledger write had actually happened yet. Now the intent
+    persists the full decision envelope and stays on disk until the caller
+    explicitly finalizes it, and recovery checks the ledger by
+    `execution_request_id` before ever re-querying the server.
+    """
+    print("\n12. Crash recovery is idempotent by execution_request_id")
+    from crassus.runner import Runner
+
+    with Mock():
+        account = Account(alias="Idem", username=f"idem_{uuid.uuid4().hex[:6]}",
+                          password="pw", strategy_id=STRATEGY_ID)
+        ledger_dir, state_dir = tmp / "idem-logs", tmp / "idem-state"
+        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
+        runner.startup()
+
+        executor = runner.executors[account.alias]
+        rid = str(uuid.uuid4())
+        result = executor.submit(
+            symbol=SYM, side="buy", quantity=1, execution_request_id=rid,
+            decision_id="dtest", strategy_id=STRATEGY_ID, strategy_version="1.0.0",
+            reason="test envelope",
+        )
+        check("Fill executes", result.outcome_class == Outcome.FILLED, result.outcome_class)
+        check("Intent retained -- not yet acknowledged by a ledger write",
+              executor.pending_intent() is not None)
+
+        # Simulate the ledger write succeeding, then a crash before
+        # `finalize()` clears the intent file.
+        runner.ledger.record(
+            decision_id="dtest", account_alias=account.alias, strategy_id=STRATEGY_ID,
+            strategy_version="1.0.0", outcome_class=Outcome.FILLED,
+            execution_request_id=rid, reason="test envelope",
+        )
+
+        before_trade_count = len(runner.sessions[account.alias].me().trades)
+
+        handled = runner._recover_pending(account)
+        check("Recovery detects the pending intent", handled)
+        check("Stale intent cleared without re-querying for a second record",
+              executor.pending_intent() is None)
+
+        lines = runner.ledger.paths.ledger.read_text().strip().split("\n")
+        matching = [json.loads(l) for l in lines if json.loads(l).get("execution_request_id") == rid]
+        check("Exactly one ledger record for this execution, not a duplicate",
+              len(matching) == 1, f"count={len(matching)}")
+        check("No duplicate trade was submitted to the server",
+              len(runner.sessions[account.alias].me().trades) == before_trade_count)
+
+
+def scenario_strategy_config_validation(tmp: Path) -> None:
+    """An unregistered strategy_id must be a startup error, not a mid-run crash.
+
+    `get_strategy()` used to run per-account with no error boundary: one
+    account configured with an unimplemented strategy_id (as five of the
+    six in accounts.example.json used to be) would raise `KeyError` deep in
+    `_run_account` and take the whole process down, Ankit's fill included.
+    """
+    print("\n13. Strategy config validation: unregistered strategy_id fails at startup")
+    from crassus.config import load_accounts
+    from crassus.runner import Runner
+
+    with Mock():
+        good = Account(alias="Ankit", username=f"cfg_{uuid.uuid4().hex[:6]}",
+                       password="pw", strategy_id=STRATEGY_ID)
+        bad = Account(alias="Bob", username=f"cfg_{uuid.uuid4().hex[:6]}",
+                      password="pw", strategy_id="patient_calls_dip")
+
+        raised = False
+        try:
+            Runner([good, bad], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+                   ledger_dir=tmp / "cfgbad-logs", state_dir=tmp / "cfgbad-state")
+        except ValueError as exc:
+            raised = True
+            check("Error names the offending account and strategy_id",
+                  "Bob" in str(exc) and "patient_calls_dip" in str(exc), str(exc))
+        check("Constructing the Runner refuses to start rather than crashing mid-run", raised)
+
+        # The bundled example config must be copy-paste runnable today, not
+        # just an eventual illustration of the six-strategy mapping.
+        example = Path(__file__).parent.parent / "accounts.example.json"
+        raw = json.loads(example.read_text())
+        for entry in raw["accounts"]:
+            entry["password"] = "pw"
+        example_accounts_path = tmp / "accounts.example.filled.json"
+        example_accounts_path.write_text(json.dumps(raw))
+        accounts = load_accounts(example_accounts_path)
+        runner = Runner(accounts, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+                        ledger_dir=tmp / "cfgexample-logs", state_dir=tmp / "cfgexample-state")
+        runner.startup()
+        check("accounts.example.json constructs and starts a Runner without error",
+              set(runner.sessions) == {a.alias for a in accounts})
 
 
 def main() -> int:
@@ -368,8 +534,10 @@ def main() -> int:
         for scenario in (
             scenario_happy_path, scenario_idempotent_replay, scenario_ambiguous_timeout,
             scenario_ambiguous_500, scenario_restart_recovery, scenario_rate_limit,
+            scenario_quote_rate_limit,
             scenario_liquidation, scenario_ledger, scenario_strategy_contract, scenario_book_math,
-            scenario_p1_closed_loop,
+            scenario_p1_closed_loop, scenario_recovery_idempotent_after_ledger_write,
+            scenario_strategy_config_validation,
         ):
             scenario(tmp)
 

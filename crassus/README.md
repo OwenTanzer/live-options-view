@@ -22,7 +22,7 @@ record of what the bot saw, decided, and did.
 | Phase | | |
 |---|---|---|
 | **P0** deployment smoke test | 🔴 **Blocked** | Account endpoints are absent from the deployed Worker — see below |
-| **P1** single-account closed loop | 🟢 Implemented, verified against a mock | 43/43 invariant checks pass |
+| **P1** single-account closed loop | 🟢 Implemented, verified against a mock | 60/60 invariant checks pass |
 | **P2** multi-account supervisor | 🟡 Runtime supports it; unexercised against a real server | |
 | **P3** strategy ecology | ⚪ Not started | Only the smoke strategy exists |
 | **P4** evaluation & hardening | ⚪ Not started | |
@@ -92,7 +92,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/runner.py` | The loop |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
-| `scripts/verify_invariants.py` | 43 checks across 11 scenarios |
+| `scripts/verify_invariants.py` | 60 checks across 14 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
 
 ## Integrity invariants
 
@@ -104,7 +104,7 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 4. **`balance_cash` is cash movement, never P&L.** Open exposure is absent from it entirely.
 5. **`no_trade` and failures are logged, not just fills.** A ledger of only executions is survivorship-filtered.
 6. **429 and `Retry-After` are honored globally.** The binding limit is per-IP, so all accounts share one budget.
-7. **HTTP 410 is terminal and recorded as a margin call.** The Worker deletes the user outright.
+7. **HTTP 410 is terminal and recorded as a margin call.** The Worker deletes the user outright. ⚠️ This invariant is verified against the *documented* contract (the mock), not the real deployed Worker's actual settlement behavior — see "Known gaps" below.
 
 ## Server constraints worth knowing
 
@@ -115,7 +115,7 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 - **Insolvent settlement deletes the account.** Not a negative balance — permanent erasure.
 - Bot accounts **do not pre-exist**; the runner registers them on first use.
 
-## Account ↔ strategy mapping
+## Account ↔ strategy mapping (target, once P3 lands)
 
 | Account | Strategy | |
 |---|---|---|
@@ -126,8 +126,13 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Jesus | `cheap_atm_calls` | P3 |
 | Doris | `cheap_atm_puts` | P3 |
 
-Only `smoke_atm_roundtrip` is implemented. The contract explicitly defers
-rolling out every strategy before one complete loop is alive.
+Only `smoke_atm_roundtrip` is implemented today, so `accounts.example.json`
+runs every account on it -- copying the file as-is is meant to work, not
+just illustrate the eventual mapping. Swap in a P3 strategy_id for an
+account only once that strategy is actually registered; the runner
+validates every configured `strategy_id` against the registry at startup
+and refuses to start (rather than crashing mid-run on the first
+unregistered one it happens to reach) if one doesn't exist yet.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
@@ -138,3 +143,4 @@ are deliberately not baked into the runtime.
 - Trade-record field names in `Book._normalize` and `ExecutionClient._trade_matches` are **unverified** — no real `/api/me` payload has ever been observable. Both normalize defensively across plausible spellings; tighten them once P0 passes.
 - `clock.session_phase` does not know about exchange holidays or early closes.
 - Liquidation auto-reprovisioning (register a replacement account after a 410) is **detected and recorded but not yet implemented** — it lands with P2.
+- **HTTP 410 liquidation detection is unverified against the real Worker, and that's a real gap, not a hedge.** `scripts/mock_worker.py` fabricates a 410 from `/api/me` and `/api/paper-trade` on demand, matching the documented contract. But `handleSettle` in `worker.js` deletes both the user and session record outright on insolvency (see `worker.js`, around the `insolvent` branch); the *next* request against that same session resolves through `requireSession()` returning `null`, and `/api/me` / `/api/paper-trade` report a generic 401 there, never a 410. The client's `AccountLiquidated` detector is exercised only against the mock's contract-accurate behavior -- it has never seen the real Worker do this, because the real Worker doesn't yet preserve enough state to do it. Deferred until either (a) `worker.js` writes a liquidation tombstone instead of deleting the record, so a resolved session can report 410 explicitly, or (b) the client additionally treats a 401 on a session it previously authenticated as ambiguous (worth reconciling) rather than assuming it's a benign logout. Do not read the passing `scenario_liquidation` check as evidence this works in production.

@@ -13,10 +13,11 @@ and settlement that deletes an insolvent user outright.
 
 Fault injection lets the recovery paths be tested on demand:
 
-    --fault timeout   hang past the client timeout, but still record the fill
-    --fault 500       record the fill, then return a 500
-    --fault 429       reply 429 with Retry-After
-    --fault 410       delete the account mid-flight (margin call)
+    --fault timeout    hang past the client timeout, but still record the fill
+    --fault 500        record the fill, then return a 500
+    --fault 429        reply 429 with Retry-After on /api/paper-trade
+    --fault 410        delete the account mid-flight (margin call)
+    --fault quote_429  reply 429 with Retry-After on /api/live-quotes
 
 `timeout` and `500` are the interesting ones: both leave the server holding a
 trade the client never got confirmation of, which is exactly the ambiguity the
@@ -32,23 +33,33 @@ import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 STARTING_CASH = 10_000.0
+DEFAULT_SNAPSHOT_FIXTURE = Path(__file__).parent / "fixtures" / "snapshot.json"
 
 USERS: dict[str, dict] = {}
 SESSIONS: dict[str, str] = {}
 LOCK = threading.Lock()
 FAULT = {"mode": None, "remaining": 0}
 QUOTES: dict[str, dict] = {}
+SNAPSHOT_BYTES: bytes = b"{}"
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def take_fault() -> str | None:
+def take_fault(*expected_modes: str) -> str | None:
+    """Consume the injected fault, but only if it applies to this route.
+
+    Scoped by mode so that, e.g., the readiness probe against
+    /api/live-quotes during test harness startup cannot silently steal a
+    /api/paper-trade fault (or vice versa) before the scenario's own
+    request ever sees it.
+    """
     with LOCK:
-        if FAULT["mode"] and FAULT["remaining"] > 0:
+        if FAULT["mode"] in expected_modes and FAULT["remaining"] > 0:
             FAULT["remaining"] -= 1
             return FAULT["mode"]
     return None
@@ -87,6 +98,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/intraday/latest.json":
+            # Serves the durable snapshot from a local fixture instead of
+            # the real R2 bucket, so the invariant suite never depends on
+            # network access to a production host it doesn't control.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(SNAPSHOT_BYTES)))
+            self.end_headers()
+            self.wfile.write(SNAPSHOT_BYTES)
+            return
+
         if path == "/api/me":
             user = self._session_user()
             if not user:
@@ -103,6 +125,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/live-quotes":
             from urllib.parse import parse_qs, urlparse
+
+            if take_fault("quote_429") == "quote_429":
+                return self._json(429, {"error": "rate_limited"}, {"Retry-After": "1"})
 
             symbols = parse_qs(urlparse(self.path).query).get("symbols", [""])[0]
             symbols = [s for s in symbols.split(",") if s]
@@ -187,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         if not all([request_id, sym, side, qty]):
             return self._json(400, {"error": "invalid_intent"})
 
-        fault = take_fault()
+        fault = take_fault("timeout", "500", "429", "410")
         if fault == "429":
             return self._json(429, {"error": "rate_limited"}, {"Retry-After": "2"})
 
@@ -234,12 +259,19 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
-    ap.add_argument("--fault", choices=["timeout", "500", "429", "410"])
+    ap.add_argument("--fault", choices=["timeout", "500", "429", "410", "quote_429"])
     ap.add_argument("--fault-count", type=int, default=1)
+    ap.add_argument(
+        "--snapshot", type=Path, default=DEFAULT_SNAPSHOT_FIXTURE,
+        help="Local JSON fixture served at /intraday/latest.json (default: bundled fixture)",
+    )
     args = ap.parse_args()
 
     if args.fault:
         FAULT["mode"], FAULT["remaining"] = args.fault, args.fault_count
+
+    global SNAPSHOT_BYTES
+    SNAPSHOT_BYTES = args.snapshot.read_bytes()
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"mock worker on http://127.0.0.1:{args.port}"

@@ -38,10 +38,30 @@ from .config import (
     SNAPSHOT_URL,
     load_accounts,
 )
-from .market import QuoteReader, SnapshotReader
-from .strategy import Decision, StrategyContext, get as get_strategy
+from .market import QuoteRateLimited, QuoteReader, SnapshotReader
+from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
+
+
+def _validate_strategy_ids(accounts: list[Any]) -> None:
+    """Fail at startup, not mid-run, on a misconfigured strategy_id.
+
+    `get_strategy()` used to run per-account, per-cycle, with no error
+    boundary around it: one account referencing an unregistered strategy
+    (as the example config's five P3 placeholders do -- only
+    `smoke_atm_roundtrip` is implemented) would raise `KeyError` and kill
+    the whole process, taking every other account down with it mid-cycle.
+    """
+    bad = {a.alias: a.strategy_id for a in accounts if a.strategy_id not in REGISTRY}
+    if bad:
+        offenders = ", ".join(f"{alias!r} -> {sid!r}" for alias, sid in bad.items())
+        raise ValueError(
+            f"Unregistered strategy_id(s) in accounts config: {offenders}. "
+            f"Registered strategies: {sorted(REGISTRY)}. Fix accounts.json before "
+            f"starting the runner -- a bad strategy_id must be a startup error, "
+            f"not a mid-run crash."
+        )
 
 
 class Runner:
@@ -56,6 +76,8 @@ class Runner:
         interval_s: float = 300.0,
         dry_run: bool = False,
     ):
+        _validate_strategy_ids(accounts)
+
         self.accounts = accounts
         self.interval_s = interval_s
         self.dry_run = dry_run
@@ -64,8 +86,10 @@ class Runner:
 
         self.ledger = DecisionLedger(ledger_dir)
         self.snapshots = SnapshotReader(snapshot_url)
-        self.quotes = QuoteReader(base_url)
         self.rate_limiter = RateLimiter()
+        # Quotes share the account RateLimiter -- the binding limit is
+        # per-IP, so quote polling must draw from the same global budget.
+        self.quotes = QuoteReader(base_url, rate_limiter=self.rate_limiter)
 
         self.sessions: dict[str, AccountSession] = {}
         self.executors: dict[str, ExecutionClient] = {}
@@ -125,22 +149,66 @@ class Runner:
                 )
                 continue
 
-            recovered = self.executors[account.alias].recover_pending()
-            if recovered:
-                log.warning("%s: %s", account.alias, recovered.note)
-                self.ledger.record(
-                    decision_id=self.ledger.new_decision_id(),
-                    account_alias=account.alias,
-                    strategy_id=account.strategy_id,
-                    strategy_version="n/a",
-                    outcome_class=recovered.outcome_class,
-                    reason=recovered.note,
-                    execution_request_id=recovered.execution_request_id,
-                    http_status=recovered.http_status,
-                    server_response=recovered.server_response,
-                    latency_ms=recovered.latency_ms,
-                    account_state_after=recovered.state_after.summary() if recovered.state_after else None,
-                )
+            self._recover_pending(account)
+
+    def _recover_pending(self, account: Any) -> bool:
+        """Resolve an intent left in flight by a crash, idempotently.
+
+        Two crash points matter here, not one:
+
+        1. Between execution and the ledger write -- the intent on disk is
+           the only record of what was decided, so it must carry the full
+           decision envelope, and the recovered outcome must be written to
+           the ledger before anything is cleared.
+        2. Between the ledger write and clearing the intent file -- without
+           checking the ledger first, this would rediscover the same trade
+           via `/api/me` and write a second record for it. Checking by
+           `execution_request_id` before touching the server makes recovery
+           idempotent across restarts.
+
+        Returns True if a pending intent was found and handled (whether or
+        not that produced a new ledger record).
+        """
+        executor = self.executors[account.alias]
+        intent = executor.pending_intent()
+        if not intent:
+            return False
+
+        request_id = intent.get("execution_request_id")
+        existing = self.ledger.find_by_execution_request_id(request_id) if request_id else None
+        if existing:
+            log.warning(
+                "%s: intent %s already durably recorded (decision_id=%s); clearing stale marker.",
+                account.alias, request_id, existing.get("decision_id"),
+            )
+            executor.finalize(request_id)
+            return True
+
+        recovered = executor.recover_pending()
+        if not recovered:
+            return False
+
+        log.warning("%s: %s", account.alias, recovered.note)
+        self.ledger.record(
+            decision_id=intent.get("decision_id") or self.ledger.new_decision_id(),
+            account_alias=account.alias,
+            strategy_id=intent.get("strategy_id") or account.strategy_id,
+            strategy_version=intent.get("strategy_version") or "n/a",
+            outcome_class=recovered.outcome_class,
+            decision=intent.get("decision"),
+            reason=recovered.note,
+            market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
+            market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
+            account_state_before=intent.get("account_state_before"),
+            execution_request_id=recovered.execution_request_id,
+            http_status=recovered.http_status,
+            server_response=recovered.server_response,
+            latency_ms=recovered.latency_ms,
+            account_state_after=recovered.state_after.summary() if recovered.state_after else None,
+        )
+        # Only cleared now that the outcome is durably on disk in the ledger.
+        executor.finalize(recovered.execution_request_id)
+        return True
 
     def run(self) -> None:
         self.install_signal_handlers()
@@ -210,19 +278,7 @@ class Runner:
         # Reconcile first: the server's view of cash and trades is the only
         # authority, and the strategy should decide against current reality.
         try:
-            pending = executor.recover_pending()
-            if pending:
-                log.warning("%s: %s", alias, pending.note)
-                self.ledger.record(
-                    **base,
-                    outcome_class=pending.outcome_class,
-                    reason=pending.note,
-                    execution_request_id=pending.execution_request_id,
-                    http_status=pending.http_status,
-                    server_response=pending.server_response,
-                    latency_ms=pending.latency_ms,
-                    account_state_after=pending.state_after.summary() if pending.state_after else None,
-                )
+            if self._recover_pending(account):
                 return
 
             state = session.me()
@@ -252,6 +308,18 @@ class Runner:
 
         try:
             decision: Decision = strategy(ctx)
+        except QuoteRateLimited as exc:
+            # Classified as rate_limited, not a generic strategy failure --
+            # the quote-side 429 already honored Retry-After globally via
+            # the shared RateLimiter before giving up.
+            log.warning("%s: quote request rate limited: %s", alias, exc)
+            self.ledger.record(
+                **base,
+                outcome_class=Outcome.RATE_LIMITED,
+                reason=f"Could not get quotes for {account.strategy_id}: {exc}",
+                account_state_before=state_before,
+            )
+            return
         except Exception as exc:
             log.exception("%s: strategy raised", alias)
             self.ledger.record(
@@ -271,6 +339,7 @@ class Runner:
                 reason=decision.reason,
                 account_state_before=state_before,
                 account_state_after=state_before,
+                quote_rate_limit_note=self.quotes.last_retry_note,
             )
             return
 
@@ -283,6 +352,7 @@ class Runner:
                 reason=f"[dry-run] {decision.reason}",
                 account_state_before=state_before,
                 account_state_after=state_before,
+                quote_rate_limit_note=self.quotes.last_retry_note,
             )
             return
 
@@ -293,9 +363,23 @@ class Runner:
                 side=decision.action,
                 quantity=decision.quantity,
                 decision_id=decision_id,
+                strategy_id=account.strategy_id,
+                strategy_version=base["strategy_version"],
+                reason=decision.reason,
+                decision=decision.to_dict(),
+                market_snapshot_timestamp=base["market_snapshot_timestamp"],
+                market_snapshot_url_or_hash=base["market_snapshot_url_or_hash"],
+                account_state_before=state_before,
             )
         except AccountLiquidated as exc:
-            self._record_liquidation(base, exc, decision=decision, state_before=state_before)
+            pending = executor.pending_intent()
+            request_id = pending.get("execution_request_id") if pending else None
+            self._record_liquidation(
+                base, exc, decision=decision, state_before=state_before, execution_request_id=request_id
+            )
+            if request_id:
+                # Only cleared now that the margin call is durably recorded.
+                executor.finalize(request_id)
             self._retire(account, str(exc))
             return
 
@@ -311,10 +395,20 @@ class Runner:
             server_response=result.server_response,
             latency_ms=result.latency_ms,
             note=result.note,
+            quote_rate_limit_note=self.quotes.last_retry_note,
         )
+        # Only cleared now that the outcome is durably recorded in the ledger.
+        executor.finalize(result.execution_request_id)
         log.info("%s: -> %s (http=%s)", alias, result.outcome_class, result.http_status)
 
-    def _record_liquidation(self, base: dict, exc: Exception, decision: Decision | None = None, state_before: dict | None = None) -> None:
+    def _record_liquidation(
+        self,
+        base: dict,
+        exc: Exception,
+        decision: Decision | None = None,
+        state_before: dict | None = None,
+        execution_request_id: str | None = None,
+    ) -> None:
         """Record a 410 as an explicit margin call.
 
         The raw status alone would leave the record ambiguous later; the
@@ -325,6 +419,7 @@ class Runner:
             **base,
             outcome_class=Outcome.ACCOUNT_LIQUIDATED,
             decision=decision.to_dict() if decision else None,
+            execution_request_id=execution_request_id,
             reason=f"MARGIN CALL -- account liquidated and deleted by the Worker: {exc}",
             account_state_before=state_before,
             http_status=410,

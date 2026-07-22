@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. The six strategy ids below are P3 work; only smoke_atm_roundtrip is implemented so far.",
+  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Only smoke_atm_roundtrip is implemented so far (P3 rolls out the rest), so every account below runs it -- copying this file as-is is meant to work out of the box. Swap in patient_calls_dip / aggressive_puts_reload / patient_puts_dip / cheap_atm_calls / cheap_atm_puts for an account only once that strategy is registered; the runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one.",
 
   "accounts": [
     {
@@ -12,31 +12,31 @@
       "alias": "Bob",
       "username": "crassus_bob",
       "password_env": "CRASSUS_PW_BOB",
-      "strategy_id": "patient_calls_dip"
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Doktor Freuding",
       "username": "crassus_freuding",
       "password_env": "CRASSUS_PW_FREUDING",
-      "strategy_id": "aggressive_puts_reload"
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Luigi",
       "username": "crassus_luigi",
       "password_env": "CRASSUS_PW_LUIGI",
-      "strategy_id": "patient_puts_dip"
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Jesus",
       "username": "crassus_jesus",
       "password_env": "CRASSUS_PW_JESUS",
-      "strategy_id": "cheap_atm_calls"
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Doris",
       "username": "crassus_doris",
       "password_env": "CRASSUS_PW_DORIS",
-      "strategy_id": "cheap_atm_puts"
+      "strategy_id": "smoke_atm_roundtrip"
     }
   ]
 }
