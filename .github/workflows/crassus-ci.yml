@@ -1,0 +1,27 @@
+name: Crassus invariant suite
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crassus/**"
+      - ".github/workflows/crassus-ci.yml"
+  pull_request:
+    paths:
+      - "crassus/**"
+      - ".github/workflows/crassus-ci.yml"
+
+jobs:
+  verify-invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: crassus
+        run: pip install -r requirements.txt
+      - name: Run integrity invariant suite
+        working-directory: crassus
+        run: python scripts/verify_invariants.py

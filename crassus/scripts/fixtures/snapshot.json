@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-07-22T14:30:00+00:00",
+  "snapshot_time": "2026-07-22T14:30:00+00:00",
+  "expiration": "2026-07-22",
+  "underlying_price": 702.0,
+  "rows": [
+    {
+      "OptionSymbol": "QQQ260722C00702000",
+      "Strike": 702.0,
+      "Type": "call",
+      "Bid": 8.2,
+      "Ask": 8.34,
+      "Volume": 4200,
+      "OpenInterest": 1500
+    },
+    {
+      "OptionSymbol": "QQQ260722P00702000",
+      "Strike": 702.0,
+      "Type": "put",
+      "Bid": 7.9,
+      "Ask": 8.05,
+      "Volume": 3100,
+      "OpenInterest": 1200
+    },
+    {
+      "OptionSymbol": "QQQ260722C00700000",
+      "Strike": 700.0,
+      "Type": "call",
+      "Bid": 9.4,
+      "Ask": 9.55,
+      "Volume": 2800,
+      "OpenInterest": 900
+    },
+    {
+      "OptionSymbol": "QQQ260722P00700000",
+      "Strike": 700.0,
+      "Type": "put",
+      "Bid": 6.7,
+      "Ask": 6.85,
+      "Volume": 2600,
+      "OpenInterest": 1100
+    }
+  ]
+}
