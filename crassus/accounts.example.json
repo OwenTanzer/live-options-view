@@ -1,0 +1,42 @@
+{
+  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. The six strategy ids below are P3 work; only smoke_atm_roundtrip is implemented so far.",
+
+  "accounts": [
+    {
+      "alias": "Ankit",
+      "username": "crassus_ankit",
+      "password_env": "CRASSUS_PW_ANKIT",
+      "strategy_id": "smoke_atm_roundtrip"
+    },
+    {
+      "alias": "Bob",
+      "username": "crassus_bob",
+      "password_env": "CRASSUS_PW_BOB",
+      "strategy_id": "patient_calls_dip"
+    },
+    {
+      "alias": "Doktor Freuding",
+      "username": "crassus_freuding",
+      "password_env": "CRASSUS_PW_FREUDING",
+      "strategy_id": "aggressive_puts_reload"
+    },
+    {
+      "alias": "Luigi",
+      "username": "crassus_luigi",
+      "password_env": "CRASSUS_PW_LUIGI",
+      "strategy_id": "patient_puts_dip"
+    },
+    {
+      "alias": "Jesus",
+      "username": "crassus_jesus",
+      "password_env": "CRASSUS_PW_JESUS",
+      "strategy_id": "cheap_atm_calls"
+    },
+    {
+      "alias": "Doris",
+      "username": "crassus_doris",
+      "password_env": "CRASSUS_PW_DORIS",
+      "strategy_id": "cheap_atm_puts"
+    }
+  ]
+}

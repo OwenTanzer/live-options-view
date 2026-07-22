@@ -1,0 +1,12 @@
+# Credentials -- never commit these
+accounts.json
+.env
+
+# Runtime artifacts
+logs/
+state/
+.venv/
+
+__pycache__/
+*.py[cod]
+.DS_Store
