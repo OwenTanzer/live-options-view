@@ -1,7 +1,7 @@
 import json
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -285,10 +285,114 @@ def test_snapshot_archive_key_uniqueness():
     assert_equal(len(first_keys), 1, "one session-open first.csv mirror")
 
 
+def _weekday_calendar(anchor, back_days, fwd_days):
+    """Stand-in for the NYSE calendar: every weekday in [anchor-back, anchor+fwd]."""
+    days, d = set(), anchor - timedelta(days=back_days)
+    while d <= anchor + timedelta(days=fwd_days):
+        if d.weekday() < 5:
+            days.add(d)
+        d += timedelta(days=1)
+    return days
+
+
+def test_classify_tier_survives_past_opex_lookup():
+    """Regression: 4th/5th-week Thursdays look up a monthly-opex Friday that is
+    already in the past. With a forward-only calendar the backwards walk ran off
+    to date.min and raised OverflowError, killing the whole collector session."""
+    original = collector._load_calendar
+    # Every Thursday whose following Friday is the end of week, across a full year.
+    crashers = [date(2026, 7, 23), date(2026, 7, 30), date(2026, 8, 27),
+                date(2026, 9, 24), date(2026, 10, 22), date(2026, 12, 24)]
+    try:
+        for day in crashers:
+            # Reproduce the old forward-only window: nothing before today.
+            collector._load_calendar = lambda d=day: _weekday_calendar(d, 0, 90)
+            tier = collector.classify_tier(day)
+            assert_true(tier.startswith("0DTE_"),
+                        f"tier for {day} with forward-only calendar ({tier})")
+
+            # And with the shipped lookback window, the real answer is reachable.
+            collector._load_calendar = lambda d=day: _weekday_calendar(
+                d, collector._CALENDAR_LOOKBACK_DAYS, collector._CALENDAR_LOOKAHEAD_DAYS)
+            assert_true(collector.classify_tier(day).startswith("0DTE_"),
+                        f"tier for {day} with lookback calendar")
+    finally:
+        collector._load_calendar = original
+
+
+def test_classify_tier_defaults_when_calendar_unavailable():
+    """An empty calendar (import/network failure inside _load_calendar) must degrade
+    to a default tier, never take down market-data streaming."""
+    original = collector._load_calendar
+    try:
+        collector._load_calendar = lambda: set()
+        for day in (date(2026, 7, 23), date(2026, 7, 27), date(2026, 11, 26)):
+            assert_equal(collector.classify_tier(day), collector.DEFAULT_TIER,
+                         f"empty-calendar fallback for {day}")
+    finally:
+        collector._load_calendar = original
+
+
+def test_classify_tier_still_labels_monthly_opex():
+    """The fallbacks must not mask real classification: the Thursday before a
+    monthly-opex Friday still classifies as 0DTE_Monthly."""
+    original = collector._load_calendar
+    try:
+        # 2026-08-21 is the third Friday of August; 08-20 is the Thursday before it.
+        collector._load_calendar = lambda: _weekday_calendar(
+            date(2026, 8, 20), collector._CALENDAR_LOOKBACK_DAYS, collector._CALENDAR_LOOKAHEAD_DAYS)
+        assert_equal(collector.classify_tier(date(2026, 8, 20)), "0DTE_Monthly",
+                     "Thursday before August monthly opex")
+        # 2026-08-13 -> Friday 08-14 is a weekly, not the monthly.
+        collector._load_calendar = lambda: _weekday_calendar(
+            date(2026, 8, 13), collector._CALENDAR_LOOKBACK_DAYS, collector._CALENDAR_LOOKAHEAD_DAYS)
+        assert_equal(collector.classify_tier(date(2026, 8, 13)), "0DTE_Weekly",
+                     "Thursday before a weekly expiry")
+    finally:
+        collector._load_calendar = original
+
+
+def test_dxlink_unauthorized_greeting_is_not_an_auth_failure():
+    """dxLink sends AUTH_STATE:UNAUTHORIZED unprompted after SETUP. Counting it as a
+    rejection walked _auth_fail_count toward needs_reauth() on every healthy session."""
+    feed = collector.DXLinkFeed.__new__(collector.DXLinkFeed)
+    feed._lock = __import__("threading").Lock()
+    feed._auth_fail_count = 0
+    feed._authorized = False
+    feed._connected = True
+    feed._channel_open = False
+    feed._last_close_code = None
+    feed._ready = __import__("threading").Event()
+    feed._token = "tok"
+    feed._ws = None
+    sent = []
+    feed._send = sent.append
+
+    feed._on_message(None, json.dumps({"type": "AUTH_STATE", "channel": 0, "state": "UNAUTHORIZED"}))
+    assert_equal(feed._auth_fail_count, 0, "greeting does not count as an auth failure")
+    assert_true(not feed.needs_reauth(), "greeting alone does not trigger reauth")
+
+    feed._on_message(None, json.dumps({"type": "AUTH_STATE", "channel": 0, "state": "AUTHORIZED"}))
+    assert_true(feed._authorized, "AUTHORIZED sets the authorized flag")
+
+    # A close after authorizing is a normal disconnect, not an auth failure.
+    feed._on_close(None, 1000, "bye")
+    assert_equal(feed._auth_fail_count, 0, "clean close is not an auth failure")
+
+    # Three connections that never authorize do trip needs_reauth().
+    for _ in range(3):
+        feed._on_close(None, None, "")
+    assert_true(feed.needs_reauth(), "repeated unauthorized closes trip needs_reauth")
+
+
 def run():
     tests = [
         test_session_window_timing,
         test_startup_classification,
+        test_classify_tier_survives_past_opex_lookup,
+        test_classify_tier_defaults_when_calendar_unavailable,
+        test_classify_tier_still_labels_monthly_opex,
+        test_dxlink_unauthorized_greeting_is_not_an_auth_failure,
         test_dxlink_ingest_health,
         test_per_side_quote_timestamps_and_registry_lifecycle,
         test_prices_feed_stale_flags,
