@@ -88,11 +88,13 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/market.py` | R2 snapshot reader + on-demand live quotes |
 | `crassus/client.py` | Sessions, execution, reconciliation — **owns every integrity invariant** |
 | `crassus/strategy.py` | The strategy contract |
+| `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (PRAW + VADER, polled and cached like the market snapshot) |
 | `crassus/strategies/` | Strategy implementations |
 | `crassus/runner.py` | The loop |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
 | `scripts/verify_invariants.py` | 66 checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
+| `scripts/verify_reddit_sentiment.py` | Hermetic checks for `reddit_sentiment_qqq`'s aggregation math and decision logic -- no Reddit credentials or network access required |
 
 ## Integrity invariants
 
@@ -137,6 +139,65 @@ unregistered one it happens to reach) if one doesn't exist yet.
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
 are deliberately not baked into the runtime.
+
+## `reddit_sentiment_qqq`
+
+A second strategy, outside the six-strategy P3 mapping above: buys one ATM
+QQQ call when aggregate Reddit sentiment is bullish, one ATM put when it's
+bearish, closes whichever side it's holding the moment sentiment stops
+supporting it, and otherwise declines. At most one contract at a time --
+sizing, hysteresis and cool-downs are `ctx.params` / future-strategy
+concerns, not platform invariants, same as everything else in this section.
+
+Its signal comes from `crassus/sentiment.py`, which polls
+r/wallstreetbets, r/stocks, r/options and r/investing for QQQ-relevant posts
+and scores each one with VADER. This reuses the ingestion-and-scoring shape
+of [nama1arpit/reddit-streaming-pipeline](https://github.com/nama1arpit/reddit-streaming-pipeline)
+(PRAW in, VADER `compound` score, an averaged aggregate as the signal) but
+not that project's Kafka/Spark/Cassandra/Kubernetes stack -- crassus is one
+lightweight process per account reading one number every few minutes, and
+that pipeline's own README documents its Reddit API access as broken since
+Reddit's 2023 pricing change, so its infrastructure could not be reused
+here as-is even if it were the right shape.
+
+To enable it for an account, set `strategy_id` to `reddit_sentiment_qqq` in
+`accounts.json` and provide a **read-only** PRAW "script" app
+(https://www.reddit.com/prefs/apps/):
+
+```bash
+export REDDIT_CLIENT_ID=...
+export REDDIT_CLIENT_SECRET=...
+export REDDIT_USER_AGENT="crassus-reddit-sentiment/1.0 by u/yourname"
+```
+
+Without those three set, the strategy declines every cycle
+(`no_trade`, reason cites the missing credential) rather than raising --
+consistent with the runtime's rule that a strategy proposes and never
+crashes the loop for a condition it can anticipate. It also declines
+outside regular market hours, before spending a Reddit API call on a
+decision that would be `no_trade` regardless, and below a minimum sample
+size (`min_sample_size`, default 5) rather than trading on a couple of
+off-topic comments. `bullish_threshold` / `bearish_threshold`
+(`mean_compound`, default ±0.15) are configurable via `ctx.params`.
+
+Verify the decision logic and aggregation math hermetically (no Reddit
+credentials, no network access):
+
+```bash
+.venv/bin/python scripts/verify_reddit_sentiment.py
+```
+
+**Known gaps**, in the same spirit as the section below: this has never
+observed a real Reddit response, only PRAW's documented submission shape
+(`title` + `selftext`), and it only reads submissions (`subreddit.new`), not
+comments, so it can undercount chatter relative to the reference pipeline,
+which scores comments. It also has no per-account/global Reddit rate-limit
+coordination the way `market.QuoteReader` shares one budget across all
+accounts' Worker traffic -- multiple accounts configured with this strategy
+_each_ poll Reddit independently, tuned via the shared `min_interval_s`
+cache with the assumption that a full 300-second window is more than
+enough headroom under PRAW's own default throttling, not something this
+runtime enforces itself.
 
 ## Known gaps
 

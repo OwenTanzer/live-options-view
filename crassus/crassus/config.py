@@ -23,6 +23,13 @@ SNAPSHOT_URL = os.environ.get(
     "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
 )
 
+# Reddit API credentials for the reddit_sentiment_qqq strategy (crassus/sentiment.py).
+# A read-only PRAW "script" app -- see https://www.reddit.com/prefs/apps/ -- never
+# from source control. Unset means that strategy declines to trade instead of crashing.
+REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET")
+REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
+
 
 @dataclass
 class Account:
