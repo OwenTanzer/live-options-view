@@ -11,6 +11,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ACCOUNTS_FILE = REPO_ROOT / "accounts.json"
@@ -23,6 +24,13 @@ SNAPSHOT_URL = os.environ.get(
     "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
 )
 
+# Reddit API credentials for the reddit_sentiment_qqq strategy (crassus/sentiment.py).
+# A read-only PRAW "script" app -- see https://www.reddit.com/prefs/apps/ -- never
+# from source control. Unset means that strategy declines to trade instead of crashing.
+REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET")
+REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
+
 
 @dataclass
 class Account:
@@ -33,6 +41,7 @@ class Account:
     username: str
     password: str = field(repr=False)
     strategy_id: str
+    params: dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:  # keep passwords out of tracebacks and logs
         return f"Account(alias={self.alias!r}, username={self.username!r}, strategy_id={self.strategy_id!r})"
@@ -70,6 +79,7 @@ def load_accounts(path: Path | None = None) -> list[Account]:
                 username=entry["username"],
                 password=password,
                 strategy_id=entry["strategy_id"],
+                params=entry.get("params", {}),
             )
         )
 
