@@ -11,6 +11,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ACCOUNTS_FILE = REPO_ROOT / "accounts.json"
@@ -40,6 +41,7 @@ class Account:
     username: str
     password: str = field(repr=False)
     strategy_id: str
+    params: dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:  # keep passwords out of tracebacks and logs
         return f"Account(alias={self.alias!r}, username={self.username!r}, strategy_id={self.strategy_id!r})"
@@ -77,6 +79,7 @@ def load_accounts(path: Path | None = None) -> list[Account]:
                 username=entry["username"],
                 password=password,
                 strategy_id=entry["strategy_id"],
+                params=entry.get("params", {}),
             )
         )
 

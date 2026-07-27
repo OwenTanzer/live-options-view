@@ -331,6 +331,7 @@ class Runner:
             now_et=clock.now_et(),
             session_phase=phase,
             quotes=self.quotes.quotes,
+            params=account.params,
         )
 
         try:

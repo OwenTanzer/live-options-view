@@ -144,10 +144,18 @@ are deliberately not baked into the runtime.
 
 A second strategy, outside the six-strategy P3 mapping above: buys one ATM
 QQQ call when aggregate Reddit sentiment is bullish, one ATM put when it's
-bearish, closes whichever side it's holding the moment sentiment stops
-supporting it, and otherwise declines. At most one contract at a time --
+bearish, and closes whichever side it's holding the moment sentiment stops
+supporting it -- including when sentiment merely goes neutral, not only when
+it flips outright -- otherwise it declines. At most one contract at a time --
 sizing, hysteresis and cool-downs are `ctx.params` / future-strategy
 concerns, not platform invariants, same as everything else in this section.
+
+"What's currently held" is read from `ctx.book.positions` directly, not
+re-derived by asking "what's the ATM strike right now" and assuming that's
+what was bought -- the underlying can drift enough between cycles that the
+strike bought last cycle is no longer the ATM one, and a naive re-derivation
+would both open a second position and be unable to find the first one to
+close.
 
 Its signal comes from `crassus/sentiment.py`, which polls
 r/wallstreetbets, r/stocks, r/options and r/investing for QQQ-relevant posts
@@ -178,7 +186,23 @@ outside regular market hours, before spending a Reddit API call on a
 decision that would be `no_trade` regardless, and below a minimum sample
 size (`min_sample_size`, default 5) rather than trading on a couple of
 off-topic comments. `bullish_threshold` / `bearish_threshold`
-(`mean_compound`, default ±0.15) are configurable via `ctx.params`.
+(`mean_compound`, default ±0.15) are configurable per account via an
+optional `"params"` object in `accounts.json`, which the runner passes
+straight through to `StrategyContext.params`:
+
+```json
+{
+  "alias": "Jesus",
+  "username": "crassus_jesus",
+  "password_env": "CRASSUS_PW_JESUS",
+  "strategy_id": "reddit_sentiment_qqq",
+  "params": { "min_sample_size": 8, "bullish_threshold": 0.2, "bearish_threshold": -0.2 }
+}
+```
+
+`"params"` is optional and defaults to `{}` for every account, including
+existing `smoke_atm_roundtrip` entries -- `accounts.example.json` is
+unchanged.
 
 Verify the decision logic and aggregation math hermetically (no Reddit
 credentials, no network access):

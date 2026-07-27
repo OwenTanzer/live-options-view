@@ -64,6 +64,13 @@ def make_snapshot(symbol: str, underlying_price: float, rows: list[dict]) -> Mar
 CALL_ROW = {"OptionSymbol": "QQQ240101C00400000", "Strike": 400.0, "Type": "call", "Bid": 1.0, "Ask": 1.1}
 PUT_ROW = {"OptionSymbol": "QQQ240101P00400000", "Strike": 400.0, "Type": "put", "Bid": 1.0, "Ask": 1.1}
 
+# The underlying has drifted since entry: 402 is now the ATM strike instead
+# of 400. The 400 call/put from CALL_ROW/PUT_ROW no longer appear in the
+# snapshot at all -- exactly the case that broke re-deriving "what's held"
+# from ctx.snapshot.atm() instead of ctx.book.positions.
+CALL_ROW_DRIFTED = {"OptionSymbol": "QQQ240101C00402000", "Strike": 402.0, "Type": "call", "Bid": 1.0, "Ask": 1.1}
+PUT_ROW_DRIFTED = {"OptionSymbol": "QQQ240101P00402000", "Strike": 402.0, "Type": "put", "Bid": 1.0, "Ask": 1.1}
+
 
 def make_ctx(
     *,
@@ -71,8 +78,10 @@ def make_ctx(
     trades: list[dict] | None = None,
     quote_map: dict[str, Quote] | None = None,
     params: dict | None = None,
+    rows: list[dict] | None = None,
+    underlying_price: float = 400.0,
 ) -> StrategyContext:
-    snapshot = make_snapshot("QQQ", 400.0, [CALL_ROW, PUT_ROW])
+    snapshot = make_snapshot("QQQ", underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW])
     book = Book(trades or [])
     quote_map = quote_map or {}
     return StrategyContext(
@@ -178,7 +187,7 @@ def scenario_insufficient_sample() -> None:
 
 
 def scenario_neutral() -> None:
-    print("\n7. Neutral sentiment trades nothing")
+    print("\n7. Neutral sentiment while flat trades nothing")
     ctx = make_ctx(session_phase="open")
     decision = rs._decide_core(ctx, _snap(0.0), None)
     check("no_trade in the neutral band", not decision.is_trade)
@@ -221,7 +230,10 @@ def scenario_already_positioned_holds() -> None:
 def scenario_sentiment_flip_closes_opposite() -> None:
     print("\n12. Sentiment flips direction while holding the other side -- close first")
     trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
-    ctx = make_ctx(session_phase="open", trades=trades)
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+    )
     decision = rs._decide_core(ctx, _snap(0.5), None)  # now bullish, but holding a put
     check("action is sell", decision.action == "sell", decision.action)
     check("closes the stale put position", decision.symbol == "QQQ240101P00400000", decision.symbol)
@@ -235,6 +247,99 @@ def scenario_unexpected_short_stands_down() -> None:
     decision = rs._decide_core(ctx, _snap(0.5), None)
     check("no_trade rather than compounding an unexpected short", not decision.is_trade)
     check("reason names the unexpected short", "short" in decision.reason.lower())
+
+
+def scenario_neutral_while_positioned_call() -> None:
+    print("\n14. Sentiment goes neutral while holding a call -- close it, don't just decline")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = rs._decide_core(ctx, _snap(0.0), None)
+    check("action is sell, not no_trade", decision.action == "sell", decision.action)
+    check("closes the actual held call", decision.symbol == "QQQ240101C00400000", decision.symbol)
+    check("closes the full held quantity", decision.quantity == 1)
+
+
+def scenario_neutral_while_positioned_put() -> None:
+    print("\n15. Sentiment goes neutral while holding a put -- close it, don't just decline")
+    trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+    )
+    decision = rs._decide_core(ctx, _snap(0.0), None)
+    check("action is sell, not no_trade", decision.action == "sell", decision.action)
+    check("closes the actual held put", decision.symbol == "QQQ240101P00400000", decision.symbol)
+
+
+def scenario_insufficient_sample_while_positioned_closes() -> None:
+    print("\n16. Sample too small to trust while holding -- close rather than freeze holding it")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = rs._decide_core(ctx, _snap(0.9, n=2), None)
+    check("action is sell", decision.action == "sell", decision.action)
+    check("closes the actual held call", decision.symbol == "QQQ240101C00400000")
+
+
+def scenario_atm_drift_no_pyramiding() -> None:
+    print("\n17. ATM drifts to a new strike while holding the old one -- no duplicate open")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        rows=[CALL_ROW_DRIFTED, PUT_ROW_DRIFTED], underlying_price=402.0,
+        quote_map={"QQQ240101C00402000": fresh_quote("QQQ240101C00402000")},
+    )
+    decision = rs._decide_core(ctx, _snap(0.5), None)  # still bullish
+    check(
+        "no_trade rather than opening a second call at the new ATM strike",
+        not decision.is_trade,
+        decision.to_dict(),
+    )
+    check("reason references the originally held symbol, not the new ATM one",
+          "QQQ240101C00400000" in decision.reason, decision.reason)
+
+
+def scenario_sentiment_flip_after_atm_drift() -> None:
+    print("\n18. Sentiment flips after the ATM strike has also moved -- still closes the real position")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        rows=[CALL_ROW_DRIFTED, PUT_ROW_DRIFTED], underlying_price=402.0,
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = rs._decide_core(ctx, _snap(-0.5), None)  # now bearish
+    check("action is sell", decision.action == "sell", decision.action)
+    check(
+        "closes the original 400-strike call, not the new 402-strike ATM row",
+        decision.symbol == "QQQ240101C00400000",
+        decision.symbol,
+    )
+
+
+def scenario_multiple_open_positions_stand_down() -> None:
+    print("\n19. More than one open position -- stand down rather than guess")
+    trades = [
+        {"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0},
+        {"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0},
+    ]
+    ctx = make_ctx(session_phase="open", trades=trades)
+    decision = rs._decide_core(ctx, _snap(0.5), None)
+    check("no_trade with more than one open position", not decision.is_trade)
+    check("reason flags multiple positions", "more than one" in decision.reason.lower())
+
+
+def scenario_unrecognized_symbol_stands_down() -> None:
+    print("\n20. Held symbol doesn't parse as an OCC option -- stand down rather than guess")
+    trades = [{"sym": "NOT-AN-OPTION-SYMBOL", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(session_phase="open", trades=trades)
+    decision = rs._decide_core(ctx, _snap(0.5), None)
+    check("no_trade on an unparseable held symbol", not decision.is_trade)
+    check("reason names the unrecognized symbol", "unrecognized" in decision.reason.lower())
 
 
 def main() -> int:
@@ -252,6 +357,13 @@ def main() -> int:
         scenario_already_positioned_holds,
         scenario_sentiment_flip_closes_opposite,
         scenario_unexpected_short_stands_down,
+        scenario_neutral_while_positioned_call,
+        scenario_neutral_while_positioned_put,
+        scenario_insufficient_sample_while_positioned_closes,
+        scenario_atm_drift_no_pyramiding,
+        scenario_sentiment_flip_after_atm_drift,
+        scenario_multiple_open_positions_stand_down,
+        scenario_unrecognized_symbol_stands_down,
     ):
         scenario()
 
