@@ -45,7 +45,7 @@ const scope = {
 };
 
 const names = Object.keys(scope);
-const factory = new Function(...names, `${source}\nreturn { renderBots, botEquity, setBotsPolling, get botsData(){return botsData}, set botsData(v){botsData=v} };`);
+const factory = new Function(...names, `${source}\nreturn { renderBots, botEquity, renderStrategyRollup, setBotsPolling, get botsData(){return botsData}, set botsData(v){botsData=v} };`);
 const panel = factory(...names.map(n => scope[n]));
 
 const pos = (sym, qty, avg) =>
@@ -108,6 +108,72 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
 
   // Bot contracts are registered for quoting.
   assert.deepEqual(liveQuotes.botSymbols, ['X']);
+}
+
+// ── per-strategy rollup ───────────────────────────────────────────────────────
+{
+  quotes.clear();
+  quotes.set('X', { mid: 4.0 });
+
+  const withStrat = (alias, username, cash, strategy_id, positions = []) =>
+    ({ ...bot(alias, username, cash, positions), strategy_id });
+
+  // Two strategies: smoke down 1000 across two accounts, sentiment up 2000
+  // across one. The rollup must aggregate by strategy, not by account.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      withStrat('A', 'a', 9500, 'smoke_atm_roundtrip'),
+      withStrat('B', 'b', 9500, 'smoke_atm_roundtrip'),
+      withStrat('C', 'c', 12000, 'reddit_sentiment_qqq'),
+    ],
+  };
+  panel.renderBots();
+
+  const roll = els['bots-by-strategy'].innerHTML;
+  assert.match(roll, /reddit_sentiment_qqq/);
+  assert.match(roll, /smoke_atm_roundtrip/);
+  assert.match(roll, /2 accounts/, 'accounts are counted per strategy');
+  assert.match(roll, /\+\$2000\.00/, 'the winning strategy aggregates its PnL');
+  assert.match(roll, /−\$1000\.00/, 'losses aggregate across a strategy\'s accounts');
+  assert.ok(roll.indexOf('reddit_sentiment_qqq') < roll.indexOf('smoke_atm_roundtrip'),
+    'strategies are ordered best PnL first');
+
+  // Cards name their strategy so a reader can tie a result to a strategy.
+  assert.match(els['bots-grid'].innerHTML, /bot-strategy">reddit_sentiment_qqq/);
+
+  // A single strategy across the whole book makes the rollup a restatement of
+  // the cards, so it is suppressed rather than shown as one meaningless tile.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [withStrat('A', 'a', 9500, 'smoke_atm_roundtrip')],
+  };
+  panel.renderBots();
+  assert.equal(els['bots-by-strategy'].innerHTML, '', 'a one-strategy book shows no rollup');
+
+  // An unmarked leg anywhere in a strategy flags it partial rather than
+  // reporting a confident aggregate.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      withStrat('A', 'a', 9500, 'smoke_atm_roundtrip', [pos('NOQUOTE', 1, 1.0)]),
+      withStrat('C', 'c', 12000, 'reddit_sentiment_qqq'),
+    ],
+  };
+  panel.renderBots();
+  assert.match(els['bots-by-strategy'].innerHTML, /partial/);
+
+  // A bot with no recorded strategy is grouped, not dropped.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      withStrat('A', 'a', 9500, 'smoke_atm_roundtrip'),
+      { ...bot('Z', 'z', 10000), strategy_id: null },
+    ],
+  };
+  panel.renderBots();
+  assert.match(els['bots-by-strategy'].innerHTML, /unassigned/);
+  assert.match(els['bots-grid'].innerHTML, /no strategy recorded/);
 }
 
 // ── XSS: a hostile alias must not execute ─────────────────────────────────────

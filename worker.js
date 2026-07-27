@@ -264,7 +264,7 @@ async function handleRegister(request, env) {
   if (originError) return originError;
   const bodyResult = await readJsonBody(request);
   if (bodyResult.error) return bodyResult.error;
-  const { username, password, alias } = bodyResult.body || {};
+  const { username, password, alias, strategy_id } = bodyResult.body || {};
 
   // A bot account is only ever created by an operator presenting the shared
   // BOT_REGISTRATION_KEY. A wrong key is rejected outright rather than quietly
@@ -280,6 +280,16 @@ async function handleRegister(request, env) {
   }
   if (isBot && alias !== undefined && (typeof alias !== 'string' || alias.length > 40)) {
     return jsonResponse({ error: 'Alias must be a string of at most 40 characters' }, 400);
+  }
+  // The Worker deliberately does not validate strategy_id against a list of
+  // known strategies: the registry lives in the Crassus runtime and grows
+  // there (reddit_sentiment_qqq arrived in #22), so a whitelist here would
+  // silently reject every new strategy until someone remembered to redeploy
+  // the Worker. The runner already refuses to start on an unregistered
+  // strategy_id, which is the check that actually matters.
+  if (isBot && strategy_id !== undefined &&
+      (typeof strategy_id !== 'string' || !/^[a-z0-9_]{1,40}$/.test(strategy_id))) {
+    return jsonResponse({ error: 'strategy_id must be 1-40 chars: lowercase letters, numbers, underscore' }, 400);
   }
 
   if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
@@ -308,7 +318,7 @@ async function handleRegister(request, env) {
     trades: [],
     createdAt: new Date().toISOString(),
     version: 0,
-    ...(isBot ? { is_bot: true, alias: alias || username } : {}),
+    ...(isBot ? { is_bot: true, alias: alias || username, strategy_id: strategy_id || null } : {}),
   };
   await env.USERS.put(key, JSON.stringify(record));
   // Index after the record exists, so the roster can never point at a
@@ -386,6 +396,7 @@ export async function handleBots(request, env) {
     bots.push({
       username: record.username,
       alias: record.alias || record.username,
+      strategy_id: record.strategy_id ?? null,
       balance_cash: record.balance_cash,
       starting_balance: record.starting_balance ?? STARTING_BALANCE,
       trade_count: trades.length,

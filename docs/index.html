@@ -489,6 +489,29 @@
     gap: 8px;
   }
   .bot-user { font-size: 0.7rem; color: var(--dim); font-weight: 400; }
+  .bot-strategy {
+    font-size: 0.68rem;
+    color: var(--dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #bots-by-strategy {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 0.9rem;
+  }
+  .strat-tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+  .strat-tile .strat-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg);
+  }
+  .strat-tile .strat-meta { color: var(--dim); }
   .bot-equity { font-size: 1.15rem; font-weight: 600; margin: 6px 0 2px; }
   .bot-pnl.up   { color: #00cc55; }
   .bot-pnl.down { color: #ee3300; }
@@ -790,6 +813,7 @@
     the live mid. Positions are marked against the same quotes the Live tab polls, so a
     bot's mark here matches what you'd see clicking the same contract.
   </div>
+  <div id="bots-by-strategy"></div>
   <div id="bots-grid"></div>
 
 </div> <!-- /bots-panel -->
@@ -1572,6 +1596,42 @@ function botEquity(bot) {
   return { equity: bot.balance_cash + openValue, openValue, unmarked };
 }
 
+// Aggregate PnL per strategy. With more than one strategy in play (#22 added
+// reddit_sentiment_qqq alongside smoke_atm_roundtrip) the interesting
+// comparison is strategy-vs-strategy, not just account-vs-account -- six
+// accounts running one strategy only tell you about variance.
+//
+// A strategy with any unmarked leg is reported as partial rather than given a
+// confident total, for the same reason individual cards are.
+function renderStrategyRollup(scored) {
+  const el = document.getElementById('bots-by-strategy');
+  const byStrategy = new Map();
+  for (const s of scored) {
+    const id = s.bot.strategy_id || 'unassigned';
+    const agg = byStrategy.get(id) || { id, accounts: 0, pnl: 0, staked: 0, unmarked: 0 };
+    agg.accounts++;
+    agg.pnl += s.equity - s.bot.starting_balance;
+    agg.staked += s.bot.starting_balance;
+    agg.unmarked += s.unmarked;
+    byStrategy.set(id, agg);
+  }
+
+  // One strategy across the board means the rollup restates the cards below.
+  if (byStrategy.size < 2) { el.innerHTML = ''; return; }
+
+  el.innerHTML = [...byStrategy.values()]
+    .sort((a, b) => b.pnl - a.pnl)
+    .map(a => {
+      const pct = a.staked ? (a.pnl / a.staked) * 100 : 0;
+      return `<div class="strat-tile">
+        <span class="strat-name">${escapeHtml(a.id)}</span>
+        <span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+        <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) ·
+          ${a.accounts} account${a.accounts === 1 ? '' : 's'}${a.unmarked ? ' · partial' : ''}</span>
+      </div>`;
+    }).join('');
+}
+
 function renderBots() {
   if (!botsData) return;
   const grid = document.getElementById('bots-grid');
@@ -1587,6 +1647,7 @@ function renderBots() {
 
   const scored = bots.map(b => ({ bot: b, ...botEquity(b) }));
   const best = Math.max(...scored.map(s => s.equity));
+  renderStrategyRollup(scored);
 
   grid.innerHTML = scored.map(({ bot, equity, unmarked }) => {
     const pnl = equity - bot.starting_balance;
@@ -1609,6 +1670,7 @@ function renderBots() {
 
     return `<div class="bot-card${isLeader ? ' leader' : ''}">
       <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
+      <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
       <div class="bot-equity">$${equity.toFixed(2)}</div>
       <div class="bot-pnl ${dir}">${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)</div>
       <div class="bot-meta">

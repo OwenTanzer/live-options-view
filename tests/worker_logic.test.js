@@ -145,7 +145,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     });
 
     const botRecord = {
-      username: 'crassus_bob', alias: 'Bob', is_bot: true, salt: 'SALT', hash: 'HASH',
+      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'reddit_sentiment_qqq',
+      salt: 'SALT', hash: 'HASH',
       iterations: 100000, balance_cash: 9500, starting_balance: 10000,
       trades: [{ sym: 'A', side: 'buy', qty: 1, price: 5, strike: 600, type: 'call', exp: '2026-07-17', ts: '2026-07-27T12:00:00Z' }],
       createdAt: '2026-07-27T00:00:00Z', version: 1,
@@ -165,6 +166,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const [bot] = body.bots;
     assert.equal(bot.username, 'crassus_bob');
     assert.equal(bot.alias, 'Bob');
+    assert.equal(bot.strategy_id, 'reddit_sentiment_qqq', 'the roster reports which strategy a bot runs');
     assert.equal(bot.balance_cash, 9500);
     assert.equal(bot.trade_count, 1);
     assert.equal(bot.positions.length, 1);
@@ -184,6 +186,14 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     });
     assert.equal((await (await handleBots({}, demoted)).json()).bots.length, 0,
       'the record, not the index, is the authority on bot-ness');
+
+    // A bot registered before strategy_id existed reports null, not undefined,
+    // so the client can render a definite "no strategy recorded" state.
+    const legacy = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify({ ...botRecord, strategy_id: undefined }),
+    });
+    assert.equal((await (await handleBots({}, legacy)).json()).bots[0].strategy_id, null);
 
     // A liquidated bot leaves a dangling index entry; the roster tolerates it.
     const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });

@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Only smoke_atm_roundtrip is implemented so far (P3 rolls out the rest), so every account below runs it -- copying this file as-is is meant to work out of the box. Swap in patient_calls_dip / aggressive_puts_reload / patient_puts_dip / cheap_atm_calls / cheap_atm_puts for an account only once that strategy is registered; the runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one.",
+  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Two strategies are implemented: smoke_atm_roundtrip (P1 smoke test) and reddit_sentiment_qqq (#22); the dip/rip/cheap-ATM ones are still P3. The runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one. The split below is deliberate -- running every account on one strategy only measures variance, so the book is halved, and the three sentiment accounts run conservative / default / aggressive thresholds so the Automated tab's per-strategy rollup compares something real. reddit_sentiment_qqq returns no_trade unless REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET / REDDIT_USER_AGENT are set; it degrades rather than crashing, so those accounts sit flat until the credentials exist.",
 
   "accounts": [
     {
@@ -24,19 +24,29 @@
       "alias": "Luigi",
       "username": "crassus_luigi",
       "password_env": "CRASSUS_PW_LUIGI",
-      "strategy_id": "smoke_atm_roundtrip"
+      "strategy_id": "reddit_sentiment_qqq",
+      "params": {
+        "min_sample_size": 12,
+        "bullish_threshold": 0.30,
+        "bearish_threshold": -0.30
+      }
     },
     {
       "alias": "Jesus",
       "username": "crassus_jesus",
       "password_env": "CRASSUS_PW_JESUS",
-      "strategy_id": "smoke_atm_roundtrip"
+      "strategy_id": "reddit_sentiment_qqq"
     },
     {
       "alias": "Doris",
       "username": "crassus_doris",
       "password_env": "CRASSUS_PW_DORIS",
-      "strategy_id": "smoke_atm_roundtrip"
+      "strategy_id": "reddit_sentiment_qqq",
+      "params": {
+        "min_sample_size": 3,
+        "bullish_threshold": 0.05,
+        "bearish_threshold": -0.05
+      }
     }
   ]
 }
