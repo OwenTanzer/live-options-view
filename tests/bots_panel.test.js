@@ -222,13 +222,39 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   panel.renderBots();
   {
     const roll = els['bots-by-strategy'].innerHTML;
-    assert.match(roll, /1 pending/, 'the incomplete account is counted as pending');
-    // smoke's only account is incomplete, so it has nothing rankable at all.
+    // smoke's only account is incomplete, so it has nothing marked at all.
     const smoke = roll.slice(roll.indexOf('smoke_atm_roundtrip'));
-    assert.match(smoke, /pending/, 'a strategy with no rankable account shows pending, not $0.00');
+    assert.match(smoke, /0\/1 marked — unranked/, 'coverage is stated explicitly');
     assert.equal(smoke.includes('−$500.00'), false, 'the excluded account does not contribute PnL');
     assert.ok(roll.indexOf('reddit_sentiment_qqq') < roll.indexOf('smoke_atm_roundtrip'),
-      'a strategy with nothing rankable sorts after one with real PnL');
+      'a strategy with nothing rankable sorts after a fully-marked one');
+  }
+
+  // A *partially* marked strategy must not be ranked against fully-marked
+  // ones on its subtotal: a 2-of-3 figure and a 3-of-3 figure cover different
+  // fractions of their books and are not comparable.
+  quotes.clear();
+  quotes.set('X', { mid: 4.0 });
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      // smoke: two accounts up big, one unmarked -> huge subtotal, but partial.
+      withStrat('S1', 's1', 20000, 'smoke_atm_roundtrip'),
+      withStrat('S2', 's2', 20000, 'smoke_atm_roundtrip'),
+      withStrat('S3', 's3', 10000, 'smoke_atm_roundtrip', [pos('NOQUOTE', 1, 1.0)]),
+      // sentiment: fully marked, but a modest gain.
+      withStrat('R1', 'r1', 10100, 'reddit_sentiment_qqq'),
+    ],
+  };
+  panel.renderBots();
+  {
+    const roll = els['bots-by-strategy'].innerHTML;
+    assert.ok(roll.indexOf('reddit_sentiment_qqq') < roll.indexOf('smoke_atm_roundtrip'),
+      'a fully-marked strategy outranks a partially-marked one with a larger subtotal');
+    const smoke = roll.slice(roll.indexOf('smoke_atm_roundtrip'));
+    assert.match(smoke, /2\/3 marked — unranked/, 'partial coverage is stated as N/M');
+    assert.match(smoke, /subtotal/, 'the subtotal is shown but labelled as such');
+    assert.match(smoke, /\+\$20000\.00/, 'the subtotal itself is still visible');
   }
 
   // A bot with no recorded strategy is grouped, not dropped.

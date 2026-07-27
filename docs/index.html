@@ -1637,25 +1637,41 @@ function renderStrategyRollup(scored) {
   // One strategy across the board means the rollup restates the cards below.
   if (byStrategy.size < 2) { el.innerHTML = ''; return; }
 
+  // A strategy is only ranked when *every* one of its accounts is marked.
+  // Ranking a subtotal from the complete accounts would order strategies on
+  // figures covering different fractions of their books -- a 2-of-3 subtotal
+  // sitting above a fully-marked rival says nothing about which is ahead.
+  // Partial strategies still show their subtotal, explicitly labelled with the
+  // coverage it represents, but are excluded from ordering and parked after
+  // the ranked ones.
   el.innerHTML = [...byStrategy.values()]
     .sort((a, b) => {
-      // A strategy with nothing rankable has no PnL to sort on; park it last
-      // rather than letting its 0 outrank a genuine loss.
-      if (!a.rankable !== !b.rankable) return a.rankable ? -1 : 1;
+      const aFull = a.pending === 0;
+      const bFull = b.pending === 0;
+      if (aFull !== bFull) return aFull ? -1 : 1;
+      if (!aFull) return a.id.localeCompare(b.id);
       return b.pnl - a.pnl;
     })
     .map(a => {
+      const full = a.pending === 0;
       const pct = a.staked ? (a.pnl / a.staked) * 100 : 0;
-      const note = a.pending
-        ? ` · ${a.pending} pending` : '';
-      const figure = a.rankable
+      const accounts = `${a.accounts} account${a.accounts === 1 ? '' : 's'}`;
+      if (full) {
+        return `<div class="strat-tile">
+          <span class="strat-name">${escapeHtml(a.id)}</span>
+          <span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+          <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) · ${accounts}</span>
+        </div>`;
+      }
+      // Nothing marked at all: there is no subtotal to show, partial or not.
+      const subtotal = a.rankable
         ? `<span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
-           <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)</span>`
-        : '<span class="strat-meta bot-unmarked"> pending</span>';
+           <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) subtotal</span>`
+        : '';
       return `<div class="strat-tile">
         <span class="strat-name">${escapeHtml(a.id)}</span>
-        ${figure}
-        <span class="strat-meta"> · ${a.accounts} account${a.accounts === 1 ? '' : 's'}${note}</span>
+        ${subtotal}
+        <span class="strat-meta bot-unmarked"> · ${a.rankable}/${a.accounts} marked — unranked</span>
       </div>`;
     }).join('');
 }

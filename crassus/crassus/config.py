@@ -27,6 +27,14 @@ SNAPSHOT_URL = os.environ.get(
 # Reddit API credentials for the reddit_sentiment_qqq strategy (crassus/sentiment.py).
 # A read-only PRAW "script" app -- see https://www.reddit.com/prefs/apps/ -- never
 # from source control. Unset means that strategy declines to trade instead of crashing.
+# Operator key that marks an account as a bot on the Worker. Registering with
+# this in an X-Bot-Registration-Key header puts the account in the `bot:` index
+# behind the public /api/bots roster (the site's Automated tab); registering
+# without it silently creates an ordinary human account that never appears
+# there, which is why the runner treats a missing key as a startup error rather
+# than a default.
+BOT_REGISTRATION_KEY = os.environ.get("BOT_REGISTRATION_KEY")
+
 REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
