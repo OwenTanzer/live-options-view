@@ -61,7 +61,8 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   quotes.set('X', { mid: 4.0 });
 
   // Flat account: equity is just cash.
-  assert.deepEqual(panel.botEquity(bot('A', 'a', 10000)), { equity: 10000, openValue: 0, unmarked: 0 });
+  assert.deepEqual(panel.botEquity(bot('A', 'a', 10000)),
+    { complete: true, unmarked: 0, openValue: 0, equity: 10000 });
 
   // Long 2 @ mark 4.00 -> 2 * 4.00 * 100 = 800 on top of cash.
   const long = panel.botEquity(bot('B', 'b', 9000, [pos('X', 2, 3.0)]));
@@ -72,11 +73,69 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   const short = panel.botEquity(bot('C', 'c', 11000, [pos('X', -3, 5.0)]));
   assert.equal(short.equity, 11000 - 1200);
 
-  // An unquoted contract is counted as unmarked rather than valued at zero --
-  // the panel must never present a confident total built from missing marks.
+  // An unquoted contract makes the whole account incomplete. Returning the sum
+  // of the marked legs would omit an unmarked short's liability entirely.
   const partial = panel.botEquity(bot('D', 'd', 9000, [pos('X', 1, 3.0), pos('NOQUOTE', 5, 1.0)]));
   assert.equal(partial.unmarked, 1, 'a contract with no quote is reported unmarked');
-  assert.equal(partial.equity, 9400, 'equity excludes the unmarked leg rather than treating it as worthless');
+  assert.equal(partial.complete, false, 'any unmarked leg makes the account incomplete');
+  assert.equal(partial.equity, null, 'no equity is reported when it cannot be fully computed');
+  assert.equal(partial.openValue, null);
+}
+
+// ── an unmarked short must not be crowned leader ──────────────────────────────
+// The failure this guards: skipping the unmarked leg and returning the rest
+// omits the short's liability, inflating equity above every honest account.
+{
+  quotes.clear();
+  quotes.set('X', { mid: 1.0 });
+
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      // Huge cash, but short 50 contracts nobody can mark. Naively summing the
+      // marked legs would show $50,000 and win outright.
+      { ...bot('Illusory', 'illusory', 50000, [pos('NOQUOTE', -50, 2.0)]), strategy_id: 's' },
+      { ...bot('Honest', 'honest', 10500, [pos('X', 1, 1.0)]), strategy_id: 's' },
+    ],
+  };
+  panel.renderBots();
+
+  const out = els['bots-grid'].innerHTML;
+  // The incomplete account sorts last, so its card runs from its alias to the end.
+  const illusory = out.slice(out.indexOf('Illusory'));
+  assert.equal(illusory.includes('leader'), false, 'an account with an unmarked short cannot be leader');
+  // Cash is a known fact and is still shown; it is *equity* that is withheld.
+  const equityField = illusory.slice(illusory.indexOf('bot-equity'), illusory.indexOf('bot-meta'));
+  assert.match(equityField, /pending/, 'equity is withheld, not estimated');
+  assert.equal(/\$[\d,]+\.\d\d/.test(equityField), false,
+    'no equity figure is rendered for an account that could not be fully marked');
+  assert.match(illusory, /awaiting marks/, 'PnL is withheld too');
+
+  // With only one rankable account there is no contest, so nobody is crowned.
+  assert.equal((out.match(/bot-card leader/g) || []).length, 0,
+    'a single rankable account is not crowned leader over an unranked one');
+
+  // The incomplete account is ordered after the complete one.
+  assert.ok(out.indexOf('Honest') < out.indexOf('Illusory'),
+    'unranked accounts sort after ranked ones regardless of nominal cash');
+}
+
+// ── ordering is by descending equity ──────────────────────────────────────────
+{
+  quotes.clear();
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      bot('Alpha', 'alpha', 9000),    // alphabetically first, worst equity
+      bot('Zulu', 'zulu', 12000),     // alphabetically last, best equity
+      bot('Mike', 'mike', 10500),
+    ],
+  };
+  panel.renderBots();
+  const out = els['bots-grid'].innerHTML;
+  const order = ['Zulu', 'Mike', 'Alpha'].map(n => out.indexOf(n));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b),
+    'cards render in descending-equity order, not the alphabetical order the API returns');
 }
 
 // ── renderBots ────────────────────────────────────────────────────────────────
@@ -151,8 +210,8 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   panel.renderBots();
   assert.equal(els['bots-by-strategy'].innerHTML, '', 'a one-strategy book shows no rollup');
 
-  // An unmarked leg anywhere in a strategy flags it partial rather than
-  // reporting a confident aggregate.
+  // An incomplete account is excluded from its strategy's aggregate and
+  // reported as pending, rather than folded in on a partial number.
   panel.botsData = {
     as_of: '2026-07-27T15:00:00Z',
     bots: [
@@ -161,7 +220,16 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
     ],
   };
   panel.renderBots();
-  assert.match(els['bots-by-strategy'].innerHTML, /partial/);
+  {
+    const roll = els['bots-by-strategy'].innerHTML;
+    assert.match(roll, /1 pending/, 'the incomplete account is counted as pending');
+    // smoke's only account is incomplete, so it has nothing rankable at all.
+    const smoke = roll.slice(roll.indexOf('smoke_atm_roundtrip'));
+    assert.match(smoke, /pending/, 'a strategy with no rankable account shows pending, not $0.00');
+    assert.equal(smoke.includes('−$500.00'), false, 'the excluded account does not contribute PnL');
+    assert.ok(roll.indexOf('reddit_sentiment_qqq') < roll.indexOf('smoke_atm_roundtrip'),
+      'a strategy with nothing rankable sorts after one with real PnL');
+  }
 
   // A bot with no recorded strategy is grouped, not dropped.
   panel.botsData = {
@@ -189,11 +257,25 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   assert.match(out, /&lt;img src=x onerror=alert\(1\)&gt;/);
 }
 
-// ── empty roster ──────────────────────────────────────────────────────────────
+// ── empty roster clears both the cards and the rollup ─────────────────────────
 {
+  quotes.clear();
+  // Populate a two-strategy rollup first, then liquidate every bot.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      { ...bot('A', 'a', 9500), strategy_id: 'smoke_atm_roundtrip' },
+      { ...bot('C', 'c', 12000), strategy_id: 'reddit_sentiment_qqq' },
+    ],
+  };
+  panel.renderBots();
+  assert.notEqual(els['bots-by-strategy'].innerHTML, '', 'rollup is populated before liquidation');
+
   panel.botsData = { as_of: '2026-07-27T15:00:00Z', bots: [] };
   panel.renderBots();
   assert.equal(els['bots-grid'].innerHTML, '');
+  assert.equal(els['bots-by-strategy'].innerHTML, '',
+    'stale rollup tiles must not survive liquidation of the last bots');
   assert.match(els['bots-status'].textContent, /no automated accounts registered yet/);
 }
 

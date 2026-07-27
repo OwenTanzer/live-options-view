@@ -1581,10 +1581,15 @@ async function fetchBots() {
   }
 }
 
-// Equity = cash + mark value of open positions. A position with no quote yet
-// is reported as unmarked rather than silently valued at zero or at cost --
-// showing a confident total built partly from missing marks is the one thing
-// this panel must not do.
+// Equity = cash + mark value of open positions, but only when every position
+// has a mark.
+//
+// Skipping an unmarked leg and returning the remaining sum is worse than
+// returning nothing: an unmarked *short* has its liability omitted, which
+// inflates equity and could crown that account leader on the strength of a
+// number nobody computed. So an account with any unmarked position reports
+// complete:false and equity:null, and is excluded from leader selection and
+// from strategy aggregation rather than ranked on a partial figure.
 function botEquity(bot) {
   let openValue = 0;
   let unmarked = 0;
@@ -1593,7 +1598,13 @@ function botEquity(bot) {
     if (mark == null) { unmarked++; continue; }
     openValue += mark * p.qty * 100;
   }
-  return { equity: bot.balance_cash + openValue, openValue, unmarked };
+  const complete = unmarked === 0;
+  return {
+    complete,
+    unmarked,
+    openValue: complete ? openValue : null,
+    equity: complete ? bot.balance_cash + openValue : null,
+  };
 }
 
 // Aggregate PnL per strategy. With more than one strategy in play (#22 added
@@ -1608,11 +1619,18 @@ function renderStrategyRollup(scored) {
   const byStrategy = new Map();
   for (const s of scored) {
     const id = s.bot.strategy_id || 'unassigned';
-    const agg = byStrategy.get(id) || { id, accounts: 0, pnl: 0, staked: 0, unmarked: 0 };
+    const agg = byStrategy.get(id) || { id, accounts: 0, rankable: 0, pnl: 0, staked: 0, pending: 0 };
     agg.accounts++;
-    agg.pnl += s.equity - s.bot.starting_balance;
-    agg.staked += s.bot.starting_balance;
-    agg.unmarked += s.unmarked;
+    // Only complete accounts contribute to the aggregate. Folding in an
+    // account whose equity nobody could compute would rank a strategy on a
+    // number that is partly missing.
+    if (s.complete) {
+      agg.rankable++;
+      agg.pnl += s.equity - s.bot.starting_balance;
+      agg.staked += s.bot.starting_balance;
+    } else {
+      agg.pending++;
+    }
     byStrategy.set(id, agg);
   }
 
@@ -1620,14 +1638,24 @@ function renderStrategyRollup(scored) {
   if (byStrategy.size < 2) { el.innerHTML = ''; return; }
 
   el.innerHTML = [...byStrategy.values()]
-    .sort((a, b) => b.pnl - a.pnl)
+    .sort((a, b) => {
+      // A strategy with nothing rankable has no PnL to sort on; park it last
+      // rather than letting its 0 outrank a genuine loss.
+      if (!a.rankable !== !b.rankable) return a.rankable ? -1 : 1;
+      return b.pnl - a.pnl;
+    })
     .map(a => {
       const pct = a.staked ? (a.pnl / a.staked) * 100 : 0;
+      const note = a.pending
+        ? ` · ${a.pending} pending` : '';
+      const figure = a.rankable
+        ? `<span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+           <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)</span>`
+        : '<span class="strat-meta bot-unmarked"> pending</span>';
       return `<div class="strat-tile">
         <span class="strat-name">${escapeHtml(a.id)}</span>
-        <span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
-        <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) ·
-          ${a.accounts} account${a.accounts === 1 ? '' : 's'}${a.unmarked ? ' · partial' : ''}</span>
+        ${figure}
+        <span class="strat-meta"> · ${a.accounts} account${a.accounts === 1 ? '' : 's'}${note}</span>
       </div>`;
     }).join('');
 }
@@ -1641,19 +1669,32 @@ function renderBots() {
 
   if (!bots.length) {
     grid.innerHTML = '';
+    // Clear the rollup too, or tiles from the last populated render survive
+    // the liquidation of the final bot and read as live.
+    document.getElementById('bots-by-strategy').innerHTML = '';
     document.getElementById('bots-status').textContent = 'no automated accounts registered yet';
     return;
   }
 
-  const scored = bots.map(b => ({ bot: b, ...botEquity(b) }));
-  const best = Math.max(...scored.map(s => s.equity));
+  // Rank by equity descending, with accounts that have no complete equity
+  // parked after them -- they are unranked, not last-placed.
+  const scored = bots.map(b => ({ bot: b, ...botEquity(b) }))
+    .sort((a, b) => {
+      if (a.complete !== b.complete) return a.complete ? -1 : 1;
+      if (!a.complete) return a.bot.alias.localeCompare(b.bot.alias);
+      return b.equity - a.equity;
+    });
+  const rankable = scored.filter(s => s.complete);
+  const best = rankable.length ? rankable[0].equity : null;
   renderStrategyRollup(scored);
 
-  grid.innerHTML = scored.map(({ bot, equity, unmarked }) => {
-    const pnl = equity - bot.starting_balance;
-    const pct = bot.starting_balance ? (pnl / bot.starting_balance) * 100 : 0;
-    const dir = pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'flat';
-    const isLeader = scored.length > 1 && equity === best;
+  grid.innerHTML = scored.map(({ bot, equity, complete, unmarked }) => {
+    const pnl = complete ? equity - bot.starting_balance : null;
+    const pct = complete && bot.starting_balance ? (pnl / bot.starting_balance) * 100 : 0;
+    const dir = !complete ? 'flat' : pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'flat';
+    // Only a complete account can lead, and only when something else could
+    // have beaten it.
+    const isLeader = complete && rankable.length > 1 && equity === best;
 
     const posRows = bot.positions.map(p => {
       const mark = liveQuotes.get(p.sym)?.mid ?? null;
@@ -1671,12 +1712,14 @@ function renderBots() {
     return `<div class="bot-card${isLeader ? ' leader' : ''}">
       <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
       <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
-      <div class="bot-equity">$${equity.toFixed(2)}</div>
-      <div class="bot-pnl ${dir}">${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)</div>
+      <div class="bot-equity">${complete ? `$${equity.toFixed(2)}` : '<span class="bot-unmarked">pending</span>'}</div>
+      <div class="bot-pnl ${dir}">${complete
+        ? `${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)`
+        : '<span class="bot-unmarked">awaiting marks</span>'}</div>
       <div class="bot-meta">
         Cash $${bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
         ${bot.last_trade_ts ? ` · last ${new Date(bot.last_trade_ts).toLocaleTimeString()}` : ''}
-        ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} unmarked — equity excludes ${unmarked === 1 ? 'it' : 'them'}</span>` : ''}
+        ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} without a mark — equity and PnL withheld, and this account is unranked</span>` : ''}
       </div>
       ${bot.positions.length
         ? `<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th></tr>${posRows}</table>`

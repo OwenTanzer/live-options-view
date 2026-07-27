@@ -10,6 +10,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100_000;
 export const STARTING_BALANCE = 10_000;
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
+export const STRATEGY_ID_RE = /^[a-z0-9_]{1,40}$/;
 export const MIN_PASSWORD_LEN = 8;
 export const MAX_PASSWORD_LEN = 256;
 const MAX_KV_WRITE_ATTEMPTS = 5;
@@ -48,6 +49,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/api/bots') {
       return handleBots(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/bot-metadata') {
+      return handleBotMetadata(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/api/me') {
@@ -288,7 +293,7 @@ async function handleRegister(request, env) {
   // the Worker. The runner already refuses to start on an unregistered
   // strategy_id, which is the check that actually matters.
   if (isBot && strategy_id !== undefined &&
-      (typeof strategy_id !== 'string' || !/^[a-z0-9_]{1,40}$/.test(strategy_id))) {
+      (typeof strategy_id !== 'string' || !STRATEGY_ID_RE.test(strategy_id))) {
     return jsonResponse({ error: 'strategy_id must be 1-40 chars: lowercase letters, numbers, underscore' }, 400);
   }
 
@@ -367,6 +372,56 @@ async function handleMe(request, env) {
   );
 }
 
+// Re-syncs a bot's operator-owned metadata (strategy_id, alias) after
+// registration.
+//
+// The authoritative strategy assignment lives in the Crassus runtime's
+// accounts.json, not here -- capturing it once at registration meant that
+// moving an existing bot to a new strategy left /api/bots attributing all its
+// future performance to the old one, with no way to correct it short of
+// abandoning the username. The runner calls this at startup so the roster
+// tracks the config that is actually running.
+//
+// Authenticated with the same operator key as bot registration: this edits the
+// public roster's attribution, so it must not be reachable by a logged-in bot
+// session, let alone anonymously.
+export async function handleBotMetadata(request, env) {
+  const key = request.headers.get('X-Bot-Registration-Key');
+  if (!env.BOT_REGISTRATION_KEY || key !== env.BOT_REGISTRATION_KEY) {
+    return jsonResponse({ error: 'Invalid bot registration key' }, 403);
+  }
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const { username, strategy_id, alias } = bodyResult.body || {};
+
+  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+    return jsonResponse({ error: 'username must be a valid username' }, 400);
+  }
+  if (strategy_id !== undefined && strategy_id !== null &&
+      (typeof strategy_id !== 'string' || !STRATEGY_ID_RE.test(strategy_id))) {
+    return jsonResponse({ error: 'strategy_id must be 1-40 chars: lowercase letters, numbers, underscore' }, 400);
+  }
+  if (alias !== undefined && (typeof alias !== 'string' || alias.length > 40)) {
+    return jsonResponse({ error: 'Alias must be a string of at most 40 characters' }, 400);
+  }
+
+  const outcome = await withUserRecord(env, username, (record) => {
+    if (!record.is_bot) return { error: 'not_a_bot' };
+    const next = { ...record };
+    if (strategy_id !== undefined) next.strategy_id = strategy_id;
+    if (alias !== undefined) next.alias = alias;
+    return { record: next, result: { strategy_id: next.strategy_id, alias: next.alias } };
+  });
+
+  if (outcome.error === 'not_found') return jsonResponse({ error: 'No such account' }, 404);
+  // A human account is never editable through the operator key -- that would be
+  // a path to publishing a real user's balance by flipping them into the roster.
+  if (outcome.error === 'not_a_bot') return jsonResponse({ error: 'Not a bot account' }, 409);
+  if (outcome.error) return jsonResponse({ error: 'Metadata could not be updated, try again' }, 503);
+
+  return jsonResponse({ username, ...outcome.result }, 200);
+}
+
 // Public read-only roster of the automated (Crassus) accounts, for the
 // Automated tab's side-by-side comparison. Deliberately unauthenticated: these
 // are paper-money bots whose whole purpose is to be observed. Two invariants
@@ -411,32 +466,28 @@ export async function handleBots(request, env) {
   return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
 }
 
-// Nets a trade list into per-contract open positions. Buys are positive, sells
-// negative; a contract that nets flat is dropped rather than shown as a zero
-// row. avg_price is the mean fill price over the trades on the surviving side,
-// so it stays meaningful for a position built up across several fills.
+// Projects the account's position book into the roster's wire shape.
+//
+// This delegates to computeBookFromTrades rather than accumulating its own cost
+// basis. An earlier version summed fills on the surviving side, which silently
+// diverged from the real book: it never reset on a flat round trip, so a
+// contract closed and reopened at a new price reported a blend of both eras.
+// The smoke strategy closes and reopens the same ATM contract every cycle, so
+// that was wrong within minutes of the first run. computeBookFromTrades already
+// handles reductions, flat resets and side flips, and is the same function
+// /api/settle books against -- sharing it is what keeps the roster and
+// settlement from disagreeing about what a bot holds.
 export function netPositions(trades) {
-  const bySym = new Map();
-  for (const t of trades) {
-    const signed = t.side === 'buy' ? t.qty : -t.qty;
-    const entry = bySym.get(t.sym) || {
-      sym: t.sym, strike: t.strike, type: t.type, exp: t.exp,
-      qty: 0, _cost: 0, _absQty: 0,
-    };
-    entry.qty += signed;
-    // Cost basis accumulates on the side the net position is being built on;
-    // closing fills are realized into cash by the trade itself, not here.
-    if ((signed > 0 && entry.qty > 0) || (signed < 0 && entry.qty < 0)) {
-      entry._cost += t.price * Math.abs(t.qty);
-      entry._absQty += Math.abs(t.qty);
-    }
-    bySym.set(t.sym, entry);
-  }
-  return [...bySym.values()]
-    .filter(e => e.qty !== 0)
-    .map(({ _cost, _absQty, ...e }) => ({
-      ...e,
-      avg_price: _absQty ? Number((_cost / _absQty).toFixed(4)) : null,
+  const book = computeBookFromTrades(trades);
+  return Object.entries(book)
+    .filter(([, b]) => b.pos !== 0)
+    .map(([sym, b]) => ({
+      sym,
+      strike: b.strike,
+      type: b.type,
+      exp: b.exp,
+      qty: b.pos,
+      avg_price: Number(b.avg.toFixed(4)),
     }));
 }
 
