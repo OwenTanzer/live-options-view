@@ -553,9 +553,12 @@ class DXLinkFeed:
                     "parameters": {"contract": "AUTO"},
                 })
             else:
-                with self._lock:
-                    self._auth_fail_count += 1
-                log.error(f"DXLink auth failed (attempt {self._auth_fail_count}): {msg}")
+                # dxLink sends AUTH_STATE:UNAUTHORIZED unprompted right after SETUP to
+                # say it is awaiting credentials -- it is not a rejection, and it races
+                # with the AUTH we send from the SETUP handler. A genuine auth failure
+                # is a connection that closes having never reached AUTHORIZED, which
+                # _on_close counts instead.
+                log.debug(f"DXLink awaiting auth: {msg}")
 
         elif mtype == "CHANNEL_OPENED":
             with self._lock:
@@ -685,11 +688,18 @@ class DXLinkFeed:
 
     def _on_close(self, ws, code, msg):
         with self._lock:
+            never_authorized   = not self._authorized
             self._connected    = False
             self._authorized   = False
             self._channel_open = False
             self._last_close_code = code
-        log.warning(f"DXLink closed: code={code}")
+            if never_authorized:
+                self._auth_fail_count += 1
+                fail_count = self._auth_fail_count
+        if never_authorized:
+            log.error(f"DXLink closed without authorizing (attempt {fail_count}): code={code}")
+        else:
+            log.warning(f"DXLink closed: code={code}")
         self._ready.clear()
 
 
@@ -863,50 +873,80 @@ def start_live_quote_server(registry: LiveQuoteRegistry):
 
 # -- tier classification (mirrors oi_viewer.py) -------------------------------
 
+# The window must reach back far enough to cover the current month's monthly-opex
+# Friday, which classify_tier looks up and which is already in the past for most of
+# the second half of any month.
+_CALENDAR_LOOKBACK_DAYS = 45
+_CALENDAR_LOOKAHEAD_DAYS = 90
+
+
 def _load_calendar():
     try:
         import pandas_market_calendars as mcal
         nyse  = mcal.get_calendar("NYSE")
-        start = date.today()
-        end   = start + timedelta(days=90)
+        start = date.today() - timedelta(days=_CALENDAR_LOOKBACK_DAYS)
+        end   = date.today() + timedelta(days=_CALENDAR_LOOKAHEAD_DAYS)
         return {d.date() for d in nyse.valid_days(start_date=start.isoformat(),
                                                     end_date=end.isoformat())}
-    except Exception:
+    except Exception as exc:
+        log.warning(f"trading calendar unavailable ({exc}) -- tier falls back to 0DTE_Regular")
         return set()
+
+
+DEFAULT_TIER = "0DTE_Regular"
+
+# Bound on how far the trading-day walks may step before giving up. The calendar
+# window is finite, so an unbounded walk off either end runs to date.min/date.max
+# and raises OverflowError -- which used to kill the whole collector session.
+_TD_WALK_LIMIT = 30
+
+
+class _CalendarLookupError(Exception):
+    """A trading-day walk ran past the edge of the loaded calendar window."""
 
 
 def classify_tier(today: date) -> str:
     import calendar as _cal
 
     valid = _load_calendar()
+    if not valid:
+        return DEFAULT_TIER
 
     def prior_td(d):
-        while d not in valid:
+        for _ in range(_TD_WALK_LIMIT):
+            if d in valid:
+                return d
             d -= timedelta(days=1)
-        return d
+        raise _CalendarLookupError(f"no trading day at or before {d} within calendar window")
 
     def next_td(d):
-        d += timedelta(days=1)
-        while d not in valid:
+        for _ in range(_TD_WALK_LIMIT):
             d += timedelta(days=1)
-        return d
+            if d in valid:
+                return d
+        raise _CalendarLookupError(f"no trading day after {d} within calendar window")
 
     def nominal_fri(d):
         return d + timedelta(days=(4 - d.weekday()) % 7)
 
-    eow    = prior_td(nominal_fri(today))
-    plus1d = next_td(today)
-    if plus1d != eow:
-        return "0DTE_Regular"
+    try:
+        eow    = prior_td(nominal_fri(today))
+        plus1d = next_td(today)
+        if plus1d != eow:
+            return DEFAULT_TIER
 
-    count, opex = 0, None
-    for day in range(1, _cal.monthrange(plus1d.year, plus1d.month)[1] + 1):
-        if date(plus1d.year, plus1d.month, day).weekday() == 4:
-            count += 1
-            if count == 3:
-                opex = prior_td(date(plus1d.year, plus1d.month, day))
-                break
-    return "0DTE_Monthly" if plus1d == opex else "0DTE_Weekly"
+        count, opex = 0, None
+        for day in range(1, _cal.monthrange(plus1d.year, plus1d.month)[1] + 1):
+            if date(plus1d.year, plus1d.month, day).weekday() == 4:
+                count += 1
+                if count == 3:
+                    opex = prior_td(date(plus1d.year, plus1d.month, day))
+                    break
+        return "0DTE_Monthly" if plus1d == opex else "0DTE_Weekly"
+    except _CalendarLookupError as exc:
+        # Tier is a labelling concern; never let it take down market-data streaming.
+        log.warning(f"tier classification fell back to {DEFAULT_TIER}: {exc}")
+        return DEFAULT_TIER
 
 
 # -- R2 client ----------------------------------------------------------------
