@@ -10,6 +10,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
+    netPositions, handleBots,
   } = await import('../worker.js');
 
   // ── validateTradeIntent ────────────────────────────────────────────────────
@@ -109,6 +110,86 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   const wrongHash = await derivePasswordHash('wrong password', salt);
   assert.equal(constantTimeEqual(hash, sameHash), true, 'the same password and salt must re-derive the same hash');
   assert.equal(constantTimeEqual(hash, wrongHash), false, 'a different password must derive a different hash');
+
+  // ── netPositions ────────────────────────────────────────────────────────────
+  {
+    const t = (sym, side, qty, price, extra = {}) =>
+      ({ sym, side, qty, price, strike: 600, type: 'call', exp: '2026-07-17', ...extra });
+
+    assert.deepEqual(netPositions([]), [], 'no trades yields no positions');
+
+    const flat = netPositions([t('A', 'buy', 2, 1.0), t('A', 'sell', 2, 1.5)]);
+    assert.deepEqual(flat, [], 'a round trip nets flat and is dropped, not shown as a zero row');
+
+    const [long] = netPositions([t('A', 'buy', 2, 1.0), t('A', 'buy', 2, 2.0)]);
+    assert.equal(long.qty, 4);
+    assert.equal(long.avg_price, 1.5, 'avg_price averages across the fills building the position');
+
+    const [short] = netPositions([t('A', 'sell', 3, 2.0)]);
+    assert.equal(short.qty, -3, 'a naked sell shows as a negative position');
+    assert.equal(short.avg_price, 2.0);
+
+    const multi = netPositions([t('A', 'buy', 1, 1.0), t('B', 'buy', 2, 3.0)]);
+    assert.equal(multi.length, 2, 'distinct symbols stay distinct');
+  }
+
+  // ── handleBots ──────────────────────────────────────────────────────────────
+  {
+    const makeEnv = (entries) => ({
+      USERS: {
+        list: async ({ prefix }) => ({
+          keys: Object.keys(entries).filter(k => k.startsWith(prefix)).map(name => ({ name })),
+        }),
+        get: async (key) => entries[key] ?? null,
+      },
+    });
+
+    const botRecord = {
+      username: 'crassus_bob', alias: 'Bob', is_bot: true, salt: 'SALT', hash: 'HASH',
+      iterations: 100000, balance_cash: 9500, starting_balance: 10000,
+      trades: [{ sym: 'A', side: 'buy', qty: 1, price: 5, strike: 600, type: 'call', exp: '2026-07-17', ts: '2026-07-27T12:00:00Z' }],
+      createdAt: '2026-07-27T00:00:00Z', version: 1,
+    };
+    const humanRecord = {
+      username: 'realperson', balance_cash: 42, trades: [], salt: 'S', hash: 'H', version: 0,
+    };
+
+    const env = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify(botRecord),
+      'user:realperson': JSON.stringify(humanRecord),
+    });
+
+    const body = await (await handleBots({}, env)).json();
+    assert.equal(body.bots.length, 1, 'only indexed bot accounts appear in the roster');
+    const [bot] = body.bots;
+    assert.equal(bot.username, 'crassus_bob');
+    assert.equal(bot.alias, 'Bob');
+    assert.equal(bot.balance_cash, 9500);
+    assert.equal(bot.trade_count, 1);
+    assert.equal(bot.positions.length, 1);
+
+    // The whole point of the projection: secrets must never reach the client.
+    for (const leaked of ['salt', 'hash', 'iterations', 'version', 'password']) {
+      assert.equal(leaked in bot, false, `/api/bots must not expose ${leaked}`);
+    }
+    assert.equal(JSON.stringify(body).includes('realperson'), false,
+      'a human account must never appear in the public bot roster');
+    assert.equal(JSON.stringify(body).includes('HASH'), false, 'no password hash may be serialized');
+
+    // A record that lost its is_bot flag is excluded even while indexed.
+    const demoted = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify({ ...botRecord, is_bot: false }),
+    });
+    assert.equal((await (await handleBots({}, demoted)).json()).bots.length, 0,
+      'the record, not the index, is the authority on bot-ness');
+
+    // A liquidated bot leaves a dangling index entry; the roster tolerates it.
+    const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
+    assert.equal((await (await handleBots({}, dangling)).json()).bots.length, 0,
+      'an index entry with no account behind it is skipped, not fatal');
+  }
 
   console.log('PASS worker.js auth/trade/settlement logic');
 })().catch(error => {

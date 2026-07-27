@@ -46,6 +46,10 @@ export default {
       return handleLogout(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/bots') {
+      return handleBots(request, env);
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return handleMe(request, env);
     }
@@ -130,6 +134,16 @@ function parseRequestedSymbols(value) {
 
 function userKey(username) {
   return `user:${username.toLowerCase()}`;
+}
+
+// Membership index for the public /api/bots roster. Bot accounts are marked
+// here at registration by an operator holding BOT_REGISTRATION_KEY -- the
+// roster is driven off this index rather than off a `crassus_` username
+// prefix, because usernames are self-chosen: anyone could register
+// `crassus_whatever` and publish their own balance. Nothing a client sends
+// can put a record in this index.
+function botKey(username) {
+  return `bot:${username.toLowerCase()}`;
 }
 
 function sessionKey(token) {
@@ -250,7 +264,23 @@ async function handleRegister(request, env) {
   if (originError) return originError;
   const bodyResult = await readJsonBody(request);
   if (bodyResult.error) return bodyResult.error;
-  const { username, password } = bodyResult.body || {};
+  const { username, password, alias } = bodyResult.body || {};
+
+  // A bot account is only ever created by an operator presenting the shared
+  // BOT_REGISTRATION_KEY. A wrong key is rejected outright rather than quietly
+  // downgraded to a human registration, so a typo in the setup script fails
+  // loudly instead of silently producing an account missing from the roster.
+  const botKeyHeader = request.headers.get('X-Bot-Registration-Key');
+  let isBot = false;
+  if (botKeyHeader !== null) {
+    if (!env.BOT_REGISTRATION_KEY || botKeyHeader !== env.BOT_REGISTRATION_KEY) {
+      return jsonResponse({ error: 'Invalid bot registration key' }, 403);
+    }
+    isBot = true;
+  }
+  if (isBot && alias !== undefined && (typeof alias !== 'string' || alias.length > 40)) {
+    return jsonResponse({ error: 'Alias must be a string of at most 40 characters' }, 400);
+  }
 
   if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
     return jsonResponse({ error: 'Username must be 3-20 characters: letters, numbers, underscore' }, 400);
@@ -274,11 +304,16 @@ async function handleRegister(request, env) {
     hash,
     iterations: PBKDF2_ITERATIONS,
     balance_cash: STARTING_BALANCE,
+    starting_balance: STARTING_BALANCE,
     trades: [],
     createdAt: new Date().toISOString(),
     version: 0,
+    ...(isBot ? { is_bot: true, alias: alias || username } : {}),
   };
   await env.USERS.put(key, JSON.stringify(record));
+  // Index after the record exists, so the roster can never point at a
+  // username that has no account behind it.
+  if (isBot) await env.USERS.put(botKey(username), JSON.stringify({ username }));
 
   return startSession(request, env, record, 201);
 }
@@ -320,6 +355,78 @@ async function handleMe(request, env) {
     { username: session.username, balance_cash: session.record.balance_cash, trades: session.record.trades },
     200,
   );
+}
+
+// Public read-only roster of the automated (Crassus) accounts, for the
+// Automated tab's side-by-side comparison. Deliberately unauthenticated: these
+// are paper-money bots whose whole purpose is to be observed. Two invariants
+// hold it safe to expose:
+//
+//   1. Only accounts in the `bot:` index appear. Human accounts are never in
+//      it (see botKey), so no real user's balance is ever published here.
+//   2. Only the whitelisted fields below are returned. `salt`, `hash`,
+//      `iterations` and session state never leave this function -- a
+//      spread-the-record-and-delete-secrets approach would leak any field a
+//      later commit adds, so the projection is explicit.
+//
+// Positions are netted server-side but left unmarked; the client marks them
+// against the same live quotes the paper panel already polls, so the roster
+// and the single-account view can never disagree about the mark.
+export async function handleBots(request, env) {
+  const index = await env.USERS.list({ prefix: 'bot:' });
+  const usernames = index.keys.map(k => k.name.slice('bot:'.length));
+
+  const bots = [];
+  for (const name of usernames) {
+    const raw = await env.USERS.get(`user:${name}`);
+    if (!raw) continue;              // liquidated out from under the index
+    const record = JSON.parse(raw);
+    if (!record.is_bot) continue;    // index and record disagree -- trust the record
+    const trades = Array.isArray(record.trades) ? record.trades : [];
+    bots.push({
+      username: record.username,
+      alias: record.alias || record.username,
+      balance_cash: record.balance_cash,
+      starting_balance: record.starting_balance ?? STARTING_BALANCE,
+      trade_count: trades.length,
+      first_trade_ts: trades.length ? trades[0].ts : null,
+      last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
+      positions: netPositions(trades),
+      created_at: record.createdAt ?? null,
+    });
+  }
+
+  bots.sort((a, b) => a.alias.localeCompare(b.alias));
+  return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
+}
+
+// Nets a trade list into per-contract open positions. Buys are positive, sells
+// negative; a contract that nets flat is dropped rather than shown as a zero
+// row. avg_price is the mean fill price over the trades on the surviving side,
+// so it stays meaningful for a position built up across several fills.
+export function netPositions(trades) {
+  const bySym = new Map();
+  for (const t of trades) {
+    const signed = t.side === 'buy' ? t.qty : -t.qty;
+    const entry = bySym.get(t.sym) || {
+      sym: t.sym, strike: t.strike, type: t.type, exp: t.exp,
+      qty: 0, _cost: 0, _absQty: 0,
+    };
+    entry.qty += signed;
+    // Cost basis accumulates on the side the net position is being built on;
+    // closing fills are realized into cash by the trade itself, not here.
+    if ((signed > 0 && entry.qty > 0) || (signed < 0 && entry.qty < 0)) {
+      entry._cost += t.price * Math.abs(t.qty);
+      entry._absQty += Math.abs(t.qty);
+    }
+    bySym.set(t.sym, entry);
+  }
+  return [...bySym.values()]
+    .filter(e => e.qty !== 0)
+    .map(({ _cost, _absQty, ...e }) => ({
+      ...e,
+      avg_price: _absQty ? Number((_cost / _absQty).toFixed(4)) : null,
+    }));
 }
 
 // Resolves the session cookie to a live user record. Returns null on any
@@ -635,6 +742,10 @@ async function handleSettle(request, env) {
 
   if (kvOutcome.error === 'insolvent') {
     await env.USERS.delete(userKey(session.username));
+    // Drop the roster index entry too, or a liquidated bot leaves a pointer to
+    // an account that no longer exists. handleBots tolerates the dangling case,
+    // but leaving one behind would slowly turn the roster into a graveyard.
+    await env.USERS.delete(botKey(session.username));
     await env.SESSIONS.delete(sessionKey(session.token));
     return jsonResponse(
       { error: 'account_liquidated', reason: 'A settlement obligation exceeded the account balance' },

@@ -15,6 +15,11 @@ class LiveQuoteService {
     this.quotes = new Map();
     this.visibleContracts = new Set();
     this.openPositions = new Set();
+    // Contracts held by the automated accounts on the Automated tab. Tracked
+    // separately from openPositions so the two never overwrite each other --
+    // the viewer's own book and the bots' books are independent interests that
+    // happen to share one quote transport.
+    this.botPositions = new Set();
     this.listeners = new Set();
     this.interestListeners = new Set();
   }
@@ -31,6 +36,14 @@ class LiveQuoteService {
     const next = new Set(symbols || []);
     const changed = !sameSet(this.openPositions, next);
     this.openPositions = next;
+    this._prune();
+    if (changed) this._notifyInterests();
+  }
+
+  setBotPositions(symbols) {
+    const next = new Set(symbols || []);
+    const changed = !sameSet(this.botPositions, next);
+    this.botPositions = next;
     this._prune();
     if (changed) this._notifyInterests();
   }
@@ -83,7 +96,7 @@ class LiveQuoteService {
   }
 
   _wanted() {
-    return new Set([...this.visibleContracts, ...this.openPositions]);
+    return new Set([...this.visibleContracts, ...this.openPositions, ...this.botPositions]);
   }
 
   // Interest-set changes (a contract scrolling out of view, a position

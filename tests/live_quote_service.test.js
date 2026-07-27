@@ -120,6 +120,31 @@ assert.equal(tickers.get('QQQ').source, 'dxlink', 'fresh live source retains pri
   assert.equal(hiddenPoller._normalInterval(), 60_000);
   hiddenPoller.dispose();
 
+  // ── botPositions is an independent interest slot ────────────────────────────
+  // The Automated tab and the viewer's own book share one quote transport, so
+  // registering bot contracts must not evict the user's positions (or vice
+  // versa) -- that would blank out marks on whichever tab rendered second.
+  {
+    const svc = new LiveQuoteService();
+    svc.setOpenPositions(['MINE']);
+    svc.setBotPositions(['BOT_A', 'BOT_B']);
+    svc.publish([
+      { symbol: 'MINE',  bid: 1, ask: 1.2, strike: 500, type: 'call', exp: '2026-07-16' },
+      { symbol: 'BOT_A', bid: 2, ask: 2.4, strike: 501, type: 'put',  exp: '2026-07-16' },
+      { symbol: 'OTHER', bid: 9, ask: 9.9, strike: 502, type: 'call', exp: '2026-07-16' },
+    ], { source: 'test' });
+
+    assert.equal(svc.get('MINE').mid, 1.1, 'user positions survive bot registration');
+    assert.equal(svc.get('BOT_A').mid, 2.2, 'bot positions are quoted');
+    assert.equal(svc.get('OTHER'), null, 'unregistered symbols are still ignored');
+    assert.deepEqual(svc.interestSymbols(), ['BOT_A', 'BOT_B', 'MINE']);
+
+    // Leaving the Automated tab drops bot-only quotes but keeps the user's.
+    svc.setBotPositions([]);
+    assert.equal(svc.get('BOT_A'), null, 'clearing bot interest prunes bot-only quotes');
+    assert.equal(svc.get('MINE').mid, 1.1, 'clearing bot interest leaves the user book intact');
+  }
+
   console.log('PASS live quote service polling, interests, health, and deduplication');
 })().catch(error => {
   console.error(error);

@@ -454,7 +454,52 @@
     cursor: pointer;
   }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
-  #live-panel.hidden, #history-panel.hidden { display: none; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden { display: none; }
+
+  /* ── automated (bot) panel ───────────────────────────────────────────── */
+  #bots-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #bots-title { font-weight: 600; color: var(--bright); }
+  #bots-status { color: var(--dim); font-size: 0.76rem; }
+  #bots-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
+  #bots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+  }
+  .bot-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .bot-card.leader { border-color: #007730; }
+  .bot-card h4 {
+    margin: 0 0 2px;
+    font-size: 0.9rem;
+    color: var(--bright);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .bot-user { font-size: 0.7rem; color: var(--dim); font-weight: 400; }
+  .bot-equity { font-size: 1.15rem; font-weight: 600; margin: 6px 0 2px; }
+  .bot-pnl.up   { color: #00cc55; }
+  .bot-pnl.down { color: #ee3300; }
+  .bot-pnl.flat { color: var(--dim); }
+  .bot-meta { font-size: 0.72rem; color: var(--dim); margin-top: 4px; }
+  .bot-card table { width: 100%; min-width: 0; margin-top: 8px; font-size: 0.72rem; }
+  .bot-card th { color: var(--dim); font-weight: 500; text-align: right; }
+  .bot-card th:first-child, .bot-card td:first-child { text-align: left; }
+  .bot-card td { text-align: right; }
+  .bot-nopos { color: var(--dim); font-size: 0.72rem; margin-top: 8px; }
+  .bot-unmarked { color: #d49a00; }
 
   /* ── historical panel ────────────────────────────────────────────────── */
   #hist-header {
@@ -606,6 +651,7 @@
 <div id="tab-bar">
   <button id="tab-live" class="tab-btn active">Live</button>
   <button id="tab-history" class="tab-btn">Historical</button>
+  <button id="tab-bots" class="tab-btn">Automated</button>
 </div>
 
 <div id="live-panel">
@@ -732,6 +778,21 @@
   </div>
 
 </div> <!-- /history-panel -->
+
+<div id="bots-panel" class="hidden">
+
+  <div id="bots-header">
+    <span id="bots-title">Automated Accounts</span>
+    <span id="bots-status">—</span>
+  </div>
+  <div id="bots-hint">
+    Crassus / Golden Goose paper-trading bots. Equity = cash + open positions marked at
+    the live mid. Positions are marked against the same quotes the Live tab polls, so a
+    bot's mark here matches what you'd see clicking the same contract.
+  </div>
+  <div id="bots-grid"></div>
+
+</div> <!-- /bots-panel -->
 
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
@@ -959,6 +1020,10 @@ function renderQuoteHealth(health) {
 }
 
 liveQuotes.subscribe(() => {
+  // Bot marks are independent of lastData/session -- the Automated tab is
+  // readable while logged out, so this re-render must come before the guard
+  // below rather than after it.
+  if (botsTimer) renderBots();
   if (!lastData || !session) return;
   const book = computeBook(session.trades);
   for (const [symbol, position] of Object.entries(book)) {
@@ -1128,6 +1193,16 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`;
 }
 function pnlClass(v) { return v > 0 ? 'pnl-up' : v < 0 ? 'pnl-down' : ''; }
+
+// Bot aliases are operator-supplied free text and land in innerHTML on the
+// Automated tab. Usernames are already constrained to [A-Za-z0-9_] server-side,
+// but aliases are not, so escape both rather than rely on that asymmetry
+// holding after some later change to the roster payload.
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 function renderPaper() {
   if (!session) return;
@@ -1421,16 +1496,135 @@ async function fetchPrices() {
 // ── tab switching ────────────────────────────────────────────────────────────
 let historyLoaded = false;
 
+// tab id -> [panel element id, tab button id]
+const TABS = {
+  live:    ['live-panel',    'tab-live'],
+  history: ['history-panel', 'tab-history'],
+  bots:    ['bots-panel',    'tab-bots'],
+};
+
 function showTab(tab) {
-  const isLive = tab === 'live';
-  document.getElementById('live-panel').classList.toggle('hidden', !isLive);
-  document.getElementById('history-panel').classList.toggle('hidden', isLive);
-  document.getElementById('tab-live').classList.toggle('active', isLive);
-  document.getElementById('tab-history').classList.toggle('active', !isLive);
-  if (!isLive && !historyLoaded) {
+  if (!TABS[tab]) tab = 'live';
+  for (const [name, [panelId, btnId]] of Object.entries(TABS)) {
+    const active = name === tab;
+    document.getElementById(panelId).classList.toggle('hidden', !active);
+    document.getElementById(btnId).classList.toggle('active', active);
+  }
+  if (tab === 'history' && !historyLoaded) {
     historyLoaded = true;
     loadHistoryManifest();
   }
+  // The bot roster is only polled while its tab is on screen -- no point
+  // holding an extra request cycle open behind a hidden panel.
+  setBotsPolling(tab === 'bots');
+}
+
+// ── automated (bot) panel ────────────────────────────────────────────────────
+// Reads /api/bots, a public read-only roster of the Crassus paper-trading
+// accounts. Positions come back netted but unmarked; they're marked here
+// against the shared liveQuotes service so a bot's mark is by construction the
+// same number the Live tab shows for that contract.
+const BOTS_POLL_MS = 30_000;
+let botsTimer = null;
+let botsData  = null;
+let botsInFlight = false;
+
+function setBotsPolling(on) {
+  if (on) {
+    if (botsTimer) return;
+    fetchBots();
+    botsTimer = setInterval(fetchBots, BOTS_POLL_MS);
+  } else {
+    if (botsTimer) clearInterval(botsTimer);
+    botsTimer = null;
+    // Stop paying for bot-only quotes once the tab is off screen.
+    liveQuotes.setBotPositions([]);
+  }
+}
+
+async function fetchBots() {
+  if (botsInFlight) return;
+  botsInFlight = true;
+  try {
+    const res = await fetch('/api/bots', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    botsData = await res.json();
+    renderBots();
+  } catch (err) {
+    document.getElementById('bots-status').textContent = `unavailable — ${err.message}`;
+  } finally {
+    botsInFlight = false;
+  }
+}
+
+// Equity = cash + mark value of open positions. A position with no quote yet
+// is reported as unmarked rather than silently valued at zero or at cost --
+// showing a confident total built partly from missing marks is the one thing
+// this panel must not do.
+function botEquity(bot) {
+  let openValue = 0;
+  let unmarked = 0;
+  for (const p of bot.positions) {
+    const mark = liveQuotes.get(p.sym)?.mid ?? null;
+    if (mark == null) { unmarked++; continue; }
+    openValue += mark * p.qty * 100;
+  }
+  return { equity: bot.balance_cash + openValue, openValue, unmarked };
+}
+
+function renderBots() {
+  if (!botsData) return;
+  const grid = document.getElementById('bots-grid');
+  const bots = botsData.bots || [];
+
+  liveQuotes.setBotPositions(bots.flatMap(b => b.positions.map(p => p.sym)));
+
+  if (!bots.length) {
+    grid.innerHTML = '';
+    document.getElementById('bots-status').textContent = 'no automated accounts registered yet';
+    return;
+  }
+
+  const scored = bots.map(b => ({ bot: b, ...botEquity(b) }));
+  const best = Math.max(...scored.map(s => s.equity));
+
+  grid.innerHTML = scored.map(({ bot, equity, unmarked }) => {
+    const pnl = equity - bot.starting_balance;
+    const pct = bot.starting_balance ? (pnl / bot.starting_balance) * 100 : 0;
+    const dir = pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'flat';
+    const isLeader = scored.length > 1 && equity === best;
+
+    const posRows = bot.positions.map(p => {
+      const mark = liveQuotes.get(p.sym)?.mid ?? null;
+      const ppnl = mark != null && p.avg_price != null
+        ? (mark - p.avg_price) * p.qty * 100 : null;
+      return `<tr>
+        <td>QQQ ${p.strike} ${p.type === 'call' ? 'C' : 'P'}</td>
+        <td>${p.qty > 0 ? '+' : ''}${p.qty}</td>
+        <td>${p.avg_price != null ? fmtQ(p.avg_price) : '—'}</td>
+        <td>${mark != null ? fmtQ(mark) : '—'}</td>
+        <td class="${ppnl != null ? pnlClass(ppnl) : ''}">${ppnl != null ? fmtMoney(ppnl) : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="bot-card${isLeader ? ' leader' : ''}">
+      <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
+      <div class="bot-equity">$${equity.toFixed(2)}</div>
+      <div class="bot-pnl ${dir}">${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)</div>
+      <div class="bot-meta">
+        Cash $${bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
+        ${bot.last_trade_ts ? ` · last ${new Date(bot.last_trade_ts).toLocaleTimeString()}` : ''}
+        ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} unmarked — equity excludes ${unmarked === 1 ? 'it' : 'them'}</span>` : ''}
+      </div>
+      ${bot.positions.length
+        ? `<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th></tr>${posRows}</table>`
+        : '<div class="bot-nopos">flat — no open positions</div>'}
+    </div>`;
+  }).join('');
+
+  const asOf = botsData.as_of ? new Date(botsData.as_of).toLocaleTimeString() : '—';
+  document.getElementById('bots-status').textContent =
+    `${bots.length} account${bots.length === 1 ? '' : 's'} · updated ${asOf}`;
 }
 
 // ── historical panel ─────────────────────────────────────────────────────────
@@ -2055,6 +2249,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   document.getElementById('tab-live').onclick    = () => showTab('live');
   document.getElementById('tab-history').onclick = () => showTab('history');
+  document.getElementById('tab-bots').onclick    = () => showTab('bots');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
 
   setStatus('', 'Loading calibration data…');
