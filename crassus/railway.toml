@@ -1,0 +1,6 @@
+[build]
+builder = "railpack"
+
+[deploy]
+startCommand = "python -m crassus.runner --interval 300"
+restartPolicyType = "always"
