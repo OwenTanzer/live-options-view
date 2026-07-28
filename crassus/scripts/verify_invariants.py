@@ -42,6 +42,8 @@ from crassus.strategy import Decision, StrategyContext  # noqa: E402
 MOCK = Path(__file__).parent / "mock_worker.py"
 PORT = 8791
 BASE = f"http://127.0.0.1:{PORT}"
+# Must match mock_worker.BOT_REGISTRATION_KEY.
+BOT_KEY = "mock-operator-key"
 MOCK_SNAPSHOT_URL = f"{BASE}/intraday/latest.json"
 
 passed, failed = 0, 0
@@ -96,7 +98,8 @@ class Mock:
 
 def make_client(tmp: Path, alias: str = "TestAcct") -> tuple[AccountSession, ExecutionClient]:
     account = Account(alias=alias, username=f"u_{uuid.uuid4().hex[:8]}", password="pw", strategy_id=STRATEGY_ID)
-    session = AccountSession(account, base_url=BASE, rate_limiter=RateLimiter(capacity=50, refill_per_s=50), timeout_s=3.0)
+    session = AccountSession(account, base_url=BASE, rate_limiter=RateLimiter(capacity=50, refill_per_s=50), timeout_s=3.0,
+                             bot_registration_key=BOT_KEY)
     session.ensure_session()
     return session, ExecutionClient(session, tmp, max_attempts=2, backoff_base_s=0.1)
 
@@ -410,7 +413,7 @@ def scenario_p1_closed_loop(tmp: Path) -> None:
                           password="pw", strategy_id=STRATEGY_ID)
         ledger_dir, state_dir = tmp / "p1-logs", tmp / "p1-state"
 
-        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
+        runner = Runner([account], bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
         runner.startup()
         snapshot = runner.snapshots.read()
 
@@ -432,7 +435,7 @@ def scenario_p1_closed_loop(tmp: Path) -> None:
               str(Book(state.trades).summary()))
 
         # Restart: a fresh Runner over the same state and account.
-        restarted = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
+        restarted = Runner([account], bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
         restarted.startup()
         rebuilt = Book(restarted.sessions[account.alias].me().trades)
         check("Restart reconstructs state from server history without duplicate fills",
@@ -458,7 +461,7 @@ def scenario_recovery_idempotent_after_ledger_write(tmp: Path) -> None:
         account = Account(alias="Idem", username=f"idem_{uuid.uuid4().hex[:6]}",
                           password="pw", strategy_id=STRATEGY_ID)
         ledger_dir, state_dir = tmp / "idem-logs", tmp / "idem-state"
-        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
+        runner = Runner([account], bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL, ledger_dir=ledger_dir, state_dir=state_dir)
         runner.startup()
 
         executor = runner.executors[account.alias]
@@ -522,7 +525,7 @@ def scenario_ambiguous_stays_pending_until_reconciled(tmp: Path) -> None:
     with Mock(fault="unreachable", count=2, me_fault="503", me_count=2, me_skip=2):
         account = Account(alias="Pending", username=f"pending_{uuid.uuid4().hex[:6]}",
                           password="pw", strategy_id=STRATEGY_ID)
-        runner = Runner([account], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+        runner = Runner([account], bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
                         ledger_dir=tmp / "pending-logs", state_dir=tmp / "pending-state")
         # Keep the test fast: default backoff/timeout are tuned for a real
         # deployment, not a sleeping fault in a unit test.
@@ -582,7 +585,7 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
 
         raised = False
         try:
-            Runner([good, bad], base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+            Runner([good, bad], bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
                    ledger_dir=tmp / "cfgbad-logs", state_dir=tmp / "cfgbad-state")
         except ValueError as exc:
             raised = True
@@ -599,11 +602,83 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
         example_accounts_path = tmp / "accounts.example.filled.json"
         example_accounts_path.write_text(json.dumps(raw))
         accounts = load_accounts(example_accounts_path)
-        runner = Runner(accounts, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+        runner = Runner(accounts, bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
                         ledger_dir=tmp / "cfgexample-logs", state_dir=tmp / "cfgexample-state")
         runner.startup()
         check("accounts.example.json constructs and starts a Runner without error",
               set(runner.sessions) == {a.alias for a in accounts})
+
+
+def scenario_bot_identity(tmp: Path) -> None:
+    """A registered account must actually land in the public /api/bots roster.
+
+    Registration used to send only username/password, so every first-run
+    account was created as an ordinary human user: invisible on the site's
+    Automated tab, and unrecoverable, since the username was then taken and
+    could not be re-registered as a bot. The failure was silent -- login
+    worked, trades worked, only the roster was quietly short an account.
+    """
+    print("\n15. Bot identity: registration and metadata sync reach /api/bots")
+    from crassus.client import ConfigError
+    from crassus.runner import Runner
+
+    with Mock():
+        account = Account(alias="Ankit", username=f"bot_{uuid.uuid4().hex[:8]}",
+                          password="pw", strategy_id=STRATEGY_ID)
+        session = AccountSession(account, base_url=BASE, bot_registration_key=BOT_KEY,
+                                 rate_limiter=RateLimiter(capacity=50, refill_per_s=50), timeout_s=3.0)
+        session.ensure_session()
+
+        roster = requests.get(f"{BASE}/api/bots", timeout=3).json()["bots"]
+        mine = [b for b in roster if b["username"] == account.username]
+        check("a first-run account appears in the public roster", len(mine) == 1)
+        check("the roster records its alias", mine and mine[0]["alias"] == "Ankit")
+        check("the roster records its strategy", mine and mine[0]["strategy_id"] == STRATEGY_ID)
+        check("no password is exposed on the public roster",
+              mine and not any("password" in k for k in mine[0]))
+
+        # Moving the account to another strategy must re-attribute it. This is
+        # the case registration alone cannot cover: the account already exists.
+        account.strategy_id = "reddit_sentiment_qqq"
+        session.ensure_session()
+        roster = requests.get(f"{BASE}/api/bots", timeout=3).json()["bots"]
+        moved = [b for b in roster if b["username"] == account.username][0]
+        check("a strategy move is re-synced on the next startup",
+              moved["strategy_id"] == "reddit_sentiment_qqq")
+
+        # A human account registered without the header must never appear.
+        human = Account(alias="Human", username=f"hum_{uuid.uuid4().hex[:8]}",
+                        password="pw", strategy_id=STRATEGY_ID)
+        plain = AccountSession(human, base_url=BASE, bot_registration_key=None,
+                               rate_limiter=RateLimiter(capacity=50, refill_per_s=50), timeout_s=3.0)
+        raised = False
+        try:
+            plain.ensure_session()
+        except ConfigError:
+            raised = True
+        check("a missing operator key fails loudly instead of registering a human account", raised)
+        roster = requests.get(f"{BASE}/api/bots", timeout=3).json()["bots"]
+        check("the aborted account was never created",
+              not any(b["username"] == human.username for b in roster))
+
+        # A wrong key is rejected outright rather than silently downgraded.
+        wrong = Account(alias="Wrong", username=f"wrg_{uuid.uuid4().hex[:8]}",
+                        password="pw", strategy_id=STRATEGY_ID)
+        bad = AccountSession(wrong, base_url=BASE, bot_registration_key="not-the-key",
+                             rate_limiter=RateLimiter(capacity=50, refill_per_s=50), timeout_s=3.0)
+        check("a wrong operator key is refused, not downgraded to a human account",
+              bad.register().status_code == 403)
+
+        # And the Runner refuses to start at all without a key, before any
+        # network call burns a username.
+        raised = False
+        try:
+            Runner([account], bot_registration_key=None, base_url=BASE,
+                   snapshot_url=MOCK_SNAPSHOT_URL,
+                   ledger_dir=tmp / "botid-logs", state_dir=tmp / "botid-state")
+        except ValueError as exc:
+            raised = "BOT_REGISTRATION_KEY" in str(exc)
+        check("Runner refuses to start without BOT_REGISTRATION_KEY", raised)
 
 
 def main() -> int:
@@ -618,6 +693,7 @@ def main() -> int:
             scenario_p1_closed_loop, scenario_recovery_idempotent_after_ledger_write,
             scenario_ambiguous_stays_pending_until_reconciled,
             scenario_strategy_config_validation,
+            scenario_bot_identity,
         ):
             scenario(tmp)
 

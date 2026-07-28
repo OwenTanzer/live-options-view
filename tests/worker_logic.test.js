@@ -10,6 +10,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
+    netPositions, handleBots, handleBotMetadata,
   } = await import('../worker.js');
 
   // ── validateTradeIntent ────────────────────────────────────────────────────
@@ -109,6 +110,207 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   const wrongHash = await derivePasswordHash('wrong password', salt);
   assert.equal(constantTimeEqual(hash, sameHash), true, 'the same password and salt must re-derive the same hash');
   assert.equal(constantTimeEqual(hash, wrongHash), false, 'a different password must derive a different hash');
+
+  // ── netPositions ────────────────────────────────────────────────────────────
+  {
+    const t = (sym, side, qty, price, extra = {}) =>
+      ({ sym, side, qty, price, strike: 600, type: 'call', exp: '2026-07-17', ...extra });
+
+    assert.deepEqual(netPositions([]), [], 'no trades yields no positions');
+
+    const flat = netPositions([t('A', 'buy', 2, 1.0), t('A', 'sell', 2, 1.5)]);
+    assert.deepEqual(flat, [], 'a round trip nets flat and is dropped, not shown as a zero row');
+
+    const [long] = netPositions([t('A', 'buy', 2, 1.0), t('A', 'buy', 2, 2.0)]);
+    assert.equal(long.qty, 4);
+    assert.equal(long.avg_price, 1.5, 'avg_price averages across the fills building the position');
+
+    const [short] = netPositions([t('A', 'sell', 3, 2.0)]);
+    assert.equal(short.qty, -3, 'a naked sell shows as a negative position');
+    assert.equal(short.avg_price, 2.0);
+
+    const multi = netPositions([t('A', 'buy', 1, 1.0), t('B', 'buy', 2, 3.0)]);
+    assert.equal(multi.length, 2, 'distinct symbols stay distinct');
+
+    // ── regressions: netPositions must agree with the real position book ──────
+    // An earlier cost accumulator never reset on a flat round trip, so a
+    // reopened contract reported a blend of the closed and current positions.
+    // The smoke strategy closes and reopens the same contract every cycle.
+    {
+      const reopen = [t('A', 'buy', 2, 1.0), t('A', 'sell', 2, 1.5), t('A', 'buy', 1, 3.0)];
+      const [p] = netPositions(reopen);
+      assert.equal(p.qty, 1);
+      assert.equal(p.avg_price, 3.0, 'a reopened position costs what it was reopened at, not a blend');
+      assert.equal(p.avg_price, computeBookFromTrades(reopen).A.avg, 'roster avg matches the settlement book');
+    }
+    // Partial close leaves the surviving lot at its original basis.
+    {
+      const partial = [t('A', 'buy', 4, 2.0), t('A', 'sell', 1, 5.0)];
+      const [p] = netPositions(partial);
+      assert.equal(p.qty, 3);
+      assert.equal(p.avg_price, 2.0, 'a partial close does not re-base the remaining position');
+      assert.equal(p.avg_price, computeBookFromTrades(partial).A.avg);
+    }
+    // Flipping through flat re-bases at the flipping fill rather than mixing sides.
+    {
+      const flip = [t('A', 'buy', 1, 1.0), t('A', 'sell', 3, 4.0)];
+      const [p] = netPositions(flip);
+      assert.equal(p.qty, -2, 'selling through flat leaves a short');
+      assert.equal(p.avg_price, 4.0, 'the flipped side is based on the flipping fill');
+      assert.equal(p.avg_price, computeBookFromTrades(flip).A.avg);
+    }
+    // Whatever the trade history, the roster and the settlement book must agree
+    // on both size and basis for every open contract.
+    {
+      const messy = [
+        t('A', 'buy', 3, 1.0), t('A', 'sell', 1, 2.0), t('A', 'buy', 2, 4.0),
+        t('A', 'sell', 4, 3.0), t('A', 'sell', 2, 6.0), t('B', 'sell', 1, 0.5),
+      ];
+      const book = computeBookFromTrades(messy);
+      for (const p of netPositions(messy)) {
+        assert.equal(p.qty, book[p.sym].pos, `qty agrees with the book for ${p.sym}`);
+        assert.equal(p.avg_price, Number(book[p.sym].avg.toFixed(4)), `avg agrees with the book for ${p.sym}`);
+      }
+    }
+  }
+
+  // ── handleBotMetadata ───────────────────────────────────────────────────────
+  {
+    const store = {
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify({
+        username: 'crassus_bob', alias: 'Bob', is_bot: true,
+        strategy_id: 'smoke_atm_roundtrip', balance_cash: 10000, trades: [], version: 0,
+      }),
+      'user:realperson': JSON.stringify({ username: 'realperson', balance_cash: 42, trades: [], version: 0 }),
+    };
+    const env = {
+      BOT_REGISTRATION_KEY: 'operator-key',
+      USERS: {
+        list: async ({ prefix }) => ({
+          keys: Object.keys(store).filter(k => k.startsWith(prefix)).map(name => ({ name })),
+        }),
+        get: async (k) => store[k] ?? null,
+        put: async (k, v) => { store[k] = v; },
+      },
+    };
+    // A real Request: readJsonBody streams request.body, so a plain stub object
+    // would exercise a different path than production.
+    const req = (body, key = 'operator-key') => new Request('https://example.test/api/bot-metadata', {
+      method: 'POST',
+      headers: key === null ? {} : { 'X-Bot-Registration-Key': key },
+      body: JSON.stringify(body),
+    });
+
+    // Moving a bot to a new strategy re-attributes its future performance.
+    const moved = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'reddit_sentiment_qqq' }), env);
+    assert.equal(moved.status, 200);
+    assert.equal((await moved.json()).strategy_id, 'reddit_sentiment_qqq');
+    const roster = await (await handleBots({}, env)).json();
+    assert.equal(roster.bots[0].strategy_id, 'reddit_sentiment_qqq',
+      'the roster reflects the re-synced strategy, not the one captured at registration');
+
+    // Without the operator key it is not reachable at all.
+    assert.equal((await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'x' }, 'wrong'), env)).status, 403);
+    assert.equal((await handleBotMetadata(req({ username: 'crassus_bob' }, null), env)).status, 403);
+
+    // A human account can never be edited into the public roster this way.
+    assert.equal((await handleBotMetadata(req({ username: 'realperson', strategy_id: 'x' }), env)).status, 409);
+    assert.equal((await handleBotMetadata(req({ username: 'nobody_here', strategy_id: 'x' }), env)).status, 404);
+
+    // Malformed strategy ids are rejected rather than stored.
+    assert.equal((await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'Not Valid!' }), env)).status, 400);
+
+    // Registration writes the user record and the bot: index as two separate
+    // puts. If the index write failed, the account exists and is flagged
+    // is_bot but is absent from the roster -- and re-registering is impossible
+    // because the username is taken. The metadata sync every startup performs
+    // must therefore repair it.
+    delete store['bot:crassus_bob'];
+    assert.equal((await (await handleBots({}, env)).json()).bots.length, 0,
+      'precondition: a lost index entry hides the account from the roster');
+
+    const repaired = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'smoke_atm_roundtrip' }), env);
+    assert.equal(repaired.status, 200);
+    assert.equal(JSON.parse(store['bot:crassus_bob']).username, 'crassus_bob',
+      'the sync recreates the missing index entry');
+    const back = await (await handleBots({}, env)).json();
+    assert.equal(back.bots.length, 1, 'the account is back in the roster after a sync');
+    assert.equal(back.bots[0].strategy_id, 'smoke_atm_roundtrip');
+
+    // And it stays idempotent when the entry was never missing.
+    assert.equal((await handleBotMetadata(req({ username: 'crassus_bob' }), env)).status, 200);
+    assert.equal((await (await handleBots({}, env)).json()).bots.length, 1,
+      'repeating the sync does not duplicate the roster entry');
+  }
+
+  // ── handleBots ──────────────────────────────────────────────────────────────
+  {
+    const makeEnv = (entries) => ({
+      USERS: {
+        list: async ({ prefix }) => ({
+          keys: Object.keys(entries).filter(k => k.startsWith(prefix)).map(name => ({ name })),
+        }),
+        get: async (key) => entries[key] ?? null,
+      },
+    });
+
+    const botRecord = {
+      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'reddit_sentiment_qqq',
+      salt: 'SALT', hash: 'HASH',
+      iterations: 100000, balance_cash: 9500, starting_balance: 10000,
+      trades: [{ sym: 'A', side: 'buy', qty: 1, price: 5, strike: 600, type: 'call', exp: '2026-07-17', ts: '2026-07-27T12:00:00Z' }],
+      createdAt: '2026-07-27T00:00:00Z', version: 1,
+    };
+    const humanRecord = {
+      username: 'realperson', balance_cash: 42, trades: [], salt: 'S', hash: 'H', version: 0,
+    };
+
+    const env = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify(botRecord),
+      'user:realperson': JSON.stringify(humanRecord),
+    });
+
+    const body = await (await handleBots({}, env)).json();
+    assert.equal(body.bots.length, 1, 'only indexed bot accounts appear in the roster');
+    const [bot] = body.bots;
+    assert.equal(bot.username, 'crassus_bob');
+    assert.equal(bot.alias, 'Bob');
+    assert.equal(bot.strategy_id, 'reddit_sentiment_qqq', 'the roster reports which strategy a bot runs');
+    assert.equal(bot.balance_cash, 9500);
+    assert.equal(bot.trade_count, 1);
+    assert.equal(bot.positions.length, 1);
+
+    // The whole point of the projection: secrets must never reach the client.
+    for (const leaked of ['salt', 'hash', 'iterations', 'version', 'password']) {
+      assert.equal(leaked in bot, false, `/api/bots must not expose ${leaked}`);
+    }
+    assert.equal(JSON.stringify(body).includes('realperson'), false,
+      'a human account must never appear in the public bot roster');
+    assert.equal(JSON.stringify(body).includes('HASH'), false, 'no password hash may be serialized');
+
+    // A record that lost its is_bot flag is excluded even while indexed.
+    const demoted = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify({ ...botRecord, is_bot: false }),
+    });
+    assert.equal((await (await handleBots({}, demoted)).json()).bots.length, 0,
+      'the record, not the index, is the authority on bot-ness');
+
+    // A bot registered before strategy_id existed reports null, not undefined,
+    // so the client can render a definite "no strategy recorded" state.
+    const legacy = makeEnv({
+      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
+      'user:crassus_bob': JSON.stringify({ ...botRecord, strategy_id: undefined }),
+    });
+    assert.equal((await (await handleBots({}, legacy)).json()).bots[0].strategy_id, null);
+
+    // A liquidated bot leaves a dangling index entry; the roster tolerates it.
+    const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
+    assert.equal((await (await handleBots({}, dangling)).json()).bots.length, 0,
+      'an index entry with no account behind it is skipped, not fatal');
+  }
 
   console.log('PASS worker.js auth/trade/settlement logic');
 })().catch(error => {

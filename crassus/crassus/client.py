@@ -31,7 +31,7 @@ import requests
 
 from . import clock
 from .audit import Outcome
-from .config import BASE_URL
+from .config import BASE_URL, BOT_REGISTRATION_KEY
 
 
 class CrassusError(Exception):
@@ -60,6 +60,17 @@ class AccountLiquidated(CrassusError):
 
 
 class TransportError(CrassusError):
+    outcome_class = Outcome.TRANSPORT_ERROR
+
+
+class ConfigError(CrassusError):
+    """Misconfiguration that must stop the runner rather than degrade.
+
+    Distinct from TransportError: nothing about retrying or reconciling helps,
+    and continuing would produce a wrong-but-plausible result (an account
+    registered as a human, silently missing from the roster).
+    """
+
     outcome_class = Outcome.TRANSPORT_ERROR
 
 
@@ -258,9 +269,15 @@ class AccountSession:
         base_url: str = BASE_URL,
         rate_limiter: RateLimiter | None = None,
         timeout_s: float = 20.0,
+        bot_registration_key: str | None = None,
     ):
         self.account = account
         self.base_url = base_url.rstrip("/")
+        # Injectable so tests and the invariant suite can exercise the bot
+        # registration path without depending on the ambient environment.
+        self.bot_registration_key = (
+            bot_registration_key if bot_registration_key is not None else BOT_REGISTRATION_KEY
+        )
         self.rate_limiter = rate_limiter or RateLimiter()
         self.timeout_s = timeout_s
         self.http = requests.Session()
@@ -292,11 +309,36 @@ class AccountSession:
 
     # -- auth -------------------------------------------------------------
 
+    def _bot_headers(self) -> dict[str, str]:
+        """Operator credential identifying this as a bot account.
+
+        Absence is a hard error rather than a fallback: registering without it
+        succeeds and produces a perfectly ordinary *human* account that never
+        enters the /api/bots roster. That failure is invisible until someone
+        notices the Automated tab is short an account, and it cannot be undone
+        by re-registering -- the username is taken. Fail before the request.
+        """
+        if not self.bot_registration_key:
+            raise ConfigError(
+                f"BOT_REGISTRATION_KEY is not set, so {self.account.alias!r} "
+                f"({self.account.username}) cannot be registered as a bot. Without it "
+                f"the account would be created as an ordinary user and never appear in "
+                f"/api/bots, and the username could not be reclaimed. Set the env var to "
+                f"the Worker's BOT_REGISTRATION_KEY secret before starting the runner."
+            )
+        return {"X-Bot-Registration-Key": self.bot_registration_key}
+
     def register(self) -> requests.Response:
         return self._request(
             "POST",
             "/api/register",
-            json={"username": self.account.username, "password": self.account.password},
+            headers=self._bot_headers(),
+            json={
+                "username": self.account.username,
+                "password": self.account.password,
+                "alias": self.account.alias,
+                "strategy_id": self.account.strategy_id,
+            },
         )
 
     def login(self) -> requests.Response:
@@ -304,6 +346,26 @@ class AccountSession:
             "POST",
             "/api/login",
             json={"username": self.account.username, "password": self.account.password},
+        )
+
+    def sync_metadata(self) -> requests.Response:
+        """Push this account's authoritative alias/strategy to the Worker.
+
+        accounts.json owns the strategy assignment; the Worker only learns it
+        when told. Registration captures it once, so without this an account
+        moved to a new strategy would go on being credited to the old one in
+        the public roster forever. Called on every startup, not just the first,
+        so the roster tracks the config that is actually running.
+        """
+        return self._request(
+            "POST",
+            "/api/bot-metadata",
+            headers=self._bot_headers(),
+            json={
+                "username": self.account.username,
+                "alias": self.account.alias,
+                "strategy_id": self.account.strategy_id,
+            },
         )
 
     def ensure_session(self) -> AccountState:
@@ -319,6 +381,15 @@ class AccountSession:
                 raise TransportError(
                     f"Could not log in or register {self.account.alias}: "
                     f"login={resp.status_code} register={reg.status_code} {reg.text[:200]}"
+                )
+        else:
+            # Registration already carried the current alias/strategy, so only
+            # an existing account needs re-syncing.
+            sync = self.sync_metadata()
+            if sync.status_code >= 400:
+                raise TransportError(
+                    f"Could not sync bot metadata for {self.account.alias}: "
+                    f"{sync.status_code} {sync.text[:200]}"
                 )
         return self.me()
 

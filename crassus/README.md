@@ -116,6 +116,8 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 - **Execution quotes must be ≤15s old.** Outside market hours the collector's quotes age out, so trades will 409 — the runner declines rather than spending rate-limit budget on a certain rejection.
 - **Insolvent settlement deletes the account.** Not a negative balance — permanent erasure.
 - Bot accounts **do not pre-exist**; the runner registers them on first use.
+- **Bot accounts are marked server-side, not by username convention.** Registering with an `X-Bot-Registration-Key` header matching the Worker's `BOT_REGISTRATION_KEY` secret adds the account to the `bot:` index that backs the public `GET /api/bots` roster and the site's Automated tab. Without the header the account registers as an ordinary human user and never appears there; with a *wrong* key registration is rejected outright rather than silently downgraded.
+- **`strategy_id` must be re-synced when it changes.** `accounts.json` here is authoritative, but the Worker only learns a bot's strategy when told. `POST /api/bot-metadata` (same operator key) updates `strategy_id`/`alias` on an existing bot, so moving an account to a new strategy re-attributes its future performance instead of leaving the roster crediting the old one. Call it at startup for every configured account.
 
 ## Account ↔ strategy mapping (target, once P3 lands)
 
@@ -128,10 +130,14 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Jesus | `cheap_atm_calls` | P3 |
 | Doris | `cheap_atm_puts` | P3 |
 
-Only `smoke_atm_roundtrip` is implemented today, so `accounts.example.json`
-runs every account on it -- copying the file as-is is meant to work, not
-just illustrate the eventual mapping. Swap in a P3 strategy_id for an
-account only once that strategy is actually registered; the runner
+Two strategies are implemented today -- `smoke_atm_roundtrip` and
+`reddit_sentiment_qqq` -- so `accounts.example.json` splits the six
+accounts three/three rather than running them all on one, which would only
+measure variance. The three sentiment accounts use conservative / default /
+aggressive thresholds via `params`, so the Automated tab's per-strategy
+rollup compares something real out of the box. Copying the file as-is is
+meant to work, not just illustrate the eventual mapping. Swap in a P3
+strategy_id for an account only once that strategy is registered; the runner
 validates every configured `strategy_id` against the registry at startup
 and refuses to start (rather than crashing mid-run on the first
 unregistered one it happens to reach) if one doesn't exist yet.

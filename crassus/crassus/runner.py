@@ -33,6 +33,7 @@ from .client import (
 )
 from .config import (
     BASE_URL,
+    BOT_REGISTRATION_KEY,
     DEFAULT_LEDGER_DIR,
     DEFAULT_STATE_DIR,
     SNAPSHOT_URL,
@@ -64,6 +65,25 @@ def _validate_strategy_ids(accounts: list[Any]) -> None:
         )
 
 
+def _validate_bot_registration_key(key: str | None) -> None:
+    """Fail at startup if the operator key is missing.
+
+    Deliberately checked here rather than only at the first request. Without
+    the key an account registers successfully as an ordinary *human* user and
+    never enters the /api/bots roster -- a silent wrong result, not an error,
+    and an unrecoverable one because the username is then taken. Better to
+    refuse to start than to burn six usernames discovering it.
+    """
+    if not key:
+        raise ValueError(
+            "BOT_REGISTRATION_KEY is not set. The runner registers bot accounts with "
+            "this operator key so they enter the /api/bots roster behind the site's "
+            "Automated tab; without it, first-run accounts are created as ordinary "
+            "users, never appear there, and their usernames cannot be reclaimed. Set "
+            "it to the Worker's BOT_REGISTRATION_KEY secret before starting the runner."
+        )
+
+
 def _unresolved(outcome_class: str) -> bool:
     """Whether an outcome still needs reconciliation before its intent can
     be considered acknowledged.
@@ -88,8 +108,11 @@ class Runner:
         state_dir: Path = DEFAULT_STATE_DIR,
         interval_s: float = 300.0,
         dry_run: bool = False,
+        bot_registration_key: str | None = None,
     ):
         _validate_strategy_ids(accounts)
+        key = bot_registration_key if bot_registration_key is not None else BOT_REGISTRATION_KEY
+        _validate_bot_registration_key(key)
 
         self.accounts = accounts
         self.interval_s = interval_s
@@ -107,7 +130,12 @@ class Runner:
         self.sessions: dict[str, AccountSession] = {}
         self.executors: dict[str, ExecutionClient] = {}
         for account in accounts:
-            session = AccountSession(account, base_url=base_url, rate_limiter=self.rate_limiter)
+            session = AccountSession(
+                account,
+                base_url=base_url,
+                rate_limiter=self.rate_limiter,
+                bot_registration_key=key,
+            )
             self.sessions[account.alias] = session
             self.executors[account.alias] = ExecutionClient(session, self.state_dir)
 

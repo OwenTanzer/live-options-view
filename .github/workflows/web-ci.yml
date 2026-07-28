@@ -1,0 +1,53 @@
+name: Web CI
+
+# The Worker and front end had no PR gate: crassus-ci.yml is path-filtered to
+# crassus/**, so a change to worker.js or docs/ showed a green tick that had
+# tested none of it -- while merging to master fires deploy.yml straight into
+# production. This runs the JS suites on any PR that touches those paths.
+on:
+  pull_request:
+    paths:
+      - "worker.js"
+      - "docs/**"
+      - "tests/**"
+      - "wrangler.toml"
+      - ".github/workflows/web-ci.yml"
+  push:
+    branches: [master]
+    paths:
+      - "worker.js"
+      - "docs/**"
+      - "tests/**"
+      - "wrangler.toml"
+      - ".github/workflows/web-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: worker logic
+        run: node tests/worker_logic.test.js
+      - name: automated tab panel
+        run: node tests/bots_panel.test.js
+      - name: live quote service
+        run: node tests/live_quote_service.test.js
+      # Catches syntax errors in the inline <script> that the panel test would
+      # otherwise only surface for the section it extracts.
+      - name: parse check
+        run: |
+          node --check worker.js
+          node --check docs/shared.js
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('docs/index.html', 'utf8');
+            const blocks = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)];
+            if (!blocks.length) throw new Error('no inline script found in docs/index.html');
+            for (const [i, b] of blocks.entries()) {
+              try { new Function(b[1]); } catch (e) { throw new Error('inline block ' + i + ': ' + e.message); }
+            }
+            console.log('parsed ' + blocks.length + ' inline block(s)');
+          "

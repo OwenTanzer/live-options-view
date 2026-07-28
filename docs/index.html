@@ -454,7 +454,75 @@
     cursor: pointer;
   }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
-  #live-panel.hidden, #history-panel.hidden { display: none; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden { display: none; }
+
+  /* ── automated (bot) panel ───────────────────────────────────────────── */
+  #bots-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #bots-title { font-weight: 600; color: var(--bright); }
+  #bots-status { color: var(--dim); font-size: 0.76rem; }
+  #bots-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
+  #bots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+  }
+  .bot-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .bot-card.leader { border-color: #007730; }
+  .bot-card h4 {
+    margin: 0 0 2px;
+    font-size: 0.9rem;
+    color: var(--bright);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .bot-user { font-size: 0.7rem; color: var(--dim); font-weight: 400; }
+  .bot-strategy {
+    font-size: 0.68rem;
+    color: var(--dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #bots-by-strategy {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 0.9rem;
+  }
+  .strat-tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+  .strat-tile .strat-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg);
+  }
+  .strat-tile .strat-meta { color: var(--dim); }
+  .bot-equity { font-size: 1.15rem; font-weight: 600; margin: 6px 0 2px; }
+  .bot-pnl.up   { color: #00cc55; }
+  .bot-pnl.down { color: #ee3300; }
+  .bot-pnl.flat { color: var(--dim); }
+  .bot-meta { font-size: 0.72rem; color: var(--dim); margin-top: 4px; }
+  .bot-card table { width: 100%; min-width: 0; margin-top: 8px; font-size: 0.72rem; }
+  .bot-card th { color: var(--dim); font-weight: 500; text-align: right; }
+  .bot-card th:first-child, .bot-card td:first-child { text-align: left; }
+  .bot-card td { text-align: right; }
+  .bot-nopos { color: var(--dim); font-size: 0.72rem; margin-top: 8px; }
+  .bot-unmarked { color: #d49a00; }
 
   /* ── historical panel ────────────────────────────────────────────────── */
   #hist-header {
@@ -606,6 +674,7 @@
 <div id="tab-bar">
   <button id="tab-live" class="tab-btn active">Live</button>
   <button id="tab-history" class="tab-btn">Historical</button>
+  <button id="tab-bots" class="tab-btn">Automated</button>
 </div>
 
 <div id="live-panel">
@@ -732,6 +801,22 @@
   </div>
 
 </div> <!-- /history-panel -->
+
+<div id="bots-panel" class="hidden">
+
+  <div id="bots-header">
+    <span id="bots-title">Automated Accounts</span>
+    <span id="bots-status">—</span>
+  </div>
+  <div id="bots-hint">
+    Crassus / Golden Goose paper-trading bots. Equity = cash + open positions marked at
+    the live mid. Positions are marked against the same quotes the Live tab polls, so a
+    bot's mark here matches what you'd see clicking the same contract.
+  </div>
+  <div id="bots-by-strategy"></div>
+  <div id="bots-grid"></div>
+
+</div> <!-- /bots-panel -->
 
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
@@ -959,6 +1044,10 @@ function renderQuoteHealth(health) {
 }
 
 liveQuotes.subscribe(() => {
+  // Bot marks are independent of lastData/session -- the Automated tab is
+  // readable while logged out, so this re-render must come before the guard
+  // below rather than after it.
+  if (botsTimer) renderBots();
   if (!lastData || !session) return;
   const book = computeBook(session.trades);
   for (const [symbol, position] of Object.entries(book)) {
@@ -1128,6 +1217,16 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`;
 }
 function pnlClass(v) { return v > 0 ? 'pnl-up' : v < 0 ? 'pnl-down' : ''; }
+
+// Bot aliases are operator-supplied free text and land in innerHTML on the
+// Automated tab. Usernames are already constrained to [A-Za-z0-9_] server-side,
+// but aliases are not, so escape both rather than rely on that asymmetry
+// holding after some later change to the roster payload.
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 function renderPaper() {
   if (!session) return;
@@ -1421,16 +1520,274 @@ async function fetchPrices() {
 // ── tab switching ────────────────────────────────────────────────────────────
 let historyLoaded = false;
 
+// tab id -> [panel element id, tab button id]
+const TABS = {
+  live:    ['live-panel',    'tab-live'],
+  history: ['history-panel', 'tab-history'],
+  bots:    ['bots-panel',    'tab-bots'],
+};
+
 function showTab(tab) {
-  const isLive = tab === 'live';
-  document.getElementById('live-panel').classList.toggle('hidden', !isLive);
-  document.getElementById('history-panel').classList.toggle('hidden', isLive);
-  document.getElementById('tab-live').classList.toggle('active', isLive);
-  document.getElementById('tab-history').classList.toggle('active', !isLive);
-  if (!isLive && !historyLoaded) {
+  if (!TABS[tab]) tab = 'live';
+  for (const [name, [panelId, btnId]] of Object.entries(TABS)) {
+    const active = name === tab;
+    document.getElementById(panelId).classList.toggle('hidden', !active);
+    document.getElementById(btnId).classList.toggle('active', active);
+  }
+  if (tab === 'history' && !historyLoaded) {
     historyLoaded = true;
     loadHistoryManifest();
   }
+  // The bot roster is only polled while its tab is on screen -- no point
+  // holding an extra request cycle open behind a hidden panel.
+  setBotsPolling(tab === 'bots');
+}
+
+// ── automated (bot) panel ────────────────────────────────────────────────────
+// Reads /api/bots, a public read-only roster of the Crassus paper-trading
+// accounts. Positions come back netted but unmarked; they're marked here
+// against the shared liveQuotes service so a bot's mark is by construction the
+// same number the Live tab shows for that contract.
+const BOTS_POLL_MS = 30_000;
+// A mark older than this no longer counts as a mark. LiveQuoteService keeps
+// whatever it last received until the symbol leaves the interest set, so
+// without an age check a quote frozen by an upstream outage would keep every
+// account looking "complete" and keep ranking them on prices from minutes ago
+// -- exactly the confidently-wrong total the completeness state exists to
+// prevent. The quote poller runs on a 5s cycle while this tab is open, so 60s
+// is a dozen missed cycles: an outage, not jitter. Matches the spirit of the
+// 30s staleness bound TickerStateStore already applies to the price strip.
+const BOT_MARK_MAX_AGE_MS = 60_000;
+let botsTimer = null;
+let botsData  = null;
+let botsInFlight = false;
+let botsError = null;
+
+function setBotsPolling(on) {
+  if (on) {
+    if (botsTimer) return;
+    fetchBots();
+    botsTimer = setInterval(fetchBots, BOTS_POLL_MS);
+  } else {
+    if (botsTimer) clearInterval(botsTimer);
+    botsTimer = null;
+    // Stop paying for bot-only quotes once the tab is off screen.
+    liveQuotes.setBotPositions([]);
+  }
+}
+
+async function fetchBots() {
+  if (botsInFlight) return;
+  botsInFlight = true;
+  try {
+    const res = await fetch('/api/bots', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    botsData = await res.json();
+    botsError = null;
+    renderBots();
+  } catch (err) {
+    // Held in state rather than written straight to the status line: a quote
+    // tick fires renderBots() every few seconds, which would otherwise paint
+    // a fresh-looking "updated 12:34:56" over the warning while still showing
+    // the last successful roster. The balances on screen are real but no
+    // longer current, so the failure has to survive until a fetch succeeds.
+    botsError = err.message;
+    renderBots();
+  } finally {
+    botsInFlight = false;
+  }
+}
+
+// Equity = cash + mark value of open positions, but only when every position
+// has a mark.
+//
+// Skipping an unmarked leg and returning the remaining sum is worse than
+// returning nothing: an unmarked *short* has its liability omitted, which
+// inflates equity and could crown that account leader on the strength of a
+// number nobody computed. So an account with any unmarked position reports
+// complete:false and equity:null, and is excluded from leader selection and
+// from strategy aggregation rather than ranked on a partial figure.
+// A quote counts only while it is fresh. An absent quote and a frozen one are
+// the same thing for ranking purposes: in both cases nobody knows what the leg
+// is worth right now.
+function botMark(sym) {
+  const q = liveQuotes.get(sym);
+  if (!q || q.mid == null) return null;
+  const age = Date.now() - Date.parse(q.observedAt);
+  // A non-finite age means no usable timestamp; a large negative one means
+  // clock skew. Neither is evidence of freshness, so neither is trusted.
+  if (!Number.isFinite(age) || age > BOT_MARK_MAX_AGE_MS || age < -30_000) return null;
+  return q.mid;
+}
+
+function botEquity(bot) {
+  let openValue = 0;
+  let unmarked = 0;
+  for (const p of bot.positions) {
+    const mark = botMark(p.sym);
+    if (mark == null) { unmarked++; continue; }
+    openValue += mark * p.qty * 100;
+  }
+  const complete = unmarked === 0;
+  return {
+    complete,
+    unmarked,
+    openValue: complete ? openValue : null,
+    equity: complete ? bot.balance_cash + openValue : null,
+  };
+}
+
+// Aggregate PnL per strategy. With more than one strategy in play (#22 added
+// reddit_sentiment_qqq alongside smoke_atm_roundtrip) the interesting
+// comparison is strategy-vs-strategy, not just account-vs-account -- six
+// accounts running one strategy only tell you about variance.
+//
+// A strategy with any unmarked leg is reported as partial rather than given a
+// confident total, for the same reason individual cards are.
+function renderStrategyRollup(scored) {
+  const el = document.getElementById('bots-by-strategy');
+  const byStrategy = new Map();
+  for (const s of scored) {
+    const id = s.bot.strategy_id || 'unassigned';
+    const agg = byStrategy.get(id) || { id, accounts: 0, rankable: 0, pnl: 0, staked: 0, pending: 0 };
+    agg.accounts++;
+    // Only complete accounts contribute to the aggregate. Folding in an
+    // account whose equity nobody could compute would rank a strategy on a
+    // number that is partly missing.
+    if (s.complete) {
+      agg.rankable++;
+      agg.pnl += s.equity - s.bot.starting_balance;
+      agg.staked += s.bot.starting_balance;
+    } else {
+      agg.pending++;
+    }
+    byStrategy.set(id, agg);
+  }
+
+  // One strategy across the board means the rollup restates the cards below.
+  if (byStrategy.size < 2) { el.innerHTML = ''; return; }
+
+  // A strategy is only ranked when *every* one of its accounts is marked.
+  // Ranking a subtotal from the complete accounts would order strategies on
+  // figures covering different fractions of their books -- a 2-of-3 subtotal
+  // sitting above a fully-marked rival says nothing about which is ahead.
+  // Partial strategies still show their subtotal, explicitly labelled with the
+  // coverage it represents, but are excluded from ordering and parked after
+  // the ranked ones.
+  el.innerHTML = [...byStrategy.values()]
+    .sort((a, b) => {
+      const aFull = a.pending === 0;
+      const bFull = b.pending === 0;
+      if (aFull !== bFull) return aFull ? -1 : 1;
+      if (!aFull) return a.id.localeCompare(b.id);
+      return b.pnl - a.pnl;
+    })
+    .map(a => {
+      const full = a.pending === 0;
+      const pct = a.staked ? (a.pnl / a.staked) * 100 : 0;
+      const accounts = `${a.accounts} account${a.accounts === 1 ? '' : 's'}`;
+      if (full) {
+        return `<div class="strat-tile">
+          <span class="strat-name">${escapeHtml(a.id)}</span>
+          <span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+          <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) · ${accounts}</span>
+        </div>`;
+      }
+      // Nothing marked at all: there is no subtotal to show, partial or not.
+      const subtotal = a.rankable
+        ? `<span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+           <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) subtotal</span>`
+        : '';
+      return `<div class="strat-tile">
+        <span class="strat-name">${escapeHtml(a.id)}</span>
+        ${subtotal}
+        <span class="strat-meta bot-unmarked"> · ${a.rankable}/${a.accounts} marked — unranked</span>
+      </div>`;
+    }).join('');
+}
+
+// A roster fetch failure outranks anything the cards have to say: whatever is
+// on screen came from an earlier successful poll and is no longer current.
+function botsStatusLine(suffix) {
+  return botsError ? `roster unavailable — ${botsError} · showing last known` : suffix;
+}
+
+function renderBots() {
+  if (!botsData) {
+    if (botsError) {
+      document.getElementById('bots-status').textContent = botsStatusLine('');
+    }
+    return;
+  }
+  const grid = document.getElementById('bots-grid');
+  const bots = botsData.bots || [];
+
+  liveQuotes.setBotPositions(bots.flatMap(b => b.positions.map(p => p.sym)));
+
+  if (!bots.length) {
+    grid.innerHTML = '';
+    // Clear the rollup too, or tiles from the last populated render survive
+    // the liquidation of the final bot and read as live.
+    document.getElementById('bots-by-strategy').innerHTML = '';
+    document.getElementById('bots-status').textContent =
+      botsStatusLine('no automated accounts registered yet');
+    return;
+  }
+
+  // Rank by equity descending, with accounts that have no complete equity
+  // parked after them -- they are unranked, not last-placed.
+  const scored = bots.map(b => ({ bot: b, ...botEquity(b) }))
+    .sort((a, b) => {
+      if (a.complete !== b.complete) return a.complete ? -1 : 1;
+      if (!a.complete) return a.bot.alias.localeCompare(b.bot.alias);
+      return b.equity - a.equity;
+    });
+  const rankable = scored.filter(s => s.complete);
+  const best = rankable.length ? rankable[0].equity : null;
+  renderStrategyRollup(scored);
+
+  grid.innerHTML = scored.map(({ bot, equity, complete, unmarked }) => {
+    const pnl = complete ? equity - bot.starting_balance : null;
+    const pct = complete && bot.starting_balance ? (pnl / bot.starting_balance) * 100 : 0;
+    const dir = !complete ? 'flat' : pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'flat';
+    // Only a complete account can lead, and only when something else could
+    // have beaten it.
+    const isLeader = complete && rankable.length > 1 && equity === best;
+
+    const posRows = bot.positions.map(p => {
+      const mark = botMark(p.sym);
+      const ppnl = mark != null && p.avg_price != null
+        ? (mark - p.avg_price) * p.qty * 100 : null;
+      return `<tr>
+        <td>QQQ ${p.strike} ${p.type === 'call' ? 'C' : 'P'}</td>
+        <td>${p.qty > 0 ? '+' : ''}${p.qty}</td>
+        <td>${p.avg_price != null ? fmtQ(p.avg_price) : '—'}</td>
+        <td>${mark != null ? fmtQ(mark) : '—'}</td>
+        <td class="${ppnl != null ? pnlClass(ppnl) : ''}">${ppnl != null ? fmtMoney(ppnl) : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="bot-card${isLeader ? ' leader' : ''}">
+      <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
+      <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
+      <div class="bot-equity">${complete ? `$${equity.toFixed(2)}` : '<span class="bot-unmarked">pending</span>'}</div>
+      <div class="bot-pnl ${dir}">${complete
+        ? `${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)`
+        : '<span class="bot-unmarked">awaiting marks</span>'}</div>
+      <div class="bot-meta">
+        Cash $${bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
+        ${bot.last_trade_ts ? ` · last ${new Date(bot.last_trade_ts).toLocaleTimeString()}` : ''}
+        ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} without a mark — equity and PnL withheld, and this account is unranked</span>` : ''}
+      </div>
+      ${bot.positions.length
+        ? `<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th></tr>${posRows}</table>`
+        : '<div class="bot-nopos">flat — no open positions</div>'}
+    </div>`;
+  }).join('');
+
+  const asOf = botsData.as_of ? new Date(botsData.as_of).toLocaleTimeString() : '—';
+  document.getElementById('bots-status').textContent =
+    botsStatusLine(`${bots.length} account${bots.length === 1 ? '' : 's'} · updated ${asOf}`);
 }
 
 // ── historical panel ─────────────────────────────────────────────────────────
@@ -2055,6 +2412,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   document.getElementById('tab-live').onclick    = () => showTab('live');
   document.getElementById('tab-history').onclick = () => showTab('history');
+  document.getElementById('tab-bots').onclick    = () => showTab('bots');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
 
   setStatus('', 'Loading calibration data…');

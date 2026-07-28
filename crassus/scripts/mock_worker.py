@@ -54,6 +54,14 @@ DEFAULT_SNAPSHOT_FIXTURE = Path(__file__).parent / "fixtures" / "snapshot.json"
 USERS: dict[str, dict] = {}
 SESSIONS: dict[str, str] = {}
 LOCK = threading.Lock()
+
+# Mirrors the deployed Worker's BOT_REGISTRATION_KEY secret. Registering with a
+# matching X-Bot-Registration-Key marks the account as a bot; registering
+# without the header creates an ordinary human account that never appears in
+# /api/bots. A *wrong* key is rejected outright rather than downgraded, so a
+# typo in the runner's config fails loudly instead of silently burning a
+# username on a non-bot account.
+BOT_REGISTRATION_KEY = "mock-operator-key"
 FAULT = {"mode": None, "remaining": 0}
 # Independent of FAULT: lets /api/me be unavailable *at the same time* as a
 # paper-trade fault, which is what a genuinely unresolvable execution needs --
@@ -143,6 +151,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(SNAPSHOT_BYTES)
             return
 
+        if path == "/api/bots":
+            # Public, unauthenticated. Only accounts flagged is_bot appear, and
+            # only whitelisted fields -- never the password.
+            with LOCK:
+                bots = [
+                    {
+                        "username": name,
+                        "alias": u.get("alias") or name,
+                        "strategy_id": u.get("strategy_id"),
+                        "balance_cash": u["cash"],
+                        "starting_balance": STARTING_CASH,
+                        "trade_count": len(u["trades"]),
+                    }
+                    for name, u in sorted(USERS.items())
+                    if u.get("is_bot")
+                ]
+            return self._json(200, {"bots": bots})
+
         if path == "/api/me":
             if take_me_fault():
                 return self._json(503, {"error": "temporarily_unavailable"})
@@ -202,13 +228,49 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/register":
             body = self._body()
             username = body.get("username")
+            bot_key = self.headers.get("X-Bot-Registration-Key")
+            is_bot = False
+            if bot_key is not None:
+                if bot_key != BOT_REGISTRATION_KEY:
+                    return self._json(403, {"error": "Invalid bot registration key"})
+                is_bot = True
             with LOCK:
                 if not username or not body.get("password"):
                     return self._json(400, {"error": "username and password required"})
                 if username in USERS:
                     return self._json(409, {"error": "already_exists"})
-                USERS[username] = {"password": body["password"], "cash": STARTING_CASH, "trades": []}
+                USERS[username] = {
+                    "password": body["password"],
+                    "cash": STARTING_CASH,
+                    "trades": [],
+                    "is_bot": is_bot,
+                    "alias": body.get("alias") or username,
+                    "strategy_id": body.get("strategy_id"),
+                }
             return self._issue_session(username, 201)
+
+        if path == "/api/bot-metadata":
+            bot_key = self.headers.get("X-Bot-Registration-Key")
+            if bot_key != BOT_REGISTRATION_KEY:
+                return self._json(403, {"error": "Invalid bot registration key"})
+            body = self._body()
+            username = body.get("username")
+            with LOCK:
+                user = USERS.get(username)
+                if user is None:
+                    return self._json(404, {"error": "No such account"})
+                # A human account is never editable into the public roster.
+                if not user.get("is_bot"):
+                    return self._json(409, {"error": "Not a bot account"})
+                if "strategy_id" in body:
+                    user["strategy_id"] = body["strategy_id"]
+                if "alias" in body:
+                    user["alias"] = body["alias"]
+                return self._json(200, {
+                    "username": username,
+                    "alias": user["alias"],
+                    "strategy_id": user["strategy_id"],
+                })
 
         if path == "/api/login":
             body = self._body()

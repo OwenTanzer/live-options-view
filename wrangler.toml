@@ -11,14 +11,15 @@ binding = "ASSETS"
 binding = "PAPER_TRADES"
 bucket_name = "qqq-options-chain-data"
 
-# Run `wrangler kv namespace create USERS` and `wrangler kv namespace create
-# SESSIONS`, then replace the placeholder ids below with the ones printed by
-# those commands. Required for /api/register, /api/login, /api/logout,
-# /api/me, and the session-authenticated /api/paper-trade and /api/settle.
+# Backs /api/register, /api/login, /api/logout, /api/me, /api/bots, and the
+# session-authenticated /api/paper-trade and /api/settle. These ids are not
+# secrets -- a namespace id only resolves against this account -- but they must
+# be real: wrangler rejects the deploy outright on an unknown id, which is how
+# the PR #15 auth build silently failed to ship for a week (run 29759921735).
 [[kv_namespaces]]
 binding = "USERS"
-id = "REPLACE_WITH_USERS_KV_NAMESPACE_ID"
+id = "e6d7e57f32ea4122ba81b8c84dc28553"
 
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "REPLACE_WITH_SESSIONS_KV_NAMESPACE_ID"
+id = "2b996344769e4e679d9f307196a76b84"
