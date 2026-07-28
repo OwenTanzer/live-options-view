@@ -419,6 +419,17 @@ export async function handleBotMetadata(request, env) {
   if (outcome.error === 'not_a_bot') return jsonResponse({ error: 'Not a bot account' }, 409);
   if (outcome.error) return jsonResponse({ error: 'Metadata could not be updated, try again' }, 503);
 
+  // Repair the roster index, idempotently.
+  //
+  // Registration writes the user record and the `bot:` index as two separate
+  // KV puts with no transaction between them. If the second fails, the account
+  // exists and is flagged is_bot but is missing from the roster -- and the
+  // runner cannot recover by re-registering, because the username is taken, so
+  // it logs in instead and this endpoint is the only code that runs again.
+  // Writing the index here unconditionally turns the every-startup metadata
+  // sync into the repair path for that window.
+  await env.USERS.put(botKey(username), JSON.stringify({ username }));
+
   return jsonResponse({ username, ...outcome.result }, 200);
 }
 

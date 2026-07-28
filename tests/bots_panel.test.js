@@ -30,6 +30,11 @@ const liveQuotes = {
   setBotPositions(syms) { this.botSymbols = [...syms]; },
 };
 
+// Quotes carry observedAt, as LiveQuoteService populates it. Helpers so a test
+// says what it means about freshness rather than hand-rolling timestamps.
+const fresh = (mid) => ({ mid, observedAt: new Date().toISOString() });
+const agedBy = (mid, ms) => ({ mid, observedAt: new Date(Date.now() - ms).toISOString() });
+
 const scope = {
   document: { getElementById: el },
   fetch: async () => { throw new Error('not used in this test'); },
@@ -45,7 +50,9 @@ const scope = {
 };
 
 const names = Object.keys(scope);
-const factory = new Function(...names, `${source}\nreturn { renderBots, botEquity, renderStrategyRollup, setBotsPolling, get botsData(){return botsData}, set botsData(v){botsData=v} };`);
+const factory = new Function(...names, `${source}\nreturn { renderBots, botEquity, renderStrategyRollup, setBotsPolling, botMark,
+  get botsData(){return botsData}, set botsData(v){botsData=v},
+  get botsError(){return botsError}, set botsError(v){botsError=v} };`);
 const panel = factory(...names.map(n => scope[n]));
 
 const pos = (sym, qty, avg) =>
@@ -58,7 +65,7 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
 // ── botEquity ─────────────────────────────────────────────────────────────────
 {
   quotes.clear();
-  quotes.set('X', { mid: 4.0 });
+  quotes.set('X', fresh(4.0));
 
   // Flat account: equity is just cash.
   assert.deepEqual(panel.botEquity(bot('A', 'a', 10000)),
@@ -82,12 +89,62 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   assert.equal(partial.openValue, null);
 }
 
+// ── a stale mark is not a mark ────────────────────────────────────────────────
+// LiveQuoteService keeps the last quote it received until the symbol leaves
+// the interest set, so an upstream outage leaves a frozen price in place. Left
+// unchecked that keeps accounts "complete" and keeps ranking them on prices
+// from minutes ago.
+{
+  quotes.clear();
+  quotes.set('FRESH', fresh(4.0));
+  quotes.set('STALE', agedBy(4.0, 5 * 60_000));    // 5 minutes old
+  quotes.set('EDGE',  agedBy(4.0, 30_000));        // within the 60s bound
+  quotes.set('SKEWED', { mid: 4.0, observedAt: new Date(Date.now() + 120_000).toISOString() });
+  quotes.set('NOTS',  { mid: 4.0 });               // no timestamp at all
+
+  assert.equal(panel.botEquity(bot('A', 'a', 9000, [pos('FRESH', 1, 1.0)])).complete, true);
+  assert.equal(panel.botEquity(bot('B', 'b', 9000, [pos('EDGE', 1, 1.0)])).complete, true,
+    'a mark inside the freshness bound still counts');
+  assert.equal(panel.botEquity(bot('C', 'c', 9000, [pos('STALE', 1, 1.0)])).complete, false,
+    'a frozen mark is treated as no mark at all');
+  assert.equal(panel.botEquity(bot('D', 'd', 9000, [pos('SKEWED', 1, 1.0)])).complete, false,
+    'a wildly future timestamp is not evidence of freshness');
+  assert.equal(panel.botEquity(bot('E', 'e', 9000, [pos('NOTS', 1, 1.0)])).complete, false,
+    'a quote with no observedAt cannot be shown to be fresh');
+
+  // Partial refresh: one leg updates, the other stays frozen. The account is
+  // incomplete even though it holds a perfectly current quote.
+  const mixed = panel.botEquity(bot('F', 'f', 9000, [pos('FRESH', 1, 1.0), pos('STALE', 1, 1.0)]));
+  assert.equal(mixed.complete, false, 'a partial refresh leaves the account unranked');
+  assert.equal(mixed.unmarked, 1);
+  assert.equal(mixed.equity, null);
+
+  // A full outage: everything freezes, so nothing is ranked and no leader is
+  // crowned off prices that stopped moving.
+  quotes.clear();
+  quotes.set('A1', agedBy(9.0, 10 * 60_000));
+  quotes.set('A2', agedBy(1.0, 10 * 60_000));
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [
+      { ...bot('Frozen1', 'f1', 10000, [pos('A1', 5, 1.0)]), strategy_id: 's' },
+      { ...bot('Frozen2', 'f2', 10000, [pos('A2', 5, 1.0)]), strategy_id: 's' },
+    ],
+  };
+  panel.renderBots();
+  const out = els['bots-grid'].innerHTML;
+  assert.equal((out.match(/bot-card leader/g) || []).length, 0,
+    'no leader is crowned during a quote outage');
+  assert.equal((out.match(/pending/g) || []).length >= 2, true,
+    'every account reports pending while its marks are frozen');
+}
+
 // ── an unmarked short must not be crowned leader ──────────────────────────────
 // The failure this guards: skipping the unmarked leg and returning the rest
 // omits the short's liability, inflating equity above every honest account.
 {
   quotes.clear();
-  quotes.set('X', { mid: 1.0 });
+  quotes.set('X', fresh(1.0));
 
   panel.botsData = {
     as_of: '2026-07-27T15:00:00Z',
@@ -141,7 +198,7 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
 // ── renderBots ────────────────────────────────────────────────────────────────
 {
   quotes.clear();
-  quotes.set('X', { mid: 4.0 });
+  quotes.set('X', fresh(4.0));
 
   panel.botsData = {
     as_of: '2026-07-27T15:00:00Z',
@@ -172,7 +229,7 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
 // ── per-strategy rollup ───────────────────────────────────────────────────────
 {
   quotes.clear();
-  quotes.set('X', { mid: 4.0 });
+  quotes.set('X', fresh(4.0));
 
   const withStrat = (alias, username, cash, strategy_id, positions = []) =>
     ({ ...bot(alias, username, cash, positions), strategy_id });
@@ -234,7 +291,7 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   // ones on its subtotal: a 2-of-3 figure and a 3-of-3 figure cover different
   // fractions of their books and are not comparable.
   quotes.clear();
-  quotes.set('X', { mid: 4.0 });
+  quotes.set('X', fresh(4.0));
   panel.botsData = {
     as_of: '2026-07-27T15:00:00Z',
     bots: [
@@ -303,6 +360,51 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
   assert.equal(els['bots-by-strategy'].innerHTML, '',
     'stale rollup tiles must not survive liquidation of the last bots');
   assert.match(els['bots-status'].textContent, /no automated accounts registered yet/);
+}
+
+// ── a roster fetch failure survives quote-driven re-renders ───────────────────
+// renderBots() is called on every quote tick. Writing the failure straight to
+// the status line let the next tick paint a fresh "updated 12:34:56" over it
+// while still showing the last successful roster -- real balances, silently
+// out of date.
+{
+  quotes.clear();
+  quotes.set('X', fresh(4.0));
+  panel.botsError = null;
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [bot('A', 'a', 12000, [pos('X', 1, 1.0)])],
+  };
+  panel.renderBots();
+  assert.match(els['bots-status'].textContent, /1 account · updated/);
+
+  // The roster fetch now fails; the cards still hold the last good data.
+  panel.botsError = 'HTTP 503';
+  panel.renderBots();
+  assert.match(els['bots-status'].textContent, /roster unavailable — HTTP 503 · showing last known/);
+
+  // A quote tick re-renders and must not paint over the warning.
+  panel.renderBots();
+  assert.match(els['bots-status'].textContent, /roster unavailable/,
+    'a quote-driven re-render must not overwrite the roster error');
+  assert.equal(/updated \d/.test(els['bots-status'].textContent), false,
+    'no fresh-looking timestamp is shown while the roster is unavailable');
+
+  // An empty roster rendered during an outage still reports the outage.
+  panel.botsData = { as_of: '2026-07-27T15:00:00Z', bots: [] };
+  panel.renderBots();
+  assert.match(els['bots-status'].textContent, /roster unavailable/,
+    'the error outranks the empty-roster message');
+
+  // Recovery clears it.
+  panel.botsError = null;
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [bot('A', 'a', 12000, [pos('X', 1, 1.0)])],
+  };
+  panel.renderBots();
+  assert.match(els['bots-status'].textContent, /1 account · updated/,
+    'a successful fetch clears the error state');
 }
 
 console.log('PASS automated tab equity, leader, escaping, and empty states');

@@ -1549,9 +1549,19 @@ function showTab(tab) {
 // against the shared liveQuotes service so a bot's mark is by construction the
 // same number the Live tab shows for that contract.
 const BOTS_POLL_MS = 30_000;
+// A mark older than this no longer counts as a mark. LiveQuoteService keeps
+// whatever it last received until the symbol leaves the interest set, so
+// without an age check a quote frozen by an upstream outage would keep every
+// account looking "complete" and keep ranking them on prices from minutes ago
+// -- exactly the confidently-wrong total the completeness state exists to
+// prevent. The quote poller runs on a 5s cycle while this tab is open, so 60s
+// is a dozen missed cycles: an outage, not jitter. Matches the spirit of the
+// 30s staleness bound TickerStateStore already applies to the price strip.
+const BOT_MARK_MAX_AGE_MS = 60_000;
 let botsTimer = null;
 let botsData  = null;
 let botsInFlight = false;
+let botsError = null;
 
 function setBotsPolling(on) {
   if (on) {
@@ -1573,9 +1583,16 @@ async function fetchBots() {
     const res = await fetch('/api/bots', { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     botsData = await res.json();
+    botsError = null;
     renderBots();
   } catch (err) {
-    document.getElementById('bots-status').textContent = `unavailable — ${err.message}`;
+    // Held in state rather than written straight to the status line: a quote
+    // tick fires renderBots() every few seconds, which would otherwise paint
+    // a fresh-looking "updated 12:34:56" over the warning while still showing
+    // the last successful roster. The balances on screen are real but no
+    // longer current, so the failure has to survive until a fetch succeeds.
+    botsError = err.message;
+    renderBots();
   } finally {
     botsInFlight = false;
   }
@@ -1590,11 +1607,24 @@ async function fetchBots() {
 // number nobody computed. So an account with any unmarked position reports
 // complete:false and equity:null, and is excluded from leader selection and
 // from strategy aggregation rather than ranked on a partial figure.
+// A quote counts only while it is fresh. An absent quote and a frozen one are
+// the same thing for ranking purposes: in both cases nobody knows what the leg
+// is worth right now.
+function botMark(sym) {
+  const q = liveQuotes.get(sym);
+  if (!q || q.mid == null) return null;
+  const age = Date.now() - Date.parse(q.observedAt);
+  // A non-finite age means no usable timestamp; a large negative one means
+  // clock skew. Neither is evidence of freshness, so neither is trusted.
+  if (!Number.isFinite(age) || age > BOT_MARK_MAX_AGE_MS || age < -30_000) return null;
+  return q.mid;
+}
+
 function botEquity(bot) {
   let openValue = 0;
   let unmarked = 0;
   for (const p of bot.positions) {
-    const mark = liveQuotes.get(p.sym)?.mid ?? null;
+    const mark = botMark(p.sym);
     if (mark == null) { unmarked++; continue; }
     openValue += mark * p.qty * 100;
   }
@@ -1676,8 +1706,19 @@ function renderStrategyRollup(scored) {
     }).join('');
 }
 
+// A roster fetch failure outranks anything the cards have to say: whatever is
+// on screen came from an earlier successful poll and is no longer current.
+function botsStatusLine(suffix) {
+  return botsError ? `roster unavailable — ${botsError} · showing last known` : suffix;
+}
+
 function renderBots() {
-  if (!botsData) return;
+  if (!botsData) {
+    if (botsError) {
+      document.getElementById('bots-status').textContent = botsStatusLine('');
+    }
+    return;
+  }
   const grid = document.getElementById('bots-grid');
   const bots = botsData.bots || [];
 
@@ -1688,7 +1729,8 @@ function renderBots() {
     // Clear the rollup too, or tiles from the last populated render survive
     // the liquidation of the final bot and read as live.
     document.getElementById('bots-by-strategy').innerHTML = '';
-    document.getElementById('bots-status').textContent = 'no automated accounts registered yet';
+    document.getElementById('bots-status').textContent =
+      botsStatusLine('no automated accounts registered yet');
     return;
   }
 
@@ -1713,7 +1755,7 @@ function renderBots() {
     const isLeader = complete && rankable.length > 1 && equity === best;
 
     const posRows = bot.positions.map(p => {
-      const mark = liveQuotes.get(p.sym)?.mid ?? null;
+      const mark = botMark(p.sym);
       const ppnl = mark != null && p.avg_price != null
         ? (mark - p.avg_price) * p.qty * 100 : null;
       return `<tr>
@@ -1745,7 +1787,7 @@ function renderBots() {
 
   const asOf = botsData.as_of ? new Date(botsData.as_of).toLocaleTimeString() : '—';
   document.getElementById('bots-status').textContent =
-    `${bots.length} account${bots.length === 1 ? '' : 's'} · updated ${asOf}`;
+    botsStatusLine(`${bots.length} account${bots.length === 1 ? '' : 's'} · updated ${asOf}`);
 }
 
 // ── historical panel ─────────────────────────────────────────────────────────

@@ -220,6 +220,28 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
     // Malformed strategy ids are rejected rather than stored.
     assert.equal((await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'Not Valid!' }), env)).status, 400);
+
+    // Registration writes the user record and the bot: index as two separate
+    // puts. If the index write failed, the account exists and is flagged
+    // is_bot but is absent from the roster -- and re-registering is impossible
+    // because the username is taken. The metadata sync every startup performs
+    // must therefore repair it.
+    delete store['bot:crassus_bob'];
+    assert.equal((await (await handleBots({}, env)).json()).bots.length, 0,
+      'precondition: a lost index entry hides the account from the roster');
+
+    const repaired = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'smoke_atm_roundtrip' }), env);
+    assert.equal(repaired.status, 200);
+    assert.equal(JSON.parse(store['bot:crassus_bob']).username, 'crassus_bob',
+      'the sync recreates the missing index entry');
+    const back = await (await handleBots({}, env)).json();
+    assert.equal(back.bots.length, 1, 'the account is back in the roster after a sync');
+    assert.equal(back.bots[0].strategy_id, 'smoke_atm_roundtrip');
+
+    // And it stays idempotent when the entry was never missing.
+    assert.equal((await handleBotMetadata(req({ username: 'crassus_bob' }), env)).status, 200);
+    assert.equal((await (await handleBots({}, env)).json()).bots.length, 1,
+      'repeating the sync does not duplicate the roster entry');
   }
 
   // ── handleBots ──────────────────────────────────────────────────────────────
