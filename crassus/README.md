@@ -401,6 +401,27 @@ also with no network access:
 .venv/bin/python scripts/verify_trump_ingestion.py
 ```
 
+`aggregate()` also filters reposts: Truth Social supports verbatim reposts
+("ReTruths"), and a real statement is sometimes restated near-verbatim
+minutes later. Counting either as independent signal would silently double
+the sentiment of one opinion. A similarity ratio over normalized text
+(`difflib.SequenceMatcher`, stdlib) drops the older of two similar-enough
+posts in favor of the fresher one already counted; `duplicate_count` on the
+snapshot (surfaced in the strategy's decision metadata) records how many
+were dropped this way. This is the same problem RavenPack's "novelty"
+score exists to solve in real news-analytics feeds -- see the module
+docstring in `crassus/trump_sentiment.py`.
+
+An ingestion failure (HTTP error, timeout, malformed feed) is treated as
+"we don't know," not "sentiment is neutral/unsupported": while flat it
+declines the same way an empty result would, but while holding a position
+it explicitly retains it rather than closing, since a transient failure of
+a single unauthenticated third-party mirror is not evidence the position
+should be closed. This distinction matters and is regression-tested
+(`scenario_fetch_error_while_positioned_retains_not_sells` in
+`verify_trump_whisperer.py`) precisely because it's easy to get backwards --
+an earlier version of this strategy did, until review caught it.
+
 **Known gaps**, in the same spirit as the section below: it has never
 observed the feed misbehave beyond what a live spot-check turned up
 (a post with an empty `<title>` -- an image/media-only post -- which scores
@@ -409,12 +430,18 @@ as neutral rather than erroring, since VADER's `compound` on empty text is
 or changes its feed shape -- unlike `reddit_sentiment_qqq`'s browser
 fallback, this has exactly one ingestion layer, because there is no known
 JS-challenge-style obstacle to work around; if `trumpstruth.org` ever adds
-one, this strategy would simply decline every cycle until an equivalent
-fallback were added. `_reader` in `crassus/strategies/trump_whisperer.py`
-is a module-level singleton like `reddit_sentiment_qqq`'s, so every account
-running this strategy in one runner process already shares one
-`min_interval_s` cache -- appropriate here in particular, since there is
-only one Trump regardless of how many accounts are watching for him.
+one, this strategy would decline every cycle while flat (and retain,
+rather than close, any held position -- see above) until an equivalent
+fallback were added. There is also no maximum-staleness fallback to the
+reader's last good cached snapshot on a fetch failure -- a failure simply
+propagates as "unavailable this cycle" rather than serving slightly-stale
+data, which would let the strategy ride out a brief outage on a still-valid
+recent read instead of just holding pat. `_reader` in
+`crassus/strategies/trump_whisperer.py` is a module-level singleton like
+`reddit_sentiment_qqq`'s, so every account running this strategy in one
+runner process already shares one `min_interval_s` cache -- appropriate
+here in particular, since there is only one Trump regardless of how many
+accounts are watching for him.
 
 ## Known gaps
 

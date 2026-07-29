@@ -118,11 +118,37 @@ def _decide_core(
                 held_quantity=held_quantity,
             )
 
-    if fetch_error is not None or snapshot is None:
-        reason = fetch_error or "no snapshot and no error reported"
+    if fetch_error is not None:
+        # An ingestion failure -- HTTP error, timeout, malformed feed, DNS
+        # failure -- is not evidence sentiment has changed; it's an absence
+        # of observation, not an observation of "neutral" or "unsupported."
+        # Closing a held position on a transient failure of a single
+        # unauthenticated third-party mirror would be treating "we don't
+        # know" as "we know it's bad now" -- stand down without touching
+        # any held position, unlike the valid-empty-result cases below
+        # (insufficient sample, neutral), which do still close per this
+        # strategy's design because those genuinely are a read of current
+        # sentiment, just one that doesn't support a position.
+        if held_symbol is not None:
+            return no(
+                f"Trump sentiment unavailable ({fetch_error}); retaining "
+                f"the held {held_type} position rather than closing on a "
+                f"missing observation.",
+                symbol=held_symbol,
+                held_quantity=held_quantity,
+            )
+        return no(f"Trump sentiment unavailable: {fetch_error}")
+
+    if snapshot is None:
+        # Not reachable via `_decide` (it only calls `_decide_core` with
+        # `snapshot=None` alongside a `fetch_error`, never both `None`), but
+        # `_decide_core` is called directly in tests and is not itself
+        # responsible for enforcing that invariant. Unlike the branch
+        # above, this genuinely is "no signal," not "ingestion failed," so
+        # it's treated like the insufficient-sample/neutral cases below.
         return _maybe_close_unsupported(
             ctx, held_symbol, held_quantity, held_type,
-            no, f"Trump sentiment unavailable: {reason}", {},
+            no, "No Trump sentiment snapshot available.", {},
         )
 
     params = ctx.params or {}

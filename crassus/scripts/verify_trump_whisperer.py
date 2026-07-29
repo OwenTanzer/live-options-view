@@ -283,8 +283,27 @@ def scenario_fetch_error() -> None:
     check("reason surfaces the underlying error", "TrumpFetchError" in decision.reason)
 
 
+def scenario_fetch_error_while_positioned_retains_not_sells() -> None:
+    print("\n12. Fetch failure while holding a position retains it -- absence of evidence isn't evidence against")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        # A live, executable quote is available -- if the bug were still
+        # present, _maybe_close_unsupported would have everything it needs
+        # to actually close, so an executable quote can't be why this
+        # doesn't sell; only the fetch_error-vs-empty-snapshot distinction
+        # can be.
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = tw._decide_core(ctx, None, "TrumpFetchError: HTTP 503")
+    check("action is no_trade, not sell", decision.action == "no_trade", decision.action)
+    check("does not close the held position", decision.symbol != "QQQ240101C00400000" or decision.action != "sell")
+    check("reason cites the missing observation", "unavailable" in decision.reason.lower(), decision.reason)
+    check("reason mentions retaining the position", "retaining" in decision.reason.lower(), decision.reason)
+
+
 def scenario_insufficient_sample() -> None:
-    print("\n12. Sample too small to trust")
+    print("\n13. Sample too small to trust")
     ctx = make_ctx(session_phase="open")
     decision = tw._decide_core(ctx, _snap(0.9, n=1), None)
     check("no_trade below min_sample_size", not decision.is_trade)
@@ -292,14 +311,14 @@ def scenario_insufficient_sample() -> None:
 
 
 def scenario_neutral() -> None:
-    print("\n13. Neutral sentiment while flat trades nothing")
+    print("\n14. Neutral sentiment while flat trades nothing")
     ctx = make_ctx(session_phase="open")
     decision = tw._decide_core(ctx, _snap(0.0), None)
     check("no_trade in the neutral band", not decision.is_trade)
 
 
 def scenario_bullish_opens_call() -> None:
-    print("\n14. Bullish + flat + executable quote -> buy one call")
+    print("\n15. Bullish + flat + executable quote -> buy one call")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")})
     decision = tw._decide_core(ctx, _snap(0.5), None)
     check("action is buy", decision.action == "buy", decision.action)
@@ -308,7 +327,7 @@ def scenario_bullish_opens_call() -> None:
 
 
 def scenario_bearish_opens_put() -> None:
-    print("\n15. Bearish + flat + executable quote -> buy one put")
+    print("\n16. Bearish + flat + executable quote -> buy one put")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")})
     decision = tw._decide_core(ctx, _snap(-0.5), None)
     check("action is buy", decision.action == "buy", decision.action)
@@ -316,7 +335,7 @@ def scenario_bearish_opens_put() -> None:
 
 
 def scenario_stale_quote_declines() -> None:
-    print("\n16. Bullish signal but stale quote declines rather than risking a 409")
+    print("\n17. Bullish signal but stale quote declines rather than risking a 409")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101C00400000": stale_quote("QQQ240101C00400000")})
     decision = tw._decide_core(ctx, _snap(0.5), None)
     check("no_trade on a stale quote", not decision.is_trade)
@@ -324,7 +343,7 @@ def scenario_stale_quote_declines() -> None:
 
 
 def scenario_already_positioned_holds() -> None:
-    print("\n17. Already holding the supported side -- no pyramiding")
+    print("\n18. Already holding the supported side -- no pyramiding")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -333,7 +352,7 @@ def scenario_already_positioned_holds() -> None:
 
 
 def scenario_sentiment_flip_closes_opposite() -> None:
-    print("\n18. Sentiment flips direction while holding the other side -- close first")
+    print("\n19. Sentiment flips direction while holding the other side -- close first")
     trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -346,7 +365,7 @@ def scenario_sentiment_flip_closes_opposite() -> None:
 
 
 def scenario_unexpected_short_stands_down() -> None:
-    print("\n19. Unexpected short position -- stand down, don't compound it")
+    print("\n20. Unexpected short position -- stand down, don't compound it")
     trades = [{"sym": "QQQ240101C00400000", "side": "sell", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -355,7 +374,7 @@ def scenario_unexpected_short_stands_down() -> None:
 
 
 def scenario_neutral_while_positioned_closes() -> None:
-    print("\n20. Sentiment goes neutral while holding a call -- close it, don't just decline")
+    print("\n21. Sentiment goes neutral while holding a call -- close it, don't just decline")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -367,7 +386,7 @@ def scenario_neutral_while_positioned_closes() -> None:
 
 
 def scenario_insufficient_sample_while_positioned_closes() -> None:
-    print("\n21. Sample too small to trust while holding -- close rather than freeze holding it")
+    print("\n22. Sample too small to trust while holding -- close rather than freeze holding it")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -379,7 +398,7 @@ def scenario_insufficient_sample_while_positioned_closes() -> None:
 
 
 def scenario_atm_drift_no_pyramiding() -> None:
-    print("\n22. ATM drifts to a new strike while holding the old one -- no duplicate open")
+    print("\n23. ATM drifts to a new strike while holding the old one -- no duplicate open")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -397,7 +416,7 @@ def scenario_atm_drift_no_pyramiding() -> None:
 
 
 def scenario_multiple_open_positions_stand_down() -> None:
-    print("\n23. More than one open position -- stand down rather than guess")
+    print("\n24. More than one open position -- stand down rather than guess")
     trades = [
         {"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0},
         {"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0},
@@ -409,7 +428,7 @@ def scenario_multiple_open_positions_stand_down() -> None:
 
 
 def scenario_unrecognized_symbol_stands_down() -> None:
-    print("\n24. Held symbol doesn't parse as an OCC option -- stand down rather than guess")
+    print("\n25. Held symbol doesn't parse as an OCC option -- stand down rather than guess")
     trades = [{"sym": "NOT-AN-OPTION-SYMBOL", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -430,6 +449,7 @@ def main() -> int:
         scenario_aggregate_empty_titles_not_flagged_as_duplicates_of_each_other,
         scenario_market_closed,
         scenario_fetch_error,
+        scenario_fetch_error_while_positioned_retains_not_sells,
         scenario_insufficient_sample,
         scenario_neutral,
         scenario_bullish_opens_call,
