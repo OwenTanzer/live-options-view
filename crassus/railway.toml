@@ -1,5 +1,16 @@
 [build]
-builder = "railpack"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+# reddit_sentiment_qqq's browser fallback (crassus/sentiment.py) needs the
+# actual Chromium binary and its Linux shared libraries, not just the
+# `playwright` pip package (a driver/CLI). A Railpack `buildCommand` running
+# `playwright install --with-deps chromium` is not sufficient evidence those
+# survive into the deploy image -- Railpack separates build-layer contents
+# (apt packages, Playwright's browser cache) from what's copied into the
+# final image. `Dockerfile` uses Microsoft's official
+# `mcr.microsoft.com/playwright/python` base image instead, which bakes a
+# version-matched Chromium directly into the runtime image, and build-time
+# smoke-tests that it actually launches (see `scripts/smoke_browser_launch.py`).
 
 [deploy]
 startCommand = "python -m crassus.runner --interval 300"

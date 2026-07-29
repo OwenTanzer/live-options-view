@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prove the reddit_sentiment_qqq strategy's decision logic and aggregation math.
 
-Hermetic like verify_invariants.py: no network access, no Reddit credentials,
-no real PRAW or vaderSentiment call. `sentiment.aggregate()` is exercised with
+Hermetic like verify_invariants.py: no network access, no real Reddit scrape
+or vaderSentiment call. `sentiment.aggregate()` is exercised with
 a fake analyzer that returns fixed scores per input string, and the strategy's
 `_decide_core()` is exercised directly with a hand-built `SentimentSnapshot`
 -- it takes no reader and makes no I/O, so this is the same style of pure
