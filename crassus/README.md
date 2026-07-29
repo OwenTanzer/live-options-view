@@ -210,11 +210,23 @@ its own -- the `playwright` package is just a driver/CLI. Locally:
 .venv/bin/python -m playwright install --with-deps chromium
 ```
 
-`crassus/railway.toml`'s `buildCommand` runs the equivalent as part of the
-Railway build, so a clean deploy has a usable browser without a manual
-post-deploy step. Without it, the fallback raises `RedditFetchError`
-(declines, doesn't crash) rather than failing to import -- the JSON layer
-alone still works wherever Reddit isn't blocking it.
+Deployed, this runs from `crassus/Dockerfile` (Railway's `railway.toml`
+sets `builder = "DOCKERFILE"`), built from the official
+`mcr.microsoft.com/playwright/python` image rather than a Railpack
+`buildCommand` -- a build command running `playwright install` is not
+evidence the browser cache survives into the deploy image Railpack
+actually ships, since it separates build-layer contents (apt packages,
+`~/.cache/ms-playwright`) from the final image. The official image bakes a
+version-matched Chromium directly into the runtime image instead, sidestepping
+that split. The image tag and `requirements.txt`'s `playwright` pin must be
+bumped together (exact-pinned, not `>=`) -- a mismatch leaves the pip
+package importable but unable to find a working Chromium. The Dockerfile
+build-tests this itself (`RUN python scripts/smoke_browser_launch.py`,
+also run as its own CI job in `crassus-ci.yml`), so that specific mismatch
+fails the build, not a live deploy days later. Without a working browser,
+the fallback raises `RedditFetchError` (declines, doesn't crash) rather
+than failing to import -- the JSON layer alone still works wherever Reddit
+isn't blocking it.
 
 A 429 from the JSON layer is treated separately from a JS-challenge/HTTP
 failure: it means Reddit itself is asking for backoff, so
@@ -227,7 +239,13 @@ unlike the JS-challenge case the fallback exists for. The browser fallback
 also recovers if the shared Chromium process itself crashes or disconnects
 mid-run (checked via `browser.is_connected()`): the dead context is torn
 down and relaunched exactly once, rather than staying cached as a
-permanently-failing fallback until the whole bot process restarts.
+permanently-failing fallback until the whole bot process restarts. Every
+Playwright call in `_fetch_listing_browser` -- including opening the page
+and the cleanup `finally` block, not just navigation -- is wrapped so a raw
+Playwright exception can never bypass `_fetch_listing`'s
+`except RedditFetchError` and skip that recovery; cleanup failures are
+swallowed rather than allowed to override whatever real error triggered
+them.
 
 The strategy declines every cycle (`no_trade`, reason cites the fetch
 error) rather than raising if a scrape fails -- consistent with the
@@ -269,6 +287,13 @@ access or real browser process:
 
 ```bash
 .venv/bin/python scripts/verify_reddit_ingestion.py
+```
+
+And, non-hermetically, that the deployed image itself can launch Chromium
+(needs Docker):
+
+```bash
+docker build -t crassus-smoke .  # fails if Chromium can't launch inside it
 ```
 
 **Known gaps**, in the same spirit as the section below: it only reads

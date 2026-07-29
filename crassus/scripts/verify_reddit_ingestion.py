@@ -139,15 +139,18 @@ class FakePage:
         batches: list[list[FakeElement]] | None = None,
         goto_error: Exception | None = None,
         selector_error: Exception | None = None,
+        close_error: Exception | None = None,
         crash_browser: "FakeBrowser | None" = None,
     ):
         self._batches = batches or [[]]
         self._read_index = 0
         self._goto_error = goto_error
         self._selector_error = selector_error
+        self._close_error = close_error
         self._crash_browser = crash_browser
         self.scroll_count = 0
         self.closed = False
+        self.close_attempted = False
         self.mouse = FakeMouse(self)
 
     def goto(self, url, timeout=None):
@@ -170,18 +173,27 @@ class FakePage:
         self._read_index += 1
 
     def close(self):
+        self.close_attempted = True
+        if self._close_error is not None:
+            raise self._close_error
         self.closed = True
 
 
 class FakeContext:
-    def __init__(self, pages: list[FakePage]):
+    def __init__(self, pages: list):
+        # Entries may be a FakePage or an Exception (raised by new_page()
+        # itself, simulating the browser disconnecting between the caller's
+        # is_connected() check and this call).
         self._pages = list(pages)
         self.new_page_calls = 0
         self.closed = False
 
     def new_page(self):
         self.new_page_calls += 1
-        return self._pages.pop(0)
+        item = self._pages.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     def close(self):
         self.closed = True
@@ -392,6 +404,58 @@ def scenario_browser_navigation_failure() -> None:
     check("page was still closed via the finally block", page.closed)
 
 
+def scenario_browser_new_page_failure_is_normalized() -> None:
+    print("\n13. _fetch_listing_browser: context.new_page() raising is normalized to RedditFetchError")
+    # Simulates the browser disconnecting between the caller's
+    # is_connected() check and this call -- a raw Playwright exception here,
+    # if left unwrapped, would bypass _fetch_listing's `except
+    # RedditFetchError` entirely and skip crash recovery.
+    context = FakeContext([RuntimeError("Target page, context or browser has been closed")])
+    try:
+        _fetch_listing_browser(context, "wallstreetbets", limit=5)
+        check("raised RedditFetchError, not the raw Playwright exception", False)
+    except RedditFetchError as exc:
+        check("raised RedditFetchError, not the raw Playwright exception", True)
+        check("original exception is chained", isinstance(exc.__cause__, RuntimeError))
+    except Exception as exc:
+        check(
+            "raised RedditFetchError, not the raw Playwright exception (got wrong type)",
+            False,
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
+def scenario_browser_close_failure_does_not_mask_original_error() -> None:
+    print("\n14. _fetch_listing_browser: a close() failure in cleanup does not override the real error")
+    page = FakePage(goto_error=RuntimeError("net::ERR_CONNECTION_RESET"), close_error=RuntimeError("already closed"))
+    context = FakeContext([page])
+    try:
+        _fetch_listing_browser(context, "wallstreetbets", limit=5)
+        check("raised RedditFetchError for the navigation failure", False)
+    except RedditFetchError as exc:
+        check("raised RedditFetchError for the navigation failure", True)
+        check("message is the navigation error, not the close() error", "navigation failed" in str(exc), str(exc))
+    except Exception as exc:
+        check(
+            "raised RedditFetchError for the navigation failure (close() error leaked instead)",
+            False,
+            f"{type(exc).__name__}: {exc}",
+        )
+    check("close() was still attempted", page.close_attempted)
+
+
+def scenario_browser_close_failure_on_success_path_is_swallowed() -> None:
+    print("\n15. _fetch_listing_browser: a close() failure after a successful fetch does not raise at all")
+    page = FakePage(batches=[[FakeElement("t1", "Fine post", body="ok")]], close_error=RuntimeError("already closed"))
+    context = FakeContext([page])
+    try:
+        posts = _fetch_listing_browser(context, "wallstreetbets", limit=5)
+        check("returns posts normally despite the close() failure", len(posts) == 1, len(posts))
+    except Exception as exc:
+        check("returns posts normally despite the close() failure", False, f"{type(exc).__name__}: {exc}")
+    check("close() was still attempted", page.close_attempted)
+
+
 # ---------------------------------------------------------------------------
 # Scenarios: RedditSentimentReader._fetch_listing (layer selection, 429
 # cooldown, browser crash recovery)
@@ -399,7 +463,7 @@ def scenario_browser_navigation_failure() -> None:
 
 
 def scenario_reader_json_success_never_touches_browser() -> None:
-    print("\n13. Reader: JSON success never invokes the browser fallback")
+    print("\n16. Reader: JSON success never invokes the browser fallback")
     session = FakeSession([FakeJsonResponse(200, _listing_payload(["a"], after=None))])
     reader = _reader(session)
     posts = reader._fetch_listing("wallstreetbets")
@@ -407,7 +471,7 @@ def scenario_reader_json_success_never_touches_browser() -> None:
 
 
 def scenario_reader_falls_back_to_browser_on_json_failure() -> None:
-    print("\n14. Reader: JSON failure (non-429) falls back to the browser and launches it once")
+    print("\n17. Reader: JSON failure (non-429) falls back to the browser and launches it once")
     session = FakeSession([FakeJsonResponse(403, None)])
     page = FakePage(batches=[[FakeElement("t1", "Fallback post")]])
     context = FakeContext([page])
@@ -419,7 +483,7 @@ def scenario_reader_falls_back_to_browser_on_json_failure() -> None:
 
 
 def scenario_reader_reuses_browser_context_across_calls() -> None:
-    print("\n15. Reader: a healthy browser context is reused, not relaunched, on the next call")
+    print("\n18. Reader: a healthy browser context is reused, not relaunched, on the next call")
     session_1 = FakeSession([FakeJsonResponse(403, None)])
     session_2 = FakeSession([FakeJsonResponse(403, None)])
     page_1 = FakePage(batches=[[FakeElement("t1", "First")]])
@@ -435,7 +499,7 @@ def scenario_reader_reuses_browser_context_across_calls() -> None:
 
 
 def scenario_reader_429_declines_without_touching_browser() -> None:
-    print("\n16. Reader: a 429 declines outright, never invoking the browser fallback")
+    print("\n19. Reader: a 429 declines outright, never invoking the browser fallback")
     session = FakeSession([FakeJsonResponse(429, None, headers={"Retry-After": "42"})])
     reader = _reader(session)  # browser_factory would assert-fail if called
     try:
@@ -447,7 +511,7 @@ def scenario_reader_429_declines_without_touching_browser() -> None:
 
 
 def scenario_reader_429_cooldown_blocks_subsequent_subreddits() -> None:
-    print("\n17. Reader: the 429 cooldown is shared across subreddits in the same and later cycles")
+    print("\n20. Reader: the 429 cooldown is shared across subreddits in the same and later cycles")
     session = FakeSession([FakeJsonResponse(429, None, headers={"Retry-After": "42"})])
     reader = _reader(session)
     try:
@@ -465,7 +529,7 @@ def scenario_reader_429_cooldown_blocks_subsequent_subreddits() -> None:
 
 
 def scenario_reader_cooldown_expires() -> None:
-    print("\n18. Reader: once the cooldown window has passed, fetching resumes normally")
+    print("\n21. Reader: once the cooldown window has passed, fetching resumes normally")
     session = FakeSession([FakeJsonResponse(200, _listing_payload(["a"], after=None))])
     reader = _reader(session, rate_limited_until=0.0)  # already expired (monotonic time is always > 0)
     posts = reader._fetch_listing("wallstreetbets")
@@ -473,7 +537,7 @@ def scenario_reader_cooldown_expires() -> None:
 
 
 def scenario_reader_recovers_from_crashed_browser() -> None:
-    print("\n19. Reader: a crashed/disconnected browser is torn down and relaunched exactly once")
+    print("\n22. Reader: a crashed/disconnected browser is torn down and relaunched exactly once")
     session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
     dead_browser = FakeBrowser(connected=True)
     dead_page = FakePage(goto_error=RuntimeError("target crashed"), crash_browser=dead_browser)
@@ -497,8 +561,39 @@ def scenario_reader_recovers_from_crashed_browser() -> None:
     check("the dead playwright handle was stopped", dead_playwright.stopped)
 
 
+def scenario_reader_recovers_when_disconnect_happens_at_new_page() -> None:
+    print("\n23. Reader: recovers when it's new_page() (not goto()) that surfaces the crash")
+    # The narrower crash shape Owen's second review called out: unlike
+    # scenario 22 (where goto() on an already-open page fails),
+    # context.new_page() itself is what raises here -- the exact call that
+    # used to sit outside _fetch_listing_browser's try block. This only
+    # reaches the relaunch path at all because _fetch_listing_browser now
+    # wraps context.new_page() in its own try/except (see
+    # scenario_browser_new_page_failure_is_normalized above); before that
+    # fix this raw exception would have bypassed `_fetch_listing`'s `except
+    # RedditFetchError` entirely and the relaunch below would never run.
+    session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
+    dead_browser = FakeBrowser(connected=False)  # already dead by the time new_page() is called
+    dead_context = FakeContext([RuntimeError("Target page, context or browser has been closed")])
+    dead_playwright = FakePlaywrightHandle()
+
+    healthy_browser = FakeBrowser(connected=True)
+    healthy_page = FakePage(batches=[[FakeElement("t1", "Recovered post")]])
+    healthy_context = FakeContext([healthy_page])
+    healthy_playwright = FakePlaywrightHandle()
+
+    factory = FakeBrowserFactory([
+        (dead_playwright, dead_browser, dead_context),
+        (healthy_playwright, healthy_browser, healthy_context),
+    ])
+    reader = _reader(session, browser_factory=factory)
+    posts = reader._fetch_listing("wallstreetbets")
+    check("recovered and returned posts from the relaunched browser", len(posts) == 1, len(posts))
+    check("relaunched exactly once (two total launches)", factory.call_count == 2, factory.call_count)
+
+
 def scenario_reader_gives_up_when_relaunch_also_fails() -> None:
-    print("\n20. Reader: if the relaunch also fails, it raises rather than retrying forever")
+    print("\n24. Reader: if the relaunch also fails, it raises rather than retrying forever")
     session = FakeSession([FakeJsonResponse(403, None)])
     dead_browser = FakeBrowser(connected=True)
     dead_page = FakePage(goto_error=RuntimeError("target crashed"), crash_browser=dead_browser)
@@ -519,7 +614,7 @@ def scenario_reader_gives_up_when_relaunch_also_fails() -> None:
 
 
 def scenario_reader_healthy_browser_failure_does_not_relaunch() -> None:
-    print("\n21. Reader: a live browser that simply fails to fetch (e.g. bad selector) is not treated as a crash")
+    print("\n25. Reader: a live browser that simply fails to fetch (e.g. bad selector) is not treated as a crash")
     session = FakeSession([FakeJsonResponse(403, None)])
     live_browser = FakeBrowser(connected=True)
     # No crash_browser wired in -- goto fails but the browser process itself
@@ -551,6 +646,9 @@ def main() -> int:
         scenario_browser_scrolls_for_more_posts,
         scenario_browser_stalls_on_thin_subreddit,
         scenario_browser_navigation_failure,
+        scenario_browser_new_page_failure_is_normalized,
+        scenario_browser_close_failure_does_not_mask_original_error,
+        scenario_browser_close_failure_on_success_path_is_swallowed,
         scenario_reader_json_success_never_touches_browser,
         scenario_reader_falls_back_to_browser_on_json_failure,
         scenario_reader_reuses_browser_context_across_calls,
@@ -558,6 +656,7 @@ def main() -> int:
         scenario_reader_429_cooldown_blocks_subsequent_subreddits,
         scenario_reader_cooldown_expires,
         scenario_reader_recovers_from_crashed_browser,
+        scenario_reader_recovers_when_disconnect_happens_at_new_page,
         scenario_reader_gives_up_when_relaunch_also_fails,
         scenario_reader_healthy_browser_failure_does_not_relaunch,
     ):

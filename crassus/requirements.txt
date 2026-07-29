@@ -5,6 +5,14 @@ vaderSentiment>=3.3.2
 
 # reddit_sentiment_qqq strategy's browser fallback only (crassus/sentiment.py
 # _fetch_listing_browser) -- used when Reddit's public new.json listing
-# fails, e.g. behind a JS challenge page. Run `playwright install chromium`
-# once after installing this.
-playwright>=1.44
+# fails, e.g. behind a JS challenge page.
+#
+# Pinned exactly (not >=) to match the mcr.microsoft.com/playwright/python
+# image tag crassus/Dockerfile builds from -- Playwright's browser binaries
+# are versioned separately from this pip package, and a mismatch leaves the
+# package importable but unable to find a working Chromium. Bump both
+# together; see Dockerfile and scripts/smoke_browser_launch.py.
+#
+# Local dev (outside the Docker image) still needs the matching browser
+# installed once: `playwright install --with-deps chromium`.
+playwright==1.61.0

@@ -31,3 +31,20 @@ jobs:
       - name: Run reddit_sentiment_qqq ingestion suite
         working-directory: crassus
         run: python scripts/verify_reddit_ingestion.py
+
+  docker-build-smoke:
+    # Builds the exact image Railway deploys from (see crassus/railway.toml's
+    # `builder = "DOCKERFILE"`) and fails if it can't. This is not redundant
+    # with verify-invariants above: that job installs crassus/requirements.txt
+    # into whatever Python runner GitHub Actions provides, which proves the
+    # hermetic test suites pass but says nothing about whether the deployed
+    # image can actually launch Chromium -- crassus/Dockerfile's own
+    # `RUN python scripts/smoke_browser_launch.py` build step is what proves
+    # that, and this job is what runs it on every PR instead of relying on a
+    # one-off manual `docker build` before merge.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build crassus Docker image (fails if Chromium can't launch inside it)
+        working-directory: crassus
+        run: docker build -t crassus-ci-smoke .

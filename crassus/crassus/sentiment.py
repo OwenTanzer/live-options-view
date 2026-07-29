@@ -297,9 +297,28 @@ def _fetch_listing_browser(
     `_BROWSER_STALL_LIMIT` consecutive rounds produce no new post ids --
     the latter guards against looping forever on a subreddit whose `new`
     feed genuinely has fewer than `limit` posts.
+
+    Every Playwright call in here -- including `context.new_page()` and the
+    `finally` cleanup, not just navigation/scrolling -- is wrapped so a raw
+    Playwright exception can never escape this function. That matters beyond
+    tidiness: `_fetch_listing`'s crash-recovery path only triggers on
+    `RedditFetchError`, so a `new_page()` call that raises because the
+    browser disconnected between `_is_browser_alive()` and this call (or a
+    `page.close()` that raises because Chromium already crashed) would
+    otherwise bypass that `except RedditFetchError` entirely -- the relaunch
+    logic would simply never run for exactly the crash shapes it exists to
+    handle. Cleanup failures are swallowed rather than normalized and raised,
+    since `page.close()` failing after Chromium already crashed carries no
+    information the navigation/scroll error above it doesn't already have,
+    and letting it propagate would silently replace that original, more
+    informative error instead of just being logged as noise.
     """
     url = _LISTING_PAGE_URL.format(subreddit=subreddit)
-    page = context.new_page()
+    try:
+        page = context.new_page()
+    except Exception as exc:
+        raise RedditFetchError(f"r/{subreddit}: opening a browser page failed: {exc}") from exc
+
     try:
         try:
             page.goto(url, timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
@@ -343,7 +362,10 @@ def _fetch_listing_browser(
 
         return posts
     finally:
-        page.close()
+        try:
+            page.close()
+        except Exception:
+            pass
 
 
 def aggregate(
