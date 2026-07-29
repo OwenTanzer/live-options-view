@@ -340,14 +340,19 @@ def _fetch_listing_browser(
             for element in elements:
                 if len(posts) >= limit:
                     break
-                post_id = element.get_attribute("id") or element.get_attribute("permalink")
-                if not post_id or post_id in seen_ids:
-                    continue
-                seen_ids.add(post_id)
-                title = element.get_attribute("post-title") or ""
-                body_element = element.query_selector('[slot="text-body"]')
-                body = body_element.inner_text() if body_element else ""
-                posts.append({"title": title, "selftext": body})
+                try:
+                    post_id = element.get_attribute("id") or element.get_attribute("permalink")
+                    if not post_id or post_id in seen_ids:
+                        continue
+                    seen_ids.add(post_id)
+                    title = element.get_attribute("post-title") or ""
+                    body_element = element.query_selector('[slot="text-body"]')
+                    body = body_element.inner_text() if body_element else ""
+                    posts.append({"title": title, "selftext": body})
+                except Exception as exc:
+                    raise RedditFetchError(
+                        f"r/{subreddit}: reading post content failed: {exc}"
+                    ) from exc
 
             if len(posts) >= limit:
                 break

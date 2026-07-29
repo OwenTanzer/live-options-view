@@ -93,20 +93,42 @@ class FakeSession:
 
 
 class FakeBodyElement:
-    def __init__(self, text: str):
+    def __init__(self, text: str, error: Exception | None = None, crash_browser: "FakeBrowser | None" = None):
         self._text = text
+        self._error = error
+        self._crash_browser = crash_browser
 
     def inner_text(self) -> str:
+        if self._error is not None:
+            if self._crash_browser is not None:
+                self._crash_browser.mark_disconnected()
+            raise self._error
         return self._text
 
 
 class FakeElement:
-    def __init__(self, post_id: str, title: str, body: str | None = None):
+    def __init__(
+        self,
+        post_id: str,
+        title: str,
+        body: str | None = None,
+        error_on: str | None = None,
+        crash_browser: "FakeBrowser | None" = None,
+    ):
         self._id = post_id
         self._title = title
         self._body = body
+        self._error_on = error_on
+        self._crash_browser = crash_browser
+
+    def _maybe_fail(self, operation: str) -> None:
+        if self._error_on == operation:
+            if self._crash_browser is not None:
+                self._crash_browser.mark_disconnected()
+            raise RuntimeError(f"browser disconnected during {operation}")
 
     def get_attribute(self, name: str):
+        self._maybe_fail("get_attribute")
         if name == "id":
             return self._id
         if name == "post-title":
@@ -116,8 +138,10 @@ class FakeElement:
         return None
 
     def query_selector(self, selector: str):
+        self._maybe_fail("query_selector")
         if selector == '[slot="text-body"]' and self._body is not None:
-            return FakeBodyElement(self._body)
+            error = RuntimeError("browser disconnected during inner_text") if self._error_on == "inner_text" else None
+            return FakeBodyElement(self._body, error=error, crash_browser=self._crash_browser)
         return None
 
 
@@ -632,6 +656,60 @@ def scenario_reader_healthy_browser_failure_does_not_relaunch() -> None:
     check("did not attempt a relaunch since the browser reported itself alive", factory.call_count == 1, factory.call_count)
 
 
+def scenario_browser_post_content_failures_are_normalized() -> None:
+    print("\n26. Browser: every per-element DOM read failure is normalized to RedditFetchError")
+    for operation in ("get_attribute", "query_selector", "inner_text"):
+        element = FakeElement("t1", "Post", body="body", error_on=operation)
+        page = FakePage(batches=[[element]])
+        context = FakeContext([page])
+        try:
+            _fetch_listing_browser(context, "wallstreetbets", limit=1)
+            check(f"normalized {operation} failure", False)
+        except RedditFetchError as exc:
+            check(f"normalized {operation} failure", True)
+            check("original exception is chained", isinstance(exc.__cause__, RuntimeError))
+            check("error identifies post-content extraction", "reading post content failed" in str(exc), str(exc))
+        except Exception as exc:
+            check(
+                f"normalized {operation} failure (got wrong type)",
+                False,
+                f"{type(exc).__name__}: {exc}",
+            )
+        check("page cleanup still ran", page.closed)
+
+
+def scenario_reader_recovers_when_browser_crashes_during_post_content() -> None:
+    print("\n27. Reader: a disconnect during per-element DOM extraction triggers one relaunch")
+    session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
+    dead_browser = FakeBrowser(connected=True)
+    dead_element = FakeElement(
+        "t1",
+        "Crash post",
+        body="body",
+        error_on="inner_text",
+        crash_browser=dead_browser,
+    )
+    dead_page = FakePage(batches=[[dead_element]])
+    dead_context = FakeContext([dead_page])
+    dead_playwright = FakePlaywrightHandle()
+
+    healthy_browser = FakeBrowser(connected=True)
+    healthy_page = FakePage(batches=[[FakeElement("t2", "Recovered post")]])
+    healthy_context = FakeContext([healthy_page])
+    healthy_playwright = FakePlaywrightHandle()
+
+    factory = FakeBrowserFactory([
+        (dead_playwright, dead_browser, dead_context),
+        (healthy_playwright, healthy_browser, healthy_context),
+    ])
+    reader = _reader(session, browser_factory=factory)
+    posts = reader._fetch_listing("wallstreetbets")
+    check("returned posts from the relaunched browser", len(posts) == 1, len(posts))
+    check("relaunched exactly once", factory.call_count == 2, factory.call_count)
+    check("closed the dead context", dead_context.closed)
+    check("stopped the dead Playwright handle", dead_playwright.stopped)
+
+
 def main() -> int:
     for scenario in (
         scenario_json_single_page,
@@ -659,6 +737,8 @@ def main() -> int:
         scenario_reader_recovers_when_disconnect_happens_at_new_page,
         scenario_reader_gives_up_when_relaunch_also_fails,
         scenario_reader_healthy_browser_failure_does_not_relaunch,
+        scenario_browser_post_content_failures_are_normalized,
+        scenario_reader_recovers_when_browser_crashes_during_post_content,
     ):
         scenario()
 
