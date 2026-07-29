@@ -39,6 +39,11 @@ BOT_REGISTRATION_KEY = os.environ.get("BOT_REGISTRATION_KEY")
 # strategy.
 REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
 
+# User-Agent for the trump_whisperer_qqq strategy's feed reader
+# (crassus/trump_sentiment.py). trumpstruth.org/feed is a public, unauthenticated
+# RSS mirror -- no credentials to provision, same as REDDIT_USER_AGENT above.
+TRUMP_FEED_USER_AGENT = os.environ.get("TRUMP_FEED_USER_AGENT")
+
 
 @dataclass
 class Account:

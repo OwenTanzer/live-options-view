@@ -31,6 +31,12 @@ jobs:
       - name: Run reddit_sentiment_qqq ingestion suite
         working-directory: crassus
         run: python scripts/verify_reddit_ingestion.py
+      - name: Run trump_whisperer_qqq strategy suite
+        working-directory: crassus
+        run: python scripts/verify_trump_whisperer.py
+      - name: Run trump_whisperer_qqq ingestion suite
+        working-directory: crassus
+        run: python scripts/verify_trump_ingestion.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
