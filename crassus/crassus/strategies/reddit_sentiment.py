@@ -1,8 +1,8 @@
 """Reddit-sentiment-driven QQQ options strategy.
 
 Sources its signal from `crassus.sentiment.RedditSentimentReader`, which
-polls a fixed subreddit set and scores each match with VADER -- the same
-ingestion-and-scoring shape as
+scrapes a fixed subreddit set's public JSON listings and scores each match
+with VADER -- the same ingestion-and-scoring shape as
 [nama1arpit/reddit-streaming-pipeline](https://github.com/nama1arpit/reddit-streaming-pipeline),
 reimplemented as an in-process poller instead of that project's Kafka/Spark/
 Cassandra stack (see `sentiment.py` for why).
@@ -298,7 +298,7 @@ def _decide(ctx: StrategyContext) -> Decision:
 
     try:
         snapshot = _reader.read()
-    except Exception as exc:  # missing credentials, PRAW/network failure, etc.
+    except Exception as exc:  # RedditFetchError, rate limiting, network failure, etc.
         return _decide_core(ctx, None, str(exc))
     return _decide_core(ctx, snapshot, None)
 

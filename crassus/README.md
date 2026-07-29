@@ -88,7 +88,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/market.py` | R2 snapshot reader + on-demand live quotes |
 | `crassus/client.py` | Sessions, execution, reconciliation — **owns every integrity invariant** |
 | `crassus/strategy.py` | The strategy contract |
-| `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (PRAW + VADER, polled and cached like the market snapshot) |
+| `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + VADER, polled and cached like the market snapshot) |
 | `crassus/strategies/` | Strategy implementations |
 | `crassus/runner.py` | The loop |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
@@ -163,35 +163,64 @@ strike bought last cycle is no longer the ATM one, and a naive re-derivation
 would both open a second position and be unable to find the first one to
 close.
 
-Its signal comes from `crassus/sentiment.py`, which polls
-r/wallstreetbets, r/stocks, r/options and r/investing for QQQ-relevant posts
-and scores each one with VADER. This reuses the ingestion-and-scoring shape
-of [nama1arpit/reddit-streaming-pipeline](https://github.com/nama1arpit/reddit-streaming-pipeline)
-(PRAW in, VADER `compound` score, an averaged aggregate as the signal) but
+Its signal comes from `crassus/sentiment.py`, which scrapes
+r/wallstreetbets, r/stocks, r/options and r/investing's public `new.json`
+listings for QQQ-relevant posts and scores each one with VADER. This reuses
+the ingestion-and-scoring shape of
+[nama1arpit/reddit-streaming-pipeline](https://github.com/nama1arpit/reddit-streaming-pipeline)
+(posts in, VADER `compound` score, an averaged aggregate as the signal) but
 not that project's Kafka/Spark/Cassandra/Kubernetes stack -- crassus is one
 lightweight process per account reading one number every few minutes, and
 that pipeline's own README documents its Reddit API access as broken since
 Reddit's 2023 pricing change, so its infrastructure could not be reused
-here as-is even if it were the right shape.
+here as-is even if it were the right shape. For the same reason, this reads
+Reddit's public per-subreddit JSON listing directly (no OAuth, no app
+registration) rather than PRAW -- lower rate limit and no uptime guarantee,
+but nothing to provision or rotate either.
 
 To enable it for an account, set `strategy_id` to `reddit_sentiment_qqq` in
-`accounts.json` and provide a **read-only** PRAW "script" app
-(https://www.reddit.com/prefs/apps/):
+`accounts.json`. No credentials are required; optionally set a distinctive
+User-Agent as a courtesy to Reddit (a generic default is used otherwise):
 
 ```bash
-export REDDIT_CLIENT_ID=...
-export REDDIT_CLIENT_SECRET=...
 export REDDIT_USER_AGENT="crassus-reddit-sentiment/1.0 by u/yourname"
 ```
 
-Without those three set, the strategy declines every cycle
-(`no_trade`, reason cites the missing credential) rather than raising --
-consistent with the runtime's rule that a strategy proposes and never
-crashes the loop for a condition it can anticipate. It also declines
-outside regular market hours, before spending a Reddit API call on a
-decision that would be `no_trade` regardless, and below a minimum sample
-size (`min_sample_size`, default 5) rather than trading on a couple of
-off-topic comments. `bullish_threshold` / `bearish_threshold`
+Ingestion has two layers, tried per subreddit in order (see
+`crassus/sentiment.py`): a plain scrape of the public `new.json` listing,
+and -- only when that fails -- a real headless Chromium tab (Playwright)
+that loads the rendered `/new/` page instead. The second layer exists
+because Reddit has been observed serving a same-origin JS proof-of-work
+page ("Please wait for verification") in place of the JSON body, which no
+plain HTTP client can solve; a real browser engine executes that challenge
+itself, the same way it would for a human visitor. Verified in practice: on
+a network where the JSON layer returns HTTP 403 for every request, the
+browser fallback still gets through to real `<shreddit-post>` content, but
+only once the headless launch also masks `navigator.webdriver` and sets a
+realistic UA/viewport/locale (`_default_browser_factory`) -- a stock
+Playwright headless launch hits the same challenge page indefinitely, since
+the challenge appears to key off exactly that automation fingerprint rather
+than anything in the request headers.
+
+The browser fallback needs the Chromium binary installed once, in addition
+to `pip install -r requirements.txt`:
+
+```bash
+.venv/bin/python -m playwright install chromium
+```
+
+Without it, the fallback raises `RedditFetchError` (declines, doesn't
+crash) rather than failing to import -- the JSON layer alone still works
+wherever Reddit isn't blocking it.
+
+The strategy declines every cycle (`no_trade`, reason cites the fetch
+error) rather than raising if a scrape fails -- consistent with the
+runtime's rule that a strategy proposes and never crashes the loop for a
+condition it can anticipate. It also declines outside regular market
+hours, before spending a request on a decision that would be `no_trade`
+regardless, and below a minimum sample size (`min_sample_size`, default 5)
+rather than trading on a couple of off-topic comments. `bullish_threshold`
+/ `bearish_threshold`
 (`mean_compound`, default ±0.15) are configurable per account via an
 optional `"params"` object in `accounts.json`, which the runner passes
 straight through to `StrategyContext.params`:
@@ -210,24 +239,34 @@ straight through to `StrategyContext.params`:
 existing `smoke_atm_roundtrip` entries -- `accounts.example.json` is
 unchanged.
 
-Verify the decision logic and aggregation math hermetically (no Reddit
-credentials, no network access):
+Verify the decision logic and aggregation math hermetically (no network
+access):
 
 ```bash
 .venv/bin/python scripts/verify_reddit_sentiment.py
 ```
 
-**Known gaps**, in the same spirit as the section below: this has never
-observed a real Reddit response, only PRAW's documented submission shape
-(`title` + `selftext`), and it only reads submissions (`subreddit.new`), not
-comments, so it can undercount chatter relative to the reference pipeline,
-which scores comments. It also has no per-account/global Reddit rate-limit
-coordination the way `market.QuoteReader` shares one budget across all
-accounts' Worker traffic -- multiple accounts configured with this strategy
-_each_ poll Reddit independently, tuned via the shared `min_interval_s`
-cache with the assumption that a full 300-second window is more than
-enough headroom under PRAW's own default throttling, not something this
-runtime enforces itself.
+**Known gaps**, in the same spirit as the section below: it only reads
+submissions, not comments, so it can undercount chatter relative to the
+reference pipeline, which scores comments. It also has no
+per-account/global Reddit rate-limit coordination the way
+`market.QuoteReader` shares one budget across all accounts' Worker traffic
+-- multiple accounts configured with this strategy _each_ scrape Reddit
+independently, tuned via the shared `min_interval_s` cache with the
+assumption that a full 300-second window is more than enough headroom, not
+something this runtime enforces itself. The browser fallback shares one
+Chromium instance and one browser context across every subreddit and every
+poll cycle for the life of the process (launching fresh per subreddit or
+per cycle would multiply an already-expensive fallback for no benefit), so
+one account running this strategy holds one background Chromium process
+open for as long as it's configured this way -- fine for a handful of
+accounts, worth revisiting if this strategy is ever assigned to many. The
+stealth measures in `_default_browser_factory` (masking
+`navigator.webdriver`, a realistic UA/viewport/locale) are the minimum
+verified to work as of this writing; Reddit is free to tighten its
+challenge in a way that defeats them without notice, same as it could
+tighten or remove the plain `new.json` endpoint this exists to fall back
+from.
 
 ## Known gaps
 

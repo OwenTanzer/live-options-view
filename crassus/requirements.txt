@@ -1,5 +1,10 @@
 requests>=2.31
 
 # reddit_sentiment_qqq strategy only -- see crassus/sentiment.py
-praw>=7.7
 vaderSentiment>=3.3.2
+
+# reddit_sentiment_qqq strategy's browser fallback only (crassus/sentiment.py
+# _fetch_listing_browser) -- used when Reddit's public new.json listing
+# fails, e.g. behind a JS challenge page. Run `playwright install chromium`
+# once after installing this.
+playwright>=1.44
