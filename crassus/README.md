@@ -88,13 +88,19 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/market.py` | R2 snapshot reader + on-demand live quotes |
 | `crassus/client.py` | Sessions, execution, reconciliation — **owns every integrity invariant** |
 | `crassus/strategy.py` | The strategy contract |
-| `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + VADER, polled and cached like the market snapshot) |
+| `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + browser fallback + VADER, polled and cached like the market snapshot) |
+| `crassus/trump_sentiment.py` | Trump Truth Social sentiment observation for `trump_whisperer_qqq` (`trumpstruth.org/feed` RSS + VADER, polled and cached the same way) |
 | `crassus/strategies/` | Strategy implementations |
 | `crassus/runner.py` | The loop |
+| `Dockerfile` | Railway's deploy image (`railway.toml`'s `builder = "DOCKERFILE"`) -- bakes a version-matched Chromium in for `reddit_sentiment_qqq`'s browser fallback |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
+| `scripts/smoke_browser_launch.py` | Build-time check that Chromium actually launches in the image (see `Dockerfile`) |
 | `scripts/verify_invariants.py` | 66 checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
 | `scripts/verify_reddit_sentiment.py` | Hermetic checks for `reddit_sentiment_qqq`'s aggregation math and decision logic -- no Reddit credentials or network access required |
+| `scripts/verify_reddit_ingestion.py` | Hermetic checks for `reddit_sentiment_qqq`'s ingestion layer (JSON fetch, browser DOM parsing, layer selection, 429 cooldown, crash recovery) -- no network access or real browser required |
+| `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
+| `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
 
 ## Integrity invariants
 
@@ -130,17 +136,19 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Jesus | `cheap_atm_calls` | P3 |
 | Doris | `cheap_atm_puts` | P3 |
 
-Two strategies are implemented today -- `smoke_atm_roundtrip` and
-`reddit_sentiment_qqq` -- so `accounts.example.json` splits the six
-accounts three/three rather than running them all on one, which would only
-measure variance. The three sentiment accounts use conservative / default /
-aggressive thresholds via `params`, so the Automated tab's per-strategy
-rollup compares something real out of the box. Copying the file as-is is
-meant to work, not just illustrate the eventual mapping. Swap in a P3
-strategy_id for an account only once that strategy is registered; the runner
-validates every configured `strategy_id` against the registry at startup
-and refuses to start (rather than crashing mid-run on the first
-unregistered one it happens to reach) if one doesn't exist yet.
+Three strategies are implemented today -- `smoke_atm_roundtrip`,
+`reddit_sentiment_qqq`, and `trump_whisperer_qqq` -- so `accounts.example.json`
+splits the six accounts three/three between `smoke_atm_roundtrip` and
+`reddit_sentiment_qqq` rather than running them all on one, which would
+only measure variance; swap an account onto `trump_whisperer_qqq` (see
+below) to compare a third signal. The three sentiment accounts use
+conservative / default / aggressive thresholds via `params`, so the
+Automated tab's per-strategy rollup compares something real out of the box.
+Copying the file as-is is meant to work, not just illustrate the eventual
+mapping. Swap in a P3 strategy_id for an account only once that strategy is
+registered; the runner validates every configured `strategy_id` against the
+registry at startup and refuses to start (rather than crashing mid-run on
+the first unregistered one it happens to reach) if one doesn't exist yet.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
@@ -317,6 +325,96 @@ minimum verified to work as of this writing; Reddit is free to tighten its
 challenge in a way that defeats them without notice, same as it could
 tighten or remove the plain `new.json` endpoint this exists to fall back
 from.
+
+## `trump_whisperer_qqq`
+
+A third strategy, same shape as `reddit_sentiment_qqq` pointed at a
+different sentiment source: buys one ATM QQQ call when aggregate sentiment
+across Trump's recent Truth Social posts is bullish, one ATM put when it's
+bearish, and closes whichever side it's holding the moment sentiment stops
+supporting it -- including going neutral, not only flipping outright --
+otherwise it declines. At most one contract at a time, same reasoning as
+`reddit_sentiment_qqq`'s own section above (sizing/hysteresis/cool-downs
+are `ctx.params` / future-strategy concerns, not platform invariants); "what's
+currently held" is likewise read from `ctx.book.positions`, not re-derived
+from "the current ATM strike."
+
+Its signal comes from `crassus/trump_sentiment.py`, which polls
+`https://trumpstruth.org/feed` -- an unauthenticated RSS mirror of Trump's
+actual Truth Social posts, no app to register and no credentials to
+provision -- and scores each post published within `max_post_age_minutes`
+(default 180) with VADER. Two existing projects were the prior art
+considered before writing this: `maxbbraun/trump2cash` (Twitter-era,
+per-company entity detection + sentiment, buy-on-positive /
+short-on-negative -- the trading-direction shape reused here, though the
+entity-resolution step doesn't apply since this only ever trades QQQ) and
+`TheNeuroDeveloper/TrumpTruthsMarketAnalysis` (the actual ingestion source,
+`trumpstruth.org/feed`, verified live and working -- but its per-post LLM
+market-impact analysis is a different cost/complexity tier than a VADER
+score, same "one lightweight process reading one number" reasoning
+`reddit_sentiment_qqq`'s section above gives for not adopting its reference
+project's heavier stack). See `crassus/trump_sentiment.py`'s module
+docstring for the full comparison.
+
+To enable it for an account, set `strategy_id` to `trump_whisperer_qqq` in
+`accounts.json`. No credentials are required; optionally set a distinctive
+User-Agent as a courtesy:
+
+```bash
+export TRUMP_FEED_USER_AGENT="crassus-trump-whisperer/1.0 by u/yourname"
+```
+
+Unlike Reddit's `new` listing (already just recent posts), the RSS feed is
+an append-only archive going back years, so `aggregate()` only scores posts
+published within `max_post_age_minutes` of the read -- a quiet stretch with
+no fresh posts reads as "no signal," not a re-scoring of old archived
+content on every cycle. `min_sample_size` defaults lower than Reddit's (2
+vs. 5) and the sentiment thresholds default wider (±0.2 vs. ±0.15) since
+there is exactly one Trump and he doesn't post constantly -- a 3-hour
+window commonly holds only 0-3 fresh posts, and individual posts tend to
+read as more strongly worded than an averaged batch of Reddit comments.
+Both remain configurable per account via `"params"`, passed through to
+`StrategyContext.params` exactly like `reddit_sentiment_qqq`:
+
+```json
+{
+  "alias": "Jesus",
+  "username": "crassus_jesus",
+  "password_env": "CRASSUS_PW_JESUS",
+  "strategy_id": "trump_whisperer_qqq",
+  "params": { "min_sample_size": 3, "bullish_threshold": 0.25, "bearish_threshold": -0.25 }
+}
+```
+
+Verify the decision logic and aggregation math hermetically (no network
+access):
+
+```bash
+.venv/bin/python scripts/verify_trump_whisperer.py
+```
+
+And the ingestion layer -- RSS parsing, freshness filtering, fetch error
+handling, and reader caching -- against a fake `requests`-shaped session,
+also with no network access:
+
+```bash
+.venv/bin/python scripts/verify_trump_ingestion.py
+```
+
+**Known gaps**, in the same spirit as the section below: it has never
+observed the feed misbehave beyond what a live spot-check turned up
+(a post with an empty `<title>` -- an image/media-only post -- which scores
+as neutral rather than erroring, since VADER's `compound` on empty text is
+`0.0`). There is no fallback ingestion path if `trumpstruth.org` goes down
+or changes its feed shape -- unlike `reddit_sentiment_qqq`'s browser
+fallback, this has exactly one ingestion layer, because there is no known
+JS-challenge-style obstacle to work around; if `trumpstruth.org` ever adds
+one, this strategy would simply decline every cycle until an equivalent
+fallback were added. `_reader` in `crassus/strategies/trump_whisperer.py`
+is a module-level singleton like `reddit_sentiment_qqq`'s, so every account
+running this strategy in one runner process already shares one
+`min_interval_s` cache -- appropriate here in particular, since there is
+only one Trump regardless of how many accounts are watching for him.
 
 ## Known gaps
 
