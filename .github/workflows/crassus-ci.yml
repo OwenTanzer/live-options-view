@@ -28,3 +28,6 @@ jobs:
       - name: Run reddit_sentiment_qqq strategy suite
         working-directory: crassus
         run: python scripts/verify_reddit_sentiment.py
+      - name: Run reddit_sentiment_qqq ingestion suite
+        working-directory: crassus
+        run: python scripts/verify_reddit_ingestion.py

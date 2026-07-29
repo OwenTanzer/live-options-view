@@ -202,16 +202,32 @@ Playwright headless launch hits the same challenge page indefinitely, since
 the challenge appears to key off exactly that automation fingerprint rather
 than anything in the request headers.
 
-The browser fallback needs the Chromium binary installed once, in addition
-to `pip install -r requirements.txt`:
+The browser fallback needs the Chromium binary and its Linux shared
+libraries, neither of which `pip install -r requirements.txt` provides on
+its own -- the `playwright` package is just a driver/CLI. Locally:
 
 ```bash
-.venv/bin/python -m playwright install chromium
+.venv/bin/python -m playwright install --with-deps chromium
 ```
 
-Without it, the fallback raises `RedditFetchError` (declines, doesn't
-crash) rather than failing to import -- the JSON layer alone still works
-wherever Reddit isn't blocking it.
+`crassus/railway.toml`'s `buildCommand` runs the equivalent as part of the
+Railway build, so a clean deploy has a usable browser without a manual
+post-deploy step. Without it, the fallback raises `RedditFetchError`
+(declines, doesn't crash) rather than failing to import -- the JSON layer
+alone still works wherever Reddit isn't blocking it.
+
+A 429 from the JSON layer is treated separately from a JS-challenge/HTTP
+failure: it means Reddit itself is asking for backoff, so
+`RedditSentimentReader` starts a cooldown (from the response's
+`Retry-After` header when present, else a conservative default) shared
+across every subreddit and every future cycle until it expires, and
+declines outright rather than falling through to the browser -- retrying
+the same rate limit through a different transport would only compound it,
+unlike the JS-challenge case the fallback exists for. The browser fallback
+also recovers if the shared Chromium process itself crashes or disconnects
+mid-run (checked via `browser.is_connected()`): the dead context is torn
+down and relaunched exactly once, rather than staying cached as a
+permanently-failing fallback until the whole bot process restarts.
 
 The strategy declines every cycle (`no_trade`, reason cites the fetch
 error) rather than raising if a scrape fails -- consistent with the
@@ -246,24 +262,33 @@ access):
 .venv/bin/python scripts/verify_reddit_sentiment.py
 ```
 
+And the ingestion layer itself -- JSON fetch/pagination, browser DOM
+parsing, layer-selection, the 429 cooldown, and browser crash recovery --
+against fake `requests`/Playwright-shaped objects, also with no network
+access or real browser process:
+
+```bash
+.venv/bin/python scripts/verify_reddit_ingestion.py
+```
+
 **Known gaps**, in the same spirit as the section below: it only reads
 submissions, not comments, so it can undercount chatter relative to the
-reference pipeline, which scores comments. It also has no
-per-account/global Reddit rate-limit coordination the way
-`market.QuoteReader` shares one budget across all accounts' Worker traffic
--- multiple accounts configured with this strategy _each_ scrape Reddit
-independently, tuned via the shared `min_interval_s` cache with the
-assumption that a full 300-second window is more than enough headroom, not
-something this runtime enforces itself. The browser fallback shares one
-Chromium instance and one browser context across every subreddit and every
-poll cycle for the life of the process (launching fresh per subreddit or
-per cycle would multiply an already-expensive fallback for no benefit), so
-one account running this strategy holds one background Chromium process
-open for as long as it's configured this way -- fine for a handful of
-accounts, worth revisiting if this strategy is ever assigned to many. The
-stealth measures in `_default_browser_factory` (masking
-`navigator.webdriver`, a realistic UA/viewport/locale) are the minimum
-verified to work as of this writing; Reddit is free to tighten its
+reference pipeline, which scores comments. `_reader` in
+`crassus/strategies/reddit_sentiment.py` is a module-level singleton, so
+every account configured with this strategy in one runner process already
+shares one `min_interval_s` cache and one 429 cooldown -- but there is
+still no cross-*process* coordination if this ever ran outside a single
+runner, and the `min_interval_s` default (300s) is tuned by assumption, not
+measured against Reddit's actual unauthenticated budget. The browser
+fallback shares one Chromium instance and one browser context across every
+subreddit and every poll cycle for the life of the process (launching
+fresh per subreddit or per cycle would multiply an already-expensive
+fallback for no benefit), so one account running this strategy holds one
+background Chromium process open for as long as it's configured this way
+-- fine for a handful of accounts, worth revisiting if this strategy is
+ever assigned to many. The stealth measures in `_default_browser_factory`
+(masking `navigator.webdriver`, a realistic UA/viewport/locale) are the
+minimum verified to work as of this writing; Reddit is free to tighten its
 challenge in a way that defeats them without notice, same as it could
 tighten or remove the plain `new.json` endpoint this exists to fall back
 from.

@@ -1,5 +1,13 @@
 [build]
 builder = "railpack"
+# reddit_sentiment_qqq's browser fallback (crassus/sentiment.py) needs the
+# actual Chromium binary and its Linux shared libraries, neither of which
+# `pip install -r requirements.txt` provides -- the playwright *package* is
+# just a driver/CLI. `--with-deps` also apt-installs Chromium's runtime
+# library dependencies (nss, libatk, libgbm, etc.) so the binary can execute
+# in a stock Railpack container instead of failing on a missing .so exactly
+# when the JSON listing is blocked and the fallback is needed.
+buildCommand = "pip install -r requirements.txt && python -m playwright install --with-deps chromium"
 
 [deploy]
 startCommand = "python -m crassus.runner --interval 300"
