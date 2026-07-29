@@ -39,6 +39,19 @@ it didn't there: `aggregate()` only scores posts published within
 reads as "no signal" rather than re-scoring the same old archived posts on
 every cycle.
 
+`aggregate()` also does novelty filtering: Truth Social supports verbatim
+reposts ("ReTruths"), and a real statement is sometimes followed minutes
+later by a near-identical restatement. Real news-analytics vendors
+(RavenPack's "novelty" score is the industry term for this) exist
+specifically to stop a trading system from treating a rehash of a story
+already priced in as fresh, independent signal. Counting a repost as a
+second data point would silently double the sentiment of whatever was
+being restated -- not a new opinion, the same one twice. `_is_duplicate`
+does this with a similarity ratio over normalized text
+(`difflib.SequenceMatcher`, stdlib, not a new dependency for what's a small
+per-cycle comparison set) rather than exact-match only, since a restatement
+is rarely character-for-character identical to the original.
+
 vaderSentiment is imported lazily (inside functions, not at module scope)
 so importing this module -- and therefore `crassus.strategies` -- never
 fails for an account not configured to use this strategy.
@@ -46,6 +59,7 @@ fails for an account not configured to use this strategy.
 
 from __future__ import annotations
 
+import difflib
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -59,6 +73,13 @@ from .config import TRUMP_FEED_USER_AGENT
 DEFAULT_FEED_URL = "https://trumpstruth.org/feed"
 DEFAULT_POST_LIMIT = 100
 DEFAULT_MAX_POST_AGE_MINUTES = 180.0
+
+# How similar two posts' normalized text must be (0-1, difflib's ratio()) to
+# treat the later one as a repost/rehash of the earlier one rather than
+# independent signal. 1.0 would only catch verbatim duplicates; this is
+# deliberately looser to also catch a near-identical restatement, but not so
+# loose that two posts that are merely on the same topic get conflated.
+_DUPLICATE_SIMILARITY_THRESHOLD = 0.9
 
 _FALLBACK_USER_AGENT = "crassus-trump-sentiment-reader/1.0"
 
@@ -79,6 +100,7 @@ class TrumpSentimentSnapshot:
     neutral_count: int
     items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     latest_post_at: str | None = None
+    duplicate_count: int = 0
 
     @property
     def bullish_share(self) -> float | None:
@@ -140,6 +162,32 @@ def _parse_feed(xml_bytes: bytes) -> list[dict[str, Any]]:
     return posts
 
 
+def _normalize_for_dedup(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _is_duplicate(text: str, seen_normalized: list[str]) -> bool:
+    """Has `text` already been counted via an earlier (fresher -- see
+    `aggregate`'s iteration order) post this cycle?
+
+    A post with no real content (empty title -- e.g. an image/media-only
+    Truth) never matches, deliberately: several such posts in one window
+    would otherwise all normalize to the same empty string and get flagged
+    as reposts of each other, which isn't a meaningful novelty judgment --
+    there's no statement there to have been restated. They're harmless
+    either way since VADER scores empty text as neutral (0.0).
+    """
+    normalized = _normalize_for_dedup(text)
+    if not normalized:
+        return False
+    for other in seen_normalized:
+        if normalized == other:
+            return True
+        if difflib.SequenceMatcher(None, normalized, other).ratio() >= _DUPLICATE_SIMILARITY_THRESHOLD:
+            return True
+    return False
+
+
 def _fetch_posts(session: Any, *, feed_url: str, limit: int, timeout_s: float = 10.0) -> list[dict[str, Any]]:
     """Fetch and parse up to `limit` most recent posts from the feed.
 
@@ -176,10 +224,21 @@ def aggregate(
     `now` is a parameter rather than `clock.now_utc()` called internally so
     this stays a pure function of its inputs, exactly like
     `crassus.sentiment.aggregate`.
+
+    Posts are expected in the feed's natural newest-first order (what
+    `_fetch_posts` returns): a repost is therefore compared against
+    already-accepted *fresher* posts and dropped in favor of them, on the
+    theory that the newest instance of a restated claim is the one worth
+    keeping if only one can count, not an arbitrarily earlier one. This
+    ordering isn't validated here -- passing posts in a different order
+    would just change which of a duplicate pair survives, not silently
+    break anything.
     """
     items: list[dict[str, Any]] = []
+    seen_normalized: list[str] = []
     total = 0.0
     bullish = bearish = neutral = 0
+    duplicates = 0
     latest_post_at: datetime | None = None
     max_age = max_post_age_minutes * 60.0
 
@@ -190,10 +249,18 @@ def aggregate(
         age_s = (now - published_at).total_seconds()
         if age_s < 0 or age_s > max_age:
             continue
+
+        text = post.get("text", "")
+        if _is_duplicate(text, seen_normalized):
+            duplicates += 1
+            continue
+        normalized = _normalize_for_dedup(text)
+        if normalized:
+            seen_normalized.append(normalized)
+
         if latest_post_at is None or published_at > latest_post_at:
             latest_post_at = published_at
 
-        text = post.get("text", "")
         compound = float(analyzer.polarity_scores(text)["compound"])
         total += compound
         if compound >= 0.05:
@@ -219,6 +286,7 @@ def aggregate(
         neutral_count=neutral,
         items=tuple(items),
         latest_post_at=clock.iso_utc(latest_post_at) if latest_post_at else None,
+        duplicate_count=duplicates,
     )
 
 

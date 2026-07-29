@@ -136,6 +136,7 @@ def _decide_core(
         bullish_share=snapshot.bullish_share,
         bearish_share=snapshot.bearish_share,
         latest_post_at=snapshot.latest_post_at,
+        duplicate_count=snapshot.duplicate_count,
     )
 
     if snapshot.sample_size < min_sample:

@@ -192,13 +192,83 @@ def scenario_aggregate_empty() -> None:
     check("latest_post_at is None with no fresh posts", snap.latest_post_at is None)
 
 
+def scenario_aggregate_exact_duplicate_counted_once() -> None:
+    print("\n6. aggregate(): a verbatim repost is not double-counted")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    # Newest-first, matching the feed's natural order: the repost (posted
+    # later, listed first) should be the survivor, the original dropped.
+    posts = [
+        {"text": "the market is booming", "link": "repost", "published_at": now - timedelta(minutes=2)},
+        {"text": "the market is booming", "link": "original", "published_at": now - timedelta(minutes=20)},
+    ]
+    analyzer = FakeAnalyzer({"the market is booming": 0.8})
+    snap = aggregate(posts, analyzer, now=now, max_post_age_minutes=180.0)
+    check("only counted once", snap.sample_size == 1, snap.sample_size)
+    check("duplicate_count reflects the dropped repost", snap.duplicate_count == 1, snap.duplicate_count)
+    check(
+        "kept the fresher (newest-first) instance",
+        snap.items[0]["link"] == "repost",
+        snap.items[0]["link"],
+    )
+
+
+def scenario_aggregate_near_duplicate_counted_once() -> None:
+    print("\n7. aggregate(): a near-identical restatement is treated as a repost too")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    posts = [
+        {
+            "text": "The economy is doing GREAT, best numbers ever!",
+            "link": "restatement",
+            "published_at": now - timedelta(minutes=1),
+        },
+        {
+            "text": "The economy is doing great, best numbers ever",
+            "link": "original",
+            "published_at": now - timedelta(minutes=30),
+        },
+    ]
+    analyzer = FakeAnalyzer({
+        "The economy is doing GREAT, best numbers ever!": 0.9,
+        "The economy is doing great, best numbers ever": 0.9,
+    })
+    snap = aggregate(posts, analyzer, now=now, max_post_age_minutes=180.0)
+    check("near-duplicate restatement collapsed to one", snap.sample_size == 1, snap.sample_size)
+    check("duplicate_count reflects the dropped restatement", snap.duplicate_count == 1, snap.duplicate_count)
+
+
+def scenario_aggregate_distinct_posts_both_counted() -> None:
+    print("\n8. aggregate(): genuinely distinct posts are not flagged as duplicates")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    posts = [
+        {"text": "tariffs are working great", "link": "a", "published_at": now - timedelta(minutes=1)},
+        {"text": "the Fed should cut rates now", "link": "b", "published_at": now - timedelta(minutes=2)},
+    ]
+    analyzer = FakeAnalyzer({"tariffs are working great": 0.6, "the Fed should cut rates now": 0.1})
+    snap = aggregate(posts, analyzer, now=now, max_post_age_minutes=180.0)
+    check("both distinct posts counted", snap.sample_size == 2, snap.sample_size)
+    check("no duplicates flagged", snap.duplicate_count == 0, snap.duplicate_count)
+
+
+def scenario_aggregate_empty_titles_not_flagged_as_duplicates_of_each_other() -> None:
+    print("\n9. aggregate(): multiple media-only (empty title) posts are each still counted")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    posts = [
+        {"text": "", "link": "a", "published_at": now - timedelta(minutes=1)},
+        {"text": "", "link": "b", "published_at": now - timedelta(minutes=2)},
+    ]
+    analyzer = FakeAnalyzer({"": 0.0})
+    snap = aggregate(posts, analyzer, now=now, max_post_age_minutes=180.0)
+    check("both empty-title posts counted, not treated as reposts of each other", snap.sample_size == 2, snap.sample_size)
+    check("no duplicates flagged", snap.duplicate_count == 0, snap.duplicate_count)
+
+
 # ---------------------------------------------------------------------------
 # _decide_core() -- decision logic (mirrors reddit_sentiment's scenarios)
 # ---------------------------------------------------------------------------
 
 
 def scenario_market_closed() -> None:
-    print("\n6. Market not open declines without touching the snapshot/error")
+    print("\n10. Market not open declines without touching the snapshot/error")
     ctx = make_ctx(session_phase="premarket")
     decision = tw._decide_core(ctx, None, None)
     check("no_trade when market isn't open", not decision.is_trade)
@@ -206,7 +276,7 @@ def scenario_market_closed() -> None:
 
 
 def scenario_fetch_error() -> None:
-    print("\n7. Feed fetch failure declines instead of crashing the account")
+    print("\n11. Feed fetch failure declines instead of crashing the account")
     ctx = make_ctx(session_phase="open")
     decision = tw._decide_core(ctx, None, "TrumpFetchError: HTTP 500")
     check("no_trade on fetch error", not decision.is_trade)
@@ -214,7 +284,7 @@ def scenario_fetch_error() -> None:
 
 
 def scenario_insufficient_sample() -> None:
-    print("\n8. Sample too small to trust")
+    print("\n12. Sample too small to trust")
     ctx = make_ctx(session_phase="open")
     decision = tw._decide_core(ctx, _snap(0.9, n=1), None)
     check("no_trade below min_sample_size", not decision.is_trade)
@@ -222,14 +292,14 @@ def scenario_insufficient_sample() -> None:
 
 
 def scenario_neutral() -> None:
-    print("\n9. Neutral sentiment while flat trades nothing")
+    print("\n13. Neutral sentiment while flat trades nothing")
     ctx = make_ctx(session_phase="open")
     decision = tw._decide_core(ctx, _snap(0.0), None)
     check("no_trade in the neutral band", not decision.is_trade)
 
 
 def scenario_bullish_opens_call() -> None:
-    print("\n10. Bullish + flat + executable quote -> buy one call")
+    print("\n14. Bullish + flat + executable quote -> buy one call")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")})
     decision = tw._decide_core(ctx, _snap(0.5), None)
     check("action is buy", decision.action == "buy", decision.action)
@@ -238,7 +308,7 @@ def scenario_bullish_opens_call() -> None:
 
 
 def scenario_bearish_opens_put() -> None:
-    print("\n11. Bearish + flat + executable quote -> buy one put")
+    print("\n15. Bearish + flat + executable quote -> buy one put")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")})
     decision = tw._decide_core(ctx, _snap(-0.5), None)
     check("action is buy", decision.action == "buy", decision.action)
@@ -246,7 +316,7 @@ def scenario_bearish_opens_put() -> None:
 
 
 def scenario_stale_quote_declines() -> None:
-    print("\n12. Bullish signal but stale quote declines rather than risking a 409")
+    print("\n16. Bullish signal but stale quote declines rather than risking a 409")
     ctx = make_ctx(session_phase="open", quote_map={"QQQ240101C00400000": stale_quote("QQQ240101C00400000")})
     decision = tw._decide_core(ctx, _snap(0.5), None)
     check("no_trade on a stale quote", not decision.is_trade)
@@ -254,7 +324,7 @@ def scenario_stale_quote_declines() -> None:
 
 
 def scenario_already_positioned_holds() -> None:
-    print("\n13. Already holding the supported side -- no pyramiding")
+    print("\n17. Already holding the supported side -- no pyramiding")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -263,7 +333,7 @@ def scenario_already_positioned_holds() -> None:
 
 
 def scenario_sentiment_flip_closes_opposite() -> None:
-    print("\n14. Sentiment flips direction while holding the other side -- close first")
+    print("\n18. Sentiment flips direction while holding the other side -- close first")
     trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -276,7 +346,7 @@ def scenario_sentiment_flip_closes_opposite() -> None:
 
 
 def scenario_unexpected_short_stands_down() -> None:
-    print("\n15. Unexpected short position -- stand down, don't compound it")
+    print("\n19. Unexpected short position -- stand down, don't compound it")
     trades = [{"sym": "QQQ240101C00400000", "side": "sell", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -285,7 +355,7 @@ def scenario_unexpected_short_stands_down() -> None:
 
 
 def scenario_neutral_while_positioned_closes() -> None:
-    print("\n16. Sentiment goes neutral while holding a call -- close it, don't just decline")
+    print("\n20. Sentiment goes neutral while holding a call -- close it, don't just decline")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -297,7 +367,7 @@ def scenario_neutral_while_positioned_closes() -> None:
 
 
 def scenario_insufficient_sample_while_positioned_closes() -> None:
-    print("\n17. Sample too small to trust while holding -- close rather than freeze holding it")
+    print("\n21. Sample too small to trust while holding -- close rather than freeze holding it")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -309,7 +379,7 @@ def scenario_insufficient_sample_while_positioned_closes() -> None:
 
 
 def scenario_atm_drift_no_pyramiding() -> None:
-    print("\n18. ATM drifts to a new strike while holding the old one -- no duplicate open")
+    print("\n22. ATM drifts to a new strike while holding the old one -- no duplicate open")
     trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(
         session_phase="open", trades=trades,
@@ -327,7 +397,7 @@ def scenario_atm_drift_no_pyramiding() -> None:
 
 
 def scenario_multiple_open_positions_stand_down() -> None:
-    print("\n19. More than one open position -- stand down rather than guess")
+    print("\n23. More than one open position -- stand down rather than guess")
     trades = [
         {"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0},
         {"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0},
@@ -339,7 +409,7 @@ def scenario_multiple_open_positions_stand_down() -> None:
 
 
 def scenario_unrecognized_symbol_stands_down() -> None:
-    print("\n20. Held symbol doesn't parse as an OCC option -- stand down rather than guess")
+    print("\n24. Held symbol doesn't parse as an OCC option -- stand down rather than guess")
     trades = [{"sym": "NOT-AN-OPTION-SYMBOL", "side": "buy", "qty": 1, "price": 1.0}]
     ctx = make_ctx(session_phase="open", trades=trades)
     decision = tw._decide_core(ctx, _snap(0.5), None)
@@ -354,6 +424,10 @@ def main() -> int:
         scenario_aggregate_filters_stale_posts,
         scenario_aggregate_skips_undated_posts,
         scenario_aggregate_empty,
+        scenario_aggregate_exact_duplicate_counted_once,
+        scenario_aggregate_near_duplicate_counted_once,
+        scenario_aggregate_distinct_posts_both_counted,
+        scenario_aggregate_empty_titles_not_flagged_as_duplicates_of_each_other,
         scenario_market_closed,
         scenario_fetch_error,
         scenario_insufficient_sample,
