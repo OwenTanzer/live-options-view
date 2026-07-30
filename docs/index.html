@@ -1498,6 +1498,13 @@ function openShareTicket(e, sym) {
   t.id = 'trade-ticket';
   t.innerHTML = `
     <div class="t-head">${sym} shares · ${q.bid != null ? fmtQ(q.bid) : '—'} × ${q.ask != null ? fmtQ(q.ask) : '—'}</div>
+    <div class="t-row t-order-row">
+      <select id="t-order-type" aria-label="share order type">
+        <option value="market">Market</option>
+        <option value="limit">Limit</option>
+      </select>
+      <label class="t-limit hidden">Limit $ <input type="number" min="0.01" max="1000000" step="0.01" id="t-limit" aria-label="share limit price"></label>
+    </div>
     <div class="t-row">
       <input type="number" min="1" step="1" value="1" id="t-qty" aria-label="share quantity">
       <button class="btn-buy" ${buyPx == null ? 'disabled' : ''}>Buy market</button>
@@ -1511,18 +1518,38 @@ function openShareTicket(e, sym) {
   t.style.top = (r.bottom + window.scrollY + 4) + 'px';
 
   const qtyEl = t.querySelector('#t-qty');
-  t.querySelector('.btn-buy').onclick = () => executeTrade(info, 'buy', qtyEl.value);
-  t.querySelector('.btn-sell').onclick = () => {
-    const normalized = normalizeShareMarketOrder({
-      side: 'sell', quantity: qtyEl.value, heldQuantity: held,
+  const orderTypeEl = t.querySelector('#t-order-type');
+  const limitWrap = t.querySelector('.t-limit');
+  const limitEl = t.querySelector('#t-limit');
+  const buyButton = t.querySelector('.btn-buy');
+  const sellButton = t.querySelector('.btn-sell');
+  orderTypeEl.onchange = () => {
+    const isLimit = orderTypeEl.value === 'limit';
+    limitWrap.classList.toggle('hidden', !isLimit);
+    buyButton.textContent = isLimit ? 'Buy limit' : 'Buy market';
+    sellButton.textContent = isLimit ? 'Sell limit' : 'Sell market';
+    if (!isLimit) limitEl.value = '';
+  };
+  const submit = side => {
+    const normalized = normalizeShareOrder({
+      side,
+      quantity: qtyEl.value,
+      heldQuantity: held,
+      orderType: orderTypeEl.value,
+      limitPrice: limitEl.value,
     });
     if (normalized.error) {
       setTradePending(false, normalized.error);
       announceOrderStatus(normalized.error, 'error');
       return;
     }
-    executeTrade(info, 'sell', normalized.value.qty);
+    executeTrade(
+      info, side, normalized.value.qty,
+      normalized.value.order_type, normalized.value.limit_price,
+    );
   };
+  buyButton.onclick = () => submit('buy');
+  sellButton.onclick = () => submit('sell');
   ticketEl = t;
 }
 

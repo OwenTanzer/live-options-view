@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const {
-  normalizePaperOrder, normalizeShareMarketOrder, isTradeableShareSymbol,
+  normalizePaperOrder, normalizeShareOrder, isTradeableShareSymbol,
 } = require('../docs/shared.js');
 
 assert.deepEqual(
@@ -19,12 +19,30 @@ assert.equal(isTradeableShareSymbol('AAPL'), true);
 assert.equal(isTradeableShareSymbol('VIX'), false, 'listed non-equities remain read-only');
 assert.equal(isTradeableShareSymbol('MSFT'), false, 'arbitrary symbols wait for explicit quote lookup support');
 assert.deepEqual(
-  normalizeShareMarketOrder({ side: 'sell', quantity: 4, heldQuantity: 10 }),
+  normalizeShareOrder({ side: 'sell', quantity: 4, heldQuantity: 10 }),
   { value: { side: 'sell', qty: 4, order_type: 'market' } },
 );
 assert.match(
-  normalizeShareMarketOrder({ side: 'sell', quantity: 11, heldQuantity: 10 }).error,
+  normalizeShareOrder({ side: 'sell', quantity: 11, heldQuantity: 10 }).error,
   /more shares than you hold/,
 );
+assert.deepEqual(
+  normalizeShareOrder({
+    side: 'buy', quantity: 3, heldQuantity: 0,
+    orderType: 'limit', limitPrice: '210.25',
+  }),
+  { value: { side: 'buy', qty: 3, order_type: 'limit', limit_price: 210.25 } },
+);
+assert.deepEqual(
+  normalizeShareOrder({
+    side: 'sell', quantity: 2, heldQuantity: 5,
+    orderType: 'limit', limitPrice: '210.05',
+  }),
+  { value: { side: 'sell', qty: 2, order_type: 'limit', limit_price: 210.05 } },
+);
+assert.match(normalizeShareOrder({
+  side: 'sell', quantity: 2, heldQuantity: 5,
+  orderType: 'limit', limitPrice: '210.257',
+}).error, /increments/);
 
 console.log('order logic tests passed');

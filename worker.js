@@ -18,6 +18,7 @@ export const MIN_PASSWORD_LEN = 8;
 export const MAX_PASSWORD_LEN = 256;
 const MAX_KV_WRITE_ATTEMPTS = 5;
 const SETTLEMENT_ID_PREFIX = 'settle';
+export const EXECUTION_RESERVATION_LEASE_MS = 30 * 1000;
 
 export default {
   async fetch(request, env) {
@@ -567,11 +568,11 @@ function sleep(ms) {
 // Trade execution
 // ---------------------------------------------------------------------------
 
-// Serializes each client-generated request id with an R2 `pending` reservation.
-// Only the reservation owner evaluates account preconditions and mutates the
-// account; it commits `filled` only afterward. Concurrent same-id requests can
-// therefore observe pending or the terminal result, but cannot apply a losing
-// fill. Rejections finalize the same reservation for idempotent replay.
+// Serializes each client-generated request id with a leased R2 `pending`
+// reservation. The owner refreshes the reservation immediately before account
+// mutation; that conditional ETag write fences off stale owners after a retry
+// takes over an abandoned lease. Rejections finalize the same reservation for
+// idempotent replay.
 //
 // Auth is now a real session (see requireSession above), not the shared
 // static token this endpoint used to check. The Origin allowlist, a
@@ -609,6 +610,7 @@ async function handlePaperTrade(request, env) {
 
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
+  let reserved;
 
   const responseForStoredOutcome = async (storedOutcome, etag) => {
     if (storedOutcome.username !== session.username || !executionIntentMatches(storedOutcome, body)) {
@@ -639,7 +641,29 @@ async function handlePaperTrade(request, env) {
 
   try {
     const existing = await env.PAPER_TRADES.get(key);
-    if (existing) return responseForStoredOutcome(await existing.json(), existing.etag);
+    if (existing) {
+      const storedOutcome = await existing.json();
+      const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
+      if (
+        storedOutcome.username !== session.username ||
+        !executionIntentMatches(storedOutcome, body) ||
+        storedOutcome.status !== 'pending' ||
+        appliedTrade ||
+        !executionReservationExpired(storedOutcome)
+      ) {
+        return responseForStoredOutcome(storedOutcome, existing.etag);
+      }
+
+      const renewed = await renewExecutionReservation(
+        env.PAPER_TRADES,
+        key,
+        storedOutcome,
+        existing.etag,
+        new Date().toISOString(),
+      );
+      if (!renewed.updated) return responseForStoredOutcome(renewed.outcome, renewed.etag);
+      reserved = renewed;
+    }
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
   }
@@ -687,25 +711,26 @@ async function handlePaperTrade(request, env) {
   const candidate = Object.freeze(priceResult.error
     ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
     : { ...common, status: 'filled', price: priceResult.price });
-  const reservation = Object.freeze({
-    execution_request_id: executionId,
-    sym: body.sym,
-    instrument_type: body.instrument_type ?? 'option',
-    side: body.side,
-    qty: body.qty,
-    order_type: body.order_type ?? 'market',
-    limit_price: body.order_type === 'limit' ? body.limit_price : null,
-    username: session.username,
-    status: 'pending',
-    ts: executedAt.toISOString(),
-  });
-  let reserved;
-  try {
-    reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
-  } catch (error) {
-    return jsonResponse({ error: 'Execution could not be reserved' }, 503);
+  if (!reserved) {
+    const reservation = Object.freeze({
+      execution_request_id: executionId,
+      sym: body.sym,
+      instrument_type: body.instrument_type ?? 'option',
+      side: body.side,
+      qty: body.qty,
+      order_type: body.order_type ?? 'market',
+      limit_price: body.order_type === 'limit' ? body.limit_price : null,
+      username: session.username,
+      status: 'pending',
+      ts: executedAt.toISOString(),
+    });
+    try {
+      reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
+    } catch (error) {
+      return jsonResponse({ error: 'Execution could not be reserved' }, 503);
+    }
+    if (!reserved.created) return responseForStoredOutcome(reserved.outcome, reserved.etag);
   }
-  if (!reserved.created) return responseForStoredOutcome(reserved.outcome, reserved.etag);
 
   if (candidate.status === 'rejected') {
     try {
@@ -724,6 +749,20 @@ async function handlePaperTrade(request, env) {
   const cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+
+  try {
+    const fenced = await renewExecutionReservation(
+      env.PAPER_TRADES,
+      key,
+      reserved.outcome,
+      reserved.etag,
+      new Date().toISOString(),
+    );
+    if (!fenced.updated) return responseForStoredOutcome(fenced.outcome, fenced.etag);
+    reserved = fenced;
+  } catch (error) {
+    return jsonResponse({ error: 'Execution lease could not be refreshed' }, 503);
+  }
 
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
@@ -966,9 +1005,6 @@ export function validateTradeIntent(body) {
   if (orderType !== 'market' && orderType !== 'limit') {
     return 'order_type must be "market" or "limit"';
   }
-  if (instrumentType === 'share' && orderType !== 'market') {
-    return 'share orders are market-only';
-  }
   if (orderType === 'market' && body.limit_price !== undefined) {
     return 'limit_price is only allowed for limit orders';
   }
@@ -1026,6 +1062,33 @@ export async function reserveExecutionRequest(bucket, key, reservation) {
   const existing = await bucket.get(key);
   if (!existing) throw new Error('Execution reservation missing after conditional write');
   return { outcome: await existing.json(), created: false, etag: existing.etag };
+}
+
+export function executionReservationExpired(
+  reservation,
+  nowMs = Date.now(),
+  leaseMs = EXECUTION_RESERVATION_LEASE_MS,
+) {
+  if (reservation?.status !== 'pending') return false;
+  const reservedAt = Date.parse(reservation.ts);
+  return !Number.isFinite(reservedAt) || nowMs - reservedAt >= leaseMs;
+}
+
+export async function renewExecutionReservation(bucket, key, reservation, reservationEtag, renewedAt) {
+  const renewed = Object.freeze({ ...reservation, status: 'pending', ts: renewedAt });
+  const stored = await bucket.put(key, JSON.stringify(renewed), {
+    onlyIf: { etagMatches: reservationEtag },
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: {
+      executionId: renewed.execution_request_id,
+      reservedAt: renewed.ts,
+    },
+  });
+  if (stored) return { outcome: renewed, updated: true, etag: stored.etag };
+
+  const existing = await bucket.get(key);
+  if (!existing) throw new Error('Execution reservation missing after conditional renewal');
+  return { outcome: await existing.json(), updated: false, etag: existing.etag };
 }
 
 export async function finalizeExecutionRequest(bucket, key, terminalOutcome, reservationEtag) {

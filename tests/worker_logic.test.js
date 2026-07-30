@@ -8,6 +8,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   const {
     validateTradeIntent, executionIntentMatches, executionPriceForOrder, exactShareQuote,
     computeBookFromTrades, existingExecutionResponse, reserveExecutionRequest, finalizeExecutionRequest,
+    executionReservationExpired, renewExecutionReservation, EXECUTION_RESERVATION_LEASE_MS,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -54,10 +55,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     execution_request_id: UUID, sym: 'VIX', instrument_type: 'share',
     side: 'buy', qty: 1, order_type: 'market',
   }), /tradeable equity list/);
-  assert.match(validateTradeIntent({
+  assert.equal(validateTradeIntent({
     execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
     side: 'buy', qty: 1, order_type: 'limit', limit_price: 200,
-  }), /market-only/);
+  }), null);
+  assert.equal(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'sell', qty: 1, order_type: 'limit', limit_price: 210.05,
+  }), null);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'sell', qty: 1, order_type: 'limit', limit_price: 200.001,
+  }), /increments of 0.01/);
 
   // ── executionIntentMatches ─────────────────────────────────────────────────
   const intent = { execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 2 };
@@ -141,7 +150,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const key = `paper-trades/requests/${UUID}.json`;
     const intent = {
       execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
-      order_type: 'limit', limit_price: 1.15, username: 'alice', ts: new Date().toISOString(),
+      order_type: 'limit', limit_price: 1.15, username: 'alice', ts: '2026-07-30T12:00:00.000Z',
     };
     const reservation = { ...intent, status: 'pending' };
     const rejection = { ...intent, order_id: UUID, status: 'rejected', error: 'not marketable' };
@@ -153,6 +162,52 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const loser = await reserveExecutionRequest(bucket, key, reservation);
     assert.equal(loser.created, false);
     assert.equal(loser.outcome.status, 'pending', 'a concurrent request cannot mutate the account');
+    const reservedAt = Date.parse(reservation.ts);
+    assert.equal(
+      executionReservationExpired(reservation, reservedAt + EXECUTION_RESERVATION_LEASE_MS - 1),
+      false,
+      'an active reservation remains owned for the full lease',
+    );
+    assert.equal(
+      executionReservationExpired(reservation, reservedAt + EXECUTION_RESERVATION_LEASE_MS),
+      true,
+      'a worker may recover a reservation once its lease expires',
+    );
+
+    const recoveryKey = `${key}-recovery`;
+    const abandoned = await reserveExecutionRequest(bucket, recoveryKey, reservation);
+    const takeover = await renewExecutionReservation(
+      bucket,
+      recoveryKey,
+      abandoned.outcome,
+      abandoned.etag,
+      '2026-07-30T12:00:31.000Z',
+    );
+    assert.equal(takeover.updated, true,
+      'a retry can take over after the first worker fails before the account write');
+    const staleFence = await renewExecutionReservation(
+      bucket,
+      recoveryKey,
+      abandoned.outcome,
+      abandoned.etag,
+      '2026-07-30T12:00:32.000Z',
+    );
+    assert.equal(staleFence.updated, false, 'the abandoned worker loses its ETag fence');
+    assert.deepEqual(staleFence.outcome, takeover.outcome);
+    const fencedTakeover = await renewExecutionReservation(
+      bucket,
+      recoveryKey,
+      takeover.outcome,
+      takeover.etag,
+      '2026-07-30T12:00:32.000Z',
+    );
+    assert.equal(fencedTakeover.updated, true, 'the recovery owner can fence immediately before mutation');
+    const staleRecoveryFill = await finalizeExecutionRequest(bucket, recoveryKey, fill, takeover.etag);
+    assert.equal(staleRecoveryFill.updated, false,
+      'an owner superseded by the pre-mutation fence cannot finalize a fill');
+    assert.equal(staleRecoveryFill.outcome.status, 'pending');
+    const recoveredFill = await finalizeExecutionRequest(bucket, recoveryKey, fill, fencedTakeover.etag);
+    assert.equal(recoveredFill.updated, true, 'the fenced recovery owner can finish the request');
 
     const finalized = await finalizeExecutionRequest(bucket, key, rejection, winner.etag);
     assert.equal(finalized.updated, true);
@@ -195,6 +250,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(quote.bid, 210.10);
     assert.equal(quote.ask, 210.12);
     assert.equal(quote.multiplier, 1);
+    assert.deepEqual(
+      executionPriceForOrder(quote, { side: 'buy', order_type: 'limit', limit_price: 210.15 }),
+      { price: 210.12 },
+    );
+    assert.deepEqual(
+      executionPriceForOrder(quote, { side: 'sell', order_type: 'limit', limit_price: 210.05 }),
+      { price: 210.10 },
+    );
+    assert.match(
+      executionPriceForOrder(quote, { side: 'sell', order_type: 'limit', limit_price: 210.11 }).error,
+      /above current bid/,
+    );
     assert.match(exactShareQuote(payload, 'MSFT', 'buy', now).error, /not found/);
     assert.match(exactShareQuote(payload, 'AAPL', 'buy', now + 60_000).error, /stale/);
     assert.match(exactShareQuote({
