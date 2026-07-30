@@ -7,7 +7,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
     validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
-    existingExecutionResponse, createCanonicalExecutionOutcome,
+    existingExecutionResponse, reserveExecutionRequest, finalizeExecutionRequest,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -96,20 +96,30 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const conflict = existingExecutionResponse(rejection, { ...rejectedIntent, limit_price: 1.20 });
     assert.equal(conflict.status, 409);
     assert.match((await conflict.json()).error, /conflicts with a different trade intent/);
+
+    const accountRejection = existingExecutionResponse(
+      { ...rejection, error: 'Insufficient balance', http_status: 400 },
+      rejectedIntent,
+    );
+    assert.equal(accountRejection.status, 400, 'account precondition rejections replay their original status');
   }
 
-  // ── createCanonicalExecutionOutcome ────────────────────────────────────────
+  // ── execution reservation/finalization ─────────────────────────────────────
   {
     const objects = new Map();
+    let revision = 0;
     const bucket = {
-      async put(key, value) {
-        if (objects.has(key)) return null;
-        objects.set(key, value);
-        return { key };
+      async put(key, value, options = {}) {
+        const current = objects.get(key);
+        if (options.onlyIf?.etagDoesNotMatch === '*' && current) return null;
+        if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) return null;
+        const etag = `etag-${++revision}`;
+        objects.set(key, { value, etag });
+        return { key, etag };
       },
       async get(key) {
-        const value = objects.get(key);
-        return value ? { json: async () => JSON.parse(value) } : null;
+        const object = objects.get(key);
+        return object ? { etag: object.etag, json: async () => JSON.parse(object.value) } : null;
       },
     };
     const key = `paper-trades/requests/${UUID}.json`;
@@ -117,15 +127,23 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
       order_type: 'limit', limit_price: 1.15, username: 'alice', ts: new Date().toISOString(),
     };
+    const reservation = { ...intent, status: 'pending' };
     const rejection = { ...intent, order_id: UUID, status: 'rejected', error: 'not marketable' };
     const fill = { ...intent, order_id: UUID, status: 'filled', price: 1.10 };
 
-    const winner = await createCanonicalExecutionOutcome(bucket, key, rejection);
+    const winner = await reserveExecutionRequest(bucket, key, reservation);
     assert.equal(winner.created, true);
-    const loser = await createCanonicalExecutionOutcome(bucket, key, fill);
+    assert.equal(winner.outcome.status, 'pending', 'a reservation is not a terminal fill');
+    const loser = await reserveExecutionRequest(bucket, key, reservation);
     assert.equal(loser.created, false);
-    assert.deepEqual(loser.outcome, rejection,
-      'a losing fill must observe the canonical rejection before any account mutation');
+    assert.equal(loser.outcome.status, 'pending', 'a concurrent request cannot mutate the account');
+
+    const finalized = await finalizeExecutionRequest(bucket, key, rejection, winner.etag);
+    assert.equal(finalized.updated, true);
+    const staleFill = await finalizeExecutionRequest(bucket, key, fill, winner.etag);
+    assert.equal(staleFill.updated, false);
+    assert.deepEqual(staleFill.outcome, rejection,
+      'a stale fill cannot replace the terminal rejection after preconditions run');
   }
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────

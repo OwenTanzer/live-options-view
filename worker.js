@@ -562,10 +562,11 @@ function sleep(ms) {
 // Trade execution
 // ---------------------------------------------------------------------------
 
-// Records one terminal paper-trading outcome per client-generated request id
-// under paper-trades/requests/. The R2 conditional create happens before a
-// fill mutates the account, so concurrent same-id requests must follow the
-// same canonical fill or rejection.
+// Serializes each client-generated request id with an R2 `pending` reservation.
+// Only the reservation owner evaluates account preconditions and mutates the
+// account; it commits `filled` only afterward. Concurrent same-id requests can
+// therefore observe pending or the terminal result, but cannot apply a losing
+// fill. Rejections finalize the same reservation for idempotent replay.
 //
 // Auth is now a real session (see requireSession above), not the shared
 // static token this endpoint used to check. The Origin allowlist, a
@@ -603,75 +604,111 @@ async function handlePaperTrade(request, env) {
 
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
-  let outcome = null;
-  let outcomeCreated = false;
+
+  const responseForStoredOutcome = async (storedOutcome, etag) => {
+    if (storedOutcome.username !== session.username || !executionIntentMatches(storedOutcome, body)) {
+      return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
+    }
+    if (storedOutcome.status === 'pending') {
+      const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
+      if (!appliedTrade) {
+        return jsonResponse({
+          error: 'Execution is already pending',
+          order_id: executionId,
+          status: 'pending',
+        }, 409);
+      }
+      try {
+        const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, appliedTrade, etag);
+        storedOutcome = recovered.outcome;
+      } catch (error) {
+        return jsonResponse({ error: 'Pending execution could not be recovered' }, 503);
+      }
+    }
+    if (storedOutcome.status === 'rejected') return existingExecutionResponse(storedOutcome, body);
+    if (storedOutcome.status !== 'filled' || !Number.isFinite(storedOutcome.price)) {
+      return jsonResponse({ error: 'Execution state is invalid' }, 503);
+    }
+    return jsonResponse({ ...storedOutcome, balance_cash: session.record.balance_cash }, 200);
+  };
+
   try {
     const existing = await env.PAPER_TRADES.get(key);
-    if (existing) outcome = await existing.json();
+    if (existing) return responseForStoredOutcome(await existing.json(), existing.etag);
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
   }
 
-  if (!outcome) {
-    let quotePayload;
+  let quotePayload;
+  try {
+    const quoteResponse = await fetchLiveQuotes([body.sym], env);
+    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
+    quotePayload = await quoteResponse.json();
+  } catch (error) {
+    return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
+  }
+  const quoteReceivedAt = new Date();
+
+  const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
+  if (quoteResult.error) {
+    return jsonResponse({ error: quoteResult.error }, quoteResult.status);
+  }
+
+  const executedAt = new Date();
+  const priceResult = executionPriceForOrder(quoteResult, body);
+  const common = {
+    execution_id: executionId,
+    execution_request_id: executionId,
+    ts: executedAt.toISOString(),
+    quote_received_ts: quoteReceivedAt.toISOString(),
+    quote_ts: quoteResult.quoteTs,
+    bid_ts: quoteResult.bidTs,
+    ask_ts: quoteResult.askTs,
+    sym: body.sym,
+    strike: quoteResult.strike,
+    type: quoteResult.type,
+    exp: quoteResult.exp,
+    side: body.side,
+    qty: body.qty,
+    order_id: executionId,
+    order_type: body.order_type ?? 'market',
+    limit_price: body.order_type === 'limit' ? body.limit_price : null,
+    bid: quoteResult.bid,
+    ask: quoteResult.ask,
+    username: session.username,
+  };
+  const candidate = Object.freeze(priceResult.error
+    ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
+    : { ...common, status: 'filled', price: priceResult.price });
+  const reservation = Object.freeze({
+    execution_request_id: executionId,
+    sym: body.sym,
+    side: body.side,
+    qty: body.qty,
+    order_type: body.order_type ?? 'market',
+    limit_price: body.order_type === 'limit' ? body.limit_price : null,
+    username: session.username,
+    status: 'pending',
+    ts: executedAt.toISOString(),
+  });
+  let reserved;
+  try {
+    reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
+  } catch (error) {
+    return jsonResponse({ error: 'Execution could not be reserved' }, 503);
+  }
+  if (!reserved.created) return responseForStoredOutcome(reserved.outcome, reserved.etag);
+
+  if (candidate.status === 'rejected') {
     try {
-      const quoteResponse = await fetchLiveQuotes([body.sym], env);
-      if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
-      quotePayload = await quoteResponse.json();
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, candidate, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
-      return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
-    }
-    const quoteReceivedAt = new Date();
-
-    const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
-    if (quoteResult.error) {
-      return jsonResponse({ error: quoteResult.error }, quoteResult.status);
-    }
-
-    const executedAt = new Date();
-    const priceResult = executionPriceForOrder(quoteResult, body);
-    const common = {
-      execution_id: executionId,
-      execution_request_id: executionId,
-      ts: executedAt.toISOString(),
-      quote_received_ts: quoteReceivedAt.toISOString(),
-      quote_ts: quoteResult.quoteTs,
-      bid_ts: quoteResult.bidTs,
-      ask_ts: quoteResult.askTs,
-      sym: body.sym,
-      strike: quoteResult.strike,
-      type: quoteResult.type,
-      exp: quoteResult.exp,
-      side: body.side,
-      qty: body.qty,
-      order_id: executionId,
-      order_type: body.order_type ?? 'market',
-      limit_price: body.order_type === 'limit' ? body.limit_price : null,
-      bid: quoteResult.bid,
-      ask: quoteResult.ask,
-      username: session.username,
-    };
-    const candidate = Object.freeze(priceResult.error
-      ? { ...common, error: priceResult.error, status: 'rejected' }
-      : { ...common, status: 'filled', price: priceResult.price });
-    try {
-      const canonical = await createCanonicalExecutionOutcome(env.PAPER_TRADES, key, candidate);
-      outcome = canonical.outcome;
-      outcomeCreated = canonical.created;
-    } catch (error) {
-      return jsonResponse({ error: 'Execution outcome could not be recorded' }, 503);
+      return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
     }
   }
 
-  if (outcome.username !== session.username || !executionIntentMatches(outcome, body)) {
-    return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
-  }
-  if (outcome.status === 'rejected') return existingExecutionResponse(outcome, body);
-  if (outcome.status !== 'filled' || !Number.isFinite(outcome.price)) {
-    return jsonResponse({ error: 'Execution state is invalid' }, 503);
-  }
-
-  const trade = Object.freeze(outcome);
+  const trade = candidate;
   // Buys debit cash and are capped by balance below; sells credit cash
   // unconditionally -- this book has no margin model for opening a short
   // (mirrors the existing no-margin design elsewhere in the app). The
@@ -697,16 +734,33 @@ async function handlePaperTrade(request, env) {
   });
 
   if (kvOutcome.error === 'insufficient_balance') {
-    return jsonResponse({ error: 'Insufficient balance' }, 400);
+    const rejection = Object.freeze({
+      ...common,
+      error: 'Insufficient balance',
+      status: 'rejected',
+      http_status: 400,
+    });
+    try {
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch (error) {
+      return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
+    }
   }
   if (kvOutcome.error) {
     return jsonResponse({ error: 'Balance could not be updated, try again' }, 503);
   }
 
-  return jsonResponse(
-    { ...trade, balance_cash: kvOutcome.result.balance_cash },
-    outcomeCreated ? 201 : 200,
-  );
+  try {
+    const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, trade, reserved.etag);
+    if (finalized.outcome.status !== 'filled') {
+      return jsonResponse({ error: 'Execution finalization conflicted' }, 503);
+    }
+  } catch (error) {
+    return jsonResponse({ error: 'Execution could not be finalized' }, 503);
+  }
+
+  return jsonResponse({ ...trade, balance_cash: kvOutcome.result.balance_cash }, 201);
 }
 
 // ---------------------------------------------------------------------------
@@ -914,20 +968,36 @@ export function existingExecutionResponse(outcome, intent) {
   if (!executionIntentMatches(outcome, intent)) {
     return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
   }
-  return jsonResponse(outcome, outcome.status === 'rejected' ? 409 : 200);
+  return jsonResponse(outcome, outcome.status === 'rejected' ? (outcome.http_status ?? 409) : 200);
 }
 
-export async function createCanonicalExecutionOutcome(bucket, key, candidate) {
-  const stored = await bucket.put(key, JSON.stringify(candidate), {
+export async function reserveExecutionRequest(bucket, key, reservation) {
+  const stored = await bucket.put(key, JSON.stringify(reservation), {
     onlyIf: { etagDoesNotMatch: '*' },
     httpMetadata: { contentType: 'application/json' },
-    customMetadata: { executionId: candidate.execution_request_id, executedAt: candidate.ts },
+    customMetadata: { executionId: reservation.execution_request_id, reservedAt: reservation.ts },
   });
-  if (stored) return { outcome: candidate, created: true };
+  if (stored) return { outcome: reservation, created: true, etag: stored.etag };
 
   const existing = await bucket.get(key);
-  if (!existing) throw new Error('Canonical execution missing after conditional write');
-  return { outcome: await existing.json(), created: false };
+  if (!existing) throw new Error('Execution reservation missing after conditional write');
+  return { outcome: await existing.json(), created: false, etag: existing.etag };
+}
+
+export async function finalizeExecutionRequest(bucket, key, terminalOutcome, reservationEtag) {
+  const stored = await bucket.put(key, JSON.stringify(terminalOutcome), {
+    onlyIf: { etagMatches: reservationEtag },
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: {
+      executionId: terminalOutcome.execution_request_id,
+      executedAt: terminalOutcome.ts,
+    },
+  });
+  if (stored) return { outcome: terminalOutcome, updated: true, etag: stored.etag };
+
+  const existing = await bucket.get(key);
+  if (!existing) throw new Error('Execution outcome missing after conditional write');
+  return { outcome: await existing.json(), updated: false, etag: existing.etag };
 }
 
 async function quoteProviderErrorResponse(response) {
