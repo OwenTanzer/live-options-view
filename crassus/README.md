@@ -387,7 +387,7 @@ Both remain configurable per account via `"params"`, passed through to
 ```json
 {
   "alias": "TrumpWhisperer",
-  "username": "crassus_trumpwhisperer",
+  "username": "crassus_trumpwhisp",
   "password_env": "CRASSUS_PW_TRUMPWHISPERER",
   "strategy_id": "trump_whisperer_qqq",
   "params": { "min_sample_size": 3, "bullish_threshold": 0.25, "bearish_threshold": -0.25 }

@@ -50,7 +50,7 @@
     },
     {
       "alias": "TrumpWhisperer",
-      "username": "crassus_trumpwhisperer",
+      "username": "crassus_trumpwhisp",
       "password_env": "CRASSUS_PW_TRUMPWHISPERER",
       "strategy_id": "trump_whisperer_qqq"
     }
