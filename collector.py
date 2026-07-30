@@ -42,6 +42,8 @@ import requests
 import websocket
 import yfinance as yf
 
+import market_signals as ms
+
 # Force UTF-8 stdout to avoid UnicodeEncodeError on non-UTF-8 terminals/Railway
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -73,6 +75,15 @@ STALE_FEED_SECS = 120   # warn if no feed event for this many seconds
 LIVE_QUOTE_PORT = int(os.environ.get("PORT", "8080"))
 MAX_LIVE_QUOTE_SYMBOLS = 100
 R2_BUCKET       = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
+
+# VWAP/RVOL (see market_signals.py and docs/plans/2026-07-vwap-rvol.md).
+# Bucket/lookback/min-days are not derived from anything about QQQ itself --
+# reasonable defaults chosen to balance per-bucket sample density against how
+# fast RVOL exits "insufficient_history" after this feature first deploys.
+RVOL_BUCKET_MINUTES     = 5
+RVOL_LOOKBACK_DAYS      = 20
+RVOL_MIN_DAYS_REQUIRED  = 5
+RVOL_BASELINE_KEY       = "baselines/qqq_rvol_buckets.json"
 
 PRICE_TICKERS: dict[str, str] = {
     "QQQ":     "QQQ",
@@ -1299,6 +1310,10 @@ _last_spot: list = [None]         # [float|None] — yfinance fallback for under
 _last_prices: dict[str, dict] = {}  # label -> {price, quote_ts}; timestamp never refreshed by fallback
 _first_snapshot_written: bool = False  # guard so first.csv is only written once per session
 
+_vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
+_rvol_baseline: dict = {}         # loaded once per session from RVOL_BASELINE_KEY; {"buckets": {...}, ...}
+_rvol_today: dict[str, int] = {}  # bucket_label -> latest session cum_volume seen in that bucket this session
+
 
 def restore_state(s3, today: date) -> None:
     """Seed _prev_vol, _last_spot, and _last_prices from the most recent R2 snapshot.
@@ -1354,12 +1369,191 @@ def restore_state(s3, today: date) -> None:
                     label = col.replace("_", "/") if col in ("JPY_USD", "BTC_USD") else col
                     _last_prices[label] = {"price": float(val), "quote_ts": None}
 
+        _restore_vwap_state(s3, today, date_str)
+
         log.info(
             f"restore_state: loaded {latest_key.split('/')[-1]} -- "
             f"vol_keys={len(_prev_vol)}  spot={_last_spot[0]}  prices={len(_last_prices)}"
         )
     except Exception as e:
         log.warning(f"restore_state failed (non-fatal): {e}")
+
+
+def _vwap_state_key(date_str: str) -> str:
+    return f"intraday/{date_str}/vwap_state.json"
+
+
+def _restore_vwap_state(s3, today: date, date_str: str) -> None:
+    """Best-effort recovery of `_vwap_state`'s running sums after a mid-session
+    restart. Written every snapshot cycle purely as a restart-recovery aid --
+    nothing else reads this object. Without this, a Railway restart mid-day
+    would silently reset VWAP to a fresh (lower-sample) accumulation with no
+    indication in the payload that this happened.
+    """
+    global _vwap_state
+    try:
+        body = s3.get_object(Bucket=R2_BUCKET, Key=_vwap_state_key(date_str))["Body"].read()
+        data = json.loads(body)
+        if data.get("session_date") != today.isoformat():
+            return  # stale leftover from a prior day; a fresh accumulator is correct
+        _vwap_state = ms.VwapState(
+            session_date=today,
+            cum_pv=data.get("cum_pv", 0.0),
+            cum_vol=data.get("cum_vol", 0),
+            last_dayvolume=data.get("last_dayvolume"),
+            vwap=data.get("vwap"),
+            vwap_ts=data.get("vwap_ts"),
+        )
+        log.info(f"restore_state: recovered vwap_state -- cum_vol={_vwap_state.cum_vol}  vwap={_vwap_state.vwap}")
+    except Exception as e:
+        log.info(f"restore_vwap_state: nothing to recover ({e})")
+
+
+def _persist_vwap_state(s3, date_str: str) -> None:
+    """Write `_vwap_state`'s running sums so a mid-session restart can recover
+    them via `_restore_vwap_state`. Best-effort -- a failure here must never
+    interrupt the snapshot it's piggybacking on.
+    """
+    try:
+        data = {
+            "session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
+            "cum_pv": _vwap_state.cum_pv,
+            "cum_vol": _vwap_state.cum_vol,
+            "last_dayvolume": _vwap_state.last_dayvolume,
+            "vwap": _vwap_state.vwap,
+            "vwap_ts": _vwap_state.vwap_ts,
+        }
+        s3.put_object(
+            Bucket=R2_BUCKET, Key=_vwap_state_key(date_str),
+            Body=json.dumps(data).encode(),
+            ContentType="application/json",
+            CacheControl="no-cache, max-age=0",
+        )
+    except Exception as e:
+        log.warning(f"vwap_state.json upload failed (non-fatal): {e}")
+
+
+def load_rvol_baseline(s3) -> dict:
+    """Best-effort load of the cross-day RVOL baseline. Missing file (first
+    deploy of this feature) is not an error -- every bucket simply reports
+    "insufficient_history"/"no_data" until enough sessions have run.
+    """
+    try:
+        body = s3.get_object(Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY)["Body"].read()
+        data = json.loads(body)
+        log.info(f"load_rvol_baseline: loaded, updated_through={data.get('updated_through')}")
+        return data
+    except Exception as e:
+        log.info(f"load_rvol_baseline: no baseline yet ({e}) -- starting fresh")
+        return {
+            "symbol": TICKER,
+            "bucket_minutes": RVOL_BUCKET_MINUTES,
+            "lookback_days": RVOL_LOOKBACK_DAYS,
+            "min_days_required": RVOL_MIN_DAYS_REQUIRED,
+            "updated_through": None,
+            "buckets": {},
+        }
+
+
+def finalize_rvol_baseline(s3, today: date) -> None:
+    """Fold today's completed-session bucket readings into the baseline.
+
+    Called once, at end-of-session -- never mid-session -- so the baseline
+    file only ever reflects complete trading days; a mid-session crash before
+    this runs simply means today's readings are lost for the baseline (not
+    corrupted into it), the same "prefer a clean miss over corrupt state"
+    tradeoff `restore_state` already makes for CSV-derived state.
+    """
+    if not _rvol_today:
+        log.info("finalize_rvol_baseline: no bucket readings this session, skipping")
+        return
+    try:
+        baseline = load_rvol_baseline(s3)
+        buckets = baseline.setdefault("buckets", {})
+        for bucket, cum_volume in _rvol_today.items():
+            samples = buckets.get(bucket, {}).get("samples", [])
+            samples = ms.prune_baseline_samples(samples, today, baseline.get("lookback_days", RVOL_LOOKBACK_DAYS))
+            samples = ms.append_session_reading(samples, today, cum_volume)
+            buckets[bucket] = {"samples": samples}
+        baseline["updated_through"] = today.isoformat()
+        baseline["bucket_minutes"] = RVOL_BUCKET_MINUTES
+        baseline["lookback_days"] = RVOL_LOOKBACK_DAYS
+        baseline["min_days_required"] = RVOL_MIN_DAYS_REQUIRED
+        s3.put_object(
+            Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY,
+            Body=json.dumps(baseline).encode(),
+            ContentType="application/json",
+            CacheControl="no-cache, max-age=0",
+        )
+        log.info(f"finalize_rvol_baseline: wrote {len(_rvol_today)} bucket readings for {today.isoformat()}")
+    except Exception as e:
+        log.warning(f"finalize_rvol_baseline failed (non-fatal): {e}")
+
+
+def _compute_underlying_market(s3, qqq: dict, underlying: float | None,
+                                ts_et: datetime, ts_utc: datetime, today: date) -> dict:
+    """VWAP/RVOL for the `underlying_market` block of `intraday/latest.json`.
+
+    Approximation, not tick-accurate VWAP: weights the snapshot's own spot
+    price by the volume delta since the last snapshot, not by each
+    individual trade's own price (see market_signals.py's module docstring).
+    """
+    global _vwap_state
+
+    _vwap_state = ms.reset_if_new_session(_vwap_state, today)
+
+    raw_day_volume = qqq.get("volume")
+    spot_ts_str = max(
+        [v for v in (qqq.get("last_ts"), qqq.get("bid_ts"), qqq.get("ask_ts")) if v],
+        default=None,
+    )
+
+    _vwap_state = ms.accumulate_vwap(
+        _vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=ts_utc,
+    )
+    _persist_vwap_state(s3, today.strftime("%Y%m%d"))
+
+    bucket = ms.bucket_label(ts_et, RVOL_BUCKET_MINUTES)
+    if raw_day_volume is not None:
+        _rvol_today[bucket] = raw_day_volume
+
+    baseline_samples = _rvol_baseline.get("buckets", {}).get(bucket, {}).get("samples", [])
+    rvol = ms.compute_rvol(raw_day_volume, baseline_samples, min_days_required=RVOL_MIN_DAYS_REQUIRED)
+
+    price_vs_vwap_abs = price_vs_vwap_pct = None
+    if underlying is not None and _vwap_state.vwap:
+        price_vs_vwap_abs = round(underlying - _vwap_state.vwap, 4)
+        price_vs_vwap_pct = round((underlying - _vwap_state.vwap) / _vwap_state.vwap * 100, 4)
+
+    spot_ts_dt = datetime.fromisoformat(spot_ts_str) if spot_ts_str else None
+    freshness = ms.classify_freshness(
+        inside_session_window=True,  # take_snapshot only ever runs inside the session window
+        spot_ts=spot_ts_dt, now=ts_utc, stale_after_s=STALE_FEED_SECS,
+    )
+
+    return {
+        "symbol": TICKER,
+        "spot": underlying,
+        "spot_ts": spot_ts_str,
+        "vwap": _vwap_state.vwap,
+        "vwap_ts": _vwap_state.vwap_ts,
+        "vwap_session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
+        "price_vs_vwap_abs": price_vs_vwap_abs,
+        "price_vs_vwap_pct": price_vs_vwap_pct,
+        "session_volume": raw_day_volume,
+        "session_volume_ts": spot_ts_str,
+        "rvol": {
+            "status": rvol.status,
+            "multiple": rvol.multiple,
+            "bucket_label": bucket,
+            "baseline_volume": rvol.baseline_volume,
+            "baseline_days_used": rvol.baseline_days_used,
+            "baseline_lookback_days": _rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
+            "baseline_updated_through": _rvol_baseline.get("updated_through"),
+        },
+        "source": "dxlink",
+        "freshness": freshness,
+    }
 
 
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
@@ -1375,6 +1569,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     if underlying is None and _last_spot[0] is not None:
         underlying = round(_last_spot[0], 2)
     atm = round(underlying) if underlying else None
+
+    underlying_market = _compute_underlying_market(s3, qqq, underlying, ts_et, ts_utc, today)
 
     rows = []
     for s in strikes:
@@ -1474,6 +1670,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "underlying_price": underlying,
         "snapshot_key":     csv_key,
         "rows":             rows,
+        "underlying_market": underlying_market,
     }
 
     try:
@@ -1557,6 +1754,10 @@ def _run_session(login: str, quote_registry: LiveQuoteRegistry):
 
     today   = date.today()
     restore_state(s3, today)
+
+    global _rvol_baseline, _rvol_today
+    _rvol_baseline = load_rvol_baseline(s3)
+    _rvol_today = {}
 
     auth    = tasty_auth(login, s3)
     tier    = classify_tier(today)
@@ -1651,6 +1852,11 @@ def _run_session(login: str, quote_registry: LiveQuoteRegistry):
         push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
     except Exception:
         pass
+
+    # Fold today's RVOL bucket readings into the cross-day baseline. Done here
+    # (once, at confirmed session end) rather than incrementally, so a
+    # mid-session crash can never leave the baseline holding a partial day.
+    finalize_rvol_baseline(s3, today)
 
     feed.stop()
     quote_registry.clear_session()

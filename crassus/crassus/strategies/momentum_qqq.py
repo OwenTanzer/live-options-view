@@ -61,6 +61,20 @@ all the decision logic; it has no network or clock dependency and is what
 `_decide` is the wrapper that validates the snapshot's own freshness, records
 its price into the shared tracker when it's a genuinely new and current read,
 computes the signal, and calls `_decide_core`.
+
+Two optional params, both default off so no deployed account's behavior
+changes until an operator opts in: `vwap_confirmation_required` (bool) vetoes
+an otherwise-supported direction unless the underlying is on the agreeing
+side of its own VWAP; `rvol_floor` (float) vetoes it unless relative volume
+clears the floor. Both read from `ctx.snapshot.underlying_market` (see
+`crassus/crassus/market.py`) via `crassus/crassus/vwap_rvol.py`'s
+`evaluate_gate` -- see that module's docstring for why VWAP/RVOL evaluation
+is a separate module from momentum's own math. The gate can only veto an
+already-supported direction, never manufacture one, and a gate that hasn't
+looked yet (RVOL still building its baseline, or a missing snapshot field)
+retains a held position rather than closing it, same "absence of evidence
+isn't evidence against" treatment as `stale_source_reason` above -- not the
+same as a gate that has looked and genuinely disagrees, which does close.
 """
 
 from __future__ import annotations
@@ -71,6 +85,7 @@ from typing import Any
 
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
+from ..vwap_rvol import evaluate_gate
 from ..momentum import (
     DEFAULT_LOOKBACK_MINUTES,
     DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES,
@@ -251,6 +266,60 @@ def _decide_core(
 
     supported_type = "call" if ret >= bullish_threshold else "put"
     direction = "up" if supported_type == "call" else "down"
+
+    vwap_confirmation_required = params.get("vwap_confirmation_required", False)
+    rvol_floor = params.get("rvol_floor", None)
+    if vwap_confirmation_required or rvol_floor is not None:
+        gate = evaluate_gate(
+            ctx.snapshot.underlying_market, direction,
+            rvol_floor=rvol_floor, require_vwap_agreement=vwap_confirmation_required,
+        )
+        gate_meta = dict(
+            meta_base,
+            vwap_gate_status=gate.status,
+            vwap=gate.vwap,
+            price_vs_vwap_pct=gate.price_vs_vwap_pct,
+            vwap_agrees=gate.vwap_agrees,
+            rvol_multiple=gate.rvol_multiple,
+            rvol_floor=rvol_floor,
+            rvol_participation_ok=gate.rvol_participation_ok,
+        )
+        if gate.status != "ok":
+            # No trustworthy VWAP/RVOL reading yet (RVOL still building its
+            # baseline, or the underlying market data itself is missing) --
+            # an absence of a fresh gate observation, not a gate that has
+            # actually looked and disagreed. Same reasoning as
+            # stale_source_reason above: retain a held position, don't act
+            # on nothing.
+            if held_symbol is not None:
+                return no(
+                    f"VWAP/RVOL confirmation data unavailable "
+                    f"(status={gate.status}); retaining the held "
+                    f"{held_type} position rather than closing on a "
+                    f"missing observation.",
+                    symbol=held_symbol,
+                    held_quantity=held_quantity,
+                    **gate_meta,
+                )
+            return no(
+                f"VWAP/RVOL confirmation data unavailable (status={gate.status}).",
+                **gate_meta,
+            )
+        if vwap_confirmation_required and not gate.vwap_agrees:
+            return _maybe_close_unsupported(
+                ctx, held_symbol, held_quantity, held_type, no,
+                f"VWAP does not confirm {direction} momentum "
+                f"(price_vs_vwap_pct={gate.price_vs_vwap_pct}).",
+                gate_meta,
+            )
+        if rvol_floor is not None and not gate.rvol_participation_ok:
+            return _maybe_close_unsupported(
+                ctx, held_symbol, held_quantity, held_type, no,
+                f"RVOL {gate.rvol_multiple} is below the required floor "
+                f"{rvol_floor}.",
+                gate_meta,
+            )
+        meta_base = gate_meta
 
     if held_symbol is not None:
         if held_type == supported_type:

@@ -48,6 +48,15 @@
     padding: 2px 8px; border-radius: 4px;
     background: #1c2128; border: 1px solid var(--border);
   }
+  #vwap-rvol {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--dim);
+  }
+  #vwap-rvol[data-state="live"] { color: var(--bright); }
+  #vwap-rvol[data-state="stale"],
+  #vwap-rvol[data-state="fallback"],
+  #vwap-rvol[data-state="closed"] { opacity: 0.72; }
 
   /* ── status bar ──────────────────────────────────────────────────────── */
   #status-bar {
@@ -246,6 +255,14 @@
     margin-top: 2px;
     text-transform: uppercase;
   }
+  .ticker-btn .vwap-line {
+    font-size: 0.52rem;
+    color: var(--dim);
+    line-height: 1.2;
+    margin-top: 2px;
+    text-align: center;
+  }
+  .ticker-btn .vwap-line[data-state="live"] { color: var(--bright); }
   .ticker-btn[data-state="live"] { border-color: #167a3f; }
   .ticker-btn[data-state="extended"] { border-color: #9a6a18; }
   .ticker-btn[data-state="stale"], .ticker-btn[data-state="fallback"] { opacity: 0.72; }
@@ -699,6 +716,7 @@
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
   <span id="tier-badge" style="display:none"></span>
+  <span id="vwap-rvol" class="vwap-rvol"></span>
 </div>
 
 <div id="status-bar">
@@ -918,7 +936,7 @@ async function loadRanges() {
 
 // ── render heatmap (live panel) ─────────────────────────────────────────────────
 function renderHeatmap(data) {
-  const { underlying_price, tier, snapshot_time } = data;
+  const { underlying_price, tier, snapshot_time, underlying_market } = data;
   const spot = underlying_price;
 
   if (!spot) {
@@ -939,6 +957,16 @@ function renderHeatmap(data) {
   tierBadge.textContent = (tier || '').replace('0DTE_', '');
   tierBadge.style.color  = TIER_COLORS[tier] || '#c9d1d9';
   tierBadge.style.display = '';
+
+  // VWAP/RVOL -- same underlying_market block the QQQ tile's second line
+  // reads (updateQqqVwapRvolLine below); both driven by this one 60s-cadence
+  // render, not the 10s prices.json/live-quotes cadence (see
+  // docs/plans/2026-07-vwap-rvol.md for why).
+  const vr = formatVwapRvol(underlying_market);
+  const vrEl = document.getElementById('vwap-rvol');
+  vrEl.textContent = vr.text;
+  vrEl.dataset.state = vr.state;
+  updateQqqVwapRvolLine(underlying_market);
 
   document.getElementById('no-data').classList.add('hidden');
   document.getElementById('heatmap-wrap').classList.remove('hidden');
@@ -1632,7 +1660,11 @@ function buildTickerEl(sym, isSmall) {
   const el = document.createElement('div');
   el.className = 'ticker-btn' + (isSmall ? ' sm' : '');
   el.id = `tk-${sym.replace('/', '-')}`;
-  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">fallback</span>`;
+  // VWAP/RVOL only exists for QQQ (the collector's only underlying, see
+  // collector.py's TICKER constant) -- VIX/SMH/etc. never carry this data,
+  // so only QQQ's tile gets the extra line.
+  const vwapLine = sym === 'QQQ' ? '<span class="vwap-line"></span>' : '';
+  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">fallback</span>${vwapLine}`;
   if (isTradeableShareSymbol(sym)) {
     el.classList.add('tradable');
     el.setAttribute('role', 'button');
@@ -1692,6 +1724,19 @@ function updatePriceStrip(pricesData) {
     stateEl.textContent = state;
     el.title = `${state} · ${d.source || 'unknown'} · ${d.observedAt || 'timestamp unavailable'}`;
   }
+}
+
+// Updates the QQQ tile's second line from renderHeatmap()'s 60s-cadence
+// underlying_market read -- deliberately not driven by updatePriceStrip's
+// 10s prices.json/live-quotes cadence, see docs/plans/2026-07-vwap-rvol.md.
+function updateQqqVwapRvolLine(underlyingMarket) {
+  const el = document.getElementById('tk-QQQ');
+  if (!el) return;
+  const lineEl = el.querySelector('.vwap-line');
+  if (!lineEl) return;
+  const vr = formatVwapRvol(underlyingMarket);
+  lineEl.textContent = vr.text;
+  lineEl.dataset.state = vr.state;
 }
 
 async function fetchPrices() {

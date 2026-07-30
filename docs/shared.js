@@ -153,6 +153,48 @@ function tickerSessionState(instrumentClass, nowMs = Date.now()) {
   return 'closed';
 }
 
+// -- VWAP/RVOL display formatting --------------------------------------------
+// Pure formatting for the `underlying_market` block published on
+// intraday/latest.json (see crassus/crassus/market.py's UnderlyingMarket and
+// docs/plans/2026-07-vwap-rvol.md) -- the same canonical record the
+// momentum_qqq strategy reads, so the UI and the strategy never disagree on
+// what "VWAP" or "RVOL" mean here. No DOM access, kept testable the same
+// simple way as tickerSessionState/TickerStateStore above.
+//
+// `state` is one of the same four values docs/index.html already uses for
+// ticker tiles (live/stale/fallback/closed, see TickerStateStore._decorate
+// and the `.ticker-btn[data-state=...]` CSS) so a stale VWAP looks exactly
+// as visually "stale" as a stale ticker quote already does -- no new state
+// vocabulary. "closed" is inferred here from the observation's own age
+// (clearly a leftover reading from a prior session), not from session-hour
+// math, because the collector can only ever write "live"/"stale" itself
+// (see collector.py's `_compute_underlying_market` -- it has no way to know
+// it has stopped running).
+const VWAP_RVOL_CLOSED_AFTER_MS = 4 * 60 * 60 * 1000;
+
+function formatVwapRvol(underlyingMarket, nowMs = Date.now()) {
+  if (!underlyingMarket) {
+    return { text: 'VWAP/RVOL: unavailable', state: 'fallback' };
+  }
+  const um = underlyingMarket;
+  const observedMs = Date.parse(um.spot_ts || um.vwap_ts || '');
+  const ageMs = Number.isFinite(observedMs) ? nowMs - observedMs : null;
+  if (ageMs != null && ageMs > VWAP_RVOL_CLOSED_AFTER_MS) {
+    return { text: 'VWAP/RVOL: session closed', state: 'closed' };
+  }
+
+  const vwapPart = um.vwap != null
+    ? `VWAP ${um.vwap.toFixed(2)} (${um.price_vs_vwap_pct >= 0 ? '+' : ''}${(um.price_vs_vwap_pct ?? 0).toFixed(2)}%)`
+    : 'VWAP —';
+  const rvol = um.rvol || {};
+  const rvolPart = rvol.status === 'ok' && rvol.multiple != null
+    ? `RVOL ${rvol.multiple.toFixed(2)}×`
+    : rvol.status === 'insufficient_history' ? 'RVOL warming up'
+    : 'RVOL —';
+
+  return { text: `${vwapPart} | ${rvolPart}`, state: um.freshness === 'live' ? 'live' : 'stale' };
+}
+
 const SHARE_QUOTE_MAX_AGE_MS = 15_000;
 
 function freshShareQuote(quote, nowMs = Date.now(), maxAgeMs = SHARE_QUOTE_MAX_AGE_MS) {
@@ -677,7 +719,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
-    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote,
+    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
