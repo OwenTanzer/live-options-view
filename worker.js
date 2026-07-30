@@ -966,9 +966,6 @@ export function validateTradeIntent(body) {
   if (orderType !== 'market' && orderType !== 'limit') {
     return 'order_type must be "market" or "limit"';
   }
-  if (instrumentType === 'share' && orderType !== 'market') {
-    return 'share orders are market-only';
-  }
   if (orderType === 'market' && body.limit_price !== undefined) {
     return 'limit_price is only allowed for limit orders';
   }

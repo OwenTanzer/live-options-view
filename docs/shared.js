@@ -450,8 +450,10 @@ function normalizePaperOrder({ side, quantity, orderType = 'market', limitPrice 
   return { value: { side, qty, order_type: 'limit', limit_price: cents / 100 } };
 }
 
-function normalizeShareMarketOrder({ side, quantity, heldQuantity = 0 } = {}) {
-  const normalized = normalizePaperOrder({ side, quantity, orderType: 'market' });
+function normalizeShareOrder({
+  side, quantity, heldQuantity = 0, orderType = 'market', limitPrice = null,
+} = {}) {
+  const normalized = normalizePaperOrder({ side, quantity, orderType, limitPrice });
   if (normalized.error) return normalized;
   if (side === 'sell' && normalized.value.qty > Math.max(0, Number(heldQuantity) || 0)) {
     return { error: 'You cannot sell more shares than you hold.' };
@@ -676,7 +678,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote,
-    parseRetryAfter, normalizePaperOrder, normalizeShareMarketOrder,
+    parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
 }
