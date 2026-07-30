@@ -7,7 +7,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
     validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
-    existingExecutionResponse,
+    existingExecutionResponse, createCanonicalExecutionOutcome,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -96,6 +96,36 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const conflict = existingExecutionResponse(rejection, { ...rejectedIntent, limit_price: 1.20 });
     assert.equal(conflict.status, 409);
     assert.match((await conflict.json()).error, /conflicts with a different trade intent/);
+  }
+
+  // ── createCanonicalExecutionOutcome ────────────────────────────────────────
+  {
+    const objects = new Map();
+    const bucket = {
+      async put(key, value) {
+        if (objects.has(key)) return null;
+        objects.set(key, value);
+        return { key };
+      },
+      async get(key) {
+        const value = objects.get(key);
+        return value ? { json: async () => JSON.parse(value) } : null;
+      },
+    };
+    const key = `paper-trades/requests/${UUID}.json`;
+    const intent = {
+      execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+      order_type: 'limit', limit_price: 1.15, username: 'alice', ts: new Date().toISOString(),
+    };
+    const rejection = { ...intent, order_id: UUID, status: 'rejected', error: 'not marketable' };
+    const fill = { ...intent, order_id: UUID, status: 'filled', price: 1.10 };
+
+    const winner = await createCanonicalExecutionOutcome(bucket, key, rejection);
+    assert.equal(winner.created, true);
+    const loser = await createCanonicalExecutionOutcome(bucket, key, fill);
+    assert.equal(loser.created, false);
+    assert.deepEqual(loser.outcome, rejection,
+      'a losing fill must observe the canonical rejection before any account mutation');
   }
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────

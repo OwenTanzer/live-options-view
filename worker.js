@@ -562,9 +562,10 @@ function sleep(ms) {
 // Trade execution
 // ---------------------------------------------------------------------------
 
-// Records one paper-trading fill per client-generated request id under
-// paper-trades/requests/. The deterministic key makes retries idempotent and
-// avoids read-modify-write races between unrelated accounts.
+// Records one terminal paper-trading outcome per client-generated request id
+// under paper-trades/requests/. The R2 conditional create happens before a
+// fill mutates the account, so concurrent same-id requests must follow the
+// same canonical fill or rejection.
 //
 // Auth is now a real session (see requireSession above), not the shared
 // static token this endpoint used to check. The Origin allowlist, a
@@ -602,32 +603,34 @@ async function handlePaperTrade(request, env) {
 
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
+  let outcome = null;
+  let outcomeCreated = false;
   try {
     const existing = await env.PAPER_TRADES.get(key);
-    if (existing) return existingExecutionResponse(await existing.json(), body);
+    if (existing) outcome = await existing.json();
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
   }
 
-  let quotePayload;
-  try {
-    const quoteResponse = await fetchLiveQuotes([body.sym], env);
-    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
-    quotePayload = await quoteResponse.json();
-  } catch (error) {
-    return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
-  }
-  const quoteReceivedAt = new Date();
+  if (!outcome) {
+    let quotePayload;
+    try {
+      const quoteResponse = await fetchLiveQuotes([body.sym], env);
+      if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
+      quotePayload = await quoteResponse.json();
+    } catch (error) {
+      return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
+    }
+    const quoteReceivedAt = new Date();
 
-  const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
-  if (quoteResult.error) {
-    return jsonResponse({ error: quoteResult.error }, quoteResult.status);
-  }
+    const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
+    if (quoteResult.error) {
+      return jsonResponse({ error: quoteResult.error }, quoteResult.status);
+    }
 
-  const executedAt = new Date();
-  const priceResult = executionPriceForOrder(quoteResult, body);
-  if (priceResult.error) {
-    const rejection = Object.freeze({
+    const executedAt = new Date();
+    const priceResult = executionPriceForOrder(quoteResult, body);
+    const common = {
       execution_id: executionId,
       execution_request_id: executionId,
       ts: executedAt.toISOString(),
@@ -641,68 +644,49 @@ async function handlePaperTrade(request, env) {
       exp: quoteResult.exp,
       side: body.side,
       qty: body.qty,
-      error: priceResult.error,
       order_id: executionId,
       order_type: body.order_type ?? 'market',
       limit_price: body.order_type === 'limit' ? body.limit_price : null,
-      status: 'rejected',
       bid: quoteResult.bid,
       ask: quoteResult.ask,
       username: session.username,
-    });
+    };
+    const candidate = Object.freeze(priceResult.error
+      ? { ...common, error: priceResult.error, status: 'rejected' }
+      : { ...common, status: 'filled', price: priceResult.price });
     try {
-      const stored = await env.PAPER_TRADES.put(key, JSON.stringify(rejection), {
-        onlyIf: { etagDoesNotMatch: '*' },
-        httpMetadata: { contentType: 'application/json' },
-        customMetadata: { executionId, executedAt: executedAt.toISOString() },
-      });
-      if (!stored) {
-        const existing = await env.PAPER_TRADES.get(key);
-        if (!existing) throw new Error('Canonical execution missing after conditional write');
-        return existingExecutionResponse(await existing.json(), body);
-      }
+      const canonical = await createCanonicalExecutionOutcome(env.PAPER_TRADES, key, candidate);
+      outcome = canonical.outcome;
+      outcomeCreated = canonical.created;
     } catch (error) {
-      return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
+      return jsonResponse({ error: 'Execution outcome could not be recorded' }, 503);
     }
-    return existingExecutionResponse(rejection, body);
   }
-  const price = priceResult.price;
+
+  if (outcome.username !== session.username || !executionIntentMatches(outcome, body)) {
+    return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
+  }
+  if (outcome.status === 'rejected') return existingExecutionResponse(outcome, body);
+  if (outcome.status !== 'filled' || !Number.isFinite(outcome.price)) {
+    return jsonResponse({ error: 'Execution state is invalid' }, 503);
+  }
+
+  const trade = Object.freeze(outcome);
   // Buys debit cash and are capped by balance below; sells credit cash
   // unconditionally -- this book has no margin model for opening a short
   // (mirrors the existing no-margin design elsewhere in the app). The
   // consequence of an uncovered short lands at settlement instead: see
   // handleSettle's insolvency/liquidation path.
-  const cashDelta = body.side === 'buy' ? -(price * body.qty * 100) : (price * body.qty * 100);
-  const trade = Object.freeze({
-    execution_id: executionId,
-    execution_request_id: executionId,
-    ts: executedAt.toISOString(),
-    quote_received_ts: quoteReceivedAt.toISOString(),
-    quote_ts: quoteResult.quoteTs,
-    bid_ts: quoteResult.bidTs,
-    ask_ts: quoteResult.askTs,
-    sym: body.sym,
-    strike: quoteResult.strike,
-    type: quoteResult.type,
-    exp: quoteResult.exp,
-    side: body.side,
-    qty: body.qty,
-    order_id: executionId,
-    order_type: body.order_type ?? 'market',
-    limit_price: body.order_type === 'limit' ? body.limit_price : null,
-    status: 'filled',
-    bid: quoteResult.bid,
-    ask: quoteResult.ask,
-    price,
-    username: session.username,
-  });
+  const cashDelta = trade.side === 'buy'
+    ? -(trade.price * trade.qty * 100)
+    : (trade.price * trade.qty * 100);
 
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
-    if (body.side === 'buy' && -cashDelta > record.balance_cash) {
+    if (trade.side === 'buy' && -cashDelta > record.balance_cash) {
       return { error: 'insufficient_balance' };
     }
     const balance_cash = record.balance_cash + cashDelta;
@@ -719,30 +703,10 @@ async function handlePaperTrade(request, env) {
     return jsonResponse({ error: 'Balance could not be updated, try again' }, 503);
   }
 
-  try {
-    const stored = await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
-      onlyIf: { etagDoesNotMatch: '*' },
-      httpMetadata: { contentType: 'application/json' },
-      customMetadata: { executionId, executedAt: executedAt.toISOString() },
-    });
-    if (!stored) {
-      // Another request with the same client-generated identity won the R2
-      // conditional create. The KV balance mutation above already applied
-      // using this request's own independently fetched quote, which may
-      // differ slightly (e.g. timestamps) from the winning R2 record's quote
-      // -- an accepted, documented inconsistency for the rare concurrent-
-      // duplicate-id case, since KV has no cross-store transaction with R2.
-      // The execution_request_id is present in KV either way, so any further
-      // retry of this same id is idempotent from here on.
-      const existing = await env.PAPER_TRADES.get(key);
-      if (!existing) throw new Error('Canonical execution missing after conditional write');
-      return existingExecutionResponse(await existing.json(), body);
-    }
-  } catch (error) {
-    return jsonResponse({ error: 'Execution could not be recorded' }, 503);
-  }
-
-  return jsonResponse({ ...trade, balance_cash: kvOutcome.result.balance_cash }, 201);
+  return jsonResponse(
+    { ...trade, balance_cash: kvOutcome.result.balance_cash },
+    outcomeCreated ? 201 : 200,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -951,6 +915,19 @@ export function existingExecutionResponse(outcome, intent) {
     return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
   }
   return jsonResponse(outcome, outcome.status === 'rejected' ? 409 : 200);
+}
+
+export async function createCanonicalExecutionOutcome(bucket, key, candidate) {
+  const stored = await bucket.put(key, JSON.stringify(candidate), {
+    onlyIf: { etagDoesNotMatch: '*' },
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { executionId: candidate.execution_request_id, executedAt: candidate.ts },
+  });
+  if (stored) return { outcome: candidate, created: true };
+
+  const existing = await bucket.get(key);
+  if (!existing) throw new Error('Canonical execution missing after conditional write');
+  return { outcome: await existing.json(), created: false };
 }
 
 async function quoteProviderErrorResponse(response) {
