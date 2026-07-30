@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const {
   LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState, parseRetryAfter,
+  SHARE_QUOTE_MAX_AGE_MS, freshShareQuote,
 } = require('../docs/shared.js');
 
 const service = new LiveQuoteService();
@@ -76,6 +77,25 @@ tickers.publish([
 ]);
 assert.equal(tickers.get('QQQ').price, 500, 'undated YFinance must not replace fresh DXLink');
 assert.equal(tickers.get('QQQ').source, 'dxlink', 'fresh live source retains priority');
+
+const shareNow = Date.parse('2026-07-30T14:30:10Z');
+const shareTickers = new TickerStateStore(
+  { AAPL: 'equity' },
+  { nowFn: () => shareNow, staleAfterMs: SHARE_QUOTE_MAX_AGE_MS },
+);
+shareTickers.publish([{
+  symbol: 'AAPL', price: 100, bid: 110, ask: 111, source: 'dxlink',
+  quote_ts: '2026-07-30T14:30:05Z',
+  bid_ts: '2026-07-30T14:30:04Z', ask_ts: '2026-07-30T14:30:05Z',
+}]);
+const freshShare = freshShareQuote(shareTickers.get('AAPL'), shareNow);
+assert.equal(freshShare.mid, 110.5, 'share marks use the fresh two-sided midpoint, not an older last trade');
+assert.equal(shareTickers.get('AAPL').bid_ts, '2026-07-30T14:30:04Z', 'ticker state preserves bid timestamps');
+assert.equal(shareTickers.get('AAPL').ask_ts, '2026-07-30T14:30:05Z', 'ticker state preserves ask timestamps');
+assert.equal(freshShareQuote({ ...shareTickers.get('AAPL'), ask_ts: null }, shareNow), null,
+  'a two-sided share quote requires the ask timestamp');
+assert.equal(freshShareQuote({ ...shareTickers.get('AAPL'), bid_ts: '2026-07-30T14:29:00Z' }, shareNow), null,
+  'a stale side disables the whole share quote');
 
 (async () => {
   const live = new LiveQuoteService();

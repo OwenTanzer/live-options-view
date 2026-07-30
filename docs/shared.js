@@ -10,6 +10,14 @@
 // positions. Durable snapshots are one producer today; a faster poller or
 // stream can publish through the same interface later without coupling display
 // consumers to R2.
+const TRADEABLE_SHARE_SYMBOLS = new Set([
+  'QQQ', 'USO', 'SMH', 'IGV', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL',
+]);
+
+function isTradeableShareSymbol(symbol) {
+  return typeof symbol === 'string' && TRADEABLE_SHARE_SYMBOLS.has(symbol);
+}
+
 class LiveQuoteService {
   constructor() {
     this.quotes = new Map();
@@ -145,6 +153,23 @@ function tickerSessionState(instrumentClass, nowMs = Date.now()) {
   return 'closed';
 }
 
+const SHARE_QUOTE_MAX_AGE_MS = 15_000;
+
+function freshShareQuote(quote, nowMs = Date.now(), maxAgeMs = SHARE_QUOTE_MAX_AGE_MS) {
+  if (!quote) return null;
+  const { bid, ask } = quote;
+  if (typeof bid !== 'number' || typeof ask !== 'number' ||
+      !Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask <= 0 || bid > ask) {
+    return null;
+  }
+  const bidMs = Date.parse(quote.bid_ts);
+  const askMs = Date.parse(quote.ask_ts);
+  if (!Number.isFinite(bidMs) || !Number.isFinite(askMs)) return null;
+  const sideAges = [nowMs - bidMs, nowMs - askMs];
+  if (sideAges.some(age => age > maxAgeMs || age < -30_000)) return null;
+  return { bid, ask, mid: (bid + ask) / 2 };
+}
+
 class TickerStateStore {
   constructor(symbolClasses, { nowFn = Date.now, staleAfterMs = 30_000 } = {}) {
     this.symbolClasses = { ...(symbolClasses || {}) };
@@ -181,6 +206,7 @@ class TickerStateStore {
       if (current && quoteAt && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
       this.quotes.set(symbol, {
         price: quote.price, bid: quote.bid ?? null, ask: quote.ask ?? null,
+        bid_ts: quote.bid_ts ?? null, ask_ts: quote.ask_ts ?? null,
         prev_close: quote.prev_close ?? null, chg_pct: quote.chg_pct ?? null,
         source: quote.source || 'unknown', observedAt: quoteAt,
         instrumentClass: quote.instrument_class || this.symbolClasses[symbol],
@@ -424,6 +450,15 @@ function normalizePaperOrder({ side, quantity, orderType = 'market', limitPrice 
   return { value: { side, qty, order_type: 'limit', limit_price: cents / 100 } };
 }
 
+function normalizeShareMarketOrder({ side, quantity, heldQuantity = 0 } = {}) {
+  const normalized = normalizePaperOrder({ side, quantity, orderType: 'market' });
+  if (normalized.error) return normalized;
+  if (side === 'sell' && normalized.value.qty > Math.max(0, Number(heldQuantity) || 0)) {
+    return { error: 'You cannot sell more shares than you hold.' };
+  }
+  return normalized;
+}
+
 const DISPLAY = 20;   // ±N strikes shown
 
 const TIER_COLORS = {
@@ -640,6 +675,8 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
-    parseRetryAfter, normalizePaperOrder, computeAtmWindow,
+    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote,
+    parseRetryAfter, normalizePaperOrder, normalizeShareMarketOrder,
+    isTradeableShareSymbol, computeAtmWindow,
   };
 }

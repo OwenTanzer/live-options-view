@@ -774,7 +774,9 @@ class LiveQuoteRegistry:
                         "kind": "ticker", "symbol": symbol, "price": price,
                         "bid": bid, "ask": ask, "prev_close": prev,
                         "chg_pct": round((price - prev) / prev * 100, 2) if prev else None,
-                        "quote_ts": max(observed), "source": "dxlink",
+                        "quote_ts": max(observed),
+                        "bid_ts": raw.get("bid_ts"), "ask_ts": raw.get("ask_ts"),
+                        "source": "dxlink",
                         "instrument_class": TICKER_CLASSES[symbol],
                     })
                 elif ticker_fallbacks.get(symbol, {}).get("price") is not None:
