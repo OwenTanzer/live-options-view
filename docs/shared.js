@@ -10,6 +10,14 @@
 // positions. Durable snapshots are one producer today; a faster poller or
 // stream can publish through the same interface later without coupling display
 // consumers to R2.
+const TRADEABLE_SHARE_SYMBOLS = new Set([
+  'QQQ', 'USO', 'SMH', 'IGV', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL',
+]);
+
+function isTradeableShareSymbol(symbol) {
+  return typeof symbol === 'string' && TRADEABLE_SHARE_SYMBOLS.has(symbol);
+}
+
 class LiveQuoteService {
   constructor() {
     this.quotes = new Map();
@@ -424,6 +432,15 @@ function normalizePaperOrder({ side, quantity, orderType = 'market', limitPrice 
   return { value: { side, qty, order_type: 'limit', limit_price: cents / 100 } };
 }
 
+function normalizeShareMarketOrder({ side, quantity, heldQuantity = 0 } = {}) {
+  const normalized = normalizePaperOrder({ side, quantity, orderType: 'market' });
+  if (normalized.error) return normalized;
+  if (side === 'sell' && normalized.value.qty > Math.max(0, Number(heldQuantity) || 0)) {
+    return { error: 'You cannot sell more shares than you hold.' };
+  }
+  return normalized;
+}
+
 const DISPLAY = 20;   // ±N strikes shown
 
 const TIER_COLORS = {
@@ -640,6 +657,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
-    parseRetryAfter, normalizePaperOrder, computeAtmWindow,
+    parseRetryAfter, normalizePaperOrder, normalizeShareMarketOrder,
+    isTradeableShareSymbol, computeAtmWindow,
   };
 }

@@ -170,12 +170,16 @@ def test_per_side_quote_timestamps_and_registry_lifecycle():
     assert_equal(payload["quotes"][0]["ask_ts"], second["ask_ts"], "registry preserves ask timestamp")
     ticker_ts = datetime.now(timezone.utc).isoformat()
     live_feed.state["QQQ"] = {
+        "bid": 500.24, "ask": 500.26,
+        "bid_ts": ticker_ts, "ask_ts": ticker_ts,
         "last": 500.25, "last_ts": ticker_ts, "prev_close": 499.0,
     }
     ticker = registry.quote_payload(["QQQ"])["quotes"][0]
     assert_equal(ticker["kind"], "ticker", "registry identifies ticker payloads")
     assert_equal(ticker["source"], "dxlink", "ticker payload exposes its source")
     assert_equal(ticker["quote_ts"], ticker_ts, "ticker payload exposes observation time")
+    assert_equal(ticker["bid_ts"], ticker_ts, "ticker payload preserves bid timestamp")
+    assert_equal(ticker["ask_ts"], ticker_ts, "ticker payload preserves ask timestamp")
     registry.clear_session()
     assert_equal(registry.health()["state"], "offline", "cleared session reports offline")
 

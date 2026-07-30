@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
-const { normalizePaperOrder } = require('../docs/shared.js');
+const {
+  normalizePaperOrder, normalizeShareMarketOrder, isTradeableShareSymbol,
+} = require('../docs/shared.js');
 
 assert.deepEqual(
   normalizePaperOrder({ side: 'buy', quantity: '2', orderType: 'market' }),
@@ -13,5 +15,16 @@ assert.match(normalizePaperOrder({ side: 'hold', quantity: 1 }).error, /buy or s
 assert.match(normalizePaperOrder({ side: 'buy', quantity: '1.5' }).error, /whole number/);
 assert.match(normalizePaperOrder({ side: 'buy', quantity: 1, orderType: 'limit', limitPrice: '' }).error, /greater than zero/);
 assert.match(normalizePaperOrder({ side: 'buy', quantity: 1, orderType: 'limit', limitPrice: '1.234' }).error, /increments/);
+assert.equal(isTradeableShareSymbol('AAPL'), true);
+assert.equal(isTradeableShareSymbol('VIX'), false, 'listed non-equities remain read-only');
+assert.equal(isTradeableShareSymbol('MSFT'), false, 'arbitrary symbols wait for explicit quote lookup support');
+assert.deepEqual(
+  normalizeShareMarketOrder({ side: 'sell', quantity: 4, heldQuantity: 10 }),
+  { value: { side: 'sell', qty: 4, order_type: 'market' } },
+);
+assert.match(
+  normalizeShareMarketOrder({ side: 'sell', quantity: 11, heldQuantity: 10 }).error,
+  /more shares than you hold/,
+);
 
 console.log('order logic tests passed');

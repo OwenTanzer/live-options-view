@@ -4,6 +4,9 @@ const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this
 const MAX_QUOTE_AGE_MS = 15 * 1000;
 const MAX_QUOTE_FUTURE_MS = 30 * 1000;
 const MAX_LIVE_QUOTE_SYMBOLS = 100;
+const TRADEABLE_SHARE_SYMBOLS = new Set([
+  'QQQ', 'USO', 'SMH', 'IGV', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL',
+]);
 
 const SESSION_COOKIE = 'session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -494,6 +497,8 @@ export function netPositions(trades) {
     .filter(([, b]) => b.pos !== 0)
     .map(([sym, b]) => ({
       sym,
+      instrument_type: b.instrument_type,
+      multiplier: b.multiplier,
       strike: b.strike,
       type: b.type,
       exp: b.exp,
@@ -649,7 +654,7 @@ async function handlePaperTrade(request, env) {
   }
   const quoteReceivedAt = new Date();
 
-  const quoteResult = exactContractQuote(quotePayload, body.sym, body.side, quoteReceivedAt.getTime());
+  const quoteResult = exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
@@ -665,6 +670,8 @@ async function handlePaperTrade(request, env) {
     bid_ts: quoteResult.bidTs,
     ask_ts: quoteResult.askTs,
     sym: body.sym,
+    instrument_type: body.instrument_type ?? 'option',
+    multiplier: quoteResult.multiplier,
     strike: quoteResult.strike,
     type: quoteResult.type,
     exp: quoteResult.exp,
@@ -683,6 +690,7 @@ async function handlePaperTrade(request, env) {
   const reservation = Object.freeze({
     execution_request_id: executionId,
     sym: body.sym,
+    instrument_type: body.instrument_type ?? 'option',
     side: body.side,
     qty: body.qty,
     order_type: body.order_type ?? 'market',
@@ -709,14 +717,13 @@ async function handlePaperTrade(request, env) {
   }
 
   const trade = candidate;
-  // Buys debit cash and are capped by balance below; sells credit cash
-  // unconditionally -- this book has no margin model for opening a short
-  // (mirrors the existing no-margin design elsewhere in the app). The
-  // consequence of an uncovered short lands at settlement instead: see
-  // handleSettle's insolvency/liquidation path.
+  // Buys debit cash and are capped by balance below. Option sells retain the
+  // existing uncovered-short behavior; share sells are constrained to the
+  // held long quantity inside the account mutation below.
+  const multiplier = trade.multiplier ?? 100;
   const cashDelta = trade.side === 'buy'
-    ? -(trade.price * trade.qty * 100)
-    : (trade.price * trade.qty * 100);
+    ? -(trade.price * trade.qty * multiplier)
+    : (trade.price * trade.qty * multiplier);
 
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
@@ -725,6 +732,10 @@ async function handlePaperTrade(request, env) {
     }
     if (trade.side === 'buy' && -cashDelta > record.balance_cash) {
       return { error: 'insufficient_balance' };
+    }
+    if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
+      const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;
+      if (held < trade.qty) return { error: 'insufficient_position' };
     }
     const balance_cash = record.balance_cash + cashDelta;
     return {
@@ -745,6 +756,20 @@ async function handlePaperTrade(request, env) {
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
+    }
+  }
+  if (kvOutcome.error === 'insufficient_position') {
+    const rejection = Object.freeze({
+      ...common,
+      error: 'Cannot sell more shares than are held',
+      status: 'rejected',
+      http_status: 400,
+    });
+    try {
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch (error) {
+      return jsonResponse({ error: 'Position rejection could not be recorded' }, 503);
     }
   }
   if (kvOutcome.error) {
@@ -775,14 +800,20 @@ async function handlePaperTrade(request, env) {
 export function computeBookFromTrades(trades) {
   const book = {};
   for (const t of trades) {
-    const b = book[t.sym] ?? (book[t.sym] = { pos: 0, avg: 0, realized: 0, strike: t.strike, type: t.type, exp: t.exp });
+    const instrumentType = t.instrument_type ?? 'option';
+    const multiplier = t.multiplier ?? (instrumentType === 'share' ? 1 : 100);
+    const b = book[t.sym] ?? (book[t.sym] = {
+      pos: 0, avg: 0, realized: 0,
+      instrument_type: instrumentType, multiplier,
+      strike: t.strike, type: t.type, exp: t.exp,
+    });
     const q = t.side === 'buy' ? t.qty : -t.qty;
     if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
       b.avg = (b.avg * Math.abs(b.pos) + t.price * Math.abs(q)) / (Math.abs(b.pos) + Math.abs(q));
       b.pos += q;
     } else {
       const closing = Math.min(Math.abs(q), Math.abs(b.pos));
-      b.realized += (t.price - b.avg) * closing * 100 * Math.sign(b.pos);
+      b.realized += (t.price - b.avg) * closing * b.multiplier * Math.sign(b.pos);
       b.pos += q;
       if (b.pos === 0) b.avg = 0;
       else if (Math.sign(b.pos) === Math.sign(q)) b.avg = t.price;
@@ -834,7 +865,8 @@ async function handleSettle(request, env) {
 
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const book = computeBookFromTrades(record.trades);
-    const expired = Object.entries(book).filter(([, b]) => b.pos !== 0 && b.exp && b.exp < as_of);
+    const expired = Object.entries(book).filter(([, b]) =>
+      b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < as_of);
     const alreadySettled = new Set(record.trades.map(t => t.execution_request_id));
     const pending = expired.filter(([sym, b]) => !alreadySettled.has(`${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`));
 
@@ -862,6 +894,7 @@ async function handleSettle(request, env) {
         execution_request_id: `${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`,
         ts: new Date().toISOString(),
         sym, strike: b.strike, type: b.type, exp: b.exp,
+        instrument_type: 'option', multiplier: 100,
         side, qty: Math.abs(b.pos), price,
         note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
         username: session.username,
@@ -915,6 +948,13 @@ export function validateTradeIntent(body) {
   if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
     return 'sym must be a non-empty string';
   }
+  const instrumentType = body.instrument_type ?? 'option';
+  if (instrumentType !== 'option' && instrumentType !== 'share') {
+    return 'instrument_type must be "option" or "share"';
+  }
+  if (instrumentType === 'share' && !TRADEABLE_SHARE_SYMBOLS.has(body.sym)) {
+    return 'share symbol is not in the tradeable equity list';
+  }
   if (body.side !== 'buy' && body.side !== 'sell') {
     return 'side must be "buy" or "sell"';
   }
@@ -925,6 +965,9 @@ export function validateTradeIntent(body) {
   const orderType = body.order_type ?? 'market';
   if (orderType !== 'market' && orderType !== 'limit') {
     return 'order_type must be "market" or "limit"';
+  }
+  if (instrumentType === 'share' && orderType !== 'market') {
+    return 'share orders are market-only';
   }
   if (orderType === 'market' && body.limit_price !== undefined) {
     return 'limit_price is only allowed for limit orders';
@@ -945,6 +988,7 @@ export function validateTradeIntent(body) {
 export function executionIntentMatches(trade, intent) {
   return trade?.execution_request_id === intent.execution_request_id &&
     trade?.sym === intent.sym &&
+    (trade?.instrument_type ?? 'option') === (intent.instrument_type ?? 'option') &&
     trade?.side === intent.side &&
     trade?.qty === intent.qty &&
     (trade?.order_type ?? 'market') === (intent.order_type ?? 'market') &&
@@ -1018,6 +1062,44 @@ async function quoteProviderErrorResponse(response) {
   );
 }
 
+function exactExecutionQuote(payload, intent, nowMs) {
+  if ((intent.instrument_type ?? 'option') === 'share') {
+    return exactShareQuote(payload, intent.sym, intent.side, nowMs);
+  }
+  return exactContractQuote(payload, intent.sym, intent.side, nowMs);
+}
+
+export function exactShareQuote(payload, symbol, side, nowMs) {
+  const row = Array.isArray(payload?.quotes)
+    ? payload.quotes.find(candidate => candidate.symbol === symbol)
+    : null;
+  if (!row) return { error: 'Exact share quote not found', status: 409 };
+  if (row.instrument_class !== 'equity') {
+    return { error: 'Symbol is not a tradeable equity', status: 409 };
+  }
+  const bidMs = Date.parse(row.bid_ts ?? row.quote_ts);
+  const askMs = Date.parse(row.ask_ts ?? row.quote_ts);
+  const sideMs = side === 'buy' ? askMs : bidMs;
+  if (!Number.isFinite(sideMs)) return { error: `Share quote has no valid ${side} timestamp`, status: 503 };
+  const age = nowMs - sideMs;
+  if (age > MAX_QUOTE_AGE_MS || age < -MAX_QUOTE_FUTURE_MS) {
+    return { error: 'Share quote is stale', status: 409 };
+  }
+  const bid = row.bid;
+  const ask = row.ask;
+  if (typeof bid !== 'number' || typeof ask !== 'number' ||
+      !Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask <= 0 || bid > ask) {
+    return { error: 'Exact share quote is invalid', status: 409 };
+  }
+  return {
+    bid, ask, strike: null, type: null, exp: null,
+    multiplier: 1,
+    bidTs: Number.isFinite(bidMs) ? new Date(bidMs).toISOString() : null,
+    askTs: Number.isFinite(askMs) ? new Date(askMs).toISOString() : null,
+    quoteTs: new Date(sideMs).toISOString(),
+  };
+}
+
 function exactContractQuote(payload, symbol, side, nowMs) {
   const row = Array.isArray(payload?.quotes)
     ? payload.quotes.find(candidate => candidate.symbol === symbol)
@@ -1044,6 +1126,7 @@ function exactContractQuote(payload, symbol, side, nowMs) {
   }
   return {
     bid, ask, strike, type: row.type, exp: row.exp,
+    multiplier: 100,
     bidTs: Number.isFinite(bidMs) ? new Date(bidMs).toISOString() : null,
     askTs: Number.isFinite(askMs) ? new Date(askMs).toISOString() : null,
     quoteTs: new Date(sideMs).toISOString(),

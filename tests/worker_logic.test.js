@@ -6,8 +6,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // worker.js is a Cloudflare Worker module (`export default { fetch }`),
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
-    validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
-    existingExecutionResponse, reserveExecutionRequest, finalizeExecutionRequest,
+    validateTradeIntent, executionIntentMatches, executionPriceForOrder, exactShareQuote,
+    computeBookFromTrades, existingExecutionResponse, reserveExecutionRequest, finalizeExecutionRequest,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -46,6 +46,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
     order_type: 'market', limit_price: 1.25,
   }), /only allowed for limit orders/);
+  assert.equal(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'buy', qty: 10, order_type: 'market',
+  }), null);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'VIX', instrument_type: 'share',
+    side: 'buy', qty: 1, order_type: 'market',
+  }), /tradeable equity list/);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'buy', qty: 1, order_type: 'limit', limit_price: 200,
+  }), /market-only/);
 
   // ── executionIntentMatches ─────────────────────────────────────────────────
   const intent = { execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 2 };
@@ -58,6 +70,10 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     { ...intent, order_type: 'limit', limit_price: 1.25 },
     { ...intent, order_type: 'limit', limit_price: 1.30 },
   ), false, 'a reused id cannot change its limit');
+  assert.equal(executionIntentMatches(
+    { ...intent, instrument_type: 'share' },
+    { ...intent, instrument_type: 'option' },
+  ), false, 'a reused id cannot change instrument type');
 
   // ── executionPriceForOrder ─────────────────────────────────────────────────
   assert.deepEqual(executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy' }), { price: 1.20 });
@@ -144,6 +160,48 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(staleFill.updated, false);
     assert.deepEqual(staleFill.outcome, rejection,
       'a stale fill cannot replace the terminal rejection after preconditions run');
+
+    const shareKey = `${key}-share`;
+    const shareReservation = {
+      ...reservation, execution_request_id: '22345678-1234-4234-8234-123456789abc',
+      instrument_type: 'share', sym: 'AAPL', side: 'sell',
+    };
+    const held = await reserveExecutionRequest(bucket, shareKey, shareReservation);
+    const positionRejection = {
+      ...shareReservation, status: 'rejected', http_status: 400,
+      error: 'Cannot sell more shares than are held',
+    };
+    await finalizeExecutionRequest(bucket, shareKey, positionRejection, held.etag);
+    const staleShareFill = await finalizeExecutionRequest(
+      bucket,
+      shareKey,
+      { ...shareReservation, status: 'filled', price: 210.10 },
+      held.etag,
+    );
+    assert.deepEqual(staleShareFill.outcome, positionRejection,
+      'a failed holdings check must remain rejected instead of becoming a stale fill');
+  }
+
+  // ── exactShareQuote ────────────────────────────────────────────────────────
+  {
+    const now = Date.parse('2026-07-30T14:30:10.000Z');
+    const payload = { quotes: [{
+      kind: 'ticker', symbol: 'AAPL', instrument_class: 'equity',
+      bid: 210.10, ask: 210.12,
+      bid_ts: '2026-07-30T14:30:04.000Z', ask_ts: '2026-07-30T14:30:05.000Z',
+      quote_ts: '2026-07-30T14:30:05.000Z',
+    }] };
+    const quote = exactShareQuote(payload, 'AAPL', 'buy', now);
+    assert.equal(quote.bid, 210.10);
+    assert.equal(quote.ask, 210.12);
+    assert.equal(quote.multiplier, 1);
+    assert.match(exactShareQuote(payload, 'MSFT', 'buy', now).error, /not found/);
+    assert.match(exactShareQuote(payload, 'AAPL', 'buy', now + 60_000).error, /stale/);
+    assert.match(exactShareQuote({
+      quotes: [{ ...payload.quotes[0], bid_ts: '2026-07-30T14:29:00.000Z' }],
+    }, 'AAPL', 'sell', now).error, /stale/, 'sell freshness follows the bid timestamp');
+    assert.match(exactShareQuote({ quotes: [{ ...payload.quotes[0], instrument_class: 'index' }] }, 'AAPL', 'buy', now).error, /not a tradeable equity/);
+    assert.match(exactShareQuote({ quotes: [{ ...payload.quotes[0], bid: null }] }, 'AAPL', 'buy', now).error, /invalid/);
   }
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────
@@ -157,6 +215,17 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(b.pos, 1, 'one contract should remain open after buying 2 and selling 1');
     assert.equal(b.avg, 1.0, 'average cost basis should be unaffected by a partial close');
     assert.equal(b.realized, (1.5 - 1.0) * 1 * 100, 'realized PnL should reflect the closed portion only');
+  }
+  {
+    const trades = [
+      { sym: 'AAPL', instrument_type: 'share', multiplier: 1, side: 'buy', qty: 10, price: 100 },
+      { sym: 'AAPL', instrument_type: 'share', multiplier: 1, side: 'sell', qty: 4, price: 110 },
+    ];
+    const b = computeBookFromTrades(trades).AAPL;
+    assert.equal(b.pos, 6);
+    assert.equal(b.avg, 100, 'a partial share exit preserves the remaining entry price');
+    assert.equal(b.realized, 40, 'share P/L uses a 1x multiplier');
+    assert.equal(b.instrument_type, 'share');
   }
 
   // ── settlementPriceServer ───────────────────────────────────────────────────
