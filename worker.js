@@ -625,7 +625,15 @@ async function handlePaperTrade(request, env) {
   }
 
   const executedAt = new Date();
-  const price = body.side === 'buy' ? quoteResult.ask : quoteResult.bid;
+  const priceResult = executionPriceForOrder(quoteResult, body);
+  if (priceResult.error) {
+    return jsonResponse({
+      error: priceResult.error,
+      order_id: executionId,
+      status: 'rejected',
+    }, 409);
+  }
+  const price = priceResult.price;
   // Buys debit cash and are capped by balance below; sells credit cash
   // unconditionally -- this book has no margin model for opening a short
   // (mirrors the existing no-margin design elsewhere in the app). The
@@ -646,6 +654,10 @@ async function handlePaperTrade(request, env) {
     exp: quoteResult.exp,
     side: body.side,
     qty: body.qty,
+    order_id: executionId,
+    order_type: body.order_type ?? 'market',
+    limit_price: body.order_type === 'limit' ? body.limit_price : null,
+    status: 'filled',
     bid: quoteResult.bid,
     ask: quoteResult.ask,
     price,
@@ -859,6 +871,23 @@ export function validateTradeIntent(body) {
     return 'qty must be a positive integer';
   }
 
+  const orderType = body.order_type ?? 'market';
+  if (orderType !== 'market' && orderType !== 'limit') {
+    return 'order_type must be "market" or "limit"';
+  }
+  if (orderType === 'market' && body.limit_price !== undefined) {
+    return 'limit_price is only allowed for limit orders';
+  }
+  if (orderType === 'limit') {
+    if (typeof body.limit_price !== 'number' || !Number.isFinite(body.limit_price) ||
+        body.limit_price <= 0 || body.limit_price > 1_000_000) {
+      return 'limit_price must be a positive finite number';
+    }
+    if (Math.abs(body.limit_price * 100 - Math.round(body.limit_price * 100)) > 1e-7) {
+      return 'limit_price must use increments of 0.01';
+    }
+  }
+
   return null;
 }
 
@@ -866,7 +895,22 @@ export function executionIntentMatches(trade, intent) {
   return trade?.execution_request_id === intent.execution_request_id &&
     trade?.sym === intent.sym &&
     trade?.side === intent.side &&
-    trade?.qty === intent.qty;
+    trade?.qty === intent.qty &&
+    (trade?.order_type ?? 'market') === (intent.order_type ?? 'market') &&
+    (trade?.limit_price ?? null) === (intent.limit_price ?? null);
+}
+
+export function executionPriceForOrder(quote, intent) {
+  const price = intent.side === 'buy' ? quote.ask : quote.bid;
+  if ((intent.order_type ?? 'market') !== 'limit') return { price };
+
+  if (intent.side === 'buy' && price > intent.limit_price) {
+    return { error: `Buy limit $${intent.limit_price.toFixed(2)} is below current ask $${price.toFixed(2)}` };
+  }
+  if (intent.side === 'sell' && price < intent.limit_price) {
+    return { error: `Sell limit $${intent.limit_price.toFixed(2)} is above current bid $${price.toFixed(2)}` };
+  }
+  return { price };
 }
 
 function existingExecutionResponse(trade, intent) {

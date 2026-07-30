@@ -35,6 +35,8 @@ jobs:
         run: node tests/bots_panel.test.js
       - name: live quote service
         run: node tests/live_quote_service.test.js
+      - name: order logic
+        run: node tests/order_logic.test.js
       # Catches syntax errors in the inline <script> that the panel test would
       # otherwise only surface for the section it extracts.
       - name: parse check

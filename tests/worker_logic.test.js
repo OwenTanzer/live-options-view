@@ -6,7 +6,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // worker.js is a Cloudflare Worker module (`export default { fetch }`),
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
-    validateTradeIntent, executionIntentMatches, computeBookFromTrades,
+    validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -33,12 +33,50 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     validateTradeIntent({ execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 0 }),
     /qty must be a positive integer/,
   );
+  assert.equal(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'limit', limit_price: 1.25,
+  }), null);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'limit', limit_price: 1.234,
+  }), /increments of 0.01/);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'market', limit_price: 1.25,
+  }), /only allowed for limit orders/);
 
   // ── executionIntentMatches ─────────────────────────────────────────────────
   const intent = { execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 2 };
   assert.equal(executionIntentMatches({ ...intent }, intent), true);
   assert.equal(executionIntentMatches({ ...intent, qty: 3 }, intent), false, 'a mismatched qty must not match');
   assert.equal(executionIntentMatches({ ...intent, sym: 'SPY' }, intent), false);
+  assert.equal(executionIntentMatches({ ...intent }, { ...intent, order_type: 'market' }), true,
+    'legacy requests and explicit market orders are the same intent');
+  assert.equal(executionIntentMatches(
+    { ...intent, order_type: 'limit', limit_price: 1.25 },
+    { ...intent, order_type: 'limit', limit_price: 1.30 },
+  ), false, 'a reused id cannot change its limit');
+
+  // ── executionPriceForOrder ─────────────────────────────────────────────────
+  assert.deepEqual(executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy' }), { price: 1.20 });
+  assert.deepEqual(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy', order_type: 'limit', limit_price: 1.25 }),
+    { price: 1.20 },
+    'a marketable buy receives price improvement instead of filling at its limit',
+  );
+  assert.match(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy', order_type: 'limit', limit_price: 1.15 }).error,
+    /below current ask/,
+  );
+  assert.deepEqual(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'sell', order_type: 'limit', limit_price: 1.05 }),
+    { price: 1.10 },
+  );
+  assert.match(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'sell', order_type: 'limit', limit_price: 1.15 }).error,
+    /above current bid/,
+  );
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────
   {
