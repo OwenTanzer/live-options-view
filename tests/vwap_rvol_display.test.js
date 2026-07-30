@@ -85,4 +85,13 @@ function um(overrides = {}) {
   assert.match(result.text, /VWAP —/);
 }
 
+// -- vwap known but price_vs_vwap_pct missing -- shows the bare price, not a
+// fabricated "+0.00%" (can't happen from the collector today since both are
+// always computed together, but the formatter shouldn't guess if it did) ----
+{
+  const result = formatVwapRvol(um({ price_vs_vwap_pct: null }), NOW);
+  assert.match(result.text, /VWAP 400\.00/);
+  assert.doesNotMatch(result.text, /%/);
+}
+
 console.log('PASS vwap/rvol display formatting -- unavailable/closed/live/stale/insufficient_history/no_data all render explicitly');

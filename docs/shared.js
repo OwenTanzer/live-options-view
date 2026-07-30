@@ -184,7 +184,9 @@ function formatVwapRvol(underlyingMarket, nowMs = Date.now()) {
   }
 
   const vwapPart = um.vwap != null
-    ? `VWAP ${um.vwap.toFixed(2)} (${um.price_vs_vwap_pct >= 0 ? '+' : ''}${(um.price_vs_vwap_pct ?? 0).toFixed(2)}%)`
+    ? (um.price_vs_vwap_pct != null
+      ? `VWAP ${um.vwap.toFixed(2)} (${um.price_vs_vwap_pct >= 0 ? '+' : ''}${um.price_vs_vwap_pct.toFixed(2)}%)`
+      : `VWAP ${um.vwap.toFixed(2)}`)
     : 'VWAP —';
   const rvol = um.rvol || {};
   const rvolPart = rvol.status === 'ok' && rvol.multiple != null
