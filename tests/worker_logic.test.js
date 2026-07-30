@@ -54,10 +54,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     execution_request_id: UUID, sym: 'VIX', instrument_type: 'share',
     side: 'buy', qty: 1, order_type: 'market',
   }), /tradeable equity list/);
-  assert.match(validateTradeIntent({
+  assert.equal(validateTradeIntent({
     execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
     side: 'buy', qty: 1, order_type: 'limit', limit_price: 200,
-  }), /market-only/);
+  }), null);
+  assert.equal(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'sell', qty: 1, order_type: 'limit', limit_price: 210.05,
+  }), null);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'AAPL', instrument_type: 'share',
+    side: 'sell', qty: 1, order_type: 'limit', limit_price: 200.001,
+  }), /increments of 0.01/);
 
   // ── executionIntentMatches ─────────────────────────────────────────────────
   const intent = { execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 2 };
@@ -195,6 +203,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(quote.bid, 210.10);
     assert.equal(quote.ask, 210.12);
     assert.equal(quote.multiplier, 1);
+    assert.deepEqual(
+      executionPriceForOrder(quote, { side: 'buy', order_type: 'limit', limit_price: 210.15 }),
+      { price: 210.12 },
+    );
+    assert.deepEqual(
+      executionPriceForOrder(quote, { side: 'sell', order_type: 'limit', limit_price: 210.05 }),
+      { price: 210.10 },
+    );
+    assert.match(
+      executionPriceForOrder(quote, { side: 'sell', order_type: 'limit', limit_price: 210.11 }).error,
+      /above current bid/,
+    );
     assert.match(exactShareQuote(payload, 'MSFT', 'buy', now).error, /not found/);
     assert.match(exactShareQuote(payload, 'AAPL', 'buy', now + 60_000).error, /stale/);
     assert.match(exactShareQuote({
