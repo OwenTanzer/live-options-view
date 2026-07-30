@@ -562,9 +562,11 @@ function sleep(ms) {
 // Trade execution
 // ---------------------------------------------------------------------------
 
-// Records one paper-trading fill per client-generated request id under
-// paper-trades/requests/. The deterministic key makes retries idempotent and
-// avoids read-modify-write races between unrelated accounts.
+// Serializes each client-generated request id with an R2 `pending` reservation.
+// Only the reservation owner evaluates account preconditions and mutates the
+// account; it commits `filled` only afterward. Concurrent same-id requests can
+// therefore observe pending or the terminal result, but cannot apply a losing
+// fill. Rejections finalize the same reservation for idempotent replay.
 //
 // Auth is now a real session (see requireSession above), not the shared
 // static token this endpoint used to check. The Origin allowlist, a
@@ -602,9 +604,37 @@ async function handlePaperTrade(request, env) {
 
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
+
+  const responseForStoredOutcome = async (storedOutcome, etag) => {
+    if (storedOutcome.username !== session.username || !executionIntentMatches(storedOutcome, body)) {
+      return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
+    }
+    if (storedOutcome.status === 'pending') {
+      const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
+      if (!appliedTrade) {
+        return jsonResponse({
+          error: 'Execution is already pending',
+          order_id: executionId,
+          status: 'pending',
+        }, 409);
+      }
+      try {
+        const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, appliedTrade, etag);
+        storedOutcome = recovered.outcome;
+      } catch (error) {
+        return jsonResponse({ error: 'Pending execution could not be recovered' }, 503);
+      }
+    }
+    if (storedOutcome.status === 'rejected') return existingExecutionResponse(storedOutcome, body);
+    if (storedOutcome.status !== 'filled' || !Number.isFinite(storedOutcome.price)) {
+      return jsonResponse({ error: 'Execution state is invalid' }, 503);
+    }
+    return jsonResponse({ ...storedOutcome, balance_cash: session.record.balance_cash }, 200);
+  };
+
   try {
     const existing = await env.PAPER_TRADES.get(key);
-    if (existing) return existingExecutionResponse(await existing.json(), body);
+    if (existing) return responseForStoredOutcome(await existing.json(), existing.etag);
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
   }
@@ -625,14 +655,8 @@ async function handlePaperTrade(request, env) {
   }
 
   const executedAt = new Date();
-  const price = body.side === 'buy' ? quoteResult.ask : quoteResult.bid;
-  // Buys debit cash and are capped by balance below; sells credit cash
-  // unconditionally -- this book has no margin model for opening a short
-  // (mirrors the existing no-margin design elsewhere in the app). The
-  // consequence of an uncovered short lands at settlement instead: see
-  // handleSettle's insolvency/liquidation path.
-  const cashDelta = body.side === 'buy' ? -(price * body.qty * 100) : (price * body.qty * 100);
-  const trade = Object.freeze({
+  const priceResult = executionPriceForOrder(quoteResult, body);
+  const common = {
     execution_id: executionId,
     execution_request_id: executionId,
     ts: executedAt.toISOString(),
@@ -646,18 +670,60 @@ async function handlePaperTrade(request, env) {
     exp: quoteResult.exp,
     side: body.side,
     qty: body.qty,
+    order_id: executionId,
+    order_type: body.order_type ?? 'market',
+    limit_price: body.order_type === 'limit' ? body.limit_price : null,
     bid: quoteResult.bid,
     ask: quoteResult.ask,
-    price,
     username: session.username,
+  };
+  const candidate = Object.freeze(priceResult.error
+    ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
+    : { ...common, status: 'filled', price: priceResult.price });
+  const reservation = Object.freeze({
+    execution_request_id: executionId,
+    sym: body.sym,
+    side: body.side,
+    qty: body.qty,
+    order_type: body.order_type ?? 'market',
+    limit_price: body.order_type === 'limit' ? body.limit_price : null,
+    username: session.username,
+    status: 'pending',
+    ts: executedAt.toISOString(),
   });
+  let reserved;
+  try {
+    reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
+  } catch (error) {
+    return jsonResponse({ error: 'Execution could not be reserved' }, 503);
+  }
+  if (!reserved.created) return responseForStoredOutcome(reserved.outcome, reserved.etag);
+
+  if (candidate.status === 'rejected') {
+    try {
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, candidate, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch (error) {
+      return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
+    }
+  }
+
+  const trade = candidate;
+  // Buys debit cash and are capped by balance below; sells credit cash
+  // unconditionally -- this book has no margin model for opening a short
+  // (mirrors the existing no-margin design elsewhere in the app). The
+  // consequence of an uncovered short lands at settlement instead: see
+  // handleSettle's insolvency/liquidation path.
+  const cashDelta = trade.side === 'buy'
+    ? -(trade.price * trade.qty * 100)
+    : (trade.price * trade.qty * 100);
 
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
-    if (body.side === 'buy' && -cashDelta > record.balance_cash) {
+    if (trade.side === 'buy' && -cashDelta > record.balance_cash) {
       return { error: 'insufficient_balance' };
     }
     const balance_cash = record.balance_cash + cashDelta;
@@ -668,33 +734,30 @@ async function handlePaperTrade(request, env) {
   });
 
   if (kvOutcome.error === 'insufficient_balance') {
-    return jsonResponse({ error: 'Insufficient balance' }, 400);
+    const rejection = Object.freeze({
+      ...common,
+      error: 'Insufficient balance',
+      status: 'rejected',
+      http_status: 400,
+    });
+    try {
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch (error) {
+      return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
+    }
   }
   if (kvOutcome.error) {
     return jsonResponse({ error: 'Balance could not be updated, try again' }, 503);
   }
 
   try {
-    const stored = await env.PAPER_TRADES.put(key, JSON.stringify(trade), {
-      onlyIf: { etagDoesNotMatch: '*' },
-      httpMetadata: { contentType: 'application/json' },
-      customMetadata: { executionId, executedAt: executedAt.toISOString() },
-    });
-    if (!stored) {
-      // Another request with the same client-generated identity won the R2
-      // conditional create. The KV balance mutation above already applied
-      // using this request's own independently fetched quote, which may
-      // differ slightly (e.g. timestamps) from the winning R2 record's quote
-      // -- an accepted, documented inconsistency for the rare concurrent-
-      // duplicate-id case, since KV has no cross-store transaction with R2.
-      // The execution_request_id is present in KV either way, so any further
-      // retry of this same id is idempotent from here on.
-      const existing = await env.PAPER_TRADES.get(key);
-      if (!existing) throw new Error('Canonical execution missing after conditional write');
-      return existingExecutionResponse(await existing.json(), body);
+    const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, trade, reserved.etag);
+    if (finalized.outcome.status !== 'filled') {
+      return jsonResponse({ error: 'Execution finalization conflicted' }, 503);
     }
   } catch (error) {
-    return jsonResponse({ error: 'Execution could not be recorded' }, 503);
+    return jsonResponse({ error: 'Execution could not be finalized' }, 503);
   }
 
   return jsonResponse({ ...trade, balance_cash: kvOutcome.result.balance_cash }, 201);
@@ -859,6 +922,23 @@ export function validateTradeIntent(body) {
     return 'qty must be a positive integer';
   }
 
+  const orderType = body.order_type ?? 'market';
+  if (orderType !== 'market' && orderType !== 'limit') {
+    return 'order_type must be "market" or "limit"';
+  }
+  if (orderType === 'market' && body.limit_price !== undefined) {
+    return 'limit_price is only allowed for limit orders';
+  }
+  if (orderType === 'limit') {
+    if (typeof body.limit_price !== 'number' || !Number.isFinite(body.limit_price) ||
+        body.limit_price <= 0 || body.limit_price > 1_000_000) {
+      return 'limit_price must be a positive finite number';
+    }
+    if (Math.abs(body.limit_price * 100 - Math.round(body.limit_price * 100)) > 1e-7) {
+      return 'limit_price must use increments of 0.01';
+    }
+  }
+
   return null;
 }
 
@@ -866,14 +946,58 @@ export function executionIntentMatches(trade, intent) {
   return trade?.execution_request_id === intent.execution_request_id &&
     trade?.sym === intent.sym &&
     trade?.side === intent.side &&
-    trade?.qty === intent.qty;
+    trade?.qty === intent.qty &&
+    (trade?.order_type ?? 'market') === (intent.order_type ?? 'market') &&
+    (trade?.limit_price ?? null) === (intent.limit_price ?? null);
 }
 
-function existingExecutionResponse(trade, intent) {
-  if (!executionIntentMatches(trade, intent)) {
+export function executionPriceForOrder(quote, intent) {
+  const price = intent.side === 'buy' ? quote.ask : quote.bid;
+  if ((intent.order_type ?? 'market') !== 'limit') return { price };
+
+  if (intent.side === 'buy' && price > intent.limit_price) {
+    return { error: `Buy limit $${intent.limit_price.toFixed(2)} is below current ask $${price.toFixed(2)}` };
+  }
+  if (intent.side === 'sell' && price < intent.limit_price) {
+    return { error: `Sell limit $${intent.limit_price.toFixed(2)} is above current bid $${price.toFixed(2)}` };
+  }
+  return { price };
+}
+
+export function existingExecutionResponse(outcome, intent) {
+  if (!executionIntentMatches(outcome, intent)) {
     return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
   }
-  return jsonResponse(trade, 200);
+  return jsonResponse(outcome, outcome.status === 'rejected' ? (outcome.http_status ?? 409) : 200);
+}
+
+export async function reserveExecutionRequest(bucket, key, reservation) {
+  const stored = await bucket.put(key, JSON.stringify(reservation), {
+    onlyIf: { etagDoesNotMatch: '*' },
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { executionId: reservation.execution_request_id, reservedAt: reservation.ts },
+  });
+  if (stored) return { outcome: reservation, created: true, etag: stored.etag };
+
+  const existing = await bucket.get(key);
+  if (!existing) throw new Error('Execution reservation missing after conditional write');
+  return { outcome: await existing.json(), created: false, etag: existing.etag };
+}
+
+export async function finalizeExecutionRequest(bucket, key, terminalOutcome, reservationEtag) {
+  const stored = await bucket.put(key, JSON.stringify(terminalOutcome), {
+    onlyIf: { etagMatches: reservationEtag },
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: {
+      executionId: terminalOutcome.execution_request_id,
+      executedAt: terminalOutcome.ts,
+    },
+  });
+  if (stored) return { outcome: terminalOutcome, updated: true, etag: stored.etag };
+
+  const existing = await bucket.get(key);
+  if (!existing) throw new Error('Execution outcome missing after conditional write');
+  return { outcome: await existing.json(), updated: false, etag: existing.etag };
 }
 
 async function quoteProviderErrorResponse(response) {

@@ -308,6 +308,16 @@
   }
   #trade-ticket .t-head { font-weight: 700; color: var(--bright); margin-bottom: 6px; }
   #trade-ticket .t-row { display: flex; gap: 6px; align-items: center; }
+  #trade-ticket .t-order-row { margin-bottom: 6px; }
+  #trade-ticket select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 0.72rem;
+  }
+  #trade-ticket .t-limit.hidden { display: none; }
   #trade-ticket input {
     width: 46px;
     background: var(--bg);
@@ -352,6 +362,9 @@
   }
   #paper-summary { color: var(--fg); font-weight: 600; text-transform: none; letter-spacing: 0; }
   #paper-hint { color: var(--dim); font-size: 0.68rem; }
+  #paper-order-status { color: var(--dim); font-size: 0.68rem; min-height: 1em; margin-top: 4px; }
+  #paper-order-status.error { color: #ff6666; }
+  #paper-order-status.success { color: #00cc55; }
   #paper-panel table { min-width: 0; width: 100%; }
   #paper-panel th, #paper-panel td {
     width: auto; height: auto;
@@ -738,6 +751,7 @@
     </span>
   </h3>
   <div id="paper-hint">Click any option cell to buy/sell. Fills at ask (buy) / bid (sell), ×100 multiplier. Balance persists to your account across devices.</div>
+  <div id="paper-order-status" role="status" aria-live="polite"></div>
   <div id="paper-positions"></div>
   <details id="paper-log">
     <summary>Trade log</summary>
@@ -964,12 +978,12 @@ function newExecutionRequestId() {
 // exact-contract quote, persists the canonical fill and the balance
 // mutation, then returns both for the local display. Auth rides the
 // same-origin session cookie automatically -- no manual header needed.
-async function requestExecution(info, side, qty, executionRequestId) {
+async function requestExecution(info, order, executionRequestId) {
   const options = {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ execution_request_id: executionRequestId, sym: info.sym, side, qty }),
+    body: JSON.stringify({ execution_request_id: executionRequestId, sym: info.sym, ...order }),
   };
   let response;
   try {
@@ -981,7 +995,12 @@ async function requestExecution(info, side, qty, executionRequestId) {
     response = await fetch('/api/paper-trade', options);
   }
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Execution failed (HTTP ${response.status})`);
+  if (!response.ok) {
+    const error = new Error(result.error || `Execution failed (HTTP ${response.status})`);
+    error.orderId = result.order_id || executionRequestId;
+    error.orderStatus = result.status || 'rejected';
+    throw error;
+  }
   return Object.freeze(result);
 }
 
@@ -1114,29 +1133,49 @@ function computeBook(trades = session?.trades || []) {
   return book;
 }
 
-async function executeTrade(info, side, qty) {
-  qty = Math.round(+qty);
-  if (!qty || qty < 1 || pendingExecutions.has(info.sym) || !session) return;
+async function executeTrade(info, side, qty, orderType = 'market', limitPrice = null) {
+  const normalized = normalizePaperOrder({ side, quantity: qty, orderType, limitPrice });
+  if (normalized.error) {
+    setTradePending(false, normalized.error);
+    announceOrderStatus(normalized.error, 'error');
+    return;
+  }
+  if (!info?.sym) {
+    setTradePending(false, 'Select an option contract.');
+    announceOrderStatus('Select an option contract.', 'error');
+    return;
+  }
+  if (pendingExecutions.has(info.sym) || !session) return;
   pendingExecutions.add(info.sym);
-  setTradePending(true, 'Fetching fresh quote…');
+  setTradePending(true, `Submitting ${normalized.value.order_type} order...`);
   let trade;
   const executionRequestId = newExecutionRequestId();
+  announceOrderStatus(`Submitting order ${executionRequestId}...`);
   try {
-    trade = await requestExecution(info, side, qty, executionRequestId);
+    trade = await requestExecution(info, normalized.value, executionRequestId);
   } catch (error) {
     setTradePending(false, error.message);
     showExecutionError(error.message);
+    announceOrderStatus(`${error.orderStatus || 'rejected'} order ${error.orderId || executionRequestId}: ${error.message}`, 'error');
     return;
   } finally {
     pendingExecutions.delete(info.sym);
   }
   session.trades.push(trade);
   session.balance_cash = trade.balance_cash;
+  announceOrderStatus(`Filled ${trade.order_type || 'market'} order ${trade.order_id || executionRequestId}.`, 'success');
   cacheSessionDisplay();
   updateQuoteInterests();
   closeTicket();
   renderPaper();
   if (lastData) renderHeatmap(lastData);  // refresh position badges
+}
+
+function announceOrderStatus(message, state = '') {
+  const status = document.getElementById('paper-order-status');
+  if (!status) return;
+  status.className = state;
+  status.textContent = message;
 }
 
 function showExecutionError(message) {
@@ -1273,7 +1312,9 @@ function renderPaper() {
     session.trades.slice().reverse().map(t => {
       const time = new Date(t.ts).toLocaleTimeString('en-US', { hour12: false, timeZone: 'America/New_York' });
       const market = t.bid != null && t.ask != null ? ` [${fmtQ(t.bid)} × ${fmtQ(t.ask)}]` : '';
-      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${market}${t.note ? ` (${t.note})` : ''}</div>`;
+      const order = t.order_type === 'limit' ? ` limit ${fmtQ(t.limit_price)}` : ' market';
+      const orderId = t.order_id ? ` · order ${t.order_id}` : '';
+      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${contractLabel(t)} @ ${fmtQ(t.price)}${market} ·${order}${orderId}${t.note ? ` (${t.note})` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
 
   document.getElementById('user-name').textContent = session.username;
@@ -1360,6 +1401,13 @@ function openTicket(e, row) {
   t.id = 'trade-ticket';
   t.innerHTML = `
     <div class="t-head">${contractLabel(info)} · ${q.bid != null ? fmtQ(q.bid) : '—'} × ${q.ask != null ? fmtQ(q.ask) : '—'}</div>
+    <div class="t-row t-order-row">
+      <select id="t-order-type" aria-label="order type">
+        <option value="market">Market</option>
+        <option value="limit">Limit</option>
+      </select>
+      <label class="t-limit hidden">Limit $ <input type="number" min="0.01" max="1000000" step="0.01" id="t-limit" aria-label="limit price"></label>
+    </div>
     <div class="t-row">
       <input type="number" min="1" step="1" value="1" id="t-qty" aria-label="quantity">
       <button class="btn-buy"  ${buyPx  == null ? 'disabled' : ''}>Buy @ ${buyPx  != null ? fmtQ(buyPx)  : '—'}</button>
@@ -1373,8 +1421,16 @@ function openTicket(e, row) {
   t.style.top  = (r.bottom + window.scrollY + 4) + 'px';
 
   const qtyEl = t.querySelector('#t-qty');
-  t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy',  qtyEl.value);
-  t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value);
+  const orderTypeEl = t.querySelector('#t-order-type');
+  const limitWrap = t.querySelector('.t-limit');
+  const limitEl = t.querySelector('#t-limit');
+  orderTypeEl.onchange = () => {
+    const isLimit = orderTypeEl.value === 'limit';
+    limitWrap.classList.toggle('hidden', !isLimit);
+    if (!isLimit) limitEl.value = '';
+  };
+  t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy', qtyEl.value, orderTypeEl.value, limitEl.value);
+  t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value, orderTypeEl.value, limitEl.value);
   ticketEl = t;
 }
 

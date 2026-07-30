@@ -6,7 +6,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // worker.js is a Cloudflare Worker module (`export default { fetch }`),
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
-    validateTradeIntent, executionIntentMatches, computeBookFromTrades,
+    validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
+    existingExecutionResponse, reserveExecutionRequest, finalizeExecutionRequest,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -33,12 +34,117 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     validateTradeIntent({ execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 0 }),
     /qty must be a positive integer/,
   );
+  assert.equal(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'limit', limit_price: 1.25,
+  }), null);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'limit', limit_price: 1.234,
+  }), /increments of 0.01/);
+  assert.match(validateTradeIntent({
+    execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+    order_type: 'market', limit_price: 1.25,
+  }), /only allowed for limit orders/);
 
   // ── executionIntentMatches ─────────────────────────────────────────────────
   const intent = { execution_request_id: UUID, sym: 'QQQ', side: 'buy', qty: 2 };
   assert.equal(executionIntentMatches({ ...intent }, intent), true);
   assert.equal(executionIntentMatches({ ...intent, qty: 3 }, intent), false, 'a mismatched qty must not match');
   assert.equal(executionIntentMatches({ ...intent, sym: 'SPY' }, intent), false);
+  assert.equal(executionIntentMatches({ ...intent }, { ...intent, order_type: 'market' }), true,
+    'legacy requests and explicit market orders are the same intent');
+  assert.equal(executionIntentMatches(
+    { ...intent, order_type: 'limit', limit_price: 1.25 },
+    { ...intent, order_type: 'limit', limit_price: 1.30 },
+  ), false, 'a reused id cannot change its limit');
+
+  // ── executionPriceForOrder ─────────────────────────────────────────────────
+  assert.deepEqual(executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy' }), { price: 1.20 });
+  assert.deepEqual(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy', order_type: 'limit', limit_price: 1.25 }),
+    { price: 1.20 },
+    'a marketable buy receives price improvement instead of filling at its limit',
+  );
+  assert.match(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'buy', order_type: 'limit', limit_price: 1.15 }).error,
+    /below current ask/,
+  );
+  assert.deepEqual(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'sell', order_type: 'limit', limit_price: 1.05 }),
+    { price: 1.10 },
+  );
+  assert.match(
+    executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'sell', order_type: 'limit', limit_price: 1.15 }).error,
+    /above current bid/,
+  );
+
+  // ── existingExecutionResponse ──────────────────────────────────────────────
+  {
+    const rejectedIntent = {
+      execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+      order_type: 'limit', limit_price: 1.15,
+    };
+    const rejection = {
+      ...rejectedIntent, order_id: UUID, status: 'rejected',
+      error: 'Buy limit $1.15 is below current ask $1.20',
+    };
+    const replay = existingExecutionResponse(rejection, rejectedIntent);
+    assert.equal(replay.status, 409, 'a persisted rejection must replay as rejected');
+    assert.deepEqual(await replay.json(), rejection);
+
+    const conflict = existingExecutionResponse(rejection, { ...rejectedIntent, limit_price: 1.20 });
+    assert.equal(conflict.status, 409);
+    assert.match((await conflict.json()).error, /conflicts with a different trade intent/);
+
+    const accountRejection = existingExecutionResponse(
+      { ...rejection, error: 'Insufficient balance', http_status: 400 },
+      rejectedIntent,
+    );
+    assert.equal(accountRejection.status, 400, 'account precondition rejections replay their original status');
+  }
+
+  // ── execution reservation/finalization ─────────────────────────────────────
+  {
+    const objects = new Map();
+    let revision = 0;
+    const bucket = {
+      async put(key, value, options = {}) {
+        const current = objects.get(key);
+        if (options.onlyIf?.etagDoesNotMatch === '*' && current) return null;
+        if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) return null;
+        const etag = `etag-${++revision}`;
+        objects.set(key, { value, etag });
+        return { key, etag };
+      },
+      async get(key) {
+        const object = objects.get(key);
+        return object ? { etag: object.etag, json: async () => JSON.parse(object.value) } : null;
+      },
+    };
+    const key = `paper-trades/requests/${UUID}.json`;
+    const intent = {
+      execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+      order_type: 'limit', limit_price: 1.15, username: 'alice', ts: new Date().toISOString(),
+    };
+    const reservation = { ...intent, status: 'pending' };
+    const rejection = { ...intent, order_id: UUID, status: 'rejected', error: 'not marketable' };
+    const fill = { ...intent, order_id: UUID, status: 'filled', price: 1.10 };
+
+    const winner = await reserveExecutionRequest(bucket, key, reservation);
+    assert.equal(winner.created, true);
+    assert.equal(winner.outcome.status, 'pending', 'a reservation is not a terminal fill');
+    const loser = await reserveExecutionRequest(bucket, key, reservation);
+    assert.equal(loser.created, false);
+    assert.equal(loser.outcome.status, 'pending', 'a concurrent request cannot mutate the account');
+
+    const finalized = await finalizeExecutionRequest(bucket, key, rejection, winner.etag);
+    assert.equal(finalized.updated, true);
+    const staleFill = await finalizeExecutionRequest(bucket, key, fill, winner.etag);
+    assert.equal(staleFill.updated, false);
+    assert.deepEqual(staleFill.outcome, rejection,
+      'a stale fill cannot replace the terminal rejection after preconditions run');
+  }
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────
   {

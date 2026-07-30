@@ -397,6 +397,33 @@ function parseRetryAfter(value, nowMs = Date.now()) {
   return Number.isFinite(dateMs) ? Math.max(0, dateMs - nowMs) : null;
 }
 
+function normalizePaperOrder({ side, quantity, orderType = 'market', limitPrice = null } = {}) {
+  const qty = Number(quantity);
+  if (side !== 'buy' && side !== 'sell') {
+    return { error: 'Choose buy or sell.' };
+  }
+  if (!Number.isInteger(qty) || qty < 1 || qty > 100_000) {
+    return { error: 'Quantity must be a positive whole number.' };
+  }
+  if (orderType !== 'market' && orderType !== 'limit') {
+    return { error: 'Choose market or limit.' };
+  }
+
+  if (orderType === 'market') {
+    return { value: { side, qty, order_type: 'market' } };
+  }
+
+  const price = Number(limitPrice);
+  if (!Number.isFinite(price) || price <= 0 || price > 1_000_000) {
+    return { error: 'Limit price must be greater than zero.' };
+  }
+  const cents = Math.round(price * 100);
+  if (Math.abs(price * 100 - cents) > 1e-7) {
+    return { error: 'Limit price must use increments of $0.01.' };
+  }
+  return { value: { side, qty, order_type: 'limit', limit_price: cents / 100 } };
+}
+
 const DISPLAY = 20;   // ±N strikes shown
 
 const TIER_COLORS = {
@@ -613,6 +640,6 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
-    parseRetryAfter, computeAtmWindow,
+    parseRetryAfter, normalizePaperOrder, computeAtmWindow,
   };
 }
