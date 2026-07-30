@@ -1493,9 +1493,6 @@ function openShareTicket(e, sym) {
   const held = Math.max(0, computeBook()[sym]?.pos ?? 0);
   const buyPx = quote?.ask ?? null;
   const sellPx = quote?.bid ?? null;
-  const suggestedLimit = q.bid != null && q.ask != null
-    ? ((q.bid + q.ask) / 2).toFixed(2)
-    : q.price != null ? Number(q.price).toFixed(2) : '';
 
   const t = document.createElement('div');
   t.id = 'trade-ticket';
@@ -1531,7 +1528,7 @@ function openShareTicket(e, sym) {
     limitWrap.classList.toggle('hidden', !isLimit);
     buyButton.textContent = isLimit ? 'Buy limit' : 'Buy market';
     sellButton.textContent = isLimit ? 'Sell limit' : 'Sell market';
-    if (isLimit && !limitEl.value) limitEl.value = suggestedLimit;
+    if (!isLimit) limitEl.value = '';
   };
   const submit = side => {
     const normalized = normalizeShareOrder({
