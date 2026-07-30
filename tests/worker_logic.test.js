@@ -200,6 +200,12 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.match(exactShareQuote({
       quotes: [{ ...payload.quotes[0], bid_ts: '2026-07-30T14:29:00.000Z' }],
     }, 'AAPL', 'sell', now).error, /stale/, 'sell freshness follows the bid timestamp');
+    assert.match(exactShareQuote({
+      quotes: [{ ...payload.quotes[0], bid_ts: null }],
+    }, 'AAPL', 'sell', now).error, /no valid sell timestamp/, 'sell requires its own bid timestamp');
+    assert.match(exactShareQuote({
+      quotes: [{ ...payload.quotes[0], ask_ts: null }],
+    }, 'AAPL', 'buy', now).error, /no valid buy timestamp/, 'buy requires its own ask timestamp');
     assert.match(exactShareQuote({ quotes: [{ ...payload.quotes[0], instrument_class: 'index' }] }, 'AAPL', 'buy', now).error, /not a tradeable equity/);
     assert.match(exactShareQuote({ quotes: [{ ...payload.quotes[0], bid: null }] }, 'AAPL', 'buy', now).error, /invalid/);
   }

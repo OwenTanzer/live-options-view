@@ -1325,7 +1325,7 @@ function renderPaper() {
     if (shareRows.length) {
       html += '<h4>Shares</h4><table><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Live</th><th>Market value</th><th>PnL</th><th></th></tr>';
       for (const [sym, b] of shareRows) {
-        const mark = tickerState.get(sym)?.price ?? null;
+        const mark = freshShareQuote(tickerState.get(sym))?.mid ?? null;
         const pnl = mark != null ? (mark - b.avg) * b.pos : null;
         const marketValue = mark != null ? mark * b.pos : null;
         if (pnl != null) unreal += pnl;
@@ -1488,10 +1488,11 @@ function openShareTicket(e, sym) {
   e.stopPropagation();
   closeTicket();
   const q = tickerState.get(sym) || {};
+  const quote = freshShareQuote(q);
   const info = { sym, instrument_type: 'share' };
   const held = Math.max(0, computeBook()[sym]?.pos ?? 0);
-  const buyPx = q.ask ?? null;
-  const sellPx = q.bid ?? null;
+  const buyPx = quote?.ask ?? null;
+  const sellPx = quote?.bid ?? null;
 
   const t = document.createElement('div');
   t.id = 'trade-ticket';
@@ -1585,7 +1586,7 @@ const TICKER_CLASSES = {
   GOOGL:'equity', AMZN:'equity', TSLA:'equity', MU:'equity', SPCX:'equity',
   'BTC/USD':'crypto',
 };
-const tickerState = new TickerStateStore(TICKER_CLASSES);
+const tickerState = new TickerStateStore(TICKER_CLASSES, { staleAfterMs: SHARE_QUOTE_MAX_AGE_MS });
 let tickerPoller = null;
 let prevPrices = {};
 
@@ -2593,7 +2594,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
     if (session) renderPaper();
   });
   updatePriceStrip(tickerState.snapshot());
-  tickerPoller = new LiveQuotePoller(tickerState, { maxQuoteAgeMs: 30_000 });
+  tickerPoller = new LiveQuotePoller(tickerState, { maxQuoteAgeMs: SHARE_QUOTE_MAX_AGE_MS });
   tickerPoller.subscribeHealth(health => renderTransportHealth('ticker-health', 'Tickers', health));
   tickerPoller.start();
 

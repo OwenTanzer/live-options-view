@@ -1077,8 +1077,8 @@ export function exactShareQuote(payload, symbol, side, nowMs) {
   if (row.instrument_class !== 'equity') {
     return { error: 'Symbol is not a tradeable equity', status: 409 };
   }
-  const bidMs = Date.parse(row.bid_ts ?? row.quote_ts);
-  const askMs = Date.parse(row.ask_ts ?? row.quote_ts);
+  const bidMs = Date.parse(row.bid_ts);
+  const askMs = Date.parse(row.ask_ts);
   const sideMs = side === 'buy' ? askMs : bidMs;
   if (!Number.isFinite(sideMs)) return { error: `Share quote has no valid ${side} timestamp`, status: 503 };
   const age = nowMs - sideMs;

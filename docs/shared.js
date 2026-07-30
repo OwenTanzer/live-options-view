@@ -153,6 +153,23 @@ function tickerSessionState(instrumentClass, nowMs = Date.now()) {
   return 'closed';
 }
 
+const SHARE_QUOTE_MAX_AGE_MS = 15_000;
+
+function freshShareQuote(quote, nowMs = Date.now(), maxAgeMs = SHARE_QUOTE_MAX_AGE_MS) {
+  if (!quote) return null;
+  const { bid, ask } = quote;
+  if (typeof bid !== 'number' || typeof ask !== 'number' ||
+      !Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask <= 0 || bid > ask) {
+    return null;
+  }
+  const bidMs = Date.parse(quote.bid_ts);
+  const askMs = Date.parse(quote.ask_ts);
+  if (!Number.isFinite(bidMs) || !Number.isFinite(askMs)) return null;
+  const sideAges = [nowMs - bidMs, nowMs - askMs];
+  if (sideAges.some(age => age > maxAgeMs || age < -30_000)) return null;
+  return { bid, ask, mid: (bid + ask) / 2 };
+}
+
 class TickerStateStore {
   constructor(symbolClasses, { nowFn = Date.now, staleAfterMs = 30_000 } = {}) {
     this.symbolClasses = { ...(symbolClasses || {}) };
@@ -189,6 +206,7 @@ class TickerStateStore {
       if (current && quoteAt && Date.parse(quoteAt) < Date.parse(current.observedAt)) continue;
       this.quotes.set(symbol, {
         price: quote.price, bid: quote.bid ?? null, ask: quote.ask ?? null,
+        bid_ts: quote.bid_ts ?? null, ask_ts: quote.ask_ts ?? null,
         prev_close: quote.prev_close ?? null, chg_pct: quote.chg_pct ?? null,
         source: quote.source || 'unknown', observedAt: quoteAt,
         instrumentClass: quote.instrument_class || this.symbolClasses[symbol],
@@ -657,6 +675,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
+    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote,
     parseRetryAfter, normalizePaperOrder, normalizeShareMarketOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
