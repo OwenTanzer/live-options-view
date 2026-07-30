@@ -25,36 +25,55 @@ later strategy, not platform invariants). `_decide_core` mirrors their
 duplication (OCC-symbol parsing, close/no-trade plumbing) is intentional
 isolation, not an oversight -- see `trump_whisperer.py`'s docstring for why.
 
-Unlike the sentiment strategies, there is no fetch/ingestion failure mode
-here -- the price observation comes from `ctx.snapshot`, which the runner has
-already fetched successfully by the time a strategy is called. What this
-strategy has instead is a warm-up/staleness problem the sentiment strategies
-don't: on the first calls of a session there isn't yet a price point
-`lookback_minutes` old to compare against ("warming_up"), and if polling was
-interrupted for a stretch -- an outage, an overnight or weekend gap -- the
-oldest available anchor can be far older than the lookback window actually
-calls for ("stale_anchor"). Both are treated as "no usable signal," exactly
-like an insufficient sentiment sample: closed positions get closed, flat
-stays flat, and neither is treated as evidence of anything.
+Unlike the sentiment strategies, there is no network call of its own here --
+the price observation comes from `ctx.snapshot`, which the runner has already
+fetched. But that snapshot is itself a poll of a durable board the collector
+republishes on its own ~60s cadence (see `market.py`'s module docstring), so
+it can go stale independently of whether the runner's own poll succeeded: a
+collector outage means the runner keeps getting *a* snapshot every cycle,
+just the same one, over and over. `_decide` therefore anchors every recorded
+observation to `snapshot.timestamp` -- the source's own clock -- never to
+`ctx.now_et`, and skips recording entirely when either the timestamp hasn't
+advanced since the last recorded read (`sha256` used as a tie-breaker in case
+a timestamp ever repeats across genuinely different content) or it's already
+more than `max_snapshot_age_minutes` old by the runner's clock. Using
+`ctx.now_et` instead would have let a single frozen price get re-recorded at
+an ever-advancing timestamp every cycle, letting the strategy compute and
+trade on a fabricated lookback return from data that never actually moved.
+
+What this strategy has instead of a fetch-error path is a warm-up/staleness
+problem the sentiment strategies don't: on the first calls of a session there
+isn't yet a price point `lookback_minutes` old to compare against
+("warming_up"), and if polling was interrupted for a stretch -- an outage, an
+overnight or weekend gap -- the oldest available anchor can be far older than
+the lookback window actually calls for ("stale_anchor"). Both, like a stale
+source snapshot, are treated as "no usable signal": closed positions get
+closed, flat stays flat, and neither is treated as evidence of anything. A
+stale *source* snapshot is the one case treated like the sentiment
+strategies' fetch_error instead -- a held position is retained rather than
+closed, because a collector outage is an absence of a fresh observation, not
+a fresh observation that happens to be neutral.
 
 `_decide_core` takes an already-computed `MomentumSignal` (see
-`crassus/momentum.py`) and contains all the decision logic; it has no network
-or clock dependency and is what `scripts/verify_momentum_qqq.py` exercises
-directly with hand-built signals. `_decide` is the thin wrapper that records
-the current snapshot's price into the shared tracker and computes the signal
-before calling it.
+`crassus/momentum.py`) plus an optional `stale_source_reason`, and contains
+all the decision logic; it has no network or clock dependency and is what
+`scripts/verify_momentum_qqq.py` exercises directly with hand-built signals.
+`_decide` is the wrapper that validates the snapshot's own freshness, records
+its price into the shared tracker when it's a genuinely new and current read,
+computes the signal, and calls `_decide_core`.
 """
 
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
 from ..momentum import (
     DEFAULT_LOOKBACK_MINUTES,
-    DEFAULT_MAX_ANCHOR_STALENESS_MULTIPLE,
+    DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES,
     DEFAULT_RETAIN_MINUTES,
     MomentumSignal,
     PriceHistoryTracker,
@@ -68,6 +87,14 @@ STRATEGY_VERSION = "1.0.0"
 DEFAULT_BULLISH_THRESHOLD = 0.003  # +0.30% trailing return
 DEFAULT_BEARISH_THRESHOLD = -0.003  # -0.30% trailing return
 
+# The board is republished roughly once a minute (market.py); a snapshot
+# whose own timestamp is older than this by the runner's clock means the
+# collector itself has stalled, not just "hasn't repolled since last cycle."
+# Generous relative to the ~60s cadence so ordinary jitter doesn't trip it,
+# but tight enough to catch a real outage well before it could distort an
+# hour-scale lookback.
+DEFAULT_MAX_SNAPSHOT_AGE_MINUTES = 5.0
+
 # OCC option symbol: root + YYMMDD + C/P + 8-digit strike. Parsed from the
 # symbol itself, not looked up in the current market snapshot -- same
 # reasoning as reddit_sentiment._OCC_TYPE_RE and trump_whisperer._OCC_TYPE_RE:
@@ -79,6 +106,19 @@ _OCC_TYPE_RE = re.compile(r"\d{6}([CP])\d{8}$")
 # one QQQ underlying price, not one per account, exactly like trump_whisperer's
 # module-level `_reader`.
 _tracker = PriceHistoryTracker(retain_minutes=DEFAULT_RETAIN_MINUTES)
+
+# (timestamp, sha256) of the most recently *recorded* snapshot, so a board
+# read that hasn't actually changed -- the collector hasn't republished yet,
+# or is stalled -- isn't re-appended to the tracker as if it were new
+# information under a new timestamp.
+_last_recorded_snapshot: tuple[str, str] | None = None
+
+
+def _snapshot_observed_at(timestamp: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(timestamp)
+    except (ValueError, TypeError):
+        return None
 
 
 def _option_type_from_symbol(symbol: str) -> str | None:
@@ -92,7 +132,11 @@ def _open_positions(ctx: StrategyContext) -> dict[str, Position]:
     return {symbol: position for symbol, position in ctx.book.positions.items() if position.quantity != 0}
 
 
-def _decide_core(ctx: StrategyContext, signal: MomentumSignal | None) -> Decision:
+def _decide_core(
+    ctx: StrategyContext,
+    signal: MomentumSignal | None,
+    stale_source_reason: str | None = None,
+) -> Decision:
     def no(reason: str, **meta: Any) -> Decision:
         return Decision.no_trade(
             reason=reason,
@@ -138,6 +182,25 @@ def _decide_core(ctx: StrategyContext, signal: MomentumSignal | None) -> Decisio
                 held_quantity=held_quantity,
             )
 
+    if stale_source_reason is not None:
+        # A stale/unparseable/duplicate source snapshot is not evidence
+        # momentum has changed -- it's an absence of a fresh observation, not
+        # an observation of "neutral" or "unsupported." Same reasoning as
+        # trump_whisperer's fetch_error branch: retain a held position rather
+        # than closing on a missing read, unlike the valid-empty-result cases
+        # below (warming up, stale anchor, neutral), which do still close
+        # because those genuinely are a read of current momentum, just one
+        # that doesn't support a position.
+        if held_symbol is not None:
+            return no(
+                f"Market snapshot unavailable or stale ({stale_source_reason}); "
+                f"retaining the held {held_type} position rather than closing "
+                f"on a missing observation.",
+                symbol=held_symbol,
+                held_quantity=held_quantity,
+            )
+        return no(f"Market snapshot unavailable or stale: {stale_source_reason}")
+
     if signal is None or signal.status == "no_data":
         return _maybe_close_unsupported(
             ctx, held_symbol, held_quantity, held_type, no,
@@ -180,8 +243,9 @@ def _decide_core(ctx: StrategyContext, signal: MomentumSignal | None) -> Decisio
     if ret is None or bearish_threshold < ret < bullish_threshold:
         return _maybe_close_unsupported(
             ctx, held_symbol, held_quantity, held_type, no,
-            f"Trailing {signal.lookback_minutes:.0f}-minute return is "
-            f"neutral (return_pct={ret}).",
+            f"Trailing return over the last {signal.anchor_age_minutes:.0f}m "
+            f"(target lookback {signal.lookback_minutes:.0f}m) is neutral "
+            f"(return_pct={ret}).",
             meta_base,
         )
 
@@ -232,7 +296,8 @@ def _decide_core(ctx: StrategyContext, signal: MomentumSignal | None) -> Decisio
         symbol=symbol,
         quantity=1,
         reason=(
-            f"Momentum points {direction} (return_pct={ret:.4f} over "
+            f"Momentum points {direction} (return_pct={ret:.4f} over the "
+            f"last {signal.anchor_age_minutes:.0f}m, target lookback "
             f"{signal.lookback_minutes:.0f}m, n={signal.sample_count}); "
             f"opening one {supported_type}."
         ),
@@ -303,19 +368,40 @@ def _close(
 
 
 def _decide(ctx: StrategyContext) -> Decision:
+    global _last_recorded_snapshot
+
     if ctx.session_phase != "open":
         return _decide_core(ctx, None)
 
     params = ctx.params or {}
     lookback_minutes = params.get("lookback_minutes", DEFAULT_LOOKBACK_MINUTES)
-    max_staleness = params.get("max_anchor_staleness_multiple", DEFAULT_MAX_ANCHOR_STALENESS_MULTIPLE)
+    max_overshoot = params.get("max_anchor_overshoot_minutes", DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES)
+    max_snapshot_age = params.get("max_snapshot_age_minutes", DEFAULT_MAX_SNAPSHOT_AGE_MINUTES)
 
-    _tracker.observe(ctx.now_et, ctx.snapshot.underlying_price)
+    observed_at = _snapshot_observed_at(ctx.snapshot.timestamp)
+    if observed_at is None:
+        return _decide_core(ctx, None, stale_source_reason=f"unparseable snapshot timestamp {ctx.snapshot.timestamp!r}")
+
+    snapshot_age_minutes = (ctx.now_et - observed_at).total_seconds() / 60.0
+    if snapshot_age_minutes > max_snapshot_age:
+        return _decide_core(
+            ctx, None,
+            stale_source_reason=(
+                f"snapshot is {snapshot_age_minutes:.1f} minutes old "
+                f"(limit={max_snapshot_age}m) -- the collector looks stalled"
+            ),
+        )
+
+    snapshot_key = (ctx.snapshot.timestamp, ctx.snapshot.sha256)
+    if snapshot_key != _last_recorded_snapshot:
+        _tracker.observe(observed_at, ctx.snapshot.underlying_price)
+        _last_recorded_snapshot = snapshot_key
+
     signal = compute_momentum(
         _tracker.snapshot(),
         now=ctx.now_et,
         lookback_minutes=lookback_minutes,
-        max_anchor_staleness_multiple=max_staleness,
+        max_anchor_overshoot_minutes=max_overshoot,
     )
     return _decide_core(ctx, signal)
 

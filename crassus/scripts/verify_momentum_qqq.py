@@ -38,12 +38,12 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         print(f"  [FAIL] {name}" + (f" -- {detail}" if detail else ""))
 
 
-def make_snapshot(underlying_price: float, rows: list[dict]) -> MarketSnapshot:
+def make_snapshot(underlying_price: float, rows: list[dict], *, timestamp: str = "2024-01-01T15:00:00+00:00") -> MarketSnapshot:
     return MarketSnapshot.from_payload(
         url="test://snapshot",
         payload={
-            "timestamp": "2024-01-01T15:00:00+00:00",
-            "snapshot_time": "2024-01-01T15:00:00+00:00",
+            "timestamp": timestamp,
+            "snapshot_time": timestamp,
             "expiration": "2024-01-01",
             "underlying_price": underlying_price,
             "rows": rows,
@@ -66,15 +66,17 @@ def make_ctx(
     params: dict | None = None,
     rows: list[dict] | None = None,
     underlying_price: float = 400.0,
+    now_et: datetime | None = None,
+    snapshot_timestamp: str = "2024-01-01T15:00:00+00:00",
 ) -> StrategyContext:
-    snapshot = make_snapshot(underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW])
+    snapshot = make_snapshot(underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW], timestamp=snapshot_timestamp)
     book = Book(trades or [])
     quote_map = quote_map or {}
     return StrategyContext(
         snapshot=snapshot,
         account_state={},
         book=book,
-        now_et=None,
+        now_et=now_et,
         session_phase=session_phase,
         quotes=lambda symbols: {s: quote_map[s] for s in symbols if s in quote_map},
         params=params or {},
@@ -162,13 +164,29 @@ def scenario_compute_stale_anchor() -> None:
     print("\n5. compute_momentum(): a polling gap makes the only anchor too stale")
     now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
     history = [
-        PricePoint(now - timedelta(minutes=400), 390.0),  # only candidate >= 60m old, but > 3x60m away
+        PricePoint(now - timedelta(minutes=400), 390.0),  # only candidate >= 60m old, way past 60+10m
         PricePoint(now, 404.0),
     ]
-    signal = compute_momentum(history, now=now, lookback_minutes=60.0, max_anchor_staleness_multiple=3.0)
+    signal = compute_momentum(history, now=now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0)
     check("status is stale_anchor", signal.status == "stale_anchor", signal.status)
     check("return_pct is None despite having an anchor price", signal.return_pct is None)
     check("anchor_price is still surfaced for the audit record", signal.anchor_price == 390.0)
+
+
+def scenario_compute_overshoot_bound_is_additive_not_multiplicative() -> None:
+    print("\n5b. compute_momentum(): overshoot bound doesn't scale with the lookback -- a 100-minute-old anchor on a 60-minute lookback is stale, not 'ok'")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    history = [
+        PricePoint(now - timedelta(minutes=100), 390.0),  # would have passed under the old 3x=180m multiplicative bound
+        PricePoint(now, 404.0),
+    ]
+    signal = compute_momentum(history, now=now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0)
+    check(
+        "a 100-minute-old anchor is rejected under a 60m lookback + 10m overshoot bound (70m max), "
+        "not silently accepted and mislabeled as a 60-minute return",
+        signal.status == "stale_anchor",
+        signal.status,
+    )
 
 
 def scenario_compute_unsorted_input() -> None:
@@ -374,6 +392,114 @@ def scenario_custom_thresholds() -> None:
     check("no_trade -- 0.01 return doesn't clear the widened 0.02 threshold", not decision.is_trade, decision.to_dict())
 
 
+# ---------------------------------------------------------------------------
+# _decide_core()'s stale_source_reason branch -- mirrors trump_whisperer's
+# fetch_error handling (P1 fix)
+# ---------------------------------------------------------------------------
+
+
+def scenario_stale_source_declines_while_flat() -> None:
+    print("\n25. Stale/unavailable source snapshot declines while flat")
+    ctx = make_ctx(session_phase="open")
+    decision = mq._decide_core(ctx, None, stale_source_reason="snapshot is 12.0 minutes old (limit=5.0m)")
+    check("no_trade on a stale source", not decision.is_trade)
+    check("reason cites the stale source", "stale" in decision.reason.lower())
+
+
+def scenario_stale_source_while_positioned_retains_not_sells() -> None:
+    print("\n26. Stale source while holding a position retains it -- absence of a fresh read isn't evidence against")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        # A live, executable quote is available -- if the bug were still
+        # present, the position could still get closed on some other basis,
+        # so an executable quote can't be why this doesn't sell; only the
+        # stale_source_reason-vs-computed-signal distinction can be.
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = mq._decide_core(ctx, None, stale_source_reason="snapshot is 12.0 minutes old (limit=5.0m)")
+    check("action is no_trade, not sell", decision.action == "no_trade", decision.action)
+    check("reason mentions retaining the position", "retaining" in decision.reason.lower(), decision.reason)
+
+
+# ---------------------------------------------------------------------------
+# _decide() -- snapshot-timestamp recording, dedup, and staleness gate
+# (P1 fix). Unlike the sentiment strategies, _decide has no network
+# dependency here, so it's exercised directly rather than only through
+# _decide_core -- but it does mutate the shared module-level tracker, so
+# each scenario resets it first for isolation.
+# ---------------------------------------------------------------------------
+
+
+def _reset_tracker() -> None:
+    mq._tracker = PriceHistoryTracker(retain_minutes=1440.0)
+    mq._last_recorded_snapshot = None
+
+
+def scenario_decide_records_using_snapshot_timestamp_not_now_et() -> None:
+    print("\n27. _decide(): records observed_at from snapshot.timestamp, not ctx.now_et")
+    _reset_tracker()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T14:58:00+00:00")
+    mq._decide(ctx)
+    points = mq._tracker.snapshot()
+    check("exactly one point recorded", len(points) == 1, len(points))
+    check(
+        "recorded observed_at matches the snapshot's own timestamp, not the runner's now_et",
+        points[0].observed_at == datetime(2026, 1, 1, 14, 58, tzinfo=timezone.utc),
+        points[0].observed_at,
+    )
+
+
+def scenario_decide_dedupes_identical_snapshot() -> None:
+    print("\n28. _decide(): repeated reads of the same unchanged snapshot are not double-recorded")
+    _reset_tracker()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx1 = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T15:00:00+00:00")
+    ctx2 = make_ctx(session_phase="open", now_et=now + timedelta(minutes=1), snapshot_timestamp="2026-01-01T15:00:00+00:00")
+    mq._decide(ctx1)
+    mq._decide(ctx2)
+    points = mq._tracker.snapshot()
+    check(
+        "only one point recorded despite two decide() calls against the same (unrepublished) snapshot",
+        len(points) == 1,
+        len(points),
+    )
+
+
+def scenario_decide_rejects_stale_snapshot_while_flat() -> None:
+    print("\n29. _decide(): a snapshot far older than the runner's clock is rejected as a stale source, not recorded")
+    _reset_tracker()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T09:00:00+00:00")  # 6 hours old
+    decision = mq._decide(ctx)
+    check("no_trade on a stale source snapshot", not decision.is_trade, decision.to_dict())
+    check("nothing recorded from the stale snapshot", len(mq._tracker.snapshot()) == 0, len(mq._tracker.snapshot()))
+    check("reason cites the stale source", "stale" in decision.reason.lower() or "stalled" in decision.reason.lower(), decision.reason)
+
+
+def scenario_decide_rejects_stale_snapshot_while_positioned() -> None:
+    print("\n30. _decide(): a stale source snapshot while holding a position retains it rather than closing on a fabricated read")
+    _reset_tracker()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T09:00:00+00:00",
+        trades=trades, quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = mq._decide(ctx)
+    check("action is no_trade, not sell", decision.action == "no_trade", decision.action)
+
+
+def scenario_decide_accepts_fresh_snapshot_within_age_limit() -> None:
+    print("\n31. _decide(): a snapshot within the age limit is recorded normally")
+    _reset_tracker()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T14:58:00+00:00")  # 2 minutes old
+    mq._decide(ctx)
+    check("one point recorded from a snapshot well within max_snapshot_age_minutes", len(mq._tracker.snapshot()) == 1)
+
+
 def main() -> int:
     for scenario in (
         scenario_registered,
@@ -381,6 +507,7 @@ def main() -> int:
         scenario_compute_warming_up,
         scenario_compute_ok,
         scenario_compute_stale_anchor,
+        scenario_compute_overshoot_bound_is_additive_not_multiplicative,
         scenario_compute_unsorted_input,
         scenario_tracker_prunes_old_points,
         scenario_market_closed,
@@ -400,6 +527,13 @@ def main() -> int:
         scenario_multiple_open_positions_stand_down,
         scenario_unrecognized_symbol_stands_down,
         scenario_custom_thresholds,
+        scenario_stale_source_declines_while_flat,
+        scenario_stale_source_while_positioned_retains_not_sells,
+        scenario_decide_records_using_snapshot_timestamp_not_now_et,
+        scenario_decide_dedupes_identical_snapshot,
+        scenario_decide_rejects_stale_snapshot_while_flat,
+        scenario_decide_rejects_stale_snapshot_while_positioned,
+        scenario_decide_accepts_fresh_snapshot_within_age_limit,
     ):
         scenario()
 

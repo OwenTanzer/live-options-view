@@ -29,7 +29,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 DEFAULT_LOOKBACK_MINUTES = 60.0
-DEFAULT_MAX_ANCHOR_STALENESS_MULTIPLE = 3.0
+
+# Additive, not multiplicative: bounded by how far a normal ~60s polling
+# cadence can overshoot the requested lookback (plus scheduling jitter), not
+# by a fraction of the lookback itself. A multiplicative bound (e.g. 3x)
+# scales with `lookback_minutes`, so a 60-minute lookback would silently
+# tolerate an anchor up to 180 minutes old and still report it as a
+# "60-minute return" -- a multi-hour move mislabeled as a much shorter,
+# likely more volatile-looking one. Ten minutes of overshoot is generous
+# for a board that republishes roughly every minute, regardless of what
+# lookback is configured.
+DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES = 10.0
 
 # Generous, fixed cap decoupled from any one strategy's configured lookback --
 # the tracker is a shared singleton (one QQQ price history, not one per
@@ -57,11 +67,12 @@ class MomentumSignal:
         serve as the lookback anchor. Transient; resolves itself as time
         passes, same status every polling cycle until it does.
       * "stale_anchor" -- the *newest* observation old enough to qualify as
-        an anchor is nonetheless older than `max_anchor_staleness_multiple *
-        lookback_minutes` -- i.e. there's a gap in the observation history
-        (an outage, a paused runner, an overnight/weekend boundary) wide
-        enough that comparing against it would silently answer a different
-        question than "return over the last `lookback_minutes` minutes."
+        an anchor is nonetheless older than `lookback_minutes +
+        max_anchor_overshoot_minutes` -- i.e. there's a gap in the
+        observation history (an outage, a paused runner, an overnight/
+        weekend boundary) wide enough that comparing against it would
+        silently answer a different question than "return over the last
+        `lookback_minutes` minutes."
       * "ok" -- `return_pct` is a trustworthy trailing return.
     """
 
@@ -78,7 +89,7 @@ def compute_momentum(
     history: list[PricePoint],
     now: datetime,
     lookback_minutes: float = DEFAULT_LOOKBACK_MINUTES,
-    max_anchor_staleness_multiple: float = DEFAULT_MAX_ANCHOR_STALENESS_MULTIPLE,
+    max_anchor_overshoot_minutes: float = DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES,
 ) -> MomentumSignal:
     """Pure function: trailing return of the newest point in `history` vs.
     the best available anchor `lookback_minutes` ago.
@@ -89,8 +100,9 @@ def compute_momentum(
     least `lookback_minutes` old -- the freshest candidate that actually
     satisfies the lookback, which minimizes how much a normal ~60s polling
     cadence overshoots the requested window. If that candidate is itself
-    older than `lookback_minutes * max_anchor_staleness_multiple`, it is
-    rejected as a stale anchor rather than silently used.
+    older than `lookback_minutes + max_anchor_overshoot_minutes`, it is
+    rejected as a stale anchor rather than silently used and mislabeled as a
+    `lookback_minutes`-horizon return it isn't.
     """
     if not history:
         return MomentumSignal(
@@ -107,7 +119,7 @@ def compute_momentum(
     current = ordered[-1]
     sample_count = len(ordered)
     target_age = timedelta(minutes=lookback_minutes)
-    max_age = timedelta(minutes=lookback_minutes * max_anchor_staleness_multiple)
+    max_age = timedelta(minutes=lookback_minutes + max_anchor_overshoot_minutes)
 
     anchor: PricePoint | None = None
     for point in reversed(ordered):
