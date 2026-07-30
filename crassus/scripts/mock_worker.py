@@ -41,12 +41,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# Mirrors the deployed Worker's USERNAME_RE (worker.js) -- a username that
+# passes here but fails in production is exactly the mismatch that let
+# crassus_trumpwhisperer (22 chars) sail through local verification while
+# every real registration attempt 400'd.
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,20}$")
 
 STARTING_CASH = 10_000.0
 DEFAULT_SNAPSHOT_FIXTURE = Path(__file__).parent / "fixtures" / "snapshot.json"
@@ -237,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if not username or not body.get("password"):
                     return self._json(400, {"error": "username and password required"})
+                if not USERNAME_RE.match(username):
+                    return self._json(400, {"error": "Username must be 3-20 characters: letters, numbers, underscore"})
                 if username in USERS:
                     return self._json(409, {"error": "already_exists"})
                 USERS[username] = {
@@ -255,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "Invalid bot registration key"})
             body = self._body()
             username = body.get("username")
+            if not isinstance(username, str) or not USERNAME_RE.match(username):
+                return self._json(400, {"error": "username must be a valid username"})
             with LOCK:
                 user = USERS.get(username)
                 if user is None:
