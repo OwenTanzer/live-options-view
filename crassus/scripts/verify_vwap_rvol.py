@@ -165,6 +165,19 @@ def scenario_gate_rvol_status_passthrough() -> None:
         check(f"rvol_participation_ok is None for status={status}", gate.rvol_participation_ok is None)
 
 
+def scenario_gate_stale_freshness_overrides_ok_rvol_status() -> None:
+    print("\n5b. evaluate_gate(): a stale underlying_market is untrustworthy even when rvol_status says 'ok'")
+    # RVOL's own bucket status can be "ok" (the baseline itself is fine)
+    # while the record's freshness is "stale" (the feed powering the *current*
+    # spot/vwap comparison has gone stale) -- these are independent axes, and
+    # the gate must not let the RVOL side vouch for the VWAP side.
+    gate = evaluate_gate(um(freshness="stale"), "up", rvol_floor=1.0, require_vwap_agreement=True)
+    check("status is stale_source, not ok", gate.status == "stale_source", gate.status)
+    check("vwap_agrees is None -- not evaluated off stale data", gate.vwap_agrees is None)
+    check("rvol_participation_ok is None -- not evaluated off stale data", gate.rvol_participation_ok is None)
+    check("freshness is surfaced on the gate result", gate.freshness == "stale", gate.freshness)
+
+
 def scenario_gate_vwap_agreement_up() -> None:
     print("\n6. evaluate_gate(): VWAP agreement, direction=up")
     above = evaluate_gate(um(price_vs_vwap_pct=0.5), "up", rvol_floor=None, require_vwap_agreement=True)
@@ -313,6 +326,36 @@ def scenario_gate_status_no_data_missing_underlying_market() -> None:
     check("reason cites unavailable data", "unavailable" in decision.reason.lower(), decision.reason)
 
 
+def scenario_stale_underlying_market_does_not_confirm_a_buy_even_with_agreeing_numbers() -> None:
+    print("\n20b. _decide_core(): a stale underlying_market never confirms a trade, even if its stale numbers would otherwise agree")
+    # price_vs_vwap_pct/rvol_multiple here would satisfy both gates if fresh
+    # -- proves the strategy is declining specifically because of staleness,
+    # not because the numbers themselves disagree.
+    ctx = make_ctx(
+        params={"vwap_confirmation_required": True, "rvol_floor": 1.2},
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "freshness": "stale", "price_vs_vwap_pct": 0.5,
+                                    "rvol": {**FULL_UM_PAYLOAD["rvol"], "multiple": 1.5}},
+    )
+    decision = mq._decide_core(ctx, bullish_signal())
+    check("no_trade despite agreeing stale numbers", not decision.is_trade, decision.to_dict())
+    check("audit metadata records the stale gate freshness", decision.metadata.get("vwap_gate_freshness") == "stale", decision.metadata)
+
+
+def scenario_stale_underlying_market_retains_held_position() -> None:
+    print("\n20c. _decide_core(): a stale underlying_market retains a held position rather than closing on a fabricated read")
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        trades=trades,
+        params={"vwap_confirmation_required": True},
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "freshness": "stale", "price_vs_vwap_pct": -0.5},
+    )
+    decision = mq._decide_core(ctx, bullish_signal())
+    check("action is no_trade, not sell", decision.action == "no_trade", decision.to_dict())
+    check("reason mentions retaining", "retaining" in decision.reason.lower(), decision.reason)
+
+
 def scenario_both_gates_enabled_bearish_direction() -> None:
     print("\n20. _decide_core(): both gates enabled together, bearish direction, both satisfied -> sell-side buy proceeds")
     ctx = make_ctx(
@@ -333,6 +376,7 @@ def main() -> int:
         scenario_market_snapshot_without_underlying_market,
         scenario_gate_none_underlying_market,
         scenario_gate_rvol_status_passthrough,
+        scenario_gate_stale_freshness_overrides_ok_rvol_status,
         scenario_gate_vwap_agreement_up,
         scenario_gate_vwap_agreement_down,
         scenario_gate_vwap_disabled,
@@ -347,6 +391,8 @@ def main() -> int:
         scenario_gate_status_not_ok_retains_held_position,
         scenario_gate_status_not_ok_declines_while_flat,
         scenario_gate_status_no_data_missing_underlying_market,
+        scenario_stale_underlying_market_does_not_confirm_a_buy_even_with_agreeing_numbers,
+        scenario_stale_underlying_market_retains_held_position,
         scenario_both_gates_enabled_bearish_direction,
     ):
         scenario()

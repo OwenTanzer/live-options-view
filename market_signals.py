@@ -37,6 +37,15 @@ from datetime import date, datetime, timedelta
 @dataclass(frozen=True)
 class VwapState:
     session_date: date | None = None
+    # observed_at of the first tick actually folded into the accumulator this
+    # session -- lets a consumer tell a VWAP that has covered the whole
+    # session-to-date apart from one that started late (a restart without
+    # full recovery, or a delayed process start), see is_partial_session().
+    session_started_at: datetime | None = None
+    # observed_at of the most recent tick folded in (or skipped-but-seen) --
+    # enforces that provider events are only ever applied in non-decreasing
+    # timestamp order, see accumulate_vwap's ordering guard below.
+    last_observed_at: datetime | None = None
     cum_pv: float = 0.0
     cum_vol: int = 0
     last_dayvolume: int | None = None
@@ -56,24 +65,36 @@ def accumulate_vwap(
     *,
     price: float | None,
     raw_day_volume: int | None,
-    observed_at: datetime,
+    observed_at: datetime | None,
 ) -> VwapState:
     """One snapshot tick's worth of VWAP accumulation.
 
     Mirrors collector.py's existing per-option VolDelta math
     (`vol_delta = max(0, vol - _prev_vol.get(sym, vol))`), applied to the
     underlying's own cumulative dayVolume instead of a per-strike one.
+
+    `observed_at` must be the *provider's* own timestamp for the price/volume
+    pair being accumulated (e.g. the DXLink bid/ask/last event that produced
+    `price` -- see collector.py's `_compute_underlying_market`), not the
+    collector's local wall-clock read time. That's what makes the ordering
+    guard below meaningful: a `None` timestamp (no paired provider
+    observation available) or one that isn't strictly newer than the last
+    tick actually folded in is treated as unusable -- an out-of-order or
+    duplicate delivery -- and the accumulator is left untouched rather than
+    risk computing a delta against, or from, an observation that arrived out
+    of sequence.
     """
-    if raw_day_volume is None:
-        # No volume observation at all this tick -- leave everything as-is
-        # rather than treat a missing reading as zero volume.
+    if raw_day_volume is None or observed_at is None:
+        return state
+
+    if state.last_observed_at is not None and observed_at <= state.last_observed_at:
         return state
 
     if state.last_dayvolume is None:
         # First volume reading this session (or since a restart with no
         # recovered state) -- nothing to delta against yet, just record the
         # baseline to delta the *next* tick against.
-        return replace(state, last_dayvolume=raw_day_volume)
+        return replace(state, last_dayvolume=raw_day_volume, last_observed_at=observed_at)
 
     delta_vol = max(0, raw_day_volume - state.last_dayvolume)
     if delta_vol == 0 or price is None:
@@ -81,18 +102,32 @@ def accumulate_vwap(
         # to weight it by this cycle -- no VWAP update either way, but the
         # dayvolume baseline still advances so a future delta isn't computed
         # across this gap.
-        return replace(state, last_dayvolume=raw_day_volume)
+        return replace(state, last_dayvolume=raw_day_volume, last_observed_at=observed_at)
 
     cum_pv = state.cum_pv + price * delta_vol
     cum_vol = state.cum_vol + delta_vol
     return VwapState(
         session_date=state.session_date,
+        session_started_at=state.session_started_at or observed_at,
+        last_observed_at=observed_at,
         cum_pv=cum_pv,
         cum_vol=cum_vol,
         last_dayvolume=raw_day_volume,
         vwap=round(cum_pv / cum_vol, 4),
         vwap_ts=observed_at.isoformat(),
     )
+
+
+def is_partial_session(state: VwapState, session_start: datetime, max_late_start_s: float = 300.0) -> bool | None:
+    """Whether this VWAP's coverage started meaningfully after the session's
+    official open -- a restart that couldn't recover prior accumulator state,
+    or a delayed process start -- rather than running from the true open.
+    `None` (not True/False) when nothing has been accumulated yet at all;
+    that's "no_data", a distinct condition from "partial."
+    """
+    if state.session_started_at is None:
+        return None
+    return (state.session_started_at - session_start).total_seconds() > max_late_start_s
 
 
 # -- RVOL ------------------------------------------------------------------

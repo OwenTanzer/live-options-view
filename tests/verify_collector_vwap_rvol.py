@@ -87,21 +87,22 @@ def test_vwap_accumulates_across_snapshots_and_resets_session():
         ts_utc = datetime(2026, 7, 30, 14, 30, 0, tzinfo=timezone.utc)
         s3 = FakeS3()
 
-        qqq = {"volume": 1_000_000, "last_ts": ts_utc.isoformat()}
-        um1 = collector._compute_underlying_market(s3, qqq, 400.0, ts_et, ts_utc, today)
+        spot_ts1 = ts_utc.isoformat()
+        um1 = collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, spot_ts1, ts_et, ts_utc, today)
         assert_equal(um1["vwap"], None, "first tick has no delta to weight yet")
         assert_equal(um1["session_volume"], 1_000_000, "session_volume reflects raw dayVolume")
         assert_equal(um1["symbol"], "QQQ", "symbol is always QQQ today")
 
-        qqq2 = {"volume": 1_100_000, "last_ts": ts_utc.isoformat()}
-        um2 = collector._compute_underlying_market(s3, qqq2, 402.0, ts_et, ts_utc + timedelta(minutes=1), today)
+        ts_utc_2 = ts_utc + timedelta(minutes=1)
+        um2 = collector._compute_underlying_market(
+            s3, {"volume": 1_100_000}, 402.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, today,
+        )
         assert_equal(um2["vwap"], 402.0, "vwap after one delta is just the tick's own price")
         assert_true(um2["price_vs_vwap_abs"] is not None, "price_vs_vwap computed once vwap exists")
 
         # A new day resets the accumulator to a fresh, single-tick state.
         tomorrow = date(2026, 7, 31)
-        qqq3 = {"volume": 500, "last_ts": ts_utc.isoformat()}
-        um3 = collector._compute_underlying_market(s3, qqq3, 410.0, ts_et, ts_utc, tomorrow)
+        um3 = collector._compute_underlying_market(s3, {"volume": 500}, 410.0, ts_utc.isoformat(), ts_et, ts_utc, tomorrow)
         assert_equal(um3["vwap"], None, "new session resets vwap to no-delta-yet state")
         assert_equal(um3["vwap_session_date"], "2026-07-31", "vwap_session_date tracks the reset")
     finally:
@@ -116,9 +117,10 @@ def test_vwap_state_persisted_and_restored_after_restart():
         ts_utc = datetime(2026, 7, 30, 14, 30, 0, tzinfo=timezone.utc)
         s3 = FakeS3()
 
-        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, ts_et, ts_utc, today)
+        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, ts_utc.isoformat(), ts_et, ts_utc, today)
+        ts_utc_2 = ts_utc + timedelta(minutes=1)
         collector._compute_underlying_market(
-            s3, {"volume": 1_100_000}, 402.0, ts_et, ts_utc + timedelta(minutes=1), today,
+            s3, {"volume": 1_100_000}, 402.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, today,
         )
         accumulated_vwap = collector._vwap_state.vwap
         assert_true(accumulated_vwap is not None, "vwap accumulated before simulated restart")
@@ -141,9 +143,10 @@ def test_vwap_state_not_restored_across_a_day_boundary():
         ts_et = collector.ET.localize(datetime(2026, 7, 29, 10, 30, 0))
         ts_utc = datetime(2026, 7, 29, 14, 30, 0, tzinfo=timezone.utc)
         s3 = FakeS3()
-        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, ts_et, ts_utc, yesterday)
+        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, ts_utc.isoformat(), ts_et, ts_utc, yesterday)
+        ts_utc_2 = ts_utc + timedelta(minutes=1)
         collector._compute_underlying_market(
-            s3, {"volume": 1_100_000}, 402.0, ts_et, ts_utc + timedelta(minutes=1), yesterday,
+            s3, {"volume": 1_100_000}, 402.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, yesterday,
         )
 
         collector._vwap_state = ms.VwapState()
@@ -225,15 +228,127 @@ def test_underlying_market_freshness_reflects_feed_staleness():
         old_ts = (now - timedelta(seconds=collector.STALE_FEED_SECS + 30)).isoformat()
 
         s3 = FakeS3()
-        um = collector._compute_underlying_market(
-            s3, {"volume": 1000, "last_ts": old_ts}, 400.0, ts_et, now, today,
-        )
-        assert_equal(um["freshness"], "stale", "an old last_ts is reported as stale, not silently live")
+        um = collector._compute_underlying_market(s3, {"volume": 1000}, 400.0, old_ts, ts_et, now, today)
+        assert_equal(um["freshness"], "stale", "an old spot_ts is reported as stale, not silently live")
 
         fresh_um = collector._compute_underlying_market(
-            s3, {"volume": 1500, "last_ts": now.isoformat()}, 401.0, ts_et, now, today,
+            s3, {"volume": 1500}, 401.0, now.isoformat(), ts_et, now, today,
         )
-        assert_equal(fresh_um["freshness"], "live", "a current last_ts is reported as live")
+        assert_equal(fresh_um["freshness"], "live", "a current spot_ts is reported as live")
+    finally:
+        _reset_module_state()
+
+
+def test_resolve_underlying_spot_pairs_price_with_its_own_timestamp():
+    # bid/ask present -> mid price, paired with bid/ask timestamps, not last_ts
+    # (which could be stale/unrelated if only a Quote event, no Trade, fired).
+    spot, ts = collector._resolve_underlying_spot(
+        {"bid": 400.0, "ask": 400.2, "bid_ts": "2026-07-30T14:00:00+00:00",
+         "ask_ts": "2026-07-30T14:00:01+00:00", "last_ts": "2026-07-29T10:00:00+00:00"},
+        last_spot_price=None, last_spot_ts=None,
+    )
+    assert_equal(spot, 400.1, "mid of bid/ask")
+    assert_equal(ts, "2026-07-30T14:00:01+00:00", "paired with bid/ask timestamps, not the unrelated last_ts")
+
+
+def test_resolve_underlying_spot_last_price_paired_with_last_ts():
+    spot, ts = collector._resolve_underlying_spot(
+        {"last": 401.5, "last_ts": "2026-07-30T14:05:00+00:00"},
+        last_spot_price=None, last_spot_ts=None,
+    )
+    assert_equal(spot, 401.5, "falls back to last")
+    assert_equal(ts, "2026-07-30T14:05:00+00:00", "paired with last's own timestamp")
+
+
+def test_resolve_underlying_spot_last_resort_fallback_paired_with_its_own_timestamp():
+    # No DXLink data at all this cycle -- falls back to _last_spot, and must
+    # use *that* fallback's own timestamp (which may be None, e.g. yfinance),
+    # never a leftover DXLink timestamp from qqq's state.
+    spot, ts = collector._resolve_underlying_spot(
+        {"last_ts": "2026-07-29T09:00:00+00:00"},  # stale leftover DXLink timestamp, must not be used
+        last_spot_price=405.25, last_spot_ts=None,  # yfinance fallback -- no trustworthy timestamp
+    )
+    assert_equal(spot, 405.25, "uses the fallback price")
+    assert_equal(ts, None, "paired with the fallback's own (missing) timestamp, not qqq's stale last_ts")
+
+    spot2, ts2 = collector._resolve_underlying_spot(
+        {}, last_spot_price=406.0, last_spot_ts="2026-07-30T13:00:00+00:00",  # CSV-restored fallback, has a real ts
+    )
+    assert_equal(spot2, 406.0, "uses the fallback price")
+    assert_equal(ts2, "2026-07-30T13:00:00+00:00", "uses the fallback's own real timestamp when it has one")
+
+
+def test_resolve_underlying_spot_nothing_available():
+    spot, ts = collector._resolve_underlying_spot({}, last_spot_price=None, last_spot_ts=None)
+    assert_equal(spot, None, "no spot available anywhere")
+    assert_equal(ts, None, "no timestamp available anywhere")
+
+
+def test_accumulate_vwap_rejects_out_of_order_provider_events():
+    _reset_module_state()
+    try:
+        today = date(2026, 7, 30)
+        ts_et = collector.ET.localize(datetime(2026, 7, 30, 10, 30, 0))
+        t1 = datetime(2026, 7, 30, 14, 30, 0, tzinfo=timezone.utc)
+        t0_late_arrival = t1 - timedelta(minutes=5)  # an event that arrives after t1 but is timestamped earlier
+        s3 = FakeS3()
+
+        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, t1.isoformat(), ts_et, t1, today)
+        collector._compute_underlying_market(
+            s3, {"volume": 1_100_000}, 402.0, (t1 + timedelta(minutes=1)).isoformat(), ts_et, t1, today,
+        )
+        vwap_after_in_order = collector._vwap_state.vwap
+        assert_true(vwap_after_in_order is not None, "vwap accumulated from two in-order ticks")
+
+        # A late-arriving event timestamped *before* the last one folded in
+        # must be ignored, not accumulated as if it were new information.
+        collector._compute_underlying_market(
+            s3, {"volume": 5_000_000}, 999.0, t0_late_arrival.isoformat(), ts_et, t1, today,
+        )
+        assert_equal(collector._vwap_state.vwap, vwap_after_in_order, "out-of-order event does not perturb the accumulator")
+    finally:
+        _reset_module_state()
+
+
+def test_underlying_market_flags_partial_session_after_a_late_start():
+    _reset_module_state()
+    try:
+        today = date(2026, 7, 30)
+        # Session opens at PREMARKET_HOUR (06:00 ET); accumulation doesn't
+        # start until 10:30 ET -- well past the session's true open.
+        late_start_et = collector.ET.localize(datetime(2026, 7, 30, 10, 30, 0))
+        late_start_utc = late_start_et.astimezone(timezone.utc)
+        s3 = FakeS3()
+
+        um1 = collector._compute_underlying_market(
+            s3, {"volume": 1_000_000}, 400.0, late_start_utc.isoformat(), late_start_et, late_start_utc, today,
+        )
+        assert_equal(um1["vwap_partial_session"], None, "no accumulation yet at all -- None, not True/False")
+
+        ts2 = late_start_utc + timedelta(minutes=1)
+        um2 = collector._compute_underlying_market(
+            s3, {"volume": 1_100_000}, 402.0, ts2.isoformat(), late_start_et, ts2, today,
+        )
+        assert_equal(um2["vwap_partial_session"], True, "accumulation started ~4.5 hours after the session's true open")
+        assert_true(um2["vwap_session_started_at"] is not None, "session_started_at is surfaced in the payload")
+    finally:
+        _reset_module_state()
+
+
+def test_underlying_market_partial_session_false_when_started_at_open():
+    _reset_module_state()
+    try:
+        today = date(2026, 7, 30)
+        open_et = collector.ET.localize(datetime(2026, 7, 30, 6, 1, 0))  # one minute after PREMARKET_HOUR
+        open_utc = open_et.astimezone(timezone.utc)
+        s3 = FakeS3()
+
+        collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, open_utc.isoformat(), open_et, open_utc, today)
+        ts2 = open_utc + timedelta(minutes=1)
+        um2 = collector._compute_underlying_market(
+            s3, {"volume": 1_100_000}, 402.0, ts2.isoformat(), open_et, ts2, today,
+        )
+        assert_equal(um2["vwap_partial_session"], False, "accumulation started right at session open -- not partial")
     finally:
         _reset_module_state()
 
@@ -248,6 +363,13 @@ def run():
         test_finalize_rvol_baseline_appends_and_prunes,
         test_finalize_rvol_baseline_skips_when_no_readings,
         test_underlying_market_freshness_reflects_feed_staleness,
+        test_resolve_underlying_spot_pairs_price_with_its_own_timestamp,
+        test_resolve_underlying_spot_last_price_paired_with_last_ts,
+        test_resolve_underlying_spot_last_resort_fallback_paired_with_its_own_timestamp,
+        test_resolve_underlying_spot_nothing_available,
+        test_accumulate_vwap_rejects_out_of_order_provider_events,
+        test_underlying_market_flags_partial_session_after_a_late_start,
+        test_underlying_market_partial_session_false_when_started_at_open,
     ]
     for test in tests:
         test()

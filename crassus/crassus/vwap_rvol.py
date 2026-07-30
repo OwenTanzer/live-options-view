@@ -12,12 +12,21 @@ split intact per concern, rather than overloading one file with two
 independent signal types.
 
 `evaluate_gate` never fabricates a verdict from untrustworthy data: when
-`underlying_market` is missing or its `rvol_status` isn't `"ok"`, the gate's
-`status` pass-through tells the caller exactly that, with `vwap_agrees`/
-`rvol_participation_ok` left `None` rather than guessed. It is the caller's
-job (see `strategies/momentum_qqq.py`) to treat that the same way an absent
-or stale market observation is already treated -- retain a held position,
-don't act on nothing -- not the same as a genuine unsupported/neutral read.
+`underlying_market` is missing, its `freshness` isn't `"live"`, or its
+`rvol_status` isn't `"ok"`, the gate's `status` pass-through tells the caller
+exactly that, with `vwap_agrees`/`rvol_participation_ok` left `None` rather
+than guessed. It is the caller's job (see `strategies/momentum_qqq.py`) to
+treat that the same way an absent or stale market observation is already
+treated -- retain a held position, don't act on nothing -- not the same as a
+genuine unsupported/neutral read.
+
+The `freshness` check runs before the RVOL-status check and gates the VWAP
+side of the evaluation too, not just RVOL: `freshness` describes the whole
+`underlying_market` record (spot, vwap, and the session volume RVOL is
+computed from all come from one collector read), so a stale record can't be
+trusted for a VWAP-agreement check just because RVOL's own bucket status
+happens to say "ok" -- RVOL's baseline can look fine while the feed powering
+the *current* spot/vwap comparison has gone stale.
 """
 
 from __future__ import annotations
@@ -31,7 +40,7 @@ from .market import UnderlyingMarket
 class VwapRvolGate:
     """The result of `evaluate_gate`."""
 
-    status: str  # "no_data" | "insufficient_history" | "ok"
+    status: str  # "no_data" | "stale_source" | "insufficient_history" | "ok"
     vwap_agrees: bool | None
     rvol_participation_ok: bool | None
     vwap: float | None
@@ -59,6 +68,14 @@ def evaluate_gate(
         return VwapRvolGate(
             status="no_data", vwap_agrees=None, rvol_participation_ok=None,
             vwap=None, price_vs_vwap_pct=None, rvol_multiple=None, freshness="stale",
+        )
+
+    if underlying_market.freshness != "live":
+        return VwapRvolGate(
+            status="stale_source",
+            vwap_agrees=None, rvol_participation_ok=None,
+            vwap=underlying_market.vwap, price_vs_vwap_pct=underlying_market.price_vs_vwap_pct,
+            rvol_multiple=None, freshness=underlying_market.freshness,
         )
 
     if underlying_market.rvol_status != "ok":

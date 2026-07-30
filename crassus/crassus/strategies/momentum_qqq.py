@@ -277,6 +277,7 @@ def _decide_core(
         gate_meta = dict(
             meta_base,
             vwap_gate_status=gate.status,
+            vwap_gate_freshness=gate.freshness,
             vwap=gate.vwap,
             price_vs_vwap_pct=gate.price_vs_vwap_pct,
             vwap_agrees=gate.vwap_agrees,
@@ -286,11 +287,13 @@ def _decide_core(
         )
         if gate.status != "ok":
             # No trustworthy VWAP/RVOL reading yet (RVOL still building its
-            # baseline, or the underlying market data itself is missing) --
-            # an absence of a fresh gate observation, not a gate that has
-            # actually looked and disagreed. Same reasoning as
-            # stale_source_reason above: retain a held position, don't act
-            # on nothing.
+            # baseline, the underlying market data itself is missing, or its
+            # freshness isn't "live" -- evaluate_gate checks freshness before
+            # rvol_status, so a stale record can't slip through just because
+            # RVOL's own bucket status happens to read "ok") -- an absence of
+            # a fresh gate observation, not a gate that has actually looked
+            # and disagreed. Same reasoning as stale_source_reason above:
+            # retain a held position, don't act on nothing.
             if held_symbol is not None:
                 return no(
                     f"VWAP/RVOL confirmation data unavailable "

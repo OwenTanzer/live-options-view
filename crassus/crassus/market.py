@@ -85,6 +85,12 @@ class UnderlyingMarket:
     market some strategy or UI code wants to render off leftover data from a
     prior session is a read-time inference the consumer makes for itself
     (e.g. from `ctx.session_phase`), not a value the collector can predict.
+
+    `vwap_partial_session` is `True` when the VWAP accumulator started
+    meaningfully after the session's official open (a restart that couldn't
+    recover its prior running sums, or a delayed process start) rather than
+    covering the whole session-to-date; `None` when nothing has accumulated
+    at all yet (`vwap` itself is `None` in that case too).
     """
 
     symbol: str | None
@@ -93,6 +99,8 @@ class UnderlyingMarket:
     vwap: float | None
     vwap_ts: str | None
     vwap_session_date: str | None
+    vwap_session_started_at: str | None
+    vwap_partial_session: bool | None
     price_vs_vwap_abs: float | None
     price_vs_vwap_pct: float | None
     session_volume: int | None
@@ -118,6 +126,8 @@ class UnderlyingMarket:
             vwap=payload.get("vwap"),
             vwap_ts=payload.get("vwap_ts"),
             vwap_session_date=payload.get("vwap_session_date"),
+            vwap_session_started_at=payload.get("vwap_session_started_at"),
+            vwap_partial_session=payload.get("vwap_partial_session"),
             price_vs_vwap_abs=payload.get("price_vs_vwap_abs"),
             price_vs_vwap_pct=payload.get("price_vs_vwap_pct"),
             session_volume=payload.get("session_volume"),

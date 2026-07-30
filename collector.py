@@ -26,6 +26,7 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import threading
@@ -1160,6 +1161,12 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
         qqq_yf = yf_data.get("QQQ")
         if qqq_yf is not None:
             _last_spot[0] = qqq_yf
+            # Same reasoning as quote_ts above: yfinance has no trustworthy
+            # provider event timestamp, so _last_spot[1] must not carry over
+            # whatever (older, DXLink-sourced) timestamp was there before --
+            # take_snapshot's freshness check needs spot_ts=None here to
+            # correctly report this fallback as not "live".
+            _last_spot[1] = None
 
     for lbl, d in prices.items():
         if d["price"] is not None:
@@ -1306,7 +1313,7 @@ def _fmt_oi(v: int) -> str:
 
 
 _prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
-_last_spot: list = [None]         # [float|None] — yfinance fallback for underlying price
+_last_spot: list = [None, None]   # [price|None, observed_at_iso|None] — yfinance/CSV fallback for underlying price
 _last_prices: dict[str, dict] = {}  # label -> {price, quote_ts}; timestamp never refreshed by fallback
 _first_snapshot_written: bool = False  # guard so first.csv is only written once per session
 
@@ -1352,11 +1359,26 @@ def restore_state(s3, today: date) -> None:
                     except Exception:
                         pass
 
-        # Restore _last_spot
+        # Restore _last_spot, paired with the timestamp encoded in the
+        # snapshot's own filename (snapshot_HHMMSSffffff.csv) -- not
+        # datetime.now() at restore time, which would misrepresent how old
+        # this recovered price actually is.
         if "UnderlyingPrice" in df.columns:
             spot = df["UnderlyingPrice"].dropna().iloc[-1] if not df["UnderlyingPrice"].dropna().empty else None
             if spot:
                 _last_spot[0] = float(spot)
+                _last_spot[1] = None
+                name_match = re.search(r"snapshot_(\d{6})(\d{6})\.csv$", latest_key)
+                if name_match:
+                    hms, micro = name_match.groups()
+                    try:
+                        spot_dt = ET.localize(datetime(
+                            today.year, today.month, today.day,
+                            int(hms[0:2]), int(hms[2:4]), int(hms[4:6]), int(micro),
+                        ))
+                        _last_spot[1] = spot_dt.astimezone(timezone.utc).isoformat()
+                    except ValueError:
+                        pass
 
         # Restore _last_prices from price columns (any col not in core option fields)
         core_cols = {"TradeDate","Expiration","Strike","Type","OptionSymbol","DTE",
@@ -1396,8 +1418,12 @@ def _restore_vwap_state(s3, today: date, date_str: str) -> None:
         data = json.loads(body)
         if data.get("session_date") != today.isoformat():
             return  # stale leftover from a prior day; a fresh accumulator is correct
+        session_started_at = data.get("session_started_at")
+        last_observed_at = data.get("last_observed_at")
         _vwap_state = ms.VwapState(
             session_date=today,
+            session_started_at=datetime.fromisoformat(session_started_at) if session_started_at else None,
+            last_observed_at=datetime.fromisoformat(last_observed_at) if last_observed_at else None,
             cum_pv=data.get("cum_pv", 0.0),
             cum_vol=data.get("cum_vol", 0),
             last_dayvolume=data.get("last_dayvolume"),
@@ -1417,6 +1443,8 @@ def _persist_vwap_state(s3, date_str: str) -> None:
     try:
         data = {
             "session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
+            "session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
+            "last_observed_at": _vwap_state.last_observed_at.isoformat() if _vwap_state.last_observed_at else None,
             "cum_pv": _vwap_state.cum_pv,
             "cum_vol": _vwap_state.cum_vol,
             "last_dayvolume": _vwap_state.last_dayvolume,
@@ -1490,26 +1518,28 @@ def finalize_rvol_baseline(s3, today: date) -> None:
         log.warning(f"finalize_rvol_baseline failed (non-fatal): {e}")
 
 
-def _compute_underlying_market(s3, qqq: dict, underlying: float | None,
+def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_str: str | None,
                                 ts_et: datetime, ts_utc: datetime, today: date) -> dict:
     """VWAP/RVOL for the `underlying_market` block of `intraday/latest.json`.
 
     Approximation, not tick-accurate VWAP: weights the snapshot's own spot
     price by the volume delta since the last snapshot, not by each
     individual trade's own price (see market_signals.py's module docstring).
+
+    `spot_ts_str` must already be paired with `underlying` by the caller
+    (see take_snapshot's spot-resolution block) -- this function does not
+    re-derive it from `qqq`, so a value that fell back to a non-DXLink source
+    can't end up stamped with an unrelated DXLink timestamp.
     """
     global _vwap_state
 
     _vwap_state = ms.reset_if_new_session(_vwap_state, today)
 
     raw_day_volume = qqq.get("volume")
-    spot_ts_str = max(
-        [v for v in (qqq.get("last_ts"), qqq.get("bid_ts"), qqq.get("ask_ts")) if v],
-        default=None,
-    )
+    spot_observed_at = datetime.fromisoformat(spot_ts_str) if spot_ts_str else None
 
     _vwap_state = ms.accumulate_vwap(
-        _vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=ts_utc,
+        _vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=spot_observed_at,
     )
     _persist_vwap_state(s3, today.strftime("%Y%m%d"))
 
@@ -1525,11 +1555,13 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None,
         price_vs_vwap_abs = round(underlying - _vwap_state.vwap, 4)
         price_vs_vwap_pct = round((underlying - _vwap_state.vwap) / _vwap_state.vwap * 100, 4)
 
-    spot_ts_dt = datetime.fromisoformat(spot_ts_str) if spot_ts_str else None
     freshness = ms.classify_freshness(
         inside_session_window=True,  # take_snapshot only ever runs inside the session window
-        spot_ts=spot_ts_dt, now=ts_utc, stale_after_s=STALE_FEED_SECS,
+        spot_ts=spot_observed_at, now=ts_utc, stale_after_s=STALE_FEED_SECS,
     )
+
+    session_start, _ = _session_bounds(ts_et)
+    vwap_partial_session = ms.is_partial_session(_vwap_state, session_start)
 
     return {
         "symbol": TICKER,
@@ -1538,6 +1570,8 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None,
         "vwap": _vwap_state.vwap,
         "vwap_ts": _vwap_state.vwap_ts,
         "vwap_session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
+        "vwap_session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
+        "vwap_partial_session": vwap_partial_session,
         "price_vs_vwap_abs": price_vs_vwap_abs,
         "price_vs_vwap_pct": price_vs_vwap_pct,
         "session_volume": raw_day_volume,
@@ -1556,6 +1590,30 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None,
     }
 
 
+def _resolve_underlying_spot(
+    qqq: dict, last_spot_price: float | None, last_spot_ts: str | None,
+) -> tuple[float | None, str | None]:
+    """Resolve the current spot price and its paired observation timestamp
+    together, branch for branch, so the two always describe the same
+    observation. Previously `underlying` could fall through to the
+    yfinance-backed `_last_spot` fallback while its timestamp was derived
+    independently from `qqq`'s DXLink state -- pairing a feed-derived
+    timestamp with a value that didn't actually come from the feed.
+    `last_spot_ts` is `None` whenever `last_spot_price` came from yfinance
+    (see `push_prices()`), which has no trustworthy provider event
+    timestamp -- that correctly makes this fallback classify as "stale",
+    never "live".
+    """
+    bid, ask = qqq.get("bid"), qqq.get("ask")
+    if bid and ask:
+        return round((bid + ask) / 2, 2), max([v for v in (qqq.get("bid_ts"), qqq.get("ask_ts")) if v], default=None)
+    if qqq.get("last"):
+        return qqq.get("last"), qqq.get("last_ts")
+    if last_spot_price is not None:
+        return round(last_spot_price, 2), last_spot_ts
+    return None, None
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker):
@@ -1564,13 +1622,10 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     ts_utc = datetime.now(timezone.utc)
 
     qqq = state.get(TICKER, {})
-    bid, ask = qqq.get("bid"), qqq.get("ask")
-    underlying = round((bid + ask) / 2, 2) if bid and ask else (qqq.get("last") or None)
-    if underlying is None and _last_spot[0] is not None:
-        underlying = round(_last_spot[0], 2)
+    underlying, spot_ts_str = _resolve_underlying_spot(qqq, _last_spot[0], _last_spot[1])
     atm = round(underlying) if underlying else None
 
-    underlying_market = _compute_underlying_market(s3, qqq, underlying, ts_et, ts_utc, today)
+    underlying_market = _compute_underlying_market(s3, qqq, underlying, spot_ts_str, ts_et, ts_utc, today)
 
     rows = []
     for s in strikes:
