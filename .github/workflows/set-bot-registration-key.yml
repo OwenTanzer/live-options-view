@@ -1,0 +1,23 @@
+name: One-off - Set Worker BOT_REGISTRATION_KEY
+
+# Manual, one-off operational task: push a rotated BOT_REGISTRATION_KEY value
+# into the Worker as a Cloudflare secret using the same CLOUDFLARE_API_TOKEN
+# deploy.yml already uses. This file and the TEMP_BOT_REGISTRATION_KEY repo
+# secret are removed again once the rotation lands.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set-secret:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: wrangler secret put BOT_REGISTRATION_KEY
+        working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SECRET_VALUE: ${{ secrets.TEMP_BOT_REGISTRATION_KEY }}
+        run: echo "$SECRET_VALUE" | npx --yes wrangler@4 secret put BOT_REGISTRATION_KEY
