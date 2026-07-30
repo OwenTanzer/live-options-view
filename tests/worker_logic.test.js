@@ -7,6 +7,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // loaded here via dynamic import rather than require() since it's ESM.
   const {
     validateTradeIntent, executionIntentMatches, executionPriceForOrder, computeBookFromTrades,
+    existingExecutionResponse,
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
@@ -77,6 +78,25 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     executionPriceForOrder({ bid: 1.10, ask: 1.20 }, { side: 'sell', order_type: 'limit', limit_price: 1.15 }).error,
     /above current bid/,
   );
+
+  // ── existingExecutionResponse ──────────────────────────────────────────────
+  {
+    const rejectedIntent = {
+      execution_request_id: UUID, sym: 'QQQ260717C00600000', side: 'buy', qty: 1,
+      order_type: 'limit', limit_price: 1.15,
+    };
+    const rejection = {
+      ...rejectedIntent, order_id: UUID, status: 'rejected',
+      error: 'Buy limit $1.15 is below current ask $1.20',
+    };
+    const replay = existingExecutionResponse(rejection, rejectedIntent);
+    assert.equal(replay.status, 409, 'a persisted rejection must replay as rejected');
+    assert.deepEqual(await replay.json(), rejection);
+
+    const conflict = existingExecutionResponse(rejection, { ...rejectedIntent, limit_price: 1.20 });
+    assert.equal(conflict.status, 409);
+    assert.match((await conflict.json()).error, /conflicts with a different trade intent/);
+  }
 
   // ── computeBookFromTrades ───────────────────────────────────────────────────
   {

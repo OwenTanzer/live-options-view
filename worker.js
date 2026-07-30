@@ -627,11 +627,44 @@ async function handlePaperTrade(request, env) {
   const executedAt = new Date();
   const priceResult = executionPriceForOrder(quoteResult, body);
   if (priceResult.error) {
-    return jsonResponse({
+    const rejection = Object.freeze({
+      execution_id: executionId,
+      execution_request_id: executionId,
+      ts: executedAt.toISOString(),
+      quote_received_ts: quoteReceivedAt.toISOString(),
+      quote_ts: quoteResult.quoteTs,
+      bid_ts: quoteResult.bidTs,
+      ask_ts: quoteResult.askTs,
+      sym: body.sym,
+      strike: quoteResult.strike,
+      type: quoteResult.type,
+      exp: quoteResult.exp,
+      side: body.side,
+      qty: body.qty,
       error: priceResult.error,
       order_id: executionId,
+      order_type: body.order_type ?? 'market',
+      limit_price: body.order_type === 'limit' ? body.limit_price : null,
       status: 'rejected',
-    }, 409);
+      bid: quoteResult.bid,
+      ask: quoteResult.ask,
+      username: session.username,
+    });
+    try {
+      const stored = await env.PAPER_TRADES.put(key, JSON.stringify(rejection), {
+        onlyIf: { etagDoesNotMatch: '*' },
+        httpMetadata: { contentType: 'application/json' },
+        customMetadata: { executionId, executedAt: executedAt.toISOString() },
+      });
+      if (!stored) {
+        const existing = await env.PAPER_TRADES.get(key);
+        if (!existing) throw new Error('Canonical execution missing after conditional write');
+        return existingExecutionResponse(await existing.json(), body);
+      }
+    } catch (error) {
+      return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
+    }
+    return existingExecutionResponse(rejection, body);
   }
   const price = priceResult.price;
   // Buys debit cash and are capped by balance below; sells credit cash
@@ -913,11 +946,11 @@ export function executionPriceForOrder(quote, intent) {
   return { price };
 }
 
-function existingExecutionResponse(trade, intent) {
-  if (!executionIntentMatches(trade, intent)) {
+export function existingExecutionResponse(outcome, intent) {
+  if (!executionIntentMatches(outcome, intent)) {
     return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
   }
-  return jsonResponse(trade, 200);
+  return jsonResponse(outcome, outcome.status === 'rejected' ? 409 : 200);
 }
 
 async function quoteProviderErrorResponse(response) {

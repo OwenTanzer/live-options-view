@@ -1427,7 +1427,7 @@ function openTicket(e, row) {
   orderTypeEl.onchange = () => {
     const isLimit = orderTypeEl.value === 'limit';
     limitWrap.classList.toggle('hidden', !isLimit);
-    if (isLimit && !limitEl.value) limitEl.value = q.mid != null ? q.mid.toFixed(2) : '';
+    if (!isLimit) limitEl.value = '';
   };
   t.querySelector('.btn-buy').onclick  = () => executeTrade(info, 'buy', qtyEl.value, orderTypeEl.value, limitEl.value);
   t.querySelector('.btn-sell').onclick = () => executeTrade(info, 'sell', qtyEl.value, orderTypeEl.value, limitEl.value);
