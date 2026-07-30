@@ -136,19 +136,27 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Jesus | `cheap_atm_calls` | P3 |
 | Doris | `cheap_atm_puts` | P3 |
 
+The six accounts above are the eventual P3 mapping's -- see below for what
+each runs today instead. A seventh, **TrumpWhisperer**, exists solely to
+run `trump_whisperer_qqq` and isn't part of that six-account P3 mapping at
+all; it's not a stand-in for a future strategy the way the other six are.
+
 Three strategies are implemented today -- `smoke_atm_roundtrip`,
 `reddit_sentiment_qqq`, and `trump_whisperer_qqq` -- so `accounts.example.json`
-splits the six accounts three/three between `smoke_atm_roundtrip` and
-`reddit_sentiment_qqq` rather than running them all on one, which would
-only measure variance; swap an account onto `trump_whisperer_qqq` (see
-below) to compare a third signal. The three sentiment accounts use
-conservative / default / aggressive thresholds via `params`, so the
-Automated tab's per-strategy rollup compares something real out of the box.
-Copying the file as-is is meant to work, not just illustrate the eventual
-mapping. Swap in a P3 strategy_id for an account only once that strategy is
-registered; the runner validates every configured `strategy_id` against the
-registry at startup and refuses to start (rather than crashing mid-run on
-the first unregistered one it happens to reach) if one doesn't exist yet.
+splits the original six accounts three/three between `smoke_atm_roundtrip`
+(Ankit, Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus,
+Doris) rather than running them all on one, which would only measure
+variance, and adds **TrumpWhisperer** running `trump_whisperer_qqq` as a
+seventh account to compare a third signal. The three `reddit_sentiment_qqq`
+accounts use conservative / default / aggressive thresholds via `params`,
+so the Automated tab's per-strategy rollup compares something real out of
+the box; TrumpWhisperer runs on `trump_whisperer_qqq`'s defaults (see below
+for `params` it accepts the same way). Copying the file as-is is meant to
+work, not just illustrate the eventual mapping. Swap in a P3 strategy_id
+for an account only once that strategy is registered; the runner validates
+every configured `strategy_id` against the registry at startup and refuses
+to start (rather than crashing mid-run on the first unregistered one it
+happens to reach) if one doesn't exist yet.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
@@ -378,9 +386,9 @@ Both remain configurable per account via `"params"`, passed through to
 
 ```json
 {
-  "alias": "Jesus",
-  "username": "crassus_jesus",
-  "password_env": "CRASSUS_PW_JESUS",
+  "alias": "TrumpWhisperer",
+  "username": "crassus_trumpwhisperer",
+  "password_env": "CRASSUS_PW_TRUMPWHISPERER",
   "strategy_id": "trump_whisperer_qqq",
   "params": { "min_sample_size": 3, "bullish_threshold": 0.25, "bearish_threshold": -0.25 }
 }
