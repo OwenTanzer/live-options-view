@@ -37,6 +37,12 @@ jobs:
       - name: Run trump_whisperer_qqq ingestion suite
         working-directory: crassus
         run: python scripts/verify_trump_ingestion.py
+      - name: Run momentum_qqq strategy suite
+        working-directory: crassus
+        run: python scripts/verify_momentum_qqq.py
+      - name: Run VWAP/RVOL data contract and gate suite
+        working-directory: crassus
+        run: python scripts/verify_vwap_rvol.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's

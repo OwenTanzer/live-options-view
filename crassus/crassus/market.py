@@ -68,6 +68,82 @@ class Quote:
 
 
 @dataclass(frozen=True)
+class UnderlyingMarket:
+    """VWAP/RVOL for the underlying, as published in `underlying_market` on
+    the snapshot payload (see collector.py's `_compute_underlying_market` and
+    `docs/plans/2026-07-vwap-rvol.md`). One canonical record consumed
+    identically by the UI and by strategies -- see
+    `crassus/crassus/vwap_rvol.py` for how a strategy evaluates it.
+
+    `rvol_status` is `"no_data"` (no baseline bucket yet) | `"insufficient_history"`
+    (bucket exists, fewer than the collector's configured minimum days of
+    samples) | `"ok"` -- same three-state shape as `momentum.MomentumSignal.status`,
+    same rationale: separate "nothing" from "not enough yet" from "trustworthy."
+
+    `freshness` is `"live"` | `"stale"` as written by the collector (it can
+    only ever observe one of those two while it's running); a `"closed"`
+    market some strategy or UI code wants to render off leftover data from a
+    prior session is a read-time inference the consumer makes for itself
+    (e.g. from `ctx.session_phase`), not a value the collector can predict.
+
+    `vwap_partial_session` is `True` when the VWAP accumulator started
+    meaningfully after the session's official open (a restart that couldn't
+    recover its prior running sums, or a delayed process start) rather than
+    covering the whole session-to-date; `None` when nothing has accumulated
+    at all yet (`vwap` itself is `None` in that case too).
+    """
+
+    symbol: str | None
+    spot: float | None
+    spot_ts: str | None
+    vwap: float | None
+    vwap_ts: str | None
+    vwap_session_date: str | None
+    vwap_session_started_at: str | None
+    vwap_partial_session: bool | None
+    price_vs_vwap_abs: float | None
+    price_vs_vwap_pct: float | None
+    session_volume: int | None
+    session_volume_ts: str | None
+    rvol_status: str
+    rvol_multiple: float | None
+    rvol_bucket_label: str | None
+    rvol_baseline_volume: float | None
+    rvol_baseline_days_used: int | None
+    rvol_baseline_lookback_days: int | None
+    source: str | None
+    freshness: str
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any] | None) -> "UnderlyingMarket | None":
+        if not payload:
+            return None
+        rvol = payload.get("rvol") or {}
+        return cls(
+            symbol=payload.get("symbol"),
+            spot=payload.get("spot"),
+            spot_ts=payload.get("spot_ts"),
+            vwap=payload.get("vwap"),
+            vwap_ts=payload.get("vwap_ts"),
+            vwap_session_date=payload.get("vwap_session_date"),
+            vwap_session_started_at=payload.get("vwap_session_started_at"),
+            vwap_partial_session=payload.get("vwap_partial_session"),
+            price_vs_vwap_abs=payload.get("price_vs_vwap_abs"),
+            price_vs_vwap_pct=payload.get("price_vs_vwap_pct"),
+            session_volume=payload.get("session_volume"),
+            session_volume_ts=payload.get("session_volume_ts"),
+            rvol_status=rvol.get("status", "no_data"),
+            rvol_multiple=rvol.get("multiple"),
+            rvol_bucket_label=rvol.get("bucket_label"),
+            rvol_baseline_volume=rvol.get("baseline_volume"),
+            rvol_baseline_days_used=rvol.get("baseline_days_used"),
+            rvol_baseline_lookback_days=rvol.get("baseline_lookback_days"),
+            source=payload.get("source"),
+            freshness=payload.get("freshness", "stale"),
+        )
+
+
+@dataclass(frozen=True)
 class MarketSnapshot:
     """One immutable read of the durable option board."""
 
@@ -79,6 +155,7 @@ class MarketSnapshot:
     underlying_price: float
     rows: list[dict[str, Any]]
     sha256: str
+    underlying_market: UnderlyingMarket | None = None
 
     @classmethod
     def from_payload(cls, url: str, payload: dict[str, Any], raw: bytes) -> "MarketSnapshot":
@@ -91,6 +168,7 @@ class MarketSnapshot:
             underlying_price=float(payload["underlying_price"]),
             rows=payload.get("rows", []),
             sha256=hashlib.sha256(raw).hexdigest(),
+            underlying_market=UnderlyingMarket.from_payload(payload.get("underlying_market")),
         )
 
     @property

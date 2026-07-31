@@ -1,0 +1,40 @@
+name: Collector suite
+
+# collector.py and market_signals.py live at repo root, outside crassus/'s
+# path filter, and had no CI coverage at all before this -- tests/
+# stage2_verification.py existed but was never wired into a workflow. This
+# closes that gap and adds coverage for the new VWAP/RVOL logic
+# (market_signals.py, see docs/plans/2026-07-vwap-rvol.md) alongside it.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "collector.py"
+      - "market_signals.py"
+      - "requirements.txt"
+      - "tests/stage2_verification.py"
+      - "tests/verify_collector_vwap_rvol.py"
+      - ".github/workflows/collector-ci.yml"
+  pull_request:
+    paths:
+      - "collector.py"
+      - "market_signals.py"
+      - "requirements.txt"
+      - "tests/stage2_verification.py"
+      - "tests/verify_collector_vwap_rvol.py"
+      - ".github/workflows/collector-ci.yml"
+
+jobs:
+  verify-collector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run collector unit suite
+        run: python tests/stage2_verification.py
+      - name: Run VWAP/RVOL collector suite
+        run: python tests/verify_collector_vwap_rvol.py
