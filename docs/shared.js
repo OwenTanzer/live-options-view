@@ -197,6 +197,43 @@ function formatVwapRvol(underlyingMarket, nowMs = Date.now()) {
   return { text: `${vwapPart} | ${rvolPart}`, state: um.freshness === 'live' ? 'live' : 'stale' };
 }
 
+// -- time-series momentum display formatting ---------------------------------
+// Pure formatting for `underlying_market.momentum` (see
+// crassus/crassus/market.py's UnderlyingMarket.momentum_* fields and
+// docs/plans/2026-07-momentum-indicator.md). Display/log-only reference
+// signal -- computed by the collector the same way momentum_qqq computes its
+// own live trading signal, but independently, not a shared value (each
+// momentum_qqq account runs its own separately-configured lookback). Same
+// state vocabulary and "closed"-by-age inference as formatVwapRvol above.
+function formatMomentum(underlyingMarket, nowMs = Date.now()) {
+  if (!underlyingMarket) {
+    return { text: 'Momentum: unavailable', state: 'fallback' };
+  }
+  const um = underlyingMarket;
+  const observedMs = Date.parse(um.spot_ts || '');
+  const ageMs = Number.isFinite(observedMs) ? nowMs - observedMs : null;
+  if (ageMs != null && ageMs > VWAP_RVOL_CLOSED_AFTER_MS) {
+    return { text: 'Momentum: session closed', state: 'closed' };
+  }
+
+  const momentum = um.momentum || {};
+  let text;
+  if (momentum.status === 'ok' && momentum.return_pct != null) {
+    const sign = momentum.return_pct >= 0 ? '+' : '';
+    const arrow = momentum.direction === 'up' ? '▲' : momentum.direction === 'down' ? '▼' : '→';
+    const lookback = momentum.lookback_minutes != null ? Math.round(momentum.lookback_minutes) : '?';
+    text = `Momentum ${arrow} ${sign}${momentum.return_pct.toFixed(2)}% (${lookback}m)`;
+  } else if (momentum.status === 'warming_up') {
+    text = 'Momentum warming up';
+  } else if (momentum.status === 'stale_anchor') {
+    text = 'Momentum stale (gap in data)';
+  } else {
+    text = 'Momentum —';
+  }
+
+  return { text, state: um.freshness === 'live' ? 'live' : 'stale' };
+}
+
 const SHARE_QUOTE_MAX_AGE_MS = 15_000;
 
 function freshShareQuote(quote, nowMs = Date.now(), maxAgeMs = SHARE_QUOTE_MAX_AGE_MS) {
@@ -721,7 +758,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
-    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol,
+    SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };

@@ -49,6 +49,10 @@ FULL_UM_PAYLOAD = {
         "baseline_volume": 700000, "baseline_days_used": 10,
         "baseline_lookback_days": 20, "baseline_updated_through": "2026-07-29",
     },
+    "momentum": {
+        "status": "ok", "return_pct": 0.42, "lookback_minutes": 60.0,
+        "anchor_age_minutes": 61.0, "sample_count": 30, "direction": "up",
+    },
     "source": "dxlink", "freshness": "live",
 }
 
@@ -56,10 +60,14 @@ FULL_UM_PAYLOAD = {
 def um(**overrides) -> UnderlyingMarket:
     payload = dict(FULL_UM_PAYLOAD)
     rvol = dict(payload["rvol"])
+    momentum = dict(payload["momentum"])
     for key in list(overrides):
         if key.startswith("rvol_"):
             rvol[key[len("rvol_"):]] = overrides.pop(key)
+        elif key.startswith("momentum_"):
+            momentum[key[len("momentum_"):]] = overrides.pop(key)
     payload["rvol"] = rvol
+    payload["momentum"] = momentum
     payload.update(overrides)
     return UnderlyingMarket.from_payload(payload)
 
@@ -127,6 +135,9 @@ def scenario_from_payload_full() -> None:
     check("rvol_status unpacked from nested rvol", parsed.rvol_status == "ok")
     check("rvol_multiple unpacked from nested rvol", parsed.rvol_multiple == 1.5)
     check("rvol_baseline_days_used unpacked", parsed.rvol_baseline_days_used == 10)
+    check("momentum_status unpacked from nested momentum", parsed.momentum_status == "ok")
+    check("momentum_return_pct unpacked from nested momentum", parsed.momentum_return_pct == 0.42)
+    check("momentum_direction unpacked from nested momentum", parsed.momentum_direction == "up")
     check("freshness", parsed.freshness == "live")
 
 
