@@ -24,11 +24,11 @@ import market_signals as ms  # noqa: E402
 
 
 class FakeBody:
-    def __init__(self, payload):
-        self.payload = payload
+    def __init__(self, raw: bytes):
+        self.raw = raw
 
     def read(self):
-        return json.dumps(self.payload).encode()
+        return self.raw
 
 
 class FakeS3:
@@ -36,10 +36,16 @@ class FakeS3:
     per-key store so `get_object` can return whatever was last `put_object`'d
     under that key -- needed to test restore/finalize round-trips, not just
     inspect what was written.
+
+    Stores raw bytes, not a parsed/re-serialized object -- collector.py's own
+    JSON-vs-NDJSON handling (single objects for vwap_state/RVOL baseline,
+    growing newline-delimited entries for momentum_log.jsonl) is exercised
+    faithfully this way, rather than assuming every key holds exactly one
+    JSON document.
     """
 
     def __init__(self, seed: dict | None = None):
-        self.store = dict(seed or {})
+        self.store: dict[str, bytes] = {k: json.dumps(v).encode() for k, v in (seed or {}).items()}
         self.objects = []
 
     def get_object(self, Bucket, Key):  # noqa: N803 (matches boto3's call signature)
@@ -48,19 +54,19 @@ class FakeS3:
         return {"Body": FakeBody(self.store[Key])}
 
     def put_object(self, Bucket, Key, Body, **kwargs):  # noqa: N803
-        payload = json.loads(Body) if isinstance(Body, (bytes, str)) else Body
-        self.store[Key] = payload
-        self.objects.append({"Key": Key, "Body": Body})
+        raw = Body if isinstance(Body, bytes) else str(Body).encode()
+        self.store[Key] = raw
+        self.objects.append({"Key": Key, "Body": raw})
 
     def json_objects(self, key):
-        out = []
-        for obj in self.objects:
-            if obj["Key"] == key:
-                body = obj["Body"]
-                if isinstance(body, bytes):
-                    body = body.decode()
-                out.append(json.loads(body))
-        return out
+        """Every `put_object` call under `key` treated as one whole JSON document."""
+        return [json.loads(obj["Body"].decode()) for obj in self.objects if obj["Key"] == key]
+
+    def ndjson_lines(self, key):
+        """The final stored value under `key`, treated as newline-delimited JSON entries."""
+        if key not in self.store:
+            return []
+        return [json.loads(line) for line in self.store[key].decode().splitlines() if line.strip()]
 
 
 def assert_equal(actual, expected, label):
@@ -77,6 +83,7 @@ def _reset_module_state():
     collector._vwap_state = ms.VwapState()
     collector._rvol_baseline = {}
     collector._rvol_today.clear()
+    collector._momentum_history = []
 
 
 def test_vwap_accumulates_across_snapshots_and_resets_session():
@@ -353,6 +360,84 @@ def test_underlying_market_partial_session_false_when_started_at_open():
         _reset_module_state()
 
 
+def test_compute_time_series_momentum_no_data():
+    now = datetime(2026, 7, 30, 15, 0, tzinfo=timezone.utc)
+    reading = ms.compute_time_series_momentum(
+        [], now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(reading.status, "no_data", "empty history")
+    assert_equal(reading.direction, None, "no direction without data")
+
+
+def test_compute_time_series_momentum_warming_up():
+    now = datetime(2026, 7, 30, 15, 0, tzinfo=timezone.utc)
+    history = [ms.SpotPoint(now - timedelta(minutes=10), 400.0), ms.SpotPoint(now, 402.0)]
+    reading = ms.compute_time_series_momentum(
+        history, now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(reading.status, "warming_up", "no point old enough to anchor the 60m lookback yet")
+
+
+def test_compute_time_series_momentum_ok_direction_up_down_flat():
+    now = datetime(2026, 7, 30, 15, 0, tzinfo=timezone.utc)
+    up = ms.compute_time_series_momentum(
+        [ms.SpotPoint(now - timedelta(minutes=65), 400.0), ms.SpotPoint(now, 404.0)],
+        now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(up.status, "ok", "valid anchor within overshoot")
+    assert_equal(up.direction, "up", "positive return above the neutral band")
+    assert_true(up.return_pct > 0, "return_pct is positive")
+
+    down = ms.compute_time_series_momentum(
+        [ms.SpotPoint(now - timedelta(minutes=65), 400.0), ms.SpotPoint(now, 396.0)],
+        now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(down.direction, "down", "negative return below the neutral band")
+
+    flat = ms.compute_time_series_momentum(
+        [ms.SpotPoint(now - timedelta(minutes=65), 400.0), ms.SpotPoint(now, 400.01)],
+        now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(flat.direction, "flat", "tiny return inside the neutral band")
+
+
+def test_compute_time_series_momentum_stale_anchor():
+    now = datetime(2026, 7, 30, 15, 0, tzinfo=timezone.utc)
+    history = [ms.SpotPoint(now - timedelta(minutes=400), 400.0), ms.SpotPoint(now, 404.0)]
+    reading = ms.compute_time_series_momentum(
+        history, now, lookback_minutes=60.0, max_anchor_overshoot_minutes=10.0, neutral_band_pct=0.05,
+    )
+    assert_equal(reading.status, "stale_anchor", "only candidate anchor is far past the overshoot bound")
+
+
+def test_underlying_market_includes_momentum_and_logs_it():
+    _reset_module_state()
+    try:
+        today = date(2026, 7, 30)
+        ts_et = collector.ET.localize(datetime(2026, 7, 30, 10, 30, 0))
+        ts_utc = datetime(2026, 7, 30, 14, 30, 0, tzinfo=timezone.utc)
+        s3 = FakeS3()
+
+        um1 = collector._compute_underlying_market(s3, {"volume": 1_000_000}, 400.0, ts_utc.isoformat(), ts_et, ts_utc, today)
+        assert_true("momentum" in um1, "underlying_market carries a momentum block")
+        assert_equal(um1["momentum"]["status"], "warming_up", "one observation is not enough to anchor yet")
+
+        ts_utc_2 = ts_utc + timedelta(minutes=65)
+        um2 = collector._compute_underlying_market(
+            s3, {"volume": 1_100_000}, 404.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, today,
+        )
+        assert_equal(um2["momentum"]["status"], "ok", "second observation, 65m later, anchors the 60m lookback")
+        assert_equal(um2["momentum"]["direction"], "up", "404 vs 400 is a positive move")
+
+        lines = s3.ndjson_lines(collector._momentum_log_key(today.strftime("%Y%m%d")))
+        assert_equal(len(lines), 2, "one momentum_log.jsonl line appended per snapshot cycle")
+        assert_equal(lines[0]["status"], "warming_up", "first logged entry matches the first reading")
+        assert_equal(lines[1]["status"], "ok", "second logged entry matches the second reading")
+        assert_equal(lines[1]["direction"], "up", "second logged entry records the up direction")
+    finally:
+        _reset_module_state()
+
+
 def run():
     tests = [
         test_vwap_accumulates_across_snapshots_and_resets_session,
@@ -370,6 +455,11 @@ def run():
         test_accumulate_vwap_rejects_out_of_order_provider_events,
         test_underlying_market_flags_partial_session_after_a_late_start,
         test_underlying_market_partial_session_false_when_started_at_open,
+        test_compute_time_series_momentum_no_data,
+        test_compute_time_series_momentum_warming_up,
+        test_compute_time_series_momentum_ok_direction_up_down_flat,
+        test_compute_time_series_momentum_stale_anchor,
+        test_underlying_market_includes_momentum_and_logs_it,
     ]
     for test in tests:
         test()

@@ -86,6 +86,16 @@ RVOL_LOOKBACK_DAYS      = 20
 RVOL_MIN_DAYS_REQUIRED  = 5
 RVOL_BASELINE_KEY       = "baselines/qqq_rvol_buckets.json"
 
+# Time-series momentum (display/log only, see market_signals.py's module
+# docstring and docs/plans/2026-07-momentum-indicator.md) -- same shape as
+# momentum_qqq's own default params (crassus/crassus/strategies/momentum_qqq.py),
+# but this is a reference signal for the UI/log, not a change to what any
+# account actually trades on.
+MOMENTUM_LOOKBACK_MINUTES          = 60.0
+MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN  = 10.0
+MOMENTUM_NEUTRAL_BAND_PCT          = 0.05  # display-only up/down/flat threshold
+MOMENTUM_RETAIN_MINUTES            = 24 * 60.0  # generous, decoupled from the configured lookback
+
 PRICE_TICKERS: dict[str, str] = {
     "QQQ":     "QQQ",
     "USO":     "USO",
@@ -1321,6 +1331,13 @@ _vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator,
 _rvol_baseline: dict = {}         # loaded once per session from RVOL_BASELINE_KEY; {"buckets": {...}, ...}
 _rvol_today: dict[str, int] = {}  # bucket_label -> latest session cum_volume seen in that bucket this session
 
+# Rolling window of recent spot observations for the display-only momentum
+# reading (see market_signals.py's compute_time_series_momentum). Unlike
+# _vwap_state, this needs no restart-recovery persistence: it's a bounded
+# real-time window, not a session-cumulative sum, so it self-heals within
+# ~MOMENTUM_LOOKBACK_MINUTES of any restart on its own.
+_momentum_history: list = []  # list[ms.SpotPoint]
+
 
 def restore_state(s3, today: date) -> None:
     """Seed _prev_vol, _last_spot, and _last_prices from the most recent R2 snapshot.
@@ -1518,6 +1535,36 @@ def finalize_rvol_baseline(s3, today: date) -> None:
         log.warning(f"finalize_rvol_baseline failed (non-fatal): {e}")
 
 
+def _momentum_log_key(date_str: str) -> str:
+    return f"intraday/{date_str}/momentum_log.jsonl"
+
+
+def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
+    """Append one momentum reading to a rolling per-day JSONL log in R2 --
+    a public, queryable historical record of the display signal, independent
+    of the private crassus trading bot's own decision ledger (which is a
+    local file wherever the runner executes, never published -- see
+    docs/plans/2026-07-momentum-indicator.md). Read-modify-write is fine at
+    this volume: at most one line per SNAPSHOT_SECS-second cycle, capped at
+    roughly 390 short lines/day. Best-effort -- a failure here must never
+    interrupt the snapshot it's piggybacking on.
+    """
+    try:
+        key = _momentum_log_key(date_str)
+        try:
+            existing = s3.get_object(Bucket=R2_BUCKET, Key=key)["Body"].read().decode()
+        except Exception:
+            existing = ""
+        s3.put_object(
+            Bucket=R2_BUCKET, Key=key,
+            Body=(existing + json.dumps(entry) + "\n").encode(),
+            ContentType="application/x-ndjson",
+            CacheControl="no-cache, max-age=0",
+        )
+    except Exception as e:
+        log.warning(f"momentum_log.jsonl append failed (non-fatal): {e}")
+
+
 def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_str: str | None,
                                 ts_et: datetime, ts_utc: datetime, today: date) -> dict:
     """VWAP/RVOL for the `underlying_market` block of `intraday/latest.json`.
@@ -1563,6 +1610,8 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
     session_start, _ = _session_bounds(ts_et)
     vwap_partial_session = ms.is_partial_session(_vwap_state, session_start)
 
+    momentum = _compute_and_log_momentum(s3, underlying, spot_observed_at, ts_utc, today)
+
     return {
         "symbol": TICKER,
         "spot": underlying,
@@ -1585,8 +1634,53 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
             "baseline_lookback_days": _rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
             "baseline_updated_through": _rvol_baseline.get("updated_through"),
         },
+        "momentum": momentum,
         "source": "dxlink",
         "freshness": freshness,
+    }
+
+
+def _compute_and_log_momentum(
+    s3, underlying: float | None, spot_observed_at: datetime | None, ts_utc: datetime, today: date,
+) -> dict:
+    """Display/log-only time-series momentum -- see market_signals.py's
+    module docstring for why this is a separate computation from
+    momentum_qqq's own live trading signal, not a shared one.
+    """
+    global _momentum_history
+
+    if underlying is not None and spot_observed_at is not None:
+        _momentum_history.append(ms.SpotPoint(observed_at=spot_observed_at, price=underlying))
+    _momentum_history = ms.prune_spot_history(_momentum_history, ts_utc, MOMENTUM_RETAIN_MINUTES)
+
+    reading = ms.compute_time_series_momentum(
+        _momentum_history, ts_utc,
+        lookback_minutes=MOMENTUM_LOOKBACK_MINUTES,
+        max_anchor_overshoot_minutes=MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
+        neutral_band_pct=MOMENTUM_NEUTRAL_BAND_PCT,
+    )
+
+    log.info(
+        f"momentum: status={reading.status} return_pct={reading.return_pct} "
+        f"direction={reading.direction} sample_count={reading.sample_count}"
+    )
+    _log_momentum_reading(s3, today.strftime("%Y%m%d"), {
+        "ts": ts_utc.isoformat(),
+        "status": reading.status,
+        "return_pct": reading.return_pct,
+        "lookback_minutes": reading.lookback_minutes,
+        "anchor_age_minutes": reading.anchor_age_minutes,
+        "sample_count": reading.sample_count,
+        "direction": reading.direction,
+    })
+
+    return {
+        "status": reading.status,
+        "return_pct": reading.return_pct,
+        "lookback_minutes": reading.lookback_minutes,
+        "anchor_age_minutes": reading.anchor_age_minutes,
+        "sample_count": reading.sample_count,
+        "direction": reading.direction,
     }
 
 

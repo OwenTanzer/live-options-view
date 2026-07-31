@@ -24,6 +24,19 @@ rates. A bucket with fewer than `min_days_required` historical samples is
 reported as "insufficient_history" rather than a real multiple, the same way
 `crassus/crassus/momentum.py`'s `MomentumSignal.status` separates "nothing"
 from "not enough yet" from "trustworthy."
+
+The time-series momentum computed here (`compute_time_series_momentum`) is a
+deliberate re-implementation of the same trailing-return math already in
+`crassus/crassus/momentum.py`'s `compute_momentum`, not an import of it --
+collector.py and the crassus trading bot are separate deployables with
+separate dependency sets (see DESIGN.md), and this repo doesn't otherwise
+import across that boundary. This is a **display/observability signal**,
+published for the UI and a public R2 log, not a change to what any
+`momentum_qqq` account actually trades on -- each account still runs its own
+independently-configured `PriceHistoryTracker` with its own `lookback_minutes`
+per `crassus/accounts.json`. The two are the same *kind* of signal, computed
+the same way, but are not guaranteed to be bit-identical to any specific
+account's live one.
 """
 
 from __future__ import annotations
@@ -226,3 +239,111 @@ def classify_freshness(
         return "stale"
     age_s = (now - spot_ts).total_seconds()
     return "live" if age_s <= stale_after_s else "stale"
+
+
+# -- time-series momentum (display/log only, see module docstring) ----------
+
+
+@dataclass(frozen=True)
+class SpotPoint:
+    observed_at: datetime
+    price: float
+
+
+@dataclass(frozen=True)
+class MomentumReading:
+    """The result of `compute_time_series_momentum`. Same status vocabulary
+    and rationale as `crassus/crassus/momentum.py`'s `MomentumSignal`:
+    "no_data" (no observations at all) | "warming_up" (observations exist,
+    none old enough yet to anchor the lookback) | "stale_anchor" (a gap in
+    observations makes the best available anchor too old to trust) | "ok".
+    """
+
+    status: str
+    return_pct: float | None
+    lookback_minutes: float
+    anchor_age_minutes: float | None
+    sample_count: int
+    direction: str | None  # "up" | "down" | "flat", only set when status == "ok"
+
+
+def prune_spot_history(history: list[SpotPoint], now: datetime, retain_minutes: float) -> list[SpotPoint]:
+    """Bound memory across a long-running process. `retain_minutes` should
+    exceed `lookback_minutes + max_anchor_overshoot_minutes` with room to
+    spare, the same relationship `DEFAULT_RETAIN_MINUTES` has to momentum.py's
+    lookback in the crassus package.
+    """
+    cutoff = now - timedelta(minutes=retain_minutes)
+    return [p for p in history if p.observed_at >= cutoff]
+
+
+def compute_time_series_momentum(
+    history: list[SpotPoint],
+    now: datetime,
+    *,
+    lookback_minutes: float,
+    max_anchor_overshoot_minutes: float,
+    neutral_band_pct: float,
+) -> MomentumReading:
+    """Trailing return of the newest point in `history` vs. the best
+    available anchor `lookback_minutes` ago -- same anchor-selection logic as
+    `crassus/crassus/momentum.py`'s `compute_momentum`: the anchor is the
+    *newest* point still at least `lookback_minutes` old (minimizing how much
+    a normal polling cadence overshoots the requested window), rejected as
+    stale if it's older than `lookback_minutes + max_anchor_overshoot_minutes`.
+
+    `neutral_band_pct` only affects `direction` (`"flat"` inside the band,
+    `"up"`/`"down"` outside it) for display purposes -- it does not gate
+    `status`, unlike a trading strategy's bullish/bearish thresholds.
+    """
+    if not history:
+        return MomentumReading(
+            status="no_data", return_pct=None, lookback_minutes=lookback_minutes,
+            anchor_age_minutes=None, sample_count=0, direction=None,
+        )
+
+    ordered = sorted(history, key=lambda p: p.observed_at)
+    current = ordered[-1]
+    sample_count = len(ordered)
+    target_age = timedelta(minutes=lookback_minutes)
+    max_age = timedelta(minutes=lookback_minutes + max_anchor_overshoot_minutes)
+
+    anchor: SpotPoint | None = None
+    anchor_age: timedelta | None = None
+    for point in reversed(ordered):
+        age = now - point.observed_at
+        if age >= target_age:
+            anchor = point
+            anchor_age = age
+            break
+
+    if anchor is None:
+        return MomentumReading(
+            status="warming_up", return_pct=None, lookback_minutes=lookback_minutes,
+            anchor_age_minutes=None, sample_count=sample_count, direction=None,
+        )
+
+    if anchor_age > max_age:
+        return MomentumReading(
+            status="stale_anchor", return_pct=None, lookback_minutes=lookback_minutes,
+            anchor_age_minutes=anchor_age.total_seconds() / 60.0, sample_count=sample_count, direction=None,
+        )
+
+    return_pct = (current.price / anchor.price - 1.0) * 100 if anchor.price else None
+    direction = None
+    if return_pct is not None:
+        if return_pct > neutral_band_pct:
+            direction = "up"
+        elif return_pct < -neutral_band_pct:
+            direction = "down"
+        else:
+            direction = "flat"
+
+    return MomentumReading(
+        status="ok",
+        return_pct=round(return_pct, 4) if return_pct is not None else None,
+        lookback_minutes=lookback_minutes,
+        anchor_age_minutes=anchor_age.total_seconds() / 60.0,
+        sample_count=sample_count,
+        direction=direction,
+    )

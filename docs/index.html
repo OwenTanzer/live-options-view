@@ -48,15 +48,15 @@
     padding: 2px 8px; border-radius: 4px;
     background: #1c2128; border: 1px solid var(--border);
   }
-  #vwap-rvol {
+  #vwap-rvol, #momentum {
     font-size: 0.78rem;
     font-weight: 600;
     color: var(--dim);
   }
-  #vwap-rvol[data-state="live"] { color: var(--bright); }
-  #vwap-rvol[data-state="stale"],
-  #vwap-rvol[data-state="fallback"],
-  #vwap-rvol[data-state="closed"] { opacity: 0.72; }
+  #vwap-rvol[data-state="live"], #momentum[data-state="live"] { color: var(--bright); }
+  #vwap-rvol[data-state="stale"], #momentum[data-state="stale"],
+  #vwap-rvol[data-state="fallback"], #momentum[data-state="fallback"],
+  #vwap-rvol[data-state="closed"], #momentum[data-state="closed"] { opacity: 0.72; }
 
   /* ── status bar ──────────────────────────────────────────────────────── */
   #status-bar {
@@ -255,14 +255,14 @@
     margin-top: 2px;
     text-transform: uppercase;
   }
-  .ticker-btn .vwap-line {
+  .ticker-btn .vwap-line, .ticker-btn .momentum-line {
     font-size: 0.52rem;
     color: var(--dim);
     line-height: 1.2;
     margin-top: 2px;
     text-align: center;
   }
-  .ticker-btn .vwap-line[data-state="live"] { color: var(--bright); }
+  .ticker-btn .vwap-line[data-state="live"], .ticker-btn .momentum-line[data-state="live"] { color: var(--bright); }
   .ticker-btn[data-state="live"] { border-color: #167a3f; }
   .ticker-btn[data-state="extended"] { border-color: #9a6a18; }
   .ticker-btn[data-state="stale"], .ticker-btn[data-state="fallback"] { opacity: 0.72; }
@@ -717,6 +717,7 @@
   <span id="price">—</span>
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
+  <span id="momentum" class="momentum"></span>
 </div>
 
 <div id="status-bar">
@@ -966,7 +967,14 @@ function renderHeatmap(data) {
   const vrEl = document.getElementById('vwap-rvol');
   vrEl.textContent = vr.text;
   vrEl.dataset.state = vr.state;
+
+  const mo = formatMomentum(underlying_market);
+  const moEl = document.getElementById('momentum');
+  moEl.textContent = mo.text;
+  moEl.dataset.state = mo.state;
+
   updateQqqVwapRvolLine(underlying_market);
+  updateQqqMomentumLine(underlying_market);
 
   document.getElementById('no-data').classList.add('hidden');
   document.getElementById('heatmap-wrap').classList.remove('hidden');
@@ -1660,10 +1668,10 @@ function buildTickerEl(sym, isSmall) {
   const el = document.createElement('div');
   el.className = 'ticker-btn' + (isSmall ? ' sm' : '');
   el.id = `tk-${sym.replace('/', '-')}`;
-  // VWAP/RVOL only exists for QQQ (the collector's only underlying, see
-  // collector.py's TICKER constant) -- VIX/SMH/etc. never carry this data,
-  // so only QQQ's tile gets the extra line.
-  const vwapLine = sym === 'QQQ' ? '<span class="vwap-line"></span>' : '';
+  // VWAP/RVOL/momentum only exist for QQQ (the collector's only underlying,
+  // see collector.py's TICKER constant) -- VIX/SMH/etc. never carry this
+  // data, so only QQQ's tile gets the extra lines.
+  const vwapLine = sym === 'QQQ' ? '<span class="vwap-line"></span><span class="momentum-line"></span>' : '';
   el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">fallback</span>${vwapLine}`;
   if (isTradeableShareSymbol(sym)) {
     el.classList.add('tradable');
@@ -1737,6 +1745,18 @@ function updateQqqVwapRvolLine(underlyingMarket) {
   const vr = formatVwapRvol(underlyingMarket);
   lineEl.textContent = vr.text;
   lineEl.dataset.state = vr.state;
+}
+
+// Same 60s cadence and rationale as updateQqqVwapRvolLine above -- see
+// docs/plans/2026-07-momentum-indicator.md.
+function updateQqqMomentumLine(underlyingMarket) {
+  const el = document.getElementById('tk-QQQ');
+  if (!el) return;
+  const lineEl = el.querySelector('.momentum-line');
+  if (!lineEl) return;
+  const mo = formatMomentum(underlyingMarket);
+  lineEl.textContent = mo.text;
+  lineEl.dataset.state = mo.state;
 }
 
 async function fetchPrices() {
