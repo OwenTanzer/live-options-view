@@ -260,7 +260,11 @@ class MomentumReading:
     """
 
     status: str
-    return_pct: float | None
+    return_pct: float | None  # already percent-scaled (e.g. 0.42 == 0.42%) --
+    # unlike `crassus/crassus/momentum.py`'s `MomentumSignal.return_pct`, which
+    # is a raw fraction (e.g. 0.0042). Same field name, deliberately different
+    # scale (this one is formatted directly for display/logging); do not
+    # assume the two are interchangeable if these ever get unified.
     lookback_minutes: float
     anchor_age_minutes: float | None
     sample_count: int
@@ -329,6 +333,8 @@ def compute_time_series_momentum(
             anchor_age_minutes=anchor_age.total_seconds() / 60.0, sample_count=sample_count, direction=None,
         )
 
+    # *100 here (percent-scaled), unlike momentum.py's raw fraction -- see
+    # MomentumReading.return_pct's docstring comment.
     return_pct = (current.price / anchor.price - 1.0) * 100 if anchor.price else None
     direction = None
     if return_pct is not None:
