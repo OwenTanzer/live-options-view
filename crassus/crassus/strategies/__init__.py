@@ -4,6 +4,7 @@ Importing this package registers every strategy in `strategy.REGISTRY`.
 """
 
 from . import gex  # noqa: F401
+from . import insider_form4  # noqa: F401
 from . import iv_skew  # noqa: F401
 from . import macro_cross_market  # noqa: F401
 from . import momentum_qqq  # noqa: F401
@@ -17,4 +18,4 @@ from . import volume_profile  # noqa: F401
 from . import vwap_breakout  # noqa: F401
 from . import vwap_fade  # noqa: F401
 
-__all__ = ["gex", "iv_skew", "macro_cross_market", "momentum_qqq", "orb_confidence", "reddit_sentiment", "smoke", "stat_arb_qqq_smh", "trump_whisperer", "vix_term_structure", "volume_profile", "vwap_breakout", "vwap_fade"]
+__all__ = ["gex", "insider_form4", "iv_skew", "macro_cross_market", "momentum_qqq", "orb_confidence", "reddit_sentiment", "smoke", "stat_arb_qqq_smh", "trump_whisperer", "vix_term_structure", "volume_profile", "vwap_breakout", "vwap_fade"]

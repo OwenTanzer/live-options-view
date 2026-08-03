@@ -53,6 +53,17 @@ REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
 # RSS mirror -- no credentials to provision, same as REDDIT_USER_AGENT above.
 TRUMP_FEED_USER_AGENT = os.environ.get("TRUMP_FEED_USER_AGENT")
 
+# User-Agent for the insider_form4_qqq strategy's EDGAR reader
+# (crassus/insider_flow.py). Unlike REDDIT_USER_AGENT/TRUMP_FEED_USER_AGENT
+# above, this one isn't just a courtesy: SEC EDGAR's fair-access policy
+# (https://www.sec.gov/os/webmaster-faq#developers) *requires* a descriptive
+# User-Agent identifying the requester with contact info, e.g.
+# "CompanyName contact@example.com", and can reject or throttle requests that
+# don't send one. Unset still always sends *some* identifying string
+# (insider_flow.py's `_FALLBACK_USER_AGENT`), never a blank header -- it just
+# identifies the project generically instead of a real operator contact.
+INSIDER_FEED_USER_AGENT = os.environ.get("INSIDER_FEED_USER_AGENT")
+
 
 @dataclass
 class Account:
