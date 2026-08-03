@@ -1,5 +1,12 @@
 requests>=2.31
 
+# volume_profile_qqq strategy only -- see crassus/strategies/volume_profile.py
+# Needed for free, unauthenticated intraday 1-minute OHLCV bars for QQQ
+# (yf.download(..., interval="1m")) to build the volume-weighted price
+# histogram (POC/value area); this repo does not otherwise collect
+# minute-bar data, only the durable options-chain snapshot in market.py.
+yfinance>=0.2.40
+
 # reddit_sentiment_qqq strategy only -- see crassus/sentiment.py
 vaderSentiment>=3.3.2
 
