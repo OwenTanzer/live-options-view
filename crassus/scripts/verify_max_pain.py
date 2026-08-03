@@ -90,6 +90,21 @@ WIDE_CHAIN = [row(s, "call", 100) for s in (380, 390, 400, 410, 420)] + [
 # default min_strikes_with_oi of 5.
 THIN_CHAIN = SMALL_CHAIN
 
+# ---------------------------------------------------------------------------
+# An asymmetric chain: call OI concentrated at the top strike, put OI flat
+# across all three. Calls and puts are deliberately NOT mirror images of each
+# other here, so a call/put payoff swap in _compute_max_pain changes the
+# answer -- unlike SMALL_CHAIN/WIDE_CHAIN, which are both call/put-symmetric
+# and so can't distinguish the correct payoff from the swapped one.
+#
+# payout(395) = 15, payout(400) = 10, payout(405) = 15 -- 400 minimizes it.
+# A swapped-payoff implementation instead minimizes at 405 (payout 5).
+# ---------------------------------------------------------------------------
+ASYMMETRIC_CHAIN = [
+    row(395, "call", 1), row(400, "call", 1), row(405, "call", 20),
+    row(395, "put", 1), row(400, "put", 1), row(405, "put", 1),
+]
+
 
 def make_ctx(
     *,
@@ -149,6 +164,13 @@ def scenario_compute_max_pain_symmetric_chain() -> None:
     strike, n_both_sides = mp._compute_max_pain(WIDE_CHAIN)
     check("max-pain strike is the median strike (400)", strike == 400.0, strike)
     check("counts 5 strikes with OI on both sides", n_both_sides == 5, n_both_sides)
+
+
+def scenario_compute_max_pain_asymmetric_chain() -> None:
+    print("\n3b. _compute_max_pain(): asymmetric call/put OI catches a payoff swap")
+    strike, n_both_sides = mp._compute_max_pain(ASYMMETRIC_CHAIN)
+    check("max-pain strike is 400 (hand-computed minimum payout)", strike == 400.0, strike)
+    check("counts 3 strikes with OI on both sides", n_both_sides == 3, n_both_sides)
 
 
 def scenario_compute_max_pain_no_strikes() -> None:
@@ -323,6 +345,7 @@ def main() -> int:
         scenario_registered,
         scenario_compute_max_pain_small_chain,
         scenario_compute_max_pain_symmetric_chain,
+        scenario_compute_max_pain_asymmetric_chain,
         scenario_compute_max_pain_no_strikes,
         scenario_market_closed,
         scenario_insufficient_oi_flat,

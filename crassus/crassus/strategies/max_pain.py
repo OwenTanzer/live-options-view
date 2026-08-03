@@ -102,9 +102,9 @@ def _compute_max_pain(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
     def payout_at(k: float) -> float:
         total = 0.0
         for r in calls:
-            total += max(0.0, r["Strike"] - k) * r["OpenInterest"]
-        for r in puts:
             total += max(0.0, k - r["Strike"]) * r["OpenInterest"]
+        for r in puts:
+            total += max(0.0, r["Strike"] - k) * r["OpenInterest"]
         return total
 
     max_pain_strike = min(all_strikes, key=lambda k: (payout_at(k), k))
