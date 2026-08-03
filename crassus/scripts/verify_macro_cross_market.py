@@ -27,7 +27,7 @@ from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.momentum import MomentumSignal, PriceHistoryTracker  # noqa: E402
 from crassus.strategies import macro_cross_market as mcm  # noqa: E402
 from crassus.strategy import REGISTRY, StrategyContext  # noqa: E402
-from crassus.tickers import TickerBoard  # noqa: E402
+from crassus.tickers import TickerBoard, _parse_board  # noqa: E402
 
 passed, failed = 0, 0
 
@@ -110,6 +110,26 @@ def _sig(return_pct: float | None, *, status: str = "ok", sample_count: int = 10
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
+
+
+def scenario_from_payload_preserves_stale_and_source() -> None:
+    print("\n0. tickers._parse_board(): a carried-forward entry's stale/source flags survive parsing")
+    payload = {
+        "timestamp": "2026-01-01T15:00:00+00:00",
+        "snapshot_time": "2026-01-01T15:00:00+00:00",
+        "feed_stale": False,
+        "prices": {
+            "10Y": {"price": 44.85, "source": "dxlink"},
+            "USO": {"price": 70.0, "stale": True, "source": "last-known"},
+        },
+    }
+    snapshot = _parse_board(payload, "2026-01-01T15:00:00+00:00")
+    check("fresh entry's price parses", snapshot.price("10Y") == 44.85, snapshot.price("10Y"))
+    check("fresh entry is not stale", snapshot.is_stale("10Y") is False)
+    check("fresh entry's source is preserved", snapshot.source.get("10Y") == "dxlink", snapshot.source.get("10Y"))
+    check("carried-forward entry's price still parses", snapshot.price("USO") == 70.0, snapshot.price("USO"))
+    check("carried-forward entry is flagged stale", snapshot.is_stale("USO") is True)
+    check("carried-forward entry's source is preserved", snapshot.source.get("USO") == "last-known", snapshot.source.get("USO"))
 
 
 def scenario_registered() -> None:
@@ -357,21 +377,34 @@ def _reset_trackers() -> None:
     mcm._yield_tracker = PriceHistoryTracker(retain_minutes=1440.0)
     mcm._crude_tracker = PriceHistoryTracker(retain_minutes=1440.0)
     mcm._last_recorded_timestamp = None
+    mcm._last_seen_source = {mcm.YIELD_TICKER: None, mcm.CRUDE_TICKER: None}
 
 
-def _make_tickers_snapshot(*, yield_price: float | None = 4.5, crude_price: float | None = 70.0,
-                            timestamp: str = "2026-01-01T14:58:00+00:00", feed_stale: bool = False) -> TickerBoard:
+def _make_tickers_snapshot(
+    *, yield_price: float | None = 4.5, crude_price: float | None = 70.0,
+    timestamp: str = "2026-01-01T14:58:00+00:00", feed_stale: bool = False,
+    yield_stale: bool = False, crude_stale: bool = False,
+    yield_source: str | None = "dxlink", crude_source: str | None = "dxlink",
+) -> TickerBoard:
     prices = {}
+    stale = {}
+    source = {}
     if yield_price is not None:
         prices["10Y"] = yield_price
+        stale["10Y"] = yield_stale
+        source["10Y"] = yield_source
     if crude_price is not None:
         prices["USO"] = crude_price
+        stale["USO"] = crude_stale
+        source["USO"] = crude_source
     return TickerBoard(
         fetched_at=timestamp,
         timestamp=timestamp,
         snapshot_time=timestamp,
         feed_stale=feed_stale,
         prices=prices,
+        stale=stale,
+        source=source,
     )
 
 
@@ -452,8 +485,59 @@ def scenario_decide_stalled_timestamp_is_fetch_error() -> None:
     check("reason cites the stall", "stall" in decision.reason.lower() or "old" in decision.reason.lower(), decision.reason)
 
 
+def scenario_decide_stale_yield_price_is_fetch_error() -> None:
+    print("\n26b. _decide(): a carried-forward (stale) 10Y price is a fetch error, not a live observation")
+    _reset_trackers()
+    mcm._reader = FakeReader(_make_tickers_snapshot(yield_stale=True, yield_source="last-known"))
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx = make_ctx(session_phase="open", now_et=now)
+    decision = mcm._decide(ctx)
+    check("no_trade on a stale yield price", not decision.is_trade)
+    check("reason cites the stale ticker", "10Y" in decision.reason and "stale" in decision.reason.lower(), decision.reason)
+    check("nothing recorded from a stale reading", len(mcm._yield_tracker.snapshot()) == 0)
+
+
+def scenario_decide_yield_source_change_resets_tracker() -> None:
+    print("\n26c. _decide(): a 10Y provider failover (DXLink -> yfinance) resets the tracker instead of computing a return across the scale change")
+    _reset_trackers()
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+
+    # Two DXLink-sourced observations at yield~44.85 (the $TNX.X convention:
+    # value = rate x10).
+    mcm._reader = FakeReader(_make_tickers_snapshot(
+        yield_price=44.80, timestamp="2026-01-01T14:50:00+00:00", yield_source="dxlink",
+    ))
+    mcm._decide(make_ctx(session_phase="open", now_et=now - timedelta(minutes=5)))
+    mcm._reader = FakeReader(_make_tickers_snapshot(
+        yield_price=44.85, timestamp="2026-01-01T14:55:00+00:00", yield_source="dxlink",
+    ))
+    mcm._decide(make_ctx(session_phase="open", now_et=now))
+    check("two same-source points recorded before failover", len(mcm._yield_tracker.snapshot()) == 2)
+
+    # Failover to yfinance's ^TNX convention: the rate directly (~4.485),
+    # not x10. Without a reset, this reads as a ~-90% one-step move.
+    mcm._reader = FakeReader(_make_tickers_snapshot(
+        yield_price=4.485, timestamp="2026-01-01T15:00:00+00:00", yield_source="yfinance",
+    ))
+    mcm._decide(make_ctx(session_phase="open", now_et=now + timedelta(minutes=5)))
+    check(
+        "the tracker was reset on the source change, not fed a cross-scale return",
+        len(mcm._yield_tracker.snapshot()) == 1,
+        len(mcm._yield_tracker.snapshot()),
+    )
+    check(
+        "the sole remaining point is the new (yfinance-scale) observation",
+        mcm._yield_tracker.snapshot()[0].price == 4.485,
+        mcm._yield_tracker.snapshot()[0].price,
+    )
+    # Crude's source didn't change, so its tracker is untouched by the
+    # yield-only failover.
+    check("crude tracker is unaffected by a yield-only source change", len(mcm._crude_tracker.snapshot()) == 3)
+
+
 def main() -> int:
     for scenario in (
+        scenario_from_payload_preserves_stale_and_source,
         scenario_registered,
         scenario_composite_score_equal_weight,
         scenario_composite_score_custom_weights,
@@ -480,6 +564,8 @@ def main() -> int:
         scenario_decide_missing_ticker_is_fetch_error,
         scenario_decide_feed_stale_flag_is_fetch_error,
         scenario_decide_stalled_timestamp_is_fetch_error,
+        scenario_decide_stale_yield_price_is_fetch_error,
+        scenario_decide_yield_source_change_resets_tracker,
     ):
         scenario()
 

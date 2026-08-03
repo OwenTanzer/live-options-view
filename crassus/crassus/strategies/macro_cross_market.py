@@ -146,6 +146,12 @@ _OCC_TYPE_RE = re.compile(r"\d{6}([CP])\d{8}$")
 _yield_tracker = PriceHistoryTracker(retain_minutes=DEFAULT_RETAIN_MINUTES)
 _crude_tracker = PriceHistoryTracker(retain_minutes=DEFAULT_RETAIN_MINUTES)
 
+# Last-seen `source` for each ticker (e.g. "dxlink", "yfinance", "last-known"),
+# so a provider failover mid-session can be detected and the tracker reset
+# rather than silently mixing two providers' scales into one series -- see
+# `_reset_tracker_on_source_change` below.
+_last_seen_source: dict[str, str | None] = {YIELD_TICKER: None, CRUDE_TICKER: None}
+
 _reader = TickerBoardReader()
 
 # The tickers board's own `timestamp` string for the most recently
@@ -426,8 +432,31 @@ def _close(
     )
 
 
+def _reset_tracker_on_source_change(ticker: str, current_source: str | None, tracker: PriceHistoryTracker) -> PriceHistoryTracker:
+    """Return `tracker`, or a fresh replacement if `ticker`'s provider
+    changed since the last observation.
+
+    `10Y` is published from two sources at two different scales
+    (`$TNX.X` on the DXLink path is the yield x10; `^TNX` on the yfinance
+    fallback is the rate directly), and both are flagged in
+    `collector.py`. A trailing return is scale-invariant *within* one
+    source, which is why a fixed-scale failover otherwise sails through
+    every check in this module -- it injects a single spurious step
+    (~-90% on failover, ~+900% on recovery) that reads as a genuine,
+    maximum-conviction move. Resetting the tracker discards the
+    now-incomparable prior history instead of computing a return across
+    the boundary; the existing `"warming_up"` handling then naturally
+    covers the gap until enough same-source samples accumulate again.
+    """
+    previous_source = _last_seen_source.get(ticker)
+    _last_seen_source[ticker] = current_source
+    if previous_source is not None and current_source is not None and current_source != previous_source:
+        return PriceHistoryTracker(retain_minutes=DEFAULT_RETAIN_MINUTES)
+    return tracker
+
+
 def _decide(ctx: StrategyContext) -> Decision:
-    global _last_recorded_timestamp
+    global _last_recorded_timestamp, _yield_tracker, _crude_tracker
 
     if ctx.session_phase != "open":
         return _decide_core(ctx, None, None)
@@ -452,6 +481,19 @@ def _decide(ctx: StrategyContext) -> Decision:
             fetch_error=f"missing price(s) for {', '.join(missing)}",
         )
 
+    # A carried-forward (last-known) price reads as a live observation to
+    # every check above -- it has a value, it isn't None, and it doesn't
+    # trip feed_stale (that's a feed-level flag, not per-ticker). Recording
+    # it would feed a frozen quote into the momentum trackers as a genuine
+    # tick, yielding a confident-looking ~0% trailing return instead of the
+    # "no fresh data" this actually is.
+    stale = [t for t in (YIELD_TICKER, CRUDE_TICKER) if snapshot.is_stale(t)]
+    if stale:
+        return _decide_core(
+            ctx, None, None,
+            fetch_error=f"stale (carried-forward) price(s) for {', '.join(stale)}",
+        )
+
     observed_at = _snapshot_observed_at(snapshot.timestamp)
     if observed_at is None:
         return _decide_core(
@@ -472,6 +514,8 @@ def _decide(ctx: StrategyContext) -> Decision:
         )
 
     if snapshot.timestamp != _last_recorded_timestamp:
+        _yield_tracker = _reset_tracker_on_source_change(YIELD_TICKER, snapshot.source.get(YIELD_TICKER), _yield_tracker)
+        _crude_tracker = _reset_tracker_on_source_change(CRUDE_TICKER, snapshot.source.get(CRUDE_TICKER), _crude_tracker)
         _yield_tracker.observe(observed_at, yield_price)
         _crude_tracker.observe(observed_at, crude_price)
         _last_recorded_timestamp = snapshot.timestamp
