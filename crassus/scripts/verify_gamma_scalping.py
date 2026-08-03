@@ -163,7 +163,10 @@ def scenario_compute_realized_vol_hand_built_series() -> None:
     log_returns = [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices))]
     mean_r = sum(log_returns) / len(log_returns)
     variance = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
-    expected_vol = math.sqrt(variance) * math.sqrt(gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR)
+    # Fixture is spaced 5 minutes apart, not 1 -- annualization must scale
+    # against that observed cadence, not a fixed one-minute assumption.
+    expected_periods_per_year = gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR / 5.0
+    expected_vol = math.sqrt(variance) * math.sqrt(expected_periods_per_year)
     expected_trailing_return = (prices[-1] / prices[0]) - 1.0
 
     check("status is ok", signal.status == "ok", signal.status)
@@ -187,6 +190,37 @@ def scenario_compute_annualization_constant() -> None:
         "ANNUALIZATION_TRADING_MINUTES_PER_YEAR is 252*390",
         gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR == 252 * 390,
         gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR,
+    )
+
+
+def scenario_compute_realized_vol_scales_with_deployed_cadence() -> None:
+    print("\n5b. compute_realized_vol(): annualization tracks the deployed 300s cadence, not a fixed 1-minute assumption")
+    now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
+    prices = [400.0, 401.0, 400.5, 402.0, 401.5, 403.0]
+    # Sampled at the runner's actual deployed interval (300s), not 1 minute.
+    history_300s = [
+        PricePoint(now - timedelta(seconds=(len(prices) - 1 - i) * 300), p) for i, p in enumerate(prices)
+    ]
+    signal_300s = gs.compute_realized_vol(history_300s, now=now, lookback_minutes=30.0, min_samples=5)
+
+    log_returns = [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices))]
+    mean_r = sum(log_returns) / len(log_returns)
+    variance = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
+    correctly_annualized = math.sqrt(variance) * math.sqrt(gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR / 5.0)
+    # What the pre-fix implementation returned: a fixed sqrt(98280) applied
+    # regardless of the actual 5-minute spacing between samples.
+    bugged_fixed_98280 = math.sqrt(variance) * math.sqrt(gs.ANNUALIZATION_TRADING_MINUTES_PER_YEAR)
+
+    check("status is ok", signal_300s.status == "ok", signal_300s.status)
+    check(
+        "realized_vol is annualized against the observed 300s spacing, not a fixed one-minute assumption",
+        signal_300s.realized_vol is not None and abs(signal_300s.realized_vol - correctly_annualized) < 1e-9,
+        (signal_300s.realized_vol, correctly_annualized),
+    )
+    check(
+        "the fixed-98280 (pre-fix) computation would have overstated this by sqrt(5) =~ 2.24x",
+        signal_300s.realized_vol is not None and abs(bugged_fixed_98280 - signal_300s.realized_vol * math.sqrt(5)) < 1e-9,
+        (bugged_fixed_98280, signal_300s.realized_vol * math.sqrt(5) if signal_300s.realized_vol else None),
     )
 
 
@@ -535,6 +569,7 @@ def main() -> int:
         scenario_compute_warming_up_too_few_samples,
         scenario_compute_realized_vol_hand_built_series,
         scenario_compute_annualization_constant,
+        scenario_compute_realized_vol_scales_with_deployed_cadence,
         scenario_compute_excludes_out_of_window_points,
         scenario_tracker_reused_from_momentum,
         scenario_market_closed,

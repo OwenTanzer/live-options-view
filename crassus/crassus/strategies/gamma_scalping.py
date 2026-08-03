@@ -38,23 +38,24 @@ Mechanism:
     within the trailing `realized_vol_lookback_minutes` window (default 30)
     and computes the sample standard deviation of consecutive log returns
     between them, then annualizes it by multiplying by
-    `sqrt(ANNUALIZATION_TRADING_MINUTES_PER_YEAR)` where
-    `ANNUALIZATION_TRADING_MINUTES_PER_YEAR = 252 * 390 = 98280` (252
-    trading days/year x 390 trading minutes/day). This annualization
-    implicitly assumes each recorded observation-to-observation step is
-    roughly one minute apart -- true of the collector's ~60s republish
-    cadence in the ordinary case, but not something this function verifies;
-    a genuinely irregular gap between observations would understate or
-    overstate the true annualized vol without tripping any status flag,
-    the same caveat `momentum.compute_momentum` documents for its own
-    anchor-age handling, just applied to a variance estimate instead of a
-    single trailing return. At least `min_samples` observations (default 5)
-    must fall inside the window or the result is `"warming_up"` -- the same
-    "insufficient data yet, not neutral data" status vocabulary as
-    `momentum.MomentumSignal`, and it is handled the same way: a held
-    position gets closed (an internal, self-computed absence of signal is
-    still a *current read*, just one that doesn't support a position),
-    exactly as `momentum_qqq._decide_core` treats its own `"warming_up"`.
+    `sqrt(periods_per_year)`, where `periods_per_year =
+    ANNUALIZATION_TRADING_MINUTES_PER_YEAR / median_spacing_minutes` and
+    `median_spacing_minutes` is the median observed gap between consecutive
+    in-window timestamps -- *not* an assumed fixed cadence. (An earlier
+    version multiplied by a fixed `sqrt(98280)`, implicitly assuming
+    one-minute spacing; the runner is deployed at a 300s interval, which
+    overstated realized vol by sqrt(5) =~ 2.24x and made the entry
+    threshold trivially easy to clear.) At least `min_samples` observations
+    (default 5) must fall inside the window or the result is
+    `"warming_up"` -- the same "insufficient data yet, not neutral data"
+    status vocabulary as `momentum.MomentumSignal`, and it is handled the
+    same way: a held position gets closed (an internal, self-computed
+    absence of signal is still a *current read*, just one that doesn't
+    support a position), exactly as `momentum_qqq._decide_core` treats its
+    own `"warming_up"`. Note the lookback window is also thin at the
+    deployed cadence -- 30 minutes at 300s sampling is only ~6 observations
+    (5 log returns), right at `min_samples`; fixing the annualization
+    doesn't fix that a 5-point stdev is a noisy estimate on its own.
 
   * Implied volatility is the average of the nearest-ATM call's IV and
     nearest-ATM put's IV (`ctx.snapshot.atm("call")` / `.atm("put")`). If
@@ -93,6 +94,7 @@ from __future__ import annotations
 
 import math
 import re
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -111,9 +113,13 @@ DEFAULT_VOL_RATIO_THRESHOLD = 1.15
 
 # 252 trading days/year x 390 trading minutes/day (9:30-16:00 ET). Used to
 # annualize a standard deviation computed on consecutive per-observation log
-# returns; see the module docstring for the caveat that this assumes those
-# observations are spaced roughly one minute apart (the collector's ~60s
-# republish cadence), not something this function itself verifies.
+# returns. This is trading-*minutes* per year; `compute_realized_vol`
+# divides it by the median observed spacing (in minutes) between in-window
+# samples to get periods-per-year for the actual sampling cadence, rather
+# than assuming one-minute spacing -- the runner is deployed at a 300s
+# interval (`crassus/railway.toml`), not the collector's ~60s republish
+# cadence, so a fixed sqrt(98280) factor overstated realized vol by
+# sqrt(5) =~ 2.24x at the deployed cadence.
 ANNUALIZATION_TRADING_MINUTES_PER_YEAR = 252 * 390  # 98,280
 
 # Same rationale as momentum_qqq.DEFAULT_MAX_SNAPSHOT_AGE_MINUTES: the board
@@ -230,7 +236,21 @@ def compute_realized_vol(
 
     mean_return = sum(log_returns) / len(log_returns)
     variance = sum((r - mean_return) ** 2 for r in log_returns) / (len(log_returns) - 1)
-    realized_vol = math.sqrt(variance) * math.sqrt(ANNUALIZATION_TRADING_MINUTES_PER_YEAR)
+
+    # Annualize against the *observed* sampling cadence, not an assumed
+    # one-minute spacing -- the runner may be deployed at any interval (300s
+    # in production), and a fixed per-minute assumption would misstate the
+    # annualized figure by the square root of however far off that
+    # assumption is.
+    gaps_minutes = [
+        (window[i].observed_at - window[i - 1].observed_at).total_seconds() / 60.0
+        for i in range(1, len(window))
+    ]
+    median_spacing_minutes = statistics.median(gaps_minutes)
+    periods_per_year = (
+        ANNUALIZATION_TRADING_MINUTES_PER_YEAR / median_spacing_minutes if median_spacing_minutes > 0 else 0.0
+    )
+    realized_vol = math.sqrt(variance) * math.sqrt(periods_per_year)
     trailing_return = (prices[-1] / prices[0]) - 1.0 if prices[0] else None
 
     return RealizedVolSignal(
