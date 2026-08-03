@@ -25,14 +25,28 @@ a value that's supposed to freeze after 15 minutes would require bolting on
 a "stop updating" flag anyway, at which point it's no longer the same
 abstraction.
 
-The tracker keys its state to `ctx.now_et.date()` (Eastern-Time-aware, per
-the `StrategyContext` contract) -- the first observation recorded on a new
-date discards any range being built for a prior date and starts a fresh one.
+The tracker keys its state to the observed snapshot timestamp's own date
+(deliberately `ctx.snapshot.timestamp`, not `ctx.now_et` -- see the
+`_decide` scenarios below) -- the first observation recorded on a new date
+discards any range being built for a prior date and starts a fresh one.
 This is a read-time inference, exactly like `session_phase` itself: nothing
 tells the tracker "a new day started," it just notices the date on the next
 observation changed. Only observations taken while `ctx.session_phase ==
 "open"` are recorded, so pre-market prints (which aren't the regular
-session's opening range at all) never pollute it.
+session's opening range at all) never pollute it. The date itself is taken
+in whatever tzinfo the snapshot timestamp carries (UTC in practice); this
+can disagree with the Eastern trading-day boundary within a few hours of
+midnight UTC, which is outside regular session hours anyway and so never
+actually matters in practice.
+
+The range's start is anchored to the actual market open (9:30 ET), not to
+whatever timestamp the first observation of the day happens to carry --
+otherwise a mid-session crash-restart would silently build a fabricated
+"opening range" out of the first price the bot sees post-restart, with
+nothing to distinguish it from a real one. The existing `sample_count <
+min_range_samples` guard then naturally stands the strategy down in that
+case, since only one observation lands inside a window whose start has
+already elapsed.
 
 The range is considered "established" once *both* (a) at least
 `opening_range_minutes` (default 15) have elapsed since the first recorded
@@ -108,6 +122,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from .. import clock
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
 from ..strategy import Decision, StrategyContext, register
@@ -150,8 +165,9 @@ class _BreakoutReading:
 
 class _OpeningRangeTracker:
     """Per-day opening-range high/low, reset on the first observation of a
-    new `ctx.now_et.date()` -- see this module's docstring for why this is a
-    distinct, deliberately non-reused shape from `PriceHistoryTracker`.
+    new date (by the observed snapshot's own timestamp, in ET) -- see this
+    module's docstring for why this is a distinct, deliberately non-reused
+    shape from `PriceHistoryTracker`.
     """
 
     def __init__(self) -> None:
@@ -160,22 +176,48 @@ class _OpeningRangeTracker:
         self._high: float | None = None
         self._low: float | None = None
         self._count: int = 0
+        self._range_closed: bool = False
 
-    def observe(self, observed_at: datetime, price: float) -> None:
+    def observe(self, observed_at: datetime, price: float, *, opening_range_minutes: float) -> None:
         day = observed_at.date()
         if day != self._day:
             # New trading day (or first observation ever) -- discard
             # whatever range was being built for the prior date and start
             # fresh. Deliberately not "close enough to yesterday" logic:
             # any date change is a new session.
+            #
+            # Anchor to the actual market open (in ET, where the open is
+            # defined) rather than "whenever we first happened to observe
+            # today" -- otherwise a crash-restart mid-session silently
+            # builds an "opening range" out of whatever price the bot first
+            # sees post-restart, with nothing to distinguish it from a real
+            # one. `min()` still falls back to `observed_at` if this read
+            # somehow arrives before the open; comparing aware datetimes
+            # works across differing tzinfo, so no conversion back is
+            # needed.
+            market_open_today = datetime.combine(
+                observed_at.astimezone(clock.ET).date(), clock.MARKET_OPEN, tzinfo=clock.ET
+            )
             self._day = day
-            self._range_start = observed_at
+            self._range_start = min(observed_at, market_open_today)
             self._high = price
             self._low = price
             self._count = 1
+            self._range_closed = False
             return
-        self._high = price if self._high is None else max(self._high, price)
-        self._low = price if self._low is None else min(self._low, price)
+        if self._range_closed:
+            # The opening-range window has already elapsed -- freeze the
+            # range rather than keep folding the current (post-window)
+            # price into `high`/`low`, which would make the breakout
+            # condition unsatisfiable by construction (the range would
+            # always contain whatever price it's being compared against).
+            return
+        elapsed_minutes = (observed_at - self._range_start).total_seconds() / 60.0
+        if elapsed_minutes >= opening_range_minutes:
+            self._range_closed = True
+            return
+        self._high = max(self._high, price)
+        self._low = min(self._low, price)
         self._count += 1
 
     @property
@@ -572,7 +614,7 @@ def _decide(ctx: StrategyContext) -> Decision:
 
     snapshot_key = (ctx.snapshot.timestamp, ctx.snapshot.sha256)
     if snapshot_key != _last_recorded_snapshot:
-        _tracker.observe(observed_at, ctx.snapshot.underlying_price)
+        _tracker.observe(observed_at, ctx.snapshot.underlying_price, opening_range_minutes=opening_range_minutes)
         _last_recorded_snapshot = snapshot_key
 
     reading = _build_reading(ctx, opening_range_minutes=opening_range_minutes)

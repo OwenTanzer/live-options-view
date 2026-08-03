@@ -153,9 +153,9 @@ def scenario_tracker_builds_range() -> None:
     print("\n2. _OpeningRangeTracker: high/low/count accumulate from same-day observations")
     tracker = orb._OpeningRangeTracker()
     t0 = datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)
-    tracker.observe(t0, 400.0)
-    tracker.observe(t0 + timedelta(minutes=5), 402.0)
-    tracker.observe(t0 + timedelta(minutes=10), 399.0)
+    tracker.observe(t0, 400.0, opening_range_minutes=15.0)
+    tracker.observe(t0 + timedelta(minutes=5), 402.0, opening_range_minutes=15.0)
+    tracker.observe(t0 + timedelta(minutes=10), 399.0, opening_range_minutes=15.0)
     check("high is the max observed", tracker.high == 402.0, tracker.high)
     check("low is the min observed", tracker.low == 399.0, tracker.low)
     check("sample_count counts every observation", tracker.sample_count == 3, tracker.sample_count)
@@ -166,14 +166,84 @@ def scenario_tracker_day_rollover_resets() -> None:
     print("\n3. _OpeningRangeTracker: a new ctx.now_et.date() discards yesterday's range")
     tracker = orb._OpeningRangeTracker()
     day1 = datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)
-    tracker.observe(day1, 400.0)
-    tracker.observe(day1 + timedelta(minutes=5), 410.0)
+    tracker.observe(day1, 400.0, opening_range_minutes=15.0)
+    tracker.observe(day1 + timedelta(minutes=5), 410.0, opening_range_minutes=15.0)
     day2 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
-    tracker.observe(day2, 350.0)
+    tracker.observe(day2, 350.0, opening_range_minutes=15.0)
     check("high resets to the new day's single observation", tracker.high == 350.0, tracker.high)
     check("low resets to the new day's single observation", tracker.low == 350.0, tracker.low)
     check("sample_count resets to 1", tracker.sample_count == 1, tracker.sample_count)
     check("range_start moves to the new day's first timestamp", tracker.range_start == day2, tracker.range_start)
+
+
+def scenario_tracker_freezes_after_window_elapses() -> None:
+    print("\n3b. _OpeningRangeTracker: high/low freeze once opening_range_minutes has elapsed")
+    tracker = orb._OpeningRangeTracker()
+    t0 = datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)  # 9:30 ET, i.e. market open
+    tracker.observe(t0, 400.0, opening_range_minutes=15.0)
+    tracker.observe(t0 + timedelta(minutes=5), 402.0, opening_range_minutes=15.0)
+    tracker.observe(t0 + timedelta(minutes=10), 399.0, opening_range_minutes=15.0)
+    # This observation lands after the 15-minute window -- without freezing,
+    # a breakout print like this would fold straight into high/low and the
+    # breakout condition (price > high) could never be satisfied.
+    tracker.observe(t0 + timedelta(minutes=20), 420.0, opening_range_minutes=15.0)
+    check("high does not include the post-window print", tracker.high == 402.0, tracker.high)
+    check("low does not include the post-window print", tracker.low == 399.0, tracker.low)
+    check("sample_count stops incrementing once the window has closed", tracker.sample_count == 3, tracker.sample_count)
+
+
+def scenario_tracker_midsession_restart_does_not_fabricate_range() -> None:
+    print("\n3c. _OpeningRangeTracker: a crash-restart mid-session anchors to market open, not the first post-restart print")
+    tracker = orb._OpeningRangeTracker()
+    # First observation of the day arrives at 11:00 ET (15:00 UTC) -- e.g. a
+    # runner restart well after the real opening range already happened.
+    restart_at = datetime(2026, 1, 1, 16, 0, tzinfo=timezone.utc)  # 11:00 ET
+    tracker.observe(restart_at, 500.0, opening_range_minutes=15.0)
+    check(
+        "range_start is anchored to today's market open, not the restart time",
+        tracker.range_start == datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc),
+        tracker.range_start,
+    )
+    check("only one sample recorded", tracker.sample_count == 1, tracker.sample_count)
+    # The next read is already ~90 minutes past the anchored range_start, so
+    # the window is immediately closed with a single sample -- below
+    # min_range_samples, so _decide_core stands down rather than trading a
+    # fabricated one-tick range.
+    tracker.observe(restart_at + timedelta(minutes=1), 500.5, opening_range_minutes=15.0)
+    check("sample_count stays at 1 -- the window closed before a second sample landed", tracker.sample_count == 1, tracker.sample_count)
+
+
+def scenario_decide_end_to_end_breakout_eventually_fires() -> None:
+    print("\n3d. _decide(): a real breakout across a full session actually produces a buy (regression for the swapped-payoff-style bug in #1)")
+    _reset_tracker()
+    start = datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)  # 9:30 ET
+    price = 500.0
+    fired = False
+    minute = 0
+    # 15-minute opening range near 500, then a steady climb to 535 over the
+    # rest of the session -- a clean trend day.
+    while minute <= 390 and not fired:
+        if minute <= 15:
+            price = 500.0 + (0.5 if minute % 2 == 0 else -0.3)
+        else:
+            price = 500.0 + (minute - 15) * (35.0 / 375.0)
+        ts = start + timedelta(minutes=minute)
+        ctx = make_ctx(
+            session_phase="open",
+            now_et=ts,
+            snapshot_timestamp=ts.isoformat(),
+            underlying_price=price,
+            underlying_market=rvol_confirmed_market(2.0),
+            quote_map={
+                "QQQ240101C00400000": fresh_quote("QQQ240101C00400000"),
+                "QQQ240101P00400000": fresh_quote("QQQ240101P00400000"),
+            },
+        )
+        decision = orb._decide(ctx)
+        if decision.is_trade:
+            fired = True
+        minute += 1
+    check("a sustained trend day eventually produces a trade", fired, f"stopped at minute={minute}, price={price:.2f}")
 
 
 # ---------------------------------------------------------------------------
@@ -453,8 +523,9 @@ def scenario_decide_records_using_snapshot_timestamp_not_now_et() -> None:
     orb._decide(ctx)
     check("exactly one observation recorded", orb._tracker.sample_count == 1, orb._tracker.sample_count)
     check(
-        "range_start matches the snapshot's own timestamp, not the runner's now_et",
-        orb._tracker.range_start == datetime(2026, 1, 1, 14, 58, tzinfo=timezone.utc),
+        "range_start is anchored to the snapshot day's market open (14:30 UTC == 9:30 ET), "
+        "not the runner's now_et, and not the snapshot's own (post-open) timestamp",
+        orb._tracker.range_start == datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc),
         orb._tracker.range_start,
     )
 
@@ -530,6 +601,9 @@ def main() -> int:
         scenario_registered,
         scenario_tracker_builds_range,
         scenario_tracker_day_rollover_resets,
+        scenario_tracker_freezes_after_window_elapses,
+        scenario_tracker_midsession_restart_does_not_fabricate_range,
+        scenario_decide_end_to_end_breakout_eventually_fires,
         scenario_market_closed,
         scenario_no_reading_yet,
         scenario_within_range_window_no_trade,
