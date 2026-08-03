@@ -24,6 +24,15 @@ SNAPSHOT_URL = os.environ.get(
     "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
 )
 
+# Public, unauthenticated intraday tickers board -- a second, independent feed
+# the same collector republishes into the same R2 bucket as SNAPSHOT_URL, used
+# by stat_arb_qqq_smh to get a price for SMH (never present in the option-chain
+# snapshot, which only ever covers QQQ's own chain). See crassus/tickers.py.
+TICKERS_URL = os.environ.get(
+    "CRASSUS_TICKERS_URL",
+    "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/prices.json",
+)
+
 # Operator key that marks an account as a bot on the Worker. Registering with
 # this in an X-Bot-Registration-Key header puts the account in the `bot:` index
 # behind the public /api/bots roster (the site's Automated tab); registering
