@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from crassus import tickers  # noqa: E402
 from crassus.client import Book  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.momentum import PriceHistoryTracker, PricePoint  # noqa: E402
@@ -109,6 +110,25 @@ def _signal(
 # ---------------------------------------------------------------------------
 # compute_ratio_signal() -- pure z-score math
 # ---------------------------------------------------------------------------
+
+
+def scenario_parse_board_preserves_stale_and_source() -> None:
+    print("\n0. tickers._parse_board(): a carried-forward entry's stale/source flags survive parsing")
+    payload = {
+        "timestamp": "2026-01-01T15:00:00+00:00",
+        "snapshot_time": "2026-01-01T15:00:00+00:00",
+        "feed_stale": False,
+        "prices": {
+            "QQQ": {"price": 400.0, "source": "dxlink"},
+            "SMH": {"price": 250.0, "stale": True, "source": "last-known"},
+        },
+    }
+    board = tickers._parse_board(payload, fetched_at="2026-01-01T15:00:05+00:00")
+    check("fresh entry's price parses", board.price("QQQ") == 400.0, board.price("QQQ"))
+    check("fresh entry is not stale", board.is_stale("QQQ") is False)
+    check("carried-forward entry's price still parses", board.price("SMH") == 250.0, board.price("SMH"))
+    check("carried-forward entry is flagged stale", board.is_stale("SMH") is True)
+    check("a symbol absent from the board is not stale by default", board.is_stale("NONEXISTENT") is False)
 
 
 def scenario_registered() -> None:
@@ -373,6 +393,33 @@ def scenario_missing_smh_price_is_fetch_error() -> None:
     check("nothing recorded into the tracker from a failed read", len(sa._tracker.snapshot()) == 0, len(sa._tracker.snapshot()))
 
 
+def scenario_stale_smh_price_is_fetch_error() -> None:
+    print("\n23b. _decide(): a carried-forward (stale) SMH price is treated as a fetch error, not a live observation")
+    _reset_tracker()
+
+    class StaleBoard:
+        def price(self, symbol: str) -> float | None:
+            return 250.0
+
+        def is_stale(self, symbol: str) -> bool:
+            return True
+
+    class StaleReader:
+        def read(self, force: bool = False) -> StaleBoard:
+            return StaleBoard()
+
+    sa._tickers_reader = StaleReader()
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+    )
+    decision = sa._decide(ctx)
+    check("held position retained rather than closed on a stale SMH price", decision.action == "no_trade", decision.action)
+    check("reason cites staleness", "stale" in decision.reason.lower(), decision.reason)
+    check("nothing recorded into the tracker from a carried-forward price", len(sa._tracker.snapshot()) == 0, len(sa._tracker.snapshot()))
+
+
 def scenario_fetch_exception_is_fetch_error() -> None:
     print("\n24. _decide(): an exception from the reader is treated as a fetch error, not a crash")
     _reset_tracker()
@@ -398,16 +445,20 @@ def _reset_tracker() -> None:
 
 
 class _FakeBoardOK:
-    def __init__(self, smh_price: float):
+    def __init__(self, smh_price: float, *, stale: bool = False):
         self._smh_price = smh_price
+        self._stale = stale
 
     def price(self, symbol: str) -> float | None:
         return self._smh_price if symbol == sa.SMH_SYMBOL else None
 
+    def is_stale(self, symbol: str) -> bool:
+        return self._stale if symbol == sa.SMH_SYMBOL else False
+
 
 class _FakeReaderOK:
-    def __init__(self, smh_price: float):
-        self._board = _FakeBoardOK(smh_price)
+    def __init__(self, smh_price: float, *, stale: bool = False):
+        self._board = _FakeBoardOK(smh_price, stale=stale)
 
     def read(self, force: bool = False) -> _FakeBoardOK:
         return self._board
@@ -447,6 +498,7 @@ def scenario_decide_end_to_end_extreme_ratio_buys() -> None:
 
 def main() -> int:
     for scenario in (
+        scenario_parse_board_preserves_stale_and_source,
         scenario_registered,
         scenario_compute_no_data,
         scenario_compute_warming_up,
@@ -470,6 +522,7 @@ def main() -> int:
         scenario_fetch_error_declines_while_flat,
         scenario_fetch_error_while_positioned_retains,
         scenario_missing_smh_price_is_fetch_error,
+        scenario_stale_smh_price_is_fetch_error,
         scenario_fetch_exception_is_fetch_error,
         scenario_decide_records_correct_log_ratio,
         scenario_decide_end_to_end_extreme_ratio_buys,

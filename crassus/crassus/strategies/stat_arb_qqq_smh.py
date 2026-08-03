@@ -35,17 +35,24 @@ bucket -- see `crassus/tickers.py`'s `TickerBoardReader` and
 `config.TICKERS_URL`.
 
 **Fetch-error handling.** A failed or malformed request to the tickers
-board, and a present-but-null/missing SMH price on an otherwise successful
-read, are both treated identically -- as `fetch_error`, not as a reading of
-"no correlation" or "neutral." Same reasoning as `trump_whisperer_qqq`'s
-`fetch_error` branch: an absent observation isn't evidence the pair's
-relationship has changed, so a held position is retained rather than closed,
-and no new position is opened from nothing. This is different from a
-genuinely *computed* ratio landing inside the neutral band, or from not yet
-having `min_samples` observations to trust a mean/stdev at all
-("warming_up") -- both of those are real reads of the current state that do
-still close a held position if it disagrees, exactly like momentum_qqq's
-warming-up/neutral branches.
+board, a present-but-null/missing SMH price on an otherwise successful read,
+and a present-but-*stale* SMH price (`board.is_stale()` -- the collector had
+no fresh DXLink/yfinance read this cycle and republished its last-known
+value, per `tickers.TickerBoard.is_stale`) are all treated identically -- as
+`fetch_error`, not as a reading of "no correlation" or "neutral." A carried-
+forward price is the worse of the two failure modes to miss: it looks like a
+perfectly ordinary observation, so skipping this check would feed a frozen
+SMH price into the ratio as if it were live, producing an artificially
+stable log-ratio and a confident-looking z-score instead of an honest
+"no data." Same reasoning as `trump_whisperer_qqq`'s `fetch_error` branch:
+an absent (or stale) observation isn't evidence the pair's relationship has
+changed, so a held position is retained rather than closed, and no new
+position is opened from nothing. This is different from a genuinely
+*computed* ratio landing inside the neutral band, or from not yet having
+`min_samples` observations to trust a mean/stdev at all ("warming_up") --
+both of those are real reads of the current state that do still close a
+held position if it disagrees, exactly like momentum_qqq's warming-up/
+neutral branches.
 
 **Session tracker.** Each cycle's `log(qqq/smh)` observation is recorded
 into a `momentum.PriceHistoryTracker` (imported and reused as-is -- the
@@ -426,6 +433,18 @@ def _decide(ctx: StrategyContext) -> Decision:
         return _decide_core(
             ctx, None,
             f"SMH price missing or invalid on tickers board (value={smh_price!r})",
+            qqq_price=qqq_price, smh_price=smh_price,
+        )
+    if board.is_stale(SMH_SYMBOL):
+        # The collector had no fresh DXLink/yfinance read this cycle and
+        # carried the last-known SMH price forward (source="last-known").
+        # A frozen price would otherwise read as a live observation and
+        # yield an artificially stable ratio -- exactly the wrong direction
+        # of wrong for a mean-reversion z-score, which wants "no data" here,
+        # not "a confident, unchanging reading."
+        return _decide_core(
+            ctx, None,
+            f"SMH price is stale (carried forward, not a fresh observation this cycle)",
             qqq_price=qqq_price, smh_price=smh_price,
         )
 

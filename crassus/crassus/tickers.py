@@ -43,6 +43,12 @@ class TickerBoard:
     snapshot_time: str
     feed_stale: bool
     prices: dict[str, float | None] = field(default_factory=dict)
+    # Per-symbol carried-forward flag: True when the collector had no fresh
+    # reading this cycle and republished the last known value instead
+    # (`d["stale"] = True`, `d["source"] = "last-known"` in collector.py).
+    # A symbol absent here (or mapping to False) was freshly observed.
+    stale: dict[str, bool] = field(default_factory=dict)
+    source: dict[str, str | None] = field(default_factory=dict)
 
     def price(self, symbol: str) -> float | None:
         """The last-published price for `symbol`, or `None` if the ticker is
@@ -51,9 +57,19 @@ class TickerBoard:
         Deliberately does not distinguish "ticker never existed on the
         board" from "ticker exists but its current reading is null" --
         both mean the same thing to a caller: there is no usable price for
-        this cycle.
+        this cycle. This is a distinct case from `is_stale()`, which covers
+        a *carried-forward* value -- present, but frozen from an earlier
+        cycle.
         """
         return self.prices.get(symbol)
+
+    def is_stale(self, symbol: str) -> bool:
+        """True if `symbol`'s price is a carried-forward last-known value
+        rather than a fresh observation this cycle. A symbol with no price
+        at all (`price(symbol) is None`) is not "stale" by this definition
+        -- it's simply absent; callers should check both.
+        """
+        return self.stale.get(symbol, False)
 
 
 def _parse_board(payload: dict[str, Any], fetched_at: str) -> TickerBoard:
@@ -62,9 +78,14 @@ def _parse_board(payload: dict[str, Any], fetched_at: str) -> TickerBoard:
         raise TickerFetchError("tickers board payload has no 'prices' object")
 
     prices: dict[str, float | None] = {}
+    stale: dict[str, bool] = {}
+    source: dict[str, str | None] = {}
     for symbol, entry in raw_prices.items():
-        price = entry.get("price") if isinstance(entry, dict) else None
+        is_dict = isinstance(entry, dict)
+        price = entry.get("price") if is_dict else None
         prices[symbol] = float(price) if isinstance(price, (int, float)) else None
+        stale[symbol] = bool(entry.get("stale", False)) if is_dict else False
+        source[symbol] = entry.get("source") if is_dict else None
 
     return TickerBoard(
         fetched_at=fetched_at,
@@ -72,6 +93,8 @@ def _parse_board(payload: dict[str, Any], fetched_at: str) -> TickerBoard:
         snapshot_time=payload.get("snapshot_time", ""),
         feed_stale=bool(payload.get("feed_stale", False)),
         prices=prices,
+        stale=stale,
+        source=source,
     )
 
 
