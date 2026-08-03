@@ -15,6 +15,7 @@ invoked.
 from __future__ import annotations
 
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +65,7 @@ def make_ctx(
     params: dict | None = None,
     rows: list[dict] | None = None,
     underlying_price: float = 400.0,
+    now_et: datetime | None = None,
 ) -> StrategyContext:
     snapshot = make_snapshot(underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW])
     book = Book(trades or [])
@@ -72,7 +74,7 @@ def make_ctx(
         snapshot=snapshot,
         account_state={},
         book=book,
-        now_et=None,
+        now_et=now_et,
         session_phase=session_phase,
         quotes=lambda symbols: {s: quote_map[s] for s in symbols if s in quote_map},
         params=params or {},
@@ -410,6 +412,75 @@ def scenario_reader_force_refetches() -> None:
     check("fetch_fn was called twice when forced", call_count["n"] == 2, call_count["n"])
 
 
+def scenario_reader_bounds_a_hanging_fetch() -> None:
+    print("\n18b. VolumeProfileBarReader: a fetch_fn that never returns is bounded by fetch_timeout_s")
+
+    def hangs(symbol: str) -> list[vp.Bar]:
+        time.sleep(5.0)
+        return make_peaked_bars()
+
+    reader = vp.VolumeProfileBarReader(symbol="QQQ", refresh_interval_s=300.0, fetch_fn=hangs, fetch_timeout_s=0.05, cooldown_s=60.0)
+    started = time.monotonic()
+    try:
+        reader.read()
+        check("read() raised on timeout", False)
+    except RuntimeError as exc:
+        elapsed = time.monotonic() - started
+        check("read() returned promptly rather than waiting for the hung call", elapsed < 1.0, elapsed)
+        check("reason cites the timeout", "timeout" in str(exc).lower(), str(exc))
+
+
+def scenario_reader_cooldown_after_timeout_skips_refetch() -> None:
+    print("\n18c. VolumeProfileBarReader: a subsequent read during cooldown fails fast without calling fetch_fn again")
+    calls = {"n": 0}
+
+    def hangs(symbol: str) -> list[vp.Bar]:
+        calls["n"] += 1
+        time.sleep(5.0)
+        return make_peaked_bars()
+
+    reader = vp.VolumeProfileBarReader(symbol="QQQ", refresh_interval_s=0.0, fetch_fn=hangs, fetch_timeout_s=0.05, cooldown_s=60.0)
+    try:
+        reader.read()
+    except RuntimeError:
+        pass
+    check("first (timed-out) call invoked fetch_fn", calls["n"] == 1, calls["n"])
+    try:
+        reader.read(force=True)
+        check("second read during cooldown raised", False)
+    except RuntimeError as exc:
+        check("second read during cooldown did not invoke fetch_fn again", calls["n"] == 1, calls["n"])
+        check("reason cites the cooldown", "cooldown" in str(exc).lower(), str(exc))
+
+
+def scenario_decide_stale_bars_treated_as_insufficient_data() -> None:
+    print("\n18d. _decide(): bars far older than ctx.now_et are rejected as stale, not traded on")
+    bars = make_peaked_bars()
+    latest_bar_ts = max(b.timestamp for b in bars)
+
+    class FreshReader:
+        def read(self, force: bool = False) -> list[vp.Bar]:
+            return bars
+
+    vp._reader = FreshReader()
+    # now_et is 6 hours after the latest bar -- e.g. yfinance served the
+    # prior session, or the feed has stalled.
+    stale_now = latest_bar_ts + timedelta(hours=6)
+    decision = vp._decide(make_ctx(session_phase="open", now_et=stale_now))
+    check("no_trade on stale bars", not decision.is_trade)
+    check("reason cites staleness", "old" in decision.reason.lower() or "stall" in decision.reason.lower(), decision.reason)
+
+    # Same bars, but now_et close to the latest bar -- fresh, should proceed
+    # to a real regime read rather than being rejected.
+    fresh_now = latest_bar_ts + timedelta(minutes=1)
+    decision2 = vp._decide(make_ctx(session_phase="open", now_et=fresh_now))
+    check(
+        "fresh bars are not rejected as stale (reaches a real regime, not the staleness reason)",
+        "old" not in decision2.reason.lower() and "stall" not in decision2.reason.lower(),
+        decision2.reason,
+    )
+
+
 def main() -> int:
     for scenario in (
         scenario_registered,
@@ -430,6 +501,9 @@ def main() -> int:
         scenario_multiple_open_positions_stand_down,
         scenario_reader_cache_respected,
         scenario_reader_force_refetches,
+        scenario_reader_bounds_a_hanging_fetch,
+        scenario_reader_cooldown_after_timeout_skips_refetch,
+        scenario_decide_stale_bars_treated_as_insufficient_data,
     ):
         scenario()
 

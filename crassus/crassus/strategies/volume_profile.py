@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -100,6 +101,23 @@ DEFAULT_BREAKOUT_LOOKBACK_MINUTES = 10.0
 # (e.g. the first minute of a fresh cache, or a half-populated fetch) --
 # treated the same as a fetch error, not as "no signal."
 MIN_BARS_REQUIRED = 5
+
+# The bars only cover "recent" relative to *themselves* -- `_detect_regime`
+# windows off `bars[-1].timestamp`, not off `ctx.now_et`. If yfinance lags,
+# or `period="1d"` hands back the previous session's bars (which happens
+# early in a session, or during an outage), nothing here would otherwise
+# notice: a stale value area would be built and compared against today's
+# live price with no flag to say the bars were old. Same reasoning and
+# similar magnitude as momentum_qqq.DEFAULT_MAX_SNAPSHOT_AGE_MINUTES.
+DEFAULT_MAX_BAR_AGE_MINUTES = 5.0
+
+# yf.download of a full day of 1-minute bars is a heavier call than a
+# fast_info lookup, and can hang or degrade for the same Yahoo-side reasons
+# documented in collector.py's fetch_yf_prices_bounded. runner.py runs every
+# account's strategy sequentially in a single thread, so an unbounded call
+# here stalls every other bot's cycle behind it, not just this one.
+DEFAULT_FETCH_TIMEOUT_S = 20.0
+DEFAULT_COOLDOWN_S = 300.0
 
 # OCC option symbol: root + YYMMDD + C/P + 8-digit strike. Parsed from the
 # symbol itself, not looked up in the current market snapshot -- same
@@ -293,19 +311,59 @@ class VolumeProfileBarReader:
         symbol: str = DEFAULT_SYMBOL,
         refresh_interval_s: float = DEFAULT_REFRESH_INTERVAL_S,
         fetch_fn: Callable[[str], list[Bar]] | None = None,
+        fetch_timeout_s: float = DEFAULT_FETCH_TIMEOUT_S,
+        cooldown_s: float = DEFAULT_COOLDOWN_S,
     ):
         self.symbol = symbol
         self.refresh_interval_s = refresh_interval_s
         self._fetch_fn = fetch_fn or _fetch_bars_yfinance
+        self.fetch_timeout_s = fetch_timeout_s
+        self.cooldown_s = cooldown_s
         self._cached: list[Bar] | None = None
         self._cached_at: float = 0.0
+        self._cooldown_until: float = 0.0
 
     def read(self, force: bool = False) -> list[Bar]:
         age = _time.monotonic() - self._cached_at
         if self._cached is not None and not force and age < self.refresh_interval_s:
             return self._cached
 
-        bars = self._fetch_fn(self.symbol)
+        now = _time.monotonic()
+        if now < self._cooldown_until:
+            raise RuntimeError(
+                f"bar fetch is in cooldown after a prior timeout/failure "
+                f"({self._cooldown_until - now:.0f}s remaining)"
+            )
+
+        # Bound the fetch with a daemon thread + join(timeout): a
+        # hung/slow yf.download() otherwise blocks this call -- and
+        # everything the runner schedules after it -- for however long
+        # yfinance takes, with no ceiling.
+        box: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                box["result"] = self._fetch_fn(self.symbol)
+            except Exception as exc:  # noqa: BLE001 -- surfaced via box, not re-raised across threads
+                box["error"] = exc
+
+        thread = threading.Thread(target=_worker, name="volume-profile-fetch", daemon=True)
+        thread.start()
+        thread.join(timeout=self.fetch_timeout_s)
+
+        if thread.is_alive():
+            self._cooldown_until = _time.monotonic() + self.cooldown_s
+            raise RuntimeError(
+                f"bar fetch exceeded {self.fetch_timeout_s:.0f}s timeout; "
+                f"cooling down for {self.cooldown_s:.0f}s"
+            )
+        if "error" in box:
+            raise box["error"]
+
+        bars = box.get("result", [])
+        if not bars:
+            self._cooldown_until = _time.monotonic() + self.cooldown_s
+
         self._cached, self._cached_at = bars, _time.monotonic()
         return self._cached
 
@@ -584,6 +642,17 @@ def _decide(ctx: StrategyContext) -> Decision:
         return _decide_core(
             ctx, None,
             f"insufficient bar data ({len(bars)} bars, need {MIN_BARS_REQUIRED})",
+        )
+
+    params = ctx.params or {}
+    max_bar_age = params.get("max_bar_age_minutes", DEFAULT_MAX_BAR_AGE_MINUTES)
+    latest_bar_ts = max(b.timestamp for b in bars)
+    bar_age_minutes = (ctx.now_et - latest_bar_ts).total_seconds() / 60.0
+    if bar_age_minutes > max_bar_age:
+        return _decide_core(
+            ctx, None,
+            f"latest bar is {bar_age_minutes:.1f} minutes old (limit={max_bar_age}m) "
+            f"-- yfinance looks stalled or is serving a prior session",
         )
 
     return _decide_core(ctx, bars, None)
