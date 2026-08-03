@@ -13,6 +13,7 @@ calls; the strategy's `_decide_core()` is exercised directly with hand-built
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -308,6 +309,51 @@ def scenario_reader_wraps_exceptions() -> None:
         check("underlying error message is preserved", "network is down" in str(exc))
 
 
+def scenario_reader_bounds_a_hanging_fetch() -> None:
+    print("\n21. Reader: a fetch_fn that never returns is bounded by fetch_timeout_s rather than blocking forever")
+
+    def hangs() -> tuple[float | None, float | None]:
+        time.sleep(5.0)  # much longer than the tiny timeout below
+        return (12.0, 20.0)
+
+    reader = vts.VixTermStructureReader(fetch_fn=hangs, min_interval_s=60.0, fetch_timeout_s=0.05, cooldown_s=60.0)
+    started = time.monotonic()
+    try:
+        reader.read()
+        check("read() raised VixFetchError on timeout", False)
+    except vts.VixFetchError as exc:
+        elapsed = time.monotonic() - started
+        check("read() returned promptly rather than waiting for the hung call", elapsed < 1.0, elapsed)
+        check("reason cites the timeout", "timeout" in str(exc).lower(), str(exc))
+
+
+def scenario_reader_cooldown_after_timeout_skips_refetch() -> None:
+    print("\n22. Reader: a subsequent read during cooldown fails fast without calling fetch_fn again")
+
+    calls = {"n": 0}
+
+    def hangs_once_then_would_work() -> tuple[float | None, float | None]:
+        calls["n"] += 1
+        time.sleep(5.0)
+        return (12.0, 20.0)  # never reached within the timeout
+
+    reader = vts.VixTermStructureReader(
+        fetch_fn=hangs_once_then_would_work, min_interval_s=0.0, fetch_timeout_s=0.05, cooldown_s=60.0,
+    )
+    try:
+        reader.read()
+    except vts.VixFetchError:
+        pass
+    check("first (timed-out) call invoked fetch_fn", calls["n"] == 1, calls["n"])
+
+    try:
+        reader.read(force=True)
+        check("second read during cooldown raised VixFetchError", False)
+    except vts.VixFetchError as exc:
+        check("second read during cooldown did not invoke fetch_fn again", calls["n"] == 1, calls["n"])
+        check("reason cites the cooldown", "cooldown" in str(exc).lower(), str(exc))
+
+
 def main() -> int:
     for scenario in (
         scenario_registered,
@@ -330,6 +376,8 @@ def main() -> int:
         scenario_cache_respected,
         scenario_cache_expires,
         scenario_reader_wraps_exceptions,
+        scenario_reader_bounds_a_hanging_fetch,
+        scenario_reader_cooldown_after_timeout_skips_refetch,
     ):
         scenario()
 

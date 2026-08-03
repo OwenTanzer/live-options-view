@@ -43,6 +43,13 @@ strategy every cycle doesn't hammer Yahoo's endpoint once per account per
 cycle -- there is one VIX term structure, not one per account, so (like
 `trump_whisperer`'s `_reader` and `momentum_qqq`'s `_tracker`) the reader is
 a module-level singleton shared across every account running this strategy.
+The fetch itself is bounded by a daemon-thread timeout
+(`fetch_timeout_s`, default 20s) with a cooldown afterward (`cooldown_s`,
+default 300s) on a timeout or an all-`None` result -- the same shape
+`collector.py`'s `fetch_yf_prices_bounded` uses, for the same reason:
+`runner.py` runs every account sequentially in a single thread, so an
+unbounded yfinance call here doesn't just stall this account, it stalls
+every other bot's cycle behind it.
 
 Error handling follows the same "absence of evidence isn't evidence against"
 rule as `trump_whisperer.py` and `momentum_qqq.py`: any fetch failure (yfinance
@@ -62,6 +69,7 @@ thin I/O wrapper the registry calls.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -77,6 +85,16 @@ DEFAULT_CONTANGO_THRESHOLD = 0.97  # ratio below this -> clearly calm/contango
 DEFAULT_BACKWARDATION_THRESHOLD = 1.03  # ratio above this -> clearly stressed/backwardation
 
 DEFAULT_MIN_INTERVAL_S = 60.0
+
+# yfinance can degrade to ~10s per symbol when Yahoo's API is degraded or
+# down, and `runner.py` runs every account's strategy sequentially in a
+# single thread -- an unbounded call here doesn't just stall this account,
+# it stalls every other bot's cycle behind it. Same shape and same values as
+# collector.py's fetch_yf_prices_bounded: bound the call with a daemon-thread
+# timeout, and back off for a cooldown after a timeout or an all-None result
+# so a persistent outage doesn't retry (and re-stall) every single cycle.
+DEFAULT_FETCH_TIMEOUT_S = 20.0
+DEFAULT_COOLDOWN_S = 300.0
 
 # OCC option symbol: root + YYMMDD + C/P + 8-digit strike. Parsed from the
 # symbol itself, not looked up in the current market snapshot -- same
@@ -130,21 +148,58 @@ class VixTermStructureReader:
         *,
         fetch_fn: Callable[[], tuple[float | None, float | None]] = _default_fetch_fn,
         min_interval_s: float = DEFAULT_MIN_INTERVAL_S,
+        fetch_timeout_s: float = DEFAULT_FETCH_TIMEOUT_S,
+        cooldown_s: float = DEFAULT_COOLDOWN_S,
     ):
         self.fetch_fn = fetch_fn
         self.min_interval_s = min_interval_s
+        self.fetch_timeout_s = fetch_timeout_s
+        self.cooldown_s = cooldown_s
         self._cached: VixTermStructureSnapshot | None = None
         self._cached_at: float = 0.0
+        self._cooldown_until: float = 0.0
 
     def read(self, force: bool = False) -> VixTermStructureSnapshot:
         age = time.monotonic() - self._cached_at
         if self._cached and not force and age < self.min_interval_s:
             return self._cached
 
-        try:
-            vix9d, vix3m = self.fetch_fn()
-        except Exception as exc:  # network errors, yfinance internals, etc.
-            raise VixFetchError(f"VIX9D/VIX3M fetch failed: {exc}") from exc
+        now = time.monotonic()
+        if now < self._cooldown_until:
+            raise VixFetchError(
+                f"VIX9D/VIX3M fetch is in cooldown after a prior timeout/failure "
+                f"({self._cooldown_until - now:.0f}s remaining)"
+            )
+
+        # Bound the fetch with a daemon thread + join(timeout) rather than
+        # calling fetch_fn() directly: a hung/slow Yahoo response otherwise
+        # blocks this call (and everything scheduled after it in the
+        # runner's single-threaded loop) for however long yfinance takes,
+        # with no ceiling.
+        box: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                box["result"] = self.fetch_fn()
+            except Exception as exc:  # noqa: BLE001 -- surfaced via box, not re-raised across threads
+                box["error"] = exc
+
+        thread = threading.Thread(target=_worker, name="vix-term-structure-fetch", daemon=True)
+        thread.start()
+        thread.join(timeout=self.fetch_timeout_s)
+
+        if thread.is_alive():
+            self._cooldown_until = time.monotonic() + self.cooldown_s
+            raise VixFetchError(
+                f"VIX9D/VIX3M fetch exceeded {self.fetch_timeout_s:.0f}s timeout; "
+                f"cooling down for {self.cooldown_s:.0f}s"
+            )
+        if "error" in box:
+            raise VixFetchError(f"VIX9D/VIX3M fetch failed: {box['error']}") from box["error"]
+
+        vix9d, vix3m = box["result"]
+        if vix9d is None and vix3m is None:
+            self._cooldown_until = time.monotonic() + self.cooldown_s
 
         snapshot = VixTermStructureSnapshot(
             fetched_at=time.monotonic(), vix9d=vix9d, vix3m=vix3m
