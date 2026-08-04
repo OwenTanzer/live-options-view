@@ -39,6 +39,7 @@ from .config import (
     SNAPSHOT_URL,
     load_accounts,
 )
+from .flatten import maybe_flatten
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
@@ -363,7 +364,8 @@ class Runner:
         )
 
         try:
-            decision: Decision = strategy(ctx)
+            flatten_decision = maybe_flatten(ctx, account.params)
+            decision: Decision = flatten_decision if flatten_decision is not None else strategy(ctx)
         except QuoteRateLimited as exc:
             # Classified as rate_limited, not a generic strategy failure --
             # the quote-side 429 already honored Retry-After globally via
