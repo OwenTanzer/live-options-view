@@ -1,33 +1,24 @@
 {
-  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Four strategies are implemented: smoke_atm_roundtrip (P1 smoke test), reddit_sentiment_qqq (#22), trump_whisperer_qqq (#29), and momentum_qqq; the dip/rip/cheap-ATM ones are still P3. The runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one. The split below is deliberate -- running every account on one strategy only measures variance -- and the three reddit_sentiment_qqq accounts run conservative / default / aggressive thresholds so the Automated tab's per-strategy rollup compares something real. Neither sentiment strategy needs credentials: reddit_sentiment_qqq scrapes Reddit's public new.json (with a headless-browser fallback for Reddit's JS challenge, optionally set REDDIT_USER_AGENT as a courtesy identifier); trump_whisperer_qqq (alias 'TrumpWhisperer' below) polls the public trumpstruth.org/feed RSS mirror of Trump's Truth Social posts, optionally set TRUMP_FEED_USER_AGENT the same way. Both return no_trade -- rather than crashing, or in TrumpWhisperer's case rather than closing a held position -- below min_sample_size or if ingestion fails. momentum_qqq (alias 'Newton' below) needs no credentials or external feed either -- its signal is the trailing return of the same underlying_price every other strategy already reads off the durable snapshot, accumulated into a rolling window in-process; it stands down the same way while that window is still warming up or has a gap in it (see crassus/momentum.py). momentum_qqq also accepts two optional params, both off/no-op by default so no existing account's behavior changes unless explicitly set: 'vwap_confirmation_required' (bool) vetoes an otherwise-supported direction unless the underlying is on the agreeing side of its own session VWAP, and 'rvol_floor' (float) vetoes it unless relative volume clears that multiple -- both read from the collector-computed underlying_market block (see crassus/vwap_rvol.py and docs/plans/2026-07-vwap-rvol.md). Neither is set on any account below; RVOL in particular reports 'insufficient_history' until the collector's self-bootstrapping baseline has accumulated enough trading days, during which a held position is retained rather than closed, same as a stale snapshot. Every account below also sets 'flatten_minutes_before_close': 15 (see crassus/flatten.py) -- without it, a strategy only ever closes a position when its own signal reverses, so a position that never gets a reversing signal rides untouched through the close and into next session's settlement sweep instead of ever being sold to close. These are all intraday plays, so every account opts in; a 0DTE/hold-to-expiration strategy added later would omit the param instead.",
+  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Four strategies are implemented: smoke_atm_roundtrip (P1 smoke test), reddit_sentiment_qqq (#22), trump_whisperer_qqq (#29), and momentum_qqq; the dip/rip/cheap-ATM ones are still P3. The runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one. The split below is deliberate -- running every account on one strategy only measures variance -- and the three reddit_sentiment_qqq accounts run conservative / default / aggressive thresholds so the Automated tab's per-strategy rollup compares something real. Neither sentiment strategy needs credentials: reddit_sentiment_qqq scrapes Reddit's public new.json (with a headless-browser fallback for Reddit's JS challenge, optionally set REDDIT_USER_AGENT as a courtesy identifier); trump_whisperer_qqq (alias 'TrumpWhisperer' below) polls the public trumpstruth.org/feed RSS mirror of Trump's Truth Social posts, optionally set TRUMP_FEED_USER_AGENT the same way. Both return no_trade -- rather than crashing, or in TrumpWhisperer's case rather than closing a held position -- below min_sample_size or if ingestion fails. momentum_qqq (alias 'Newton' below) needs no credentials or external feed either -- its signal is the trailing return of the same underlying_price every other strategy already reads off the durable snapshot, accumulated into a rolling window in-process; it stands down the same way while that window is still warming up or has a gap in it (see crassus/momentum.py). momentum_qqq also accepts two optional params, both off/no-op by default so no existing account's behavior changes unless explicitly set: 'vwap_confirmation_required' (bool) vetoes an otherwise-supported direction unless the underlying is on the agreeing side of its own session VWAP, and 'rvol_floor' (float) vetoes it unless relative volume clears that multiple -- both read from the collector-computed underlying_market block (see crassus/vwap_rvol.py and docs/plans/2026-07-vwap-rvol.md). Neither is set on any account below; RVOL in particular reports 'insufficient_history' until the collector's self-bootstrapping baseline has accumulated enough trading days, during which a held position is retained rather than closed, same as a stale snapshot. Every account is also end-of-day flattened (see crassus/flatten.py): this is mandatory, not a params opt-in -- a position that never gets a reversing signal from its own strategy still gets force-closed inside the last DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE (15) minutes before the 4pm close, rather than riding untouched into next session's settlement sweep. 'flatten_minutes_before_close' can widen or narrow that window per account if set explicitly, but no params value turns it off.",
 
   "accounts": [
     {
       "alias": "Ankit",
       "username": "crassus_ankit",
       "password_env": "CRASSUS_PW_ANKIT",
-      "strategy_id": "smoke_atm_roundtrip",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Bob",
       "username": "crassus_bob",
       "password_env": "CRASSUS_PW_BOB",
-      "strategy_id": "smoke_atm_roundtrip",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Doktor Freuding",
       "username": "crassus_freuding",
       "password_env": "CRASSUS_PW_FREUDING",
-      "strategy_id": "smoke_atm_roundtrip",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "smoke_atm_roundtrip"
     },
     {
       "alias": "Luigi",
@@ -37,18 +28,14 @@
       "params": {
         "min_sample_size": 12,
         "bullish_threshold": 0.30,
-        "bearish_threshold": -0.30,
-        "flatten_minutes_before_close": 15
+        "bearish_threshold": -0.30
       }
     },
     {
       "alias": "Jesus",
       "username": "crassus_jesus",
       "password_env": "CRASSUS_PW_JESUS",
-      "strategy_id": "reddit_sentiment_qqq",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "reddit_sentiment_qqq"
     },
     {
       "alias": "Doris",
@@ -58,27 +45,20 @@
       "params": {
         "min_sample_size": 3,
         "bullish_threshold": 0.05,
-        "bearish_threshold": -0.05,
-        "flatten_minutes_before_close": 15
+        "bearish_threshold": -0.05
       }
     },
     {
       "alias": "TrumpWhisperer",
       "username": "crassus_trumpwhisp",
       "password_env": "CRASSUS_PW_TRUMPWHISPERER",
-      "strategy_id": "trump_whisperer_qqq",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "trump_whisperer_qqq"
     },
     {
       "alias": "Newton",
       "username": "crassus_newton",
       "password_env": "CRASSUS_PW_NEWTON",
-      "strategy_id": "momentum_qqq",
-      "params": {
-        "flatten_minutes_before_close": 15
-      }
+      "strategy_id": "momentum_qqq"
     }
   ]
 }

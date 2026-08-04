@@ -91,15 +91,29 @@ def stale_quote(symbol: str) -> Quote:
     return Quote(symbol=symbol, bid=1.0, ask=1.1, quote_ts="2024-01-01T15:00:00", server_ts="2024-01-01T15:05:00")
 
 
-def scenario_no_op_without_param() -> None:
-    print("\n1. No flatten_minutes_before_close set -- always None, regardless of how close to the bell")
+def scenario_fires_without_param_using_default() -> None:
+    print("\n1. No flatten_minutes_before_close set -- still mandatory, falls back to the default window")
     ctx = make_ctx(
         trades=[LONG_CALL],
         quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
-        now_et=datetime(2024, 1, 1, 15, 59, tzinfo=ET),
+        now_et=datetime(2024, 1, 1, 15, 50, tzinfo=ET),  # 10 min to close, inside the 15-min default
     )
     decision = maybe_flatten(ctx, {})
-    check("no decision when the param is unset", decision is None)
+    check("a decision is proposed even with no params at all", decision is not None)
+    check("uses the default window", decision.metadata["flatten_minutes_before_close"] == 15.0)
+
+
+def scenario_no_params_value_disables_it() -> None:
+    print("\n1b. Explicitly setting flatten_minutes_before_close to 0/None still falls back to the default -- there is no opt-out")
+    ctx = make_ctx(
+        trades=[LONG_CALL],
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+        now_et=datetime(2024, 1, 1, 15, 50, tzinfo=ET),
+    )
+    decision_zero = maybe_flatten(ctx, {"flatten_minutes_before_close": 0})
+    decision_none = maybe_flatten(ctx, {"flatten_minutes_before_close": None})
+    check("0 doesn't disable it", decision_zero is not None)
+    check("None doesn't disable it", decision_none is not None)
 
 
 def scenario_outside_window() -> None:
@@ -203,7 +217,8 @@ def scenario_exactly_at_threshold_fires() -> None:
 
 def main() -> int:
     for scenario in (
-        scenario_no_op_without_param,
+        scenario_fires_without_param_using_default,
+        scenario_no_params_value_disables_it,
         scenario_outside_window,
         scenario_flat_book_is_a_no_op,
         scenario_not_open_is_a_no_op,
