@@ -3,6 +3,12 @@ requests>=2.31
 # reddit_sentiment_qqq strategy only -- see crassus/sentiment.py
 vaderSentiment>=3.3.2
 
+# vix_term_structure_qqq strategy only -- see
+# crassus/strategies/vix_term_structure.py. Free, unauthenticated wrapper
+# around Yahoo Finance's public quote endpoints; used to fetch ^VIX9D and
+# ^VIX3M, which aren't published anywhere else in this system.
+yfinance>=0.2.40
+
 # reddit_sentiment_qqq strategy's browser fallback only (crassus/sentiment.py
 # _fetch_listing_browser) -- used when Reddit's public new.json listing
 # fails, e.g. behind a JS challenge page.
