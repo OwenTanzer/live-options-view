@@ -907,7 +907,16 @@ async function settleAccount(env, username, as_of, spot_marks) {
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < as_of);
     const alreadySettled = new Set(record.trades.map(t => t.execution_request_id));
-    const pending = expired.filter(([sym, b]) => !alreadySettled.has(`${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`));
+    const settleable = expired.filter(([sym, b]) => !alreadySettled.has(`${SETTLEMENT_ID_PREFIX}:${sym}:${b.exp}`));
+    // A short position's settlement price depends on that expiration's spot
+    // mark; without one, settlementPriceServer would silently price it at 0
+    // ("expired worthless") regardless of whether it was actually ITM. Rather
+    // than let a missing mark forgive a real obligation, leave those shorts
+    // pending -- settlement is idempotent, so a later call with a complete
+    // mark set (the next cron sweep, or a dashboard load for that date)
+    // picks them back up. Longs are unaffected: they always settle at 0
+    // regardless of spot (see settlementPriceServer).
+    const pending = settleable.filter(([, b]) => b.pos > 0 || spot_marks[b.exp] != null);
 
     if (!pending.length) {
       return { result: { settled: [], balance_cash: record.balance_cash, liquidated: false } };
@@ -951,8 +960,10 @@ async function settleAccount(env, username, as_of, spot_marks) {
 
 // Drops a liquidated account's user record, roster index entry, and (if any)
 // live session. The cron sweep hits this same path as the interactive
-// endpoint -- a bot has no session to clear, but SESSIONS.delete on a token
-// that was never set is a harmless no-op.
+// endpoint, just with `token` always null -- a bot's own registration does
+// start a session like any other account's, but the cron sweep never has
+// that token in hand, so SESSIONS.delete on a token that was never passed
+// is a harmless no-op rather than an attempt to clear a specific session.
 async function liquidateAccount(env, username, token) {
   await env.USERS.delete(userKey(username));
   // Drop the roster index entry too, or a liquidated bot leaves a pointer to

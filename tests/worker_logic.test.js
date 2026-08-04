@@ -649,6 +649,70 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(store.get('bot:crassus_broke'), undefined, 'liquidation also drops the roster index entry');
   }
 
+  // ── settleAllBots: a missing spot mark must not forgive a real obligation ──
+  {
+    const store = new Map();
+    const makeKvEnv = (entries) => {
+      for (const [k, v] of Object.entries(entries)) store.set(k, v);
+      return {
+        USERS: {
+          list: async ({ prefix }) => ({
+            keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
+          }),
+          get: async (key) => store.get(key) ?? null,
+          put: async (key, value) => { store.set(key, value); },
+          delete: async (key) => { store.delete(key); },
+        },
+      };
+    };
+
+    // Deep ITM short (spot will be 610 once R2 is reachable) with an ample
+    // balance -- if a missing mark were priced as 0 instead of skipped, this
+    // would wrongly book it "expired worthless" and, being idempotent on
+    // execution_request_id, never get another chance to settle correctly.
+    const bot = {
+      username: 'crassus_ankit', is_bot: true, salt: 'S', hash: 'H',
+      iterations: 100000, balance_cash: 50000, starting_balance: 50000,
+      trades: [{
+        execution_request_id: 'orig-1', sym: 'QQQ260717C00600000', side: 'sell', qty: 1,
+        price: 5, strike: 600, type: 'call', exp: '2026-07-17',
+        instrument_type: 'option', multiplier: 100, ts: '2026-07-17T12:00:00Z',
+      }],
+      createdAt: '2026-07-17T00:00:00Z', version: 1,
+    };
+    const env = makeKvEnv({
+      'bot:crassus_ankit': JSON.stringify({ username: 'crassus_ankit' }),
+      'user:crassus_ankit': JSON.stringify(bot),
+    });
+
+    // R2 is unreachable this run -- both candidate paths 404.
+    const realFetch = global.fetch;
+    global.fetch = async () => ({ ok: false, text: async () => '' });
+    try {
+      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+
+    const afterMiss = JSON.parse(store.get('user:crassus_ankit'));
+    assert.equal(afterMiss.trades.length, 1, 'no settlement trade is recorded without a spot mark for the expiration');
+    assert.equal(afterMiss.balance_cash, 50000, 'balance is untouched -- the short is left pending, not priced at 0');
+
+    // R2 recovers on the next sweep -- the still-pending short settles
+    // correctly, exactly as if the first run had never happened.
+    global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
+    try {
+      await settleAllBots(env, new Date('2026-07-19T12:00:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+
+    const afterRecovery = JSON.parse(store.get('user:crassus_ankit'));
+    assert.equal(afterRecovery.trades.length, 2, 'the pending short settles once a mark becomes available');
+    assert.equal(afterRecovery.trades[1].note, 'exercised against (assigned)', 'settles at its true intrinsic value, not worthless');
+    assert.equal(afterRecovery.balance_cash, 50000 - 10 * 100, 'cash debited by the correct intrinsic value once recovered');
+  }
+
   console.log('PASS worker.js auth/trade/settlement logic');
 })().catch(error => {
   console.error(error);
