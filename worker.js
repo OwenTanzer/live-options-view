@@ -89,7 +89,17 @@ export default {
     }
 
     return response;
-  }
+  },
+
+  // Cloudflare Cron Trigger (see wrangler.toml [triggers]). Settlement used to
+  // be entirely client-triggered via /api/settle, called opportunistically
+  // from the dashboard's own render loop -- fine for a human's own account,
+  // but a bot nobody is watching never opens a dashboard, so its expired
+  // positions just piled up unsettled (issue #42). This sweeps every bot
+  // account server-side on a schedule instead of relying on a viewer.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(settleAllBots(env));
+  },
 }
 
 async function handleLiveQuotes(url, env) {
@@ -887,22 +897,12 @@ export function validateSettleRequest(body) {
   return null;
 }
 
-async function handleSettle(request, env) {
-  const session = await requireSession(request, env);
-  if (!session) return new Response('Forbidden', { status: 401 });
-
-  const originError = checkOrigin(request);
-  if (originError) return originError;
-
-  const bodyResult = await readJsonBody(request);
-  if (bodyResult.error) return bodyResult.error;
-
-  const validationError = validateSettleRequest(bodyResult.body);
-  if (validationError) return new Response(validationError, { status: 400 });
-
-  const { as_of, spot_marks } = bodyResult.body;
-
-  const kvOutcome = await withUserRecord(env, session.username, (record) => {
+// Core settlement mutation, shared by the session-authenticated /api/settle
+// endpoint and the unattended cron sweep (see settleAllBots below) -- a bot
+// account with no human ever opening its dashboard must settle the same way
+// a logged-in user's does, just without a session to key off of.
+async function settleAccount(env, username, as_of, spot_marks) {
+  return withUserRecord(env, username, (record) => {
     const book = computeBookFromTrades(record.trades);
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < as_of);
@@ -923,7 +923,7 @@ async function handleSettle(request, env) {
       const cashDelta = side === 'sell' ? price * Math.abs(b.pos) * 100 : -(price * Math.abs(b.pos) * 100);
       // An ITM short whose payout exceeds what's left in the account is an
       // obligation this book can't meet -- rather than clamp or partially
-      // apply it, the whole account is liquidated (see handleSettle below).
+      // apply it, the whole account is liquidated (see callers below).
       if (balance_cash + cashDelta < 0) {
         return { error: 'insolvent' };
       }
@@ -936,7 +936,7 @@ async function handleSettle(request, env) {
         instrument_type: 'option', multiplier: 100,
         side, qty: Math.abs(b.pos), price,
         note: price > 0 ? 'exercised against (assigned)' : 'expired worthless',
-        username: session.username,
+        username,
       });
       newTrades.push(trade);
       settled.push(trade);
@@ -947,14 +947,119 @@ async function handleSettle(request, env) {
       result: { settled, balance_cash, liquidated: false },
     };
   });
+}
+
+// Drops a liquidated account's user record, roster index entry, and (if any)
+// live session. The cron sweep hits this same path as the interactive
+// endpoint -- a bot has no session to clear, but SESSIONS.delete on a token
+// that was never set is a harmless no-op.
+async function liquidateAccount(env, username, token) {
+  await env.USERS.delete(userKey(username));
+  // Drop the roster index entry too, or a liquidated bot leaves a pointer to
+  // an account that no longer exists. handleBots tolerates the dangling case,
+  // but leaving one behind would slowly turn the roster into a graveyard.
+  await env.USERS.delete(botKey(username));
+  if (token) await env.SESSIONS.delete(sessionKey(token));
+}
+
+// NY trading-day date for `as_of`. Cron Triggers fire on a UTC schedule with
+// no DST awareness, so deriving the date from en-CA formatting in the
+// exchange's own timezone (rather than from the UTC wall clock) keeps
+// settlement keyed to the correct trading day across the EST/EDT boundary.
+function tradingDateNY(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(now);
+}
+
+// Same daily chain archive the historical panel reads (see fetchChainCsv in
+// docs/index.html) -- fetched directly from R2 rather than through the
+// worker's own routes since this runs server-side, not from a browser.
+// Only the UnderlyingPrice of the expiration's own 0DTE chain is needed, so
+// this stops at the first matching row instead of parsing the whole CSV.
+async function fetchSpotMarkForDate(dateStr) {
+  const key = dateStr.replace(/-/g, '');
+  for (const path of [`raw/qqq_chain_${key}.csv`, `raw/opex/qqq_chain_${key}.csv`]) {
+    const response = await fetch(`${R2_ORIGIN}/${path}`, { cf: { cacheTtl: 0 } });
+    if (!response.ok) continue;
+    const text = await response.text();
+    const lines = text.split('\n');
+    if (lines.length < 2) continue;
+    const header = lines[0].split(',');
+    const priceIdx = header.indexOf('UnderlyingPrice');
+    const expIdx = header.indexOf('Expiration');
+    if (priceIdx === -1) continue;
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) continue;
+      const cols = line.split(',');
+      if (expIdx !== -1 && cols[expIdx] !== dateStr) continue;
+      const price = Number(cols[priceIdx]);
+      if (Number.isFinite(price) && price >= 0) return price;
+    }
+  }
+  return null;
+}
+
+// Cron entry point (see the `scheduled` handler above). Settles every bot
+// account's expired positions against end-of-day spot marks pulled from the
+// archived chain data, independent of whether anyone's dashboard is open.
+export async function settleAllBots(env, now = new Date()) {
+  const asOf = tradingDateNY(now);
+  const index = await env.USERS.list({ prefix: 'bot:' });
+  const usernames = index.keys.map(k => k.name.slice('bot:'.length));
+
+  const pendingByUsername = new Map();
+  const neededExpirations = new Set();
+
+  for (const username of usernames) {
+    const raw = await env.USERS.get(userKey(username));
+    if (!raw) continue;
+    const record = JSON.parse(raw);
+    if (!record.is_bot) continue;
+    const book = computeBookFromTrades(record.trades);
+    const expired = Object.entries(book).filter(([, b]) =>
+      b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < asOf);
+    if (!expired.length) continue;
+    pendingByUsername.set(username, true);
+    for (const [, b] of expired) neededExpirations.add(b.exp);
+  }
+
+  if (!pendingByUsername.size) return;
+
+  const spotMarks = {};
+  for (const exp of neededExpirations) {
+    const spot = await fetchSpotMarkForDate(exp);
+    if (spot != null) spotMarks[exp] = spot;
+  }
+
+  for (const username of pendingByUsername.keys()) {
+    const outcome = await settleAccount(env, username, asOf, spotMarks);
+    if (outcome.error === 'insolvent') {
+      await liquidateAccount(env, username, null);
+    }
+    // Any other error (not_found, conflict) is left for the next cron run --
+    // settlement is idempotent (see the alreadySettled check in
+    // settleAccount), so a transient miss here just gets retried.
+  }
+}
+
+async function handleSettle(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) return new Response('Forbidden', { status: 401 });
+
+  const originError = checkOrigin(request);
+  if (originError) return originError;
+
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+
+  const validationError = validateSettleRequest(bodyResult.body);
+  if (validationError) return new Response(validationError, { status: 400 });
+
+  const { as_of, spot_marks } = bodyResult.body;
+
+  const kvOutcome = await settleAccount(env, session.username, as_of, spot_marks);
 
   if (kvOutcome.error === 'insolvent') {
-    await env.USERS.delete(userKey(session.username));
-    // Drop the roster index entry too, or a liquidated bot leaves a pointer to
-    // an account that no longer exists. handleBots tolerates the dangling case,
-    // but leaving one behind would slowly turn the roster into a graveyard.
-    await env.USERS.delete(botKey(session.username));
-    await env.SESSIONS.delete(sessionKey(session.token));
+    await liquidateAccount(env, session.username, session.token);
     return jsonResponse(
       { error: 'account_liquidated', reason: 'A settlement obligation exceeded the account balance' },
       410,

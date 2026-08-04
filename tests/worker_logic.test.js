@@ -12,7 +12,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     settlementPriceServer, validateSettleRequest, constantTimeEqual,
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
-    netPositions, handleBots, handleBotMetadata,
+    netPositions, handleBots, handleBotMetadata, settleAllBots,
   } = await import('../worker.js');
 
   // ── validateTradeIntent ────────────────────────────────────────────────────
@@ -558,6 +558,95 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
     assert.equal((await (await handleBots({}, dangling)).json()).bots.length, 0,
       'an index entry with no account behind it is skipped, not fatal');
+  }
+
+  // ── settleAllBots (issue #42: unattended settlement for bot accounts) ───────
+  {
+    const store = new Map();
+    const makeKvEnv = (entries) => {
+      for (const [k, v] of Object.entries(entries)) store.set(k, v);
+      return {
+        USERS: {
+          list: async ({ prefix }) => ({
+            keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
+          }),
+          get: async (key) => store.get(key) ?? null,
+          put: async (key, value) => { store.set(key, value); },
+          delete: async (key) => { store.delete(key); },
+        },
+      };
+    };
+
+    // A bot with an expired, unmarked ITM short call -- exactly the
+    // stuck-`awaiting marks` scenario from the issue.
+    const stuckBot = {
+      username: 'crassus_ankit', is_bot: true, salt: 'S', hash: 'H',
+      iterations: 100000, balance_cash: 1000, starting_balance: 10000,
+      trades: [{
+        execution_request_id: 'orig-1', sym: 'QQQ260717C00600000', side: 'sell', qty: 1,
+        price: 5, strike: 600, type: 'call', exp: '2026-07-17',
+        instrument_type: 'option', multiplier: 100, ts: '2026-07-17T12:00:00Z',
+      }],
+      createdAt: '2026-07-17T00:00:00Z', version: 1,
+    };
+    const env = makeKvEnv({
+      'bot:crassus_ankit': JSON.stringify({ username: 'crassus_ankit' }),
+      'user:crassus_ankit': JSON.stringify(stuckBot),
+    });
+
+    // No browser session is ever involved -- settleAllBots pulls its own spot
+    // mark from the R2 chain archive rather than depending on a viewer's
+    // locally-accumulated spotMarks.
+    const realFetch = global.fetch;
+    global.fetch = async (url) => {
+      assert.match(String(url), /raw\/qqq_chain_20260717\.csv$/, 'fetches the expiration date\'s own archived chain');
+      const csv = 'UnderlyingPrice,Expiration\n610,2026-07-17\n';
+      return { ok: true, text: async () => csv };
+    };
+    try {
+      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+
+    const settledRecord = JSON.parse(store.get('user:crassus_ankit'));
+    assert.equal(settledRecord.trades.length, 2, 'the expired short is settled without any session/dashboard involved');
+    const settlement = settledRecord.trades[1];
+    assert.equal(settlement.note, 'exercised against (assigned)', 'ITM short call at spot 610 vs strike 600 is assigned');
+    assert.equal(settledRecord.balance_cash, 1000 - 10 * 100, 'cash debited by intrinsic value * qty * multiplier');
+
+    // Idempotent: a second sweep over an already-settled book is a no-op.
+    global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
+    try {
+      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+    assert.equal(JSON.parse(store.get('user:crassus_ankit')).trades.length, 2, 'already-settled expirations are not re-settled');
+
+    // An obligation the account can't cover liquidates it, same as the
+    // interactive /api/settle path.
+    const insolventBot = {
+      username: 'crassus_broke', is_bot: true, salt: 'S', hash: 'H',
+      iterations: 100000, balance_cash: 100, starting_balance: 10000,
+      trades: [{
+        execution_request_id: 'orig-2', sym: 'QQQ260717C00600000', side: 'sell', qty: 1,
+        price: 5, strike: 600, type: 'call', exp: '2026-07-17',
+        instrument_type: 'option', multiplier: 100, ts: '2026-07-17T12:00:00Z',
+      }],
+      createdAt: '2026-07-17T00:00:00Z', version: 1,
+    };
+    store.set('bot:crassus_broke', JSON.stringify({ username: 'crassus_broke' }));
+    store.set('user:crassus_broke', JSON.stringify(insolventBot));
+
+    global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
+    try {
+      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+    assert.equal(store.get('user:crassus_broke'), undefined, 'an unpayable settlement liquidates the bot account');
+    assert.equal(store.get('bot:crassus_broke'), undefined, 'liquidation also drops the roster index entry');
   }
 
   console.log('PASS worker.js auth/trade/settlement logic');
