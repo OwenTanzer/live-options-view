@@ -10,6 +10,7 @@ no I/O beyond `ctx.quotes()`, which every scenario here stubs directly.
 
 from __future__ import annotations
 
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from crassus.client import Book  # noqa: E402
-from crassus.flatten import STRATEGY_ID, maybe_flatten  # noqa: E402
+from crassus.flatten import DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE, STRATEGY_ID, maybe_flatten  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.strategy import StrategyContext  # noqa: E402
 
@@ -128,15 +129,17 @@ def scenario_outside_window() -> None:
     check("no decision 30 minutes out with a 15-minute window", decision is None)
 
 
-def scenario_flat_book_is_a_no_op() -> None:
-    print("\n3. No open position -- nothing to flatten even inside the window")
+def scenario_flat_book_blocks_entry() -> None:
+    print("\n3. No open position but inside the window -- explicit no_trade, not None, so the strategy can't open one")
     ctx = make_ctx(
         trades=[],
         params={"flatten_minutes_before_close": 15},
         now_et=datetime(2024, 1, 1, 15, 55, tzinfo=ET),
     )
     decision = maybe_flatten(ctx, ctx.params)
-    check("no decision on a flat book", decision is None)
+    check("a decision is still returned (not None)", decision is not None)
+    check("it's a no_trade", decision is not None and not decision.is_trade)
+    check("attributed to the flatten module", decision is not None and decision.strategy_id == STRATEGY_ID)
 
 
 def scenario_not_open_is_a_no_op() -> None:
@@ -180,7 +183,7 @@ def scenario_closes_a_held_short() -> None:
 
 
 def scenario_missing_quote_defers() -> None:
-    print("\n7. No live quote for the held symbol -- defers to the next cycle rather than guessing")
+    print("\n7. No live quote for the held symbol -- explicit no_trade (retry next cycle), not None (which would let the strategy run)")
     ctx = make_ctx(
         trades=[LONG_CALL],
         quote_map={},
@@ -188,11 +191,12 @@ def scenario_missing_quote_defers() -> None:
         now_et=datetime(2024, 1, 1, 15, 50, tzinfo=ET),
     )
     decision = maybe_flatten(ctx, ctx.params)
-    check("no decision without a live quote", decision is None)
+    check("a decision is still returned (not None)", decision is not None)
+    check("it's a no_trade, not a close", decision is not None and not decision.is_trade)
 
 
 def scenario_stale_quote_defers() -> None:
-    print("\n8. A stale quote for the held symbol -- defers rather than executing against it")
+    print("\n8. A stale quote for the held symbol -- explicit no_trade rather than executing against it or falling through")
     ctx = make_ctx(
         trades=[LONG_CALL],
         quote_map={"QQQ240101C00400000": stale_quote("QQQ240101C00400000")},
@@ -200,7 +204,8 @@ def scenario_stale_quote_defers() -> None:
         now_et=datetime(2024, 1, 1, 15, 50, tzinfo=ET),
     )
     decision = maybe_flatten(ctx, ctx.params)
-    check("no decision on a stale quote", decision is None)
+    check("a decision is still returned (not None)", decision is not None)
+    check("it's a no_trade, not a close", decision is not None and not decision.is_trade)
 
 
 def scenario_exactly_at_threshold_fires() -> None:
@@ -215,18 +220,90 @@ def scenario_exactly_at_threshold_fires() -> None:
     check("fires at the boundary itself", decision is not None)
 
 
+def scenario_no_reentry_after_close_same_window() -> None:
+    print("\n10. Regression: close on one cycle, still-supported entry signal on the next -- flatten blocks it, not the runner falling through")
+    now = datetime(2024, 1, 1, 15, 50, tzinfo=ET)  # 10 min to close
+
+    # Cycle 1: held long gets closed.
+    ctx_holding = make_ctx(
+        trades=[LONG_CALL],
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+        params={"flatten_minutes_before_close": 15},
+        now_et=now,
+    )
+    closing_decision = maybe_flatten(ctx_holding, ctx_holding.params)
+    check("cycle 1 closes the held long", closing_decision is not None and closing_decision.action == "sell")
+
+    # Cycle 2, a few minutes later, still inside the window: the close filled
+    # so the book is now flat -- if the account's own strategy still supports
+    # entering (a persistent signal), maybe_flatten must still return a
+    # decision of its own (a no_trade) so the runner never calls the
+    # strategy this cycle, rather than returning None and letting a fresh
+    # entry through.
+    ctx_after_fill = make_ctx(
+        trades=[],  # book is flat again after the closing fill
+        params={"flatten_minutes_before_close": 15},
+        now_et=now.replace(minute=53),
+    )
+    reentry_guard = maybe_flatten(ctx_after_fill, ctx_after_fill.params)
+    check("cycle 2 still returns a decision (never None) inside the window", reentry_guard is not None)
+    check("cycle 2's decision is a no_trade, blocking any new entry", reentry_guard is not None and not reentry_guard.is_trade)
+    check(
+        "cycle 2's decision is attributed to the flatten module, not the account's strategy",
+        reentry_guard is not None and reentry_guard.strategy_id == STRATEGY_ID,
+    )
+
+
+def scenario_invalid_params_fall_back_to_default() -> None:
+    print("\n11. Invalid flatten_minutes_before_close values (negative, wrong type, NaN, inf) fall back to the default rather than silently disabling the window")
+    now = datetime(2024, 1, 1, 15, 50, tzinfo=ET)  # 10 min to close -- inside the 15-min default
+
+    for label, bad_value in (
+        ("negative", -5),
+        ("non-numeric string", "fifteen"),
+        ("NaN", math.nan),
+        ("+inf", math.inf),
+        ("-inf", -math.inf),
+    ):
+        ctx = make_ctx(
+            trades=[LONG_CALL],
+            quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+            params={"flatten_minutes_before_close": bad_value},
+            now_et=now,
+        )
+        decision = maybe_flatten(ctx, ctx.params)
+        check(f"{label} value still fires (falls back to the default)", decision is not None, bad_value)
+        if decision is not None:
+            check(
+                f"{label} value's metadata reports the default, not the bad input",
+                decision.metadata["flatten_minutes_before_close"] == DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE,
+            )
+
+    # A numeric string is a legitimate coercion, not an error case.
+    ctx = make_ctx(
+        trades=[LONG_CALL],
+        quote_map={"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")},
+        params={"flatten_minutes_before_close": "20"},
+        now_et=now,
+    )
+    decision = maybe_flatten(ctx, ctx.params)
+    check("a numeric string is coerced rather than rejected", decision is not None and decision.metadata["flatten_minutes_before_close"] == 20.0)
+
+
 def main() -> int:
     for scenario in (
         scenario_fires_without_param_using_default,
         scenario_no_params_value_disables_it,
         scenario_outside_window,
-        scenario_flat_book_is_a_no_op,
+        scenario_flat_book_blocks_entry,
         scenario_not_open_is_a_no_op,
         scenario_closes_a_held_long,
         scenario_closes_a_held_short,
         scenario_missing_quote_defers,
         scenario_stale_quote_defers,
         scenario_exactly_at_threshold_fires,
+        scenario_no_reentry_after_close_same_window,
+        scenario_invalid_params_fall_back_to_default,
     ):
         scenario()
 
