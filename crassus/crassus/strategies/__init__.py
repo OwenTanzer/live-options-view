@@ -12,5 +12,6 @@ from . import momentum_qqq  # noqa: F401
 from . import reddit_sentiment  # noqa: F401
 from . import smoke  # noqa: F401
 from . import trump_whisperer  # noqa: F401
+from . import vwap_breakout  # noqa: F401
 
-__all__ = ["smoke", "reddit_sentiment", "trump_whisperer", "momentum_qqq"]
+__all__ = ["smoke", "reddit_sentiment", "trump_whisperer", "momentum_qqq", "vwap_breakout"]
