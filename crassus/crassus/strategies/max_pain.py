@@ -4,8 +4,8 @@
 expiration payout to *option holders* (equivalently, aggregate loss to
 option *writers*) is minimized, across every strike currently carrying open
 interest. For a candidate settlement level K, this strategy sums, over every
-row in the current chain, `max(0, Strike - K) * OpenInterest` for calls plus
-`max(0, K - Strike) * OpenInterest` for puts -- i.e. what every strike's
+row in the current chain, `max(0, K - Strike) * OpenInterest` for calls plus
+`max(0, Strike - K) * OpenInterest` for puts -- i.e. what every strike's
 outstanding open interest would be worth if the underlying settled at K --
 then repeats that sum for every K present in the chain and takes the K that
 minimizes it. That K is the max-pain strike.
