@@ -23,14 +23,18 @@ positioning can also just be right, and 0DTE dealer hedging flows can
 dominate whatever retail sentiment this ratio is trying to capture. Nothing
 here should be read as validated alpha.
 
-"Extreme" is judged relative to *this session's own history* of PCR
+"Extreme" is judged relative to *a 24h trailing window of prior* PCR
 readings, not a fixed absolute PCR level -- see `crassus/pcr.py`'s module
 docstring for the full reasoning (same idea `momentum_qqq.py` applies to
 price: a 0DTE QQQ PCR baseline is not 0DTE SPX's, and isn't necessarily
 stable across sessions either, so a hand-picked universal cutoff would be
 mis-calibrated more often than not). Concretely, extremity is a z-score of
-the current reading against the mean/stdev of every *prior* reading this
-session (`pcr.compute_pcr_extremity`); `extreme_z_threshold` (default 1.5)
+the current reading against the mean/stdev of every *prior* reading still
+inside the retention window (`pcr.compute_pcr_extremity`) -- 24h by default,
+so the baseline is a trailing window that can span more than one session
+rather than something that resets at the open; a single session's worth of
+readings at the runner's cadence is a thin sample to z-score against.
+`extreme_z_threshold` (default 1.5)
 is the number of standard deviations required before a reading counts as
 extreme enough to trade.
 
@@ -44,13 +48,13 @@ why this is the right level of complexity for now, and for why every
 recorded PCR observation is anchored to `snapshot.timestamp` (the source's
 own clock) rather than `ctx.now_et`, with a duplicate/stale-snapshot guard
 so a stalled collector serving the same snapshot repeatedly cannot get
-re-recorded as fresh session history under an ever-advancing timestamp.
+re-recorded as fresh baseline history under an ever-advancing timestamp.
 
 The one PCR-specific wrinkle: a snapshot can have zero call open interest
 (e.g. a very early/degenerate chain), which would make the ratio undefined.
 That is treated the same as any other unusable-source read -- a
 `stale_source_reason`, not a recordable data point -- so a held position is
-retained rather than closed on it, and nothing poisons the session baseline.
+retained rather than closed on it, and nothing poisons the trailing baseline.
 
 `_decide_core` takes an already-computed `PCRExtremitySignal` (see
 `crassus/pcr.py`) plus an optional `stale_source_reason`, and contains all
@@ -97,7 +101,7 @@ DEFAULT_MAX_SNAPSHOT_AGE_MINUTES = 5.0
 _OCC_TYPE_RE = re.compile(r"\d{6}([CP])\d{8}$")
 
 # Shared across every account running this strategy, deliberately -- there is
-# one session's worth of PCR history, not one per account, exactly like
+# one trailing window of PCR history, not one per account, exactly like
 # momentum_qqq's module-level `_tracker`.
 _tracker = PCRHistoryTracker(retain_minutes=DEFAULT_RETAIN_MINUTES)
 
@@ -227,7 +231,7 @@ def _decide_core(
             ctx, held_symbol, held_quantity, held_type, no,
             f"Only {signal.baseline_sample_count} prior PCR reading(s) so "
             f"far; still warming up to a {DEFAULT_MIN_BASELINE_SAMPLES}-"
-            f"reading session baseline.",
+            f"reading 24h trailing baseline.",
             meta_base,
         )
 
@@ -238,8 +242,8 @@ def _decide_core(
     if z is None or abs(z) < extreme_z_threshold:
         return _maybe_close_unsupported(
             ctx, held_symbol, held_quantity, held_type, no,
-            f"Current PCR {signal.current_pcr} is within the session's "
-            f"normal range (z={z}, threshold={extreme_z_threshold}).",
+            f"Current PCR {signal.current_pcr} is within the 24h trailing "
+            f"baseline's normal range (z={z}, threshold={extreme_z_threshold}).",
             meta_base,
         )
 

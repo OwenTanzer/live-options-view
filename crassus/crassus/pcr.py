@@ -1,4 +1,4 @@
-"""Session-relative extremity of the put/call open-interest ratio.
+"""Baseline-relative extremity of the put/call open-interest ratio.
 
 The put/call ratio (PCR) here is `sum(put OpenInterest) / sum(call
 OpenInterest)` across every row in a single 0DTE options-chain snapshot. It
@@ -10,21 +10,24 @@ the underlying is going on its own.
 directionally -- see that module's docstring for the crowd-positioning
 argument. What this module provides is the piece that argument depends on:
 turning one scalar PCR reading into a judgment of how *extreme* it is,
-relative to the session's own history of readings so far, rather than
-against a fixed universal threshold.
+relative to a trailing window of recent readings (24h by default, see
+`DEFAULT_RETAIN_MINUTES`), rather than against a fixed universal threshold.
 
 A fixed absolute threshold (e.g. "PCR > 1.2 is extreme") is the wrong tool
 here for the same reason `momentum.py` computes a trailing return relative
 to the instrument's own recent price rather than an absolute price level:
 0DTE QQQ's baseline PCR is not 0DTE SPX's, is not equity-only PCR, and can
 also drift session to session with dealer positioning and expiration mix.
-What is stationary enough to threshold against is *this session's own
-distribution of readings so far* -- so a reading is "extreme" when it is far
-from what this session has been showing, measured in standard deviations
-(a z-score), not when it crosses some hand-picked absolute number.
+What is stationary enough to threshold against is *the recent trailing
+distribution of readings* -- so a reading is "extreme" when it is far from
+what the last day or so has been showing, measured in standard deviations
+(a z-score), not when it crosses some hand-picked absolute number. Note the
+window is deliberately trailing rather than session-scoped: it can carry
+readings across the overnight boundary, since PCR's normal range does not
+reset at the opening bell and one session alone is a thin sample.
 
 Design choice: the baseline (mean, stdev) used to score the current reading
-is built from every *prior* recorded point in the session -- the current
+is built from every *prior* recorded point in the window -- the current
 reading itself is excluded from its own baseline. Folding the newest point
 into the mean/stdev it's being scored against would mechanically pull the
 baseline toward the very reading being judged, damping the z-score of
@@ -62,8 +65,14 @@ from datetime import datetime, timedelta
 
 # Generous, fixed cap decoupled from any one strategy's configured
 # min_samples -- the tracker is a shared singleton (one PCR history, not one
-# per account/param-set), so it must hold enough history for the session,
+# per account/param-set), so it must hold enough history to z-score against,
 # not reset every time a caller asks for a shorter/longer baseline.
+#
+# Note this is a 24h *trailing* window, deliberately not a per-session reset:
+# the baseline can carry readings from the prior session, which is the point.
+# One session at the runner's cadence is a thin sample, and PCR's normal range
+# doesn't reset at the opening bell. Anything describing this as a "session"
+# baseline is describing it wrong.
 DEFAULT_RETAIN_MINUTES = 24 * 60.0
 
 DEFAULT_MIN_BASELINE_SAMPLES = 10
@@ -85,10 +94,10 @@ class PCRExtremitySignal:
 
       * "no_data" -- no observations at all yet.
       * "warming_up" -- observations exist, but fewer than `min_samples`
-        *prior* readings exist to build a session baseline against. Same
+        *prior* readings exist to build a trailing baseline against. Same
         "absence of evidence" treatment as momentum's warming_up state.
       * "ok" -- `z_score` is a trustworthy measure of how extreme the
-        current reading is relative to the session baseline so far.
+        current reading is relative to the trailing baseline so far.
     """
 
     current_pcr: float | None
@@ -165,7 +174,9 @@ class PCRHistoryTracker:
 
     Points older than `retain_minutes` are dropped on each `observe()` so
     memory stays bounded across a long-running process; `retain_minutes`
-    should exceed the length of one trading session.
+    defines the trailing baseline window itself (24h by default), so it is
+    a signal parameter and not only a memory cap -- shortening it narrows
+    what a z-score is measured against.
     """
 
     def __init__(self, retain_minutes: float = DEFAULT_RETAIN_MINUTES):
