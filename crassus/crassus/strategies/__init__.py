@@ -8,10 +8,11 @@ the MOO-24 contract explicitly defers rolling out every strategy before one
 complete loop is demonstrably alive.
 """
 
+from . import max_pain  # noqa: F401
 from . import momentum_qqq  # noqa: F401
 from . import oi_skew  # noqa: F401
 from . import reddit_sentiment  # noqa: F401
 from . import smoke  # noqa: F401
 from . import trump_whisperer  # noqa: F401
 
-__all__ = ["smoke", "reddit_sentiment", "trump_whisperer", "momentum_qqq", "oi_skew"]
+__all__ = ["smoke", "reddit_sentiment", "trump_whisperer", "momentum_qqq", "oi_skew", "max_pain"]
