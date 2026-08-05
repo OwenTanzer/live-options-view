@@ -1,0 +1,134 @@
+name: Temporary QQQ SPY IWM breakpoint generalization
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run cross-index breakpoint analysis
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, statistics as st, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from itertools import product
+
+          SYMBOLS=['QQQ','SPY','IWM']
+          STARTS=['09:30','09:45','10:00','10:15']
+          END1S=['12:45','13:00','13:15','13:30','13:45','14:00','14:15']
+          START2S=['13:45','14:00','14:15','14:30','14:45','15:00','15:15']
+          END2S=['15:00','15:15','15:30','15:45','16:00']
+          BASE=('09:30','13:30','14:30','15:45')
+
+          def minutes(t):
+              h,m=map(int,t.split(':')); return h*60+m
+
+          def fetch(symbol):
+              url=f'https://query2.finance.yahoo.com/v8/finance/chart/{symbol}?range=60d&interval=5m&includePrePost=false&events=div%2Csplits'
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(req,timeout=30) as x:
+                  raw=json.load(x)['chart']['result'][0]
+              q=raw['indicators']['quote'][0]
+              by={}
+              for i,ts in enumerate(raw['timestamp']):
+                  dt=datetime.fromtimestamp(ts,ZoneInfo('America/New_York'))
+                  o=q['open'][i]; c=q['close'][i]
+                  if o is None or c is None: continue
+                  by.setdefault(dt.date(),{})[dt.strftime('%H:%M')]={'open':float(o),'close':float(c)}
+              needed=set(STARTS+END1S+START2S+['15:00','15:15','15:30','15:45','15:55','09:30'])
+              days=[]
+              for d,b in sorted(by.items()):
+                  if not all(t in b for t in needed): continue
+                  def px(t): return b['15:55']['close'] if t=='16:00' else b[t]['open']
+                  p0=px('09:30')
+                  disp={t:abs(px(t)-p0)/p0*10000 for t in STARTS+END1S+START2S+END2S}
+                  days.append((d,disp))
+              return days
+
+          data={s:fetch(s) for s in SYMBOLS}
+          common=sorted(set.intersection(*[set(d for d,_ in data[s]) for s in SYMBOLS]))
+          data={s:[(d,disp) for d,disp in data[s] if d in common] for s in SYMBOLS}
+
+          def cfg_stats(days,a,b,c,d):
+              vals=[(disp[b]-disp[a])+(disp[d]-disp[c]) for _,disp in days]
+              dur=(minutes(b)-minutes(a))+(minutes(d)-minutes(c))
+              return {'mean':st.mean(vals),'median':st.median(vals),'pos':sum(v>0 for v in vals)/len(vals),'per_hour':st.mean(vals)/(dur/60),'duration':dur}
+
+          def interval(days,a,b):
+              vals=[disp[b]-disp[a] for _,disp in days]
+              return {'mean':st.mean(vals),'median':st.median(vals),'pos':sum(v>0 for v in vals)/len(vals),'vals':vals}
+
+          print(f'COMMON_N={len(common)} dates={common[0]}..{common[-1]}')
+          print('\nSHAPE_SUMMARY_BPS')
+          windows=[('morning','09:30','13:30'),('valley','13:30','14:30'),('afternoon','14:30','15:45'),('close','15:45','16:00')]
+          for s in SYMBOLS:
+              print(f'-- {s}')
+              for name,a,b in windows:
+                  z=interval(data[s],a,b)
+                  print(f'{name},{a}-{b},mean={z["mean"]:.3f},median={z["median"]:.3f},pos={z["pos"]:.3f}')
+              bs=cfg_stats(data[s],*BASE)
+              print(f'active_baseline,mean={bs["mean"]:.3f},median={bs["median"]:.3f},pos={bs["pos"]:.3f},per_hour={bs["per_hour"]:.3f}')
+
+          print('\nSHIFT_TESTS_BPS')
+          specs=[('morning_end','13:30',END1S,1),('afternoon_start','14:30',START2S,2),('afternoon_end','15:45',END2S,3)]
+          for s in SYMBOLS:
+              bs=cfg_stats(data[s],*BASE)
+              print(f'-- {s}')
+              for name,bt,cands,idx in specs:
+                  print(f'[{name}]')
+                  for t in cands:
+                      cfg=list(BASE); cfg[idx]=t
+                      if minutes(cfg[0])>=minutes(cfg[1]) or minutes(cfg[2])>=minutes(cfg[3]): continue
+                      z=cfg_stats(data[s],*cfg)
+                      print(f'shift={minutes(t)-minutes(bt):+d},time={t},mean={z["mean"]:.3f},delta={z["mean"]-bs["mean"]:+.3f},per_hour={z["per_hour"]:.3f}')
+
+          print('\nOPEN_DELAY_BPS')
+          for s in SYMBOLS:
+              bs=cfg_stats(data[s],*BASE)
+              print(f'-- {s}')
+              for a in STARTS:
+                  cfg=(a,BASE[1],BASE[2],BASE[3])
+                  z=cfg_stats(data[s],*cfg)
+                  print(f'entry={a},mean={z["mean"]:.3f},delta={z["mean"]-bs["mean"]:+.3f}')
+
+          print('\nGRID_RANK')
+          for s in SYMBOLS:
+              grid=[]
+              for a,b,c,d in product(STARTS,END1S,START2S,END2S):
+                  if minutes(a)>=minutes(b) or minutes(c)>=minutes(d): continue
+                  z=cfg_stats(data[s],a,b,c,d)
+                  grid.append((z['mean'],a,b,c,d,z['median'],z['pos'],z['per_hour']))
+              grid.sort(reverse=True)
+              rank=next(i for i,x in enumerate(grid,1) if x[1:5]==BASE)
+              print(f'{s},feasible={len(grid)},rank={rank},percentile={(1-(rank-1)/len(grid))*100:.2f},best={grid[0][1:5]},best_mean={grid[0][0]:.3f},base_mean={cfg_stats(data[s],*BASE)["mean"]:.3f}')
+
+          print('\nVALLEY_SLIDES_BPS')
+          valleys=[('13:15','14:15'),('13:30','14:30'),('13:45','14:45')]
+          for s in SYMBOLS:
+              print(f'-- {s}')
+              for a,b in valleys:
+                  z=interval(data[s],a,b)
+                  print(f'{a}-{b},mean={z["mean"]:.3f},median={z["median"]:.3f},pos={z["pos"]:.3f}')
+
+          print('\nAFTERNOON_SLIDES_BPS')
+          aft=[('14:15','15:30'),('14:30','15:45'),('14:45','16:00')]
+          for s in SYMBOLS:
+              print(f'-- {s}')
+              for a,b in aft:
+                  z=interval(data[s],a,b)
+                  print(f'{a}-{b},mean={z["mean"]:.3f},median={z["median"]:.3f},pos={z["pos"]:.3f}')
+
+          print('\nDAILY_CROSS_SYMBOL_CORRELATIONS')
+          def corr(x,y):
+              mx,my=st.mean(x),st.mean(y)
+              num=sum((a-mx)*(b-my) for a,b in zip(x,y))
+              den=(sum((a-mx)**2 for a in x)*sum((b-my)**2 for b in y))**0.5
+              return num/den if den else float('nan')
+          for name,a,b in windows:
+              vals={s:interval(data[s],a,b)['vals'] for s in SYMBOLS}
+              print(f'{name},QQQ_SPY={corr(vals["QQQ"],vals["SPY"]):.3f},QQQ_IWM={corr(vals["QQQ"],vals["IWM"]):.3f},SPY_IWM={corr(vals["SPY"],vals["IWM"]):.3f}')
+          PY
