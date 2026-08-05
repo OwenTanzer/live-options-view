@@ -39,6 +39,7 @@ from .config import (
     SNAPSHOT_URL,
     load_accounts,
 )
+from .flatten import maybe_flatten
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
@@ -240,6 +241,13 @@ class Runner:
             account_alias=account.alias,
             strategy_id=intent.get("strategy_id") or account.strategy_id,
             strategy_version=intent.get("strategy_version") or "n/a",
+            # Persisted on the intent at submit time (see ExecutionClient.
+            # submit) so recovery reflects the account's strategy assignment
+            # *as of the decision*, not whatever the config says now -- the
+            # two can diverge if the account was reassigned before a crash
+            # was recovered from. Only intents from before this field
+            # existed fall back to current config.
+            account_strategy_id=intent.get("account_strategy_id") or account.strategy_id,
             outcome_class=recovered.outcome_class,
             decision=intent.get("decision"),
             reason=recovered.note,
@@ -322,16 +330,13 @@ class Runner:
             market_snapshot_url_or_hash=snapshot.provenance if snapshot else None,
         )
 
-        if snapshot is None:
-            self.ledger.record(
-                **base,
-                outcome_class=Outcome.RUNNER_ERROR,
-                reason="No market snapshot available this cycle.",
-            )
-            return
-
         # Reconcile first: the server's view of cash and trades is the only
-        # authority, and the strategy should decide against current reality.
+        # authority, and both the mandatory EOD flatten and the account's own
+        # strategy should decide against current reality. This only needs
+        # /api/me, not a market snapshot -- deliberately not gated on
+        # `snapshot` being present, so a snapshot-service outage during the
+        # flatten window can't strand a held position that flatten.
+        # maybe_flatten would otherwise close (it never touches `snapshot`).
         try:
             if self._recover_pending(account):
                 return
@@ -363,7 +368,22 @@ class Runner:
         )
 
         try:
-            decision: Decision = strategy(ctx)
+            flatten_decision = maybe_flatten(ctx, account.params)
+            if flatten_decision is not None:
+                decision: Decision = flatten_decision
+            elif snapshot is None:
+                # Ordinary strategy evaluation does need a snapshot -- only
+                # the mandatory flatten is exempt. No flatten fired above, so
+                # there's nothing safe to decide against this cycle.
+                self.ledger.record(
+                    **base,
+                    outcome_class=Outcome.RUNNER_ERROR,
+                    reason="No market snapshot available this cycle.",
+                    account_state_before=state_before,
+                )
+                return
+            else:
+                decision = strategy(ctx)
         except QuoteRateLimited as exc:
             # Classified as rate_limited, not a generic strategy failure --
             # the quote-side 429 already honored Retry-After globally via
@@ -386,10 +406,22 @@ class Runner:
             )
             return
 
+        # From here on a Decision exists and may not have come from the
+        # account's own strategy (see maybe_flatten) -- attribute the record
+        # to whichever one actually produced it, not the account's assigned
+        # strategy_id, while keeping that assignment around separately so a
+        # record can still be grouped by account/strategy.
+        decision_base = {
+            **base,
+            "strategy_id": decision.strategy_id,
+            "strategy_version": decision.strategy_version,
+            "account_strategy_id": account.strategy_id,
+        }
+
         if not decision.is_trade:
             log.info("%s: no_trade -- %s", alias, decision.reason)
             self.ledger.record(
-                **base,
+                **decision_base,
                 outcome_class=Outcome.NO_TRADE,
                 decision=decision.to_dict(),
                 reason=decision.reason,
@@ -402,7 +434,7 @@ class Runner:
         if self.dry_run:
             log.info("%s: DRY RUN would %s %s x%s -- %s", alias, decision.action, decision.symbol, decision.quantity, decision.reason)
             self.ledger.record(
-                **base,
+                **decision_base,
                 outcome_class=Outcome.NO_TRADE,
                 decision=decision.to_dict(),
                 reason=f"[dry-run] {decision.reason}",
@@ -419,8 +451,9 @@ class Runner:
                 side=decision.action,
                 quantity=decision.quantity,
                 decision_id=decision_id,
-                strategy_id=account.strategy_id,
-                strategy_version=base["strategy_version"],
+                strategy_id=decision.strategy_id,
+                strategy_version=decision.strategy_version,
+                account_strategy_id=account.strategy_id,
                 reason=decision.reason,
                 decision=decision.to_dict(),
                 market_snapshot_timestamp=base["market_snapshot_timestamp"],
@@ -431,7 +464,7 @@ class Runner:
             pending = executor.pending_intent()
             request_id = pending.get("execution_request_id") if pending else None
             self._record_liquidation(
-                base, exc, decision=decision, state_before=state_before, execution_request_id=request_id
+                decision_base, exc, decision=decision, state_before=state_before, execution_request_id=request_id
             )
             if request_id:
                 # Only cleared now that the margin call is durably recorded.
@@ -440,7 +473,7 @@ class Runner:
             return
 
         self.ledger.record(
-            **base,
+            **decision_base,
             outcome_class=result.outcome_class,
             decision=decision.to_dict(),
             reason=decision.reason,
