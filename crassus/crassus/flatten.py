@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from . import exchange_calendar
 from .strategy import Decision, StrategyContext
 
 STRATEGY_ID = "eod_flatten"
@@ -84,7 +85,10 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
         return None
 
     minutes_before_close = _resolve_window_minutes(params)
-    market_close = ctx.now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    close_time = exchange_calendar.session_close(ctx.now_et.date())
+    market_close = ctx.now_et.replace(
+        hour=close_time.hour, minute=close_time.minute, second=0, microsecond=0
+    )
     minutes_to_close = (market_close - ctx.now_et).total_seconds() / 60.0
     if minutes_to_close > minutes_before_close:
         return None

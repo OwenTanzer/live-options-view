@@ -254,6 +254,55 @@ def scenario_no_reentry_after_close_same_window() -> None:
     )
 
 
+def scenario_half_day_uses_the_real_close() -> None:
+    print("\n12. Regression: a half-day session uses its actual 13:00 close, not an unconditional 16:00")
+    # 2024-11-29 (day after Thanksgiving) is an NYSE early-close day: 13:00 ET.
+    half_day = datetime(2024, 11, 29, tzinfo=ET)
+    quote_map = {"QQQ240101C00400000": fresh_quote("QQQ240101C00400000")}
+
+    # 12:50 ET: 190 minutes to a normal 16:00 close, but only 10 to the real
+    # 13:00 half-day close -- must fire.
+    ctx_inside_half_day_window = make_ctx(
+        trades=[LONG_CALL],
+        quote_map=quote_map,
+        params={"flatten_minutes_before_close": 15},
+        now_et=half_day.replace(hour=12, minute=50),
+    )
+    decision = maybe_flatten(ctx_inside_half_day_window, ctx_inside_half_day_window.params)
+    check(
+        "fires at 12:50 on a half day (10 minutes to the real 13:00 close)",
+        decision is not None,
+    )
+
+    # 12:30 ET on the same half day: still 30 minutes out even under the
+    # 13:00 close -- must not fire yet.
+    ctx_before_half_day_window = make_ctx(
+        trades=[LONG_CALL],
+        quote_map=quote_map,
+        params={"flatten_minutes_before_close": 15},
+        now_et=half_day.replace(hour=12, minute=30),
+    )
+    decision_early = maybe_flatten(ctx_before_half_day_window, ctx_before_half_day_window.params)
+    check(
+        "does not fire at 12:30 on a half day (30 minutes to the real 13:00 close)",
+        decision_early is None,
+    )
+
+    # A normal trading day at the same wall-clock time (12:50) must not fire
+    # -- confirms the half-day close is date-specific, not a blanket change.
+    ctx_normal_day = make_ctx(
+        trades=[LONG_CALL],
+        quote_map=quote_map,
+        params={"flatten_minutes_before_close": 15},
+        now_et=datetime(2024, 11, 27, 12, 50, tzinfo=ET),
+    )
+    decision_normal = maybe_flatten(ctx_normal_day, ctx_normal_day.params)
+    check(
+        "does not fire at 12:50 on an ordinary day (still 190 minutes to the real 16:00 close)",
+        decision_normal is None,
+    )
+
+
 def scenario_invalid_params_fall_back_to_default() -> None:
     print("\n11. Invalid flatten_minutes_before_close values (negative, wrong type, NaN, inf) fall back to the default rather than silently disabling the window")
     now = datetime(2024, 1, 1, 15, 50, tzinfo=ET)  # 10 min to close -- inside the 15-min default
@@ -303,6 +352,7 @@ def main() -> int:
         scenario_stale_quote_defers,
         scenario_exactly_at_threshold_fires,
         scenario_no_reentry_after_close_same_window,
+        scenario_half_day_uses_the_real_close,
         scenario_invalid_params_fall_back_to_default,
     ):
         scenario()
