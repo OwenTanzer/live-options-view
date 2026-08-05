@@ -1,0 +1,123 @@
+name: Temporary QQQ breakpoint robustness
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run robustness analysis
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, math, statistics as st, urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from itertools import product
+
+          URL='https://query2.finance.yahoo.com/v8/finance/chart/QQQ?range=60d&interval=5m&includePrePost=false&events=div%2Csplits'
+          req=urllib.request.Request(URL,headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req,timeout=30) as x:
+              raw=json.load(x)['chart']['result'][0]
+          q=raw['indicators']['quote'][0]
+          by={}
+          for i,ts in enumerate(raw['timestamp']):
+              dt=datetime.fromtimestamp(ts,ZoneInfo('America/New_York'))
+              o=q['open'][i]; c=q['close'][i]
+              if o is None or c is None: continue
+              by.setdefault(dt.date(),{})[dt.strftime('%H:%M')]={'open':float(o),'close':float(c)}
+
+          def px(b,t):
+              if t=='16:00': return b['15:55']['close']
+              return b[t]['open']
+
+          starts=['09:30','09:45','10:00','10:15']
+          end1s=['12:45','13:00','13:15','13:30','13:45','14:00','14:15']
+          start2s=['13:45','14:00','14:15','14:30','14:45','15:00','15:15']
+          end2s=['15:00','15:15','15:30','15:45','16:00']
+          needed=set(starts+end1s+start2s+['15:00','15:15','15:30','15:45','15:55','09:30'])
+          days=[]
+          for d,b in sorted(by.items()):
+              if all(t in b for t in needed):
+                  p0=px(b,'09:30')
+                  disp={t:abs(px(b,t)-p0) for t in starts+end1s+start2s+end2s}
+                  days.append((d,disp))
+
+          def minutes(t):
+              h,m=map(int,t.split(':')); return 60*h+m
+
+          def stats(a,b,c,d):
+              vals=[]
+              for _,disp in days:
+                  vals.append((disp[b]-disp[a])+(disp[d]-disp[c]))
+              dur=(minutes(b)-minutes(a))+(minutes(d)-minutes(c))
+              return {
+                'mean':st.mean(vals),'median':st.median(vals),'pos':sum(v>0 for v in vals)/len(vals),
+                'per_hour':st.mean(vals)/(dur/60),'duration':dur,'vals':vals
+              }
+
+          base=('09:30','13:30','14:30','15:45')
+          bs=stats(*base)
+          print(f'N={len(days)} dates={days[0][0]}..{days[-1][0]}')
+          print(f'BASE {base}: mean={bs["mean"]:.4f} median={bs["median"]:.4f} pos={bs["pos"]:.3f} per_hour={bs["per_hour"]:.4f} duration={bs["duration"]}')
+
+          print('\nONE_AT_A_TIME')
+          sweeps=[('entry',starts,1),('morning_end',end1s,2),('afternoon_start',start2s,3),('afternoon_end',end2s,4)]
+          for name,vals,idx1 in sweeps:
+              print(f'-- {name}')
+              for v in vals:
+                  cfg=list(base); cfg[idx1-1]=v
+                  if minutes(cfg[0])>=minutes(cfg[1]) or minutes(cfg[2])>=minutes(cfg[3]): continue
+                  s=stats(*cfg)
+                  print(f'{v},mean={s["mean"]:.4f},delta={s["mean"]-bs["mean"]:+.4f},median={s["median"]:.4f},pos={s["pos"]:.3f},per_hour={s["per_hour"]:.4f},duration={s["duration"]}')
+
+          print('\nLOCAL_SHIFT_TESTS')
+          # Independently shift the three discovered non-open boundaries by ±15/30/45; opening only later because regular session begins 09:30.
+          for name,base_t,candidates in [
+              ('morning_end','13:30',end1s),('afternoon_start','14:30',start2s),('afternoon_end','15:45',end2s)]:
+              print('--',name)
+              bmin=minutes(base_t)
+              for t in candidates:
+                  shift=minutes(t)-bmin
+                  cfg=list(base)
+                  idx={'morning_end':1,'afternoon_start':2,'afternoon_end':3}[name]
+                  cfg[idx]=t
+                  if minutes(cfg[0])>=minutes(cfg[1]) or minutes(cfg[2])>=minutes(cfg[3]): continue
+                  s=stats(*cfg)
+                  print(f'shift={shift:+d},time={t},mean={s["mean"]:.4f},delta={s["mean"]-bs["mean"]:+.4f},per_hour={s["per_hour"]:.4f}')
+
+          # Full feasible grid; show rank, broad plateau, and local neighborhood.
+          grid=[]
+          for a,b,c,d in product(starts,end1s,start2s,end2s):
+              if minutes(a)>=minutes(b) or minutes(c)>=minutes(d): continue
+              s=stats(a,b,c,d)
+              grid.append((s['mean'],s['per_hour'],a,b,c,d,s['median'],s['pos'],s['duration']))
+          grid.sort(reverse=True)
+          rank=next(i for i,x in enumerate(grid,1) if x[2:6]==base)
+          print(f'\nGRID feasible={len(grid)} baseline_rank={rank} baseline_percentile={(1-(rank-1)/len(grid))*100:.2f}')
+          print('TOP20')
+          for x in grid[:20]:
+              print(f'mean={x[0]:.4f},per_hour={x[1]:.4f},cfg={x[2:6]},median={x[6]:.4f},pos={x[7]:.3f},duration={x[8]}')
+
+          # ±15-minute neighborhood around baseline where feasible.
+          near=[]
+          for a in ['09:30','09:45']:
+              for b in ['13:15','13:30','13:45']:
+                  for c in ['14:15','14:30','14:45']:
+                      for d in ['15:30','15:45','16:00']:
+                          if minutes(a)>=minutes(b) or minutes(c)>=minutes(d): continue
+                          s=stats(a,b,c,d); near.append((s['mean'],s['per_hour'],a,b,c,d))
+          print(f'\nNEIGHBORHOOD15 n={len(near)} mean_of_means={st.mean(x[0] for x in near):.4f} min={min(x[0] for x in near):.4f} max={max(x[0] for x in near):.4f} sd={st.pstdev(x[0] for x in near):.4f}')
+          print(f'NEIGHBORHOOD15 per_hour mean={st.mean(x[1] for x in near):.4f} min={min(x[1] for x in near):.4f} max={max(x[1] for x in near):.4f}')
+
+          # Compare selected active windows with omitted valley and closing interval.
+          def interval_mean(a,b):
+              vals=[disp[b]-disp[a] for _,disp in days]
+              return st.mean(vals),st.median(vals),sum(v>0 for v in vals)/len(vals)
+          print('\nSHAPE_INTERVALS')
+          for a,b in [('09:30','13:15'),('09:30','13:30'),('09:30','13:45'),('13:15','14:15'),('13:30','14:30'),('13:45','14:45'),('14:15','15:30'),('14:30','15:45'),('14:45','16:00'),('15:45','16:00')]:
+              m,med,p=interval_mean(a,b)
+              print(f'{a}-{b},mean={m:.4f},median={med:.4f},pos={p:.3f},per_hour={m/((minutes(b)-minutes(a))/60):.4f}')
+          PY
