@@ -12,7 +12,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
-      - name: Analyze latest 60 days of QQQ 5-minute bars
+      - name: Analyze QQQ hourly and late-session persistence
         shell: bash
         run: |
           python3 - <<'PY'
@@ -28,180 +28,90 @@ jobs:
               "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?range=60d&interval=5m&includePrePost=false&events=div%2Csplits",
           ]
           payload = None
-          errors = []
           for attempt in range(4):
               for url in urls:
                   try:
-                      req = urllib.request.Request(
-                          url,
-                          headers={
-                              "User-Agent": "Mozilla/5.0",
-                              "Accept": "application/json,text/plain,*/*",
-                          },
-                      )
+                      req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
                       with urllib.request.urlopen(req, timeout=30) as response:
                           payload = json.load(response)["chart"]["result"][0]
                       break
-                  except Exception as exc:
-                      errors.append(f"{url}: {type(exc).__name__}: {exc}")
+                  except Exception:
+                      pass
               if payload is not None:
                   break
               time.sleep(3 * (attempt + 1))
           if payload is None:
-              raise RuntimeError("Unable to fetch QQQ bars: " + " | ".join(errors[-4:]))
+              raise RuntimeError("Unable to fetch QQQ bars")
 
           quote = payload["indicators"]["quote"][0]
-          by_day = {}
           eastern = ZoneInfo("America/New_York")
+          by_day = {}
           for i, timestamp in enumerate(payload["timestamp"]):
               dt = datetime.fromtimestamp(timestamp, eastern)
-              open_price = quote["open"][i]
-              close_price = quote["close"][i]
-              if open_price is None or close_price is None:
-                  continue
-              by_day.setdefault(dt.date(), {})[dt.strftime("%H:%M")] = (
-                  float(open_price),
-                  float(close_price),
-              )
+              o, c = quote["open"][i], quote["close"][i]
+              if o is not None and c is not None:
+                  by_day.setdefault(dt.date(), {})[dt.strftime("%H:%M")] = (float(o), float(c))
 
-          checkpoints = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:00", "15:30", "CLOSE"]
-          required = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:00", "15:30", "15:55"]
+          open_checkpoints = [
+              "09:30", "10:30", "11:30", "12:30", "13:30", "14:30",
+              "15:00", "15:15", "15:30", "15:45", "15:50"
+          ]
+          required = open_checkpoints + ["15:55"]
           rows = []
           for date, bars in sorted(by_day.items()):
               if not all(t in bars for t in required):
                   continue
-              prices = {
-                  "09:30": bars["09:30"][0],
-                  "10:30": bars["10:30"][0],
-                  "11:30": bars["11:30"][0],
-                  "12:30": bars["12:30"][0],
-                  "13:30": bars["13:30"][0],
-                  "14:30": bars["14:30"][0],
-                  "15:00": bars["15:00"][0],
-                  "15:30": bars["15:30"][0],
-                  "CLOSE": bars["15:55"][1],
-              }
+              prices = {t: bars[t][0] for t in open_checkpoints}
+              prices["CLOSE"] = bars["15:55"][1]
               p0 = prices["09:30"]
-              displacement = {key: abs(value - p0) for key, value in prices.items()}
-              rows.append(
-                  {
-                      "date": str(date),
-                      "open": p0,
-                      "prices": prices,
-                      "m": displacement,
-                  }
-              )
+              rows.append({
+                  "date": str(date),
+                  "open": p0,
+                  "m": {t: abs(p - p0) for t, p in prices.items()},
+              })
 
-          def mean(values):
-              return st.mean(values) if values else float("nan")
+          def mean(x): return st.mean(x)
+          def median(x): return st.median(x)
+          def helped(x): return 100 * sum(v > 0 for v in x) / len(x)
+          def line(tag, values): print(tag + "," + ",".join(str(v) for v in values))
 
-          def median(values):
-              return st.median(values) if values else float("nan")
-
-          def trimmed_mean(values, trim=1):
-              values = sorted(values)
-              if len(values) <= 2 * trim:
-                  return mean(values)
-              return mean(values[trim:-trim])
-
-          def pct(value):
-              return 100.0 * value
-
-          print("QQQ_HOURLY_ANALYSIS_BEGIN")
-          print(f"SAMPLE,{rows[0]['date']},{rows[-1]['date']},{len(rows)}")
-          print("DEFINITION,M_t=abs(P_t-P_09:30); contribution=M_end-M_start; persistence=M_close-M_t")
+          line("SAMPLE", [rows[0]["date"], rows[-1]["date"], len(rows)])
 
           intervals = [
-              ("09:30", "10:30"),
-              ("10:30", "11:30"),
-              ("11:30", "12:30"),
-              ("12:30", "13:30"),
-              ("13:30", "14:30"),
-              ("14:30", "15:30"),
+              ("09:30", "10:30"), ("10:30", "11:30"), ("11:30", "12:30"),
+              ("12:30", "13:30"), ("13:30", "14:30"), ("14:30", "15:30"),
               ("15:30", "CLOSE"),
           ]
-          print("INTERVAL_CONTRIBUTION_HEADER,interval,mean_points,median_points,trimmed_mean_points,positive_days,positive_pct,negative_days")
-          for start, end in intervals:
-              values = [r["m"][end] - r["m"][start] for r in rows]
-              positive = sum(v > 0 for v in values)
-              negative = sum(v < 0 for v in values)
-              print(
-                  "INTERVAL_CONTRIBUTION," + ",".join(
-                      [
-                          f"{start}-{end}",
-                          f"{mean(values):.6f}",
-                          f"{median(values):.6f}",
-                          f"{trimmed_mean(values):.6f}",
-                          str(positive),
-                          f"{pct(positive / len(values)):.2f}",
-                          str(negative),
-                      ]
-                  )
-              )
+          line("HOUR_HEADER", ["window", "mean", "median", "helped_pct"])
+          for a, b in intervals:
+              values = [r["m"][b] - r["m"][a] for r in rows]
+              line("HOUR", [f"{a}-{b}", f"{mean(values):.6f}", f"{median(values):.6f}", f"{helped(values):.2f}"])
 
-          print("CHECKPOINT_HEADER,time,mean_abs_points,median_abs_points,mean_abs_pct")
-          for t in checkpoints:
-              points = [r["m"][t] for r in rows]
-              percentages = [r["m"][t] / r["open"] for r in rows]
-              print(
-                  "CHECKPOINT," + ",".join(
-                      [t, f"{mean(points):.6f}", f"{median(points):.6f}", f"{pct(mean(percentages)):.4f}"]
-                  )
-              )
+          late = ["15:00", "15:15", "15:30", "15:45", "15:50", "CLOSE"]
+          line("LATE_CHECKPOINT_HEADER", ["time", "mean_abs", "median_abs", "mean_vs_1500", "median_vs_1500", "beats_1500_pct"])
+          base = [r["m"]["15:00"] for r in rows]
+          for t in late:
+              values = [r["m"][t] for r in rows]
+              delta = [r["m"][t] - r["m"]["15:00"] for r in rows]
+              line("LATE_CHECKPOINT", [t, f"{mean(values):.6f}", f"{median(values):.6f}", f"{mean(delta):.6f}", f"{median(delta):.6f}", f"{helped(delta):.2f}"])
 
-          persistence_times = ["10:30", "11:30", "12:30", "13:30", "14:30", "15:00", "15:30"]
-          print("PERSISTENCE_HEADER,time,mean_to_close,median_to_close,trimmed_mean_to_close,helped_days,helped_pct,hurt_days")
-          for t in persistence_times:
-              values = [r["m"]["CLOSE"] - r["m"][t] for r in rows]
-              helped = sum(v > 0 for v in values)
-              hurt = sum(v < 0 for v in values)
-              print(
-                  "PERSISTENCE," + ",".join(
-                      [
-                          t,
-                          f"{mean(values):.6f}",
-                          f"{median(values):.6f}",
-                          f"{trimmed_mean(values):.6f}",
-                          str(helped),
-                          f"{pct(helped / len(values)):.2f}",
-                          str(hurt),
-                      ]
-                  )
-              )
+          adjacent = [("15:00", "15:15"), ("15:15", "15:30"), ("15:30", "15:45"), ("15:45", "15:50"), ("15:50", "CLOSE")]
+          line("LATE_SLICE_HEADER", ["window", "mean", "median", "helped_pct"])
+          for a, b in adjacent:
+              values = [r["m"][b] - r["m"][a] for r in rows]
+              line("LATE_SLICE", [f"{a}-{b}", f"{mean(values):.6f}", f"{median(values):.6f}", f"{helped(values):.2f}"])
 
           for threshold in [0.005, 0.0075, 0.0100, 0.0150]:
-              print(f"CONDITIONAL_HEADER,threshold={threshold:.4f},time,n,mean_to_close,median_to_close,helped_pct")
-              for t in persistence_times:
-                  subset = [r for r in rows if r["m"][t] / r["open"] >= threshold]
-                  if not subset:
-                      continue
-                  values = [r["m"]["CLOSE"] - r["m"][t] for r in subset]
-                  helped = sum(v > 0 for v in values)
-                  print(
-                      "CONDITIONAL," + ",".join(
-                          [
-                              f"{threshold:.4f}",
-                              t,
-                              str(len(subset)),
-                              f"{mean(values):.6f}",
-                              f"{median(values):.6f}",
-                              f"{pct(helped / len(values)):.2f}",
-                          ]
-                      )
-                  )
+              subset = [r for r in rows if r["m"]["15:00"] / r["open"] >= threshold]
+              line("COND_1500_HEADER", [f"threshold={threshold:.4f}", "n", "exit_time", "mean_vs_1500", "median_vs_1500", "beats_1500_pct"])
+              for t in late[1:]:
+                  delta = [r["m"][t] - r["m"]["15:00"] for r in subset]
+                  line("COND_1500", [f"{threshold:.4f}", len(subset), t, f"{mean(delta):.6f}", f"{median(delta):.6f}", f"{helped(delta):.2f}"])
 
-          print("TOP_LATE_EXTENSION_HEADER,date,from_15_00,from_15_30,close_abs_move")
-          ranked = sorted(rows, key=lambda r: r["m"]["CLOSE"] - r["m"]["15:00"], reverse=True)
-          for r in ranked[:8]:
-              print(
-                  "TOP_LATE_EXTENSION," + ",".join(
-                      [
-                          r["date"],
-                          f"{r['m']['CLOSE'] - r['m']['15:00']:.6f}",
-                          f"{r['m']['CLOSE'] - r['m']['15:30']:.6f}",
-                          f"{r['m']['CLOSE']:.6f}",
-                      ]
-                  )
-              )
-          print("QQQ_HOURLY_ANALYSIS_END")
+          # Fixed-time exit comparison: which checkpoint maximizes mean and median displacement?
+          all_times = ["10:30", "11:30", "12:30", "13:30", "14:30", "15:00", "15:15", "15:30", "15:45", "15:50", "CLOSE"]
+          means = {t: mean([r["m"][t] for r in rows]) for t in all_times}
+          medians = {t: median([r["m"][t] for r in rows]) for t in all_times}
+          line("BEST_FIXED_MEAN", [max(means, key=means.get), f"{max(means.values()):.6f}"])
+          line("BEST_FIXED_MEDIAN", [max(medians, key=medians.get), f"{max(medians.values()):.6f}"])
           PY
