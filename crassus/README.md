@@ -90,7 +90,10 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/strategy.py` | The strategy contract |
 | `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + browser fallback + VADER, polled and cached like the market snapshot) |
 | `crassus/trump_sentiment.py` | Trump Truth Social sentiment observation for `trump_whisperer_qqq` (`trumpstruth.org/feed` RSS + VADER, polled and cached the same way) |
+| `crassus/phelps.py` | `phelps_wrap()` -- retrofits Guideline Phelps' ~25-30 minute hold-time floor onto any existing strategy's exits, without touching its entry/signal logic |
 | `crassus/strategies/` | Strategy implementations |
+| `crassus/strategies/phelps_variants.py` | Phelps-wrapped twins of the four live strategies (`smoke_atm_roundtrip_phelps`, `reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, `momentum_qqq_phelps`) -- same entries, exits deferred one Phelps window |
+| `crassus/strategies/phelps_pure.py` | `phelps_pure_qqq` -- entry *and* exit both derived from Guideline Phelps directly (short-window displacement trigger, hold-until-invalidation-or-window-elapses exit), rather than wrapping another strategy's signal |
 | `crassus/runner.py` | The loop |
 | `Dockerfile` | Railway's deploy image (`railway.toml`'s `builder = "DOCKERFILE"`) -- bakes a version-matched Chromium in for `reddit_sentiment_qqq`'s browser fallback |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
@@ -101,6 +104,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `scripts/verify_reddit_ingestion.py` | Hermetic checks for `reddit_sentiment_qqq`'s ingestion layer (JSON fetch, browser DOM parsing, layer selection, 429 cooldown, crash recovery) -- no network access or real browser required |
 | `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
 | `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
+| `scripts/verify_phelps.py` | Hermetic checks for `phelps_wrap()`'s defer/release/invalidation-clearing logic and `phelps_pure_qqq`'s entry/exit decision logic -- no network access required |
 
 ## Integrity invariants
 
@@ -161,6 +165,51 @@ happens to reach) if one doesn't exist yet.
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
 are deliberately not baked into the runtime.
+
+## Guideline Phelps and the Phelps test bots
+
+Guideline Phelps (Notion: Trading Method / Preliminary Guideline Phelps) is
+a provisional hold-time rule, not a strategy: a 0DTE option position is a
+short-horizon convexity purchase, and the market may overprice convexity
+across a whole session while underpricing it inside the specific ~25-30
+minute window ("one Phelps") the day's move actually happens in. The
+guideline says a position should be granted one Phelps window before an
+ordinary signal reversal or option-price discomfort counts as a reason to
+exit -- only a genuine invalidation of the entry thesis should close it
+early; past the window, a still-unresolved position should be released.
+
+`crassus/phelps.py`'s `phelps_wrap()` retrofits exactly that hold-time floor
+onto any of this repo's existing strategies without touching their entry or
+signal logic: every strategy here shares one exit shape (close the moment
+its own signal stops supporting the position), so `phelps_wrap` intercepts
+a proposed close, holds it until `ctx.params["phelps_minutes"]` (default
+`phelps.PHELPS_MINUTES_DEFAULT`, the guideline's 25-30m band's midpoint)
+has elapsed since entry, then releases it. `crassus/strategies/phelps_variants.py`
+applies this to the four live strategies, producing `smoke_atm_roundtrip_phelps`,
+`reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, and
+`momentum_qqq_phelps`.
+
+`accounts.example.json`'s **Phelps test bots** are exact copies of the eight
+live accounts (Ankit, Bob, Doktor Freuding, Luigi, Jesus, Doris,
+TrumpWhisperer, Newton) -- same alias root plus " Phelps", same params where
+the original has any -- moved onto the corresponding `_phelps` strategy_id.
+Comparing e.g. Ankit vs. Ankit Phelps isolates the effect of the hold-time
+floor with nothing else changed.
+
+A ninth account, **Bowman** (named for Bob Bowman, Michael Phelps's coach --
+"Phelps" itself is reserved for the guideline), runs `phelps_pure_qqq`
+(`crassus/strategies/phelps_pure.py`), which is not a wrapper: both its
+entry (a short-window, ~5-minute displacement trigger -- see that module's
+docstring for why this is the most direct proxy for "a structurally
+privileged moment" the guideline itself doesn't otherwise define) and its
+exit (close immediately only on a full retrace of the triggering
+displacement; otherwise hold, regardless of P&L, until the Phelps window
+elapses and then release unconditionally) are derived from the guideline
+directly. It exists to isolate what Phelps alone contributes as a signal,
+not just as an exit-timing floor.
+
+See `scripts/verify_phelps.py` for hermetic coverage of both the wrapper
+and the standalone strategy.
 
 ## `reddit_sentiment_qqq`
 
