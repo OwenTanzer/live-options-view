@@ -8,6 +8,7 @@ the MOO-24 contract explicitly defers rolling out every strategy before one
 complete loop is demonstrably alive.
 """
 
+from . import canopus_down_day  # noqa: F401
 from . import max_pain  # noqa: F401
 from . import momentum_qqq  # noqa: F401
 from . import oi_skew  # noqa: F401
@@ -24,4 +25,5 @@ __all__ = [
     "oi_skew",
     "max_pain",
     "put_call_ratio",
+    "canopus_down_day",
 ]
