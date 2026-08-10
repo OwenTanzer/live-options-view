@@ -180,7 +180,7 @@ Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` u
 - Runs as its own daemon thread started once from `main()`, independent of the QQQ market session (`_run_session`) -- STEO has nothing to do with market hours.
 - Polls `api.eia.gov`'s v2 STEO API every `EIA_STEO_POLL_SECS` (6h). EIA's API serves the *current* published forecast, not a queryable history of what a prior release forecast for the same future month -- so vintage-over-vintage comparison is built up locally, one release snapshot per poll, in `baselines/eia_steo_vintages.json` (same rolling-log shape as the RVOL baseline in §5, deduplicated by release month).
 - `macro/eia_steo.json` holds the latest release's full forecast curve, its diff against the immediately prior stored vintage (`revisions`), and the latest OVX reading + regime classification (`classify_ovx_regime`, see `crude_calibration.py`) pulled from the same `_last_prices` state the price strip uses.
-- Series IDs (`BREPUUS`/`WTIPUUS`/`PATC_WORLD`) are believed correct but were not verified against a live authenticated call while building this -- see `crude_calibration.py`'s module docstring before depending on them.
+- Series IDs verified 2026-08 with a live authenticated call: `BREPUUS` (Brent) and `WTIPUUS` (WTI) as guessed. The balance series was *not* `PATC_WORLD` as originally guessed -- that's world liquid fuels **consumption** (~100+ million bbl/d, not a balance figure at all). The correct series is `T3_STCHANGE_WORLD` ("Net Inventory Withdrawals, Total World Crude Oil and Other Liquids"), found via `api.eia.gov/v2/steo/facet/seriesId`. Its sign convention (positive = draw/withdrawal, negative = build) was cross-checked against a real number: Apr-Jun 2026 averages ~5.08 million bbl/d on this series, matching the debate transcript's own "realized Q2 draw was 5.1 million barrels per day" almost exactly.
 
 ---
 
@@ -363,8 +363,7 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 | DXLink intermittent 502s | Option data blanks during outages | `latest.json` guard preserves last good snapshot; viewer shows "Cached" status |
 | No access control | Anyone with the URL can view | Cloudflare Access can gate it if needed |
 | Single 0DTE expiration | Thursday dual-expiry (0DTE + Friday) not shown | Out of scope |
-| EIA STEO series IDs unverified live | `macro/eia_steo.json` could silently return empty/wrong fields | `crude_calibration.py`'s series IDs (§5.7) were sourced from documentation, not a live authenticated call — verify against `api.eia.gov` before relying on this feed |
-| OVX DXLink symbol is a guess | May always fall through to yfinance | Same unverified-guess situation as the existing KOSPI ticker (§6) |
+| OVX DXLink symbol is a guess | May always fall through to yfinance | Same unverified-guess situation as the existing KOSPI ticker (§6). EIA STEO series IDs (§5.7), by contrast, were verified live and are not a limitation. |
 
 ---
 

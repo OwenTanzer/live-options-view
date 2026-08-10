@@ -32,7 +32,7 @@ def test_parse_steo_rows_groups_by_period_across_series():
     rows = [
         {"period": "2026-07", "seriesId": "BREPUUS", "value": "105.0"},
         {"period": "2026-07", "seriesId": "WTIPUUS", "value": "99.5"},
-        {"period": "2026-07", "seriesId": "PATC_WORLD", "value": "-7.6"},
+        {"period": "2026-07", "seriesId": "T3_STCHANGE_WORLD", "value": "7.6"},
         {"period": "2026-08", "seriesId": "BREPUUS", "value": "102.0"},
     ]
     vintage = cc.parse_steo_rows(rows, release_period="2026-06")
@@ -43,7 +43,7 @@ def test_parse_steo_rows_groups_by_period_across_series():
     assert_true(jul is not None, "July point present")
     assert_equal(jul.brent, 105.0, "July Brent")
     assert_equal(jul.wti, 99.5, "July WTI")
-    assert_equal(jul.balance, -7.6, "July balance (draw)")
+    assert_equal(jul.balance, 7.6, "July balance (a draw -- positive on T3_STCHANGE_WORLD)")
 
     aug = cc.point_for_period(vintage, "2026-08")
     assert_equal(aug.brent, 102.0, "August Brent")
@@ -68,14 +68,17 @@ def test_point_for_period_missing_returns_none():
 
 
 def test_compare_vintages_computes_deltas_for_shared_period():
-    # Mirrors the debate's own comparison: June STEO assumed continued
-    # closure (bearish balance, high Brent); July STEO assumed normalization
-    # (bullish balance, lower Brent) for the same forecast month.
+    # Mirrors the debate's own comparison, with the real, live-verified
+    # T3_STCHANGE_WORLD sign convention (positive = draw/withdrawal): June
+    # STEO assumed continued closure -- a 7.6 million bbl/d Q3 draw, high
+    # Brent. July STEO assumed normalization -- draw cut to 2.2 million
+    # bbl/d, lower Brent. The debate itself put this gap at "roughly the 5.4
+    # million barrel-per-day gap between the June and July STEO assumptions."
     prior = cc.parse_steo_rows(
         [
             {"period": "2026-09", "seriesId": "BREPUUS", "value": "105.0"},
             {"period": "2026-09", "seriesId": "WTIPUUS", "value": "99.0"},
-            {"period": "2026-09", "seriesId": "PATC_WORLD", "value": "-7.6"},
+            {"period": "2026-09", "seriesId": "T3_STCHANGE_WORLD", "value": "7.6"},
         ],
         release_period="2026-06",
     )
@@ -83,7 +86,7 @@ def test_compare_vintages_computes_deltas_for_shared_period():
         [
             {"period": "2026-09", "seriesId": "BREPUUS", "value": "81.0"},
             {"period": "2026-09", "seriesId": "WTIPUUS", "value": "76.8"},
-            {"period": "2026-09", "seriesId": "PATC_WORLD", "value": "2.2"},
+            {"period": "2026-09", "seriesId": "T3_STCHANGE_WORLD", "value": "2.2"},
         ],
         release_period="2026-07",
     )
@@ -93,7 +96,7 @@ def test_compare_vintages_computes_deltas_for_shared_period():
     assert_equal(revision.current_release, "2026-07", "current release label")
     assert_equal(revision.brent_delta, -24.0, "Brent revised down $24")
     assert_equal(revision.wti_delta, round(76.8 - 99.0, 4), "WTI delta")
-    assert_equal(revision.balance_delta, round(2.2 - (-7.6), 4), "balance swung ~9.8M bbl/d toward build")
+    assert_equal(revision.balance_delta, round(2.2 - 7.6, 4), "draw revised down 5.4M bbl/d -- toward a build, bearish")
 
 
 def test_compare_vintages_returns_none_for_period_absent_in_either_vintage():

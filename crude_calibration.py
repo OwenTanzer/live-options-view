@@ -25,20 +25,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# EIA v2 STEO series IDs used here. Verify against the STEO Data Browser
-# (https://www.eia.gov/outlooks/steo/data.php) or a live
-# `GET https://api.eia.gov/v2/steo/data/?api_key=...&facets[seriesId][]=BREPUUS`
-# call before relying on these in production -- EIA does not version series
-# IDs the way a typical API versions endpoints, and STEO occasionally
-# renames or retires a series across annual outlook revisions.
+# EIA v2 STEO series IDs used here. Verified 2026-08 with a live
+# `GET https://api.eia.gov/v2/steo/data/?api_key=...&facets[seriesId][]=...`
+# call -- all three resolve and the balance series's sign convention was
+# cross-checked against api.eia.gov/v2/steo/facet/seriesId and against a real
+# figure (Apr-Jun 2026 averages ~5.08 million bbl/d on T3_STCHANGE_WORLD,
+# matching the "realized Q2 draw was 5.1 million barrels per day" figure from
+# the debate transcript this module was built for -- see the module
+# docstring above). EIA does not version series IDs the way a typical API
+# versions endpoints, and STEO occasionally renames or retires a series
+# across annual outlook revisions, so re-verify if this ever starts
+# returning empty rows.
 BRENT_SERIES_ID = "BREPUUS"   # Brent spot price, $/barrel, monthly
 WTI_SERIES_ID   = "WTIPUUS"   # WTI spot price, $/barrel, monthly
-# World petroleum & other liquids balance: production minus consumption,
-# million barrels/day. Positive = build, negative = draw. This is the
-# series whose vintage-over-vintage swing the debate's Contention Three
-# hinged on (a ~5.4 million bbl/d gap between two consecutive STEO releases'
-# Q3 assumptions).
-BALANCE_SERIES_ID = "PATC_WORLD"
+# "Net Inventory Withdrawals, Total World Crude Oil and Other Liquids,"
+# million barrels/day. Positive = withdrawal (a draw -- stocks are being
+# consumed, i.e. tighter/bullish); negative = a build (looser/bearish). Not
+# named "balance" or "PATC_WORLD" (which is *consumption*, not the
+# balance) in EIA's own facet listing -- easy to mis-guess, hence the live
+# check above. This is the series whose vintage-over-vintage swing the
+# debate's Contention Three hinged on: prior (June-vintage, closure-assumed)
+# forecast a ~7.6 million bbl/d Q3 draw; current (July-vintage,
+# normalization-assumed) revised that down to ~2.2 million bbl/d -- a ~5.4
+# million bbl/d swing toward a smaller draw (looser, more bearish).
+BALANCE_SERIES_ID = "T3_STCHANGE_WORLD"
 
 
 @dataclass(frozen=True)
@@ -46,7 +56,8 @@ class SteoPricePoint:
     period: str    # "YYYY-MM"
     brent: float | None
     wti: float | None
-    balance: float | None  # world petroleum balance, million bbl/d
+    balance: float | None  # net world inventory withdrawal, million bbl/d;
+                            # positive = draw, negative = build -- see BALANCE_SERIES_ID
 
 
 @dataclass(frozen=True)
@@ -109,7 +120,9 @@ class SteoRevision:
     current_release: str | None
     brent_delta: float | None
     wti_delta: float | None
-    balance_delta: float | None  # million bbl/d; positive = revised toward build/surplus
+    balance_delta: float | None  # million bbl/d; positive = revised toward a larger
+                                  # withdrawal/draw (tighter, bullish); negative = revised
+                                  # toward a build (looser, bearish) -- see BALANCE_SERIES_ID
 
 
 def compare_vintages(prior: SteoVintage, current: SteoVintage, period: str) -> SteoRevision | None:
