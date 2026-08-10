@@ -37,6 +37,7 @@ just its exit timing, is built from Phelps directly.
 
 from __future__ import annotations
 
+import math
 import threading
 from datetime import datetime
 from typing import Any
@@ -68,6 +69,31 @@ def _fill_time_for_symbol(ctx: StrategyContext, symbol: str) -> datetime | None:
         if best is None or fired_at > best:
             best = fired_at
     return best
+
+
+def resolve_phelps_minutes(params: dict[str, Any]) -> float:
+    """`params.get("phelps_minutes")`, validated -- shared by `phelps_wrap`
+    and `phelps_pure_qqq` so both apply the same guard, rather than each
+    reading the raw params value directly. Flagged in review: neither did
+    any validation before this -- a non-numeric string raised inside the
+    `:.1f}m` reason-string formatting (a strategy exception, not a clean
+    no_trade), NaN made every `elapsed_minutes < phelps_minutes` comparison
+    false so the window "elapsed" immediately, and +inf made it always true
+    so the window never elapsed (holds forever). Same "bad params must not
+    silently defeat the guideline" posture as `flatten._resolve_window_minutes`
+    and `canopus_down_day._resolve_params`'s numeric fields -- falls back to
+    the default rather than raising or propagating a nonsensical value.
+    """
+    value = params.get("phelps_minutes")
+    if value is None:
+        return PHELPS_MINUTES_DEFAULT
+    try:
+        minutes = float(value)
+    except (TypeError, ValueError):
+        return PHELPS_MINUTES_DEFAULT
+    if not math.isfinite(minutes) or minutes <= 0:
+        return PHELPS_MINUTES_DEFAULT
+    return minutes
 
 # The guideline's working value is a 25-30 minute band with no established
 # point estimate yet ("Parameters not yet established"). The midpoint is
@@ -168,7 +194,7 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
             entry_time = _entry_times.get((key_prefix, symbol), ctx.now_et)
 
         params = ctx.params or {}
-        phelps_minutes = params.get("phelps_minutes", PHELPS_MINUTES_DEFAULT)
+        phelps_minutes = resolve_phelps_minutes(params)
         elapsed_minutes = (ctx.now_et - entry_time).total_seconds() / 60.0
 
         if elapsed_minutes < phelps_minutes:

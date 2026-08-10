@@ -319,6 +319,88 @@ def test_phelps_pure_invalidates_on_full_retrace() -> None:
     check("full retrace closes immediately, well inside the window", d.action == "sell", d.reason)
 
 
+def test_phelps_pure_restart_recovers_entry_time_from_fill_ts() -> None:
+    print("\nRegression: phelps_pure recovers entry_time from the fill ts on restart, not ctx.now_et")
+    phelps_pure._watches.clear()  # no pre-existing watch -- simulates a restart
+    fill_time = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    now = fill_time + timedelta(minutes=10)
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0, "ts": fill_time.isoformat()}]
+
+    ctx = make_ctx(
+        username="restart_acct", trades=trades, now_et=now,
+        underlying_price=400.0, snapshot_timestamp=now.isoformat(),
+    )
+    d = phelps_pure._decide(ctx)
+    watch = phelps_pure._watches.get("restart_acct")
+    check("a watch was reconstructed", watch is not None)
+    check("entry_time recovered from the real fill ts, not ctx.now_et", watch is not None and watch.entry_time == fill_time, watch.entry_time if watch else None)
+    check(
+        "elapsed time reflects the true 10m since fill, not 0m since this restart cycle",
+        d.metadata is not None and d.metadata.get("phelps_elapsed_minutes") == 10.0,
+        d.metadata,
+    )
+
+
+def test_phelps_pure_restart_falls_back_to_now_when_ts_missing() -> None:
+    print("\nRegression guard: phelps_pure still falls back to ctx.now_et when no trade ts exists")
+    phelps_pure._watches.clear()
+    now = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]  # no ts
+
+    ctx = make_ctx(username="no_ts_acct", trades=trades, now_et=now, underlying_price=400.0, snapshot_timestamp=now.isoformat())
+    phelps_pure._decide(ctx)
+    watch = phelps_pure._watches.get("no_ts_acct")
+    check("falls back to ctx.now_et when no ts is available", watch is not None and watch.entry_time == now)
+
+
+def test_phelps_minutes_validation() -> None:
+    print("\nRegression: phelps_minutes is validated in both phelps_wrap and phelps_pure")
+    from crassus.phelps import PHELPS_MINUTES_DEFAULT, resolve_phelps_minutes
+
+    for label, bad_value in (("non-numeric string", "soon"), ("NaN", float("nan")), ("+inf", float("inf")), ("negative", -5), ("zero", 0)):
+        resolved = resolve_phelps_minutes({"phelps_minutes": bad_value})
+        check(f"{label} normalizes to the default", resolved == PHELPS_MINUTES_DEFAULT, (label, bad_value, resolved))
+
+    check("a valid override is still honored", resolve_phelps_minutes({"phelps_minutes": 10.0}) == 10.0)
+    check("a numeric string is coerced, not rejected", resolve_phelps_minutes({"phelps_minutes": "10"}) == 10.0)
+
+    # End-to-end through phelps_wrap: a NaN phelps_minutes must not make the
+    # window "elapse" immediately (NaN fails every comparison, which could
+    # otherwise release a position on the very first cycle).
+    _entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision(action="sell", symbol="HELD", quantity=1, reason="signal reversed", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": t0.isoformat()}]
+    ctx = make_ctx(username="nan_acct", trades=trades, now_et=t0 + timedelta(minutes=1), params={"phelps_minutes": float("nan")})
+    d = wrapped(ctx)
+    check("a NaN phelps_minutes falls back to the default rather than releasing immediately", d.action == "no_trade", d.reason)
+
+
+def test_phelps_pure_entry_rejected_without_live_quote() -> None:
+    print("\nRegression: a qualifying displacement with no live quote is rejected (dry run), not a crash or a phantom watch")
+    phelps_pure._tracker._points.clear()
+    phelps_pure._last_recorded_snapshot = None
+    phelps_pure._watches.clear()
+
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx0 = make_ctx(username="noquote", trades=[], now_et=t0, underlying_price=400.0, snapshot_timestamp=t0.isoformat())
+    phelps_pure._decide(ctx0)
+
+    t1 = t0 + timedelta(minutes=6)
+    ctx1 = make_ctx(
+        username="noquote", trades=[], now_et=t1, underlying_price=401.2,
+        snapshot_timestamp=t1.isoformat(), quote_map={},  # no live quote for the row this would trade
+        rows=[CALL_ROW, PUT_ROW],
+    )
+    d1 = phelps_pure._decide(ctx1)
+    check("no trade -- displacement qualifies but there's no live quote to enter with", d1.action == "no_trade", d1.reason)
+    check("no watch recorded for a rejected entry", "noquote" not in phelps_pure._watches)
+
+
 test_phelps_wrap_defers_early_close()
 test_phelps_wrap_never_blocks_buys_or_flat_no_trade()
 test_phelps_wrap_respects_custom_window_param()
@@ -328,6 +410,10 @@ test_phelps_wrap_falls_back_to_now_when_ts_missing()
 test_phelps_pure_enters_on_displacement()
 test_phelps_pure_holds_through_window_then_releases()
 test_phelps_pure_restart_recovery_grants_fresh_window()
+test_phelps_pure_restart_recovers_entry_time_from_fill_ts()
+test_phelps_pure_restart_falls_back_to_now_when_ts_missing()
+test_phelps_minutes_validation()
+test_phelps_pure_entry_rejected_without_live_quote()
 test_phelps_pure_invalidates_on_full_retrace()
 
 print()

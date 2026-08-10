@@ -67,13 +67,17 @@ docstring for the full reasoning; it applies here without modification.
 Per-account entry state (entry time, anchor price, held direction) is
 tracked in an in-process dict keyed by account username, the same
 constraint documented in `crassus/phelps.py`. A restart that finds an
-already-open position with no recorded entry starts both the Phelps clock
-and the invalidation anchor fresh, at the current price -- the same "fail
-toward granting the sanctuary" choice `phelps.phelps_wrap` makes, and in
-this strategy's case also the only self-consistent choice, since the real
-anchor price is not recoverable from the server's trade history (unlike the
-*entry time*, which `phelps.phelps_wrap` now recovers from the trade
-record's own timestamp when one exists -- see that module).
+already-open position with no recorded entry reconstructs the watch, but
+the two fields split: the invalidation anchor is set fresh, at the current
+price -- the real pre-displacement anchor simply isn't recoverable from the
+server's trade history, so this is the only self-consistent choice, same
+"fail toward granting the sanctuary" posture `phelps.phelps_wrap` uses.
+The *entry time* is different: it reuses `phelps.phelps_wrap`'s
+`_fill_time_for_symbol` to recover the real fill timestamp from
+`ctx.book.trades`, falling back to `ctx.now_et` only if no matching timed
+trade exists. An earlier version always used `ctx.now_et` here regardless,
+so every restart granted this strategy's position another full Phelps
+window no matter how long it had actually been held -- flagged in review.
 
 The retracement check against a freshly-reconstructed anchor is written
 with strict `<`/`>`, not `<=`/`>=`, deliberately: the anchor is set from
@@ -100,7 +104,7 @@ from ..momentum import (
     PriceHistoryTracker,
     compute_momentum,
 )
-from ..phelps import PHELPS_MINUTES_DEFAULT
+from ..phelps import _fill_time_for_symbol, resolve_phelps_minutes
 from ..strategy import Decision, StrategyContext, register
 
 STRATEGY_ID = "phelps_pure_qqq"
@@ -239,12 +243,19 @@ def _decide_core(
         elif watch is None or watch.symbol != held_symbol:
             # Holding a position with no (or a stale) recorded watch -- a
             # fresh process, or the prior watch referred to a symbol that's
-            # since closed. Start both clocks now, at the current price;
-            # see the module docstring for why this is the only
-            # self-consistent default.
+            # since closed. The invalidation anchor still can't be
+            # recovered (the real pre-displacement price isn't in the trade
+            # history -- see module docstring), but the *entry time* can:
+            # reuse phelps.phelps_wrap's fill-time recovery (reads the
+            # opening trade's own `ts` off ctx.book.trades) instead of
+            # unconditionally restarting the clock at `ctx.now_et`. An
+            # earlier version always used `ctx.now_et` here, so every
+            # restart granted another full Phelps window regardless of how
+            # long the position had actually been held -- flagged in review.
+            fill_time = _fill_time_for_symbol(ctx, held_symbol)
             watch = _Watch(
                 symbol=held_symbol,
-                entry_time=ctx.now_et,
+                entry_time=fill_time if fill_time is not None else ctx.now_et,
                 anchor_price=ctx.snapshot.underlying_price,
                 direction="up" if held_type == "call" else "down",
             )
@@ -278,7 +289,7 @@ def _decide_core(
             )
 
         params = ctx.params or {}
-        phelps_minutes = params.get("phelps_minutes", PHELPS_MINUTES_DEFAULT)
+        phelps_minutes = resolve_phelps_minutes(params)
         elapsed_minutes = (ctx.now_et - watch.entry_time).total_seconds() / 60.0
         if elapsed_minutes < phelps_minutes:
             return no(
