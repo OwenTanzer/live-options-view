@@ -61,6 +61,23 @@ capture meaningfully later than that means a restart (or startup delay)
 happened in between and the true 9:30 print was missed. A late-flagged day
 stands down entirely (no entry evaluated) rather than trading against a
 reference it can't trust.
+
+That fix validated the *decision cycle's* wall-clock time, not the
+*snapshot data's* own timestamp -- a gap flagged in a follow-up review: a
+stale pre-open snapshot (the collector's `latest.json` still holding a
+premarket print because it hadn't published a fresh post-open one yet)
+could be observed on an on-schedule decision cycle and get cached as the
+true 9:30 reference even though its own source print predates the session.
+`_maybe_record_reference` now independently validates `ctx.snapshot.timestamp`
+itself: it must parse, be from today, and fall inside [reference_time,
+reference_time + tolerance] -- symmetric with the now_time check, and for
+the same reason a genuine 9:30 print should be observed close to 9:30, not
+meaningfully before (stale/pre-open) or after (a stalled collector's
+delayed, no-longer-representative read) it. Unlike a late now_time (which
+still gets recorded and flagged), a snapshot that fails this check records
+nothing at all -- a later cycle gets another chance with hopefully fresher
+data before the entry window closes, since a snapshot that's currently
+stale might not stay that way.
 """
 
 from __future__ import annotations
@@ -156,16 +173,67 @@ def _minutes_between(earlier: dt_time, later: dt_time) -> float:
             - (earlier.hour * 60 + earlier.minute + earlier.second / 60.0))
 
 
+def _snapshot_observed_at(timestamp: str, tzinfo: Any) -> datetime | None:
+    """Parse `ctx.snapshot.timestamp` (see `worker.js`'s snapshot shape,
+    same ISO-with-optional-Z convention as trade `ts` elsewhere in this
+    module) into a tz-aware datetime. `None` on anything unparseable."""
+    try:
+        return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).astimezone(tzinfo)
+    except (TypeError, ValueError):
+        return None
+
+
 def _maybe_record_reference(
     today: date, price: float, reference_time: dt_time, now_time: dt_time,
+    snapshot_timestamp: str, now_et: datetime,
     tolerance_minutes: float = REFERENCE_CAPTURE_TOLERANCE_MINUTES,
-) -> None:
+) -> str | None:
+    """Records today's reference on the first cycle it's safe to trust one,
+    and returns why it didn't (or None on success) -- purely informational,
+    for the caller's `no_trade` reason when nothing gets recorded yet.
+
+    Two independent freshness checks, not one: `now_time` (this decision
+    cycle's own wall-clock time) being on schedule only proves the *runner*
+    didn't restart late -- it says nothing about whether the *snapshot data
+    itself* actually reflects an at/after-reference-time print. A snapshot
+    whose own timestamp predates the reference time (a stale pre-open print
+    still sitting in `latest.json` because the collector hadn't published a
+    fresh post-open snapshot yet) would previously pass the old now_time-only
+    check and get cached as if it were the true opening reference. Flagged
+    in review. Now the snapshot's own timestamp must independently fall
+    inside [reference_time, reference_time + tolerance_minutes] on today's
+    date -- symmetric with the now_time check, and for the same reason: a
+    genuine 9:30 print should be observed close to 9:30, not meaningfully
+    before it (stale/pre-open) or after it (the collector stalled and this
+    is a delayed, no-longer-representative read).
+
+    If the snapshot doesn't validate, nothing is recorded this cycle --
+    unlike a late *now_time*, this isn't treated as "the best we'll ever
+    get," it's treated as "not usable yet," so a later cycle with a fresher
+    snapshot gets another chance before the entry window closes.
+    """
     if now_time < reference_time:
-        return
+        return "before the reference time"
     if today in _reference_price_by_date:
-        return
+        return None
+
+    observed_at = _snapshot_observed_at(snapshot_timestamp, now_et.tzinfo)
+    if observed_at is None:
+        return f"unparseable snapshot timestamp {snapshot_timestamp!r}"
+    if observed_at.date() != today:
+        return f"snapshot timestamp {observed_at.isoformat()} is not from today"
+    observed_time = observed_at.time()
+    if observed_time < reference_time:
+        return f"snapshot timestamp {observed_time} predates the reference time {reference_time} (stale pre-open print)"
+    if _minutes_between(reference_time, observed_time) > tolerance_minutes:
+        return (
+            f"snapshot timestamp {observed_time} is more than {tolerance_minutes:g}m after the "
+            f"reference time {reference_time} (stale/delayed print, no longer representative of the open)"
+        )
+
     _reference_price_by_date[today] = price
     _reference_capture_late_by_date[today] = _minutes_between(reference_time, now_time) > tolerance_minutes
+    return None
 
 
 def _target_price(fill_price: float, multiplier: float) -> float:
@@ -206,7 +274,10 @@ def _decide(ctx: StrategyContext) -> Decision:
     now_time = ctx.now_et.time()
     today = ctx.now_et.date()
 
-    _maybe_record_reference(today, ctx.snapshot.underlying_price, cfg["reference_time"], now_time)
+    reference_skip_reason = _maybe_record_reference(
+        today, ctx.snapshot.underlying_price, cfg["reference_time"], now_time,
+        ctx.snapshot.timestamp, ctx.now_et,
+    )
 
     positions = {s: p for s, p in ctx.book.positions.items() if p.quantity != 0}
     unrecognized = {s: p.quantity for s, p in positions.items() if _option_type_from_symbol(s) is None}
@@ -302,7 +373,11 @@ def _decide(ctx: StrategyContext) -> Decision:
 
     reference_price = _reference_price_by_date.get(today)
     if reference_price is None:
-        return no("No 9:30 ET reference price recorded yet this session; cannot evaluate displacement.", **meta_base)
+        return no(
+            "No 9:30 ET reference price recorded yet this session; cannot evaluate displacement."
+            + (f" ({reference_skip_reason})" if reference_skip_reason else ""),
+            **meta_base,
+        )
     if _reference_capture_late_by_date.get(today):
         return no(
             "Today's reference was captured more than "

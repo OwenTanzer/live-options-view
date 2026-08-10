@@ -27,8 +27,10 @@ from crassus.strategies.canopus_down_day import (  # noqa: E402
     STRATEGY_ID,
     _reference_price_by_date,
     _reference_capture_late_by_date,
+    _maybe_record_reference,
     _decide,
 )
+from datetime import time as dt_time  # noqa: E402
 from crassus.strategy import StrategyContext  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
@@ -64,12 +66,12 @@ DEFAULT_PARAMS = {
 }
 
 
-def make_snapshot(underlying_price: float = 396.0) -> MarketSnapshot:
+def make_snapshot(underlying_price: float = 396.0, timestamp: str = "2024-01-01T19:45:00+00:00") -> MarketSnapshot:
     return MarketSnapshot.from_payload(
         url="test://snapshot",
         payload={
-            "timestamp": "2024-01-01T19:45:00+00:00",
-            "snapshot_time": "2024-01-01T19:45:00+00:00",
+            "timestamp": timestamp,
+            "snapshot_time": timestamp,
             "expiration": "2024-01-01",
             "underlying_price": underlying_price,
             "rows": [
@@ -98,11 +100,15 @@ def make_ctx(
     trades: list[dict] | None = None,
     quote_map: dict[str, Quote] | None = None,
     params: dict | None = None,
+    snapshot_timestamp: str | None = None,
 ) -> StrategyContext:
     quote_map = quote_map or {}
     now_et = datetime(2024, 1, day, hour, minute, tzinfo=ET)
+    # Default: the snapshot was observed at exactly decision time -- always
+    # a valid, fresh reference source unless a scenario deliberately passes
+    # a different snapshot_timestamp to test staleness/unparseability.
     return StrategyContext(
-        snapshot=make_snapshot(underlying_price),
+        snapshot=make_snapshot(underlying_price, timestamp=snapshot_timestamp or now_et.isoformat()),
         account_state={},
         book=Book(trades or []),
         now_et=now_et,
@@ -267,15 +273,24 @@ def scenario_market_not_open_is_a_no_op() -> None:
 
 
 def scenario_late_reference_capture_stands_down() -> None:
-    print("\n14. Reference captured well after 9:30 (post-restart) -- flagged late, stands down rather than trading it")
+    print(
+        "\n14. Decision cycle itself delayed past 9:30, but the snapshot it's finally acting on is "
+        "genuinely fresh -- reference is recorded (the data is trustworthy) but flagged late, so the "
+        "day still stands down. Isolates the now_time check from the snapshot-freshness check below."
+    )
     day = next_day()
-    # Reference "captured" at 10:00, 30 minutes after the 09:30 configured
-    # reference time -- past REFERENCE_CAPTURE_TOLERANCE_MINUTES (5), so this
-    # is treated as a missed true 9:30 print, not the real reference.
-    ctx_ref = make_ctx(day=day, hour=10, minute=0, underlying_price=405.0)
+    # The snapshot genuinely reflects a 9:31 print (inside the tolerance
+    # window -- real, usable data), but this process doesn't get around to
+    # processing it until 10:00 (e.g. it was busy, or just restarted and
+    # this happens to be the first snapshot it fetched). now_time is late
+    # even though the *source* isn't.
+    ctx_ref = make_ctx(
+        day=day, hour=10, minute=0, underlying_price=405.0,
+        snapshot_timestamp=f"2024-01-{day:02d}T09:31:00-05:00",
+    )
     _decide(ctx_ref)
-    check("reference recorded (imperfect, but still recorded)", _reference_price_by_date.get(ctx_ref.now_et.date()) == 405.0)
-    check("reference flagged as captured late", _reference_capture_late_by_date.get(ctx_ref.now_et.date()) is True)
+    check("reference recorded (the snapshot data itself is trustworthy)", _reference_price_by_date.get(ctx_ref.now_et.date()) == 405.0)
+    check("reference flagged as captured late (the decision cycle itself was delayed)", _reference_capture_late_by_date.get(ctx_ref.now_et.date()) is True)
 
     # Would otherwise qualify: 405 -> 403 is -0.49%, past the 0.25% threshold.
     ctx_entry = make_ctx(
@@ -284,6 +299,63 @@ def scenario_late_reference_capture_stands_down() -> None:
     )
     decision = _decide(ctx_entry)
     check("no trade -- stands down on a late-captured reference instead of trading against it", not decision.is_trade)
+
+
+def scenario_stale_pre_open_snapshot_not_recorded() -> None:
+    print(
+        "\n14b. Regression (review follow-up): a stale PRE-OPEN snapshot observed on an "
+        "on-schedule decision cycle must not be cached as the true 9:30 reference"
+    )
+    day = next_day()
+    today = datetime(2024, 1, day, tzinfo=ET).date()
+    now_et = datetime(2024, 1, day, 9, 30, tzinfo=ET)
+    # now_time (9:30) is right on schedule -- the old now_time-only check
+    # would have accepted this. But the snapshot's own timestamp is 9:00,
+    # a premarket print that predates the session -- e.g. the collector
+    # hadn't published a fresh post-open snapshot yet.
+    reason = _maybe_record_reference(
+        today, 405.0, dt_time(9, 30), now_et.time(),
+        f"2024-01-{day:02d}T09:00:00-05:00", now_et,
+    )
+    check("no reference recorded from a pre-open snapshot", today not in _reference_price_by_date)
+    check("explains why", reason is not None and "predates the reference time" in reason, reason)
+
+    # A later cycle with a genuinely fresh post-open snapshot still gets to record one.
+    now_et2 = datetime(2024, 1, day, 9, 32, tzinfo=ET)
+    reason2 = _maybe_record_reference(today, 406.0, dt_time(9, 30), now_et2.time(), now_et2.isoformat(), now_et2)
+    check("a later, genuinely fresh snapshot still records the reference", reason2 is None and _reference_price_by_date.get(today) == 406.0)
+
+
+def scenario_stale_post_open_snapshot_not_recorded() -> None:
+    print(
+        "\n14c. Regression (review follow-up): the snapshot *source itself* being stale "
+        "(collector stalled, its most recent print is already well past the reference window) "
+        "is rejected -- distinct from test 14, where the snapshot was genuinely fresh but our "
+        "own decision cycle was the thing running late"
+    )
+    day = next_day()
+    today = datetime(2024, 1, day, tzinfo=ET).date()
+    # Both the decision cycle *and* the snapshot it's reading are at 10:00 --
+    # this isn't a processing delay on our side, the collector's own most
+    # recent snapshot really is 30 minutes past the reference time, well
+    # outside the tolerance window that would still call it "the open."
+    now_et = datetime(2024, 1, day, 10, 0, tzinfo=ET)
+    reason = _maybe_record_reference(
+        today, 405.0, dt_time(9, 30), now_et.time(),
+        f"2024-01-{day:02d}T10:00:00-05:00", now_et,
+    )
+    check("no reference recorded from a stale snapshot source", today not in _reference_price_by_date)
+    check("explains why", reason is not None and "stale/delayed print" in reason, reason)
+
+
+def scenario_unparseable_snapshot_timestamp_not_recorded() -> None:
+    print("\n14d. Regression (review follow-up): an unparseable snapshot timestamp is rejected, not crashed on")
+    day = next_day()
+    today = datetime(2024, 1, day, tzinfo=ET).date()
+    now_et = datetime(2024, 1, day, 9, 30, tzinfo=ET)
+    reason = _maybe_record_reference(today, 405.0, dt_time(9, 30), now_et.time(), "not-a-timestamp", now_et)
+    check("no reference recorded from an unparseable timestamp", today not in _reference_price_by_date)
+    check("explains why", reason is not None and "unparseable snapshot timestamp" in reason, reason)
 
 
 def scenario_on_time_reference_still_trades_normally() -> None:
@@ -340,6 +412,9 @@ def main() -> int:
         scenario_stands_down_on_held_call,
         scenario_market_not_open_is_a_no_op,
         scenario_late_reference_capture_stands_down,
+        scenario_stale_pre_open_snapshot_not_recorded,
+        scenario_stale_post_open_snapshot_not_recorded,
+        scenario_unparseable_snapshot_timestamp_not_recorded,
         scenario_on_time_reference_still_trades_normally,
         scenario_owens_false_signal_example,
     ):
