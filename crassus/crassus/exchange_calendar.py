@@ -11,11 +11,25 @@ categories (flagged case: 2028-07-03) -- an EOD flatten computing the wrong
 close time is exactly the kind of bug this module exists to prevent, so
 correctness wins over the dependency-weight tradeoff here.
 
-The original hand-rolled rules are kept as `_fallback_session_close` /
-`_fallback_is_holiday`, used only if `pandas_market_calendars` fails to
-import or raises -- so a broken/missing calendar package degrades to the
-old (narrower but still correct-for-2-of-N-cases) behavior instead of
-crashing `flatten.maybe_flatten` outright.
+`is_holiday`'s original hand-rolled rules are kept as `_fallback_is_holiday`,
+used only if `pandas_market_calendars` fails to import or raises. This isn't
+the close-safety-critical path -- `session_phase` in clock.py already
+tolerates a holiday reading as `open`, backstopped by the server's own
+stale-quote rejection -- so degrading to the old rules here is acceptable.
+
+`session_close` is different: it's what `flatten.maybe_flatten` -- a
+mandatory, not opt-in, close-safety control -- uses to decide when the EOD
+flatten window opens. An earlier version fell back to the same hand-rolled
+early-close rules here too, but review correctly pointed out that's not
+fail-safe: those rules have the exact defect this module exists to fix
+(missing early closes outside two hard-coded categories), so falling back
+to them on a calendar failure could silently restore the wrong close time
+on precisely the kind of unmodeled half day this module is meant to catch.
+On any failure to read the real calendar, `session_close` now returns
+`EARLY_CLOSE` unconditionally -- the conservative direction for a mandatory
+flatten is to open the window too early on an ordinary day (costs some
+runway, not safety) rather than risk opening it too late on a real half
+day it can't verify.
 
 `session_phase` in clock.py already tolerates holidays reading as `open`
 (the server's stale-quote rejection is its backstop); this module only
@@ -97,34 +111,13 @@ def _holidays(year: int) -> set[date]:
     return holidays
 
 
-def _early_closes(year: int) -> set[date]:
-    """Day after Thanksgiving, and Christmas Eve when it's itself a trading
-    day (not a weekend or, if Dec 25 falls on Saturday, the observed-Friday
-    Christmas holiday)."""
-    day_after_thanksgiving = _nth_weekday(year, 11, 3, 4) + timedelta(days=1)
-    closes = {day_after_thanksgiving}
-    christmas_eve = date(year, 12, 24)
-    if christmas_eve.weekday() < 5 and christmas_eve not in _holidays(year):
-        closes.add(christmas_eve)
-    return closes
-
-
 _holiday_cache: dict[int, set[date]] = {}
-_early_close_cache: dict[int, set[date]] = {}
 
 
 def _fallback_is_holiday(d: date) -> bool:
     if d.year not in _holiday_cache:
         _holiday_cache[d.year] = _holidays(d.year)
     return d in _holiday_cache[d.year]
-
-
-def _fallback_session_close(d: date) -> time:
-    """Day after Thanksgiving and Christmas Eve only -- see module docstring
-    for why this is a fallback, not the primary path."""
-    if d.year not in _early_close_cache:
-        _early_close_cache[d.year] = _early_closes(d.year)
-    return EARLY_CLOSE if d in _early_close_cache[d.year] else MARKET_CLOSE
 
 
 def _nyse_schedule_for_year(year: int):
@@ -142,8 +135,10 @@ def _nyse_schedule_for_year(year: int):
         )
     except Exception:
         log.warning(
-            "pandas_market_calendars unavailable/failed for %d -- falling back to the "
-            "hand-rolled holiday/early-close rules (Thanksgiving Friday + Christmas Eve only)",
+            "pandas_market_calendars unavailable/failed for %d -- is_holiday() falls back to "
+            "the hand-rolled holiday rules, but session_close() will conservatively return "
+            "EARLY_CLOSE for every day this year rather than risk an incorrect 16:00 on an "
+            "unmodeled half day (this is a mandatory close-safety control -- see module docstring)",
             year, exc_info=True,
         )
         schedule = None
@@ -171,11 +166,11 @@ def session_close(d: date) -> time:
     """
     schedule = _nyse_schedule_for_year(d.year)
     if schedule is None:
-        return _fallback_session_close(d)
+        return EARLY_CLOSE  # conservative: see module docstring
     try:
         row = schedule.loc[schedule.index.date == d]
     except Exception:
-        return _fallback_session_close(d)
+        return EARLY_CLOSE  # conservative: see module docstring
     if row.empty:
         # Not a trading day per the real calendar either -- callers already
         # guard on session_phase before reaching here, so this is defensive,

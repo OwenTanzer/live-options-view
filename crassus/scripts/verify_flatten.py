@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -339,6 +339,50 @@ def scenario_invalid_params_fall_back_to_default() -> None:
     check("a numeric string is coerced rather than rejected", decision is not None and decision.metadata["flatten_minutes_before_close"] == 20.0)
 
 
+def scenario_multi_position_book_converges_to_flat() -> None:
+    print(
+        "\n12. Regression: a book holding two positions at once (e.g. a straddle's call+put) "
+        "gets both closed, one per cycle, not just the first"
+    )
+    now = datetime(2024, 1, 1, 15, 50, tzinfo=ET)  # 10 min to close
+    quote_map = {
+        "QQQ240101C00400000": fresh_quote("QQQ240101C00400000"),
+        "QQQ240101P00400000": fresh_quote("QQQ240101P00400000"),
+    }
+
+    # Cycle 1: both legs still held.
+    ctx1 = make_ctx(trades=[LONG_CALL, SHORT_PUT], quote_map=quote_map, now_et=now)
+    d1 = maybe_flatten(ctx1, ctx1.params)
+    check("cycle 1 closes one of the two held positions", d1 is not None and d1.is_trade)
+    check(
+        "cycle 1 picks deterministically (sorted symbol), not arbitrarily",
+        d1.symbol == "QQQ240101C00400000",
+        d1.symbol,
+    )
+
+    # Cycle 2: the book is rebuilt from server state each cycle, and the
+    # closed leg's own closing trade is now part of that history -- so the
+    # call position nets to flat and only the put remains held.
+    ctx2 = make_ctx(
+        trades=[LONG_CALL, SHORT_PUT, {**LONG_CALL, "side": "sell", "ts": "2024-01-01T15:50:00Z"}],
+        quote_map=quote_map, now_et=now + timedelta(minutes=1),
+    )
+    d2 = maybe_flatten(ctx2, ctx2.params)
+    check("cycle 2 closes the remaining put leg", d2 is not None and d2.is_trade and d2.symbol == "QQQ240101P00400000")
+
+    # Cycle 3: fully flat now -- back to the ordinary "block new entries" no_trade.
+    ctx3 = make_ctx(
+        trades=[
+            LONG_CALL, SHORT_PUT,
+            {**LONG_CALL, "side": "sell", "ts": "2024-01-01T15:50:00Z"},
+            {**SHORT_PUT, "side": "buy", "ts": "2024-01-01T15:51:00Z"},
+        ],
+        quote_map=quote_map, now_et=now + timedelta(minutes=2),
+    )
+    d3 = maybe_flatten(ctx3, ctx3.params)
+    check("cycle 3: book is fully flat, blocks new entries rather than trying to close anything else", d3 is not None and not d3.is_trade)
+
+
 def main() -> int:
     for scenario in (
         scenario_fires_without_param_using_default,
@@ -354,6 +398,7 @@ def main() -> int:
         scenario_no_reentry_after_close_same_window,
         scenario_half_day_uses_the_real_close,
         scenario_invalid_params_fall_back_to_default,
+        scenario_multi_position_book_converges_to_flat,
     ):
         scenario()
 

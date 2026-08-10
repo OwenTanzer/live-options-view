@@ -77,9 +77,19 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
     returns a `Decision`: a close for a held position, an explicit `no_trade`
     while a flat book waits out the rest of the session (never `None`, so the
     strategy can't reopen one), or an explicit `no_trade` while waiting on a
-    live quote to close safely. Picks the first held position; every current
-    strategy already enforces "at most one open position" as its own
-    invariant, so in practice there is only ever one to consider.
+    live quote to close safely.
+
+    Closes one held position per call, not the whole book at once -- `Decision`
+    only ever carries one symbol (see `strategy.py`), the same one-order-per-
+    cycle constraint every multi-leg strategy in this repo works within (see
+    `looking_glass_straddle.py`, which legitimately holds *two* positions at
+    once -- a call and a put -- contradicting an earlier version of this
+    docstring's claim that every strategy caps at one). `maybe_flatten` still
+    converges a multi-position book to fully flat: it's re-invoked every
+    cycle while `ctx.book.is_flat` is False, `ctx.book` is rebuilt fresh from
+    server state each call, and a just-closed position no longer appears in
+    it -- so each cycle closes whichever position is still held, over as many
+    cycles as it takes. See `verify_flatten.py`'s multi-position scenario.
     """
     if ctx.session_phase != "open":
         return None
@@ -107,7 +117,8 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
             },
         )
 
-    symbol, position = next(iter(ctx.book.positions.items()))
+    symbol = sorted(ctx.book.positions.keys())[0]  # deterministic pick when more than one is held
+    position = ctx.book.positions[symbol]
 
     quote = ctx.quotes([symbol]).get(symbol)
     if quote is None or not quote.is_executable:
