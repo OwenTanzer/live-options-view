@@ -1303,12 +1303,22 @@ def load_steo_vintage_log(s3) -> list[dict]:
     that vintage-over-vintage comparison has to be built up locally over
     time, one release per stored entry (same reasoning as RVOL's own
     baselines/ history, see market_signals.py).
+
+    Raises on anything other than the log genuinely never having been
+    written yet (`NoSuchKey` -- a fresh deployment/bucket). A transient R2
+    read failure, an auth error, or corrupt JSON must NOT be silently
+    treated as "no history exists": `push_eia_steo` appends to whatever
+    this returns and overwrites the R2 object with the result, so treating
+    a *read* failure as an empty log would destroy every real prior
+    vintage on the next write. Flagged in review; let the caller's own
+    exception handling (`eia_steo_loop`'s per-cycle try/except) skip this
+    poll and retry later instead.
     """
     try:
         body = s3.get_object(Bucket=R2_BUCKET, Key=EIA_STEO_LOG_KEY)["Body"].read()
-        return json.loads(body)
-    except Exception:
+    except s3.exceptions.NoSuchKey:
         return []
+    return json.loads(body)
 
 
 def save_steo_vintage_log(s3, entries: list[dict]) -> None:
@@ -1322,27 +1332,38 @@ def save_steo_vintage_log(s3, entries: list[dict]) -> None:
 def push_eia_steo(s3) -> None:
     rows = fetch_eia_steo_rows(EIA_API_KEY)
     # EIA's v2 API doesn't hand back "which monthly release this row came
-    # from" directly -- STEO is published roughly once a month, so the
-    # calendar month we happen to be polling in is used as the vintage label.
-    # This is an approximation right at a release boundary (a poll in the
-    # first few days of a month, before that month's STEO has actually been
-    # published yet, mislabels the *previous* month's data as the new
-    # vintage) -- acceptable here because the log de-duplicates by label
-    # below, so a mislabeled early-month poll just gets silently corrected
-    # once the real new-month data lands on a later poll.
+    # from" directly, so the calendar month we happen to be polling in is
+    # used as the vintage *label* -- but whether to mint a new vintage entry
+    # at all is decided by whether the fetched data actually changed from
+    # the most recently logged entry, not by the calendar alone. Labeling by
+    # calendar month unconditionally (the original approach) creates a
+    # phantom release right at a boundary: a poll in the first few days of a
+    # month, before that month's STEO has actually been published, would log
+    # a new entry under the new month's label containing last month's
+    # unchanged data -- and anything reading macro/eia_steo.json in that
+    # window (or a vintage-over-vintage comparison run against it) would see
+    # a fabricated "this month's release" that was never actually published.
+    # Flagged in review. Content-equality against the last logged entry is
+    # the real signal for "did a new release land"; the calendar month is
+    # only the label attached once that's true.
     release_period = datetime.now(timezone.utc).strftime("%Y-%m")
     current = cc.parse_steo_rows(rows, release_period=release_period)
+    current_points_payload = [
+        {"period": p.period, "brent": p.brent, "wti": p.wti, "balance": p.balance}
+        for p in current.points
+    ]
 
-    entries = load_steo_vintage_log(s3)
-    entries = [e for e in entries if e.get("release_period") != release_period]
-    entries.append({
-        "release_period": release_period,
-        "points": [
-            {"period": p.period, "brent": p.brent, "wti": p.wti, "balance": p.balance}
-            for p in current.points
-        ],
-    })
-    save_steo_vintage_log(s3, entries)
+    entries = load_steo_vintage_log(s3)  # raises on a real read failure -- see that function's docstring
+    if entries and entries[-1].get("points") == current_points_payload:
+        # Byte-identical to the most recent logged vintage: EIA hasn't
+        # actually published a new STEO since we last saw one, even if the
+        # calendar month has rolled over. Reuse the existing label instead
+        # of minting a phantom one, and skip the R2 write entirely.
+        release_period = entries[-1]["release_period"]
+    else:
+        entries = [e for e in entries if e.get("release_period") != release_period]
+        entries.append({"release_period": release_period, "points": current_points_payload})
+        save_steo_vintage_log(s3, entries)
 
     prior_vintage = None
     if len(entries) >= 2:
