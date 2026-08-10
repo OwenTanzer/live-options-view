@@ -34,7 +34,7 @@ one, same texture-matching principle as the block bootstrap itself.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -55,32 +55,39 @@ class DayBars:
     v: np.ndarray
 
 
-def _to_et_date(ts: int) -> date:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(ET).date()
-
-
 def split_into_sessions(bars_by_year: dict[int, dict[str, list]]) -> list[DayBars]:
     """Flatten the columnar year files and group into regular-session days.
 
-    Days with fewer than `BARS_PER_SESSION` bars (early closes, partial feed
-    outages, the always-partial first/last day of the requested range) are
-    dropped -- a bootstrap block drawn from a short day would silently shift
-    every later block's time-of-day alignment for the rest of the synthetic
-    day.
+    Bars are explicitly filtered to the 09:30-16:00 ET regular session by
+    each bar's own timestamp, not sliced by position (`rows[-78:]`, an
+    earlier version's approach) -- flagged in review: taking "the last N
+    bars" silently assumes every day's rows are pre/post-market-free and in
+    exactly the expected order, which real historical data isn't guaranteed
+    to be (a day with e.g. an extra late after-hours print would have
+    shifted every bar's time-of-day alignment for the rest of that
+    bootstrapped day without raising any error).
+
+    Days with fewer than `BARS_PER_SESSION` *regular-session* bars (early
+    closes, partial feed outages, the always-partial first/last day of the
+    requested range) are dropped -- a bootstrap block drawn from a short day
+    would silently shift every later block's time-of-day alignment too.
     """
+    session_open = dt_time(9, 30)
+    session_close = dt_time(16, 0)
     by_day: dict[date, list[tuple]] = {}
     for cols in bars_by_year.values():
         t, o, h, l, c, v = cols["t"], cols["o"], cols["h"], cols["l"], cols["c"], cols["v"]
         for i in range(len(t)):
-            d = _to_et_date(int(t[i]))
-            by_day.setdefault(d, []).append((t[i], o[i], h[i], l[i], c[i], v[i]))
+            bar_dt = datetime.fromtimestamp(int(t[i]), tz=timezone.utc).astimezone(ET)
+            if not (session_open <= bar_dt.time() < session_close):
+                continue
+            by_day.setdefault(bar_dt.date(), []).append((t[i], o[i], h[i], l[i], c[i], v[i]))
 
     sessions = []
     for d, rows in sorted(by_day.items()):
         rows.sort(key=lambda r: r[0])
-        if len(rows) < BARS_PER_SESSION:
+        if len(rows) != BARS_PER_SESSION:
             continue
-        rows = rows[-BARS_PER_SESSION:]  # keep the latest N (drops any pre-open prints)
         arr = np.array(rows, dtype=float)
         sessions.append(DayBars(day=d, t=arr[:, 0], o=arr[:, 1], h=arr[:, 2], l=arr[:, 3], c=arr[:, 4], v=arr[:, 5]))
     return sessions

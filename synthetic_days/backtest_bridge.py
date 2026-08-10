@@ -12,6 +12,17 @@ fake days before it ever sees a real market, the same hermetic-but-now-also-
 *sequential* idea `scripts/verify_canopus_down_day.py` uses for single
 hand-built scenarios.
 
+**Known gap, flagged in review:** this does not check `crassus/flatten.py`'s
+mandatory EOD flatten before calling the strategy -- unlike the real
+`Runner._run_account`, which always checks `flatten.maybe_flatten` first.
+`flatten.py` doesn't exist on this branch's tree yet (branched off `master`
+before that PR merged), so there is nothing to import and wire in today. A
+backtested strategy can therefore hold a position later into the session
+than the real deployed runner would ever allow. Once that PR merges, this
+loop should check `flatten.maybe_flatten(ctx, {})` before `strategy(ctx)`
+each cycle, same ordering the real runner uses, rather than calling the
+strategy unconditionally as it does now.
+
 Usage:
     python backtest_bridge.py --strategy canopus_down_day_14 --days ./out
 """

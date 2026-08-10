@@ -55,32 +55,37 @@ def load_donors(src: R2Source, symbol: str, max_days: int | None = None):
     return donors
 
 
-def _atm_extrinsic(rows: list[dict]) -> float | None:
-    """Straddle extrinsic value (call + put time value) at the nearest-ATM
-    strike, from one real intraday snapshot's rows. `None` if the rows don't
-    have enough two-sided quotes to compute it."""
-    valid = [r for r in rows if r.get("Bid") and r.get("Ask") and r.get("UnderlyingPrice")]
-    if not valid:
+def _row_extrinsic(row: dict, spot: float) -> float | None:
+    """One row's own extrinsic (time) value: mid - intrinsic, at the given
+    spot. `None` if the row lacks a two-sided quote."""
+    if not row.get("Bid") or not row.get("Ask"):
         return None
-    spot = float(valid[0]["UnderlyingPrice"])
-    calls = [r for r in valid if r.get("Type") == "call"]
-    puts = [r for r in valid if r.get("Type") == "put"]
-    if not calls or not puts:
-        return None
-    atm_call = min(calls, key=lambda r: abs(float(r["Strike"]) - spot))
-    atm_put = min(puts, key=lambda r: abs(float(r["Strike"]) - spot))
-    mid_call = (float(atm_call["Bid"]) + float(atm_call["Ask"])) / 2.0
-    mid_put = (float(atm_put["Bid"]) + float(atm_put["Ask"])) / 2.0
-    intrinsic_call = max(0.0, spot - float(atm_call["Strike"]))
-    intrinsic_put = max(0.0, float(atm_put["Strike"]) - spot)
-    return max(0.0, mid_call - intrinsic_call) + max(0.0, mid_put - intrinsic_put)
+    strike = float(row["Strike"])
+    mid = (float(row["Bid"]) + float(row["Ask"])) / 2.0
+    intrinsic = max(0.0, spot - strike) if row.get("Type") == "call" else max(0.0, strike - spot)
+    return max(0.0, mid - intrinsic)
+
+
+def _eod_extrinsic_by_symbol(eod_rows: list[dict]) -> dict[str, float]:
+    """Every quoted row's extrinsic value from one day's *last* snapshot --
+    the per-symbol denominator every earlier snapshot's ratio is computed
+    against (see `load_intraday_curve`)."""
+    out = {}
+    for r in eod_rows:
+        if not r.get("UnderlyingPrice") or not r.get("OptionSymbol"):
+            continue
+        extrinsic = _row_extrinsic(r, float(r["UnderlyingPrice"]))
+        if extrinsic is not None:
+            out[r["OptionSymbol"]] = extrinsic
+    return out
 
 
 def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int = 30):
-    """Build the canonical time-of-day OI/spread/volume ramp from real
-    intraday days the collector has recorded. Returns None (== "assume
-    already fully in place all day") if no intraday history exists yet --
-    see `chain_synth.intraday_shape_curve`'s docstring for why that's the
+    """Build the canonical time-of-day OI/spread/volume ramp, and the
+    (time x moneyness) premium-decay grid, from real intraday days the
+    collector has recorded. Returns None (== "assume already fully in
+    place all day") if no intraday history exists yet -- see
+    `chain_synth.intraday_shape_curve`'s docstring for why that's the
     honest default rather than inventing a shape.
 
     A collector day writes ~390 snapshot CSVs (one per minute); fetching
@@ -90,12 +95,19 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
     subsamples each day's snapshots instead, and `max_days` evenly
     subsamples *which* days are read when more are available, keeping this
     fast without biasing towards whichever days happen to sort first.
+
+    The premium-decay ratio is computed *per row*, against that same row's
+    own symbol's EOD extrinsic value -- not one pooled ATM-straddle scalar
+    applied to every strike and side uniformly, which an earlier version
+    did (flagged in review: OTM/ITM options don't decay identically to ATM
+    ones).
     """
     days = src.intraday_days_available()
     if len(days) > max_days:
         idx = np.linspace(0, len(days) - 1, max_days).round().astype(int)
         days = [days[i] for i in sorted(set(idx))]
     samples = []
+    premium_decay_samples: list[tuple[float, float, bool, float]] = []
     for yyyymmdd in days:
         keys = src.intraday_snapshots(yyyymmdd)
         if not keys:
@@ -119,24 +131,37 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
                 if r.get("Bid") and r.get("Ask") and float(r["Bid"]) > 0
             ]
             median_spread = float(np.median(spreads)) if spreads else float("nan")
-            atm_extrinsic = _atm_extrinsic(rows)
-            parsed_days.append((t, total_oi, total_vol, median_spread, atm_extrinsic))
+            parsed_days.append((t, total_oi, total_vol, median_spread, rows))
         if len(parsed_days) < 2:
             continue
         eod_oi = parsed_days[-1][1] or 1.0
         eod_vol = parsed_days[-1][2] or 1.0
         eod_spread = parsed_days[-1][3]
-        eod_extrinsic = parsed_days[-1][4]
+        eod_extrinsic_by_symbol = _eod_extrinsic_by_symbol(parsed_days[-1][4])
         open_t = parsed_days[0][0].replace(hour=9, minute=30, second=0, microsecond=0)
-        for t, oi, vol, spread, extrinsic in parsed_days:
+        for t, oi, vol, spread, rows in parsed_days:
             minutes = (t - open_t).total_seconds() / 60.0
             samples.append((minutes, {
                 "oi_ratio": oi / eod_oi,
                 "volume_ratio": vol / eod_vol,
                 "spread_ratio": (spread / eod_spread) if eod_spread and eod_spread == eod_spread else float("nan"),
-                "premium_decay_ratio": (extrinsic / eod_extrinsic) if extrinsic is not None and eod_extrinsic else float("nan"),
             }))
-    return intraday_shape_curve(samples) if samples else None
+
+            spot = next((float(r["UnderlyingPrice"]) for r in rows if r.get("UnderlyingPrice")), None)
+            if spot is None:
+                continue
+            for r in rows:
+                sym = r.get("OptionSymbol")
+                eod_extrinsic = eod_extrinsic_by_symbol.get(sym)
+                if not eod_extrinsic or eod_extrinsic <= 1e-6:
+                    continue
+                extrinsic = _row_extrinsic(r, spot)
+                if extrinsic is None:
+                    continue
+                moneyness = float(r["Strike"]) / spot - 1.0
+                is_call = r.get("Type") == "call"
+                premium_decay_samples.append((minutes, moneyness, is_call, extrinsic / eod_extrinsic))
+    return intraday_shape_curve(samples, premium_decay_samples) if samples else None
 
 
 def generate_day(

@@ -66,6 +66,24 @@ def _intrinsic_rel(moneyness: np.ndarray, is_call: np.ndarray) -> np.ndarray:
     return np.where(is_call, np.maximum(0.0, -moneyness), np.maximum(0.0, moneyness))
 
 
+def _relative_moneyness(moneyness: np.ndarray, is_call: np.ndarray) -> np.ndarray:
+    """Signed moneyness, reoriented so positive always means OTM and
+    negative always means ITM regardless of side -- the dimension that
+    actually governs extrinsic-value decay behavior, so calls and puts
+    share one bucket axis instead of two mirrored ones."""
+    return np.where(is_call, -moneyness, moneyness)
+
+
+# Bucket edges for `_relative_moneyness`, giving 5 buckets: deep ITM,
+# near ITM, ATM, near OTM, deep OTM. Coarse deliberately -- real intraday
+# collector coverage (see day_generator.py) is a handful of days at best,
+# so a finer grid would mostly be empty cells falling back to the ATM
+# column anyway (see `intraday_shape_curve`).
+MONEYNESS_BUCKET_EDGES = (-0.02, -0.005, 0.005, 0.02)
+N_MONEYNESS_BUCKETS = len(MONEYNESS_BUCKET_EDGES) + 1
+ATM_BUCKET_INDEX = int(np.searchsorted(MONEYNESS_BUCKET_EDGES, 0.0))
+
+
 def build_donor(chain_cols: dict, day: date) -> ChainDonor | None:
     """`chain_cols` is the column-oriented payload from `options_0dte_day`."""
     n = len(chain_cols.get("strike", []))
@@ -134,28 +152,63 @@ def _lookup_nearest(donor_moneyness: np.ndarray, donor_is_call: np.ndarray, dono
     return out
 
 
-def intraday_shape_curve(intraday_rows_by_time: list[tuple[float, dict[str, float]]]) -> dict[str, np.ndarray]:
+def _backward_then_forward_fill(arr: np.ndarray, default: float | None = 1.0) -> None:
+    """In place. Backward-fill first (a leading gap inherits the nearest
+    *real future* value), then forward-fill (a trailing gap inherits the
+    nearest real past value). An earlier version forward-filled only,
+    seeded from a hard-coded 1.0 -- so any leading gap got stuck at 1.0
+    regardless of what the real data showed a bit later, instead of
+    inheriting the nearest real value. Flagged in review: for a decay curve
+    like premium_decay_ratio, the leading buckets are exactly the ones
+    covering the most active part of the session, so this could materially
+    underprice opening options. `default` seeds the *remaining* gaps only if
+    the array has no real values at all; pass `None` to leave it all-NaN in
+    that case instead (used for the moneyness grid, where the caller has a
+    better fallback than a flat constant -- see `intraday_shape_curve`).
+    """
+    last = None
+    for i in range(len(arr) - 1, -1, -1):
+        if arr[i] == arr[i]:
+            last = arr[i]
+        elif last is not None:
+            arr[i] = last
+    last = default
+    for i in range(len(arr)):
+        if arr[i] == arr[i]:
+            last = arr[i]
+        elif last is not None:
+            arr[i] = last
+
+
+def intraday_shape_curve(
+    intraday_rows_by_time: list[tuple[float, dict[str, float]]],
+    premium_decay_samples: list[tuple[float, float, bool, float]] | None = None,
+) -> dict[str, Any]:
     """Reduce several real intraday days into one canonical time-of-day ramp.
 
     `intraday_rows_by_time`: list of (minutes_since_open, {"oi_ratio":...,
-    "spread_ratio":..., "volume_ratio":..., "premium_decay_ratio":...})
-    samples pooled across every available real intraday day (each day's own
-    ratios are computed against *that day's own* EOD values before pooling,
-    so days with different absolute OI/volume/premium levels still
-    contribute comparably-shaped samples). `premium_decay_ratio` is the
-    ATM-straddle extrinsic value at time t divided by that same day's EOD
-    ATM-straddle extrinsic value -- 0DTE time value bleeds off through the
-    session, so this is >1 in the morning and ~1 near the close, and is what
-    lets `synth_snapshot_rows` scale a donor's EOD extrinsic value up to a
-    realistic mid-morning level instead of reusing it flat all day (a real
-    bug flagged in PR review -- see #65).
+    "spread_ratio":..., "volume_ratio":...}) samples pooled across every
+    available real intraday day (each day's own ratios are computed against
+    *that day's own* EOD values before pooling, so days with different
+    absolute OI/volume levels still contribute comparably-shaped samples).
+    Binned into 15-minute buckets, median per bucket, gaps filled per
+    `_backward_then_forward_fill`.
 
-    Returns a monotonic lookup table (minutes-since-open -> ratio) built by
-    binning into 15-minute buckets and taking the median, then
-    forward/back-filling gaps -- collector coverage is sparse enough that
-    some buckets may have zero samples.
+    `premium_decay_samples`: list of (minutes_since_open, moneyness, is_call,
+    ratio) -- one entry *per real intraday chain row*, pooled the same way,
+    each row's ratio computed against that same row's own symbol's EOD
+    extrinsic value. An earlier version instead computed one pooled
+    ATM-straddle ratio and applied it to every strike and side uniformly --
+    flagged in review: OTM and ITM options don't decay identically to ATM
+    ones, so `synth_snapshot_rows` needs a moneyness-conditional lookup, not
+    one scalar. Binned into (15-minute bucket x moneyness bucket, see
+    `MONEYNESS_BUCKET_EDGES`) and returned as `"premium_decay_grid"`, a 2D
+    array. A moneyness bucket with no samples anywhere falls back to the ATM
+    bucket's own (filled) curve as the best available proxy for decay
+    *shape* at other moneyness levels, before falling back further to a
+    flat 1.0 if even the ATM bucket has nothing.
     """
-    keys = ("oi_ratio", "spread_ratio", "volume_ratio", "premium_decay_ratio")
+    keys = ("oi_ratio", "spread_ratio", "volume_ratio")
     buckets: dict[int, dict[str, list[float]]] = {}
     for minutes, ratios in intraday_rows_by_time:
         b = int(minutes // 15)
@@ -165,25 +218,40 @@ def intraday_shape_curve(intraday_rows_by_time: list[tuple[float, dict[str, floa
                 slot[k].append(v)
 
     n_buckets = (390 // 15) + 1
-    curve = {k: np.full(n_buckets, np.nan) for k in keys}
+    curve: dict[str, Any] = {k: np.full(n_buckets, np.nan) for k in keys}
     for b, slot in buckets.items():
         if 0 <= b < n_buckets:
             for k, vals in slot.items():
                 if vals:
                     curve[k][b] = float(np.median(vals))
-
-    # Forward/back fill, then fall back to a flat "already fully in place"
-    # default (1.0) if no real intraday data exists for that ratio at all --
-    # this is the honest degrade-to-neutral path when collector coverage is
-    # too short to say anything about time-of-day shape yet.
     for k in curve:
-        arr = curve[k]
-        last = 1.0
-        for i in range(len(arr)):
-            if arr[i] == arr[i]:
-                last = arr[i]
-            else:
-                arr[i] = last
+        _backward_then_forward_fill(curve[k], default=1.0)
+
+    grid = np.full((n_buckets, N_MONEYNESS_BUCKETS), np.nan)
+    grid_samples: dict[tuple[int, int], list[float]] = {}
+    for minutes, moneyness, is_call, ratio in (premium_decay_samples or []):
+        if ratio != ratio:
+            continue
+        b = int(minutes // 15)
+        if not (0 <= b < n_buckets):
+            continue
+        rel_m = -moneyness if is_call else moneyness
+        m_bucket = int(np.searchsorted(MONEYNESS_BUCKET_EDGES, rel_m))
+        grid_samples.setdefault((b, m_bucket), []).append(ratio)
+    for (b, m_bucket), vals in grid_samples.items():
+        grid[b, m_bucket] = float(np.median(vals))
+
+    for m_bucket in range(N_MONEYNESS_BUCKETS):
+        _backward_then_forward_fill(grid[:, m_bucket], default=None)
+
+    atm_column = grid[:, ATM_BUCKET_INDEX].copy()
+    if np.all(np.isnan(atm_column)):
+        atm_column = np.ones(n_buckets)
+    for m_bucket in range(N_MONEYNESS_BUCKETS):
+        if np.all(np.isnan(grid[:, m_bucket])):
+            grid[:, m_bucket] = atm_column
+
+    curve["premium_decay_grid"] = grid
     return curve
 
 
@@ -222,9 +290,16 @@ def synth_snapshot_rows(
     if intraday_curve is not None:
         b = min(int(minutes_since_open // 15), len(intraday_curve["oi_ratio"]) - 1)
         oi_ratio, spread_ratio, vol_ratio = intraday_curve["oi_ratio"][b], intraday_curve["spread_ratio"][b], intraday_curve["volume_ratio"][b]
-        premium_decay_ratio = intraday_curve["premium_decay_ratio"][b]
+        # Per-row, not one scalar for the whole snapshot: OTM/ITM options
+        # don't decay identically to ATM ones (see chain_synth.intraday_shape_curve).
+        grid = intraday_curve["premium_decay_grid"]
+        gb = min(b, grid.shape[0] - 1)
+        rel_moneyness = _relative_moneyness(target_moneyness, all_is_call)
+        m_bucket = np.clip(np.searchsorted(MONEYNESS_BUCKET_EDGES, rel_moneyness), 0, N_MONEYNESS_BUCKETS - 1)
+        premium_decay_ratio = grid[gb, m_bucket]
     else:
-        oi_ratio = spread_ratio = vol_ratio = premium_decay_ratio = 1.0
+        oi_ratio = spread_ratio = vol_ratio = 1.0
+        premium_decay_ratio = 1.0
 
     # Price = intrinsic (exact function of moneyness, no donor needed) +
     # extrinsic (the donor's EOD time-value shape by moneyness, scaled up by
