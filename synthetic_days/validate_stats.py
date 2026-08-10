@@ -158,7 +158,18 @@ def main():
     synth_returns = []
     for day in synth_days:
         prices = np.array([snap["underlying_price"] for snap in day["snapshots"]])
-        synth_returns.append(np.diff(np.log(prices)))
+        # `day_generator.py` upsamples to a 60s cadence (step_s=60, bar_s=300
+        # -> 5 sub-steps per 5-min bar), and `upsample_to_seconds`'s Brownian
+        # bridge is pinned to land exactly on the bootstrapped 5-min close at
+        # the last sub-step of each bar -- so `prices[4::5]` recovers exactly
+        # those 5-min closes. Comparing those to real 5-min bars, instead of
+        # diffing the raw 1-min path against 5-min real bars, matters: return
+        # variance scales with the sampling interval under a random walk, so
+        # a 1-min-vs-5-min comparison structurally understates synthetic std/
+        # kurtosis/ACF regardless of how good the generator is. Caught in
+        # real PR review (see #65) -- this was silently wrong before.
+        five_min_closes = prices[4::5]
+        synth_returns.append(np.diff(np.log(five_min_closes)))
 
     real_stats = describe_returns(real_returns, "real")
     synth_stats = describe_returns(synth_returns, "synthetic")

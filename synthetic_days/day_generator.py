@@ -55,6 +55,27 @@ def load_donors(src: R2Source, symbol: str, max_days: int | None = None):
     return donors
 
 
+def _atm_extrinsic(rows: list[dict]) -> float | None:
+    """Straddle extrinsic value (call + put time value) at the nearest-ATM
+    strike, from one real intraday snapshot's rows. `None` if the rows don't
+    have enough two-sided quotes to compute it."""
+    valid = [r for r in rows if r.get("Bid") and r.get("Ask") and r.get("UnderlyingPrice")]
+    if not valid:
+        return None
+    spot = float(valid[0]["UnderlyingPrice"])
+    calls = [r for r in valid if r.get("Type") == "call"]
+    puts = [r for r in valid if r.get("Type") == "put"]
+    if not calls or not puts:
+        return None
+    atm_call = min(calls, key=lambda r: abs(float(r["Strike"]) - spot))
+    atm_put = min(puts, key=lambda r: abs(float(r["Strike"]) - spot))
+    mid_call = (float(atm_call["Bid"]) + float(atm_call["Ask"])) / 2.0
+    mid_put = (float(atm_put["Bid"]) + float(atm_put["Ask"])) / 2.0
+    intrinsic_call = max(0.0, spot - float(atm_call["Strike"]))
+    intrinsic_put = max(0.0, float(atm_put["Strike"]) - spot)
+    return max(0.0, mid_call - intrinsic_call) + max(0.0, mid_put - intrinsic_put)
+
+
 def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int = 30):
     """Build the canonical time-of-day OI/spread/volume ramp from real
     intraday days the collector has recorded. Returns None (== "assume
@@ -98,19 +119,22 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
                 if r.get("Bid") and r.get("Ask") and float(r["Bid"]) > 0
             ]
             median_spread = float(np.median(spreads)) if spreads else float("nan")
-            parsed_days.append((t, total_oi, total_vol, median_spread))
+            atm_extrinsic = _atm_extrinsic(rows)
+            parsed_days.append((t, total_oi, total_vol, median_spread, atm_extrinsic))
         if len(parsed_days) < 2:
             continue
         eod_oi = parsed_days[-1][1] or 1.0
         eod_vol = parsed_days[-1][2] or 1.0
         eod_spread = parsed_days[-1][3]
+        eod_extrinsic = parsed_days[-1][4]
         open_t = parsed_days[0][0].replace(hour=9, minute=30, second=0, microsecond=0)
-        for t, oi, vol, spread in parsed_days:
+        for t, oi, vol, spread, extrinsic in parsed_days:
             minutes = (t - open_t).total_seconds() / 60.0
             samples.append((minutes, {
                 "oi_ratio": oi / eod_oi,
                 "volume_ratio": vol / eod_vol,
                 "spread_ratio": (spread / eod_spread) if eod_spread and eod_spread == eod_spread else float("nan"),
+                "premium_decay_ratio": (extrinsic / eod_extrinsic) if extrinsic is not None and eod_extrinsic else float("nan"),
             }))
     return intraday_shape_curve(samples) if samples else None
 

@@ -47,12 +47,23 @@ class ChainDonor:
     moneyness: np.ndarray  # (strike/spot - 1), signed
     is_call: np.ndarray
     rel_mid: np.ndarray  # mid / spot -- rescales onto a different day's spot
+    extrinsic_rel: np.ndarray  # (mid - intrinsic) / spot -- the time-value part, see synth_snapshot_rows
     rel_spread: np.ndarray  # (ask-bid)/mid
     oi_share: np.ndarray  # this row's OI / total chain OI that day (shape, not level)
     volume_share: np.ndarray
     underlying_price: float
     total_oi: float
     total_volume: float
+
+
+def _intrinsic_rel(moneyness: np.ndarray, is_call: np.ndarray) -> np.ndarray:
+    """Intrinsic value / spot, as an exact function of signed moneyness
+    (strike/spot - 1) -- (spot-strike)/spot = -moneyness for a call,
+    (strike-spot)/spot = moneyness for a put. No approximation: this is a
+    scale-invariant identity, so it holds for the donor's own day and for
+    whatever spot the synthetic day recenters onto.
+    """
+    return np.where(is_call, np.maximum(0.0, -moneyness), np.maximum(0.0, moneyness))
 
 
 def build_donor(chain_cols: dict, day: date) -> ChainDonor | None:
@@ -84,11 +95,14 @@ def build_donor(chain_cols: dict, day: date) -> ChainDonor | None:
     if valid.sum() < 5:
         return None
 
+    extrinsic_rel = np.maximum(rel_mid - _intrinsic_rel(moneyness, is_call), 0.0)
+
     return ChainDonor(
         day=day,
         moneyness=moneyness[valid],
         is_call=is_call[valid],
         rel_mid=rel_mid[valid],
+        extrinsic_rel=extrinsic_rel[valid],
         rel_spread=rel_spread[valid],
         oi_share=(oi[valid] / total_oi),
         volume_share=(vol[valid] / total_vol),
@@ -124,26 +138,34 @@ def intraday_shape_curve(intraday_rows_by_time: list[tuple[float, dict[str, floa
     """Reduce several real intraday days into one canonical time-of-day ramp.
 
     `intraday_rows_by_time`: list of (minutes_since_open, {"oi_ratio":...,
-    "spread_ratio":..., "volume_ratio":...}) samples pooled across every
-    available real intraday day (each day's own ratios are computed against
-    *that day's own* EOD values before pooling, so days with different
-    absolute OI/volume levels still contribute comparably-shaped samples).
+    "spread_ratio":..., "volume_ratio":..., "premium_decay_ratio":...})
+    samples pooled across every available real intraday day (each day's own
+    ratios are computed against *that day's own* EOD values before pooling,
+    so days with different absolute OI/volume/premium levels still
+    contribute comparably-shaped samples). `premium_decay_ratio` is the
+    ATM-straddle extrinsic value at time t divided by that same day's EOD
+    ATM-straddle extrinsic value -- 0DTE time value bleeds off through the
+    session, so this is >1 in the morning and ~1 near the close, and is what
+    lets `synth_snapshot_rows` scale a donor's EOD extrinsic value up to a
+    realistic mid-morning level instead of reusing it flat all day (a real
+    bug flagged in PR review -- see #65).
 
     Returns a monotonic lookup table (minutes-since-open -> ratio) built by
     binning into 15-minute buckets and taking the median, then
     forward/back-filling gaps -- collector coverage is sparse enough that
     some buckets may have zero samples.
     """
+    keys = ("oi_ratio", "spread_ratio", "volume_ratio", "premium_decay_ratio")
     buckets: dict[int, dict[str, list[float]]] = {}
     for minutes, ratios in intraday_rows_by_time:
         b = int(minutes // 15)
-        slot = buckets.setdefault(b, {"oi_ratio": [], "spread_ratio": [], "volume_ratio": []})
+        slot = buckets.setdefault(b, {k: [] for k in keys})
         for k, v in ratios.items():
             if v == v:  # not NaN
                 slot[k].append(v)
 
     n_buckets = (390 // 15) + 1
-    curve = {"oi_ratio": np.full(n_buckets, np.nan), "spread_ratio": np.full(n_buckets, np.nan), "volume_ratio": np.full(n_buckets, np.nan)}
+    curve = {k: np.full(n_buckets, np.nan) for k in keys}
     for b, slot in buckets.items():
         if 0 <= b < n_buckets:
             for k, vals in slot.items():
@@ -187,8 +209,8 @@ def synth_snapshot_rows(
     all_is_call = np.array([True] * n + [False] * n)
     target_moneyness = all_strikes / spot - 1.0
 
-    rel_mid = _lookup_nearest(donor.moneyness, donor.is_call, donor.rel_mid, target_moneyness, all_is_call)
-    rel_mid = np.clip(np.nan_to_num(rel_mid, nan=np.nanmedian(donor.rel_mid)), 1e-4, None)
+    extrinsic_rel = _lookup_nearest(donor.moneyness, donor.is_call, donor.extrinsic_rel, target_moneyness, all_is_call)
+    extrinsic_rel = np.clip(np.nan_to_num(extrinsic_rel, nan=np.nanmedian(donor.extrinsic_rel)), 0.0, None)
     rel_spread = _lookup_nearest(donor.moneyness, donor.is_call, donor.rel_spread, target_moneyness, all_is_call)
     rel_spread = np.clip(np.nan_to_num(rel_spread, nan=np.nanmedian(donor.rel_spread)), 0.001, 1.0)
     oi_share = _lookup_nearest(donor.moneyness, donor.is_call, donor.oi_share, target_moneyness, all_is_call)
@@ -200,10 +222,17 @@ def synth_snapshot_rows(
     if intraday_curve is not None:
         b = min(int(minutes_since_open // 15), len(intraday_curve["oi_ratio"]) - 1)
         oi_ratio, spread_ratio, vol_ratio = intraday_curve["oi_ratio"][b], intraday_curve["spread_ratio"][b], intraday_curve["volume_ratio"][b]
+        premium_decay_ratio = intraday_curve["premium_decay_ratio"][b]
     else:
-        oi_ratio = spread_ratio = vol_ratio = 1.0
+        oi_ratio = spread_ratio = vol_ratio = premium_decay_ratio = 1.0
 
-    mid = np.maximum(rel_mid * spot, 0.01)
+    # Price = intrinsic (exact function of moneyness, no donor needed) +
+    # extrinsic (the donor's EOD time-value shape by moneyness, scaled up by
+    # the real intraday decay curve -- extrinsic value is largest in the
+    # morning and bleeds off to the donor's EOD level by the close, not flat
+    # all day).
+    intrinsic_rel = _intrinsic_rel(target_moneyness, all_is_call)
+    mid = np.maximum(intrinsic_rel * spot + extrinsic_rel * spot * premium_decay_ratio, 0.01)
     half_spread = mid * rel_spread * spread_ratio / 2.0
     bid = np.maximum(mid - half_spread, 0.0)
     ask = mid + half_spread

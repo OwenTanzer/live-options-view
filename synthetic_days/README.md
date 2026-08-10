@@ -31,13 +31,13 @@ only needed once per new date range; every subsequent run works offline.
 ```
         R2 (qqq-options-chain-data)
    ┌───────────────┬───────────────┬────────────────────┐
-   │ history/5min   │ history/       │ intraday/YYYYMMDD/  │
+   │ history/QQQ/5  │ history/       │ intraday/YYYYMMDD/  │
    │                │ options_0dte   │ snapshot_*.csv       │
    └──────┬─────────┴──────┬─────────┴──────────┬───────────┘
           │                │                    │
    price_path.py     chain_synth.py       chain_synth.py
-   (block bootstrap   (smile/OI donor,    (intraday OI/spread/
-    of 5-min returns)  Black-Scholes)      volume ramp)
+   (block bootstrap   (premium/OI/spread  (intraday OI/spread/
+    of 5-min returns)  donor by moneyness) volume/premium-decay ramp)
           │                │                    │
           └───────┬────────┴──────────┬─────────┘
                    ▼                   ▼
@@ -66,33 +66,67 @@ calm bar gets a calm sub-path, a violent one gets a noisy one.
 
 **Options chain (`chain_synth.py`):** one real EOD chain day is drawn as a
 "donor" for the premium/OI/spread *shape* (not level); strikes are
-re-centered each snapshot on the synthetic day's own current spot; mid price
-(as a fraction of spot) and relative spread are looked up by nearest signed
-moneyness on the matching call/put side of the donor. Bid/ask spread width
-and OI/volume levels are then scaled by the real intraday time-of-day ramp
-for that minute of the session. IV/greeks are left `None` rather than
-synthesized: a live R2 pull confirmed MarketData.app's historical 0DTE
-endpoint never populates them, and no strategy in `crassus/crassus/strategies/`
-reads those fields anyway (checked directly) -- inventing numbers nothing
-downstream consumes, and that inverting from a near-zero-time-to-expiry price
-would make unreliable anyway, wasn't worth the complexity.
+re-centered each snapshot on the synthetic day's own current spot. Price is
+split into intrinsic value (an exact function of moneyness -- no donor
+needed) plus extrinsic/time value, looked up by nearest signed moneyness on
+the matching call/put side of the donor and then **scaled by a real
+intraday decay curve** (ATM-straddle extrinsic value at time t, divided by
+that same real day's own EOD extrinsic value, pooled across every available
+intraday collector day) -- 0DTE time value is largest at the open and bleeds
+off to the donor's EOD level by the close, so a flat reuse of the EOD
+premium all day would misprice every entry/exit before 3:45pm. Bid/ask
+spread width and OI/volume levels are scaled by the same kind of real
+intraday ramp. IV/greeks are left `None` rather than synthesized: a live R2
+pull confirmed MarketData.app's historical 0DTE endpoint never populates
+them, and no strategy in `crassus/crassus/strategies/` reads those fields
+anyway (checked directly) -- inventing numbers nothing downstream consumes,
+and that inverting from a near-zero-time-to-expiry price would make
+unreliable anyway, wasn't worth the complexity.
 
 **Validation (`validate_stats.py`):** don't take the above on faith --
-compares pooled real vs. synthetic 5-min return moments, ACF of squared
-returns (the volatility-clustering signature), ACF of raw returns, daily
-range distribution, and -- most directly relevant to this repo --
+compares pooled real vs. synthetic 5-min return moments (both resampled to
+the *same* 5-min resolution -- the synthetic path is generated at 60s
+cadence, so this downsamples to the bootstrapped 5-min closes rather than
+diffing 1-min-vs-5-min returns, which structurally understates synthetic
+std/kurtosis/ACF regardless of generator quality), ACF of squared returns
+(the volatility-clustering signature), ACF of raw returns, daily range
+distribution, and -- most directly relevant to this repo --
 `canopus_down_day_14`'s own signal condition (down >=0.25% from the 9:30
 reference by 2:45pm ET), real frequency vs. synthetic frequency.
+
+## Validated against the live bucket
+
+Run against real R2 data (830 real historical sessions, 80 EOD chain donor
+days, 27/27 intraday time-of-day buckets calibrated from real collector
+days): real 5-min QQQ returns show kurtosis 53 and positive/decaying
+ACF(returns^2) across lags 1-5 (the real volatility-clustering signature).
+Once compared at matching 5-min resolution, synthetic days land std=0.001091
+vs. real std=0.001094 (near-exact), kurtosis 12.8 (real gap vs. 53, but a
+real gap now -- not a resolution artifact), and ACF(returns^2) ~0.08-0.19 vs.
+real's 0.11-0.38, both clearly positive and nothing like the ~0 an iid
+simulator would show.
 
 ## Known limitations
 
 - **Intraday chain shape is data-starved.** `collector.py` has only been
-  running since ~July, so the time-of-day OI/spread/volume ramp is
-  calibrated from however many real intraday days exist in R2 at generation
-  time -- could be a handful. `day_generator.py` prints how much real
-  intraday coverage it found; treat the ramp as low-confidence until that
-  grows. `options_0dte` EOD history (since 2025-04) has much deeper coverage
-  and drives the smile/OI-shape donor, which is the more load-bearing piece.
+  running since ~July, so the time-of-day OI/spread/volume/premium-decay
+  ramp is calibrated from however many real intraday days exist in R2 at
+  generation time -- could be a handful, and the premium-decay curve in
+  particular showed a couple of noisy buckets (e.g. one bucket landing at
+  1.0x instead of the surrounding ~8x) on a 15-day sample, most likely from
+  low sample count in early-morning buckets on thin-quote days.
+  `day_generator.py` prints how much real intraday coverage it found; treat
+  the ramp as low-confidence until that grows. `options_0dte` EOD history
+  (since 2025-04) has much deeper coverage and drives the premium/OI-shape
+  donor, which is the more load-bearing piece.
+- **Kurtosis is still real-vs-synthetic gap, not just measurement noise.**
+  12.8 vs. real's 53, even after fixing the resolution-matching bug --
+  moving block bootstrap smooths some of the most extreme single-bar jumps'
+  exact timing; a smaller block size trades that off against more
+  block-boundary artifacts (see next point).
+- **Independently-drawn blocks introduce a mild return-autocorrelation
+  artifact** at block boundaries, since consecutive blocks aren't serially
+  linked -- visible in `validate_stats.py`'s ACF(returns) output.
 - **Holidays/early closes aren't modeled** in the synthetic calendar --
   `day_generator.py` only skips weekends when labeling synthetic dates.
 - **No macro/event regime tagging.** A synthetic day can accidentally splice
