@@ -33,15 +33,34 @@ cannot supply: the *morning* 9:30 reference price, needed hours before the
 2:45 entry decision and therefore not recoverable from the held position at
 decision time. `_reference_price_by_date` is a small **in-process** cache,
 same "shared across every account, deliberately -- there is one QQQ
-underlying" posture as `momentum_qqq._tracker`. A runner restart after 9:30
-but before 2:45 loses the real opening reference and will instead record
-whatever price it first observes post-restart -- always a *later*, more
-favorable-to-"already-declined" price than the true 9:30 print, so a missed
-true reference can only ever suppress a qualifying entry, never manufacture a
-false one. Documented here rather than solved with a durable store because
-nothing else in this codebase persists an intraday reference price either;
-if that becomes a recurring need across strategies it belongs in a shared
-module, not bolted onto this one.
+underlying" posture as `momentum_qqq._tracker`. Documented here rather than
+solved with a durable store because nothing else in this codebase persists
+an intraday reference price either; if that becomes a recurring need across
+strategies it belongs in a shared module, not bolted onto this one.
+
+A runner restart after 9:30 but before 2:45 loses the real opening reference
+and, without a guard, would instead record whatever price it first observes
+post-restart as if it were the 9:30 print. An earlier version of this
+docstring claimed that substitute reference could only ever *suppress* a
+qualifying entry, reasoning that it would always be a later, more
+favorable-to-"already-declined" price -- that reasoning is wrong whenever
+price isn't monotonic. Concretely (flagged in review): true 9:30 print 400,
+restart at 10:00 with price already at 405 records a *late* reference of
+405; by 14:45 price is back down to 403 -- 0.49% below the false reference
+405 (qualifies), while actually +0.75% *above* the true reference 400
+(should not qualify). A late reference can manufacture a false signal, not
+just suppress a true one.
+
+Fixed with `_reference_capture_late_by_date`: the first observation for
+`today` is still recorded as the reference (unchanged, still needed to
+evaluate displacement), but is additionally flagged "late" if it happens
+more than `REFERENCE_CAPTURE_TOLERANCE_MINUTES` after the configured
+reference time -- under normal operation (the collector's ~60s snapshot
+cadence) the reference is captured within about a minute of 9:30, so any
+capture meaningfully later than that means a restart (or startup delay)
+happened in between and the true 9:30 print was missed. A late-flagged day
+stands down entirely (no entry evaluated) rather than trading against a
+reference it can't trust.
 """
 
 from __future__ import annotations
@@ -62,6 +81,7 @@ DEFAULT_ENTRY_WINDOW_END_ET = "14:51"  # exclusive -- "through 14:50:59" in the 
 DEFAULT_FALLBACK_EXIT_TIME_ET = "15:45"
 DEFAULT_DOWN_THRESHOLD_PCT = 0.0025  # 0.25%
 DEFAULT_TARGET_MULTIPLIER = 1.14  # eta = 14%, the plateau's empirical upper boundary
+REFERENCE_CAPTURE_TOLERANCE_MINUTES = 5.0  # see module docstring's restart-safety note
 
 # Same OCC-suffix parse as momentum_qqq._OCC_TYPE_RE et al -- duplicated
 # deliberately rather than shared; see momentum_qqq.py's module docstring.
@@ -71,6 +91,13 @@ _OCC_TYPE_RE = re.compile(r"\d{6}([CP])\d{8}$")
 # day. Shared across every account running this strategy -- there is one QQQ
 # underlying, not one per account.
 _reference_price_by_date: dict[date, float] = {}
+
+# date -> True if that day's reference (above) was captured more than
+# REFERENCE_CAPTURE_TOLERANCE_MINUTES after the reference time -- meaning a
+# restart happened between 9:30 and first-observation-after-restart, so the
+# recorded "reference" is not actually the true 9:30 print. See module
+# docstring. Only ever set once per day, alongside the reference itself.
+_reference_capture_late_by_date: dict[date, bool] = {}
 
 
 def _option_type_from_symbol(symbol: str) -> str | None:
@@ -122,11 +149,23 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _maybe_record_reference(today: date, price: float, reference_time: dt_time, now_time: dt_time) -> None:
+def _minutes_between(earlier: dt_time, later: dt_time) -> float:
+    """Minutes from `earlier` to `later`, same day. Negative if `later` is
+    actually earlier -- callers here only call this with later >= earlier."""
+    return ((later.hour * 60 + later.minute + later.second / 60.0)
+            - (earlier.hour * 60 + earlier.minute + earlier.second / 60.0))
+
+
+def _maybe_record_reference(
+    today: date, price: float, reference_time: dt_time, now_time: dt_time,
+    tolerance_minutes: float = REFERENCE_CAPTURE_TOLERANCE_MINUTES,
+) -> None:
     if now_time < reference_time:
         return
-    if today not in _reference_price_by_date:
-        _reference_price_by_date[today] = price
+    if today in _reference_price_by_date:
+        return
+    _reference_price_by_date[today] = price
+    _reference_capture_late_by_date[today] = _minutes_between(reference_time, now_time) > tolerance_minutes
 
 
 def _target_price(fill_price: float, multiplier: float) -> float:
@@ -264,6 +303,15 @@ def _decide(ctx: StrategyContext) -> Decision:
     reference_price = _reference_price_by_date.get(today)
     if reference_price is None:
         return no("No 9:30 ET reference price recorded yet this session; cannot evaluate displacement.", **meta_base)
+    if _reference_capture_late_by_date.get(today):
+        return no(
+            "Today's reference was captured more than "
+            f"{REFERENCE_CAPTURE_TOLERANCE_MINUTES:g} minute(s) after the configured reference time "
+            f"({meta_base['reference_time_et']} ET) -- almost certainly a missed true 9:30 print after a "
+            "restart, not the real opening reference. Standing down for today rather than trading "
+            "against a reference that can't be trusted.",
+            reference_price=reference_price, **meta_base,
+        )
 
     current_price = ctx.snapshot.underlying_price
     displacement_pct = (current_price - reference_price) / reference_price

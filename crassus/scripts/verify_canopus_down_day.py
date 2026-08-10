@@ -23,8 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus.client import Book  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.strategies.canopus_down_day import (  # noqa: E402
+    REFERENCE_CAPTURE_TOLERANCE_MINUTES,
     STRATEGY_ID,
     _reference_price_by_date,
+    _reference_capture_late_by_date,
     _decide,
 )
 from crassus.strategy import StrategyContext  # noqa: E402
@@ -264,6 +266,64 @@ def scenario_market_not_open_is_a_no_op() -> None:
     check("no trade outside the open session", not decision.is_trade)
 
 
+def scenario_late_reference_capture_stands_down() -> None:
+    print("\n14. Reference captured well after 9:30 (post-restart) -- flagged late, stands down rather than trading it")
+    day = next_day()
+    # Reference "captured" at 10:00, 30 minutes after the 09:30 configured
+    # reference time -- past REFERENCE_CAPTURE_TOLERANCE_MINUTES (5), so this
+    # is treated as a missed true 9:30 print, not the real reference.
+    ctx_ref = make_ctx(day=day, hour=10, minute=0, underlying_price=405.0)
+    _decide(ctx_ref)
+    check("reference recorded (imperfect, but still recorded)", _reference_price_by_date.get(ctx_ref.now_et.date()) == 405.0)
+    check("reference flagged as captured late", _reference_capture_late_by_date.get(ctx_ref.now_et.date()) is True)
+
+    # Would otherwise qualify: 405 -> 403 is -0.49%, past the 0.25% threshold.
+    ctx_entry = make_ctx(
+        day=day, hour=14, minute=45, underlying_price=403.0,
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+    )
+    decision = _decide(ctx_entry)
+    check("no trade -- stands down on a late-captured reference instead of trading against it", not decision.is_trade)
+
+
+def scenario_on_time_reference_still_trades_normally() -> None:
+    print("\n15. Reference captured within tolerance of 9:30 -- not flagged late, trades normally (regression guard)")
+    day = next_day()
+    ctx_ref = make_ctx(day=day, hour=9, minute=30, underlying_price=400.0)
+    _decide(ctx_ref)
+    check("reference not flagged as late", not _reference_capture_late_by_date.get(ctx_ref.now_et.date()))
+
+    ctx_entry = make_ctx(
+        day=day, hour=14, minute=45, underlying_price=398.8,
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+    )
+    decision = _decide(ctx_entry)
+    check("still trades normally when the reference was captured on time", decision.is_trade)
+
+
+def scenario_owens_false_signal_example() -> None:
+    print(
+        "\n16. Owen's exact false-signal example (true open 400, restart reference 405, "
+        "14:45 price 403 -- was -0.49% off the false reference but +0.75% off the true one)"
+    )
+    day = next_day()
+    # The restart means the true 9:30 print (400) is never observed by this
+    # process at all -- the first observation, at 10:00, is already 405.
+    ctx_ref = make_ctx(day=day, hour=10, minute=0, underlying_price=405.0)
+    _decide(ctx_ref)
+
+    ctx_entry = make_ctx(
+        day=day, hour=14, minute=45, underlying_price=403.0,
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+    )
+    decision = _decide(ctx_entry)
+    check(
+        "no trade -- previously this would have wrongly bought a put on a manufactured "
+        "-0.49% signal despite QQQ actually being +0.75% above the true reference",
+        not decision.is_trade,
+    )
+
+
 def main() -> int:
     for scenario in (
         scenario_records_reference_and_waits_for_window,
@@ -279,6 +339,9 @@ def main() -> int:
         scenario_no_reentry_after_completed_trade,
         scenario_stands_down_on_held_call,
         scenario_market_not_open_is_a_no_op,
+        scenario_late_reference_capture_stands_down,
+        scenario_on_time_reference_still_trades_normally,
+        scenario_owens_false_signal_example,
     ):
         scenario()
 
