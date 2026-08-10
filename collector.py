@@ -10,6 +10,11 @@ R2 output:
   intraday/latest.json                   -- live feed for the web viewer
   intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
+  macro/eia_steo.json                    -- EIA STEO crude calibration + OVX regime
+                                             (every EIA_STEO_POLL_SECS, optional feature --
+                                             see crude_calibration.py; skipped if EIA_API_KEY unset)
+  baselines/eia_steo_vintages.json       -- rolling log of past STEO releases this
+                                             collector has observed, for vintage-over-vintage diffs
 
 Environment variables (set in Railway dashboard):
   TASTY_LOGIN            tastytrade username
@@ -20,6 +25,9 @@ Environment variables (set in Railway dashboard):
   R2_BUCKET_NAME         bucket name (default: pub-4d5c916b8cb74ffb8c0abd7dfadb02cf)
   LIVE_QUOTE_KEY         shared key for the Worker's read-only quote proxy
   PORT                   Railway HTTP port (default: 8080 locally)
+  EIA_API_KEY            optional -- enables the macro/eia_steo.json feed (see
+                          crude_calibration.py); free signup at eia.gov/opendata.
+                          Feature is silently skipped (logged once) if unset.
 """
 
 import io
@@ -43,6 +51,7 @@ import requests
 import websocket
 import yfinance as yf
 
+import crude_calibration as cc
 import market_signals as ms
 
 # Force UTF-8 stdout to avoid UnicodeEncodeError on non-UTF-8 terminals/Railway
@@ -77,6 +86,20 @@ LIVE_QUOTE_PORT = int(os.environ.get("PORT", "8080"))
 MAX_LIVE_QUOTE_SYMBOLS = 100
 R2_BUCKET       = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
 
+# EIA STEO crude calibration feed (see crude_calibration.py). Optional --
+# skipped entirely if EIA_API_KEY isn't set, same soft-dependency shape as
+# the KOSPI/OVX DXLink-symbol guesses degrading to yfinance rather than
+# failing the whole collector. Runs independent of the market session (unlike
+# prices_loop/health_loop, which only run inside _run_session) since STEO has
+# nothing to do with QQQ market hours -- started once from main().
+EIA_API_KEY          = os.environ.get("EIA_API_KEY")
+EIA_STEO_URL          = "https://api.eia.gov/v2/steo/data/"
+EIA_STEO_POLL_SECS    = 6 * 3600   # STEO itself updates ~monthly; polling a few times a
+                                    # day just catches a fresh release promptly without a cron
+EIA_STEO_KEY          = "macro/eia_steo.json"
+EIA_STEO_LOG_KEY      = "baselines/eia_steo_vintages.json"
+EIA_STEO_MAX_VINTAGES = 6
+
 # VWAP/RVOL (see market_signals.py and docs/plans/2026-07-vwap-rvol.md).
 # Bucket/lookback/min-days are not derived from anything about QQQ itself --
 # reasonable defaults chosen to balance per-bucket sample density against how
@@ -100,6 +123,13 @@ PRICE_TICKERS: dict[str, str] = {
     "QQQ":     "QQQ",
     "USO":     "USO",
     "VIX":     "$VIX.X",
+    # Cboe Crude Oil ETF Volatility Index. Same unverified-guess situation as
+    # KOSPI below: tastytrade/dxFeed may or may not carry this index symbol
+    # at all. If the guess is wrong this ticker just never gets DXLink data
+    # and always falls through to the yfinance path (a real, working ^OVX
+    # symbol) -- same graceful degradation every ticker here already has
+    # pre-market.
+    "OVX":     "$OVX.X",
     "SMH":     "SMH",
     "IGV":     "IGV",
     "10Y":     "$TNX.X",      # CBOE 10-year Treasury yield index (value = yield × 10)
@@ -125,7 +155,7 @@ TICKER_CLASSES: dict[str, str] = {
     "QQQ": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
     "META": "equity", "GOOGL": "equity", "AMZN": "equity", "TSLA": "equity",
     "MU": "equity", "SPCX": "equity", "AAPL": "equity",
-    "VIX": "index", "10Y": "yield", "JPY/USD": "futures",
+    "VIX": "index", "OVX": "index", "10Y": "yield", "JPY/USD": "futures",
     "KOSPI": "international", "BTC/USD": "crypto",
 }
 
@@ -134,6 +164,7 @@ YF_SYMBOL_MAP: dict[str, str] = {
     "QQQ":     "QQQ",
     "USO":     "USO",
     "VIX":     "^VIX",       # pre-market: None expected (CBOE only calculates at open)
+    "OVX":     "^OVX",       # pre-market: same CBOE-open-only caveat as VIX above
     "SMH":     "SMH",
     "IGV":     "IGV",
     "10Y":     "^TNX",       # yields the rate directly (e.g. 4.485), NOT × 10
@@ -1236,6 +1267,134 @@ def prices_loop(s3, feed: DXLinkFeed, counters: Counters,
     log.info("prices loop stopped")
 
 
+# -- eia_steo.json upload (every EIA_STEO_POLL_SECS, optional feature) -------
+
+
+def fetch_eia_steo_rows(api_key: str) -> list[dict]:
+    """Raw rows from EIA's v2 STEO API for the series crude_calibration.py
+    tracks (see BRENT_SERIES_ID/WTI_SERIES_ID/BALANCE_SERIES_ID there),
+    most-recent-period-first. Network I/O only -- parsing/normalization is
+    crude_calibration.parse_steo_rows.
+
+    Series IDs and the response shape assumed here (`response.data`, each row
+    a flat dict with `period`/`seriesId`/`value`) should be verified against
+    a live call before this is trusted -- see crude_calibration.py's module
+    docstring. `length=36` pulls roughly three years of monthly history per
+    series, comfortably more than the current STEO forecast window needs.
+    """
+    params = {
+        "api_key": api_key,
+        "frequency": "monthly",
+        "data[0]": "value",
+        "facets[seriesId][]": [cc.BRENT_SERIES_ID, cc.WTI_SERIES_ID, cc.BALANCE_SERIES_ID],
+        "sort[0][column]": "period",
+        "sort[0][direction]": "desc",
+        "length": 36,
+    }
+    resp = requests.get(EIA_STEO_URL, params=params, timeout=20)
+    resp.raise_for_status()
+    return resp.json()["response"]["data"]
+
+
+def load_steo_vintage_log(s3) -> list[dict]:
+    """Rolling log of past STEO releases this collector has itself observed
+    -- EIA's live API serves the current published values, not a queryable
+    history of what a *prior* release forecast for the same future month, so
+    that vintage-over-vintage comparison has to be built up locally over
+    time, one release per stored entry (same reasoning as RVOL's own
+    baselines/ history, see market_signals.py).
+    """
+    try:
+        body = s3.get_object(Bucket=R2_BUCKET, Key=EIA_STEO_LOG_KEY)["Body"].read()
+        return json.loads(body)
+    except Exception:
+        return []
+
+
+def save_steo_vintage_log(s3, entries: list[dict]) -> None:
+    payload = json.dumps(entries[-EIA_STEO_MAX_VINTAGES:]).encode()
+    s3.put_object(
+        Bucket=R2_BUCKET, Key=EIA_STEO_LOG_KEY,
+        Body=payload, ContentType="application/json",
+    )
+
+
+def push_eia_steo(s3) -> None:
+    rows = fetch_eia_steo_rows(EIA_API_KEY)
+    # EIA's v2 API doesn't hand back "which monthly release this row came
+    # from" directly -- STEO is published roughly once a month, so the
+    # calendar month we happen to be polling in is used as the vintage label.
+    # This is an approximation right at a release boundary (a poll in the
+    # first few days of a month, before that month's STEO has actually been
+    # published yet, mislabels the *previous* month's data as the new
+    # vintage) -- acceptable here because the log de-duplicates by label
+    # below, so a mislabeled early-month poll just gets silently corrected
+    # once the real new-month data lands on a later poll.
+    release_period = datetime.now(timezone.utc).strftime("%Y-%m")
+    current = cc.parse_steo_rows(rows, release_period=release_period)
+
+    entries = load_steo_vintage_log(s3)
+    entries = [e for e in entries if e.get("release_period") != release_period]
+    entries.append({
+        "release_period": release_period,
+        "points": [
+            {"period": p.period, "brent": p.brent, "wti": p.wti, "balance": p.balance}
+            for p in current.points
+        ],
+    })
+    save_steo_vintage_log(s3, entries)
+
+    prior_vintage = None
+    if len(entries) >= 2:
+        prior_entry = entries[-2]
+        prior_vintage = cc.SteoVintage(
+            release_period=prior_entry["release_period"],
+            points=tuple(cc.SteoPricePoint(**p) for p in prior_entry["points"]),
+        )
+
+    revisions = []
+    if prior_vintage is not None:
+        for point in current.points:
+            revision = cc.compare_vintages(prior_vintage, current, point.period)
+            if revision is not None:
+                revisions.append(revision.__dict__)
+
+    ovx_value = _last_prices.get("OVX", {}).get("price")
+
+    payload = json.dumps({
+        "timestamp":       datetime.now(timezone.utc).isoformat(),
+        "current_release": release_period,
+        "prior_release":   prior_vintage.release_period if prior_vintage else None,
+        "points":          [
+            {"period": p.period, "brent": p.brent, "wti": p.wti, "balance": p.balance}
+            for p in current.points
+        ],
+        "revisions":       revisions,
+        "ovx": {
+            "value":  ovx_value,
+            "regime": cc.classify_ovx_regime(ovx_value),
+        },
+    }, default=str).encode()
+
+    s3.put_object(
+        Bucket=R2_BUCKET, Key=EIA_STEO_KEY,
+        Body=payload, ContentType="application/json",
+        CacheControl="no-cache, max-age=300",
+    )
+
+
+def eia_steo_loop(s3) -> None:
+    if not EIA_API_KEY:
+        log.info("EIA_API_KEY not set -- skipping macro/eia_steo.json (crude calibration) feed")
+        return
+    while True:
+        try:
+            push_eia_steo(s3)
+        except Exception as e:
+            log.warning(f"eia_steo.json error: {e}")
+        time.sleep(EIA_STEO_POLL_SECS)
+
+
 # -- health.json upload (every 15s) ------------------------------------------
 
 def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
@@ -2015,6 +2174,13 @@ def main():
     quote_registry = LiveQuoteRegistry()
     start_live_quote_server(quote_registry)
     login = os.environ["TASTY_LOGIN"]
+
+    # Independent of the QQQ market session (unlike prices_loop/health_loop,
+    # started fresh inside every _run_session): EIA STEO has nothing to do
+    # with market hours, so this runs continuously off its own s3 client for
+    # the life of the process. No-ops immediately if EIA_API_KEY is unset.
+    steo_thread = threading.Thread(target=eia_steo_loop, args=(make_s3(),), daemon=True)
+    steo_thread.start()
 
     while True:
         wait_for_premarket()
