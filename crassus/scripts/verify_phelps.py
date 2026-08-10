@@ -231,6 +231,76 @@ def test_phelps_pure_holds_through_window_then_releases() -> None:
     check("released after the window elapses", d_late.action == "sell", d_late.reason)
 
 
+def test_phelps_wrap_recovers_fill_time_from_trade_ts() -> None:
+    print("\nRegression: entry time is recovered from the trade's own ts, not first-observation time")
+    _entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision(action="sell", symbol="HELD", quantity=1, reason="signal reversed", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+
+    # Fill happened 30 minutes ago (past the 27.5m default window) but this
+    # is the *first* cycle this process observes the position as held --
+    # e.g. a restart, or simply the runner's own multi-minute cadence
+    # meaning the position wasn't held on the cycle the buy was submitted.
+    fill_time = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    now = fill_time + timedelta(minutes=30)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": fill_time.isoformat()}]
+
+    ctx = make_ctx(username="acct2", trades=trades, now_et=now)
+    decision = wrapped(ctx)
+    check(
+        "released on the very first observed cycle because the real fill was already past the window",
+        decision.action == "sell" and decision.symbol == "HELD",
+        decision.reason,
+    )
+    check(
+        "elapsed time in the release reflects the true fill time (~30m), not 0m",
+        decision.metadata is not None and decision.metadata.get("phelps_elapsed_minutes", 0) >= 29.9,
+        decision.metadata,
+    )
+
+
+def test_phelps_wrap_falls_back_to_now_when_ts_missing() -> None:
+    print("\nRegression guard: a trade record with no ts still falls back to first-observed time")
+    _entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision(action="sell", symbol="HELD", quantity=1, reason="signal reversed", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+    now = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0}]  # no ts
+
+    ctx = make_ctx(username="acct3", trades=trades, now_et=now)
+    decision = wrapped(ctx)
+    check("no ts on the trade -- still defers via the first-observed fallback, not a crash", decision.action == "no_trade", decision.reason)
+
+
+def test_phelps_pure_restart_recovery_grants_fresh_window() -> None:
+    print("\nRegression: a freshly-reconstructed watch (restart) does not immediately close on equality")
+    phelps_pure._watches.clear()
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "QQQ240101C00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    quote_map = {"QQQ240101C00400000": executable_quote()}
+
+    # No pre-existing watch -- this is the restart-recovery branch. Anchor
+    # gets set from this same cycle's underlying_price (400.0), so
+    # current_price == anchor_price on this exact cycle.
+    ctx = make_ctx(
+        username="bowman", trades=trades, now_et=t0, underlying_price=400.0,
+        snapshot_timestamp=t0.isoformat(), quote_map=quote_map,
+    )
+    decision = phelps_pure._decide(ctx)
+    check(
+        "does not immediately close on the equality case -- grants a fresh window instead",
+        decision.action == "no_trade",
+        decision.reason,
+    )
+    check("a fresh watch was recorded, dated this cycle", phelps_pure._watches.get("bowman") is not None and phelps_pure._watches["bowman"].entry_time == t0)
+
+
 def test_phelps_pure_invalidates_on_full_retrace() -> None:
     phelps_pure._watches.clear()
     t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
@@ -253,8 +323,11 @@ test_phelps_wrap_defers_early_close()
 test_phelps_wrap_never_blocks_buys_or_flat_no_trade()
 test_phelps_wrap_respects_custom_window_param()
 test_phelps_wrap_clears_state_on_flat()
+test_phelps_wrap_recovers_fill_time_from_trade_ts()
+test_phelps_wrap_falls_back_to_now_when_ts_missing()
 test_phelps_pure_enters_on_displacement()
 test_phelps_pure_holds_through_window_then_releases()
+test_phelps_pure_restart_recovery_grants_fresh_window()
 test_phelps_pure_invalidates_on_full_retrace()
 
 print()

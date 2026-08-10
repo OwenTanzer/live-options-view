@@ -43,6 +43,32 @@ from typing import Any
 
 from .strategy import Decision, Strategy, StrategyContext
 
+
+def _fill_time_for_symbol(ctx: StrategyContext, symbol: str) -> datetime | None:
+    """The most recent `buy` trade's own timestamp for `symbol`, if the raw
+    trade record carries one -- `Book.trades` (client.py) keeps the raw
+    dicts, and `ts` is present on them (see `canopus_down_day._traded_today`
+    for the same read against the same shape). Returns `None` if there's no
+    matching trade or its `ts` can't be parsed, so the caller can fall back
+    to "first observed" rather than crash on an unexpected trade shape.
+    """
+    best: datetime | None = None
+    for trade in ctx.book.trades:
+        if not isinstance(trade, dict):
+            continue
+        trade_symbol = trade.get("sym") or trade.get("symbol") or trade.get("option_symbol") or trade.get("OptionSymbol")
+        side = str(trade.get("side") or trade.get("action") or trade.get("direction") or "").lower()
+        ts = trade.get("ts")
+        if trade_symbol != symbol or side != "buy" or not ts:
+            continue
+        try:
+            fired_at = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if best is None or fired_at > best:
+            best = fired_at
+    return best
+
 # The guideline's working value is a 25-30 minute band with no established
 # point estimate yet ("Parameters not yet established"). The midpoint is
 # used as the default rather than either edge, and is a knob
@@ -78,19 +104,28 @@ def _held(ctx: StrategyContext) -> tuple[str, int] | None:
 def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> Strategy:
     """Wrap `base` so a proposed close of a held position waits one Phelps.
 
-    Entry time is tracked in-process only, keyed by (account username,
-    symbol), because the server exposes no trade timestamps this runtime can
-    read back (`Book`/`Position` in client.py carry no `opened_at` -- see
-    that module's docstring on why the book is average-cost-derived, not
-    timestamped). Two consequences worth being honest about:
+    Entry time is tracked in-process, keyed by (account username, symbol),
+    seeded from the real fill timestamp when one is recoverable
+    (`_fill_time_for_symbol` reads it off `ctx.book.trades`' own `ts` field
+    -- `Position` itself carries no `opened_at`, but the raw trade dicts
+    `Book` is built from do, the same source `canopus_down_day._traded_today`
+    already reads). This matters under the deployed runner's 5-minute
+    cadence: `Position`/`Book` only reflect a fill on the *next* cycle after
+    it happened (the position reads as flat on the cycle the buy is
+    proposed), so seeding the clock from "when this cycle first observed
+    the position held" -- rather than the trade's own timestamp --
+    systematically started every Phelps window a full cycle late. Flagged
+    in review.
 
-    1. A process restart that finds an already-open position with no
-       recorded entry starts the clock at that observation, not at the
-       position's real (unknown) entry time. That's a deliberate choice
-       between two wrong defaults -- treating it as brand new (a fresh
-       window) versus treating it as already-expired (no window at all) --
-       and "fresh window" was chosen because it fails toward Phelps's own
-       stated bias (grant the discomfort sanctuary) rather than against it.
+    Two consequences worth being honest about:
+
+    1. If no matching trade record exists or its `ts` can't be parsed (an
+       unexpected trade shape, or a position that predates the trade
+       history this runtime can see), the clock still falls back to "first
+       observed," not the position's real (unknown) entry time -- a
+       deliberate choice between two wrong defaults, and "fresh window" was
+       chosen because it fails toward Phelps's own stated bias (grant the
+       discomfort sanctuary) rather than against it.
     2. The table is per-process and unbounded only in the sense that a
        symbol's entry is cleared the moment the account is next observed
        flat in it -- there is no long-lived leak, but a crash between "sell
@@ -112,7 +147,8 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
                 symbol, _qty = held
                 key = (key_prefix, symbol)
                 if key not in _entry_times:
-                    _entry_times[key] = ctx.now_et
+                    fill_time = _fill_time_for_symbol(ctx, symbol)
+                    _entry_times[key] = fill_time if fill_time is not None else ctx.now_et
                 # These strategies cap at one open position each, so a
                 # tracked entry under any other symbol for this account is
                 # stale (the position it referred to is gone) -- drop it

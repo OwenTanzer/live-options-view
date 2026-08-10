@@ -66,14 +66,22 @@ docstring for the full reasoning; it applies here without modification.
 
 Per-account entry state (entry time, anchor price, held direction) is
 tracked in an in-process dict keyed by account username, the same
-constraint and the same restart caveat documented in `crassus/phelps.py`
-(no server-side trade timestamps to recover it from). A restart that finds
-an already-open position with no recorded entry starts both the Phelps
-clock and the invalidation anchor fresh, at the current price -- the same
-"fail toward granting the sanctuary" choice `phelps.phelps_wrap` makes, and
-in this strategy's case also the only self-consistent choice, since the
-real anchor price is simply not recoverable from the server's trade
-history.
+constraint documented in `crassus/phelps.py`. A restart that finds an
+already-open position with no recorded entry starts both the Phelps clock
+and the invalidation anchor fresh, at the current price -- the same "fail
+toward granting the sanctuary" choice `phelps.phelps_wrap` makes, and in
+this strategy's case also the only self-consistent choice, since the real
+anchor price is not recoverable from the server's trade history (unlike the
+*entry time*, which `phelps.phelps_wrap` now recovers from the trade
+record's own timestamp when one exists -- see that module).
+
+The retracement check against a freshly-reconstructed anchor is written
+with strict `<`/`>`, not `<=`/`>=`, deliberately: the anchor is set from
+this same cycle's `ctx.snapshot.underlying_price`, so current price equals
+anchor price on the very cycle the watch is created. An earlier version
+used `<=`/`>=` here, which read that equality as "already retraced" and
+closed the position immediately instead of granting the fresh window the
+restart-recovery branch above intends -- flagged in review.
 """
 
 from __future__ import annotations
@@ -244,9 +252,16 @@ def _decide_core(
 
     if held_symbol is not None and watch is not None:
         current_price = ctx.snapshot.underlying_price
+        # Strict inequality, not <=/>= : when a watch is *just* created (the
+        # restart-recovery branch above), anchor_price is set from this same
+        # ctx.snapshot.underlying_price, so current_price == anchor_price on
+        # that very cycle. A <=/>= comparison read that equality as "already
+        # retraced" and closed the position immediately instead of granting
+        # a fresh window -- flagged in review. "Retraced" should mean price
+        # crossed past the anchor, not merely touched it.
         retraced = (
-            (watch.direction == "up" and current_price <= watch.anchor_price)
-            or (watch.direction == "down" and current_price >= watch.anchor_price)
+            (watch.direction == "up" and current_price < watch.anchor_price)
+            or (watch.direction == "down" and current_price > watch.anchor_price)
         )
         if retraced:
             return _close(
