@@ -28,15 +28,44 @@ Each arrow is a separate cycle's `Decision`, inferred from `ctx.book`'s
 current call/put quantities rather than any state this module keeps itself --
 the same "book is the only durable state" discipline every other strategy
 here follows, and the only way a restart mid-sequence resumes correctly
-instead of forgetting where it was. The practical consequence: on a fast
-enough `--interval`, the two entry legs (and the two exit legs) land within
-one cycle of each other, not simultaneously, so the strikes and the
-underlying's exact print at each leg's fill can differ very slightly if QQQ
-moves between them. The brief's own entry definition ("first eligible quote
-after both legs display valid markets") already accepts this isn't an
-instantaneous atomic fill; running this account on a short interval keeps the
-gap small. A true multi-leg combo order would remove it entirely, but that is
-a server/execution-layer change, not a strategy one.
+instead of forgetting where it was. The practical consequence, on the
+deployed runner's 5-minute cadence: the two entry legs (and the two exit
+legs) can land a full cycle apart, not near-simultaneously, so the ATM put
+strike leg 2 completes at can differ from the strike implied at leg 1's
+fill if QQQ moved in between, and the between-legs market can widen. Two
+things review flagged and this module now guards against, both only
+relevant to the call-leg-held/put-leg-pending window between entry legs 1
+and 2:
+
+  * **No second-leg spread guard.** Leg 2 used to buy the put the moment
+    *any* executable quote existed, without checking its spread against
+    `max_entry_leg_spread_pct` the way leg 1's combined check does. Fixed:
+    leg 2 now applies the same spread check before completing the straddle.
+  * **No rollback if leg 2 never completes.** A held call leg with no
+    matching put is unintended single-leg directional exposure, not the
+    straddle the strategy is supposed to hold -- previously nothing bounded
+    how long it could sit that way. Fixed: if more than
+    `max_leg_completion_wait_minutes` (default 10) has elapsed since the
+    call leg's own recorded fill time (read from `ctx.book.trades`' `ts`,
+    same source `_traded_today` below already reads) without completing leg
+    2, the calls are sold back to flatten rather than left open indefinitely.
+
+A true multi-leg combo order would remove the gap between legs entirely, but
+that is a server/execution-layer change, not a strategy one.
+
+**Terminal exit is deliberately earlier than a bare "15 minutes before
+close" reading of the brief would suggest**, and this is a cross-PR
+consideration, not an oversight: this repo also has a mandatory end-of-day
+flatten (`flatten.maybe_flatten`, see PR introducing `crassus/flatten.py`)
+that by default force-closes every account's positions
+`flatten_minutes_before_close` (15 by default) before the real close. This
+strategy's own two-cycle terminal unwind (sell calls, then puts one cycle
+later) needs to *finish*, not just *start*, before that blanket flatten
+would otherwise preempt it and hand the exit to a control that isn't aware
+of the straddle's two-leg shape. `DEFAULT_TERMINAL_EXIT_TIME_ET` is set to
+15:30, not 15:55, specifically to leave that margin -- flagged in review as
+a real conflict at the old default (a two-cycle unwind starting at 15:55
+could still be mid-sequence, holding a naked put, when 16:00 arrives).
 
 **Construction is ATM straddle only.** The brief requires symmetric OTM
 strangles to be tested as a *separate, separately labeled* construction --
@@ -66,11 +95,12 @@ STRATEGY_ID = "looking_glass_straddle"
 STRATEGY_VERSION = "1.0.0"
 
 DEFAULT_ENTRY_TIME_ET = "09:30"
-DEFAULT_TERMINAL_EXIT_TIME_ET = "15:55"
+DEFAULT_TERMINAL_EXIT_TIME_ET = "15:30"  # see module docstring: margin before PR #59's 15:45 mandatory flatten
 DEFAULT_CORE_PROFIT_THRESHOLD_PCT = 0.20  # eta
 DEFAULT_NUM_STRADDLES = 4  # N
 DEFAULT_CORE_SELL_COUNT = 3  # k -- the brief's own "+33.3%" row, 1 runner left
 DEFAULT_MAX_LEG_SPREAD_PCT = 0.15  # each leg's own (ask-bid)/mid, not combined
+DEFAULT_MAX_LEG_COMPLETION_WAIT_MINUTES = 10.0  # rollback the call leg if the put leg never completes
 
 # Same OCC-suffix parse as momentum_qqq._OCC_TYPE_RE / trump_whisperer's --
 # duplicated deliberately, not shared, so a held position is still
@@ -143,6 +173,9 @@ def _resolve_params(params: dict[str, Any]) -> dict[str, Any]:
         "max_leg_spread_pct": _positive_float(
             params.get("max_entry_leg_spread_pct"), DEFAULT_MAX_LEG_SPREAD_PCT
         ),
+        "max_leg_completion_wait_minutes": _positive_float(
+            params.get("max_leg_completion_wait_minutes"), DEFAULT_MAX_LEG_COMPLETION_WAIT_MINUTES
+        ),
     }
 
 
@@ -163,6 +196,32 @@ def _traded_today(ctx: StrategyContext) -> bool:
         if fired_at.astimezone(ctx.now_et.tzinfo).date() == today:
             return True
     return False
+
+
+def _leg_fill_time(ctx: StrategyContext, symbol: str) -> datetime | None:
+    """The most recent `buy` trade's own timestamp for `symbol`, if the raw
+    trade record carries one -- same `ctx.book.trades` shape `_traded_today`
+    reads above. Used to bound how long the call leg can sit without a
+    matching put before rolling it back. `None` if no matching timed trade
+    exists (an unexpected trade shape); callers treat that as "can't
+    measure the wait, don't force a rollback on missing data."
+    """
+    best: datetime | None = None
+    for trade in ctx.book.trades:
+        if not isinstance(trade, dict):
+            continue
+        trade_symbol = trade.get("sym") or trade.get("symbol") or trade.get("option_symbol") or trade.get("OptionSymbol")
+        side = str(trade.get("side") or trade.get("action") or trade.get("direction") or "").lower()
+        ts = trade.get("ts")
+        if trade_symbol != symbol or side != "buy" or not ts:
+            continue
+        try:
+            fired_at = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(ctx.now_et.tzinfo)
+        except ValueError:
+            continue
+        if best is None or fired_at > best:
+            best = fired_at
+    return best
 
 
 def _leg(ctx: StrategyContext, option_type: str, positions: dict[str, Position]) -> tuple[str | None, int]:
@@ -308,6 +367,30 @@ def _decide(ctx: StrategyContext) -> Decision:
 
     # -- leg 2 of entry: N calls held, no puts yet. ----------------------
     if call_qty == n and put_qty == 0:
+        call_fill_time = _leg_fill_time(ctx, call_symbol)
+        if call_fill_time is not None:
+            wait_minutes = (ctx.now_et - call_fill_time).total_seconds() / 60.0
+            if wait_minutes > cfg["max_leg_completion_wait_minutes"]:
+                quote = _quote_or_none(ctx, call_symbol)
+                if quote is None:
+                    return no(
+                        f"Call leg has waited {wait_minutes:.1f}m for a matching put past the "
+                        f"{cfg['max_leg_completion_wait_minutes']:g}m rollback limit, but no live/fresh "
+                        f"quote yet to sell it back -- retrying next cycle.",
+                        symbol=call_symbol, wait_minutes=round(wait_minutes, 2), **meta_base,
+                    )
+                return Decision(
+                    action="sell", symbol=call_symbol, quantity=n,
+                    reason=(
+                        f"Leg 2 (put) never completed within {cfg['max_leg_completion_wait_minutes']:g}m of the "
+                        f"call leg's fill ({wait_minutes:.1f}m elapsed) -- rolling back the unintended "
+                        f"naked call exposure rather than leaving it open indefinitely."
+                    ),
+                    strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
+                    metadata={**meta_base, "symbol": call_symbol, "wait_minutes": round(wait_minutes, 2), "rollback": True,
+                              "bid": quote.bid, "ask": quote.ask},
+                )
+
         put_row = ctx.snapshot.atm("put")
         if not put_row:
             return no("Holding the call leg; no quoted ATM put yet to complete the straddle.", symbol=call_symbol, **meta_base)
@@ -317,6 +400,15 @@ def _decide(ctx: StrategyContext) -> Decision:
             return no(
                 "Holding the call leg; waiting for a live/fresh put quote to complete leg 2.",
                 symbol=put_sym, **meta_base,
+            )
+        put_mid = (pq.bid + pq.ask) / 2
+        put_spread_pct = (pq.ask - pq.bid) / put_mid if put_mid > 0 else float("inf")
+        max_spread = cfg["max_leg_spread_pct"]
+        if put_spread_pct > max_spread:
+            return no(
+                f"Holding the call leg; put market too wide to complete leg 2 "
+                f"(put spread={put_spread_pct:.3f}, limit={max_spread}); waiting for a tighter print.",
+                symbol=put_sym, put_spread_pct=put_spread_pct, **meta_base,
             )
         return Decision(
             action="buy", symbol=put_sym, quantity=n,

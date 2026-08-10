@@ -138,8 +138,9 @@ def scenario_missing_quote_defers_entry() -> None:
 
 def scenario_completes_leg_two() -> None:
     print("\n5. N calls held, no puts yet -- buys N puts (leg 2/2)")
+    # Call leg filled 1 minute ago -- well inside max_leg_completion_wait_minutes.
     ctx = make_ctx(
-        trades=[trade(CALL_SYM, "buy", 4, 1.0)],
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:31:00-05:00")],
         quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
         now_et=datetime(2024, 1, 1, 9, 32, tzinfo=ET),
     )
@@ -281,6 +282,56 @@ def scenario_market_not_open_is_a_no_op() -> None:
     check("no trade outside the open session", not decision.is_trade)
 
 
+def scenario_leg_two_wide_spread_waits() -> None:
+    print("\n16. Regression: leg 2 (put) also respects the spread guard, not just leg 1")
+    ctx = make_ctx(
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:31:00-05:00")],
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.30)},  # (1.30-1.0)/1.15 = 0.26, over the 0.15 limit
+        now_et=datetime(2024, 1, 1, 9, 32, tzinfo=ET),
+    )
+    decision = _decide(ctx)
+    check("no trade -- leg 2 spread too wide to complete the straddle", not decision.is_trade)
+
+
+def scenario_leg_two_rollback_after_timeout() -> None:
+    print("\n17. Regression: put leg never completes -- calls are rolled back after max_leg_completion_wait_minutes")
+    # Call leg filled 15 minutes before this decision, past the default 10m rollback limit.
+    ctx = make_ctx(
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:20:00-05:00")],
+        quote_map={CALL_SYM: quote(CALL_SYM, 0.90, 0.95), PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+        now_et=datetime(2024, 1, 1, 9, 35, tzinfo=ET),
+    )
+    decision = _decide(ctx)
+    check(
+        "sells the calls back instead of waiting further or buying puts",
+        decision.is_trade and decision.action == "sell" and decision.symbol == CALL_SYM,
+        decision.reason,
+    )
+    check("rolls back the full call quantity", decision.quantity == 4)
+    check("metadata marks this as a rollback", decision.metadata is not None and decision.metadata.get("rollback") is True)
+
+
+def scenario_leg_two_within_wait_window_still_completes() -> None:
+    print("\n18. Regression guard: within the wait window, leg 2 still completes normally (no premature rollback)")
+    ctx = make_ctx(
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:25:00-05:00")],  # 9 minutes ago, under the 10m limit
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+        now_et=datetime(2024, 1, 1, 9, 34, tzinfo=ET),
+    )
+    decision = _decide(ctx)
+    check("still completes leg 2 normally, not a rollback", decision.is_trade and decision.action == "buy" and decision.symbol == PUT_SYM)
+
+
+def scenario_default_terminal_time_has_margin_before_flatten() -> None:
+    print("\n19. Regression: the module's own default terminal exit time leaves margin before PR #59's 15:45 flatten")
+    from crassus.strategies.looking_glass_straddle import DEFAULT_TERMINAL_EXIT_TIME_ET
+    check(
+        "default terminal exit time is before 15:45 (PR #59's default mandatory flatten)",
+        DEFAULT_TERMINAL_EXIT_TIME_ET < "15:45",
+        DEFAULT_TERMINAL_EXIT_TIME_ET,
+    )
+
+
 def main() -> int:
     for scenario in (
         scenario_waits_before_entry_time,
@@ -298,6 +349,10 @@ def main() -> int:
         scenario_stands_down_on_multiple_call_symbols,
         scenario_stands_down_on_unexpected_combination,
         scenario_market_not_open_is_a_no_op,
+        scenario_leg_two_wide_spread_waits,
+        scenario_leg_two_rollback_after_timeout,
+        scenario_leg_two_within_wait_window_still_completes,
+        scenario_default_terminal_time_has_margin_before_flatten,
     ):
         scenario()
 
