@@ -43,6 +43,9 @@ jobs:
       - name: Run VWAP/RVOL data contract and gate suite
         working-directory: crassus
         run: python scripts/verify_vwap_rvol.py
+      - name: Run looking_glass_straddle strategy suite
+        working-directory: crassus
+        run: python scripts/verify_looking_glass_straddle.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's

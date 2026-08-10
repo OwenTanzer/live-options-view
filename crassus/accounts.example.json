@@ -69,7 +69,7 @@
         "num_straddles": 4,
         "core_sell_count": 3,
         "entry_time_et": "09:30",
-        "terminal_exit_time_et": "15:55",
+        "terminal_exit_time_et": "15:30",
         "core_profit_threshold_pct": 0.20,
         "max_entry_leg_spread_pct": 0.15
       }

@@ -37,6 +37,17 @@ things review flagged and this module now guards against, both only
 relevant to the call-leg-held/put-leg-pending window between entry legs 1
 and 2:
 
+  * **Leg 2 re-queried "whatever's currently ATM" instead of the specific
+    contract matching the held call.** `ctx.snapshot.atm("put")` re-evaluates
+    against the *current* underlying price -- if QQQ moved between leg 1's
+    fill and leg 2's cycle, this could silently buy a different strike than
+    the held call, turning the position into a non-matching strangle
+    instead of the intended same-strike straddle. Flagged in review (a P1:
+    "the live runner cannot currently execute the strategy semantics this
+    PR advertises"). Fixed: `_matching_put_symbol` derives the exact
+    expiration+strike put from the held call's own OCC symbol; leg 2 now
+    looks that specific symbol up via `ctx.snapshot.by_symbol` and waits
+    (rather than substituting a different strike) if it isn't quoted yet.
   * **No second-leg spread guard.** Leg 2 used to buy the put the moment
     *any* executable quote existed, without checking its spread against
     `max_entry_leg_spread_pct` the way leg 1's combined check does. Fixed:
@@ -49,6 +60,10 @@ and 2:
     call leg's own recorded fill time (read from `ctx.book.trades`' `ts`,
     same source `_traded_today` below already reads) without completing leg
     2, the calls are sold back to flatten rather than left open indefinitely.
+    This also now covers "the exact matching put never becomes quoted at
+    all" -- that case waits every cycle just like a missing live quote does,
+    so it converges to the same timeout-driven rollback instead of a
+    separate code path.
 
 A true multi-leg combo order would remove the gap between legs entirely, but
 that is a server/execution-layer change, not a strategy one.
@@ -114,6 +129,21 @@ def _option_type_from_symbol(symbol: str) -> str | None:
     if not match:
         return None
     return "call" if match.group(1) == "C" else "put"
+
+
+# Same expiration+strike, opposite side, derived directly from the OCC
+# symbol rather than re-querying "whatever's currently ATM" for leg 2 --
+# flagged in review: re-querying ATM independently at leg 2 can drift to a
+# different strike than the held call implies if the underlying moved
+# between the two entry legs' fills (a real risk on the deployed runner's
+# 5-minute cadence), silently turning the position into a non-matching
+# strangle instead of the intended same-strike straddle.
+_CALL_TO_PUT_RE = re.compile(r"^(.*\d{6})C(\d{8})$")
+
+
+def _matching_put_symbol(call_symbol: str) -> str | None:
+    match = _CALL_TO_PUT_RE.match(call_symbol)
+    return f"{match.group(1)}P{match.group(2)}" if match else None
 
 
 def _parse_hhmm(value: Any, default: str) -> dt_time:
@@ -391,10 +421,21 @@ def _decide(ctx: StrategyContext) -> Decision:
                               "bid": quote.bid, "ask": quote.ask},
                 )
 
-        put_row = ctx.snapshot.atm("put")
-        if not put_row:
-            return no("Holding the call leg; no quoted ATM put yet to complete the straddle.", symbol=call_symbol, **meta_base)
-        put_sym = put_row["OptionSymbol"]
+        put_sym = _matching_put_symbol(call_symbol)
+        if put_sym is None:
+            return no(
+                f"Holding the call leg {call_symbol}, but couldn't derive its matching put symbol "
+                f"from an unrecognized OCC format; standing down rather than guessing.",
+                symbol=call_symbol, **meta_base,
+            )
+        put_row = ctx.snapshot.by_symbol(put_sym)
+        if not put_row or not put_row.get("Bid") or not put_row.get("Ask"):
+            return no(
+                f"Holding the call leg; the specific matching put {put_sym} (same strike/expiration "
+                f"as the held call) isn't quoted in the current snapshot yet -- waiting rather than "
+                f"substituting a different strike.",
+                symbol=put_sym, **meta_base,
+            )
         pq = _quote_or_none(ctx, put_sym)
         if pq is None:
             return no(

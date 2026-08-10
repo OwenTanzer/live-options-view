@@ -51,15 +51,15 @@ DEFAULT_PARAMS = {
 }
 
 
-def make_snapshot() -> MarketSnapshot:
+def make_snapshot(underlying_price: float = 400.0, rows: list[dict] | None = None) -> MarketSnapshot:
     return MarketSnapshot.from_payload(
         url="test://snapshot",
         payload={
             "timestamp": "2024-01-01T15:00:00+00:00",
             "snapshot_time": "2024-01-01T15:00:00+00:00",
             "expiration": "2024-01-01",
-            "underlying_price": 400.0,
-            "rows": [
+            "underlying_price": underlying_price,
+            "rows": rows if rows is not None else [
                 {"OptionSymbol": CALL_SYM, "Strike": 400.0, "Type": "call", "Bid": 1.0, "Ask": 1.05},
                 {"OptionSymbol": PUT_SYM, "Strike": 400.0, "Type": "put", "Bid": 1.0, "Ask": 1.05},
             ],
@@ -83,10 +83,12 @@ def make_ctx(
     quote_map: dict[str, Quote] | None = None,
     params: dict | None = None,
     now_et: datetime | None = None,
+    underlying_price: float = 400.0,
+    rows: list[dict] | None = None,
 ) -> StrategyContext:
     quote_map = quote_map or {}
     return StrategyContext(
-        snapshot=make_snapshot(),
+        snapshot=make_snapshot(underlying_price, rows),
         account_state={},
         book=Book(trades or []),
         now_et=now_et or datetime(2024, 1, 1, 9, 30, tzinfo=ET),
@@ -332,6 +334,55 @@ def scenario_default_terminal_time_has_margin_before_flatten() -> None:
     )
 
 
+WRONG_PUT_SYM = "QQQ240101P00404000"  # a different strike -- would be "ATM" if the underlying moved to 404
+
+
+def scenario_leg_two_buys_the_matching_put_not_current_atm() -> None:
+    print(
+        "\n20. Regression (review follow-up P1): leg 2 buys the specific put matching the held "
+        "call's strike, not whatever's currently ATM if the underlying moved in between"
+    )
+    # The call leg (400 strike) is already held. The underlying has since
+    # moved to 404 -- if leg 2 re-queried atm("put") it would pick the 404
+    # put (closer to the new price), a different strike than the held call.
+    rows = [
+        {"OptionSymbol": CALL_SYM, "Strike": 400.0, "Type": "call", "Bid": 1.0, "Ask": 1.05},
+        {"OptionSymbol": PUT_SYM, "Strike": 400.0, "Type": "put", "Bid": 1.0, "Ask": 1.05},  # matches the held call
+        {"OptionSymbol": WRONG_PUT_SYM, "Strike": 404.0, "Type": "put", "Bid": 0.5, "Ask": 0.55},  # closer to spot=404
+    ]
+    ctx = make_ctx(
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:31:00-05:00")],
+        quote_map={PUT_SYM: quote(PUT_SYM, 1.0, 1.05), WRONG_PUT_SYM: quote(WRONG_PUT_SYM, 0.5, 0.55)},
+        now_et=datetime(2024, 1, 1, 9, 32, tzinfo=ET),
+        underlying_price=404.0, rows=rows,
+    )
+    decision = _decide(ctx)
+    check(
+        "buys the put matching the held call's strike, not the current-ATM one",
+        decision.is_trade and decision.action == "buy" and decision.symbol == PUT_SYM,
+        decision.symbol if decision.is_trade else decision.reason,
+    )
+
+
+def scenario_leg_two_waits_rather_than_substitute_wrong_strike() -> None:
+    print(
+        "\n21. Regression guard: if the exact matching put isn't quoted at all, waits -- "
+        "never substitutes a different strike even when one is available"
+    )
+    rows = [
+        {"OptionSymbol": CALL_SYM, "Strike": 400.0, "Type": "call", "Bid": 1.0, "Ask": 1.05},
+        {"OptionSymbol": WRONG_PUT_SYM, "Strike": 404.0, "Type": "put", "Bid": 0.5, "Ask": 0.55},  # matching put absent
+    ]
+    ctx = make_ctx(
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:31:00-05:00")],
+        quote_map={WRONG_PUT_SYM: quote(WRONG_PUT_SYM, 0.5, 0.55)},
+        now_et=datetime(2024, 1, 1, 9, 32, tzinfo=ET),
+        underlying_price=404.0, rows=rows,
+    )
+    decision = _decide(ctx)
+    check("no trade -- waits rather than buying the wrong-strike put", not decision.is_trade)
+
+
 def main() -> int:
     for scenario in (
         scenario_waits_before_entry_time,
@@ -353,6 +404,8 @@ def main() -> int:
         scenario_leg_two_rollback_after_timeout,
         scenario_leg_two_within_wait_window_still_completes,
         scenario_default_terminal_time_has_margin_before_flatten,
+        scenario_leg_two_buys_the_matching_put_not_current_atm,
+        scenario_leg_two_waits_rather_than_substitute_wrong_strike,
     ):
         scenario()
 
