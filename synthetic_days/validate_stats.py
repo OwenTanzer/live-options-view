@@ -40,6 +40,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from r2_sources import R2Source  # noqa: E402
 from price_path import split_into_sessions, _log_returns  # noqa: E402
+from chain_synth import (  # noqa: E402
+    MONEYNESS_BUCKET_EDGES,
+    N_MONEYNESS_BUCKETS,
+    ATM_BUCKET_INDEX,
+    _relative_moneyness,
+)
+from day_generator import load_intraday_curve, _row_extrinsic, _eod_extrinsic_by_symbol  # noqa: E402
+from datetime import datetime  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+ET = ZoneInfo("America/New_York")
 
 
 def acf(x: np.ndarray, lag: int) -> float:
@@ -111,10 +122,124 @@ def canopus_signal_rate_synthetic(days: list[dict]) -> float:
     return hits / len(days) if days else float("nan")
 
 
+def _bucket_option_ratios(rows_by_snapshot: list[tuple[float, list[dict]]], eod_extrinsic_by_symbol: dict[str, float]) -> np.ndarray:
+    """One real intraday day's rows -> a (time_bucket x moneyness_bucket)
+    grid of median premium_decay ratios, same bucketing
+    `chain_synth.intraday_shape_curve` uses for the calibration grid, so the
+    two are directly comparable cell-for-cell.
+    """
+    n_buckets = (390 // 15) + 1
+    samples: dict[tuple[int, int], list[float]] = {}
+    for minutes, rows in rows_by_snapshot:
+        spot = next((float(r["UnderlyingPrice"]) for r in rows if r.get("UnderlyingPrice")), None)
+        if spot is None:
+            continue
+        b = int(minutes // 15)
+        if not (0 <= b < n_buckets):
+            continue
+        for r in rows:
+            eod_extrinsic = eod_extrinsic_by_symbol.get(r.get("OptionSymbol"))
+            if not eod_extrinsic or eod_extrinsic <= 1e-6:
+                continue
+            extrinsic = _row_extrinsic(r, spot)
+            if extrinsic is None:
+                continue
+            moneyness = float(r["Strike"]) / spot - 1.0
+            is_call = r.get("Type") == "call"
+            rel_m = _relative_moneyness(np.array([moneyness]), np.array([is_call]))[0]
+            m_bucket = int(np.searchsorted(MONEYNESS_BUCKET_EDGES, rel_m))
+            samples.setdefault((b, m_bucket), []).append(extrinsic / eod_extrinsic)
+
+    grid = np.full((n_buckets, N_MONEYNESS_BUCKETS), np.nan)
+    for (b, m_bucket), vals in samples.items():
+        grid[b, m_bucket] = float(np.median(vals))
+    return grid
+
+
+def held_out_option_path_check(src: R2Source, max_calibration_days: int = 15, samples_per_day: int = 30) -> dict | None:
+    """Out-of-sample check for `chain_synth`'s moneyness/time-conditional
+    premium-decay grid: hold one real intraday day *out* of calibration,
+    rebuild the grid from every other real intraday day, then compare that
+    grid's predictions against the held-out day's own real, never-seen rows
+    -- a held contract's price path followed across (time, moneyness)
+    buckets, exactly the dimension the strategy P&L in `backtest_bridge.py`
+    depends on.
+
+    Calibrating the grid from real rows and then only comparing it back
+    against rows it was fit on (what `validate_stats.py` did before this)
+    is not a validation -- flagged in review. Returns `None` (skip, not
+    fail) if fewer than 2 real intraday days are available, since a
+    held-out check needs at least one day excluded from calibration and one
+    day to validate against.
+
+    Only compares cells the calibration grid was actually fit on real data
+    for (`premium_decay_grid_sampled_mask`), not cells that fell back to a
+    flat 1.0 or a borrowed ATM-column value for lack of any real
+    calibration sample -- comparing the held-out day against an explicit
+    "no real data here" placeholder measures how wrong the placeholder is,
+    not whether the model generalizes.
+    """
+    days = src.intraday_days_available()
+    if len(days) < 2:
+        return None
+    held_out_day = days[-1]
+
+    curve = load_intraday_curve(src, max_days=max_calibration_days, samples_per_day=samples_per_day, exclude_days={held_out_day})
+    if curve is None:
+        return None
+    calibrated_grid = curve["premium_decay_grid"]
+    calibrated_sampled_mask = curve["premium_decay_grid_sampled_mask"]
+
+    keys = src.intraday_snapshots(held_out_day)
+    if len(keys) > samples_per_day:
+        idx = np.linspace(0, len(keys) - 1, samples_per_day).round().astype(int)
+        keys = [keys[i] for i in sorted(set(idx))]
+    parsed = []
+    for key in keys:
+        rows = src.intraday_snapshot_csv(key)
+        if not rows:
+            continue
+        hhmmss = key.rsplit("snapshot_", 1)[-1].split(".")[0][:6]
+        t = datetime.strptime(f"{held_out_day}{hhmmss}", "%Y%m%d%H%M%S").replace(tzinfo=ET)
+        parsed.append((t, rows))
+    if len(parsed) < 2:
+        return None
+
+    open_t = parsed[0][0].replace(hour=9, minute=30, second=0, microsecond=0)
+    eod_extrinsic_by_symbol = _eod_extrinsic_by_symbol(parsed[-1][1])
+    rows_by_snapshot = [((t - open_t).total_seconds() / 60.0, rows) for t, rows in parsed]
+    real_holdout_grid = _bucket_option_ratios(rows_by_snapshot, eod_extrinsic_by_symbol)
+
+    matched = ~np.isnan(real_holdout_grid) & (real_holdout_grid > 0) & (calibrated_grid > 0) & calibrated_sampled_mask
+    n_matched = int(matched.sum())
+    if n_matched == 0:
+        return None
+    # log-ratio, not a raw absolute difference: these are decay *ratios*
+    # spanning roughly 1x-20x (see chain_synth.py/README), a multiplicative
+    # quantity, so a fixed absolute-difference bound would be meaningless at
+    # one end of the range and impossibly tight at the other.
+    log_ratio_err = np.abs(np.log2(real_holdout_grid[matched] / calibrated_grid[matched]))
+
+    atm_real = real_holdout_grid[:, ATM_BUCKET_INDEX]
+    atm_calibrated = calibrated_grid[:, ATM_BUCKET_INDEX]
+    atm_buckets_with_real_samples = [
+        (b, float(atm_real[b]), float(atm_calibrated[b])) for b in range(len(atm_real)) if atm_real[b] == atm_real[b]
+    ]
+
+    return {
+        "held_out_day": held_out_day,
+        "n_matched_cells": n_matched,
+        "median_log2_ratio_error": float(np.median(log_ratio_err)),
+        "max_log2_ratio_error": float(np.max(log_ratio_err)),
+        "atm_bucket_path": atm_buckets_with_real_samples,  # the "held contract followed across time buckets" trace
+    }
+
+
 def check_acceptance(
     real_stats: dict, synth_stats: dict,
     real_ranges: np.ndarray, synth_ranges: np.ndarray,
     real_rate: float, synth_rate: float,
+    option_path_check: dict | None = None,
 ) -> bool:
     """Pass/fail gate, not just diagnostics -- flagged in review: printing
     numbers for a human to eyeball doesn't catch a regression in CI. Returns
@@ -129,6 +254,16 @@ def check_acceptance(
     generator is *novel* days, not reproductions of real ones, so some
     drift from the specific real sample is expected and healthy. A tight
     threshold here would make CI flaky on nothing but sampling variance.
+
+    The *ratio* checks above (synthetic vs real) are necessary but not
+    sufficient: a corrupted or unrealistic "real" fixture would still pass
+    them as long as the synthetic side drifted along with it -- exactly
+    what happened before this fix, when the checked-in "real" 5-min-bar
+    fixture had a 1.99% per-bar standard deviation and a 21.7% average
+    daily range (both roughly 10-20x anything QQQ has ever actually done
+    intraday) and every check here still reported PASS. The absolute bounds
+    below apply directly to the real side too, so a bad fixture fails loudly
+    instead of dragging a correct generator down with it in a ratio check.
     """
     passed, failed = 0, 0
 
@@ -168,6 +303,60 @@ def check_acceptance(
         rate_gap == rate_gap and rate_gap <= 0.30,
         f"real={real_rate:.1%} synthetic={synth_rate:.1%} gap={rate_gap:.1%}" if rate_gap == rate_gap else "n/a",
     )
+
+    # -- Absolute sanity bounds: guard the fixture itself, not just the
+    # synthetic/real ratio (see this function's docstring). Bounds are QQQ-
+    # scale but generous -- real 5-min bar std is typically 0.03%-0.3%, real
+    # single-day range is typically 0.3%-4%; these bounds are wide enough to
+    # tolerate a genuinely volatile real session without being wide enough
+    # to admit the 1.99%-std / 21.7%-range fixture that motivated this check.
+    check(
+        "real fixture's 5-min-bar std is within a sane absolute range for QQQ (0.02%-0.6%)",
+        0.0002 <= real_stats["std"] <= 0.006, f"real_std={real_stats['std']:.5f}",
+    )
+    check(
+        "synthetic 5-min-bar std is within a sane absolute range for QQQ (0.02%-0.6%)",
+        0.0002 <= synth_stats["std"] <= 0.006, f"synth_std={synth_stats['std']:.5f}",
+    )
+    check(
+        "real fixture's average daily range is within a sane absolute bound for QQQ (0.2%-8%)",
+        0.002 <= real_range_mean <= 0.08, f"real_range_mean={real_range_mean:.4f}",
+    )
+    check(
+        "synthetic average daily range is within a sane absolute bound for QQQ (0.2%-8%)",
+        0.002 <= synth_range_mean <= 0.08, f"synth_range_mean={synth_range_mean:.4f}",
+    )
+
+    # -- Option-path acceptance: held-out real intraday day vs the
+    # moneyness/time-conditional premium-decay grid calibrated without it
+    # (see held_out_option_path_check). Skipped, not failed, when fewer than
+    # 2 real intraday days are available to hold one out -- an absent check
+    # is reported as such below, not silently treated as a pass.
+    if option_path_check is None:
+        print("  [SKIP] option-path out-of-sample check -- need >=2 real intraday days (only had fewer)")
+    else:
+        opc = option_path_check
+        # Bounds expressed as a real/calibrated multiplicative factor
+        # (2**log2_error), matching the ~1x-8x dynamic range chain_synth.py's
+        # own docs and README already document for this decay grid -- not
+        # fitted to any one held-out day's specific result.
+        check(
+            f"held-out day {opc['held_out_day']}: option-path grid median real-vs-calibrated factor <= 3x "
+            f"(matched {opc['n_matched_cells']} real cells)",
+            opc["median_log2_ratio_error"] <= np.log2(3), f"factor={2**opc['median_log2_ratio_error']:.2f}x",
+        )
+        check(
+            f"held-out day {opc['held_out_day']}: option-path grid max real-vs-calibrated factor <= 16x "
+            f"(deliberately wider than the median check -- a single worst cell is the thinnest-sample "
+            f"signal in this whole gate with only a handful of real intraday days to calibrate from; "
+            f"the median check above is the one that actually reflects typical backtest fidelity)",
+            opc["max_log2_ratio_error"] <= np.log2(16), f"factor={2**opc['max_log2_ratio_error']:.2f}x",
+        )
+        if opc["atm_bucket_path"]:
+            print("  ATM bucket, held contract followed across time buckets (real vs grid calibrated without this day):")
+            for b, real_ratio, calibrated_ratio in opc["atm_bucket_path"]:
+                minutes = b * 15
+                print(f"    t+{minutes:>3}min: real={real_ratio:.3f}  calibrated_grid={calibrated_ratio:.3f}")
 
     print(f"\n{passed} passed, {failed} failed")
     return failed == 0
@@ -245,9 +434,10 @@ def main():
     synth_ranges = daily_ranges(synth_days)
     real_rate = canopus_signal_rate_real(sessions)
     synth_rate = canopus_signal_rate_synthetic(synth_days)
+    option_path_check = held_out_option_path_check(src)
 
     print_report(real_stats, synth_stats, real_ranges, synth_ranges, real_rate, synth_rate)
-    ok = check_acceptance(real_stats, synth_stats, real_ranges, synth_ranges, real_rate, synth_rate)
+    ok = check_acceptance(real_stats, synth_stats, real_ranges, synth_ranges, real_rate, synth_rate, option_path_check)
     sys.exit(0 if ok else 1)
 
 

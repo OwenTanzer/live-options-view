@@ -80,7 +80,7 @@ def _eod_extrinsic_by_symbol(eod_rows: list[dict]) -> dict[str, float]:
     return out
 
 
-def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int = 30):
+def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int = 30, exclude_days: set[str] | None = None):
     """Build the canonical time-of-day OI/spread/volume ramp, and the
     (time x moneyness) premium-decay grid, from real intraday days the
     collector has recorded. Returns None (== "assume already fully in
@@ -101,8 +101,15 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
     applied to every strike and side uniformly, which an earlier version
     did (flagged in review: OTM/ITM options don't decay identically to ATM
     ones).
+
+    `exclude_days` (YYYYMMDD strings) removes days from the calibration
+    pool entirely before subsampling -- `validate_stats.py` uses this to
+    hold one real intraday day out of calibration so it can validate the
+    resulting grid against that day's real, never-seen-by-the-model rows
+    (an actual out-of-sample check, not comparing the grid to the same rows
+    it was fit on).
     """
-    days = src.intraday_days_available()
+    days = [d for d in src.intraday_days_available() if d not in (exclude_days or set())]
     if len(days) > max_days:
         idx = np.linspace(0, len(days) - 1, max_days).round().astype(int)
         days = [days[i] for i in sorted(set(idx))]

@@ -12,16 +12,16 @@ fake days before it ever sees a real market, the same hermetic-but-now-also-
 *sequential* idea `scripts/verify_canopus_down_day.py` uses for single
 hand-built scenarios.
 
-**Known gap, flagged in review:** this does not check `crassus/flatten.py`'s
-mandatory EOD flatten before calling the strategy -- unlike the real
-`Runner._run_account`, which always checks `flatten.maybe_flatten` first.
-`flatten.py` doesn't exist on this branch's tree yet (branched off `master`
-before that PR merged), so there is nothing to import and wire in today. A
-backtested strategy can therefore hold a position later into the session
-than the real deployed runner would ever allow. Once that PR merges, this
-loop should check `flatten.maybe_flatten(ctx, {})` before `strategy(ctx)`
-each cycle, same ordering the real runner uses, rather than calling the
-strategy unconditionally as it does now.
+Checks `crassus/flatten.py`'s mandatory EOD flatten before calling the
+strategy each cycle, same ordering `Runner._run_account` uses in the real
+deployed loop (see `crassus/crassus/flatten.py`, merged via #59): once the
+flatten window opens, `maybe_flatten` always returns a `Decision` and the
+strategy is never consulted for the rest of the session, so a backtested
+strategy cannot hold a position later into the session than the real
+runner would ever allow it to. `flatten_minutes_before_close` is read from
+the same `params` dict passed to the strategy, so a caller's params
+override (or lack of one, falling back to `flatten.DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE`)
+applies identically to both.
 
 Usage:
     python backtest_bridge.py --strategy canopus_down_day_14 --days ./out
@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "crassus"))
 
 from crassus.client import Book  # noqa: E402
+from crassus.flatten import maybe_flatten  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.strategy import StrategyContext  # noqa: E402
 import crassus.strategies  # noqa: E402  (registers every strategy_id into crassus.strategy.REGISTRY)
@@ -86,7 +87,15 @@ def run_strategy_on_day(strategy_id: str, day: dict, params: dict | None = None)
             params=params or {},
         )
 
-        decision = strategy(ctx)
+        # Same ordering the real Runner._run_account uses: the mandatory
+        # flatten gets first refusal every cycle, and once its window opens
+        # it always returns a Decision (never None), so the strategy below
+        # is never consulted again for the rest of the session -- exactly
+        # what stopped 7/10 max_pain_qqq days from finishing open_at_close
+        # once this was wired in (see PR review history).
+        decision = maybe_flatten(ctx, params or {})
+        if decision is None:
+            decision = strategy(ctx)
         if decision.is_trade:
             row = row_by_symbol.get(decision.symbol)
             if row is None:

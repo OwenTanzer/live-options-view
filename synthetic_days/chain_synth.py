@@ -241,6 +241,14 @@ def intraday_shape_curve(
     for (b, m_bucket), vals in grid_samples.items():
         grid[b, m_bucket] = float(np.median(vals))
 
+    # Which cells actually got a real sample, before any gap-fill or
+    # fallback touches them -- `validate_stats.py`'s out-of-sample check
+    # uses this to compare the held-out day only against cells the grid was
+    # genuinely calibrated on, not against a flat-1.0/ATM-borrowed
+    # placeholder standing in for missing real data (comparing real data to
+    # a "we have nothing here" placeholder isn't a validation of anything).
+    sampled_mask = ~np.isnan(grid)
+
     for m_bucket in range(N_MONEYNESS_BUCKETS):
         _backward_then_forward_fill(grid[:, m_bucket], default=None)
 
@@ -252,6 +260,7 @@ def intraday_shape_curve(
             grid[:, m_bucket] = atm_column
 
     curve["premium_decay_grid"] = grid
+    curve["premium_decay_grid_sampled_mask"] = sampled_mask
     return curve
 
 

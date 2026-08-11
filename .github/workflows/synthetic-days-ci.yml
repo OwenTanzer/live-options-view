@@ -1,10 +1,11 @@
 name: synthetic_days validation
 
-# Runs entirely against the checked-in hermetic fixture (tests/fixtures/r2_cache/,
-# see tests/make_fixtures.py) -- no R2 credentials are exposed to or needed by
-# CI. Credentialed reproduction against the live bucket remains available
-# locally (see synthetic_days/README.md) but is optional, not required for
-# this to pass.
+# Runs entirely against the checked-in fixture (tests/fixtures/r2_cache/,
+# see tests/make_fixtures.py) -- a real, compact slice pulled from the live
+# R2 bucket, not synthesized, so no R2 credentials are exposed to or needed
+# by CI even though the "real" comparison data genuinely is real. Refreshing
+# the fixture (re-running tests/make_fixtures.py) does need R2 credentials
+# locally (see synthetic_days/README.md); CI itself never touches R2.
 
 on:
   push:
@@ -33,8 +34,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Generate synthetic days from the hermetic fixture
-        run: python day_generator.py --n-days 10 --seed 3 --years 2024 --out ./tests/out --max-donor-days 10 --max-intraday-days 2 --intraday-samples-per-day 14
-      - name: Validate synthetic-vs-real statistics (acceptance gate -- fails on drift)
-        run: python validate_stats.py --years 2024 --days ./tests/out
+        run: python day_generator.py --n-days 10 --seed 3 --years 2026 --out ./tests/out --max-donor-days 10 --max-intraday-days 6 --intraday-samples-per-day 30
+      - name: Validate synthetic-vs-real statistics (acceptance gate -- fails on drift, including an out-of-sample option-path check)
+        run: python validate_stats.py --years 2026 --days ./tests/out
       - name: Backtest a real crassus strategy against the synthetic days
         run: python backtest_bridge.py --strategy max_pain_qqq --days ./tests/out
