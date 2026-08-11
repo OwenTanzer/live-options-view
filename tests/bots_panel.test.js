@@ -257,6 +257,16 @@ const bot = (alias, username, cash, positions = [], extra = {}) =>
 
   // Cards name their strategy so a reader can tie a result to a strategy.
   assert.match(els['bots-grid'].innerHTML, /bot-strategy">reddit_sentiment_qqq/);
+  // Future Crassus strategies are data, not front-end releases. Any valid
+  // strategy id returned by the roster receives both a card and a rollup tile.
+  panel.botsData = {
+    as_of: '2026-07-27T15:00:00Z',
+    bots: [withStrat('Future', 'future', 10000, 'future_pr_strategy'),
+      withStrat('A', 'a', 10000, 'smoke_atm_roundtrip')],
+  };
+  panel.renderBots();
+  assert.match(els['bots-grid'].innerHTML, /bot-strategy">future_pr_strategy/);
+  assert.match(els['bots-by-strategy'].innerHTML, /future_pr_strategy/);
 
   // A single strategy across the whole book makes the rollup a restatement of
   // the cards, so it is suppressed rather than shown as one meaningless tile.
