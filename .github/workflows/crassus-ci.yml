@@ -43,6 +43,9 @@ jobs:
       - name: Run VWAP/RVOL data contract and gate suite
         working-directory: crassus
         run: python scripts/verify_vwap_rvol.py
+      - name: Run canopus_down_day_14 strategy suite
+        working-directory: crassus
+        run: python scripts/verify_canopus_down_day.py
       - name: Run Guideline Phelps suite
         working-directory: crassus
         run: python scripts/verify_phelps.py
