@@ -383,6 +383,44 @@ def scenario_multi_position_book_converges_to_flat() -> None:
     check("cycle 3: book is fully flat, blocks new entries rather than trying to close anything else", d3 is not None and not d3.is_trade)
 
 
+def scenario_starved_leg_does_not_block_a_closeable_one() -> None:
+    print(
+        "\n13. Regression (review follow-up): the first-sorted leg having a missing/stale quote "
+        "must not starve a second held leg that has a perfectly good one"
+    )
+    now = datetime(2024, 1, 1, 15, 50, tzinfo=ET)  # 10 min to close
+    # QQQ240101C... sorts before QQQ240101P... -- give the call (sorted
+    # first) a stale quote and the put a fresh one. An earlier version
+    # would retry only the call, forever, and never even look at the put.
+    quote_map = {
+        "QQQ240101C00400000": stale_quote("QQQ240101C00400000"),
+        "QQQ240101P00400000": fresh_quote("QQQ240101P00400000"),
+    }
+    ctx = make_ctx(trades=[LONG_CALL, SHORT_PUT], quote_map=quote_map, now_et=now)
+    decision = maybe_flatten(ctx, ctx.params)
+    check(
+        "closes the put (good quote) instead of getting stuck waiting on the call (stale quote)",
+        decision is not None and decision.is_trade and decision.symbol == "QQQ240101P00400000",
+        decision.symbol if decision and decision.is_trade else (decision.reason if decision else None),
+    )
+
+    # And when *neither* leg has a usable quote, it still correctly retries
+    # rather than forcing a bad fill -- naming both stuck symbols now, not just one.
+    ctx_both_stale = make_ctx(
+        trades=[LONG_CALL, SHORT_PUT],
+        quote_map={"QQQ240101C00400000": stale_quote("QQQ240101C00400000"), "QQQ240101P00400000": stale_quote("QQQ240101P00400000")},
+        now_et=now,
+    )
+    decision_both_stale = maybe_flatten(ctx_both_stale, ctx_both_stale.params)
+    check("no trade when every held leg's quote is stale", decision_both_stale is not None and not decision_both_stale.is_trade)
+    check(
+        "the retry reason names every stuck symbol, not just one",
+        decision_both_stale.metadata is not None
+        and set(decision_both_stale.metadata.get("symbols", [])) == {"QQQ240101C00400000", "QQQ240101P00400000"},
+        decision_both_stale.metadata,
+    )
+
+
 def main() -> int:
     for scenario in (
         scenario_fires_without_param_using_default,
@@ -399,6 +437,7 @@ def main() -> int:
         scenario_half_day_uses_the_real_close,
         scenario_invalid_params_fall_back_to_default,
         scenario_multi_position_book_converges_to_flat,
+        scenario_starved_leg_does_not_block_a_closeable_one,
     ):
         scenario()
 

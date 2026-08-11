@@ -90,6 +90,20 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
     server state each call, and a just-closed position no longer appears in
     it -- so each cycle closes whichever position is still held, over as many
     cycles as it takes. See `verify_flatten.py`'s multi-position scenario.
+
+    Which held position gets closed *this* cycle is picked by scanning every
+    held symbol (sorted, for determinism) for the first one with a live/fresh
+    quote, not by unconditionally retrying the first sorted symbol every
+    cycle regardless of its quote. An earlier version did the latter: if the
+    first-sorted leg's quote was persistently missing or stale (a genuinely
+    stuck/delisted contract, or a collector gap), it retried *only* that leg
+    forever, starving every other held leg -- even ones with a perfectly
+    good, immediately-closeable quote -- right through the close. Flagged in
+    review as exactly the failure mode this mandatory control exists to
+    prevent. Now every held symbol gets a chance each cycle; only if *none*
+    of them have an executable quote does this fall back to the retry
+    no_trade, and that message now names every still-stuck symbol, not just
+    one.
     """
     if ctx.session_phase != "open":
         return None
@@ -117,29 +131,31 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
             },
         )
 
-    symbol = sorted(ctx.book.positions.keys())[0]  # deterministic pick when more than one is held
-    position = ctx.book.positions[symbol]
+    symbols = sorted(ctx.book.positions.keys())  # deterministic scan order
+    quotes = ctx.quotes(symbols)
+    symbol = next((s for s in symbols if quotes.get(s) is not None and quotes[s].is_executable), None)
 
-    quote = ctx.quotes([symbol]).get(symbol)
-    if quote is None or not quote.is_executable:
-        # Can't safely close this cycle at a live/fresh quote -- still an
-        # explicit no_trade, not None, so the strategy doesn't get a chance
-        # to open something else while this one waits to be closed.
+    if symbol is None:
+        # None of the held legs have a live/fresh quote this cycle -- still
+        # an explicit no_trade, not None, so the strategy doesn't get a
+        # chance to open something else while these wait to be closed.
         return Decision.no_trade(
             reason=(
                 f"End-of-day flatten window ({minutes_to_close:.1f} minute(s) to close): "
-                f"no live/fresh quote for {symbol} yet to close it against; retrying next "
-                f"cycle rather than falling through to the strategy."
+                f"no live/fresh quote for any of {symbols} yet to close against; retrying "
+                f"next cycle rather than falling through to the strategy."
             ),
             strategy_id=STRATEGY_ID,
             strategy_version=STRATEGY_VERSION,
             metadata={
                 "flatten_minutes_before_close": minutes_before_close,
                 "minutes_to_close": minutes_to_close,
-                "symbol": symbol,
+                "symbols": symbols,
             },
         )
 
+    position = ctx.book.positions[symbol]
+    quote = quotes[symbol]
     side = "sell" if position.quantity > 0 else "buy"
     return Decision(
         action=side,
