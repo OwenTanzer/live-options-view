@@ -200,6 +200,64 @@ def test_genuinely_new_data_still_mints_a_new_release_normally():
         _unfreeze()
 
 
+class FakeResponse:
+    """Just enough of a requests.Response to exercise fetch_eia_steo_rows:
+    raise_for_status() + json()."""
+
+    def __init__(self, data: list[dict], total: int | str | None):
+        self._data = data
+        self._total = total
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict:
+        payload = {"data": self._data}
+        if self._total is not None:
+            payload["total"] = self._total
+        return {"response": payload}
+
+
+def test_fetch_eia_steo_rows_raises_when_server_reports_more_than_returned():
+    print("\nRegression: a truncated EIA response (server total > rows actually returned) raises, not silently used")
+    original_get = collector.requests.get
+    # total=200 but only 5 rows actually came back -- exactly the shape a
+    # too-small `length` produced before this fix (length=36 capped total
+    # rows across all 3 series combined, not periods-per-series).
+    collector.requests.get = lambda *a, **kw: FakeResponse(data=[{"period": "2026-08"}] * 5, total=200)
+    try:
+        try:
+            collector.fetch_eia_steo_rows("fake-key")
+            raise AssertionError("expected fetch_eia_steo_rows to raise on a truncated response")
+        except RuntimeError as e:
+            assert_true("truncated" in str(e).lower(), str(e))
+    finally:
+        collector.requests.get = original_get
+
+
+def test_fetch_eia_steo_rows_accepts_a_complete_response():
+    print("\nRegression guard: a complete response (total == rows returned) is accepted normally")
+    original_get = collector.requests.get
+    rows = [{"period": "2026-08"}] * 12
+    collector.requests.get = lambda *a, **kw: FakeResponse(data=rows, total=12)
+    try:
+        result = collector.fetch_eia_steo_rows("fake-key")
+        assert_equal(len(result), 12, "all rows returned, none dropped")
+    finally:
+        collector.requests.get = original_get
+
+
+def test_fetch_eia_steo_rows_degrades_gracefully_without_a_total_field():
+    print("\nRegression guard: a response with no 'total' field (unexpected schema) still returns data, doesn't crash")
+    original_get = collector.requests.get
+    collector.requests.get = lambda *a, **kw: FakeResponse(data=[{"period": "2026-08"}], total=None)
+    try:
+        result = collector.fetch_eia_steo_rows("fake-key")
+        assert_equal(len(result), 1, "returns what it got -- can't verify completeness, but doesn't fail closed")
+    finally:
+        collector.requests.get = original_get
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

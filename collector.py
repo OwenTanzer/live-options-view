@@ -99,6 +99,16 @@ EIA_STEO_POLL_SECS    = 6 * 3600   # STEO itself updates ~monthly; polling a few
 EIA_STEO_KEY          = "macro/eia_steo.json"
 EIA_STEO_LOG_KEY      = "baselines/eia_steo_vintages.json"
 EIA_STEO_MAX_VINTAGES = 6
+# EIA v2's `length` caps *total rows returned*, not periods-per-series --
+# with 3 series requested together (facets[seriesId][] has 3 values), the
+# old length=36 capped the combined response at 36 rows total (effectively
+# ~12 periods across 3 series, not 36 periods per series as the docstring
+# claimed), silently truncating history. 5000 is comfortably above
+# 3 series x 36 periods = 108 rows with margin for future series/window
+# growth, and is at/near EIA v2's own per-request row cap. See
+# fetch_eia_steo_rows's truncation check for the actual safety net --
+# this constant alone doesn't guarantee nothing is ever dropped.
+EIA_STEO_PAGE_LENGTH = 5000
 
 # VWAP/RVOL (see market_signals.py and docs/plans/2026-07-vwap-rvol.md).
 # Bucket/lookback/min-days are not derived from anything about QQQ itself --
@@ -1279,8 +1289,19 @@ def fetch_eia_steo_rows(api_key: str) -> list[dict]:
     Series IDs and the response shape assumed here (`response.data`, each row
     a flat dict with `period`/`seriesId`/`value`) should be verified against
     a live call before this is trusted -- see crude_calibration.py's module
-    docstring. `length=36` pulls roughly three years of monthly history per
-    series, comfortably more than the current STEO forecast window needs.
+    docstring.
+
+    An earlier version passed `length=36` intending "36 periods of history
+    per series" -- but EIA v2's `length` caps *total rows in the response*,
+    and with 3 series requested together that capped the combined response
+    at 36 rows total (~12 periods across 3 series), silently truncating
+    history without any error. Flagged in review. Fixed two ways: request a
+    `length` (`EIA_STEO_PAGE_LENGTH`) with real margin over what 3 series x
+    36 periods needs, and verify the server's own `response.total` count
+    against what was actually returned -- raising rather than silently
+    returning a truncated page if EIA's per-request cap or a future
+    additional series ever exceeds it. `total` is only checked when present;
+    an unexpected response schema degrades to "can't verify," not a crash.
     """
     params = {
         "api_key": api_key,
@@ -1289,11 +1310,27 @@ def fetch_eia_steo_rows(api_key: str) -> list[dict]:
         "facets[seriesId][]": [cc.BRENT_SERIES_ID, cc.WTI_SERIES_ID, cc.BALANCE_SERIES_ID],
         "sort[0][column]": "period",
         "sort[0][direction]": "desc",
-        "length": 36,
+        "offset": 0,
+        "length": EIA_STEO_PAGE_LENGTH,
     }
     resp = requests.get(EIA_STEO_URL, params=params, timeout=20)
     resp.raise_for_status()
-    return resp.json()["response"]["data"]
+    payload = resp.json()["response"]
+    data = payload["data"]
+    total = payload.get("total")
+    if total is not None:
+        try:
+            total_int = int(total)
+        except (TypeError, ValueError):
+            total_int = None
+        if total_int is not None and total_int > len(data):
+            raise RuntimeError(
+                f"EIA STEO response truncated: server reports {total_int} total row(s) but "
+                f"only {len(data)} were returned (length={EIA_STEO_PAGE_LENGTH}). Increase "
+                f"EIA_STEO_PAGE_LENGTH or add real offset-based pagination rather than "
+                f"silently using a partial history."
+            )
+    return data
 
 
 def load_steo_vintage_log(s3) -> list[dict]:
