@@ -68,8 +68,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Prove the integrity invariants (spins up the mock Worker itself)
 .venv/bin/python scripts/verify_invariants.py
 
-# Run the loop
-cp accounts.example.json accounts.json      # gitignored; then set passwords
+# Run the loop. accounts.example.json is the tracked bot catalog; export the
+# CRASSUS_PW_* variables it names. An ignored accounts.json can override fields
+# by username or add private accounts, but cannot hide catalog bots.
 .venv/bin/python -m crassus.runner --once --dry-run
 .venv/bin/python -m crassus.runner --interval 300
 ```
@@ -96,7 +97,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
 | `scripts/smoke_browser_launch.py` | Build-time check that Chromium actually launches in the image (see `Dockerfile`) |
-| `scripts/verify_invariants.py` | 66 checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
+| `scripts/verify_invariants.py` | Integrity checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
 | `scripts/verify_reddit_sentiment.py` | Hermetic checks for `reddit_sentiment_qqq`'s aggregation math and decision logic -- no Reddit credentials or network access required |
 | `scripts/verify_reddit_ingestion.py` | Hermetic checks for `reddit_sentiment_qqq`'s ingestion layer (JSON fetch, browser DOM parsing, layer selection, 429 cooldown, crash recovery) -- no network access or real browser required |
 | `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
@@ -116,14 +117,20 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 
 ## Server constraints worth knowing
 
-- **No `account_id`** — an account *is* a login. Six bots = six registrations, six cookie jars.
+- **No `account_id`** — an account *is* a login. Twelve catalog bots = twelve registrations, twelve cookie jars.
 - **The `reason` field is silently dropped.** Strategy reasoning lives only in the local ledger.
 - **No close endpoint, no positions endpoint, no server P&L.** Closing is an opposite-side trade; positions are derived average-cost from the `/api/me` trade list.
 - **Execution quotes must be ≤15s old.** Outside market hours the collector's quotes age out, so trades will 409 — the runner declines rather than spending rate-limit budget on a certain rejection.
 - **Insolvent settlement deletes the account.** Not a negative balance — permanent erasure.
 - Bot accounts **do not pre-exist**; the runner registers them on first use.
 - **Bot accounts are marked server-side, not by username convention.** Registering with an `X-Bot-Registration-Key` header matching the Worker's `BOT_REGISTRATION_KEY` secret adds the account to the `bot:` index that backs the public `GET /api/bots` roster and the site's Automated tab. Without the header the account registers as an ordinary human user and never appears there; with a *wrong* key registration is rejected outright rather than silently downgraded.
-- **`strategy_id` must be re-synced when it changes.** `accounts.json` here is authoritative, but the Worker only learns a bot's strategy when told. `POST /api/bot-metadata` (same operator key) updates `strategy_id`/`alias` on an existing bot, so moving an account to a new strategy re-attributes its future performance instead of leaving the roster crediting the old one. Call it at startup for every configured account.
+- **`strategy_id` must be re-synced when it changes.** The merged catalog/config is authoritative, but the Worker only learns a bot's strategy when told. `POST /api/bot-metadata` (same operator key) updates `strategy_id`/`alias` on an existing bot, so moving an account to a new strategy re-attributes its future performance instead of leaving the roster crediting the old one. The runner does this at startup for every configured account.
+
+### Adding a Crassus bot or strategy
+
+Register the strategy in `crassus/strategies`, add at least one public account definition to `accounts.example.json`, and provision the listed password environment variable plus `BOT_REGISTRATION_KEY` in the runtime. CI fails if a registered strategy has no catalog account. No Worker or front-end edit is needed: the runner registers or re-syncs the account, `GET /api/bots` returns it, and the Automated tab renders its card generically.
+
+The UI has no bot or strategy whitelist, and the ignored `accounts.json` is only an overlay. That means a stale private config cannot hide bots added to the checked-in catalog by later PRs.
 
 ## Account ↔ strategy mapping (target, once P3 lands)
 
@@ -137,26 +144,25 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Doris | `cheap_atm_puts` | P3 |
 
 The six accounts above are the eventual P3 mapping's -- see below for what
-each runs today instead. A seventh, **TrumpWhisperer**, exists solely to
-run `trump_whisperer_qqq` and isn't part of that six-account P3 mapping at
-all; it's not a stand-in for a future strategy the way the other six are.
+each runs today instead. Six additional accounts are dedicated to strategies
+outside that mapping: **TrumpWhisperer** runs `trump_whisperer_qqq`, **Newton**
+runs `momentum_qqq`, and **Max Pain**, **OI Skew**, and **Put-Call Ratio** run
+`max_pain_qqq`, `oi_skew_qqq`, and `put_call_ratio_qqq`, respectively. **Canopus** runs the frozen `canopus_down_day_14` forward-test rule.
 
-Three strategies are implemented today -- `smoke_atm_roundtrip`,
-`reddit_sentiment_qqq`, and `trump_whisperer_qqq` -- so `accounts.example.json`
-splits the original six accounts three/three between `smoke_atm_roundtrip`
-(Ankit, Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus,
-Doris) rather than running them all on one, which would only measure
-variance, and adds **TrumpWhisperer** running `trump_whisperer_qqq` as a
-seventh account to compare a third signal. The three `reddit_sentiment_qqq`
-accounts use conservative / default / aggressive thresholds via `params`,
-so the Automated tab's per-strategy rollup compares something real out of
-the box; TrumpWhisperer runs on `trump_whisperer_qqq`'s defaults (see below
-for `params` it accepts the same way). Copying the file as-is is meant to
-work, not just illustrate the eventual mapping. Swap in a P3 strategy_id
-for an account only once that strategy is registered; the runner validates
-every configured `strategy_id` against the registry at startup and refuses
-to start (rather than crashing mid-run on the first unregistered one it
-happens to reach) if one doesn't exist yet.
+Eight strategies are implemented today -- `smoke_atm_roundtrip`,
+`reddit_sentiment_qqq`, `trump_whisperer_qqq`, `momentum_qqq`, `max_pain_qqq`,
+`oi_skew_qqq`, `put_call_ratio_qqq`, and `canopus_down_day_14` -- so `accounts.example.json` splits
+the original six accounts three/three between `smoke_atm_roundtrip` (Ankit,
+Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus, Doris), then
+assigns one dedicated account to each of the other six strategies. The three
+`reddit_sentiment_qqq` accounts use conservative / default / aggressive
+thresholds via `params`, so the Automated tab's per-strategy rollup compares
+something real out of the box. Copying the file as-is is meant to work, not
+just illustrate the eventual mapping. Swap in a P3 strategy_id for an account
+only once that strategy is registered; the runner validates every configured
+`strategy_id` against the registry at startup and refuses to start (rather than
+crashing mid-run on the first unregistered one it happens to reach) if one
+doesn't exist yet.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and

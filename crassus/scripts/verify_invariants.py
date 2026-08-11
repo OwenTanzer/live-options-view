@@ -12,6 +12,7 @@ before P1 can be called done, and the deployed Worker cannot demonstrate it.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -590,6 +592,48 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
     print("\n14. Strategy config validation: unregistered strategy_id fails at startup")
     from crassus.config import load_accounts
     from crassus.runner import Runner
+    from crassus.strategy import REGISTRY
+
+    # Every registered strategy needs at least one catalog account. This is the
+    # PR gate that turns "added a Crassus strategy" into "the generic UI will
+    # receive a card for it" instead of relying on somebody to remember an
+    # out-of-band Railway config edit after merge.
+    example = Path(__file__).parent.parent / "accounts.example.json"
+    raw = json.loads(example.read_text())
+    catalog_strategy_ids = {entry["strategy_id"] for entry in raw["accounts"]}
+    missing_cards = set(REGISTRY) - catalog_strategy_ids
+    check(
+        "every registered strategy has a catalog-backed display card",
+        not missing_cards,
+        f"missing: {sorted(missing_cards)}",
+    )
+
+    # A stale ignored accounts.json used to replace the tracked example
+    # wholesale, which is exactly how newer bots disappeared. It is now an
+    # overlay: catalog bots remain, while matching local fields still win.
+    stale_override = tmp / "accounts.json"
+    stale_override.write_text(json.dumps({
+        "accounts": [{
+            "username": raw["accounts"][0]["username"],
+            "alias": "Local Override",
+            "password": "local-password",
+        }]
+    }))
+    password_env = {
+        entry["password_env"]: "catalog-password"
+        for entry in raw["accounts"]
+        if entry.get("password_env")
+    }
+    with patch.dict(os.environ, password_env, clear=True):
+        merged = load_accounts(catalog_path=example, override_path=stale_override)
+    check(
+        "a stale private override cannot hide newly cataloged bots",
+        {a.username for a in merged} == {entry["username"] for entry in raw["accounts"]},
+    )
+    check(
+        "private fields still override their matching catalog account",
+        merged[0].alias == "Local Override" and merged[0].password == "local-password",
+    )
 
     with Mock():
         good = Account(alias="Ankit", username=f"cfg_{uuid.uuid4().hex[:6]}",
@@ -609,8 +653,6 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
 
         # The bundled example config must be copy-paste runnable today, not
         # just an eventual illustration of the six-strategy mapping.
-        example = Path(__file__).parent.parent / "accounts.example.json"
-        raw = json.loads(example.read_text())
         for entry in raw["accounts"]:
             entry["password"] = "pw"
         example_accounts_path = tmp / "accounts.example.filled.json"

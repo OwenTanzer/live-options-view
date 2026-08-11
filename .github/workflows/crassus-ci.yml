@@ -52,6 +52,9 @@ jobs:
       - name: Run runner/flatten attribution and crash-recovery suite
         working-directory: crassus
         run: python scripts/verify_runner_flatten_attribution.py
+      - name: Run canopus_down_day_14 strategy suite
+        working-directory: crassus
+        run: python scripts/verify_canopus_down_day.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
