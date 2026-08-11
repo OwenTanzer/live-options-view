@@ -367,17 +367,23 @@ def scenario_rollback_bounds_naked_leg_exposure_through_real_runner() -> None:
             check("cycle 2: waiting on the unquoted matching put, 5m elapsed (< 10m limit)", rec["outcome_class"] == "no_trade" and "isn't quoted" in rec["reason"])
             check("cycle 2: no rollback yet -- still holding the naked call", h.book.position(CALL_SYM).quantity == 4)
 
-            # Cycle 3 (09:42, 12 min elapsed since the call's fill): past the
-            # 10-minute completion window -- rolls back rather than riding
-            # the naked call indefinitely.
-            rec = h.run_cycle(9, 42, underlying_price=400.0, rows=[], quotes={CALL_SYM: (1.10, 1.15)})
-            check("cycle 3: rollback fires past the completion timeout", rec["outcome_class"] == "filled" and rec["decision"]["action"] == "sell")
+            # Cycle 3 (09:40, +300s again -- the deployed runner's *actual*
+            # next cycle, not an artificial gap): exactly 10 minutes elapsed
+            # since the 09:30:00 fill, precisely `max_leg_completion_wait_minutes`
+            # -- not past it. Flagged in review: an earlier version of this test
+            # jumped straight to 09:42 (12 minutes), which hid a real off-by-one
+            # in the strategy (`>` instead of `>=`) that would have let this
+            # exact-boundary cycle slip through to 09:45 in production, silently
+            # widening the advertised 10-minute cap by a full cadence interval.
+            rec = h.run_cycle(9, 40, underlying_price=400.0, rows=[], quotes={CALL_SYM: (1.10, 1.15)})
+            check("cycle 3: rollback fires the cycle it reaches the cap, not one cycle later", rec["outcome_class"] == "filled" and rec["decision"]["action"] == "sell")
             check("cycle 3: rolls back the full N held calls", rec["decision"]["symbol"] == CALL_SYM and rec["decision"]["quantity"] == 4)
             check("cycle 3: decision metadata is tagged as a rollback", rec["decision"].get("metadata", {}).get("rollback") is True)
             check("cycle 3: book is flat again -- naked exposure bounded, not indefinite", h.book.is_flat, str(h.book.summary()))
 
-            # Cycle 4 (09:47): already traded (and rolled back) today -- no re-entry.
-            rec = h.run_cycle(9, 47, underlying_price=400.0, rows=[], quotes={})
+            # Cycle 4 (09:45, +300s again): already traded (and rolled back)
+            # today -- no re-entry.
+            rec = h.run_cycle(9, 45, underlying_price=400.0, rows=[], quotes={})
             check("cycle 4: no re-entry after the rolled-back sequence", rec["outcome_class"] == "no_trade" and "re-entry" in rec["reason"])
     finally:
         market_mod.requests.get = original_get

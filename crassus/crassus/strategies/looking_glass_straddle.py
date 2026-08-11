@@ -55,15 +55,21 @@ and 2:
   * **No rollback if leg 2 never completes.** A held call leg with no
     matching put is unintended single-leg directional exposure, not the
     straddle the strategy is supposed to hold -- previously nothing bounded
-    how long it could sit that way. Fixed: if more than
-    `max_leg_completion_wait_minutes` (default 10) has elapsed since the
-    call leg's own recorded fill time (read from `ctx.book.trades`' `ts`,
-    same source `_traded_today` below already reads) without completing leg
-    2, the calls are sold back to flatten rather than left open indefinitely.
-    This also now covers "the exact matching put never becomes quoted at
-    all" -- that case waits every cycle just like a missing live quote does,
-    so it converges to the same timeout-driven rollback instead of a
-    separate code path.
+    how long it could sit that way. Fixed: once `max_leg_completion_wait_minutes`
+    (default 10) has elapsed *or been reached* since the call leg's own
+    recorded fill time (read from `ctx.book.trades`' `ts`, same source
+    `_traded_today` below already reads) without completing leg 2, the
+    calls are sold back to flatten rather than left open indefinitely. The
+    comparison is `>=`, not `>`: at the deployed runner's 300s cadence, a
+    strict `>` would let the cycle landing exactly on the cap (e.g. a call
+    filled at 09:30:00, evaluated again at 09:40:00 with a 10-minute cap)
+    pass through without rolling back, deferring the actual rollback to the
+    *next* cycle and silently widening the advertised cap by up to one
+    cadence interval -- flagged in review as an off-by-one against the cap
+    it claims to enforce. This also now covers "the exact matching put
+    never becomes quoted at all" -- that case waits every cycle just like a
+    missing live quote does, so it converges to the same timeout-driven
+    rollback instead of a separate code path.
 
 A true multi-leg combo order would remove the gap between legs entirely, but
 that is a server/execution-layer change, not a strategy one.
@@ -400,7 +406,7 @@ def _decide(ctx: StrategyContext) -> Decision:
         call_fill_time = _leg_fill_time(ctx, call_symbol)
         if call_fill_time is not None:
             wait_minutes = (ctx.now_et - call_fill_time).total_seconds() / 60.0
-            if wait_minutes > cfg["max_leg_completion_wait_minutes"]:
+            if wait_minutes >= cfg["max_leg_completion_wait_minutes"]:
                 quote = _quote_or_none(ctx, call_symbol)
                 if quote is None:
                     return no(

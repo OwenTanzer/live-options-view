@@ -324,6 +324,29 @@ def scenario_leg_two_within_wait_window_still_completes() -> None:
     check("still completes leg 2 normally, not a rollback", decision.is_trade and decision.action == "buy" and decision.symbol == PUT_SYM)
 
 
+def scenario_leg_two_rollback_fires_exactly_at_the_cap_boundary() -> None:
+    print(
+        "\n19. Regression: rollback fires the cycle it *reaches* the cap, not only once strictly past it -- "
+        "flagged in review: a strict `>` would let the cycle landing exactly on the cap slip through to the next "
+        "one, silently widening the advertised 10m cap by up to a full 300s cadence interval"
+    )
+    ctx = make_ctx(
+        # Call filled at 09:30:00 exactly; evaluated again at 09:40:00 exactly --
+        # precisely the deployed runner's second 300s cycle after the fill, and
+        # exactly `max_leg_completion_wait_minutes` (10) later, not past it.
+        trades=[trade(CALL_SYM, "buy", 4, 1.0, ts="2024-01-01T09:30:00-05:00")],
+        quote_map={CALL_SYM: quote(CALL_SYM, 0.90, 0.95), PUT_SYM: quote(PUT_SYM, 1.0, 1.05)},
+        now_et=datetime(2024, 1, 1, 9, 40, tzinfo=ET),
+    )
+    decision = _decide(ctx)
+    check(
+        "rolls back at exactly the cap, not one cycle later",
+        decision.is_trade and decision.action == "sell" and decision.symbol == CALL_SYM,
+        decision.reason,
+    )
+    check("metadata marks this as a rollback", decision.metadata is not None and decision.metadata.get("rollback") is True)
+
+
 def scenario_default_terminal_time_has_margin_before_flatten() -> None:
     print("\n19. Regression: the module's own default terminal exit time leaves margin before PR #59's 15:45 flatten")
     from crassus.strategies.looking_glass_straddle import DEFAULT_TERMINAL_EXIT_TIME_ET
@@ -403,6 +426,7 @@ def main() -> int:
         scenario_leg_two_wide_spread_waits,
         scenario_leg_two_rollback_after_timeout,
         scenario_leg_two_within_wait_window_still_completes,
+        scenario_leg_two_rollback_fires_exactly_at_the_cap_boundary,
         scenario_default_terminal_time_has_margin_before_flatten,
         scenario_leg_two_buys_the_matching_put_not_current_atm,
         scenario_leg_two_waits_rather_than_substitute_wrong_strike,
