@@ -1,6 +1,5 @@
 {
-  "_comment": "Copy to accounts.json (gitignored) and fill in. Use password_env to pull secrets from the environment instead of storing them here. Seven strategies are implemented: smoke_atm_roundtrip (P1 smoke test), reddit_sentiment_qqq (#22), trump_whisperer_qqq (#29), momentum_qqq, max_pain_qqq, oi_skew_qqq, and put_call_ratio_qqq; the dip/rip/cheap-ATM ones are still P3. The runner validates strategy_id at startup and refuses to start rather than crashing mid-run on an unregistered one. The split below is deliberate -- running every account on one strategy only measures variance -- and the three reddit_sentiment_qqq accounts run conservative / default / aggressive thresholds so the Automated tab's per-strategy rollup compares something real. Neither sentiment strategy needs credentials: reddit_sentiment_qqq scrapes Reddit's public new.json (with a headless-browser fallback for Reddit's JS challenge, optionally set REDDIT_USER_AGENT as a courtesy identifier); trump_whisperer_qqq (alias 'TrumpWhisperer' below) polls the public trumpstruth.org/feed RSS mirror of Trump's Truth Social posts, optionally set TRUMP_FEED_USER_AGENT the same way. Both return no_trade -- rather than crashing, or in TrumpWhisperer's case rather than closing a held position -- below min_sample_size or if ingestion fails. momentum_qqq (alias 'Newton' below) needs no credentials or external feed either -- its signal is the trailing return of the same underlying_price every other strategy already reads off the durable snapshot, accumulated into a rolling window in-process; it stands down the same way while that window is still warming up or has a gap in it (see crassus/momentum.py). momentum_qqq also accepts two optional params, both off/no-op by default so no existing account's behavior changes unless explicitly set: 'vwap_confirmation_required' (bool) vetoes an otherwise-supported direction unless the underlying is on the agreeing side of its own session VWAP, and 'rvol_floor' (float) vetoes it unless relative volume clears that multiple -- both read from the collector-computed underlying_market block (see crassus/vwap_rvol.py and docs/plans/2026-07-vwap-rvol.md). Neither is set on any account below; RVOL in particular reports 'insufficient_history' until the collector's self-bootstrapping baseline has accumulated enough trading days, during which a held position is retained rather than closed, same as a stale snapshot.",
-
+  "_comment": "This deployable catalog covers eight registered strategies: smoke_atm_roundtrip, reddit_sentiment_qqq, trump_whisperer_qqq, momentum_qqq, max_pain_qqq, oi_skew_qqq, put_call_ratio_qqq, and canopus_down_day_14. Canopus implements the frozen Down-Day 14 forward-test rule: capture a trustworthy 09:30 ET reference, buy one ATM 0DTE put during 14:45-14:51 only when QQQ is down at least 0.25%, sell when the live bid reaches 1.14x the fill (rounded up to the next cent), or liquidate at 15:45. Do not retune it from individual outcomes. Passwords come from the listed environment variables; the runner rejects unregistered strategies and missing credentials at startup.",
   "_runtime_note": "This tracked file is the default bot catalog. An ignored accounts.json overlays matching usernames and may add private accounts; it does not replace or hide catalog entries.",
   "accounts": [
     {
@@ -28,8 +27,8 @@
       "strategy_id": "reddit_sentiment_qqq",
       "params": {
         "min_sample_size": 12,
-        "bullish_threshold": 0.30,
-        "bearish_threshold": -0.30
+        "bullish_threshold": 0.3,
+        "bearish_threshold": -0.3
       }
     },
     {
@@ -78,6 +77,20 @@
       "username": "crassus_putcall",
       "password_env": "CRASSUS_PW_PUT_CALL_RATIO",
       "strategy_id": "put_call_ratio_qqq"
+    },
+    {
+      "alias": "Canopus",
+      "username": "crassus_canopus",
+      "password_env": "CRASSUS_PW_CANOPUS",
+      "strategy_id": "canopus_down_day_14",
+      "params": {
+        "reference_time_et": "09:30",
+        "entry_window_start_et": "14:45",
+        "entry_window_end_et": "14:51",
+        "fallback_exit_time_et": "15:45",
+        "down_threshold_pct": 0.0025,
+        "target_multiplier": 1.14
+      }
     }
   ]
 }

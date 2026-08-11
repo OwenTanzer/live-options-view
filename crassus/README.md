@@ -117,7 +117,7 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 
 ## Server constraints worth knowing
 
-- **No `account_id`** — an account *is* a login. Eleven catalog bots = eleven registrations, eleven cookie jars.
+- **No `account_id`** — an account *is* a login. Twelve catalog bots = twelve registrations, twelve cookie jars.
 - **The `reason` field is silently dropped.** Strategy reasoning lives only in the local ledger.
 - **No close endpoint, no positions endpoint, no server P&L.** Closing is an opposite-side trade; positions are derived average-cost from the `/api/me` trade list.
 - **Execution quotes must be ≤15s old.** Outside market hours the collector's quotes age out, so trades will 409 — the runner declines rather than spending rate-limit budget on a certain rejection.
@@ -144,17 +144,17 @@ The UI has no bot or strategy whitelist, and the ignored `accounts.json` is only
 | Doris | `cheap_atm_puts` | P3 |
 
 The six accounts above are the eventual P3 mapping's -- see below for what
-each runs today instead. Five additional accounts are dedicated to strategies
+each runs today instead. Six additional accounts are dedicated to strategies
 outside that mapping: **TrumpWhisperer** runs `trump_whisperer_qqq`, **Newton**
 runs `momentum_qqq`, and **Max Pain**, **OI Skew**, and **Put-Call Ratio** run
-`max_pain_qqq`, `oi_skew_qqq`, and `put_call_ratio_qqq`, respectively.
+`max_pain_qqq`, `oi_skew_qqq`, and `put_call_ratio_qqq`, respectively. **Canopus** runs the frozen `canopus_down_day_14` forward-test rule.
 
-Seven strategies are implemented today -- `smoke_atm_roundtrip`,
+Eight strategies are implemented today -- `smoke_atm_roundtrip`,
 `reddit_sentiment_qqq`, `trump_whisperer_qqq`, `momentum_qqq`, `max_pain_qqq`,
-`oi_skew_qqq`, and `put_call_ratio_qqq` -- so `accounts.example.json` splits
+`oi_skew_qqq`, `put_call_ratio_qqq`, and `canopus_down_day_14` -- so `accounts.example.json` splits
 the original six accounts three/three between `smoke_atm_roundtrip` (Ankit,
 Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus, Doris), then
-assigns one dedicated account to each of the other five strategies. The three
+assigns one dedicated account to each of the other six strategies. The three
 `reddit_sentiment_qqq` accounts use conservative / default / aggressive
 thresholds via `params`, so the Automated tab's per-strategy rollup compares
 something real out of the box. Copying the file as-is is meant to work, not
