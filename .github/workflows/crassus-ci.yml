@@ -43,6 +43,15 @@ jobs:
       - name: Run VWAP/RVOL data contract and gate suite
         working-directory: crassus
         run: python scripts/verify_vwap_rvol.py
+      - name: Run mandatory EOD flatten suite
+        working-directory: crassus
+        run: python scripts/verify_flatten.py
+      - name: Run NYSE exchange calendar suite
+        working-directory: crassus
+        run: python scripts/verify_exchange_calendar.py
+      - name: Run runner/flatten attribution and crash-recovery suite
+        working-directory: crassus
+        run: python scripts/verify_runner_flatten_attribution.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
