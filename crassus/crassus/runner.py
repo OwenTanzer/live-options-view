@@ -34,12 +34,15 @@ from .client import (
 from .config import (
     BASE_URL,
     BOT_REGISTRATION_KEY,
+    CRASSUS_AI_OVERRIDES_URL,
     DEFAULT_LEDGER_DIR,
     DEFAULT_STATE_DIR,
     SNAPSHOT_URL,
     load_accounts,
 )
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
+from .overrides_client import OverridesClient
+from .policy import OverridePolicy
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
@@ -122,6 +125,13 @@ class Runner:
 
         self.ledger = DecisionLedger(ledger_dir)
         self.snapshots = SnapshotReader(snapshot_url)
+        self.overrides_client = OverridesClient(base_url=CRASSUS_AI_OVERRIDES_URL, bot_registration_key=key)
+        self.policy = OverridePolicy()
+        # Prior *accepted* effective params per account, used only as the
+        # rate-of-change baseline for the next override -- not persisted,
+        # so a restart resets the cap to compare against the account's own
+        # configured baseline again, never a stale in-memory value.
+        self._prior_accepted: dict[str, dict[str, Any]] = {}
         self.rate_limiter = RateLimiter()
         # Quotes share the account RateLimiter -- the binding limit is
         # per-IP, so quote polling must draw from the same global budget.
@@ -180,7 +190,7 @@ class Runner:
                 continue
             except CrassusError as exc:
                 log.error("%s: could not establish session: %s", account.alias, exc)
-                self.ledger.record(
+                self._record(
                     decision_id=self.ledger.new_decision_id(),
                     account_alias=account.alias,
                     strategy_id=account.strategy_id,
@@ -235,7 +245,7 @@ class Runner:
             return False
 
         log.warning("%s: %s", account.alias, recovered.note)
-        self.ledger.record(
+        self._record(
             decision_id=intent.get("decision_id") or self.ledger.new_decision_id(),
             account_alias=account.alias,
             strategy_id=intent.get("strategy_id") or account.strategy_id,
@@ -300,6 +310,17 @@ class Runner:
         while time.monotonic() < deadline and not self.should_stop:
             time.sleep(min(1.0, deadline - time.monotonic()))
 
+    def _record(self, **kwargs: Any) -> dict[str, Any]:
+        """`ledger.record()`, plus a best-effort durability mirror.
+
+        The local JSONL write (audit.py) remains the sole authority and
+        happens first and unconditionally; the mirror POST is fire-and-
+        forget and can never affect what was already durably written here.
+        """
+        rec = self.ledger.record(**kwargs)
+        self.overrides_client.post_ledger_mirror(rec)
+        return rec
+
     def _retire(self, account: Any, reason: str) -> None:
         self.retired.add(account.alias)
         log.warning("%s retired: %s", account.alias, reason)
@@ -323,7 +344,7 @@ class Runner:
         )
 
         if snapshot is None:
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=Outcome.RUNNER_ERROR,
                 reason="No market snapshot available this cycle.",
@@ -342,7 +363,7 @@ class Runner:
             self._retire(account, str(exc))
             return
         except CrassusError as exc:
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=exc.outcome_class,
                 reason=f"Could not reconcile account state: {exc}",
@@ -352,6 +373,30 @@ class Runner:
         book = Book(state.trades)
         state_before = {**state.summary(), **book.summary()}
 
+        # One override fetch + policy evaluation per account per cycle,
+        # right before the strategy sees params -- this is the "one
+        # immutable parameter snapshot per account-processing cycle"
+        # requirement: params are resolved exactly once here and never
+        # touched again for the rest of this account's cycle.
+        envelope = self.overrides_client.fetch_override(alias)
+        kill_switch = self.overrides_client.fetch_kill_switch()
+        frozen = self.overrides_client.fetch_freeze(alias)
+        policy_result = self.policy.evaluate(
+            account,
+            account.params,
+            envelope,
+            self._prior_accepted.get(alias),
+            kill_switch=kill_switch,
+            frozen=frozen,
+        )
+        if policy_result.applied:
+            self._prior_accepted[alias] = policy_result.effective_params
+        # Additive audit fields only -- audit.MANDATORY_FIELDS is untouched,
+        # this just records whether an override was in effect this cycle
+        # and why one wasn't, if it wasn't.
+        base["override_id"] = policy_result.override_id
+        base["policy_rejections"] = policy_result.rejections or None
+
         ctx = StrategyContext(
             snapshot=snapshot,
             account_state=state.summary(),
@@ -359,7 +404,7 @@ class Runner:
             now_et=clock.now_et(),
             session_phase=phase,
             quotes=self.quotes.quotes,
-            params=account.params,
+            params=policy_result.effective_params,
         )
 
         try:
@@ -369,7 +414,7 @@ class Runner:
             # the quote-side 429 already honored Retry-After globally via
             # the shared RateLimiter before giving up.
             log.warning("%s: quote request rate limited: %s", alias, exc)
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=Outcome.RATE_LIMITED,
                 reason=f"Could not get quotes for {account.strategy_id}: {exc}",
@@ -378,7 +423,7 @@ class Runner:
             return
         except Exception as exc:
             log.exception("%s: strategy raised", alias)
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=Outcome.RUNNER_ERROR,
                 reason=f"Strategy {account.strategy_id} raised: {exc}",
@@ -388,7 +433,7 @@ class Runner:
 
         if not decision.is_trade:
             log.info("%s: no_trade -- %s", alias, decision.reason)
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=Outcome.NO_TRADE,
                 decision=decision.to_dict(),
@@ -401,7 +446,7 @@ class Runner:
 
         if self.dry_run:
             log.info("%s: DRY RUN would %s %s x%s -- %s", alias, decision.action, decision.symbol, decision.quantity, decision.reason)
-            self.ledger.record(
+            self._record(
                 **base,
                 outcome_class=Outcome.NO_TRADE,
                 decision=decision.to_dict(),
@@ -439,7 +484,7 @@ class Runner:
             self._retire(account, str(exc))
             return
 
-        self.ledger.record(
+        self._record(
             **base,
             outcome_class=result.outcome_class,
             decision=decision.to_dict(),
@@ -481,7 +526,7 @@ class Runner:
         annotation says plainly that the account was margin called and that
         the Worker deleted it, which is the fact an evaluation needs.
         """
-        self.ledger.record(
+        self._record(
             **base,
             outcome_class=Outcome.ACCOUNT_LIQUIDATED,
             decision=decision.to_dict() if decision else None,

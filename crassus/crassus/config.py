@@ -25,6 +25,12 @@ DEFAULT_LEDGER_DIR = REPO_ROOT / "logs"
 DEFAULT_STATE_DIR = REPO_ROOT / "state"
 
 BASE_URL = os.environ.get("CRASSUS_BASE_URL", "https://options.moopertonic.net")
+
+# Override/kill-switch/freeze/ledger-mirror channel (see crassus/policy.py,
+# crassus/overrides_client.py). Same Worker as BASE_URL by default -- a
+# separate env var only so a test/mock deployment can point the override
+# channel elsewhere without also redirecting live trading traffic.
+CRASSUS_AI_OVERRIDES_URL = os.environ.get("CRASSUS_AI_OVERRIDES_URL", BASE_URL)
 SNAPSHOT_URL = os.environ.get(
     "CRASSUS_SNAPSHOT_URL",
     "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
