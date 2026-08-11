@@ -91,6 +91,17 @@ class UnderlyingMarket:
     recover its prior running sums, or a delayed process start) rather than
     covering the whole session-to-date; `None` when nothing has accumulated
     at all yet (`vwap` itself is `None` in that case too).
+
+    `momentum_*` fields are a **display/log-only** reference time-series
+    momentum reading -- computed by the collector the same way
+    `momentum.compute_momentum` computes momentum_qqq's own live trading
+    signal, but as an independent computation, not a shared one (each
+    momentum_qqq account still runs its own `PriceHistoryTracker` with its
+    own configured `lookback_minutes`; this field is not guaranteed to match
+    any specific account's live signal). See market_signals.py's module
+    docstring and docs/plans/2026-07-momentum-indicator.md. `momentum_status`
+    uses the same four-state vocabulary as `momentum.MomentumSignal.status`:
+    `"no_data"` | `"warming_up"` | `"stale_anchor"` | `"ok"`.
     """
 
     symbol: str | None
@@ -111,6 +122,12 @@ class UnderlyingMarket:
     rvol_baseline_volume: float | None
     rvol_baseline_days_used: int | None
     rvol_baseline_lookback_days: int | None
+    momentum_status: str
+    momentum_return_pct: float | None
+    momentum_lookback_minutes: float | None
+    momentum_anchor_age_minutes: float | None
+    momentum_sample_count: int | None
+    momentum_direction: str | None
     source: str | None
     freshness: str
 
@@ -119,6 +136,7 @@ class UnderlyingMarket:
         if not payload:
             return None
         rvol = payload.get("rvol") or {}
+        momentum = payload.get("momentum") or {}
         return cls(
             symbol=payload.get("symbol"),
             spot=payload.get("spot"),
@@ -138,6 +156,12 @@ class UnderlyingMarket:
             rvol_baseline_volume=rvol.get("baseline_volume"),
             rvol_baseline_days_used=rvol.get("baseline_days_used"),
             rvol_baseline_lookback_days=rvol.get("baseline_lookback_days"),
+            momentum_status=momentum.get("status", "no_data"),
+            momentum_return_pct=momentum.get("return_pct"),
+            momentum_lookback_minutes=momentum.get("lookback_minutes"),
+            momentum_anchor_age_minutes=momentum.get("anchor_age_minutes"),
+            momentum_sample_count=momentum.get("sample_count"),
+            momentum_direction=momentum.get("direction"),
             source=payload.get("source"),
             freshness=payload.get("freshness", "stale"),
         )

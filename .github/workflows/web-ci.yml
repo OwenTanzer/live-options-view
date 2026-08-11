@@ -39,6 +39,8 @@ jobs:
         run: node tests/order_logic.test.js
       - name: vwap/rvol display
         run: node tests/vwap_rvol_display.test.js
+      - name: momentum display
+        run: node tests/momentum_display.test.js
       # Catches syntax errors in the inline <script> that the panel test would
       # otherwise only surface for the section it extracts.
       - name: parse check
