@@ -24,6 +24,35 @@ id = "e6d7e57f32ea4122ba81b8c84dc28553"
 binding = "SESSIONS"
 id = "2b996344769e4e679d9f307196a76b84"
 
+# Crassus AI's kill switch + per-bot freeze flags (worker.js
+# handleCrassusKillSwitch/handleCrassusFreezeGet/Post). Simple booleans, same
+# storage shape as USERS/SESSIONS above.
+#
+# NOT YET PROVISIONED -- this id is a placeholder. Before deploying, run:
+#   wrangler kv:namespace create CRASSUS_CONTROL
+# and replace the id below with the one it prints (wrangler refuses to
+# deploy against an unknown id, same as the USERS/SESSIONS note above).
+[[kv_namespaces]]
+binding = "CRASSUS_CONTROL"
+id = "REPLACE_WITH_REAL_CRASSUS_CONTROL_KV_ID"
+
+# Crassus AI's versioned override channel + decision-ledger durability
+# mirror (worker.js handleCrassusOverride*, handleCrassusLedgerMirror; schema
+# in migrations/0001_crassus_ai.sql). See crassus/crassus/policy.py for why
+# this exists: the previously-proposed "shared JSON file" between Railway
+# services can't be durable or safely shared, so this is the real store both
+# the Worker (browser-facing) and the Railway-hosted Crassus runner (via
+# these Worker routes) read and write against.
+#
+# NOT YET PROVISIONED -- placeholder id. Before deploying, run:
+#   wrangler d1 create crassus_ai
+#   wrangler d1 execute crassus_ai --file=migrations/0001_crassus_ai.sql
+# and replace the database_id below with the one `d1 create` prints.
+[[d1_databases]]
+binding = "CRASSUS_DB"
+database_name = "crassus_ai"
+database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
+
 # Server-side settlement sweep (see the `scheduled` export in worker.js /
 # settleAllBots) -- fixes bot accounts that never settle because nothing
 # opens their dashboard to fire the client-triggered /api/settle call

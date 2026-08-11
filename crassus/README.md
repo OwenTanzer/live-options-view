@@ -119,6 +119,55 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 6. **429 and `Retry-After` are honored globally.** The binding limit is per-IP, so all accounts share one budget.
 7. **HTTP 410 is terminal and recorded as a margin call.** The Worker deletes the user outright. ⚠️ This invariant is verified against the *documented* contract (the mock), not the real deployed Worker's actual settlement behavior — see "Known gaps" below.
 
+## Crassus AI overrides (skeleton, PR1 of 3)
+
+Crassus AI is an LLM layer that will eventually propose bounded parameter
+adjustments for these bots. **This PR ships only the deterministic safety
+layer** -- durable storage, the policy gate, and its wiring into the
+runner -- with no code yet that calls an LLM or accepts human chat; those
+are PR2 and PR3. Collaborator sign-off required exactly this split: the
+trust boundary had to be reviewable before any model output could reach it.
+
+**The rule this system exists to enforce:** Crassus AI may only ever
+produce a *proposed* parameter override. `crassus/crassus/policy.py`'s
+`OverridePolicy.evaluate()` is the sole authority on whether it becomes
+effective -- called fresh every account-processing cycle in
+`runner.py::_run_account`, fail-closed at every step (any missing,
+malformed, expired, unapproved, out-of-bounds, or unreachable input yields
+the account's own baseline `params`, never a crash and never a partially
+applied override). Order execution, `strategy_id`, and account identity are
+never in scope for an override -- see `policy.STRATEGY_PARAM_SCHEMAS` for
+the full allowlist, which only ever contains the scalar thresholds/flags a
+strategy already reads out of `ctx.params`.
+
+Storage is Cloudflare D1 (`migrations/0001_crassus_ai.sql`) plus a new KV
+namespace (`CRASSUS_CONTROL`, for the kill switch and per-bot freeze
+flags), reached only through new `worker.js` routes -- not a file shared
+between Railway services, which collaborators flagged as unsafe. Before
+deploying, provision the real bindings (the ids in `wrangler.toml` are
+placeholders) and secrets:
+
+```
+wrangler kv:namespace create CRASSUS_CONTROL   # then paste the id into wrangler.toml
+wrangler d1 create crassus_ai                  # then paste the database_id into wrangler.toml
+wrangler d1 execute crassus_ai --file=migrations/0001_crassus_ai.sql
+wrangler secret put CRASSUS_AI_KEY             # held by the (not-yet-built) crassus_ai service
+wrangler secret put CRASSUS_OPERATOR_KEY       # held only by human operators (Jake/Owen), used from a CLI
+```
+
+`BOT_REGISTRATION_KEY` (already provisioned) doubles as the read-only
+credential the runner uses against `GET /api/crassus/overrides/:alias`,
+`GET /api/crassus/kill-switch`, `GET /api/crassus/freeze/:alias`, and
+`POST /api/crassus/ledger` -- no new runner-side secret is required for
+this PR.
+
+Also recommended, outside this repo: attach a Railway persistent volume to
+the Crassus service for `logs/`/`state/`, so the local decision ledger
+survives a redeploy independently of the new D1 mirror.
+
+Run `python crassus/scripts/verify_crassus_policy.py` to exercise the
+fail-closed guarantees directly.
+
 ## Server constraints worth knowing
 
 - **No `account_id`** — an account *is* a login. Twenty-one catalog bots = twenty-one registrations, twenty-one cookie jars.

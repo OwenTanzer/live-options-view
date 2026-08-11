@@ -45,7 +45,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -69,6 +69,10 @@ LOCK = threading.Lock()
 # typo in the runner's config fails loudly instead of silently burning a
 # username on a non-bot account.
 BOT_REGISTRATION_KEY = "mock-operator-key"
+# Mirrors worker.js's new machine-auth secrets for the Crassus AI override
+# channel (see crassus/crassus/overrides_client.py, crassus/crassus/policy.py).
+CRASSUS_AI_KEY = "mock-crassus-ai-key"
+CRASSUS_OPERATOR_KEY = "mock-crassus-operator-key"
 FAULT = {"mode": None, "remaining": 0}
 # Independent of FAULT: lets /api/me be unavailable *at the same time* as a
 # paper-trade fault, which is what a genuinely unresolvable execution needs --
@@ -76,6 +80,13 @@ FAULT = {"mode": None, "remaining": 0}
 ME_FAULT = {"mode": None, "remaining": 0, "skip": 0}
 QUOTES: dict[str, dict] = {}
 SNAPSHOT_BYTES: bytes = b"{}"
+
+# Crassus AI override channel (mirrors worker.js's D1/KV storage locally, for
+# tests only -- see crassus/README.md's "Crassus AI overrides" section).
+OVERRIDES: dict[str, dict] = {}
+KILL_SWITCH = {"enabled": False}
+FREEZES: dict[str, bool] = {}
+LEDGER_MIRROR: list[dict] = []
 
 
 def now() -> str:
@@ -227,6 +238,29 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
 
+        if path.startswith("/api/crassus/overrides/"):
+            if self.headers.get("X-Bot-Registration-Key") != BOT_REGISTRATION_KEY:
+                return self._json(403, {"error": "invalid_bot_key"})
+            alias = path.rsplit("/", 1)[-1]
+            with LOCK:
+                candidates = [
+                    o for o in OVERRIDES.values()
+                    if o["account_alias"] == alias and o["status"] == "accepted" and o["expires_utc"] > now()
+                ]
+            if not candidates:
+                return self._json(404, {"error": "not_found"})
+            latest = max(candidates, key=lambda o: o["created_utc"])
+            return self._json(200, latest)
+
+        if path == "/api/crassus/kill-switch":
+            return self._json(200, {"enabled": KILL_SWITCH["enabled"]})
+
+        if path.startswith("/api/crassus/freeze/"):
+            if self.headers.get("X-Bot-Registration-Key") != BOT_REGISTRATION_KEY:
+                return self._json(403, {"error": "invalid_bot_key"})
+            alias = path.rsplit("/", 1)[-1]
+            return self._json(200, {"frozen": FREEZES.get(alias, False)})
+
         return self._json(404, {"error": "not_found"})
 
     def do_POST(self):
@@ -297,6 +331,74 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/paper-trade":
             return self._paper_trade()
+
+        if path == "/api/crassus/overrides":
+            if self.headers.get("X-Crassus-Ai-Key") != CRASSUS_AI_KEY:
+                return self._json(403, {"error": "invalid_crassus_ai_key"})
+            body = self._body()
+            override_id = uuid.uuid4().hex
+            # Mirrors worker.js: the client sends expires_in_minutes, the
+            # server computes expires_utc -- a client can propose a duration,
+            # never a fixed timestamp.
+            expires_utc = (
+                datetime.now(timezone.utc)
+                + timedelta(minutes=float(body.get("expires_in_minutes") or 0))
+            ).isoformat()
+            with LOCK:
+                OVERRIDES[override_id] = {
+                    "id": override_id,
+                    "account_alias": body.get("account_alias"),
+                    "status": "proposed",
+                    "previous_params": body.get("previous_params"),
+                    "proposed_params": body.get("proposed_params"),
+                    "rationale": body.get("rationale"),
+                    "evidence_refs": body.get("evidence_refs"),
+                    "model": body.get("model"),
+                    "created_utc": now(),
+                    "expires_utc": expires_utc,
+                    "accepted_utc": None,
+                    "accepted_by": None,
+                    "rollback_target": body.get("rollback_target"),
+                    "schema_version": "crassus_override.v1",
+                }
+            return self._json(201, {"id": override_id, "status": "proposed"})
+
+        if path.startswith("/api/crassus/overrides/") and path.endswith(("/accept", "/reject")):
+            if self.headers.get("X-Crassus-Operator-Key") != CRASSUS_OPERATOR_KEY:
+                return self._json(403, {"error": "invalid_operator_key"})
+            parts = path.split("/")
+            override_id, action = parts[-2], parts[-1]
+            with LOCK:
+                row = OVERRIDES.get(override_id)
+                if not row:
+                    return self._json(404, {"error": "not_found"})
+                row["status"] = "accepted" if action == "accept" else "rejected"
+                if action == "accept":
+                    row["accepted_utc"] = now()
+                    row["accepted_by"] = "mock-operator"
+            return self._json(200, {"id": override_id, "status": row["status"]})
+
+        if path == "/api/crassus/kill-switch":
+            if self.headers.get("X-Crassus-Operator-Key") != CRASSUS_OPERATOR_KEY:
+                return self._json(403, {"error": "invalid_operator_key"})
+            body = self._body()
+            KILL_SWITCH["enabled"] = bool(body.get("enabled"))
+            return self._json(200, {"enabled": KILL_SWITCH["enabled"]})
+
+        if path == "/api/crassus/freeze":
+            if self.headers.get("X-Crassus-Operator-Key") != CRASSUS_OPERATOR_KEY:
+                return self._json(403, {"error": "invalid_operator_key"})
+            body = self._body()
+            alias = body.get("account_alias")
+            FREEZES[alias] = bool(body.get("frozen"))
+            return self._json(200, {"account_alias": alias, "frozen": FREEZES[alias]})
+
+        if path == "/api/crassus/ledger":
+            if self.headers.get("X-Bot-Registration-Key") != BOT_REGISTRATION_KEY:
+                return self._json(403, {"error": "invalid_bot_key"})
+            with LOCK:
+                LEDGER_MIRROR.append(self._body())
+            return self._json(200, {"ok": True})
 
         return self._json(404, {"error": "not_found"})
 

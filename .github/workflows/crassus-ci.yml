@@ -73,6 +73,9 @@ jobs:
       - name: Run durable archive failure-boundary suite
         working-directory: crassus
         run: python scripts/verify_archive.py
+      - name: Run Crassus AI policy layer suite
+        working-directory: crassus
+        run: python scripts/verify_crassus_policy.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
