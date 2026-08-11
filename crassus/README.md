@@ -91,7 +91,10 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/strategy.py` | The strategy contract |
 | `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + browser fallback + VADER, polled and cached like the market snapshot) |
 | `crassus/trump_sentiment.py` | Trump Truth Social sentiment observation for `trump_whisperer_qqq` (`trumpstruth.org/feed` RSS + VADER, polled and cached the same way) |
+| `crassus/phelps.py` | `phelps_wrap()` -- retrofits Guideline Phelps' ~25-30 minute hold-time floor onto any existing strategy's exits, without touching its entry/signal logic |
 | `crassus/strategies/` | Strategy implementations |
+| `crassus/strategies/phelps_variants.py` | Phelps-wrapped twins of the four live strategies (`smoke_atm_roundtrip_phelps`, `reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, `momentum_qqq_phelps`) -- same entries, exits deferred one Phelps window |
+| `crassus/strategies/phelps_pure.py` | `phelps_pure_qqq` -- entry *and* exit both derived from Guideline Phelps directly (short-window displacement trigger, hold-until-invalidation-or-window-elapses exit), rather than wrapping another strategy's signal |
 | `crassus/runner.py` | The loop |
 | `Dockerfile` | Railway's deploy image (`railway.toml`'s `builder = "DOCKERFILE"`) -- bakes a version-matched Chromium in for `reddit_sentiment_qqq`'s browser fallback |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
@@ -102,6 +105,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `scripts/verify_reddit_ingestion.py` | Hermetic checks for `reddit_sentiment_qqq`'s ingestion layer (JSON fetch, browser DOM parsing, layer selection, 429 cooldown, crash recovery) -- no network access or real browser required |
 | `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
 | `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
+| `scripts/verify_phelps.py` | Hermetic checks for `phelps_wrap()`'s defer/release/invalidation-clearing logic and `phelps_pure_qqq`'s entry/exit decision logic -- no network access required |
 
 ## Integrity invariants
 
@@ -117,7 +121,7 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 
 ## Server constraints worth knowing
 
-- **No `account_id`** — an account *is* a login. Twelve catalog bots = twelve registrations, twelve cookie jars.
+- **No `account_id`** — an account *is* a login. Twenty-one catalog bots = twenty-one registrations, twenty-one cookie jars.
 - **The `reason` field is silently dropped.** Strategy reasoning lives only in the local ledger.
 - **No close endpoint, no positions endpoint, no server P&L.** Closing is an opposite-side trade; positions are derived average-cost from the `/api/me` trade list.
 - **Execution quotes must be ≤15s old.** Outside market hours the collector's quotes age out, so trades will 409 — the runner declines rather than spending rate-limit budget on a certain rejection.
@@ -144,29 +148,69 @@ The UI has no bot or strategy whitelist, and the ignored `accounts.json` is only
 | Doris | `cheap_atm_puts` | P3 |
 
 The six accounts above are the eventual P3 mapping's -- see below for what
-each runs today instead. Six additional accounts are dedicated to strategies
-outside that mapping: **TrumpWhisperer** runs `trump_whisperer_qqq`, **Newton**
-runs `momentum_qqq`, and **Max Pain**, **OI Skew**, and **Put-Call Ratio** run
-`max_pain_qqq`, `oi_skew_qqq`, and `put_call_ratio_qqq`, respectively. **Canopus** runs the frozen `canopus_down_day_14` forward-test rule.
+each runs today instead. Six additional base accounts are dedicated to other
+strategies: **TrumpWhisperer**, **Newton**, **Max Pain**, **OI Skew**,
+**Put-Call Ratio**, and **Canopus**. Nine more catalog accounts form the
+Phelps comparison block: eight twins of the original accounts plus **Bowman**.
 
-Eight strategies are implemented today -- `smoke_atm_roundtrip`,
-`reddit_sentiment_qqq`, `trump_whisperer_qqq`, `momentum_qqq`, `max_pain_qqq`,
-`oi_skew_qqq`, `put_call_ratio_qqq`, and `canopus_down_day_14` -- so `accounts.example.json` splits
-the original six accounts three/three between `smoke_atm_roundtrip` (Ankit,
-Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus, Doris), then
-assigns one dedicated account to each of the other six strategies. The three
-`reddit_sentiment_qqq` accounts use conservative / default / aggressive
-thresholds via `params`, so the Automated tab's per-strategy rollup compares
-something real out of the box. Copying the file as-is is meant to work, not
-just illustrate the eventual mapping. Swap in a P3 strategy_id for an account
-only once that strategy is registered; the runner validates every configured
-`strategy_id` against the registry at startup and refuses to start (rather than
-crashing mid-run on the first unregistered one it happens to reach) if one
-doesn't exist yet.
+Thirteen strategies are implemented today: the eight base strategies
+`smoke_atm_roundtrip`, `reddit_sentiment_qqq`, `trump_whisperer_qqq`,
+`momentum_qqq`, `max_pain_qqq`, `oi_skew_qqq`, `put_call_ratio_qqq`, and
+`canopus_down_day_14`; four wrapped Phelps variants; and `phelps_pure_qqq`.
+The catalog keeps the original six accounts split three/three between smoke
+and Reddit sentiment, assigns one account to every other base strategy, and
+adds the Phelps comparison accounts described below. The runner validates
+every configured `strategy_id` at startup, and CI requires every registered
+strategy to have at least one catalog-backed account.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
 are deliberately not baked into the runtime.
+
+## Guideline Phelps and the Phelps test bots
+
+Guideline Phelps (Notion: Trading Method / Preliminary Guideline Phelps) is
+a provisional hold-time rule, not a strategy: a 0DTE option position is a
+short-horizon convexity purchase, and the market may overprice convexity
+across a whole session while underpricing it inside the specific ~25-30
+minute window ("one Phelps") the day's move actually happens in. The
+guideline says a position should be granted one Phelps window before an
+ordinary signal reversal or option-price discomfort counts as a reason to
+exit -- only a genuine invalidation of the entry thesis should close it
+early; past the window, a still-unresolved position should be released.
+
+`crassus/phelps.py`'s `phelps_wrap()` retrofits exactly that hold-time floor
+onto any of this repo's existing strategies without touching their entry or
+signal logic: every strategy here shares one exit shape (close the moment
+its own signal stops supporting the position), so `phelps_wrap` intercepts
+a proposed close, holds it until `ctx.params["phelps_minutes"]` (default
+`phelps.PHELPS_MINUTES_DEFAULT`, the guideline's 25-30m band's midpoint)
+has elapsed since entry, then releases it. `crassus/strategies/phelps_variants.py`
+applies this to the four live strategies, producing `smoke_atm_roundtrip_phelps`,
+`reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, and
+`momentum_qqq_phelps`.
+
+`accounts.example.json`'s **Phelps test bots** are exact copies of the eight
+live accounts (Ankit, Bob, Doktor Freuding, Luigi, Jesus, Doris,
+TrumpWhisperer, Newton) -- same alias root plus " Phelps", same params where
+the original has any -- moved onto the corresponding `_phelps` strategy_id.
+Comparing e.g. Ankit vs. Ankit Phelps isolates the effect of the hold-time
+floor with nothing else changed.
+
+A ninth account, **Bowman** (named for Bob Bowman, Michael Phelps's coach --
+"Phelps" itself is reserved for the guideline), runs `phelps_pure_qqq`
+(`crassus/strategies/phelps_pure.py`), which is not a wrapper: both its
+entry (a short-window, ~5-minute displacement trigger -- see that module's
+docstring for why this is the most direct proxy for "a structurally
+privileged moment" the guideline itself doesn't otherwise define) and its
+exit (close immediately only on a full retrace of the triggering
+displacement; otherwise hold, regardless of P&L, until the Phelps window
+elapses and then release unconditionally) are derived from the guideline
+directly. It exists to isolate what Phelps alone contributes as a signal,
+not just as an exit-timing floor.
+
+See `scripts/verify_phelps.py` for hermetic coverage of both the wrapper
+and the standalone strategy.
 
 ## `reddit_sentiment_qqq`
 

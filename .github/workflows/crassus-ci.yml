@@ -46,6 +46,9 @@ jobs:
       - name: Run canopus_down_day_14 strategy suite
         working-directory: crassus
         run: python scripts/verify_canopus_down_day.py
+      - name: Run Guideline Phelps suite
+        working-directory: crassus
+        run: python scripts/verify_phelps.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
