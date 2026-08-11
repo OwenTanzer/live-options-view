@@ -49,6 +49,9 @@ jobs:
       - name: Run Guideline Phelps suite
         working-directory: crassus
         run: python scripts/verify_phelps.py
+      - name: Run Crassus AI policy layer suite
+        working-directory: crassus
+        run: python scripts/verify_crassus_policy.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's
