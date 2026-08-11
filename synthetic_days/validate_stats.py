@@ -41,9 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from r2_sources import R2Source  # noqa: E402
 from price_path import split_into_sessions, _log_returns  # noqa: E402
 from chain_synth import (  # noqa: E402
+    MIN_MEANINGFUL_EOD_EXTRINSIC,
     MONEYNESS_BUCKET_EDGES,
     N_MONEYNESS_BUCKETS,
-    ATM_BUCKET_INDEX,
     _relative_moneyness,
 )
 from day_generator import load_intraday_curve, _row_extrinsic, _eod_extrinsic_by_symbol  # noqa: E402
@@ -139,7 +139,7 @@ def _bucket_option_ratios(rows_by_snapshot: list[tuple[float, list[dict]]], eod_
             continue
         for r in rows:
             eod_extrinsic = eod_extrinsic_by_symbol.get(r.get("OptionSymbol"))
-            if not eod_extrinsic or eod_extrinsic <= 1e-6:
+            if not eod_extrinsic or eod_extrinsic < MIN_MEANINGFUL_EOD_EXTRINSIC:
                 continue
             extrinsic = _row_extrinsic(r, spot)
             if extrinsic is None:
@@ -156,14 +156,93 @@ def _bucket_option_ratios(rows_by_snapshot: list[tuple[float, list[dict]]], eod_
     return grid
 
 
+def _held_symbol_path(
+    rows_by_snapshot: list[tuple[float, list[dict]]],
+    eod_extrinsic_by_symbol: dict[str, float],
+    calibrated_grid: np.ndarray,
+) -> tuple[str | None, list[tuple[float, int, float, float]]]:
+    """Follows *one real OptionSymbol* -- the call nearest the money at the
+    session's first snapshot -- across every later snapshot it appears in,
+    computing that same symbol's own extrinsic-value ratio against its own
+    EOD extrinsic value at each point.
+
+    This is the literal "held contract followed across time buckets"
+    `_bucket_option_ratios` does not provide: that function pools every
+    symbol in a moneyness bucket into a cross-sectional median at each time
+    bucket -- a real and useful aggregate check, but not one position's
+    price path. A strike that's ATM at 10am and a *different* strike that's
+    ATM at 2pm can both land in the "ATM bucket" at their respective times
+    without ever being the same held contract. Flagged in review: the
+    previous `atm_bucket_path` was exactly this cross-sectional-median
+    sequence mislabeled as a held-contract trace. `held_out_option_path_check`
+    still gates on the pooled grid (a real, useful aggregate signal); this
+    is the separate same-symbol check requested in addition to it.
+
+    Returns `(None, [])` if no call is quoted at the first snapshot or that
+    call has no real EOD extrinsic value to normalize against. Each path
+    entry is `(minutes_since_open, moneyness_bucket_at_that_snapshot,
+    real_ratio, calibrated_grid_ratio_at_that_time/bucket)` -- moneyness
+    bucket is tracked per-snapshot, not fixed at entry, since the same
+    symbol's moneyness drifts as spot moves through the session.
+    """
+    if not rows_by_snapshot:
+        return None, []
+    first_minutes, first_rows = rows_by_snapshot[0]
+    first_spot = next((float(r["UnderlyingPrice"]) for r in first_rows if r.get("UnderlyingPrice")), None)
+    if first_spot is None:
+        return None, []
+    calls = [r for r in first_rows if r.get("Type") == "call" and r.get("OptionSymbol") in eod_extrinsic_by_symbol]
+    if not calls:
+        return None, []
+    # Nearest-the-money first, then next-nearest, etc. -- not just the
+    # single closest strike. A held position is a real trader's choice, not
+    # necessarily the exact ATM strike, and giving up entirely because that
+    # one strike happens to decay to a numerically meaningless near-zero
+    # EOD extrinsic value (see MIN_MEANINGFUL_EOD_EXTRINSIC) would silently
+    # skip the trace on days where a real, demonstrable held-contract path
+    # is available one strike over.
+    candidates = sorted(calls, key=lambda r: abs(float(r["Strike"]) - first_spot))
+    held_symbol = held_strike = eod_extrinsic = None
+    for candidate in candidates:
+        sym = candidate["OptionSymbol"]
+        candidate_eod = eod_extrinsic_by_symbol.get(sym)
+        if candidate_eod and candidate_eod >= MIN_MEANINGFUL_EOD_EXTRINSIC:
+            held_symbol, held_strike, eod_extrinsic = sym, float(candidate["Strike"]), candidate_eod
+            break
+    if held_symbol is None:
+        return None, []
+
+    n_time_buckets = (390 // 15) + 1
+    path: list[tuple[float, int, float, float]] = []
+    for minutes, rows in rows_by_snapshot:
+        row = next((r for r in rows if r.get("OptionSymbol") == held_symbol), None)
+        if row is None:
+            continue  # this exact contract wasn't in this snapshot's window -- skip, don't substitute another strike
+        spot = next((float(r["UnderlyingPrice"]) for r in rows if r.get("UnderlyingPrice")), None)
+        if spot is None:
+            continue
+        extrinsic = _row_extrinsic(row, spot)
+        if extrinsic is None:
+            continue
+        real_ratio = extrinsic / eod_extrinsic
+        rel_m = float(_relative_moneyness(np.array([held_strike / spot - 1.0]), np.array([True]))[0])
+        m_bucket = int(np.clip(np.searchsorted(MONEYNESS_BUCKET_EDGES, rel_m), 0, N_MONEYNESS_BUCKETS - 1))
+        b = int(np.clip(minutes // 15, 0, n_time_buckets - 1))
+        path.append((minutes, m_bucket, real_ratio, float(calibrated_grid[b, m_bucket])))
+    return held_symbol, path
+
+
 def held_out_option_path_check(src: R2Source, max_calibration_days: int = 15, samples_per_day: int = 30) -> dict | None:
     """Out-of-sample check for `chain_synth`'s moneyness/time-conditional
     premium-decay grid: hold one real intraday day *out* of calibration,
     rebuild the grid from every other real intraday day, then compare that
     grid's predictions against the held-out day's own real, never-seen rows
-    -- a held contract's price path followed across (time, moneyness)
-    buckets, exactly the dimension the strategy P&L in `backtest_bridge.py`
-    depends on.
+    -- across (time, moneyness) buckets, exactly the dimension the strategy
+    P&L in `backtest_bridge.py` depends on. This is a pooled, cross-
+    sectional comparison (every symbol in a bucket, at each time bucket);
+    `_held_symbol_path` below additionally follows one *actual* held
+    contract by its own `OptionSymbol` across the whole session, since a
+    pooled bucket median is not the same claim as one position's price path.
 
     Calibrating the grid from real rows and then only comparing it back
     against rows it was fit on (what `validate_stats.py` did before this)
@@ -207,7 +286,18 @@ def held_out_option_path_check(src: R2Source, max_calibration_days: int = 15, sa
 
     open_t = parsed[0][0].replace(hour=9, minute=30, second=0, microsecond=0)
     eod_extrinsic_by_symbol = _eod_extrinsic_by_symbol(parsed[-1][1])
-    rows_by_snapshot = [((t - open_t).total_seconds() / 60.0, rows) for t, rows in parsed]
+    # Regular-session rows only (0..390 minutes since the 09:30 open) --
+    # same reasoning as day_generator.load_intraday_curve's own filter: a
+    # pre-market snapshot's negative minutes-since-open would otherwise
+    # collapse into time-bucket 0 via a negative-floor-division clip,
+    # corrupting both the pooled grid comparison and the held-symbol trace
+    # with samples that were never actually "0 minutes since open."
+    rows_by_snapshot = [
+        ((t - open_t).total_seconds() / 60.0, rows) for t, rows in parsed
+        if 0.0 <= (t - open_t).total_seconds() / 60.0 <= 390.0
+    ]
+    if len(rows_by_snapshot) < 2:
+        return None
     real_holdout_grid = _bucket_option_ratios(rows_by_snapshot, eod_extrinsic_by_symbol)
 
     matched = ~np.isnan(real_holdout_grid) & (real_holdout_grid > 0) & (calibrated_grid > 0) & calibrated_sampled_mask
@@ -220,18 +310,15 @@ def held_out_option_path_check(src: R2Source, max_calibration_days: int = 15, sa
     # one end of the range and impossibly tight at the other.
     log_ratio_err = np.abs(np.log2(real_holdout_grid[matched] / calibrated_grid[matched]))
 
-    atm_real = real_holdout_grid[:, ATM_BUCKET_INDEX]
-    atm_calibrated = calibrated_grid[:, ATM_BUCKET_INDEX]
-    atm_buckets_with_real_samples = [
-        (b, float(atm_real[b]), float(atm_calibrated[b])) for b in range(len(atm_real)) if atm_real[b] == atm_real[b]
-    ]
+    held_symbol, held_symbol_path = _held_symbol_path(rows_by_snapshot, eod_extrinsic_by_symbol, calibrated_grid)
 
     return {
         "held_out_day": held_out_day,
         "n_matched_cells": n_matched,
         "median_log2_ratio_error": float(np.median(log_ratio_err)),
         "max_log2_ratio_error": float(np.max(log_ratio_err)),
-        "atm_bucket_path": atm_buckets_with_real_samples,  # the "held contract followed across time buckets" trace
+        "held_symbol": held_symbol,
+        "held_symbol_path": held_symbol_path,  # the actual same-contract-across-time trace, see _held_symbol_path
     }
 
 
@@ -352,11 +439,24 @@ def check_acceptance(
             f"the median check above is the one that actually reflects typical backtest fidelity)",
             opc["max_log2_ratio_error"] <= np.log2(16), f"factor={2**opc['max_log2_ratio_error']:.2f}x",
         )
-        if opc["atm_bucket_path"]:
-            print("  ATM bucket, held contract followed across time buckets (real vs grid calibrated without this day):")
-            for b, real_ratio, calibrated_ratio in opc["atm_bucket_path"]:
-                minutes = b * 15
-                print(f"    t+{minutes:>3}min: real={real_ratio:.3f}  calibrated_grid={calibrated_ratio:.3f}")
+        if opc["held_symbol_path"]:
+            print(
+                f"  Held contract {opc['held_symbol']} -- one actual same-symbol position, not a cross-sectional "
+                f"bucket median, followed across every snapshot it appears in on the held-out day "
+                f"(real vs grid calibrated without this day):"
+            )
+        else:
+            print(
+                "  Held-contract trace: skipped -- the call nearest the money at the open decayed to a real EOD "
+                "extrinsic value below the meaningful floor (see MIN_MEANINGFUL_EOD_EXTRINSIC), which would only "
+                "produce a numerically meaningless near-infinite ratio, not a substitute contract."
+            )
+        if opc["held_symbol_path"]:
+            for minutes, m_bucket, real_ratio, calibrated_ratio in opc["held_symbol_path"]:
+                print(
+                    f"    t+{minutes:>3.0f}min (moneyness bucket {m_bucket}): "
+                    f"real={real_ratio:.3f}  calibrated_grid={calibrated_ratio:.3f}"
+                )
 
     print(f"\n{passed} passed, {failed} failed")
     return failed == 0

@@ -83,6 +83,20 @@ MONEYNESS_BUCKET_EDGES = (-0.02, -0.005, 0.005, 0.02)
 N_MONEYNESS_BUCKETS = len(MONEYNESS_BUCKET_EDGES) + 1
 ATM_BUCKET_INDEX = int(np.searchsorted(MONEYNESS_BUCKET_EDGES, 0.0))
 
+# A premium-decay ratio (some snapshot's extrinsic value / that same
+# symbol's own EOD extrinsic value) is only numerically meaningful when the
+# EOD denominator is itself a real, tradeable amount. A contract that
+# decays to a fraction of a cent by the close makes the ratio for any
+# earlier snapshot balloon toward infinity regardless of how good the
+# model is -- that's a division-by-near-zero artifact of a worthless
+# contract, not evidence about decay-curve fidelity. `day_generator.py`'s
+# calibration and `validate_stats.py`'s out-of-sample check both filter
+# out any row whose own EOD extrinsic value is below this floor before
+# computing a ratio from it. 5 cents, not fractions of a cent (the
+# previous `1e-6` threshold): real-money-equivalent noise floor for a
+# 0DTE contract, well below the ~$0.05 tick most quoted spreads clear.
+MIN_MEANINGFUL_EOD_EXTRINSIC = 0.05
+
 
 def build_donor(chain_cols: dict, day: date) -> ChainDonor | None:
     """`chain_cols` is the column-oriented payload from `options_0dte_day`."""

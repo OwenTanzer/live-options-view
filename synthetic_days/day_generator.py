@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from r2_sources import R2Source  # noqa: E402
 from price_path import split_into_sessions, bootstrap_day, upsample_to_seconds, ET  # noqa: E402
-from chain_synth import build_donor, intraday_shape_curve, synth_snapshot_rows  # noqa: E402
+from chain_synth import MIN_MEANINGFUL_EOD_EXTRINSIC, build_donor, intraday_shape_curve, synth_snapshot_rows  # noqa: E402
 
 STRIKE_WINDOW_DEFAULT = 33  # matches collector.py's live STRIKE_WINDOW
 
@@ -148,6 +148,15 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
         open_t = parsed_days[0][0].replace(hour=9, minute=30, second=0, microsecond=0)
         for t, oi, vol, spread, rows in parsed_days:
             minutes = (t - open_t).total_seconds() / 60.0
+            if not (0.0 <= minutes <= 390.0):
+                # Pre-market/after-hours collector snapshots -- real data,
+                # but outside the regular session this curve's 15-minute
+                # buckets (0..390) are indexed over. Flagged in review
+                # territory: including them collapses every pre-market
+                # sample into time-bucket 0 via a negative-minutes//15
+                # clip, corrupting the very first bucket with samples that
+                # were never actually "0 minutes since open."
+                continue
             samples.append((minutes, {
                 "oi_ratio": oi / eod_oi,
                 "volume_ratio": vol / eod_vol,
@@ -160,7 +169,7 @@ def load_intraday_curve(src: R2Source, max_days: int = 15, samples_per_day: int 
             for r in rows:
                 sym = r.get("OptionSymbol")
                 eod_extrinsic = eod_extrinsic_by_symbol.get(sym)
-                if not eod_extrinsic or eod_extrinsic <= 1e-6:
+                if not eod_extrinsic or eod_extrinsic < MIN_MEANINGFUL_EOD_EXTRINSIC:
                     continue
                 extrinsic = _row_extrinsic(r, spot)
                 if extrinsic is None:

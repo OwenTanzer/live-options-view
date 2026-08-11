@@ -32,9 +32,11 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -117,16 +119,84 @@ def make_options_0dte(src: R2Source) -> None:
     print(f"wrote {len(fixture_manifest['days'])} real EOD donor chain days")
 
 
+def _is_valid_trading_session(src: R2Source, yyyymmdd: str) -> bool:
+    """Weekday *and* the day's own rows carry coherent trade-date/
+    expiration/DTE semantics, not just a weekday-looking directory name.
+
+    Flagged in review: `make_intraday_days()` previously took the latest
+    calendar directories with no session-validity check at all. The
+    checked-in calibration set ended up including a Saturday and a Sunday
+    (`2026-08-08`/`2026-08-09`) -- stale collector snapshots left over from
+    the last real session -- whose rows still claimed `DTE=0` against a
+    following Monday's expiration, contaminating the "real" decay
+    calibration with non-session chains. A weekday check alone would not
+    have caught that (the underlying `TradeDate` in a stale weekend
+    snapshot can still be a real prior weekday); checking that every
+    `DTE=0` row's `Expiration` actually equals its own `TradeDate` catches
+    both a wrong calendar day and stale same-day-labeled leftovers.
+
+    Also requires the day's last recorded snapshot to actually reach late
+    in the session (>= 15:45 ET) -- a still-in-progress "today" (the
+    collector's most recent directory, if this script is run mid-session)
+    would otherwise pass the weekday/DTE checks above while having no real
+    EOD close at all yet, which is the same "normalize against a snapshot
+    that isn't actually the close" failure mode as the subsampling bug this
+    round also fixes, just at the day-selection level instead of the
+    within-day one.
+    """
+    day_date = datetime.strptime(yyyymmdd, "%Y%m%d").date()
+    if day_date.weekday() >= 5:
+        return False
+    snap_keys = src.intraday_snapshots(yyyymmdd)
+    if not snap_keys:
+        return False
+    last_hhmmss = snap_keys[-1].rsplit("snapshot_", 1)[-1].split(".")[0][:6]
+    if last_hhmmss < "154500":
+        return False
+    sample = src.intraday_snapshot_csv(snap_keys[len(snap_keys) // 2])
+    if not sample:
+        return False
+    for row in sample:
+        try:
+            dte = int(row.get("DTE") or -1)
+        except ValueError:
+            continue
+        if dte != 0:
+            continue
+        trade_date, expiration = row.get("TradeDate"), row.get("Expiration")
+        if not trade_date or not expiration or trade_date != expiration:
+            return False
+        try:
+            if date.fromisoformat(trade_date) != day_date:
+                return False
+        except ValueError:
+            return False
+    return True
+
+
 def make_intraday_days(src: R2Source) -> None:
-    """N_INTRADAY_DAYS real intraday collector days, subsampled to
-    INTRADAY_SNAPSHOTS_PER_DAY real snapshots each (roughly every 30 min
-    across the real session) -- real chain rows, just fewer of them, to keep
-    the checked-in fixture compact."""
+    """N_INTRADAY_DAYS real, validated trading-session intraday collector
+    days, subsampled to INTRADAY_SNAPSHOTS_PER_DAY real snapshots each
+    (roughly every 30 min across the real session, always including the
+    session's true final snapshot) -- real chain rows, just fewer of them,
+    to keep the checked-in fixture compact."""
     available = src.intraday_days_available()
     if not available:
         print("No real intraday/ days in R2.", file=sys.stderr)
         sys.exit(1)
-    chosen_days = available[-N_INTRADAY_DAYS:]
+
+    chosen_days = []
+    skipped = []
+    for yyyymmdd in reversed(available):  # most recent first
+        if len(chosen_days) >= N_INTRADAY_DAYS:
+            break
+        if _is_valid_trading_session(src, yyyymmdd):
+            chosen_days.append(yyyymmdd)
+        else:
+            skipped.append(yyyymmdd)
+    chosen_days.sort()
+    if skipped:
+        print(f"skipped {len(skipped)} non-session/invalid intraday day(s): {skipped}")
 
     intraday_root = FIXTURE_DIR / "intraday"
     intraday_root.mkdir(parents=True, exist_ok=True)
@@ -135,11 +205,21 @@ def make_intraday_days(src: R2Source) -> None:
         snap_keys = src.intraday_snapshots(yyyymmdd)
         if not snap_keys:
             continue
-        # Real filenames encode HHMMSSffffff in ET-naive collector wall
-        # time; keep every Nth one, evenly spaced, rather than the first N
-        # (which would all land pre-market).
-        stride = max(1, len(snap_keys) // INTRADAY_SNAPSHOTS_PER_DAY)
-        picked = snap_keys[::stride][:INTRADAY_SNAPSHOTS_PER_DAY]
+        n = len(snap_keys)
+        if n <= INTRADAY_SNAPSHOTS_PER_DAY:
+            picked = snap_keys
+        else:
+            # Evenly spaced across [0, n-1] *inclusive* -- guarantees the
+            # last real snapshot (the true session close) is always kept.
+            # Flagged in review: `snap_keys[::stride][:N]` could (and did)
+            # drop the close entirely when stride*N < n, leaving the
+            # fixture ending mid-afternoon; `load_intraday_curve()`
+            # normalizes every row's decay ratio against whichever
+            # snapshot is *last in the retained set*, treating it as EOD --
+            # so a dropped close silently mislabeled an afternoon snapshot
+            # as the close and corrupted the whole day's decay curve.
+            idx = sorted(set(np.linspace(0, n - 1, INTRADAY_SNAPSHOTS_PER_DAY).round().astype(int).tolist()))
+            picked = [snap_keys[i] for i in idx]
 
         day_dir = intraday_root / yyyymmdd
         day_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +235,7 @@ def make_intraday_days(src: R2Source) -> None:
         (day_dir / "_listing.json").write_text(json.dumps(day_listing))
         listing.extend(day_listing)
     (intraday_root / "_listing.json").write_text(json.dumps(listing))
-    print(f"wrote {len(chosen_days)} real intraday collector days ({len(listing)} real snapshots)")
+    print(f"wrote {len(chosen_days)} real, validated intraday trading-session days ({len(listing)} real snapshots)")
 
 
 def main() -> None:
