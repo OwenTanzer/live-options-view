@@ -68,8 +68,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Prove the integrity invariants (spins up the mock Worker itself)
 .venv/bin/python scripts/verify_invariants.py
 
-# Run the loop
-cp accounts.example.json accounts.json      # gitignored; then set passwords
+# Run the loop. accounts.example.json is the tracked bot catalog; export the
+# CRASSUS_PW_* variables it names. An ignored accounts.json can override fields
+# by username or add private accounts, but cannot hide catalog bots.
 .venv/bin/python -m crassus.runner --once --dry-run
 .venv/bin/python -m crassus.runner --interval 300
 ```
@@ -90,17 +91,21 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/strategy.py` | The strategy contract |
 | `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + browser fallback + VADER, polled and cached like the market snapshot) |
 | `crassus/trump_sentiment.py` | Trump Truth Social sentiment observation for `trump_whisperer_qqq` (`trumpstruth.org/feed` RSS + VADER, polled and cached the same way) |
+| `crassus/phelps.py` | `phelps_wrap()` -- retrofits Guideline Phelps' ~25-30 minute hold-time floor onto any existing strategy's exits, without touching its entry/signal logic |
 | `crassus/strategies/` | Strategy implementations |
+| `crassus/strategies/phelps_variants.py` | Phelps-wrapped twins of the four live strategies (`smoke_atm_roundtrip_phelps`, `reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, `momentum_qqq_phelps`) -- same entries, exits deferred one Phelps window |
+| `crassus/strategies/phelps_pure.py` | `phelps_pure_qqq` -- entry *and* exit both derived from Guideline Phelps directly (short-window displacement trigger, hold-until-invalidation-or-window-elapses exit), rather than wrapping another strategy's signal |
 | `crassus/runner.py` | The loop |
 | `Dockerfile` | Railway's deploy image (`railway.toml`'s `builder = "DOCKERFILE"`) -- bakes a version-matched Chromium in for `reddit_sentiment_qqq`'s browser fallback |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
 | `scripts/mock_worker.py` | Local stand-in for the Worker, with fault injection |
 | `scripts/smoke_browser_launch.py` | Build-time check that Chromium actually launches in the image (see `Dockerfile`) |
-| `scripts/verify_invariants.py` | 66 checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
+| `scripts/verify_invariants.py` | Integrity checks across 15 scenarios, run hermetically against a local mock (`crassus/scripts/fixtures/snapshot.json` stands in for the R2 snapshot; no network access to production is required) |
 | `scripts/verify_reddit_sentiment.py` | Hermetic checks for `reddit_sentiment_qqq`'s aggregation math and decision logic -- no Reddit credentials or network access required |
 | `scripts/verify_reddit_ingestion.py` | Hermetic checks for `reddit_sentiment_qqq`'s ingestion layer (JSON fetch, browser DOM parsing, layer selection, 429 cooldown, crash recovery) -- no network access or real browser required |
 | `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
 | `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
+| `scripts/verify_phelps.py` | Hermetic checks for `phelps_wrap()`'s defer/release/invalidation-clearing logic and `phelps_pure_qqq`'s entry/exit decision logic -- no network access required |
 
 ## Integrity invariants
 
@@ -116,14 +121,20 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 
 ## Server constraints worth knowing
 
-- **No `account_id`** — an account *is* a login. Six bots = six registrations, six cookie jars.
+- **No `account_id`** — an account *is* a login. Twenty-one catalog bots = twenty-one registrations, twenty-one cookie jars.
 - **The `reason` field is silently dropped.** Strategy reasoning lives only in the local ledger.
 - **No close endpoint, no positions endpoint, no server P&L.** Closing is an opposite-side trade; positions are derived average-cost from the `/api/me` trade list.
 - **Execution quotes must be ≤15s old.** Outside market hours the collector's quotes age out, so trades will 409 — the runner declines rather than spending rate-limit budget on a certain rejection.
 - **Insolvent settlement deletes the account.** Not a negative balance — permanent erasure.
 - Bot accounts **do not pre-exist**; the runner registers them on first use.
 - **Bot accounts are marked server-side, not by username convention.** Registering with an `X-Bot-Registration-Key` header matching the Worker's `BOT_REGISTRATION_KEY` secret adds the account to the `bot:` index that backs the public `GET /api/bots` roster and the site's Automated tab. Without the header the account registers as an ordinary human user and never appears there; with a *wrong* key registration is rejected outright rather than silently downgraded.
-- **`strategy_id` must be re-synced when it changes.** `accounts.json` here is authoritative, but the Worker only learns a bot's strategy when told. `POST /api/bot-metadata` (same operator key) updates `strategy_id`/`alias` on an existing bot, so moving an account to a new strategy re-attributes its future performance instead of leaving the roster crediting the old one. Call it at startup for every configured account.
+- **`strategy_id` must be re-synced when it changes.** The merged catalog/config is authoritative, but the Worker only learns a bot's strategy when told. `POST /api/bot-metadata` (same operator key) updates `strategy_id`/`alias` on an existing bot, so moving an account to a new strategy re-attributes its future performance instead of leaving the roster crediting the old one. The runner does this at startup for every configured account.
+
+### Adding a Crassus bot or strategy
+
+Register the strategy in `crassus/strategies`, add at least one public account definition to `accounts.example.json`, and provision the listed password environment variable plus `BOT_REGISTRATION_KEY` in the runtime. CI fails if a registered strategy has no catalog account. No Worker or front-end edit is needed: the runner registers or re-syncs the account, `GET /api/bots` returns it, and the Automated tab renders its card generically.
+
+The UI has no bot or strategy whitelist, and the ignored `accounts.json` is only an overlay. That means a stale private config cannot hide bots added to the checked-in catalog by later PRs.
 
 ## Account ↔ strategy mapping (target, once P3 lands)
 
@@ -137,30 +148,69 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 | Doris | `cheap_atm_puts` | P3 |
 
 The six accounts above are the eventual P3 mapping's -- see below for what
-each runs today instead. A seventh, **TrumpWhisperer**, exists solely to
-run `trump_whisperer_qqq` and isn't part of that six-account P3 mapping at
-all; it's not a stand-in for a future strategy the way the other six are.
+each runs today instead. Six additional base accounts are dedicated to other
+strategies: **TrumpWhisperer**, **Newton**, **Max Pain**, **OI Skew**,
+**Put-Call Ratio**, and **Canopus**. Nine more catalog accounts form the
+Phelps comparison block: eight twins of the original accounts plus **Bowman**.
 
-Three strategies are implemented today -- `smoke_atm_roundtrip`,
-`reddit_sentiment_qqq`, and `trump_whisperer_qqq` -- so `accounts.example.json`
-splits the original six accounts three/three between `smoke_atm_roundtrip`
-(Ankit, Bob, Doktor Freuding) and `reddit_sentiment_qqq` (Luigi, Jesus,
-Doris) rather than running them all on one, which would only measure
-variance, and adds **TrumpWhisperer** running `trump_whisperer_qqq` as a
-seventh account to compare a third signal. The three `reddit_sentiment_qqq`
-accounts use conservative / default / aggressive thresholds via `params`,
-so the Automated tab's per-strategy rollup compares something real out of
-the box; TrumpWhisperer runs on `trump_whisperer_qqq`'s defaults (see below
-for `params` it accepts the same way). Copying the file as-is is meant to
-work, not just illustrate the eventual mapping. Swap in a P3 strategy_id
-for an account only once that strategy is registered; the runner validates
-every configured `strategy_id` against the registry at startup and refuses
-to start (rather than crashing mid-run on the first unregistered one it
-happens to reach) if one doesn't exist yet.
+Thirteen strategies are implemented today: the eight base strategies
+`smoke_atm_roundtrip`, `reddit_sentiment_qqq`, `trump_whisperer_qqq`,
+`momentum_qqq`, `max_pain_qqq`, `oi_skew_qqq`, `put_call_ratio_qqq`, and
+`canopus_down_day_14`; four wrapped Phelps variants; and `phelps_pure_qqq`.
+The catalog keeps the original six accounts split three/three between smoke
+and Reddit sentiment, assigns one account to every other base strategy, and
+adds the Phelps comparison accounts described below. The runner validates
+every configured `strategy_id` at startup, and CI requires every registered
+strategy to have at least one catalog-backed account.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
 are deliberately not baked into the runtime.
+
+## Guideline Phelps and the Phelps test bots
+
+Guideline Phelps (Notion: Trading Method / Preliminary Guideline Phelps) is
+a provisional hold-time rule, not a strategy: a 0DTE option position is a
+short-horizon convexity purchase, and the market may overprice convexity
+across a whole session while underpricing it inside the specific ~25-30
+minute window ("one Phelps") the day's move actually happens in. The
+guideline says a position should be granted one Phelps window before an
+ordinary signal reversal or option-price discomfort counts as a reason to
+exit -- only a genuine invalidation of the entry thesis should close it
+early; past the window, a still-unresolved position should be released.
+
+`crassus/phelps.py`'s `phelps_wrap()` retrofits exactly that hold-time floor
+onto any of this repo's existing strategies without touching their entry or
+signal logic: every strategy here shares one exit shape (close the moment
+its own signal stops supporting the position), so `phelps_wrap` intercepts
+a proposed close, holds it until `ctx.params["phelps_minutes"]` (default
+`phelps.PHELPS_MINUTES_DEFAULT`, the guideline's 25-30m band's midpoint)
+has elapsed since entry, then releases it. `crassus/strategies/phelps_variants.py`
+applies this to the four live strategies, producing `smoke_atm_roundtrip_phelps`,
+`reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, and
+`momentum_qqq_phelps`.
+
+`accounts.example.json`'s **Phelps test bots** are exact copies of the eight
+live accounts (Ankit, Bob, Doktor Freuding, Luigi, Jesus, Doris,
+TrumpWhisperer, Newton) -- same alias root plus " Phelps", same params where
+the original has any -- moved onto the corresponding `_phelps` strategy_id.
+Comparing e.g. Ankit vs. Ankit Phelps isolates the effect of the hold-time
+floor with nothing else changed.
+
+A ninth account, **Bowman** (named for Bob Bowman, Michael Phelps's coach --
+"Phelps" itself is reserved for the guideline), runs `phelps_pure_qqq`
+(`crassus/strategies/phelps_pure.py`), which is not a wrapper: both its
+entry (a short-window, ~5-minute displacement trigger -- see that module's
+docstring for why this is the most direct proxy for "a structurally
+privileged moment" the guideline itself doesn't otherwise define) and its
+exit (close immediately only on a full retrace of the triggering
+displacement; otherwise hold, regardless of P&L, until the Phelps window
+elapses and then release unconditionally) are derived from the guideline
+directly. It exists to isolate what Phelps alone contributes as a signal,
+not just as an exit-timing floor.
+
+See `scripts/verify_phelps.py` for hermetic coverage of both the wrapper
+and the standalone strategy.
 
 ## `reddit_sentiment_qqq`
 

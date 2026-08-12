@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ACCOUNTS_FILE = REPO_ROOT / "accounts.json"
+# The checked-in catalog is the deployable roster. It intentionally contains
+# only public bot metadata and environment-variable names, never passwords.
+# An ignored accounts.json may override credentials/parameters for local use,
+# but it must not replace the catalog: otherwise an old local file silently
+# hides every bot added by a later PR.
+DEFAULT_ACCOUNTS_CATALOG = REPO_ROOT / "accounts.example.json"
+DEFAULT_ACCOUNTS_OVERRIDE = REPO_ROOT / "accounts.json"
 DEFAULT_LEDGER_DIR = REPO_ROOT / "logs"
 DEFAULT_STATE_DIR = REPO_ROOT / "state"
 
@@ -60,23 +66,83 @@ class Account:
         return f"Account(alias={self.alias!r}, username={self.username!r}, strategy_id={self.strategy_id!r})"
 
 
-def load_accounts(path: Path | None = None) -> list[Account]:
+def _read_entries(path: Path) -> list[dict[str, Any]]:
+    raw = json.loads(path.read_text())
+    entries = raw.get("accounts")
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: top-level 'accounts' must be a list")
+    return entries
+
+
+def _merge_entries(
+    catalog: list[dict[str, Any]], overrides: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Overlay a private local file without letting it hide catalog bots.
+
+    Matching is by username, the server-side account identity. Override-only
+    accounts are appended so operators can still run private experiments.
+    """
+    by_username: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for source, entries in (("catalog", catalog), ("override", overrides)):
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("username"), str):
+                raise ValueError(f"Account in {source} has no string username: {entry!r}")
+            username = entry["username"]
+            if source == "catalog":
+                if username in by_username:
+                    raise ValueError(f"Duplicate account username in catalog: {username!r}")
+                by_username[username] = dict(entry)
+                order.append(username)
+            elif username in by_username:
+                by_username[username].update(entry)
+            else:
+                by_username[username] = dict(entry)
+                order.append(username)
+    return [by_username[username] for username in order]
+
+
+def load_accounts(
+    path: Path | None = None,
+    *,
+    catalog_path: Path = DEFAULT_ACCOUNTS_CATALOG,
+    override_path: Path = DEFAULT_ACCOUNTS_OVERRIDE,
+) -> list[Account]:
     """Load accounts from JSON.
 
-    Resolution order: explicit path, then $CRASSUS_ACCOUNTS_FILE, then
-    ./accounts.json. Each entry may set "password_env" instead of "password"
-    to pull the secret from the environment.
+    An explicit path or $CRASSUS_ACCOUNTS_FILE is loaded exactly. Otherwise the
+    checked-in accounts.example.json catalog is loaded, with an ignored local
+    accounts.json overlaid by username when present. This keeps credentials
+    private while ensuring a stale override cannot make newly merged bots
+    disappear from the runner and therefore from the Automated tab.
+
+    Each entry may set "password_env" instead of "password" to pull the secret
+    from the environment.
     """
-    path = path or Path(os.environ.get("CRASSUS_ACCOUNTS_FILE", DEFAULT_ACCOUNTS_FILE))
-    if not path.exists():
+    configured_path = path or (
+        Path(os.environ["CRASSUS_ACCOUNTS_FILE"])
+        if os.environ.get("CRASSUS_ACCOUNTS_FILE")
+        else None
+    )
+    if configured_path is not None:
+        if not configured_path.exists():
+            raise FileNotFoundError(f"No accounts file at {configured_path}.")
+        entries = _read_entries(configured_path)
+    else:
+        if not catalog_path.exists():
+            raise FileNotFoundError(f"No bot catalog at {catalog_path}.")
+        catalog = _read_entries(catalog_path)
+        overrides = _read_entries(override_path) if override_path.exists() else []
+        entries = _merge_entries(catalog, overrides)
+
+    if not entries:
         raise FileNotFoundError(
-            f"No accounts file at {path}. Copy accounts.example.json to accounts.json "
-            f"(it is gitignored) or set $CRASSUS_ACCOUNTS_FILE."
+            "No bot accounts are configured. Add one to accounts.example.json "
+            "or provide $CRASSUS_ACCOUNTS_FILE."
         )
 
-    raw = json.loads(path.read_text())
     accounts = []
-    for entry in raw["accounts"]:
+    for entry in entries:
         password = entry.get("password")
         if not password and entry.get("password_env"):
             password = os.environ.get(entry["password_env"])
@@ -99,4 +165,7 @@ def load_accounts(path: Path | None = None) -> list[Account]:
     aliases = [a.alias for a in accounts]
     if len(set(aliases)) != len(aliases):
         raise ValueError(f"Duplicate account aliases: {aliases}")
+    usernames = [a.username for a in accounts]
+    if len(set(usernames)) != len(usernames):
+        raise ValueError(f"Duplicate account usernames: {usernames}")
     return accounts
