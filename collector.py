@@ -1318,18 +1318,28 @@ def fetch_eia_steo_rows(api_key: str) -> list[dict]:
     payload = resp.json()["response"]
     data = payload["data"]
     total = payload.get("total")
-    if total is not None:
-        try:
-            total_int = int(total)
-        except (TypeError, ValueError):
-            total_int = None
-        if total_int is not None and total_int > len(data):
-            raise RuntimeError(
-                f"EIA STEO response truncated: server reports {total_int} total row(s) but "
-                f"only {len(data)} were returned (length={EIA_STEO_PAGE_LENGTH}). Increase "
-                f"EIA_STEO_PAGE_LENGTH or add real offset-based pagination rather than "
-                f"silently using a partial history."
-            )
+    try:
+        total_int = int(total)
+    except (TypeError, ValueError):
+        # A missing/malformed `total` means we cannot verify the response
+        # wasn't truncated -- fail closed rather than silently persisting
+        # unverifiable partial data as a new vintage. Flagged in review: the
+        # original `if total is not None:` guard skipped verification
+        # entirely (and swallowed unparseable values into a no-op) whenever
+        # EIA's response didn't carry a clean int `total`, which is exactly
+        # the case this check exists to catch.
+        raise RuntimeError(
+            f"EIA STEO response missing or malformed 'total' field ({total!r}) -- cannot "
+            f"verify the {len(data)} returned row(s) are complete, refusing to treat them "
+            f"as a trustworthy vintage."
+        )
+    if total_int > len(data):
+        raise RuntimeError(
+            f"EIA STEO response truncated: server reports {total_int} total row(s) but "
+            f"only {len(data)} were returned (length={EIA_STEO_PAGE_LENGTH}). Increase "
+            f"EIA_STEO_PAGE_LENGTH or add real offset-based pagination rather than "
+            f"silently using a partial history."
+        )
     return data
 
 
@@ -1397,6 +1407,13 @@ def push_eia_steo(s3) -> None:
         # calendar month has rolled over. Reuse the existing label instead
         # of minting a phantom one, and skip the R2 write entirely.
         release_period = entries[-1]["release_period"]
+        # Flagged in review: `current` was built above with the pre-
+        # canonicalization calendar guess, so leaving it as-is would let
+        # compare_vintages() below stamp each SteoRevision's current_release
+        # with that stale guess while the top-level payload's current_release
+        # uses the canonicalized label -- the two would disagree. Rebuild
+        # `current` with the final label before it's used for anything else.
+        current = cc.SteoVintage(release_period=release_period, points=current.points)
     else:
         entries = [e for e in entries if e.get("release_period") != release_period]
         entries.append({"release_period": release_period, "points": current_points_payload})

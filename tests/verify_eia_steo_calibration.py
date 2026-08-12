@@ -200,6 +200,39 @@ def test_genuinely_new_data_still_mints_a_new_release_normally():
         _unfreeze()
 
 
+def test_unchanged_data_revisions_agree_with_the_canonicalized_top_level_label():
+    print("\nRegression (review follow-up): on the unchanged-data path, each revision's current_release must match the top-level current_release, not the pre-canonicalization calendar guess")
+    older_points = [{"period": "2026-08", "brent": 78.0, "wti": 73.0, "balance": 0.5}]
+    latest_points = [{"period": "2026-08", "brent": 80.0, "wti": 75.0, "balance": 1.0}]
+    real_log = [
+        {"release_period": "2026-06", "points": older_points},
+        {"release_period": "2026-07", "points": latest_points},
+    ]
+    s3 = FakeS3(seed={collector.EIA_STEO_LOG_KEY: json.dumps(real_log).encode()})
+
+    original_fetch = collector.fetch_eia_steo_rows
+    # Same data as the most recently logged (2026-07) vintage, fetched after
+    # the calendar has already rolled to August -- the unchanged-data path,
+    # which relabels release_period to the real prior label ("2026-07")
+    # after `current` (and its release_period) was already built with the
+    # fresh "2026-08" guess.
+    collector.fetch_eia_steo_rows = lambda api_key: _rows("2026-08", 80.0, 75.0, 1.0)
+    _freeze(datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc))
+    try:
+        collector.push_eia_steo(s3)
+        steo_payload = json.loads(s3.store[collector.EIA_STEO_KEY])
+        assert_equal(steo_payload["current_release"], "2026-07", "top-level label is the canonicalized real one")
+        assert_true(len(steo_payload["revisions"]) > 0, "a revision was computed against the older prior vintage")
+        for revision in steo_payload["revisions"]:
+            assert_equal(
+                revision["current_release"], steo_payload["current_release"],
+                "each revision's current_release must agree with the top-level current_release",
+            )
+    finally:
+        collector.fetch_eia_steo_rows = original_fetch
+        _unfreeze()
+
+
 class FakeResponse:
     """Just enough of a requests.Response to exercise fetch_eia_steo_rows:
     raise_for_status() + json()."""
@@ -247,13 +280,30 @@ def test_fetch_eia_steo_rows_accepts_a_complete_response():
         collector.requests.get = original_get
 
 
-def test_fetch_eia_steo_rows_degrades_gracefully_without_a_total_field():
-    print("\nRegression guard: a response with no 'total' field (unexpected schema) still returns data, doesn't crash")
+def test_fetch_eia_steo_rows_raises_without_a_total_field():
+    print("\nRegression (review follow-up): a response with no 'total' field (unexpected schema) raises instead of failing open")
     original_get = collector.requests.get
     collector.requests.get = lambda *a, **kw: FakeResponse(data=[{"period": "2026-08"}], total=None)
     try:
-        result = collector.fetch_eia_steo_rows("fake-key")
-        assert_equal(len(result), 1, "returns what it got -- can't verify completeness, but doesn't fail closed")
+        try:
+            collector.fetch_eia_steo_rows("fake-key")
+            raise AssertionError("expected fetch_eia_steo_rows to raise when 'total' is missing")
+        except RuntimeError as e:
+            assert_true("missing or malformed" in str(e).lower(), str(e))
+    finally:
+        collector.requests.get = original_get
+
+
+def test_fetch_eia_steo_rows_raises_on_a_malformed_total_field():
+    print("\nRegression (review follow-up): a non-numeric 'total' field raises instead of silently skipping verification")
+    original_get = collector.requests.get
+    collector.requests.get = lambda *a, **kw: FakeResponse(data=[{"period": "2026-08"}], total="not-a-number")
+    try:
+        try:
+            collector.fetch_eia_steo_rows("fake-key")
+            raise AssertionError("expected fetch_eia_steo_rows to raise when 'total' is malformed")
+        except RuntimeError as e:
+            assert_true("missing or malformed" in str(e).lower(), str(e))
     finally:
         collector.requests.get = original_get
 
