@@ -13,6 +13,8 @@ from . import looking_glass_straddle  # noqa: F401
 from . import max_pain  # noqa: F401
 from . import momentum_qqq  # noqa: F401
 from . import oi_skew  # noqa: F401
+from . import phelps_pure  # noqa: F401
+from . import phelps_variants  # noqa: F401
 from . import put_call_ratio  # noqa: F401
 from . import reddit_sentiment  # noqa: F401
 from . import smoke  # noqa: F401
@@ -28,4 +30,6 @@ __all__ = [
     "put_call_ratio",
     "canopus_down_day",
     "looking_glass_straddle",
+    "phelps_variants",
+    "phelps_pure",
 ]

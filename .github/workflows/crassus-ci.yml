@@ -46,6 +46,9 @@ jobs:
       - name: Run canopus_down_day_14 strategy suite
         working-directory: crassus
         run: python scripts/verify_canopus_down_day.py
+      - name: Run Guideline Phelps suite
+        working-directory: crassus
+        run: python scripts/verify_phelps.py
       - name: Run looking_glass_straddle strategy suite
         working-directory: crassus
         run: python scripts/verify_looking_glass_straddle.py

@@ -1,5 +1,5 @@
 {
-  "_comment": "This deployable catalog covers nine registered strategies: smoke_atm_roundtrip, reddit_sentiment_qqq, trump_whisperer_qqq, momentum_qqq, max_pain_qqq, oi_skew_qqq, put_call_ratio_qqq, canopus_down_day_14, and looking_glass_straddle. Canopus implements the frozen Down-Day 14 forward-test rule: capture a trustworthy 09:30 ET reference, buy one ATM 0DTE put during 14:45-14:51 only when QQQ is down at least 0.25%, sell when the live bid reaches 1.14x the fill (rounded up to the next cent), or liquidate at 15:45. Do not retune it from individual outcomes. looking_glass_straddle (alias 'Cheshire' below) is a provisional-research direction-neutral 0DTE QQQ opening straddle -- buy num_straddles ATM calls+puts at entry_time_et, sell core_sell_count of each leg the first time the position's live value reaches C0*(1+core_profit_threshold_pct), and let the N-k runner ride uncapped to terminal_exit_time_et (or liquidate everything there on a no-touch day); no re-entry once a day's sequence has traded. See crassus/strategies/looking_glass_straddle.py's module docstring for why entry/exit are unavoidably two legs across separate runner cycles (Decision only ever places one symbol per cycle) and for why the params below are one representative point in the strategy brief's own validation sweep, not a tuned result. Passwords come from the listed environment variables; the runner rejects unregistered strategies and missing credentials at startup.",
+  "_comment": "This deployable catalog contains 22 bots covering fourteen registered strategies: the nine current base strategies (including Canopus and looking_glass_straddle) plus smoke_atm_roundtrip_phelps, reddit_sentiment_qqq_phelps, trump_whisperer_qqq_phelps, momentum_qqq_phelps, and phelps_pure_qqq. The eight Phelps twins preserve their base accounts' strategy/params while adding only the validated hold-time wrapper; Bowman exercises the pure Phelps strategy. Canopus implements the frozen Down-Day 14 forward-test rule: capture a trustworthy 09:30 ET reference, buy one ATM 0DTE put during 14:45-14:51 only when QQQ is down at least 0.25%, sell when the live bid reaches 1.14x the fill (rounded up to the next cent), or liquidate at 15:45. Do not retune it from individual outcomes. looking_glass_straddle (alias 'Cheshire' below) is a provisional-research direction-neutral 0DTE QQQ opening straddle -- buy num_straddles ATM calls+puts at entry_time_et, sell core_sell_count of each leg the first time the position's live value reaches C0*(1+core_profit_threshold_pct), and let the N-k runner ride uncapped to terminal_exit_time_et (or liquidate everything there on a no-touch day); no re-entry once a day's sequence has traded. See crassus/strategies/looking_glass_straddle.py's module docstring for why entry/exit are unavoidably two legs across separate runner cycles (Decision only ever places one symbol per cycle) and for why the params below are one representative point in the strategy brief's own validation sweep, not a tuned result. Every listed password environment variable must be provisioned because this tracked catalog is the runtime roster, not an inactive example.",
   "_runtime_note": "This tracked file is the default bot catalog. An ignored accounts.json overlays matching usernames and may add private accounts; it does not replace or hide catalog entries.",
 
   "accounts": [
@@ -106,6 +106,72 @@
         "core_profit_threshold_pct": 0.20,
         "max_entry_leg_spread_pct": 0.15
       }
+    },
+    {
+      "_comment": "Phelps test bots below: exact copies of the eight accounts above -- same alias root, same strategy, same params where the base account has any -- run through phelps_variants.py's phelps_wrap() instead of the bare strategy. The only behavioral difference is that a proposed close of a held position is deferred until phelps.PHELPS_MINUTES_DEFAULT (or an explicit phelps_minutes param) has elapsed since entry. Comparing e.g. Ankit vs. Ankit Phelps isolates exactly that one change.",
+      "alias": "Ankit Phelps",
+      "username": "crassus_ankit_phelps",
+      "password_env": "CRASSUS_PW_ANKIT_PHELPS",
+      "strategy_id": "smoke_atm_roundtrip_phelps"
+    },
+    {
+      "alias": "Bob Phelps",
+      "username": "crassus_bob_phelps",
+      "password_env": "CRASSUS_PW_BOB_PHELPS",
+      "strategy_id": "smoke_atm_roundtrip_phelps"
+    },
+    {
+      "alias": "Doktor Freuding Phelps",
+      "username": "crassus_freuding_phelps",
+      "password_env": "CRASSUS_PW_FREUDING_PHELPS",
+      "strategy_id": "smoke_atm_roundtrip_phelps"
+    },
+    {
+      "alias": "Luigi Phelps",
+      "username": "crassus_luigi_phelps",
+      "password_env": "CRASSUS_PW_LUIGI_PHELPS",
+      "strategy_id": "reddit_sentiment_qqq_phelps",
+      "params": {
+        "min_sample_size": 12,
+        "bullish_threshold": 0.3,
+        "bearish_threshold": -0.3
+      }
+    },
+    {
+      "alias": "Jesus Phelps",
+      "username": "crassus_jesus_phelps",
+      "password_env": "CRASSUS_PW_JESUS_PHELPS",
+      "strategy_id": "reddit_sentiment_qqq_phelps"
+    },
+    {
+      "alias": "Doris Phelps",
+      "username": "crassus_doris_phelps",
+      "password_env": "CRASSUS_PW_DORIS_PHELPS",
+      "strategy_id": "reddit_sentiment_qqq_phelps",
+      "params": {
+        "min_sample_size": 3,
+        "bullish_threshold": 0.05,
+        "bearish_threshold": -0.05
+      }
+    },
+    {
+      "alias": "TrumpWhisperer Phelps",
+      "username": "crassus_trumpwhisp_phelps",
+      "password_env": "CRASSUS_PW_TRUMPWHISPERER_PHELPS",
+      "strategy_id": "trump_whisperer_qqq_phelps"
+    },
+    {
+      "alias": "Newton Phelps",
+      "username": "crassus_newton_phelps",
+      "password_env": "CRASSUS_PW_NEWTON_PHELPS",
+      "strategy_id": "momentum_qqq_phelps"
+    },
+    {
+      "_comment": "Bowman: not a Phelps twin of an existing bot -- a new account whose only strategy is phelps_pure_qqq (crassus/strategies/phelps_pure.py), which builds both its entry (a short-window displacement trigger) and its exit (invalidation-or-Phelps-window) directly from Guideline Phelps rather than wrapping another strategy's signal. Named for Bob Bowman, Michael Phelps's coach, to keep 'Phelps' itself reserved for the guideline.",
+      "alias": "Bowman",
+      "username": "crassus_bowman",
+      "password_env": "CRASSUS_PW_BOWMAN",
+      "strategy_id": "phelps_pure_qqq"
     }
   ]
 }
