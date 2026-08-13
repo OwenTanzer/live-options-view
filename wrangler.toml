@@ -27,9 +27,10 @@ id = "2b996344769e4e679d9f307196a76b84"
 # Server-side settlement sweep (see the `scheduled` export in worker.js /
 # settleAllBots) -- fixes bot accounts that never settle because nothing
 # opens their dashboard to fire the client-triggered /api/settle call
-# (issue #42). Runs every 15 minutes from 18:00-23:45 UTC on trading days,
-# which covers the 4pm ET close with margin on both sides of the EST/EDT
-# boundary; settlement is idempotent, so repeated runs are cheap no-ops
-# once a day's positions are settled.
+# (issue #42). Runs every 15 minutes from 12:00-23:45 UTC on trading days.
+# The early window clears anything left from the prior session before the US
+# market opens; the late window covers the 16:15 ET same-day cutoff on both
+# sides of the EST/EDT boundary. Settlement is idempotent, so repeated runs are
+# cheap no-ops once a day's positions are settled.
 [triggers]
-crons = ["*/15 18-23 * * 1-5"]
+crons = ["*/15 12-23 * * 1-5"]

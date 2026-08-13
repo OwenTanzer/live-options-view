@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const UUID = '12345678-1234-4234-8234-123456789abc';
 
@@ -14,6 +16,10 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
     netPositions, handleBots, handleBotMetadata, settleAllBots,
   } = await import('../worker.js');
+
+  const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.toml'), 'utf8');
+  assert.match(wrangler, /crons\s*=\s*\["\*\/15 12-23 \* \* 1-5"\]/,
+    'the settlement sweep must run early enough to clear prior-day positions before market open');
 
   // ── validateTradeIntent ────────────────────────────────────────────────────
   assert.equal(
@@ -594,17 +600,28 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       'user:crassus_ankit': JSON.stringify(stuckBot),
     });
 
-    // No browser session is ever involved -- settleAllBots pulls its own spot
-    // mark from the R2 chain archive rather than depending on a viewer's
-    // locally-accumulated spotMarks.
+    // Before the 16:15 ET cutoff, a same-day expiration is still left alone.
+    // This prevents the broad UTC cron window from settling live contracts.
     const realFetch = global.fetch;
+    global.fetch = async () => { throw new Error('pre-cutoff settlement must not fetch a mark'); };
+    try {
+      await settleAllBots(env, new Date('2026-07-17T20:14:00Z'));
+    } finally {
+      global.fetch = realFetch;
+    }
+    assert.equal(JSON.parse(store.get('user:crassus_ankit')).trades.length, 1,
+      'a same-day position remains open immediately before 16:15 ET');
+
+    // No browser session is ever involved. At 16:15 ET the exclusive as-of
+    // date advances, so the same-day expiration settles against its archived
+    // spot instead of remaining unmarked until the following afternoon.
     global.fetch = async (url) => {
       assert.match(String(url), /raw\/qqq_chain_20260717\.csv$/, 'fetches the expiration date\'s own archived chain');
       const csv = 'UnderlyingPrice,Expiration\n610,2026-07-17\n';
       return { ok: true, text: async () => csv };
     };
     try {
-      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+      await settleAllBots(env, new Date('2026-07-17T20:15:00Z'));
     } finally {
       global.fetch = realFetch;
     }
@@ -618,7 +635,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     // Idempotent: a second sweep over an already-settled book is a no-op.
     global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
     try {
-      await settleAllBots(env, new Date('2026-07-18T12:00:00Z'));
+      await settleAllBots(env, new Date('2026-07-17T20:30:00Z'));
     } finally {
       global.fetch = realFetch;
     }
