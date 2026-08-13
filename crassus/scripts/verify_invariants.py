@@ -20,8 +20,10 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -245,13 +247,25 @@ def scenario_quote_rate_limit(tmp: Path) -> None:
               reader.last_retry_note is not None and "rate-limited" in reader.last_retry_note,
               reader.last_retry_note)
 
-        # The penalty from the quote-side 429 must be visible to account
+        # The penalty from a quote-side 429 must be visible to account
         # traffic sharing the same limiter -- prove the pause actually
         # propagated rather than being scoped to the quote reader alone.
+        #
+        # Measuring this against the *already-completed* `reader.quotes()`
+        # call above doesn't work: that call's own retry already waited out
+        # the pause internally (its own `acquire()` at the top of the retry
+        # loop is what consumes it), so by the time it returns,
+        # `_pause_until` has typically already elapsed and a fresh
+        # `acquire()` finds nothing to wait for -- passing even if
+        # `penalize()` never touched the shared object at all. Simulating a
+        # still-fresh penalty directly (as if a peer account's request had
+        # just been 429'd concurrently) and measuring an *independent*
+        # `acquire()` call against it is the actual test of propagation.
+        limiter.penalize(1.0)
         started = time.monotonic()
         limiter.acquire()
-        check("Account-side acquire() also waited out the quote-side penalty",
-              time.monotonic() - started > 0.0)
+        check("Account-side acquire() also waited out a penalty applied to the shared limiter",
+              time.monotonic() - started >= 0.5, time.monotonic() - started)
 
     with Mock(fault="quote_429", count=5):
         reader2 = QuoteReader(BASE, rate_limiter=RateLimiter(capacity=50, refill_per_s=50), max_attempts=2)
@@ -723,21 +737,41 @@ def scenario_bot_identity(tmp: Path) -> None:
         check("Runner refuses to start without BOT_REGISTRATION_KEY", raised)
 
 
+ET = ZoneInfo("America/New_York")
+# A fixed weekday, mid-session ET instant -- comfortably inside "open" and far
+# from any close, so `Runner._run_account`'s mandatory EOD flatten (which
+# reads `clock.now_et()` to decide whether its window is open) never
+# interferes with these scenarios, which are testing other invariants
+# entirely. Injected by monkeypatching `crassus.clock.now_et` rather than
+# threading a clock parameter through Runner/flatten/every strategy
+# signature -- `clock.now_et` is the single source of truth every one of
+# them already reads from, so patching it there deterministically freezes
+# time for the whole integration surface at once. Flagged in review: this
+# suite previously used the real wall clock, so it went red for a couple of
+# hours around each weekday's 15:45 mandatory-flatten window.
+_FROZEN_NOW_ET = datetime(2024, 1, 2, 11, 0, tzinfo=ET)  # a Tuesday, 11:00 ET
+
+
 def main() -> int:
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        print("Verifying Crassus integrity invariants against the mock Worker")
-        for scenario in (
-            scenario_happy_path, scenario_idempotent_replay, scenario_ambiguous_timeout,
-            scenario_ambiguous_500, scenario_restart_recovery, scenario_rate_limit,
-            scenario_quote_rate_limit,
-            scenario_liquidation, scenario_ledger, scenario_strategy_contract, scenario_book_math,
-            scenario_p1_closed_loop, scenario_recovery_idempotent_after_ledger_write,
-            scenario_ambiguous_stays_pending_until_reconciled,
-            scenario_strategy_config_validation,
-            scenario_bot_identity,
-        ):
-            scenario(tmp)
+    real_now_et = clock.now_et
+    clock.now_et = lambda: _FROZEN_NOW_ET
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            print("Verifying Crassus integrity invariants against the mock Worker")
+            for scenario in (
+                scenario_happy_path, scenario_idempotent_replay, scenario_ambiguous_timeout,
+                scenario_ambiguous_500, scenario_restart_recovery, scenario_rate_limit,
+                scenario_quote_rate_limit,
+                scenario_liquidation, scenario_ledger, scenario_strategy_contract, scenario_book_math,
+                scenario_p1_closed_loop, scenario_recovery_idempotent_after_ledger_write,
+                scenario_ambiguous_stays_pending_until_reconciled,
+                scenario_strategy_config_validation,
+                scenario_bot_identity,
+            ):
+                scenario(tmp)
+    finally:
+        clock.now_et = real_now_et
 
     print("\n" + "=" * 66)
     print(f"{passed} passed, {failed} failed")
