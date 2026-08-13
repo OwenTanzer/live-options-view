@@ -11,17 +11,23 @@ on:
     paths:
       - "collector.py"
       - "market_signals.py"
+      - "crude_calibration.py"
       - "requirements.txt"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/verify_crude_calibration.py"
+      - "tests/verify_eia_steo_calibration.py"
       - ".github/workflows/collector-ci.yml"
   pull_request:
     paths:
       - "collector.py"
       - "market_signals.py"
+      - "crude_calibration.py"
       - "requirements.txt"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/verify_crude_calibration.py"
+      - "tests/verify_eia_steo_calibration.py"
       - ".github/workflows/collector-ci.yml"
 
 jobs:
@@ -38,3 +44,7 @@ jobs:
         run: python tests/stage2_verification.py
       - name: Run VWAP/RVOL collector suite
         run: python tests/verify_collector_vwap_rvol.py
+      - name: Run crude calibration suite
+        run: python tests/verify_crude_calibration.py
+      - name: Run EIA STEO calibration suite
+        run: python tests/verify_eia_steo_calibration.py

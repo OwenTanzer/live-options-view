@@ -234,6 +234,20 @@ function formatMomentum(underlyingMarket, nowMs = Date.now()) {
   return { text, state: um.freshness === 'live' ? 'live' : 'stale' };
 }
 
+// EIA STEO crude calibration panel formatting (docs/index.html's
+// fetchSteoCalibration). Pure, DOM-free -- same rationale as
+// formatVwapRvol/formatMomentum above: testable directly, no fixture DOM
+// needed.
+function fmtSteoDelta(delta, unit = '') {
+  if (delta == null) return { text: '', cls: '' };
+  const sign = delta >= 0 ? '+' : '';
+  return { text: `${sign}${delta.toFixed(2)}${unit}`, cls: delta > 0 ? 'up' : delta < 0 ? 'down' : '' };
+}
+
+function findRevision(revisions, period) {
+  return (revisions || []).find(r => r.period === period) || null;
+}
+
 const SHARE_QUOTE_MAX_AGE_MS = 15_000;
 
 function freshShareQuote(quote, nowMs = Date.now(), maxAgeMs = SHARE_QUOTE_MAX_AGE_MS) {
@@ -759,6 +773,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
+    fmtSteoDelta, findRevision,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
