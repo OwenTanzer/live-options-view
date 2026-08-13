@@ -125,9 +125,9 @@ Strike encoding: integer strikes use the integer directly (`713`); half-strikes 
 | Symbol class | Event types | Key fields |
 |---|---|---|
 | QQQ 0DTE chain (±67 strikes × 2 sides = up to 268 symbols) | Quote, Summary, Trade, Greeks | eventType, bidPrice, askPrice, openInterest, prevDayClosePrice, dayOpenPrice, dayVolume, price, volatility, delta, gamma, theta, vega |
-| Price tickers (16 symbols) | Quote, Trade, TradeETH, Summary | eventType, bidPrice, askPrice, price, dayVolume, prevDayClosePrice |
+| Price tickers (17 symbols) | Quote, Trade, TradeETH, Summary | eventType, bidPrice, askPrice, price, dayVolume, prevDayClosePrice |
 
-DXLink does not deliver equity Quote events for ETFs/equities in the standard feed. All 16 price tickers fall back to yfinance.
+DXLink does not deliver equity Quote events for ETFs/equities in the standard feed. All 17 price tickers fall back to yfinance.
 
 ### 5.2 yfinance fallback
 
@@ -149,7 +149,7 @@ The `latest.json` guard is critical for display continuity: when DXLink is down,
 On every session start (including redeployments), `restore_state()` reads the most recent today's snapshot CSV from R2 and seeds:
 - `_prev_vol` — per-symbol cumulative volume baseline, so `VolDelta` is accurate from the first snapshot without a one-beat gap
 - `_last_spot` — underlying price fallback
-- `_last_prices` — all 16 macro prices for CSV columns
+- `_last_prices` — all 17 macro prices for CSV columns
 
 ### 5.5 CSV schema
 
@@ -159,10 +159,10 @@ OpenInterest, Volume, VolDelta,
 Bid, Mid, Ask, Last,
 IV, Delta, Gamma, Theta, Vega,
 UnderlyingPrice,
-QQQ, USO, VIX, SMH, IGV, 10Y, JPY_USD, KOSPI, BTC_USD, META, GOOGL, AMZN, TSLA, MU, SPCX, AAPL
+QQQ, USO, VIX, OVX, SMH, IGV, 10Y, JPY_USD, KOSPI, BTC_USD, META, GOOGL, AMZN, TSLA, MU, SPCX, AAPL
 ```
 
-The 16 macro price columns are repeated on every row (denormalized). This allows any snapshot CSV to be loaded as a standalone DataFrame with full macro context for that timestamp.
+The 17 macro price columns are repeated on every row (denormalized). This allows any snapshot CSV to be loaded as a standalone DataFrame with full macro context for that timestamp.
 
 `VolDelta` = `Volume - prev_snapshot_volume` (clamped ≥0), giving contracts traded in the last 60-second window.
 
@@ -171,6 +171,16 @@ The 16 macro price columns are repeated on every row (denormalized). This allows
 ### 5.6 Tier classification
 
 Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` using a holiday-corrected NYSE calendar. Tier is embedded in `latest.json` and drives OI threshold multipliers in the viewer.
+
+### 5.7 EIA STEO crude calibration (optional)
+
+`macro/eia_steo.json` and `baselines/eia_steo_vintages.json` -- a separate, optional feed unrelated to the QQQ option chain, added to answer a recurring question mechanically: has EIA's Short-Term Energy Outlook revised its crude price/balance forecast since last release, and how does that compare to where crude-oil volatility (OVX, see §6) actually sits right now. See `crude_calibration.py` for the pure parsing/comparison logic and its module docstring for the motivating example.
+
+- Gated entirely on `EIA_API_KEY` (unset by default) -- `eia_steo_loop()` logs once and returns immediately if it's absent, same soft-dependency shape as an unverified DXLink symbol guess falling through to yfinance.
+- Runs as its own daemon thread started once from `main()`, independent of the QQQ market session (`_run_session`) -- STEO has nothing to do with market hours.
+- Polls `api.eia.gov`'s v2 STEO API every `EIA_STEO_POLL_SECS` (6h). EIA's API serves the *current* published forecast, not a queryable history of what a prior release forecast for the same future month -- so vintage-over-vintage comparison is built up locally, one release snapshot per poll, in `baselines/eia_steo_vintages.json` (same rolling-log shape as the RVOL baseline in §5, deduplicated by release month).
+- `macro/eia_steo.json` holds the latest release's full forecast curve, its diff against the immediately prior stored vintage (`revisions`), and the latest OVX reading + regime classification (`classify_ovx_regime`, see `crude_calibration.py`) pulled from the same `_last_prices` state the price strip uses.
+- Series IDs verified 2026-08 with a live authenticated call: `BREPUUS` (Brent) and `WTIPUUS` (WTI) as guessed. The balance series was *not* `PATC_WORLD` as originally guessed -- that's world liquid fuels **consumption** (~100+ million bbl/d, not a balance figure at all). The correct series is `T3_STCHANGE_WORLD` ("Net Inventory Withdrawals, Total World Crude Oil and Other Liquids"), found via `api.eia.gov/v2/steo/facet/seriesId`. Its sign convention (positive = draw/withdrawal, negative = build) was cross-checked against a real number: Apr-Jun 2026 averages ~5.08 million bbl/d on this series, matching the debate transcript's own "realized Q2 draw was 5.1 million barrels per day" almost exactly.
 
 ---
 
@@ -182,6 +192,7 @@ Each session is classified as `0DTE_Regular`, `0DTE_Weekly`, or `0DTE_Monthly` u
 |---|---|---|---|
 | QQQ | `QQQ` | `QQQ` | Underlying |
 | VIX | `$VIX.X` | `^VIX` | CBOE VIX index |
+| OVX | `$OVX.X` (unverified) | `^OVX` | CBOE Crude Oil ETF Volatility Index (USO options, 30-day); tastytrade/dxFeed may not carry this at all, in which case it always falls through to yfinance -- same graceful-degradation shape as KOSPI below |
 | SMH | `SMH` | `SMH` | Semiconductor ETF |
 | IGV | `IGV` | `IGV` | Software ETF |
 | JPY/USD | `/6J:XCME` | `JPYUSD=X` | CME yen futures; displayed inverted as `¥155.3` |
@@ -347,11 +358,12 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 | Limitation | Impact | Notes |
 |---|---|---|
 | OI is prior-day settled | OI walls are static until next morning | OCC doesn't publish real-time OI — by design. Volume/VolDelta are the live signals. |
-| DXLink doesn't deliver equity Quote events | ETF/equity bid/ask not available via DXLink | All 16 price tickers use yfinance as primary source |
+| DXLink doesn't deliver equity Quote events | ETF/equity bid/ask not available via DXLink | All 17 price tickers use yfinance as primary source |
 | 60-second snapshot granularity | Sub-minute flow not captured | VolDelta per 60s window is the resolution floor |
 | DXLink intermittent 502s | Option data blanks during outages | `latest.json` guard preserves last good snapshot; viewer shows "Cached" status |
 | No access control | Anyone with the URL can view | Cloudflare Access can gate it if needed |
 | Single 0DTE expiration | Thursday dual-expiry (0DTE + Friday) not shown | Out of scope |
+| OVX DXLink symbol is a guess | May always fall through to yfinance | Same unverified-guess situation as the existing KOSPI ticker (§6). EIA STEO series IDs (§5.7), by contrast, were verified live and are not a limitation. |
 
 ---
 
