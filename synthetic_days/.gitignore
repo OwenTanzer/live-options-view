@@ -1,0 +1,4 @@
+/r2_cache/
+out/
+tests/out/
+__pycache__/

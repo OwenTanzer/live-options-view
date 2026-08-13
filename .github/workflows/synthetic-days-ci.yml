@@ -1,0 +1,41 @@
+name: synthetic_days validation
+
+# Runs entirely against the checked-in fixture (tests/fixtures/r2_cache/,
+# see tests/make_fixtures.py) -- a real, compact slice pulled from the live
+# R2 bucket, not synthesized, so no R2 credentials are exposed to or needed
+# by CI even though the "real" comparison data genuinely is real. Refreshing
+# the fixture (re-running tests/make_fixtures.py) does need R2 credentials
+# locally (see synthetic_days/README.md); CI itself never touches R2.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "synthetic_days/**"
+      - ".github/workflows/synthetic-days-ci.yml"
+  pull_request:
+    paths:
+      - "synthetic_days/**"
+      - ".github/workflows/synthetic-days-ci.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: synthetic_days
+    env:
+      SYNTHETIC_DAYS_CACHE: ./tests/fixtures/r2_cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Generate synthetic days from the hermetic fixture
+        run: python day_generator.py --n-days 10 --seed 3 --years 2026 --out ./tests/out --max-donor-days 10 --max-intraday-days 6 --intraday-samples-per-day 30
+      - name: Validate synthetic-vs-real statistics (acceptance gate -- fails on drift, including an out-of-sample option-path check)
+        run: python validate_stats.py --years 2026 --days ./tests/out
+      - name: Backtest a real crassus strategy against the synthetic days
+        run: python backtest_bridge.py --strategy max_pain_qqq --days ./tests/out
