@@ -973,12 +973,28 @@ async function liquidateAccount(env, username, token) {
   if (token) await env.SESSIONS.delete(sessionKey(token));
 }
 
-// NY trading-day date for `as_of`. Cron Triggers fire on a UTC schedule with
-// no DST awareness, so deriving the date from en-CA formatting in the
-// exchange's own timezone (rather than from the UTC wall clock) keeps
-// settlement keyed to the correct trading day across the EST/EDT boundary.
-function tradingDateNY(now = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(now);
+// Exclusive upper bound for expired contracts. Before 16:15 ET it is today's
+// date, so today's contracts remain live. At/after 16:15 ET it advances by one
+// calendar day, making same-day expirations eligible for settlement once the
+// market has closed and the final chain archive has had time to land in R2.
+//
+// Cron Triggers use UTC and have no DST awareness, so both the date and cutoff
+// are derived in New York time. The returned date remains compatible with the
+// existing `b.exp < asOf` predicate used by both settlement paths.
+function settlementAsOfNY(now = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(now).filter(part => part.type !== 'literal').map(part => [part.type, part.value]),
+  );
+  const dateStr = `${parts.year}-${parts.month}-${parts.day}`;
+  if ((Number(parts.hour) * 60) + Number(parts.minute) < (16 * 60) + 15) return dateStr;
+
+  const next = new Date(`${dateStr}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
 }
 
 // Same daily chain archive the historical panel reads (see fetchChainCsv in
@@ -1013,7 +1029,7 @@ async function fetchSpotMarkForDate(dateStr) {
 // account's expired positions against end-of-day spot marks pulled from the
 // archived chain data, independent of whether anyone's dashboard is open.
 export async function settleAllBots(env, now = new Date()) {
-  const asOf = tradingDateNY(now);
+  const asOf = settlementAsOfNY(now);
   const index = await env.USERS.list({ prefix: 'bot:' });
   const usernames = index.keys.map(k => k.name.slice('bot:'.length));
 
