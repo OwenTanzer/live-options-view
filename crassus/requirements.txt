@@ -1,5 +1,14 @@
 requests>=2.31
 
+# exchange_calendar.py's authoritative NYSE holiday/early-close source (same
+# library backfill_options_history.py already depends on at the repo root).
+# Pulls in pandas as a transitive dependency -- accepted deliberately after
+# review caught the hand-rolled fallback rules missing real NYSE-published
+# early closes (e.g. 2028-07-03); exchange_calendar.py still degrades to
+# those hand-rolled rules if this import fails, so it's not a hard runtime
+# dependency, just the preferred one.
+pandas_market_calendars>=4.3
+
 # reddit_sentiment_qqq strategy only -- see crassus/sentiment.py
 vaderSentiment>=3.3.2
 

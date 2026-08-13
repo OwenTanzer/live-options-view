@@ -242,6 +242,43 @@
     line-height: 1;
   }
   .ticker-btn.sm .px { font-size: 0.78rem; }
+
+  /* ── crude calibration panel ─────────────────────────────────────────── */
+  #steo-panel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-bottom: 1rem;
+    font-size: 0.76rem;
+    color: var(--dim);
+  }
+  #steo-panel .steo-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.62rem;
+    color: var(--dim);
+    margin-right: 4px;
+  }
+  #steo-panel .steo-value { color: var(--bright); font-weight: 600; }
+  #steo-panel .steo-delta.up   { color: #3fb950; }
+  #steo-panel .steo-delta.down { color: #f85149; }
+  #steo-panel .ovx-regime {
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 1px 6px;
+    border-radius: 8px;
+  }
+  #steo-panel .ovx-regime.calm     { background: rgba(63,185,80,0.18); color: #3fb950; }
+  #steo-panel .ovx-regime.elevated { background: rgba(210,153,34,0.18); color: #d29922; }
+  #steo-panel .ovx-regime.high     { background: rgba(248,81,73,0.18); color: #f85149; }
+  #steo-panel .ovx-regime.no_data  { background: rgba(139,148,158,0.18); color: var(--dim); }
   .ticker-btn .chg {
     font-size: 0.6rem;
     font-weight: 600;
@@ -731,11 +768,21 @@
 
 <div id="price-strip">
   <div class="price-group" id="px-main">
-    <!-- QQQ USO VIX SMH IGV — large -->
+    <!-- QQQ USO VIX OVX SMH IGV — large -->
   </div>
   <div class="price-group" id="px-secondary">
     <!-- BTC/USD META GOOGL AMZN TSLA — small -->
   </div>
+</div>
+
+<!-- EIA STEO crude calibration + OVX regime, see collector.py's macro/eia_steo.json
+     (optional feed -- gated on EIA_API_KEY; panel just never appears if it's absent). -->
+<div id="steo-panel" class="hidden">
+  <span><span class="steo-label">STEO</span><span class="steo-value" id="steo-release">—</span></span>
+  <span><span class="steo-label">Brent fcst</span><span class="steo-value" id="steo-brent">—</span><span class="steo-delta" id="steo-brent-delta"></span></span>
+  <span><span class="steo-label">WTI fcst</span><span class="steo-value" id="steo-wti">—</span><span class="steo-delta" id="steo-wti-delta"></span></span>
+  <span><span class="steo-label">World balance</span><span class="steo-value" id="steo-balance">—</span><span class="steo-delta" id="steo-balance-delta"></span></span>
+  <span><span class="steo-label">OVX</span><span class="steo-value" id="steo-ovx">—</span><span class="ovx-regime" id="steo-ovx-regime">—</span></span>
 </div>
 
 <div id="no-data">No live data yet. The collector starts each session day and uploads the first snapshot ~11 minutes after pre-market opens.</div>
@@ -1641,10 +1688,10 @@ function startCountdown() {
 
 // ── price strip ───────────────────────────────────────────────────────────────
 
-const MAIN_TICKERS = ['QQQ', 'VIX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
+const MAIN_TICKERS = ['QQQ', 'VIX', 'OVX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
 const SMALL_TICKERS = ['AAPL', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'BTC/USD'];
 const TICKER_CLASSES = {
-  QQQ:'equity', VIX:'index', SMH:'equity', IGV:'equity', 'JPY/USD':'futures',
+  QQQ:'equity', VIX:'index', OVX:'index', SMH:'equity', IGV:'equity', 'JPY/USD':'futures',
   KOSPI:'international', USO:'equity', '10Y':'yield', AAPL:'equity', META:'equity',
   GOOGL:'equity', AMZN:'equity', TSLA:'equity', MU:'equity', SPCX:'equity',
   'BTC/USD':'crypto',
@@ -1767,6 +1814,57 @@ async function fetchPrices() {
     tickerState.publishFallback(data.prices || {}, data.timestamp || new Date().toISOString());
   } catch (e) {
     console.warn('prices.json fetch failed:', e);
+  }
+}
+
+// EIA STEO crude calibration + OVX regime. Optional feed -- collector.py
+// only ever writes macro/eia_steo.json if EIA_API_KEY is configured, so a
+// 404 here just means the feature isn't enabled; the panel stays hidden
+// rather than showing an error, same as #steo-panel's default state.
+// fmtSteoDelta/findRevision live in shared.js (pure, tested directly there).
+async function fetchSteoCalibration() {
+  const panel = document.getElementById('steo-panel');
+  try {
+    const resp = await fetch(`${R2}/macro/eia_steo.json?_=${Date.now()}`);
+    if (!resp.ok) { panel.classList.add('hidden'); return; }
+    const data = await resp.json();
+    const points = data.points || [];
+    if (!points.length) { panel.classList.add('hidden'); return; }
+
+    // Nearest forecast period still ahead of (or equal to) the current
+    // calendar month -- the most relevant single number for "what does the
+    // latest STEO say is coming," same reasoning a reader would use pulling
+    // one row out of the full forecast table.
+    const nowPeriod = new Date().toISOString().slice(0, 7);
+    const nearest = points.find(p => p.period >= nowPeriod) || points[points.length - 1];
+    const revision = findRevision(data.revisions, nearest.period);
+
+    document.getElementById('steo-release').textContent =
+      data.current_release + (data.prior_release ? ` (vs ${data.prior_release})` : '');
+    document.getElementById('steo-brent').textContent = nearest.brent != null ? `$${nearest.brent.toFixed(2)}` : '—';
+    document.getElementById('steo-wti').textContent = nearest.wti != null ? `$${nearest.wti.toFixed(2)}` : '—';
+    document.getElementById('steo-balance').textContent =
+      nearest.balance != null ? `${nearest.balance.toFixed(2)} Mbbl/d` : '—';
+
+    const brentD = fmtSteoDelta(revision?.brent_delta, '');
+    const wtiD = fmtSteoDelta(revision?.wti_delta, '');
+    const balD = fmtSteoDelta(revision?.balance_delta, '');
+    for (const [id, d] of [['steo-brent-delta', brentD], ['steo-wti-delta', wtiD], ['steo-balance-delta', balD]]) {
+      const el = document.getElementById(id);
+      el.textContent = d.text;
+      el.className = `steo-delta ${d.cls}`;
+    }
+
+    const ovx = data.ovx || {};
+    document.getElementById('steo-ovx').textContent = ovx.value != null ? ovx.value.toFixed(2) : '—';
+    const regimeEl = document.getElementById('steo-ovx-regime');
+    regimeEl.textContent = ovx.regime || 'no_data';
+    regimeEl.className = `ovx-regime ${ovx.regime || 'no_data'}`;
+
+    panel.classList.remove('hidden');
+  } catch (e) {
+    console.warn('eia_steo.json fetch failed:', e);
+    panel.classList.add('hidden');
   }
 }
 
@@ -2695,6 +2793,12 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   // prices.json remains a fallback and retains its existing producer cadence.
   setInterval(fetchPrices, 60_000);
+
+  // eia_steo.json updates server-side every few hours at most (see
+  // collector.py's EIA_STEO_POLL_SECS) -- polling once a minute is just
+  // "pick up a change reasonably soon," not matched to its real cadence.
+  fetchSteoCalibration();
+  setInterval(fetchSteoCalibration, 60_000);
 
   // Calibration data has no periodic retry of its own — safety net in case the
   // visibility handler above never fires (e.g. the tab was never backgrounded,
