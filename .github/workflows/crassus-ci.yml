@@ -49,6 +49,12 @@ jobs:
       - name: Run Guideline Phelps suite
         working-directory: crassus
         run: python scripts/verify_phelps.py
+      - name: Run looking_glass_straddle strategy suite
+        working-directory: crassus
+        run: python scripts/verify_looking_glass_straddle.py
+      - name: Run looking_glass_straddle Runner-integration suite (300s cadence)
+        working-directory: crassus
+        run: python scripts/verify_looking_glass_straddle_runner_integration.py
       - name: Run mandatory EOD flatten suite
         working-directory: crassus
         run: python scripts/verify_flatten.py

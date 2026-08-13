@@ -9,6 +9,7 @@ complete loop is demonstrably alive.
 """
 
 from . import canopus_down_day  # noqa: F401
+from . import looking_glass_straddle  # noqa: F401
 from . import max_pain  # noqa: F401
 from . import momentum_qqq  # noqa: F401
 from . import oi_skew  # noqa: F401
@@ -28,6 +29,7 @@ __all__ = [
     "max_pain",
     "put_call_ratio",
     "canopus_down_day",
+    "looking_glass_straddle",
     "phelps_variants",
     "phelps_pure",
 ]
