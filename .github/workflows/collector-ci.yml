@@ -17,6 +17,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
+      - "tests/verify_weekly_collection.py"
       - ".github/workflows/collector-ci.yml"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
+      - "tests/verify_weekly_collection.py"
       - ".github/workflows/collector-ci.yml"
 
 jobs:
@@ -48,3 +50,5 @@ jobs:
         run: python tests/verify_crude_calibration.py
       - name: Run EIA STEO calibration suite
         run: python tests/verify_eia_steo_calibration.py
+      - name: Run weekly collection suite
+        run: python tests/verify_weekly_collection.py
