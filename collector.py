@@ -2233,6 +2233,11 @@ def _next_session_start(et: datetime, blocked_session_date: date | None = None) 
             session_date.year, session_date.month, session_date.day,
             PREMARKET_HOUR, 0, 0,
         ))
+        if session_date == et.date() and et < _session_bounds(et)[1]:
+            # Preserve the helper's established contract: while today's
+            # unblocked session has not ended, its start is still "next".
+            # wait_for_premarket() checks eligibility before calling us.
+            return candidate
         if candidate >= et:
             return candidate
     raise ExchangeCalendarUnavailable("no-session-in-14-day-window")
