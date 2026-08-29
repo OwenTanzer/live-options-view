@@ -270,6 +270,75 @@ class SnapshotTracker:
 R2_REMEMBER_TOKEN_KEY = "auth/remember_token.json"
 
 
+class TastyAuthError(RuntimeError):
+    """A failed auth chain that must not be retried during this session date."""
+
+    def __init__(self, phase: str, *, status: int | None = None,
+                 detail: str = "unavailable", challenge_present: bool = False):
+        self.phase = phase
+        self.status = status
+        self.detail = detail
+        self.challenge_present = challenge_present
+        super().__init__(
+            f"tasty auth failed phase={phase} status={status if status is not None else 'n/a'} "
+            f"challenge_present={challenge_present} error={detail}"
+        )
+
+
+_SAFE_AUTH_ERROR_KEYS = {"code", "error-code", "message", "reason"}
+
+
+def _redact_auth_secrets(value: str) -> str:
+    """Remove configured tastytrade secrets from a diagnostic string."""
+    redacted = value
+    for name in ("TASTY_LOGIN", "TASTY_PASSWORD", "TASTY_TOTP_SECRET", "TASTY_REMEMBER_TOKEN"):
+        secret = os.environ.get(name)
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    redacted = re.sub(
+        r"(?i)\b(token|password|otp|secret)\b\s*(?:[:=]\s*|\s+)[^\s,;]+",
+        r"\1=[redacted]",
+        redacted,
+    )
+    redacted = re.sub(r"\b[A-Za-z0-9_\-]{32,}\b", "[redacted]", redacted)
+    return redacted[:500]
+
+
+def _safe_broker_error(resp: requests.Response) -> str:
+    """Extract allow-listed broker error fields without logging response bodies."""
+    try:
+        payload = resp.json()
+    except Exception:
+        return "unavailable"
+
+    fields: list[str] = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            for raw_key, child in value.items():
+                key = str(raw_key).lower().replace("_", "-")
+                if key in _SAFE_AUTH_ERROR_KEYS and isinstance(child, (str, int, float, bool)):
+                    fields.append(f"{key}={_redact_auth_secrets(str(child))}")
+                elif key in {"error", "errors"}:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value[:5]:
+                visit(child)
+
+    visit(payload)
+    return "; ".join(fields[:8]) or "unavailable"
+
+
+def _auth_error_from_response(phase: str, resp: requests.Response) -> TastyAuthError:
+    challenge_present = bool(resp.headers.get("X-Tastyworks-Challenge-Token"))
+    return TastyAuthError(
+        phase,
+        status=resp.status_code,
+        detail=_safe_broker_error(resp),
+        challenge_present=challenge_present,
+    )
+
+
 def _load_remember_token(s3) -> str | None:
     try:
         body = s3.get_object(Bucket=os.environ["R2_BUCKET_NAME"], Key=R2_REMEMBER_TOKEN_KEY)["Body"].read()
@@ -291,99 +360,132 @@ def _save_remember_token(s3, token: str):
 
 def _complete_device_challenge(login: str, password: str, challenge_token: str) -> requests.Response:
     import pyotp
-    requests.post(
-        f"{TASTY_BASE}/device-challenge",
-        headers={"Content-Type": "application/json", "X-Tastyworks-Challenge-Token": challenge_token},
-        timeout=10,
-    )
+    try:
+        challenge_resp = requests.post(
+            f"{TASTY_BASE}/device-challenge",
+            headers={"Content-Type": "application/json", "X-Tastyworks-Challenge-Token": challenge_token},
+            timeout=10,
+        )
+    except Exception as exc:
+        raise TastyAuthError("device-challenge-init", detail=type(exc).__name__, challenge_present=True) from exc
+    if not 200 <= challenge_resp.status_code < 300:
+        raise _auth_error_from_response("device-challenge-init", challenge_resp)
+
     otp = pyotp.TOTP(os.environ["TASTY_TOTP_SECRET"]).now()
     log.info("device challenge: submitting TOTP")
-    return requests.post(
-        f"{TASTY_BASE}/sessions",
-        json={"login": login, "password": password, "remember-me": True},
-        headers={
-            "Content-Type": "application/json",
-            "X-Tastyworks-Challenge-Token": challenge_token,
-            "X-Tastyworks-OTP": otp,
-        },
-        timeout=15,
-    )
+    try:
+        return requests.post(
+            f"{TASTY_BASE}/sessions",
+            json={"login": login, "password": password, "remember-me": True},
+            headers={
+                "Content-Type": "application/json",
+                "X-Tastyworks-Challenge-Token": challenge_token,
+                "X-Tastyworks-OTP": otp,
+            },
+            timeout=15,
+        )
+    except Exception as exc:
+        raise TastyAuthError("device-challenge-submit", detail=type(exc).__name__, challenge_present=True) from exc
+
+
+def _finish_tasty_auth(resp: requests.Response, s3, method: str) -> dict:
+    if resp.status_code != 201:
+        raise _auth_error_from_response(method, resp)
+
+    try:
+        data = resp.json()["data"]
+        session_token = data["session-token"]
+    except Exception as exc:
+        raise TastyAuthError(method, status=resp.status_code, detail="malformed-success-response") from exc
+
+    new_token = data.get("remember-token")
+    log.info(f"tastytrade session established via {method}")
+    if new_token:
+        try:
+            _save_remember_token(s3, new_token)
+        except Exception as exc:
+            # The live session is already valid. Failing it here would cause an
+            # unnecessary second login and turn an R2 problem into an auth storm.
+            log.error(f"remember-token persistence failed (non-fatal): {type(exc).__name__}")
+
+    try:
+        quote_resp = requests.get(
+            f"{TASTY_BASE}/api-quote-tokens",
+            headers={"Authorization": session_token},
+            timeout=10,
+        )
+    except Exception as exc:
+        raise TastyAuthError("quote-token", detail=type(exc).__name__) from exc
+    if quote_resp.status_code != 200:
+        raise _auth_error_from_response("quote-token", quote_resp)
+
+    try:
+        quote_data = quote_resp.json()["data"]
+        streamer_token = quote_data["token"]
+        streamer_url = (quote_data.get("dxlink-url") or quote_data.get("websocket-url") or
+                        "wss://tasty-openapi-ws.dxfeed.com/realtime")
+    except Exception as exc:
+        raise TastyAuthError("quote-token", status=quote_resp.status_code,
+                             detail="malformed-success-response") from exc
+
+    log.info(f"streamer token obtained  url={streamer_url}")
+    return {
+        "session_token": session_token,
+        "streamer_token": streamer_token,
+        "streamer_url": streamer_url,
+    }
 
 
 def tasty_auth(login: str, s3) -> dict:
-    remember_token = _load_remember_token(s3)
-    if remember_token:
-        log.info("tasty_auth -- trying remember-token")
-        resp = requests.post(
-            f"{TASTY_BASE}/sessions",
-            json={"login": login, "remember-token": remember_token, "remember-me": True},
-            headers={"Content-Type": "application/json"},
-            timeout=15,
-        )
-        if resp.status_code == 201:
-            data      = resp.json()["data"]
-            new_token = data.get("remember-token")
-            log.info("tastytrade session established via remember-token")
-            if new_token:
-                _save_remember_token(s3, new_token)
-            resp2 = requests.get(
-                f"{TASTY_BASE}/api-quote-tokens",
-                headers={"Authorization": data["session-token"]},
-                timeout=10,
+    try:
+        remember_token = _load_remember_token(s3)
+        if remember_token:
+            log.info("tasty_auth -- trying remember-token")
+            try:
+                resp = requests.post(
+                    f"{TASTY_BASE}/sessions",
+                    json={"login": login, "remember-token": remember_token, "remember-me": True},
+                    headers={"Content-Type": "application/json"},
+                    timeout=15,
+                )
+            except Exception as exc:
+                raise TastyAuthError("remember-token", detail=type(exc).__name__) from exc
+            if resp.status_code == 201:
+                return _finish_tasty_auth(resp, s3, "remember-token")
+            log.warning(
+                f"remember-token rejected status={resp.status_code} "
+                f"challenge_present={bool(resp.headers.get('X-Tastyworks-Challenge-Token'))} "
+                f"error={_safe_broker_error(resp)}; trying password once"
             )
-            resp2.raise_for_status()
-            d = resp2.json()["data"]
-            streamer_token = d["token"]
-            streamer_url   = (d.get("dxlink-url") or d.get("websocket-url") or
-                              "wss://tasty-openapi-ws.dxfeed.com/realtime")
-            log.info(f"streamer token obtained  url={streamer_url}")
-            return {
-                "session_token":  data["session-token"],
-                "streamer_token": streamer_token,
-                "streamer_url":   streamer_url,
-            }
-        log.warning(f"remember-token rejected ({resp.status_code}), falling back to password+TOTP")
 
-    password = os.environ["TASTY_PASSWORD"]
-    log.info("tasty_auth -- using password")
-    resp = requests.post(
-        f"{TASTY_BASE}/sessions",
-        json={"login": login, "password": password, "remember-me": True},
-        headers={"Content-Type": "application/json"},
-        timeout=15,
-    )
-    if resp.status_code == 403:
+        password = os.environ["TASTY_PASSWORD"]
+        log.info("tasty_auth -- using password (single attempt)")
+        try:
+            resp = requests.post(
+                f"{TASTY_BASE}/sessions",
+                json={"login": login, "password": password, "remember-me": True},
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+        except Exception as exc:
+            raise TastyAuthError("password", detail=type(exc).__name__) from exc
+
         challenge_token = resp.headers.get("X-Tastyworks-Challenge-Token")
-        if not challenge_token:
-            resp.raise_for_status()
-        log.info("device challenge required -- completing automatically")
-        resp = _complete_device_challenge(login, password, challenge_token)
+        if challenge_token and 400 <= resp.status_code < 500:
+            log.info(
+                f"device challenge required status={resp.status_code} "
+                "challenge_present=True -- completing once"
+            )
+            resp = _complete_device_challenge(login, password, challenge_token)
+            return _finish_tasty_auth(resp, s3, "device-challenge-submit")
 
-    resp.raise_for_status()
-    data          = resp.json()["data"]
-    session_token = data["session-token"]
-    new_token     = data.get("remember-token")
-    log.info("tastytrade session established")
-
-    if new_token:
-        _save_remember_token(s3, new_token)
-
-    resp2 = requests.get(
-        f"{TASTY_BASE}/api-quote-tokens",
-        headers={"Authorization": session_token},
-        timeout=10,
-    )
-    resp2.raise_for_status()
-    d = resp2.json()["data"]
-    streamer_token = d["token"]
-    streamer_url   = (d.get("dxlink-url") or d.get("websocket-url") or
-                      "wss://tasty-openapi-ws.dxfeed.com/realtime")
-    log.info(f"streamer token obtained  url={streamer_url}")
-    return {
-        "session_token":  session_token,
-        "streamer_token": streamer_token,
-        "streamer_url":   streamer_url,
-    }
+        return _finish_tasty_auth(resp, s3, "password")
+    except TastyAuthError:
+        raise
+    except Exception as exc:
+        # Unknown failures in the auth path are safety failures. Converting them
+        # keeps main() from treating them as transient session errors and retrying.
+        raise TastyAuthError("unexpected", detail=type(exc).__name__) from exc
 
 
 # -- option chain structure ---------------------------------------------------
@@ -2074,6 +2176,23 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
 
 # -- session lifecycle --------------------------------------------------------
 
+class ExchangeCalendarUnavailable(RuntimeError):
+    """Raised when exchange-session eligibility cannot be established safely."""
+
+
+def _exchange_session_dates(start: date, end: date) -> set[date]:
+    try:
+        import pandas_market_calendars as mcal
+        calendar = mcal.get_calendar("NYSE")
+        return {
+            timestamp.date()
+            for timestamp in calendar.valid_days(
+                start_date=start.isoformat(), end_date=end.isoformat()
+            )
+        }
+    except Exception as exc:
+        raise ExchangeCalendarUnavailable(type(exc).__name__) from exc
+
 def past_stop() -> bool:
     et = datetime.now(ET)
     return (et.hour, et.minute) >= (STOP_HOUR, STOP_MIN)
@@ -2098,28 +2217,51 @@ def _inside_session_window(et: datetime) -> bool:
     return start <= et < stop
 
 
-def _next_session_start(et: datetime) -> datetime:
-    start, stop = _session_bounds(et)
-    if et < stop:
-        return start
-    next_day = et.date() + timedelta(days=1)
-    return ET.localize(datetime(
-        next_day.year, next_day.month, next_day.day,
-        PREMARKET_HOUR, 0, 0,
-    ))
+def _session_is_eligible(et: datetime, blocked_session_date: date | None = None) -> bool:
+    """Return True only when auth is allowed for this exchange-session date."""
+    if blocked_session_date == et.date() or not _inside_session_window(et):
+        return False
+    return et.date() in _exchange_session_dates(et.date(), et.date())
 
 
-def wait_for_premarket():
-    """Block until inside the valid session window (06:00-16:15 ET).
-    If called post-close, sleeps until next day to prevent Railway restart-loops."""
+def _next_session_start(et: datetime, blocked_session_date: date | None = None) -> datetime:
+    horizon = et.date() + timedelta(days=14)
+    for session_date in sorted(_exchange_session_dates(et.date(), horizon)):
+        if session_date == blocked_session_date:
+            continue
+        candidate = ET.localize(datetime(
+            session_date.year, session_date.month, session_date.day,
+            PREMARKET_HOUR, 0, 0,
+        ))
+        if session_date == et.date() and et < _session_bounds(et)[1]:
+            # Preserve the helper's established contract: while today's
+            # unblocked session has not ended, its start is still "next".
+            # wait_for_premarket() checks eligibility before calling us.
+            return candidate
+        if candidate >= et:
+            return candidate
+    raise ExchangeCalendarUnavailable("no-session-in-14-day-window")
+
+
+def wait_for_premarket(blocked_session_date: date | None = None):
+    """Block until an unblocked NYSE session is inside 06:00-16:15 ET.
+
+    Calendar lookup failures are fail-closed: the collector sleeps and makes no
+    tastytrade request until exchange-session eligibility can be established.
+    """
     while True:
         et = datetime.now(ET)
-        if _inside_session_window(et):
-            return
-        base = _next_session_start(et)
+        try:
+            if _session_is_eligible(et, blocked_session_date):
+                return
+            base = _next_session_start(et, blocked_session_date)
+        except ExchangeCalendarUnavailable as exc:
+            log.error(f"exchange calendar unavailable ({exc}) -- auth remains disabled; retrying in 1h")
+            time.sleep(3600)
+            continue
         delay = (base - et).total_seconds()
         log.info(
-            f"outside trading window -- sleeping "
+            f"outside eligible exchange session -- sleeping "
             f"{int(delay // 3600)}h {int((delay % 3600) // 60)}m "
             f"until {base.strftime('%Y-%m-%d %H:%M ET')}"
         )
@@ -2135,7 +2277,7 @@ def _run_session(login: str, quote_registry: LiveQuoteRegistry):
     classification = _classify_startup(s3, process_start)
     log.info(f"startup classification: {classification}")
 
-    today   = date.today()
+    today   = datetime.now(ET).date()
     restore_state(s3, today)
 
     global _rvol_baseline, _rvol_today
@@ -2203,15 +2345,26 @@ def _run_session(login: str, quote_registry: LiveQuoteRegistry):
 
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS}s, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
+    reauth_attempted = False
     while not past_stop():
         if feed.needs_reauth():
-            log.warning("DXLink auth failed 3+ times -- re-fetching streamer token")
+            if reauth_attempted:
+                feed.stop()
+                quote_registry.clear_session()
+                raise TastyAuthError(
+                    "streamer-reauth-circuit",
+                    detail="one-reauth-chain-already-used-this-session",
+                )
+            reauth_attempted = True
+            log.warning("DXLink auth failed 3+ times -- one streamer reauth attempt permitted")
             try:
                 new_auth = tasty_auth(login, s3)
                 feed.update_token(new_auth["streamer_token"])
                 log.info("streamer token refreshed")
-            except Exception as e:
-                log.error(f"token refresh failed: {e}")
+            except TastyAuthError:
+                feed.stop()
+                quote_registry.clear_session()
+                raise
         feed.restart_if_dead()
 
         tracker.check_missed()
@@ -2257,16 +2410,28 @@ def main():
     steo_thread = threading.Thread(target=eia_steo_loop, args=(make_s3(),), daemon=True)
     steo_thread.start()
 
+    blocked_session_date: date | None = None
     while True:
-        wait_for_premarket()
+        wait_for_premarket(blocked_session_date)
         try:
             _run_session(login, quote_registry)
+        except TastyAuthError as exc:
+            quote_registry.clear_session()
+            blocked_session_date = datetime.now(ET).date()
+            log.critical(
+                f"{exc}; auth circuit open for exchange session {blocked_session_date}"
+            )
         except Exception as e:
             quote_registry.clear_session()
-            log.error(f"session failed: {e}", exc_info=True)
-            time.sleep(60)
-        # After session end or crash, wait_for_premarket() handles sleeping until
-        # the next window -- process never exits, Railway never restart-loops
+            blocked_session_date = datetime.now(ET).date()
+            log.error(
+                f"session failed: {e}; startup circuit open for exchange session "
+                f"{blocked_session_date}",
+                exc_info=True,
+            )
+        # After session end or any failed startup, wait_for_premarket() sleeps
+        # until the next eligible exchange session. A downstream startup error
+        # therefore cannot indirectly repeat the tastytrade login chain.
 
 
 if __name__ == "__main__":
