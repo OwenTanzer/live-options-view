@@ -2233,7 +2233,7 @@ def _next_session_start(et: datetime, blocked_session_date: date | None = None) 
             session_date.year, session_date.month, session_date.day,
             PREMARKET_HOUR, 0, 0,
         ))
-        if candidate > et:
+        if candidate >= et:
             return candidate
     raise ExchangeCalendarUnavailable("no-session-in-14-day-window")
 
