@@ -2,5 +2,5 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python collector.py"
+startCommand = "sleep 31536000"
 restartPolicyType = "never"
