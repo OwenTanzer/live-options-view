@@ -14,6 +14,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
 
-# Railway overrides this with the same command from railway.toml. Keep the
-# image itself fail-safe and suspended when it is run anywhere else.
-CMD ["sleep", "31536000"]
+# Railway overrides this with the same command from railway.toml.
+CMD ["python", "collector.py"]

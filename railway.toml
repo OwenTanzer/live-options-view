@@ -3,5 +3,5 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sleep 31536000"
+startCommand = "python collector.py"
 restartPolicyType = "never"
