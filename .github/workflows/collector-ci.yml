@@ -13,6 +13,8 @@ on:
       - "market_signals.py"
       - "crude_calibration.py"
       - "requirements.txt"
+      - "scripts/probe_tasty_oauth.py"
+      - "tests/test_auth_safety.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
@@ -24,6 +26,8 @@ on:
       - "market_signals.py"
       - "crude_calibration.py"
       - "requirements.txt"
+      - "scripts/probe_tasty_oauth.py"
+      - "tests/test_auth_safety.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
@@ -42,6 +46,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run collector unit suite
         run: python tests/stage2_verification.py
+      - name: Run OAuth and auth-circuit safety suite
+        run: python -m unittest discover -s tests -p test_auth_safety.py -v
       - name: Run VWAP/RVOL collector suite
         run: python tests/verify_collector_vwap_rvol.py
       - name: Run crude calibration suite
