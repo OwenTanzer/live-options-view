@@ -3,3 +3,4 @@
 # provider-generated libraries so the collector and the read-only probe can
 # load them without replacing Nixpacks' default Python setup.
 nixLibs = ["...", "gcc-unwrapped"]
+aptPkgs = ["...", "libstdc++6"]
