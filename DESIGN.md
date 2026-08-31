@@ -65,15 +65,17 @@ The product is a live web view at `options.moopertonic.net`, accessible from any
 
 ## 3. Auth Flow
 
-### 3.1 tastytrade session
+### 3.1 tastytrade OAuth
 
-1. Try R2-persisted remember-token first (`auth/remember_token.json`)
-2. If rejected (403) or missing, fall back to `POST /sessions` with `TASTY_LOGIN` + `TASTY_PASSWORD`
-3. If MFA challenge required, complete automatically using `TASTY_TOTP_SECRET` via `pyotp`
-4. `GET /api-quote-tokens` → `streamer-token` + `streamer-url` (DXLink WebSocket endpoint)
-5. Rotate and save new remember-token to R2 after each successful auth
+1. Read the personal application's client secret and refresh token from Railway secrets.
+2. Require `TASTY_OAUTH_SCOPES=read`; any additional scope fails closed before a broker request.
+3. Exchange the refresh token at `POST /oauth/token` for a short-lived access token.
+4. Cache the access token in memory, refresh it 60 seconds before expiry, and serialize concurrent refresh demand through one lock.
+5. Call `GET /api-quote-tokens` with `Authorization: Bearer <access-token>` to obtain the DXLink token and URL.
 
-Session is established once at startup. The token is rotated on every auth, persisted to R2, and reused on the next deployment to avoid repeated TOTP challenges.
+There is no username/password, TOTP, remember-token, or `/sessions` fallback. The legacy
+`auth/remember_token.json` R2 object is quarantined by omission: production code neither
+reads nor writes it. See `docs/tastytrade-oauth.md` for provisioning, rotation, and rollout gates.
 
 ### 3.2 DXLink connection sequence
 
@@ -326,9 +328,9 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 
 | Variable | Purpose |
 |---|---|
-| `TASTY_LOGIN` | tastytrade username |
-| `TASTY_PASSWORD` | tastytrade password |
-| `TASTY_TOTP_SECRET` | Base32 TOTP secret for MFA auto-completion |
+| `TASTY_OAUTH_CLIENT_SECRET` | Personal OAuth application secret |
+| `TASTY_OAUTH_REFRESH_TOKEN` | Personal OAuth grant refresh token |
+| `TASTY_OAUTH_SCOPES` | Must be exactly `read` |
 | `LIVE_QUOTE_KEY` | Shared collector/Worker key protecting the live quote endpoint |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 API token access key (read+write) |
