@@ -1,0 +1,5 @@
+[phases.setup]
+# NumPy/pandas wheels require the C++ runtime at import time. Extend the
+# provider-generated libraries so the collector and the read-only probe can
+# load them without replacing Nixpacks' default Python setup.
+nixLibs = ["...", "gcc-unwrapped"]
