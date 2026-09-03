@@ -68,7 +68,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from . import clock
-from .config import REDDIT_USER_AGENT
+from .config import REDDIT_USER_AGENT, SENTIMENT_ANALYZER_BACKEND
 
 DEFAULT_SUBREDDITS: tuple[str, ...] = ("wallstreetbets", "stocks", "options", "investing")
 DEFAULT_KEYWORDS: tuple[str, ...] = ("qqq", "nasdaq-100", "nasdaq 100", "nasdaq100")
@@ -170,6 +170,18 @@ def _default_session_factory() -> Any:
 
 
 def _default_analyzer_factory() -> Any:
+    """VADER by default -- unchanged production behavior. Set
+    SENTIMENT_ANALYZER_BACKEND=local_llm (see config.py) to score
+    magnitude-of-market-impact via a local Ollama model instead; see
+    crassus/local_llm_sentiment.py for why. Either way `analyzer_factory`
+    remains a constructor argument, so a caller can also pass a specific
+    analyzer directly regardless of this env-driven default.
+    """
+    if SENTIMENT_ANALYZER_BACKEND == "local_llm":
+        from .local_llm_sentiment import LocalLLMAnalyzer  # noqa: PLC0415
+
+        return LocalLLMAnalyzer()
+
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer  # noqa: PLC0415
 
     return SentimentIntensityAnalyzer()
