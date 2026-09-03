@@ -1,0 +1,47 @@
+name: news_pin_bot suite
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "news_pin_bot/**"
+      - ".github/workflows/news-pin-bot-ci.yml"
+  pull_request:
+    paths:
+      - "news_pin_bot/**"
+      - ".github/workflows/news-pin-bot-ci.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        working-directory: news_pin_bot
+        run: pip install -r requirements.txt
+      - name: Byte-compile and import every module
+        working-directory: news_pin_bot
+        run: |
+          python -m py_compile $(find . -name "*.py" -not -path "./scripts/*")
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          import importlib
+          for mod in ['config.settings', 'bot.discord_bot', 'correlate.anomaly',
+                      'correlate.pin_engine', 'correlate.price_tracker', 'db.storage',
+                      'ingest.alpaca_stream', 'ingest.dedup', 'ingest.free_wires',
+                      'ingest.types', 'score.impact_scorer']:
+              importlib.import_module(mod)
+          "
+      - name: Run pin-engine reaction-window/recovery suite
+        working-directory: news_pin_bot
+        run: python scripts/verify_pin_engine.py
+      - name: Run anomaly-scanner return-based z-score/cooldown suite
+        working-directory: news_pin_bot
+        run: python scripts/verify_anomaly.py
+      - name: Run dedup/UTC-timestamp/delivery-confirmation suite
+        working-directory: news_pin_bot
+        run: python scripts/verify_dedup_and_delivery.py
