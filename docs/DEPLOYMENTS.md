@@ -40,21 +40,24 @@ of normal operations.
 
 ## Current drift requiring correction
 
-As of the reconciliation date, all repository-backed Railway services have
-`checkSuites` disabled and no effective service-specific watch paths. The
-MOO-144 probe also points to the merged feature branch rather than `master`.
+As of the reconciliation date, `live-options-view` and `crassus-runner` have
+narrow, service-specific watch paths. Railway still reports `checkSuites`
+disabled for both services: two accepted and committed attempts to enable
+"Wait for CI" were silently discarded by Railway. The MOO-144 probe also points
+to the merged feature branch rather than `master` until its scheduled capture
+is complete.
 
-This caused the documentation-independent MOO-144 merge to rebuild both
-`live-options-view` and `crassus-runner`, even though neither runtime changed.
-Both deployments succeeded, but the coupling is wasteful and increases the
+Before the watch paths were corrected, the documentation-independent MOO-144
+merge rebuilt both continuous services even though neither runtime changed.
+Both deployments succeeded, but that coupling was wasteful and increased the
 blast radius of every merge.
 
-The target state is:
+The remaining target state is:
 
-- Repository-backed production services deploy only after required GitHub
-  checks succeed.
-- Each service has narrow watch paths matching its actual runtime inputs.
-- The MOO-144 worker uses reviewed code from `master` if it remains active.
+- Railway persists "Wait for CI" for both continuous repository-backed
+  production services.
+- The MOO-144 worker uses reviewed code from `master` if it remains active
+  after its scheduled capture.
 - A documentation-only or unrelated-service change deploys no runtime service.
 
 ## Automatic deployment policy
@@ -66,8 +69,8 @@ must not mean indiscriminate execution of every service after every merge.
 
 | Service | Files that may trigger deployment |
 |---|---|
-| `live-options-view` | `collector.py`, `market_signals.py`, `crude_calibration.py`, `requirements.txt`, `Dockerfile`, `railway.toml` |
-| `crassus-runner` | `crassus/**` |
+| `live-options-view` | `/collector.py`, `/market_signals.py`, `/crude_calibration.py`, `/requirements.txt`, `/Dockerfile`, `/railway.toml` |
+| `crassus-runner` | `/crassus/**` |
 | `moo144-tradier-probe` | `scripts/moo144_tradier_probe.py`, `requirements.txt`, `Dockerfile` |
 
 Tests, documentation, analysis, and unrelated workflows must not redeploy a
