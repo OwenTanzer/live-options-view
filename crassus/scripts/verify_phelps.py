@@ -138,6 +138,44 @@ def test_phelps_wrap_never_blocks_buys_or_flat_no_trade() -> None:
     check("a flat no_trade passes through untouched", d_flat.action == "no_trade")
 
 
+def test_phelps_wrap_rejects_multiple_open_positions() -> None:
+    _entry_times.clear()
+    base_called = False
+
+    def base(ctx: StrategyContext) -> Decision:
+        nonlocal base_called
+        base_called = True
+        return Decision(
+            action="buy",
+            symbol="THIRD",
+            quantity=1,
+            reason="would compound the book",
+            strategy_id="base",
+            strategy_version="1.0.0",
+        )
+
+    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+    trades = [
+        {"sym": "FIRST", "side": "buy", "qty": 1, "price": 1.0},
+        {"sym": "SECOND", "side": "buy", "qty": 1, "price": 1.0},
+    ]
+    ctx = make_ctx(
+        username="contaminated",
+        trades=trades,
+        now_et=datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc),
+    )
+
+    decision = wrapped(ctx)
+    check("multiple positions are rejected at the wrapper boundary", decision.action == "no_trade")
+    check("the base strategy is not allowed to compound a contaminated book", not base_called)
+    check(
+        "the rejection records every held symbol",
+        decision.metadata is not None
+        and decision.metadata.get("open_positions") == {"FIRST": 1, "SECOND": 1},
+        decision.metadata,
+    )
+
+
 def test_phelps_wrap_respects_custom_window_param() -> None:
     _entry_times.clear()
 
@@ -403,6 +441,7 @@ def test_phelps_pure_entry_rejected_without_live_quote() -> None:
 
 test_phelps_wrap_defers_early_close()
 test_phelps_wrap_never_blocks_buys_or_flat_no_trade()
+test_phelps_wrap_rejects_multiple_open_positions()
 test_phelps_wrap_respects_custom_window_param()
 test_phelps_wrap_clears_state_on_flat()
 test_phelps_wrap_recovers_fill_time_from_trade_ts()
