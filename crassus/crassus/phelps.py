@@ -163,6 +163,28 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
 
     def _decide(ctx: StrategyContext) -> Decision:
         key_prefix = _account_key(ctx)
+        open_positions = {
+            symbol: position
+            for symbol, position in ctx.book.positions.items()
+            if position.quantity != 0
+        }
+        if len(open_positions) > 1:
+            return Decision.no_trade(
+                reason=(
+                    "Guideline Phelps: holding more than one open option "
+                    "position; standing down rather than tracking an arbitrary "
+                    "symbol or compounding the contaminated book."
+                ),
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={
+                    "open_positions": {
+                        symbol: position.quantity
+                        for symbol, position in open_positions.items()
+                    },
+                    "phelps_multiple_positions": True,
+                },
+            )
         held = _held(ctx)
 
         with _lock:
