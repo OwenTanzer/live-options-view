@@ -656,6 +656,10 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
     # A stale ignored accounts.json used to replace the tracked example
     # wholesale, which is exactly how newer bots disappeared. It is now an
     # overlay: catalog bots remain, while matching local fields still win.
+    # An "active": false catalog entry (MOO-161's FW roster, pending
+    # CRASSUS_PW_*_FW provisioning) is deliberately excluded here too --
+    # see the next block for that gate specifically.
+    active_entries = [e for e in raw["accounts"] if e.get("active", True)]
     stale_override = tmp / "accounts.json"
     stale_override.write_text(json.dumps({
         "accounts": [{
@@ -673,11 +677,41 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
         merged = load_accounts(catalog_path=example, override_path=stale_override)
     check(
         "a stale private override cannot hide newly cataloged bots",
-        {a.username for a in merged} == {entry["username"] for entry in raw["accounts"]},
+        {a.username for a in merged} == {entry["username"] for entry in active_entries},
     )
     check(
         "private fields still override their matching catalog account",
         merged[0].alias == "Local Override" and merged[0].password == "local-password",
+    )
+
+    # MOO-161 release/activation split: a catalog entry marked "active":
+    # false still counts toward the catalog-backed-card gate above, but
+    # must not be able to abort startup for a credential nobody has
+    # provisioned yet -- deliberately not clearing os.environ here, so an
+    # unset CRASSUS_PW_*_FW proves nothing was ever looked up for it.
+    inactive_entries = [e for e in raw["accounts"] if not e.get("active", True)]
+    check("the catalog has at least one inactive (pending-activation) entry to exercise", bool(inactive_entries))
+    with patch.dict(os.environ, password_env, clear=True):
+        active_only = load_accounts(catalog_path=example, override_path=tmp / "accounts.json.does-not-exist")
+    check(
+        "inactive catalog entries are skipped without their password_env ever being required",
+        {a.username for a in active_only}.isdisjoint({e["username"] for e in inactive_entries}),
+    )
+
+    # Activation flips the same catalog entry to a real account once its
+    # credential exists -- via the ignored accounts.json override, exactly
+    # like any other private field override above.
+    activated_username = inactive_entries[0]["username"]
+    activated_password_env = inactive_entries[0]["password_env"]
+    activation_override = tmp / "accounts.activated.json"
+    activation_override.write_text(json.dumps({
+        "accounts": [{"username": activated_username, "active": True}]
+    }))
+    with patch.dict(os.environ, {**password_env, activated_password_env: "fw-password"}, clear=True):
+        with_activation = load_accounts(catalog_path=example, override_path=activation_override)
+    check(
+        "an override flipping 'active' to true turns a pending catalog entry into a real account",
+        activated_username in {a.username for a in with_activation},
     )
 
     with Mock():
