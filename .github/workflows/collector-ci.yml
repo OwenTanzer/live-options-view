@@ -1,10 +1,8 @@
 name: Collector suite
 
-# collector.py and market_signals.py live at repo root, outside crassus/'s
-# path filter, and had no CI coverage at all before this -- tests/
-# stage2_verification.py existed but was never wired into a workflow. This
-# closes that gap and adds coverage for the new VWAP/RVOL logic
-# (market_signals.py, see docs/plans/2026-07-vwap-rvol.md) alongside it.
+# Root collector code and the read-only provider probes share dependencies and
+# safety invariants. Keep every executable probe and its regression tests on
+# the same required workflow.
 on:
   push:
     branches: [master]
@@ -14,7 +12,9 @@ on:
       - "crude_calibration.py"
       - "requirements.txt"
       - "scripts/probe_tasty_oauth.py"
+      - "scripts/moo144_tradier_probe.py"
       - "tests/test_auth_safety.py"
+      - "tests/test_moo144_tradier_probe.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
@@ -27,7 +27,9 @@ on:
       - "crude_calibration.py"
       - "requirements.txt"
       - "scripts/probe_tasty_oauth.py"
+      - "scripts/moo144_tradier_probe.py"
       - "tests/test_auth_safety.py"
+      - "tests/test_moo144_tradier_probe.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_crude_calibration.py"
@@ -48,6 +50,8 @@ jobs:
         run: python tests/stage2_verification.py
       - name: Run OAuth and auth-circuit safety suite
         run: python -m unittest discover -s tests -p test_auth_safety.py -v
+      - name: Run MOO-144 Tradier probe suite
+        run: python -m unittest discover -s tests -p test_moo144_tradier_probe.py -v
       - name: Run VWAP/RVOL collector suite
         run: python tests/verify_collector_vwap_rvol.py
       - name: Run crude calibration suite
