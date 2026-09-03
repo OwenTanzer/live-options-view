@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Callable
 
 import aiohttp
-import discord
 
 from config import settings
 from correlate.anomaly import run_anomaly_scanner
@@ -20,7 +20,6 @@ from correlate.price_tracker import PriceTracker
 from db.storage import Storage
 from ingest import alpaca_stream, free_wires
 from ingest.dedup import RecentTextWindow
-from ingest.types import Headline
 from score.impact_scorer import score_headline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -47,18 +46,28 @@ async def process_headlines(
             if not symbols:
                 continue
 
-            if dedup_window.is_duplicate(headline.headline):
-                log.debug("skipping duplicate: %s", headline.headline[:80])
-                continue
-            dedup_window.add(headline.headline)
+            # A duplicate/rehash still gets inserted, linked via
+            # is_duplicate_of, so a second source corroborating the same
+            # story is recorded for future cross-confirmation instead of
+            # being silently dropped before that link can ever be made. It
+            # just isn't re-scored or re-pinned as a second independent
+            # signal.
+            duplicate_of = dedup_window.find_duplicate(headline.headline)
 
             headline_id = storage.insert_headline(
                 source=headline.source, external_id=headline.external_id,
                 symbols=symbols, headline=headline.headline, summary=headline.summary,
                 url=headline.url, published_at=headline.published_at,
+                is_duplicate_of=duplicate_of,
             )
             if headline_id is None:
                 continue  # already ingested (source, external_id) pair
+
+            dedup_window.add(headline.headline, headline_id)
+
+            if duplicate_of is not None:
+                log.debug("recorded duplicate of #%s: %s", duplicate_of, headline.headline[:80])
+                continue
 
             score, reasoning, scorer = await score_headline(session, headline.headline, symbols)
             storage.set_impact_score(headline_id, score, reasoning, scorer)
@@ -71,29 +80,52 @@ async def process_headlines(
 
 async def poll_and_post_results(storage: Storage, outbox: asyncio.Queue) -> None:
     """Watches SQLite for pins that just resolved and unexplained moves that
-    just got logged, and enqueues Discord embeds for the new ones."""
-    from bot.discord_bot import build_pin_embed, build_unexplained_embed
+    just got logged, and enqueues Discord embeds for the new ones.
+
+    A row is only marked posted once discord_bot.py reports the send
+    actually succeeded (see OutboxItem.on_result). `pending` tracks rows
+    already enqueued but not yet resolved, so a slow send doesn't get
+    re-enqueued by the next 5s poll before its callback fires.
+    """
+    from bot.discord_bot import OutboxItem, build_pin_embed, build_unexplained_embed
+
+    pending: set[tuple[str, int]] = set()
+
+    def make_on_result(kind: str, row_id: int, mark_posted: Callable[[int], None]) -> Callable[[bool], None]:
+        def on_result(success: bool) -> None:
+            pending.discard((kind, row_id))
+            if success:
+                mark_posted(row_id)
+            else:
+                log.warning("discord delivery failed for %s #%s, will retry", kind, row_id)
+        return on_result
 
     while True:
         await asyncio.sleep(5.0)
 
         for row in storage.unposted_confirmed_pins():
+            key = ("pin", row["id"])
+            if key in pending:
+                continue
             embed = build_pin_embed(
                 symbol=row["symbol"], headline=row["headline"], url=row["url"],
                 impact_score=row["impact_score"] or 0.0, reasoning=row["impact_reasoning"] or "",
                 pct_move=row["pct_move"] or 0.0, volume_ratio=row["volume_ratio"] or 0.0,
                 confirmed=True,
             )
-            await outbox.put(embed)
-            storage.mark_pin_posted(row["id"])
+            pending.add(key)
+            await outbox.put(OutboxItem(embed, make_on_result("pin", row["id"], storage.mark_pin_posted)))
 
         for row in storage.unposted_unexplained_moves():
+            key = ("unexplained", row["id"])
+            if key in pending:
+                continue
             embed = build_unexplained_embed(
                 symbol=row["symbol"], pct_move=row["pct_move"] or 0.0,
                 zscore=row["zscore"] or 0.0, volume_ratio=row["volume_ratio"] or 0.0,
             )
-            await outbox.put(embed)
-            storage.mark_unexplained_posted(row["id"])
+            pending.add(key)
+            await outbox.put(OutboxItem(embed, make_on_result("unexplained", row["id"], storage.mark_unexplained_posted)))
 
 
 async def main() -> None:
@@ -106,9 +138,11 @@ async def main() -> None:
     tracker = PriceTracker()
     pin_engine = PinEngine(storage, tracker)
     dedup_window = RecentTextWindow()
-    outbox: asyncio.Queue[discord.Embed] = asyncio.Queue()
+    outbox: asyncio.Queue = asyncio.Queue()
 
     from bot.discord_bot import run_bot
+
+    pin_engine.recover_open_pins()
 
     tasks = [
         asyncio.create_task(alpaca_stream.stream_trades(settings.WATCHLIST, tracker.on_trade)),

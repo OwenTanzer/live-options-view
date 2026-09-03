@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable
 
 import websockets
@@ -47,7 +48,15 @@ def _parse_news_message(msg: dict[str, Any]) -> Headline | None:
         return None
     published_raw = msg.get("created_at") or msg.get("updated_at")
     try:
-        published_at = time.mktime(time.strptime(published_raw[:19], "%Y-%m-%dT%H:%M:%S"))
+        # Alpaca sends RFC3339 UTC timestamps ("...Z" or "+00:00"). Parse the
+        # naive "YYYY-MM-DDTHH:MM:SS" prefix as explicitly UTC -- time.mktime
+        # would instead interpret it in the local timezone, skewing every
+        # published_at by the host's UTC offset.
+        published_at = (
+            datetime.strptime(published_raw[:19], "%Y-%m-%dT%H:%M:%S")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
     except Exception:
         published_at = time.time()
     return Headline(

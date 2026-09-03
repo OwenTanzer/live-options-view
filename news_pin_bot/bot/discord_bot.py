@@ -1,11 +1,20 @@
-"""Discord posting layer. Consumes an asyncio.Queue of pre-formatted embeds
-so the ingest/score/correlate pipeline never depends on discord.py directly
--- it just puts messages on a queue.
+"""Discord posting layer. Consumes an asyncio.Queue of OutboxItems so the
+ingest/score/correlate pipeline never depends on discord.py directly -- it
+just puts messages on a queue.
+
+Each item carries an `on_result(success: bool)` callback rather than the
+caller marking its DB row "posted" as soon as it's enqueued. That way a row
+is only ever marked posted once `channel.send` actually succeeds; a failed
+send reports `success=False` and the caller (main.py) leaves the row
+unposted so the next poll cycle re-enqueues and retries it, instead of the
+alert silently disappearing forever.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
+from typing import Callable
 
 import discord
 
@@ -37,8 +46,14 @@ def build_unexplained_embed(*, symbol: str, pct_move: float, zscore: float, volu
     return embed
 
 
+@dataclass
+class OutboxItem:
+    embed: discord.Embed
+    on_result: Callable[[bool], None]
+
+
 class PinBotClient(discord.Client):
-    def __init__(self, outbox: asyncio.Queue[discord.Embed]):
+    def __init__(self, outbox: "asyncio.Queue[OutboxItem]"):
         intents = discord.Intents.default()
         super().__init__(intents=intents)
         self._outbox = outbox
@@ -52,13 +67,16 @@ class PinBotClient(discord.Client):
         if channel is None:
             channel = await self.fetch_channel(settings.DISCORD_CHANNEL_ID)
         while True:
-            embed = await self._outbox.get()
+            item = await self._outbox.get()
             try:
-                await channel.send(embed=embed)
+                await channel.send(embed=item.embed)
             except Exception as exc:
                 log.warning("failed to post embed: %s", exc)
+                item.on_result(False)
+            else:
+                item.on_result(True)
 
 
-async def run_bot(outbox: asyncio.Queue[discord.Embed]) -> None:
+async def run_bot(outbox: "asyncio.Queue[OutboxItem]") -> None:
     client = PinBotClient(outbox)
     await client.start(settings.DISCORD_BOT_TOKEN)

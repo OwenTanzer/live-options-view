@@ -36,13 +36,18 @@ class SymbolState:
         """Most recent trade price at or before `ts` -- used to get the
         "before" price for a pin window without needing exact-timestamp
         alignment."""
-        candidate = None
-        for trade in self.trades:
+        trade = self.trade_at_or_before(ts)
+        return trade.price if trade else None
+
+    def trade_at_or_before(self, ts: float) -> Trade | None:
+        """Most recent Trade at or before `ts`, or None if every known trade
+        is after `ts` (or there's no history at all). Scanned from the newest
+        end since the common caller wants a price "just now" or a few
+        seconds/minutes back, not one from hours ago."""
+        for trade in reversed(self.trades):
             if trade.ts <= ts:
-                candidate = trade.price
-            else:
-                break
-        return candidate
+                return trade
+        return None
 
     def trades_since(self, since_ts: float) -> list[Trade]:
         return [t for t in self.trades if t.ts >= since_ts]

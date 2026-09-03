@@ -56,3 +56,7 @@ PIN_VOLUME_RATIO_THRESHOLD = float(os.environ.get("PIN_VOLUME_RATIO_THRESHOLD", 
 ANOMALY_BASELINE_WINDOW_MIN = float(os.environ.get("ANOMALY_BASELINE_WINDOW_MIN", "30"))
 ANOMALY_CHECK_INTERVAL_SECS = float(os.environ.get("ANOMALY_CHECK_INTERVAL_SECS", "15"))
 ANOMALY_ZSCORE_THRESHOLD = float(os.environ.get("ANOMALY_ZSCORE_THRESHOLD", "3.0"))
+# Once a symbol is flagged, suppress re-flagging it again until this many
+# seconds have passed -- otherwise one sustained anomalous stretch produces
+# a new row (and Discord post) every ANOMALY_CHECK_INTERVAL_SECS.
+ANOMALY_COOLDOWN_SECS = float(os.environ.get("ANOMALY_COOLDOWN_SECS", "300"))
