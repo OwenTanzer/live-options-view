@@ -173,7 +173,14 @@ def select_symbols(
                 "option_type": kind,
             }
 
-    nearest = sorted(by_strike, key=lambda strike: abs(strike - spot))[:strike_count]
+    complete_strikes = [
+        strike
+        for strike, legs in by_strike.items()
+        if {"call", "put"}.issubset(legs)
+    ]
+    nearest = sorted(
+        complete_strikes, key=lambda strike: abs(strike - spot)
+    )[:strike_count]
     selected = [
         by_strike[strike][kind]
         for strike in sorted(nearest)
@@ -233,6 +240,37 @@ def put_bytes_verified(
     if content_encoding:
         arguments["ContentEncoding"] = content_encoding
     client.put_object(**arguments)
+    head = client.head_object(Bucket=bucket, Key=key)
+    if int(head.get("ContentLength", -1)) != len(body):
+        raise RuntimeError(f"R2 verification failed for {key}")
+    return {"key": key, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+
+
+def claim_run_once(
+    client: Any,
+    bucket: str,
+    run_date: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    key = f"moo144/tradier/{run_date}/run-claim.json"
+    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    try:
+        client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            IfNoneMatch="*",
+        )
+    except Exception as exc:
+        response = getattr(exc, "response", {}) or {}
+        status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+        code = (response.get("Error") or {}).get("Code")
+        if status == 412 or code in {"PreconditionFailed", "412"}:
+            raise RuntimeError(
+                f"MOO-144 capture already claimed for {run_date}; refusing a second launch"
+            ) from exc
+        raise
     head = client.head_object(Bucket=bucket, Key=key)
     if int(head.get("ContentLength", -1)) != len(body):
         raise RuntimeError(f"R2 verification failed for {key}")
@@ -326,7 +364,7 @@ class Stats:
             if previous is not None:
                 if sequence < previous:
                     self.sequence_out_of_order[symbol] += 1
-                elif sequence != previous + 1:
+                elif sequence > previous + 1:
                     self.sequence_discontinuities[symbol] += 1
             self.last_sequence[symbol] = max(sequence, previous if previous is not None else sequence)
         except (KeyError, TypeError, ValueError):
@@ -417,9 +455,11 @@ class SegmentWriter:
         self.handle.close()
         if self.records:
             key = f"{self.prefix}/{self.path.name}"
+            upload_started = self.clock()
             artifact = upload_file_verified(
                 self.r2, self.bucket, self.path, key, "application/x-ndjson", "gzip"
             )
+            artifact["upload_seconds"] = round(self.clock() - upload_started, 3)
             artifact["records"] = self.records
             self.artifacts.append(artifact)
             self.path.unlink()
@@ -531,7 +571,11 @@ def capture(
                     f"Tradier stream exceeded {max_consecutive_reconnects} consecutive reconnects"
                 ) from exc
             delay = min(2 ** (consecutive_failures - 1), 15) + random.uniform(0, 1)
-            sleeper(min(delay, max(0.0, deadline - monotonic())))
+            remaining = min(delay, max(0.0, deadline - monotonic()))
+            while remaining > 0 and not STOP:
+                interval = min(0.5, remaining)
+                sleeper(interval)
+                remaining -= interval
     return reconnects
 
 
@@ -574,6 +618,18 @@ def main() -> int:
     client = Tradier(token)
     symbols, universe = select_symbols(client, strike_count, duration, run_date)
     r2, bucket = r2_client()
+    claim = claim_run_once(
+        r2,
+        bucket,
+        str(run_date),
+        {
+            "schema_version": 1,
+            "issue": "MOO-144",
+            "run_date": run_date,
+            "claimed_at": started_at,
+            "run_id": run_id,
+        },
+    )
     start_payload = {
         "schema_version": 2,
         "issue": "MOO-144",
@@ -581,6 +637,7 @@ def main() -> int:
         "started_at": started_at,
         "requested_duration_seconds": duration,
         "universe": universe,
+        "claim": claim,
     }
     preflight = json_artifact(r2, bucket, f"{prefix}/run-started.json", start_payload)
     print(json.dumps({
@@ -628,6 +685,7 @@ def main() -> int:
             "run_id": run_id,
             "prefix": prefix,
             "artifacts": [preflight, *writer.artifacts, summary_meta],
+            "run_claim": claim,
         }
         manifest_meta = json_artifact(
             r2, bucket, f"{prefix}/manifest.json", manifest
