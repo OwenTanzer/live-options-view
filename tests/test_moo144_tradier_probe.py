@@ -59,6 +59,7 @@ class FakeTradier:
                 {"symbol": "QQQ-P599", "strike": 599, "option_type": "put"},
                 {"symbol": "QQQ-C600", "strike": 600, "option_type": "call"},
                 {"symbol": "QQQ-P600", "strike": 600, "option_type": "put"},
+                {"symbol": "QQQ-C6005", "strike": 600.5, "option_type": "call"},
                 {"symbol": "QQQ-C601", "strike": 601, "option_type": "call"},
                 {"symbol": "QQQ-P601", "strike": 601, "option_type": "put"},
             ]}}
@@ -70,6 +71,13 @@ class FakeR2:
         self.objects = {}
 
     def put_object(self, *, Bucket, Key, Body, **_kwargs):
+        if _kwargs.get("IfNoneMatch") == "*" and (Bucket, Key) in self.objects:
+            error = RuntimeError("precondition failed")
+            error.response = {
+                "ResponseMetadata": {"HTTPStatusCode": 412},
+                "Error": {"Code": "PreconditionFailed"},
+            }
+            raise error
         self.objects[(Bucket, Key)] = bytes(Body)
 
     def upload_file(self, filename, bucket, key, ExtraArgs=None):
@@ -199,6 +207,18 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(summary["flag_frequencies"]["<empty>"], 2)
         self.assertEqual(summary["correction_count"], 2)
         self.assertEqual(summary["duplicate_count"], 1)
+        self.assertEqual(summary["sequence_discontinuities_by_symbol"], {})
+
+    def test_daily_claim_is_atomic_and_refuses_second_launch(self):
+        r2 = FakeR2()
+        first = probe.claim_run_once(
+            r2, "bucket", "2026-09-03", {"run_id": "first"}
+        )
+        self.assertTrue(first["key"].endswith("/2026-09-03/run-claim.json"))
+        with self.assertRaisesRegex(RuntimeError, "already claimed"):
+            probe.claim_run_once(
+                r2, "bucket", "2026-09-03", {"run_id": "second"}
+            )
 
     def test_clean_stream_end_is_bounded_and_recorded_as_gap(self):
         client = FakeStreamClient()
@@ -268,6 +288,7 @@ class ProbeTests(unittest.TestCase):
 
         keys = {key for bucket, key in r2.objects if bucket == "bucket"}
         self.assertTrue(any(key.endswith("/run-started.json") for key in keys))
+        self.assertTrue(any(key.endswith("/run-claim.json") for key in keys))
         self.assertTrue(any("normalized-events-part-" in key for key in keys))
         self.assertTrue(any(key.endswith("/summary.json") for key in keys))
         self.assertTrue(any(key.endswith("/manifest.json") for key in keys))
