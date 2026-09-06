@@ -41,6 +41,7 @@ from .config import (
 )
 from .flatten import maybe_flatten
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
+from .observability import configure_logging, event, rejection_reason
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
@@ -142,6 +143,7 @@ class Runner:
 
         self._stop = threading.Event()
         self.retired: set[str] = set()
+        self.cycle_count = 0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -279,27 +281,68 @@ class Runner:
 
         while not self.should_stop:
             started = time.monotonic()
-            phase = clock.session_phase()
-            log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
-
-            try:
-                snapshot = self.snapshots.read()
-            except Exception as exc:  # snapshot is shared; one failure stalls the cycle
-                log.error("Snapshot read failed: %s", exc)
-                snapshot = None
-
-            for account in self.accounts:
-                if self.should_stop:
-                    break
-                if account.alias in self.retired:
-                    continue
-                self._run_account(account, snapshot, phase)
-
+            self.run_cycle()
             if self.should_stop:
                 break
             self._sleep(self.interval_s - (time.monotonic() - started))
 
         log.info("Stopped cleanly. Ledger: %s", self.ledger.paths.ledger)
+
+    def run_cycle(self) -> bool:
+        """Record completion only after all eligible account calls return.
+
+        Completion measures loop progress, not successful trading or healthy
+        data. Individual no_trade/error outcomes remain in the decision ledger.
+        These events support monitoring but do not implement a stall watchdog.
+        """
+        self.cycle_count += 1
+        started = time.monotonic()
+        phase = clock.session_phase()
+        fields = {
+            "run_id": self.ledger.run_id,
+            "cycle_sequence": self.cycle_count,
+            "cycle_started_at": clock.iso_utc(),
+            "phase": phase,
+        }
+        log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
+        event(log, "cycle_started", **fields)
+        processed = 0
+        skipped = 0
+        try:
+            try:
+                snapshot = self.snapshots.read()
+            except Exception as exc:
+                log.error("Snapshot read failed: %s", exc)
+                snapshot = None
+
+            for account in self.accounts:
+                if self.should_stop:
+                    event(
+                        log, "cycle_interrupted", **fields,
+                        accounts_processed=processed, accounts_skipped=skipped,
+                    )
+                    return False
+                if account.alias in self.retired:
+                    skipped += 1
+                    continue
+                self._run_account(account, snapshot, phase)
+                processed += 1
+        except BaseException as exc:
+            event(
+                log, "cycle_failed", level=logging.ERROR, **fields,
+                accounts_processed=processed, accounts_skipped=skipped,
+                error_type=type(exc).__name__,
+                duration_seconds=round(time.monotonic() - started, 3),
+            )
+            raise
+        event(
+            log, "cycle_completed", **fields,
+            cycle_completed_at=clock.iso_utc(),
+            duration_seconds=round(time.monotonic() - started, 3),
+            accounts_processed=processed, accounts_skipped=skipped,
+            snapshot_available=snapshot is not None,
+        )
+        return True
 
     def _sleep(self, seconds: float) -> None:
         """Interruptible wait, so a stop signal does not have to sit through
@@ -499,6 +542,14 @@ class Runner:
             # Only cleared now that the outcome is durably recorded in the ledger.
             executor.finalize(result.execution_request_id)
         log.info("%s: -> %s (http=%s)", alias, result.outcome_class, result.http_status)
+        if result.outcome_class == Outcome.REJECTED:
+            event(
+                log, "execution_rejected", level=logging.WARNING,
+                run_id=self.ledger.run_id, account_alias=alias,
+                decision_id=decision_id, execution_request_id=result.execution_request_id,
+                http_status=result.http_status,
+                rejection_reason=rejection_reason(result.server_response),
+            )
 
     def _record_liquidation(
         self,
@@ -537,10 +588,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-    )
+    configure_logging(args.verbose)
 
     accounts = load_accounts(args.accounts)
     if args.only:
@@ -558,11 +606,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         runner.install_signal_handlers()
         runner.startup()
-        snapshot = runner.snapshots.read()
-        phase = clock.session_phase()
-        for account in accounts:
-            if account.alias not in runner.retired:
-                runner._run_account(account, snapshot, phase)
+        if not runner.run_cycle():
+            log.warning("Single cycle interrupted. Ledger: %s", runner.ledger.paths.ledger)
+            return 130
         log.info("Single cycle complete. Ledger: %s", runner.ledger.paths.ledger)
         return 0
 

@@ -191,6 +191,32 @@ After deployment:
 Changes outside `crassus/**` must not redeploy this service unless a deliberately
 shared dependency is introduced and documented.
 
+### Operational log interpretation
+
+Runner logging sends levels below ERROR to stdout and ERROR/CRITICAL to stderr.
+This prevents Railway from marking ordinary INFO cycle messages as errors simply
+because Python's default logging handler writes to stderr.
+
+Each pass emits `cycle_started`, then `cycle_completed` only after every eligible
+account call returns. Completion includes the run ID, cycle sequence, start and
+completion timestamps, duration, processed/skipped counts, and snapshot availability.
+`cycle_failed` records a propagated exception's type; `cycle_interrupted` records a
+partial pass stopped by the operator. The same events are used with `--once`.
+Completion is evidence of loop progress, not proof that accounts traded successfully
+or that the snapshot was fresh. Individual outcomes remain in the decision ledger.
+
+`execution_rejected` supplies the decision/request IDs and an allowlisted reason
+such as `insufficient_balance`. Unknown server errors are labeled
+`unclassified_rejection`; arbitrary response bodies are not echoed into runtime
+logs. Use the request ID to locate the complete outcome in the decision ledger or
+the Worker's `paper-trades/requests/<execution_request_id>.json` object when present.
+
+These diagnostics do not close #73: a missing-cycle alert/watchdog, fatal-child
+recovery verification, and a memory soak test are still required. They also do
+not persist the full decision ledger across deployments. Preserve `/app/logs`
+and `/app/state` from the active container before a redeploy until durable storage
+is implemented; the current Railway configuration reports no volume mount.
+
 ## MOO-144 Tradier probe
 
 The probe is a read-only capability experiment, not a production collector. It
