@@ -33,7 +33,9 @@ an external notification destination or HTTP health endpoint.
 The supervisor is a Linux child subreaper: a detached Chromium process is adopted
 if Python or its Node driver dies. Shutdown sends TERM to the worker group, allows
 five seconds for graceful cleanup, then kills remaining descendants and reaps
-adopted children. Process identities include kernel start times to reduce PID
+adopted children. During normal operation it also reaps exited, adopted Chromium
+helpers on each supervisor poll; the real browser regression exposed these
+zero-memory zombie processes after otherwise successful cleanup. Process identities include kernel start times to reduce PID
 reuse risk. A development sandbox exposing `/proc` from another PID namespace
 reports memory unavailable and cannot validate detached-child cleanup; the exact
 production-image CI job exercises this on a normal Linux process namespace.

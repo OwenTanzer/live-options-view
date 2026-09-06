@@ -48,6 +48,7 @@ class Process:
     parent: int
     started: int
     rss: int
+    state: str
 
 
 def proc_visible() -> bool:
@@ -69,7 +70,7 @@ def process_tree(root_pid: int) -> dict[int, Process]:
         try:
             raw = (directory / "stat").read_text()
             fields = raw[raw.rfind(")") + 2:].split()
-            processes[int(directory.name)] = Process(int(fields[1]), int(fields[19]), int(fields[21]))
+            processes[int(directory.name)] = Process(int(fields[1]), int(fields[19]), int(fields[21]), fields[0])
         except (OSError, ValueError, IndexError):
             continue
     descendants = {root_pid} if root_pid in processes else set()
@@ -156,6 +157,20 @@ def _subreaper(value: int | None = None) -> int:
     if value is not None and libc.prctl(36, value, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
         raise OSError(ctypes.get_errno(), "cannot set child subreaper")
     return previous.value
+
+
+def reap_adopted(worker_pid: int | None, baseline: set[int]) -> int:
+    """Reap exited browser helpers regularly, preserving Popen's worker status."""
+    count = 0
+    for pid, info in process_tree(os.getpid()).items():
+        if info.parent != os.getpid() or pid == worker_pid or pid in baseline or info.state != "Z":
+            continue
+        try:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+            count += bool(waited)
+        except ChildProcessError:
+            pass
+    return count
 
 
 def _stop_group(child: subprocess.Popen, grace_s: float, baseline: set[int]) -> None:
@@ -254,6 +269,9 @@ def supervise(command: list[str], interval_s: float, *, poll_s: float = 1.0,
                     line, buffer = buffer.split(b"\n", 1)
                     progress.accept(json.loads(line), time.monotonic())
             now = time.monotonic()
+            reaped = reap_adopted(child.pid, baseline)
+            if reaped:
+                event(log, "runner_children_reaped", count=reaped)
             code = child.poll()
             if code is not None:
                 event(log, "runner_unhealthy", level=logging.ERROR, reason="worker_exited",

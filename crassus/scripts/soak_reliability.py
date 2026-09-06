@@ -20,7 +20,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus import sentiment
 from crassus.observability import configure_logging
-from crassus.supervisor import memory_snapshot, proc_visible, process_tree, supervise
+from crassus.supervisor import memory_snapshot, proc_visible, process_tree, reap_adopted, supervise
 
 MIB = 1024 * 1024
 HTML = '<html><body>' + ''.join(
@@ -79,9 +79,11 @@ def soak(cycles: int) -> dict:
             assert snapshot.sample_size == 24, snapshot.sample_size
             gc.collect()
             deadline = time.monotonic() + 2
+            reap_adopted(None, set())
             sample = memory_snapshot(os.getpid())
             while sample['descendant_count'] and time.monotonic() < deadline:
                 time.sleep(.02)
+                reap_adopted(None, set())
                 sample = memory_snapshot(os.getpid())
             assert sample['descendant_count'] == 0, sample
             resting.append(sample['worker_rss_bytes'])
