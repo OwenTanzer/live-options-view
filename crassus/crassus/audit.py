@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import clock
+from .durability import durable_mkdir, sync_directory
 
 SCHEMA_VERSION = "crassus_audit.v1"
 
@@ -83,7 +84,7 @@ class LedgerPaths:
 
     @classmethod
     def for_run(cls, ledger_dir: Path, run_id: str) -> "LedgerPaths":
-        ledger_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(ledger_dir)
         return cls(ledger=ledger_dir / f"decisions-{run_id}.jsonl")
 
 
@@ -202,4 +203,5 @@ class DecisionLedger:
                 fh.write(line + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+            sync_directory(self.paths.ledger.parent)
         return rec

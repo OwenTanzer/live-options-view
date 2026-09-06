@@ -21,8 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # hides every bot added by a later PR.
 DEFAULT_ACCOUNTS_CATALOG = REPO_ROOT / "accounts.example.json"
 DEFAULT_ACCOUNTS_OVERRIDE = REPO_ROOT / "accounts.json"
-DEFAULT_LEDGER_DIR = REPO_ROOT / "logs"
-DEFAULT_STATE_DIR = REPO_ROOT / "state"
+DATA_ROOT = Path(os.environ.get("CRASSUS_DATA_ROOT", str(REPO_ROOT)))
+DEFAULT_LEDGER_DIR = DATA_ROOT / "logs"
+DEFAULT_STATE_DIR = DATA_ROOT / "state"
 
 BASE_URL = os.environ.get("CRASSUS_BASE_URL", "https://options.moopertonic.net")
 SNAPSHOT_URL = os.environ.get(
