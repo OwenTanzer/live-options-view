@@ -35,21 +35,20 @@ def fixture_browser():
     return stack
 
 
-def driver_pid() -> int:
-    for pid in process_tree(os.getpid()):
-        try:
-            if Path(f'/proc/{pid}/comm').read_text().strip() == 'node':
-                return pid
-        except OSError:
-            pass
-    raise AssertionError('Playwright Node driver not found in process tree')
+def driver_pid(playwright) -> int:
+    # Test-only access to the exact transport process in our pinned Playwright
+    # version. Node can change its /proc/comm title, so do not infer identity
+    # from that mutable process name.
+    pid = playwright._impl_obj._connection._transport._proc.pid
+    assert pid in process_tree(os.getpid()), 'driver is not our descendant'
+    return pid
 
 
 def inject_driver_failure(evidence: Path):
     stack = fixture_browser()
     page = stack[2].new_page()
     page.goto('https://fixture.invalid/')
-    os.kill(driver_pid(), signal.SIGKILL)
+    os.kill(driver_pid(stack[0]), signal.SIGKILL)
     evidence.write_text("driver SIGKILL injected\n")
     try:
         page.title()  # Real synchronous Playwright call after fatal driver death.
