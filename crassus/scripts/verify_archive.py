@@ -222,7 +222,10 @@ class ArchiveTests(unittest.TestCase):
                 runner, archive = Mock(), Mock()
                 runner.run_cycle.return_value = False
                 runner.run.side_effect = RuntimeError("runner failed")
-                with patch("crassus.runner.Runner", return_value=runner), \
+                # Exercise the worker lifecycle; the outer CLI now supervises
+                # a separate process, where these local mocks would not apply.
+                with patch.dict(os.environ, {"_CRASSUS_HEARTBEAT_FD": "-1"}), \
+                     patch("crassus.runner.Runner", return_value=runner), \
                      patch("crassus.runner.load_accounts", return_value=[]), \
                      patch("crassus.runner.configure_logging"), \
                      patch("crassus.runner.archive_from_environment", return_value=archive):

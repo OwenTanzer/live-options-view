@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
+import os
 import signal
 import sys
 import threading
@@ -43,6 +45,7 @@ from .config import (
 from .flatten import maybe_flatten
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
 from .observability import configure_logging, event, rejection_reason
+from .supervisor import HEARTBEAT_FD, report_cycle, supervise
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
@@ -294,7 +297,7 @@ class Runner:
 
         Completion measures loop progress, not successful trading or healthy
         data. Individual no_trade/error outcomes remain in the decision ledger.
-        These events support monitoring but do not implement a stall watchdog.
+        The continuous CLI supervisor also consumes these progress records.
         """
         self.cycle_count += 1
         started = time.monotonic()
@@ -307,6 +310,7 @@ class Runner:
         }
         log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
         event(log, "cycle_started", **fields)
+        report_cycle("cycle_started", **fields)
         processed = 0
         skipped = 0
         try:
@@ -329,6 +333,7 @@ class Runner:
                 self._run_account(account, snapshot, phase)
                 processed += 1
         except BaseException as exc:
+            report_cycle("cycle_failed", **fields, error_type=type(exc).__name__)
             event(
                 log, "cycle_failed", level=logging.ERROR, **fields,
                 accounts_processed=processed, accounts_skipped=skipped,
@@ -336,10 +341,14 @@ class Runner:
                 duration_seconds=round(time.monotonic() - started, 3),
             )
             raise
+        completed_at = clock.iso_utc()
+        duration = round(time.monotonic() - started, 3)
+        report_cycle("cycle_completed", **fields, cycle_completed_at=completed_at,
+                     duration_seconds=duration)
         event(
             log, "cycle_completed", **fields,
-            cycle_completed_at=clock.iso_utc(),
-            duration_seconds=round(time.monotonic() - started, 3),
+            cycle_completed_at=completed_at,
+            duration_seconds=duration,
             accounts_processed=processed, accounts_skipped=skipped,
             snapshot_available=snapshot is not None,
         )
@@ -590,6 +599,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     configure_logging(args.verbose)
+
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        parser.error("--interval must be finite and positive")
+    if not args.once and HEARTBEAT_FD not in os.environ:
+        return supervise([sys.executable, "-m", "crassus.runner",
+                          *(sys.argv[1:] if argv is None else argv)], args.interval)
 
     accounts = load_accounts(args.accounts)
     if args.only:
