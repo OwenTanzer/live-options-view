@@ -29,6 +29,7 @@ from typing import Any
 
 import requests
 
+from .durability import durable_mkdir, sync_directory
 from . import clock
 from .audit import Outcome
 from .config import BASE_URL, BOT_REGISTRATION_KEY
@@ -443,7 +444,7 @@ class ExecutionClient:
     ):
         self.session = session
         self.state_dir = Path(state_dir)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(self.state_dir)
         self.max_attempts = max_attempts
         self.backoff_base_s = backoff_base_s
 
@@ -466,9 +467,11 @@ class ExecutionClient:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, self._inflight_path)
+        sync_directory(self.state_dir)
 
     def _clear_intent(self) -> None:
         self._inflight_path.unlink(missing_ok=True)
+        sync_directory(self.state_dir)
 
     def finalize(self, execution_request_id: str) -> None:
         """Clear the persisted intent -- but only once its outcome is durably
