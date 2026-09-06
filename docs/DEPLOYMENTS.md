@@ -297,3 +297,11 @@ than being appended indefinitely to this contract.
 
 The superseded June 23, 2026 pre-deployment audit remains available in Git
 history at commit [`57c9d2d`](https://github.com/OwenTanzer/live-options-view/blob/57c9d2df4e7f1832ed54539268ecffb08e6d36ef/docs/PRE_DEPLOYMENT_REVIEW.md).
+
+### Crassus durable data and private archive
+
+The optional persistent data root and private R2 ledger archive are documented in
+[`crassus/ARCHIVING.md`](../crassus/ARCHIVING.md), including configuration, safe
+first migration, checkpoint guarantees and restore limitations. Enabling a new
+root requires seeding both current ledger and pending state on a persistent
+volume before runner startup. Code changes alone do not provide durable storage.

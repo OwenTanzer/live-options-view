@@ -67,6 +67,9 @@ jobs:
       - name: Run operational logging and cycle-completion suite
         working-directory: crassus
         run: python scripts/verify_observability.py
+      - name: Run durable archive failure-boundary suite
+        working-directory: crassus
+        run: python scripts/verify_archive.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's

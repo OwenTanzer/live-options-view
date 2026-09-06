@@ -23,6 +23,7 @@ from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
+from .archive import from_environment as archive_from_environment
 from .client import (
     AccountLiquidated,
     AccountSession,
@@ -603,17 +604,24 @@ def main(argv: list[str] | None = None) -> int:
         interval_s=args.interval,
         dry_run=args.dry_run,
     )
-    if args.once:
-        runner.install_signal_handlers()
-        runner.startup()
-        if not runner.run_cycle():
-            log.warning("Single cycle interrupted. Ledger: %s", runner.ledger.paths.ledger)
-            return 130
-        log.info("Single cycle complete. Ledger: %s", runner.ledger.paths.ledger)
-        return 0
+    archive = archive_from_environment(runner.ledger.paths.ledger.parent, runner.state_dir)
+    if archive:
+        archive.start()
+    try:
+        if args.once:
+            runner.install_signal_handlers()
+            runner.startup()
+            if not runner.run_cycle():
+                log.warning("Single cycle interrupted. Ledger: %s", runner.ledger.paths.ledger)
+                return 130
+            log.info("Single cycle complete. Ledger: %s", runner.ledger.paths.ledger)
+            return 0
 
-    runner.run()
-    return 0
+        runner.run()
+        return 0
+    finally:
+        if archive:
+            archive.close()
 
 
 if __name__ == "__main__":
