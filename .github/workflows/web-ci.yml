@@ -31,6 +31,8 @@ jobs:
           node-version: "22"
       - name: worker logic
         run: node tests/worker_logic.test.js
+      - name: bot account closure and identity compatibility
+        run: node tests/account_closure.test.js
       - name: automated tab panel
         run: node tests/bots_panel.test.js
       - name: live quote service

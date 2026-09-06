@@ -13,6 +13,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100_000;
 export const STARTING_BALANCE = 10_000;
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
+export const BOT_USERNAME_RE = /^[A-Za-z0-9_]{3,40}$/;
 export const STRATEGY_ID_RE = /^[a-z0-9_]{1,40}$/;
 export const MIN_PASSWORD_LEN = 8;
 export const MAX_PASSWORD_LEN = 256;
@@ -311,8 +312,8 @@ async function handleRegister(request, env) {
     return jsonResponse({ error: 'strategy_id must be 1-40 chars: lowercase letters, numbers, underscore' }, 400);
   }
 
-  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
-    return jsonResponse({ error: 'Username must be 3-20 characters: letters, numbers, underscore' }, 400);
+  if (typeof username !== 'string' || !(isBot ? BOT_USERNAME_RE : USERNAME_RE).test(username)) {
+    return jsonResponse({ error: `Username must be 3-${isBot ? 40 : 20} characters: letters, numbers, underscore` }, 400);
   }
   if (typeof password !== 'string' || password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN) {
     return jsonResponse({ error: `Password must be ${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN} characters` }, 400);
@@ -381,7 +382,9 @@ async function handleMe(request, env) {
   const session = await requireSession(request, env);
   if (!session) return jsonResponse({ error: 'Not logged in' }, 401);
   return jsonResponse(
-    { username: session.username, balance_cash: session.record.balance_cash, trades: session.record.trades },
+    { username: session.username, balance_cash: session.record.balance_cash, trades: session.record.trades,
+      account_closed: session.record.account_closed === true,
+      closed_at: session.record.closed_at ?? null, closure_reason: session.record.closure_reason ?? null },
     200,
   );
 }
@@ -408,7 +411,7 @@ export async function handleBotMetadata(request, env) {
   if (bodyResult.error) return bodyResult.error;
   const { username, strategy_id, alias } = bodyResult.body || {};
 
-  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+  if (typeof username !== 'string' || !BOT_USERNAME_RE.test(username)) {
     return jsonResponse({ error: 'username must be a valid username' }, 400);
   }
   if (strategy_id !== undefined && strategy_id !== null &&
@@ -479,6 +482,9 @@ export async function handleBots(request, env) {
       strategy_id: record.strategy_id ?? null,
       balance_cash: record.balance_cash,
       starting_balance: record.starting_balance ?? STARTING_BALANCE,
+      account_closed: record.account_closed === true,
+      closed_at: record.closed_at ?? null,
+      closure_reason: record.closure_reason ?? null,
       trade_count: trades.length,
       first_trade_ts: trades.length ? trades[0].ts : null,
       last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
@@ -627,8 +633,30 @@ async function handlePaperTrade(request, env) {
       return jsonResponse({ error: 'execution_request_id conflicts with a different trade intent' }, 409);
     }
     if (storedOutcome.status === 'pending') {
+      // Closure and its exact rejected intent are retained together in KV.
+      // Recover a crash after closure but before R2 outcome finalization,
+      // without obtaining a new quote or attempting another account mutation.
+      const closure = session.record.closure_execution;
+      if (session.record.account_closed && closure?.execution_request_id === executionId) {
+        try {
+          const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, closure, etag);
+          return existingExecutionResponse(recovered.outcome, body);
+        } catch (error) {
+          return jsonResponse({ error: 'Closed-account rejection could not be recovered' }, 503);
+        }
+      }
       const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
       if (!appliedTrade) {
+        if (session.record.account_closed) {
+          try {
+            const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key,
+              { ...storedOutcome, status: 'rejected', http_status: 403,
+                error: 'Account closed', account_closed: true }, etag);
+            return existingExecutionResponse(recovered.outcome, body);
+          } catch (error) {
+            return jsonResponse({ error: 'Closed-account pending intent could not be recovered' }, 503);
+          }
+        }
         return jsonResponse({
           error: 'Execution is already pending',
           order_id: executionId,
@@ -658,6 +686,7 @@ async function handlePaperTrade(request, env) {
         storedOutcome.username !== session.username ||
         !executionIntentMatches(storedOutcome, body) ||
         storedOutcome.status !== 'pending' ||
+        session.record.account_closed ||
         appliedTrade ||
         !executionReservationExpired(storedOutcome)
       ) {
@@ -676,6 +705,11 @@ async function handlePaperTrade(request, env) {
     }
   } catch (error) {
     return jsonResponse({ error: 'Execution state unavailable' }, 503);
+  }
+
+  if (session.record.account_closed) {
+    return jsonResponse({ error: 'Account closed', account_closed: true,
+      closure_reason: session.record.closure_reason }, 403);
   }
 
   let quotePayload;
@@ -779,7 +813,15 @@ async function handlePaperTrade(request, env) {
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
+    if (record.account_closed) return { error: 'account_closed' };
     if (trade.side === 'buy' && -cashDelta > record.balance_cash) {
+      if (record.is_bot) {
+        const rejection = { ...common, error: 'Insufficient balance', status: 'rejected',
+          http_status: 400, account_closed: true };
+        return { record: { ...record, account_closed: true, closed_at: executedAt.toISOString(),
+          closure_reason: 'insufficient_balance', closure_execution: rejection },
+          result: { balance_rejection: rejection } };
+      }
       return { error: 'insufficient_balance' };
     }
     if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
@@ -793,8 +835,8 @@ async function handlePaperTrade(request, env) {
     };
   });
 
-  if (kvOutcome.error === 'insufficient_balance') {
-    const rejection = Object.freeze({
+  if (kvOutcome.error === 'insufficient_balance' || kvOutcome.result?.balance_rejection) {
+    const rejection = Object.freeze(kvOutcome.result?.balance_rejection ?? {
       ...common,
       error: 'Insufficient balance',
       status: 'rejected',
@@ -805,6 +847,16 @@ async function handlePaperTrade(request, env) {
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
+    }
+  }
+  if (kvOutcome.error === 'account_closed') {
+    const rejection = { ...common, error: 'Account closed', account_closed: true,
+      status: 'rejected', http_status: 403 };
+    try {
+      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch (error) {
+      return jsonResponse({ error: 'Account closure rejection could not be recorded' }, 503);
     }
   }
   if (kvOutcome.error === 'insufficient_position') {
@@ -903,6 +955,8 @@ export function validateSettleRequest(body) {
 // a logged-in user's does, just without a session to key off of.
 async function settleAccount(env, username, as_of, spot_marks) {
   return withUserRecord(env, username, (record) => {
+    if (record.account_closed) return { result: { settled: [], balance_cash: record.balance_cash,
+      account_closed: true, liquidated: false } };
     const book = computeBookFromTrades(record.trades);
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < as_of);
@@ -965,6 +1019,15 @@ async function settleAccount(env, username, as_of, spot_marks) {
 // that token in hand, so SESSIONS.delete on a token that was never passed
 // is a harmless no-op rather than an attempt to clear a specific session.
 async function liquidateAccount(env, username, token) {
+  const raw = await env.USERS.get(userKey(username));
+  if (raw && JSON.parse(raw).is_bot) {
+    const outcome = await withUserRecord(env, username, (record) => ({
+      record: { ...record, account_closed: true, closed_at: record.closed_at ?? new Date().toISOString(),
+        closure_reason: record.closure_reason ?? 'insolvent_settlement' }, result: { closed: true },
+    }));
+    if (outcome.error) throw new Error('Bot closure could not be persisted');
+    return; // Retain identity and history; never auto-provision a wiped bot.
+  }
   await env.USERS.delete(userKey(username));
   // Drop the roster index entry too, or a liquidated bot leaves a pointer to
   // an account that no longer exists. handleBots tolerates the dangling case,
@@ -1040,7 +1103,7 @@ export async function settleAllBots(env, now = new Date()) {
     const raw = await env.USERS.get(userKey(username));
     if (!raw) continue;
     const record = JSON.parse(raw);
-    if (!record.is_bot) continue;
+    if (!record.is_bot || record.account_closed) continue;
     const book = computeBookFromTrades(record.trades);
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < asOf);
@@ -1087,6 +1150,10 @@ async function handleSettle(request, env) {
 
   if (kvOutcome.error === 'insolvent') {
     await liquidateAccount(env, session.username, session.token);
+    if (session.record.is_bot) {
+      return jsonResponse({ settled: [], account_closed: true,
+        closure_reason: 'insolvent_settlement', balance_cash: session.record.balance_cash }, 200);
+    }
     return jsonResponse(
       { error: 'account_liquidated', reason: 'A settlement obligation exceeded the account balance' },
       410,

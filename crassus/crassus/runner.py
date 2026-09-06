@@ -198,6 +198,8 @@ class Runner:
                 continue
 
             self._recover_pending(account)
+            if getattr(state, "account_closed", False) and not self.executors[account.alias].pending_intent():
+                self._retire_closed(account, state)
 
     def _recover_pending(self, account: Any) -> bool:
         """Resolve an intent left in flight by a crash, idempotently.
@@ -365,6 +367,16 @@ class Runner:
         self.retired.add(account.alias)
         log.warning("%s retired: %s", account.alias, reason)
 
+    def _retire_closed(self, account: Any, state: Any) -> None:
+        self.ledger.record(
+            decision_id=self.ledger.new_decision_id(), account_alias=account.alias,
+            strategy_id=account.strategy_id, strategy_version="n/a",
+            outcome_class=Outcome.NO_TRADE, account_closed=True,
+            account_state_before=state.summary(),
+            reason=f"Account closed: {state.closure_reason}; trading permanently stopped.",
+        )
+        self._retire(account, f"Account closed: {state.closure_reason}")
+
     # -- one account, one cycle -------------------------------------------
 
     def _run_account(self, account: Any, snapshot: Any, phase: str) -> None:
@@ -405,6 +417,10 @@ class Runner:
                 outcome_class=exc.outcome_class,
                 reason=f"Could not reconcile account state: {exc}",
             )
+            return
+
+        if getattr(state, "account_closed", False):
+            self._retire_closed(account, state)
             return
 
         book = Book(state.trades)
@@ -560,6 +576,8 @@ class Runner:
                 http_status=result.http_status,
                 rejection_reason=rejection_reason(result.server_response),
             )
+            if isinstance(result.server_response, dict) and result.server_response.get("account_closed") is True:
+                self._retire(account, "Worker closed account; terminal rejection preserved in ledger.")
 
     def _record_liquidation(
         self,
