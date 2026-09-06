@@ -243,9 +243,25 @@ def _fetch_listing_json(
     return posts[:limit]
 
 
+def _release_browser(context: Any, browser: Any, playwright: Any) -> None:
+    """Attempt every teardown even if a close is interrupted or already failed."""
+    interrupted = None
+    for obj, method in ((context, "close"), (browser, "close"), (playwright, "stop")):
+        if obj is None:
+            continue
+        try:
+            getattr(obj, method)()
+        except Exception:
+            pass  # Includes driver/target already closed.
+        except BaseException as exc:
+            interrupted = exc
+    if interrupted is not None:
+        raise interrupted
+
+
 def _default_browser_factory() -> Any:
     """Launch one headless Chromium instance and one browser context, reused
-    across every subreddit and every poll cycle for the life of the process
+    across every subreddit in one read, then closed before the read returns
     -- launching fresh per subreddit would multiply the (already-expensive,
     only reached on JSON failure) fallback cost by the subreddit count for
     no benefit, since nothing about the challenge or the page requires a
@@ -259,6 +275,7 @@ def _default_browser_factory() -> Any:
     from playwright.sync_api import sync_playwright  # noqa: PLC0415 -- optional dependency
 
     playwright = sync_playwright().start()
+    browser = context = None
     try:
         browser = playwright.chromium.launch(headless=True, args=_BROWSER_LAUNCH_ARGS)
         context = browser.new_context(
@@ -267,8 +284,8 @@ def _default_browser_factory() -> Any:
             locale="en-US",
         )
         context.add_init_script(_BROWSER_INIT_SCRIPT)
-    except Exception:
-        playwright.stop()
+    except BaseException:
+        _release_browser(context, browser, playwright)
         raise
     return playwright, browser, context
 
@@ -469,12 +486,22 @@ class RedditSentimentReader:
         if self._analyzer is None:
             self._analyzer = self._analyzer_factory()
 
-        snapshot = aggregate(
-            self._collect_texts(),
-            self._analyzer,
-            symbol=self.symbol,
-            subreddits=self.subreddits,
-        )
+        self._browser_unavailable = False  # Retry a prior launch failure on a fresh read.
+
+        # A page close alone does not bound the lifetime of the context and
+        # Node driver (including their protocol objects/caches). Own the
+        # entire Playwright stack for exactly one fresh aggregation, sharing
+        # it across subreddits but never retaining it across runner cycles.
+        # This also runs when the generator, scorer, or caller is cancelled.
+        try:
+            snapshot = aggregate(
+                self._collect_texts(),
+                self._analyzer,
+                symbol=self.symbol,
+                subreddits=self.subreddits,
+            )
+        finally:
+            self._close_browser()
         self._cached, self._cached_at = snapshot, time.monotonic()
         return snapshot
 
@@ -490,41 +517,28 @@ class RedditSentimentReader:
         """Tear down whatever's cached (best-effort, ignoring errors from an
         already-dead process) and clear the cache so the next
         `_get_browser_context` call relaunches from scratch. Does not touch
-        `_browser_unavailable` -- a crash after a previously successful
-        launch is a transient recovery case, not the same as playwright
-        never being installed at all."""
-        for obj, method in (
-            (self._browser_context, "close"),
-            (self._browser, "close"),
-            (self._playwright, "stop"),
-        ):
-            if obj is not None:
-                try:
-                    getattr(obj, method)()
-                except Exception:
-                    pass
+        `_browser_unavailable`, which suppresses repeated launch attempts
+        within this read. The next fresh read retries even a launch failure."""
+        resources = self._browser_context, self._browser, self._playwright
         self._playwright = None
         self._browser = None
         self._browser_context = None
+        _release_browser(*resources)
 
     def _get_browser_context(self) -> Any:
         """Lazily launch the shared headless browser context on first use,
-        once per reader for the life of the process, and transparently
+        once per fresh read, and transparently
         relaunch it once if a previously-working browser has since
         crashed or disconnected.
 
-        `_browser_unavailable` remembers a *launch* failure (e.g. playwright
-        not installed, or `playwright install chromium` never run) so a
-        repeatedly-failing JSON layer doesn't retry the launch every cycle --
-        it fails the same way every time and the error is already surfaced to
-        the strategy as a no_trade reason. A crash of an already-running
-        browser is different: without the `is_connected()` check below, a
-        dead context would stay cached forever and every subsequent fallback
-        would fail identically until the whole bot process restarted.
+        `_browser_unavailable` suppresses repeated launch failures within
+        the same read. A new uncached read clears it so a transient driver
+        failure never permanently disables the fallback. A disconnect after
+        launch still permits exactly one relaunch within the current fetch.
         """
         if self._browser_unavailable:
             raise RedditFetchError(
-                "browser fallback unavailable (see prior error); install with "
+                "browser fallback unavailable for this read (see prior error); install with "
                 "`pip install playwright && playwright install chromium`"
             )
         if self._browser_context is not None and not self._is_browser_alive():

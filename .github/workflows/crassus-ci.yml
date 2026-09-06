@@ -67,6 +67,9 @@ jobs:
       - name: Run operational logging and cycle-completion suite
         working-directory: crassus
         run: python scripts/verify_observability.py
+      - name: Run runner reliability failure-injection suite
+        working-directory: crassus
+        run: python scripts/verify_reliability.py
       - name: Run durable archive failure-boundary suite
         working-directory: crassus
         run: python scripts/verify_archive.py
@@ -87,3 +90,15 @@ jobs:
       - name: Build crassus Docker image (fails if Chromium can't launch inside it)
         working-directory: crassus
         run: docker build -t crassus-ci-smoke .
+      - name: Run real Chromium memory and fatal-driver regression
+        timeout-minutes: 10
+        run: docker run --name crassus-reliability-soak --network none --entrypoint python crassus-ci-smoke scripts/soak_reliability.py --cycles 30 --output /tmp/reliability-soak.json
+      - name: Extract measured soak evidence
+        if: always()
+        run: docker cp crassus-reliability-soak:/tmp/reliability-soak.json reliability-soak.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crassus-reliability-soak
+          path: reliability-soak.json
+          if-no-files-found: warn
