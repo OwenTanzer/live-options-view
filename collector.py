@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-collector.py -- QQQ 0DTE live chain snapshot service.
+collector.py -- QQQ live chain snapshot service.
 
 Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
 DXLink websocket, and uploads snapshots to R2 every minute.
+
+The nearest end-of-week expiration is subscribed through the same feed and
+archived at hourly regular-session slots for historical analysis.  It does not
+replace or alter the tactical 0DTE stream.
 
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
   intraday/latest.json                   -- live feed for the web viewer
   intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
+  raw/weekly/YYYYMMDD/qqq_chain_*.csv    -- nearest-weekly snapshots (~hourly RTH)
+  manifest.json                          -- existing pipeline manifest + weekly keys
   macro/eia_steo.json                    -- EIA STEO crude calibration + OVX regime
                                              (every EIA_STEO_POLL_SECS, optional feature --
                                              see crude_calibration.py; skipped if EIA_API_KEY unset)
@@ -35,12 +41,14 @@ import io
 import json
 import logging
 import os
+import math
 import re
 import secrets
 import sys
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -77,6 +85,7 @@ TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
 STRIKE_WINDOW   = 33
 SNAPSHOT_SECS   = 60
+WEEKLY_SNAPSHOT_SECS = 60 * 60
 PRICES_SECS     = 10
 HEALTH_SECS     = 15
 PREMARKET_HOUR  = 6
@@ -86,6 +95,16 @@ STALE_FEED_SECS = 120   # warn if no feed event for this many seconds
 LIVE_QUOTE_PORT = int(os.environ.get("PORT", "8080"))
 MAX_LIVE_QUOTE_SYMBOLS = 100
 R2_BUCKET       = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
+WEEKLY_R2_PREFIX = "raw/weekly"
+
+# Keep the weekly archive byte-for-byte compatible with qqq-data-pipeline's
+# chain CSV field set and order.  The live 0DTE CSV intentionally retains its
+# additional VolDelta and macro columns.
+PIPELINE_CHAIN_COLUMNS = [
+    "TradeDate", "Expiration", "Strike", "Type", "OptionSymbol", "DTE",
+    "OpenInterest", "Volume", "Bid", "Mid", "Ask", "Last", "IV", "Delta",
+    "Gamma", "Theta", "Vega", "UnderlyingPrice",
+]
 
 # EIA STEO crude calibration feed (see crude_calibration.py). Optional --
 # skipped entirely if EIA_API_KEY isn't set, same soft-dependency shape as
@@ -547,34 +566,29 @@ def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
     return f".{TICKER}{yy}{mm}{dd}{side}{_strike_str(strike)}"
 
 
-def load_chain(access_token: str, today: date) -> tuple[list[dict], str]:
-    resp = requests.get(
-        f"{TASTY_BASE}/option-chains/{TICKER}/nested",
-        headers=_bearer_headers(access_token),
-        timeout=30,
+def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = None) -> date:
+    """Return the EoW expiration using qqq-data-pipeline's holiday behavior."""
+    nominal_friday = as_of + timedelta(days=(4 - as_of.weekday()) % 7)
+    valid = _load_calendar() if valid_days is None else valid_days
+    if not valid:
+        # The chain lookup below still verifies that this expiration actually
+        # exists. Calendar failure must not disturb the existing 0DTE path.
+        return nominal_friday
+
+    expiry = nominal_friday
+    for _ in range(_TD_WALK_LIMIT):
+        if expiry in valid:
+            return expiry
+        expiry -= timedelta(days=1)
+    raise _CalendarLookupError(
+        f"no trading day at or before {nominal_friday} within calendar window"
     )
-    resp.raise_for_status()
 
-    items = resp.json().get("data", {}).get("items", [])
-    if not items:
-        raise RuntimeError("empty option chain response")
 
-    today_str   = today.isoformat()
-    expirations = items[0].get("expirations", [])
-
-    target = None
-    for exp in sorted(expirations, key=lambda e: e.get("expiration-date", "")):
-        if exp.get("expiration-date", "") >= today_str:
-            target = exp
-            break
-    if target is None:
-        raise RuntimeError(f"no upcoming expiration found in chain for {today_str}")
-
-    exp_date = target["expiration-date"]
-    log.info(f"chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
-
+def _parse_expiration_strikes(expiration: dict) -> list[dict]:
+    exp_date = expiration["expiration-date"]
     strikes = []
-    for s in target.get("strikes", []):
+    for s in expiration.get("strikes", []):
         strike = float(s.get("strike-price", 0))
         c = s.get("call", {})
         p = s.get("put",  {})
@@ -599,8 +613,65 @@ def load_chain(access_token: str, today: date) -> tuple[list[dict], str]:
             "call_occ": call_occ,
             "put_occ":  put_occ,
         })
+    return strikes
 
-    return strikes, exp_date
+
+def load_chain(access_token: str, today: date) -> tuple[list[dict], str, list[dict], str]:
+    """Load the current expiration and the pipeline-compatible EoW expiration."""
+    resp = requests.get(
+        f"{TASTY_BASE}/option-chains/{TICKER}/nested",
+        headers=_bearer_headers(access_token),
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    items = resp.json().get("data", {}).get("items", [])
+    if not items:
+        raise RuntimeError("empty option chain response")
+
+    today_str   = today.isoformat()
+    expirations = items[0].get("expirations", [])
+
+    ordered_expirations = sorted(expirations, key=lambda e: e.get("expiration-date", ""))
+    target = None
+    for exp in ordered_expirations:
+        if exp.get("expiration-date", "") >= today_str:
+            target = exp
+            break
+    if target is None:
+        raise RuntimeError(f"no upcoming expiration found in chain for {today_str}")
+
+    exp_date = target["expiration-date"]
+    log.info(f"chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
+
+    strikes = _parse_expiration_strikes(target)
+
+    try:
+        weekly_exp_date = nearest_weekly_expiration(today).isoformat()
+    except Exception as exc:
+        log.error(
+            f"weekly expiration selection failed ({exc}) -- "
+            "weekly collection disabled for this session"
+        )
+        return strikes, exp_date, [], ""
+    weekly_target = next(
+        (exp for exp in ordered_expirations
+         if exp.get("expiration-date") == weekly_exp_date),
+        None,
+    )
+    if weekly_target is None:
+        log.error(
+            f"nearest weekly expiration {weekly_exp_date} not found in chain -- "
+            "weekly collection disabled for this session"
+        )
+        return strikes, exp_date, [], weekly_exp_date
+
+    weekly_strikes = strikes if weekly_exp_date == exp_date else _parse_expiration_strikes(weekly_target)
+    log.info(
+        f"weekly chain expiration: {weekly_exp_date}  "
+        f"({len(weekly_target.get('strikes', []))} strikes)"
+    )
+    return strikes, exp_date, weekly_strikes, weekly_exp_date
 
 
 # -- DXLink websocket feed ----------------------------------------------------
@@ -2202,6 +2273,200 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         raise
 
 
+@lru_cache(maxsize=32)
+def _weekly_session_bounds(day: date) -> Optional[tuple[datetime, datetime]]:
+    """Exchange hours, including holidays and early closes; fail closed on errors."""
+    import pandas_market_calendars as mcal
+    schedule = mcal.get_calendar("NYSE").schedule(start_date=day, end_date=day)
+    if schedule.empty:
+        return None
+    row = schedule.iloc[0]
+    return (row["market_open"].to_pydatetime().astimezone(ET),
+            row["market_close"].to_pydatetime().astimezone(ET))
+
+
+def _weekly_snapshot_slot(ts_et: datetime) -> Optional[datetime]:
+    """Return the hourly RTH slot containing ``ts_et``, or None outside RTH."""
+    ts_et = ts_et.astimezone(ET)
+    bounds = _weekly_session_bounds(ts_et.date())
+    if bounds is None:
+        return None
+    session_open, session_close = bounds
+    if not session_open <= ts_et < session_close:
+        return None
+    elapsed = (ts_et - session_open).total_seconds()
+    return session_open + timedelta(
+        seconds=int(elapsed // WEEKLY_SNAPSHOT_SECS) * WEEKLY_SNAPSHOT_SECS
+    )
+
+
+def _weekly_day_prefix(exp_date: str, trade_date: date) -> str:
+    expiry = date.fromisoformat(exp_date).strftime("%Y%m%d")
+    return f"{WEEKLY_R2_PREFIX}/{expiry}/qqq_chain_{trade_date.strftime('%Y%m%d')}_"
+
+
+def _weekly_existing_snapshot(s3, exp_date: str, trade_date: date,
+                              slot: datetime) -> Optional[str]:
+    """Find an already-written observation in this slot after a restart."""
+    prefix = _weekly_day_prefix(exp_date, trade_date)
+    response = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=prefix)
+    for item in response.get("Contents", []):
+        key = item.get("Key", "")
+        match = re.search(r"_(\d{6,12})\.csv$", key)
+        if not match:
+            continue
+        observed_time = datetime.strptime(match.group(1)[:4], "%H%M").time()
+        observed = datetime.combine(trade_date, observed_time)
+        observed_et = ET.localize(observed)
+        if _weekly_snapshot_slot(observed_et) == slot:
+            return key
+    return None
+
+
+def _load_pipeline_manifest(s3) -> dict:
+    try:
+        body = s3.get_object(Bucket=R2_BUCKET, Key="manifest.json")["Body"].read()
+        return json.loads(body.decode())
+    except Exception as exc:
+        response = getattr(exc, "response", {})
+        error = response.get("Error", {}) if isinstance(response, dict) else {}
+        if error.get("Code") in {"NoSuchKey", "404", "NotFound"}:
+            return {"dates": []}
+        raise
+
+
+def _update_weekly_manifest(s3, exp_date: str, snapshot_key: str) -> None:
+    """Extend the existing pipeline manifest without changing its date index."""
+    manifest = _load_pipeline_manifest(s3)
+    weekly = manifest.setdefault("weekly_expirations", {})
+    if not isinstance(weekly, dict):
+        raise RuntimeError("manifest weekly_expirations must be an object")
+    keys = weekly.setdefault(exp_date, [])
+    if not isinstance(keys, list):
+        raise RuntimeError(f"manifest weekly_expirations[{exp_date}] must be a list")
+    if snapshot_key not in keys:
+        keys.append(snapshot_key)
+        keys.sort()
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    s3.put_object(
+        Bucket=R2_BUCKET,
+        Key="manifest.json",
+        Body=json.dumps(manifest, indent=2, sort_keys=True).encode(),
+        ContentType="application/json",
+    )
+
+
+def _weekly_fresh_value(value, observed_at, now: datetime) -> bool:
+    """Only finite nonnegative prices with recent feed observations qualify."""
+    try:
+        age = (now - datetime.fromisoformat(observed_at)).total_seconds()
+        return (not isinstance(value, bool) and math.isfinite(float(value))
+                and float(value) >= 0 and 0 <= age <= STALE_FEED_SECS)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def take_weekly_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
+                         exp_date: str, today: date,
+                         ts_et: Optional[datetime] = None) -> Optional[str]:
+    """Archive observed contracts, retaining the pipeline's 18-column schema.
+
+    Success requires a fresh underlying and at least one fresh, non-crossed
+    two-sided option quote. Unquoted/stale contracts are omitted, so partial
+    coverage is possible; unknown OI/volume remain blank, observed zero stays
+    zero. A slot without qualifying data remains retryable. Summary/Greeks
+    fields retain the feed's existing semantics, not new freshness guarantees.
+    """
+    ts_et = ts_et or datetime.now(ET)
+    slot = _weekly_snapshot_slot(ts_et)
+    if slot is None:
+        return None
+
+    existing_key = _weekly_existing_snapshot(s3, exp_date, today, slot)
+    if existing_key:
+        _update_weekly_manifest(s3, exp_date, existing_key)
+        log.info(f"weekly slot already collected -> {existing_key}")
+        return existing_key
+
+    state = feed.get_state()
+    qqq = state.get(TICKER, {})
+    if (_weekly_fresh_value(qqq.get("bid"), qqq.get("bid_ts"), ts_et)
+            and _weekly_fresh_value(qqq.get("ask"), qqq.get("ask_ts"), ts_et)
+            and qqq["ask"] >= qqq["bid"]):
+        underlying, spot_ts = _resolve_underlying_spot(qqq, None, None)
+    else:
+        underlying, spot_ts = qqq.get("last"), qqq.get("last_ts")
+    if not underlying or not _weekly_fresh_value(underlying, spot_ts, ts_et):
+        log.warning("weekly snapshot awaiting fresh underlying data -- slot remains retryable")
+        return None
+    atm = round(underlying) if underlying else None
+
+    rows = []
+    dte = (date.fromisoformat(exp_date) - today).days
+    for strike_row in strikes:
+        strike = strike_row["strike"]
+        if atm is not None and abs(strike - atm) > STRIKE_WINDOW:
+            continue
+        for option_type, sym_key, occ_key in (
+            ("call", "call_sym", "call_occ"),
+            ("put",  "put_sym",  "put_occ"),
+        ):
+            sym = strike_row[sym_key]
+            data = state.get(sym, {})
+            bid = data.get("bid")
+            ask = data.get("ask")
+            if not (_weekly_fresh_value(bid, data.get("bid_ts"), ts_et)
+                    and _weekly_fresh_value(ask, data.get("ask_ts"), ts_et)
+                    and ask >= bid):
+                continue
+            mid = round((bid + ask) / 2, 4) if bid is not None and ask is not None else None
+            rows.append({
+                "TradeDate":       today.isoformat(),
+                "Expiration":      exp_date,
+                "Strike":          strike,
+                "Type":            option_type,
+                "OptionSymbol":    strike_row[occ_key] or sym,
+                "DTE":             dte,
+                "OpenInterest":    data.get("oi"),
+                "Volume":          data.get("volume"),
+                "Bid":             bid,
+                "Mid":             mid,
+                "Ask":             ask,
+                "Last":            data.get("last"),
+                "IV":              data.get("volatility"),
+                "Delta":           data.get("delta"),
+                "Gamma":           data.get("gamma"),
+                "Theta":           data.get("theta"),
+                "Vega":            data.get("vega"),
+                "UnderlyingPrice": underlying,
+            })
+
+    if not rows:
+        log.warning("weekly snapshot awaiting fresh option quotes -- slot remains retryable")
+        return None
+
+    key = (
+        _weekly_day_prefix(exp_date, today)
+        + ts_et.strftime("%H%M%S%f")
+        + ".csv"
+    )
+    csv_buf = io.StringIO()
+    pd.DataFrame(rows, columns=PIPELINE_CHAIN_COLUMNS).to_csv(csv_buf, index=False)
+    s3.put_object(
+        Bucket=R2_BUCKET,
+        Key=key,
+        Body=csv_buf.getvalue().encode(),
+        ContentType="text/csv",
+    )
+    _update_weekly_manifest(s3, exp_date, key)
+    bid_count = sum(1 for row in rows if row["Bid"] is not None)
+    log.info(
+        f"-> {key}  ({len(rows)} weekly rows, expiration={exp_date}, "
+        f"underlying={underlying}, bids={bid_count})"
+    )
+    return key
+
+
 # -- session lifecycle --------------------------------------------------------
 
 class ExchangeCalendarUnavailable(RuntimeError):
@@ -2224,6 +2489,24 @@ def _exchange_session_dates(start: date, end: date) -> set[date]:
 def past_stop() -> bool:
     et = datetime.now(ET)
     return (et.hour, et.minute) >= (STOP_HOUR, STOP_MIN)
+
+
+def weekly_snapshot_loop(s3, feed: DXLinkFeed, strikes: list[dict],
+                         exp_date: str, today: date) -> None:
+    """Collect one weekly snapshot per hourly regular-session slot."""
+    last_slot = None
+    while not past_stop():
+        now_et = datetime.now(ET)
+        try:
+            slot = _weekly_snapshot_slot(now_et)
+            if slot is not None and slot != last_slot:
+                if take_weekly_snapshot(s3, feed, strikes, exp_date, today, now_et):
+                    last_slot = slot
+        except Exception as exc:
+            # Calendar/data/storage errors leave the slot retryable and never
+            # affect the tactical minute loop.
+            log.error(f"weekly snapshot error: {exc}")
+        time.sleep(SNAPSHOT_SECS)
 
 
 def _session_bounds(et: datetime) -> tuple[datetime, datetime]:
@@ -2316,7 +2599,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     tier    = classify_tier(today)
     log.info(f"session date={today}  tier={tier}")
 
-    strikes, exp_date = load_chain(auth["access_token"], today)
+    strikes, exp_date, weekly_strikes, weekly_exp_date = load_chain(
+        auth["access_token"], today
+    )
 
     option_syms = []
     contracts = {}
@@ -2333,6 +2618,13 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 "streamer_symbol": s["put_sym"], "strike": s["strike"],
                 "type": "put", "exp": exp_date,
             }
+
+    # Weekly contracts share the same DXLink connection but are intentionally
+    # not added to the live quote registry/UI contract map.
+    for s in weekly_strikes:
+        option_syms.append(s["call_sym"])
+        option_syms.append(s["put_sym"])
+    option_syms = list(dict.fromkeys(option_syms))
 
     price_syms = list(PRICE_TICKERS.values())
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
@@ -2370,6 +2662,18 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     )
     health_thread.start()
     log.info(f"health thread started (every {HEALTH_SECS}s)")
+
+    if weekly_strikes:
+        weekly_thread = threading.Thread(
+            target=weekly_snapshot_loop,
+            args=(s3, feed, weekly_strikes, weekly_exp_date, today),
+            daemon=True,
+        )
+        weekly_thread.start()
+        log.info(
+            f"weekly snapshot thread started (expiration {weekly_exp_date}, "
+            f"every {WEEKLY_SNAPSHOT_SECS // 60}m during 09:30-16:00 ET)"
+        )
 
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS}s, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
