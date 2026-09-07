@@ -54,10 +54,13 @@ python main.py
 3. `score/impact_scorer.py` asks a local Ollama model to score 0-10
    expected volatility impact; falls back to a VADER-magnitude score if
    Ollama's unreachable/slow.
-4. A score >= 5.0 opens a "pin" (`correlate/pin_engine.py`): snapshot
-   price now, wait `PIN_POST_SECONDS`, check whether price actually moved
+4. A score >= 5.0 opens a "pin" (`correlate/pin_engine.py`): anchor price
+   at the original headline ingest time, wait until that time plus
+   `PIN_POST_SECONDS`, check whether price actually moved
    >= `PIN_MOVE_THRESHOLD_PCT` on >= `PIN_VOLUME_RATIO_THRESHOLD`x normal
-   volume. Only confirmed pins post to Discord.
+   volume. Scoring delays do not move either endpoint; later ticks are
+   excluded. Thresholds use absolute movement, while alerts retain its sign.
+   Only confirmed pins post to Discord.
 5. Independently, `correlate/anomaly.py` sweeps every watched symbol every
    `ANOMALY_CHECK_INTERVAL_SECS` for a price z-score beyond
    `ANOMALY_ZSCORE_THRESHOLD` with no matching headline in the last 5
@@ -65,6 +68,13 @@ python main.py
 6. Everything lands in `db/market_pin_bot.sqlite3` -- `Storage.accuracy_stats()`
    gives a running hit-rate so scoring/thresholds can be tuned against
    real outcomes instead of guessed once and left alone.
+
+Restart loses the in-memory tick history. Open observations from the previous
+run are therefore closed with `incomplete_reason=restart_lost_price_history`;
+missing endpoint prices or baseline volume also produce explicit incomplete
+observations. These have no invented return, are not posted as confirmed,
+and are excluded from accuracy statistics. Existing databases receive an
+additive column migration; completed historical outcomes are preserved.
 
 ## Not yet built (documented gaps, not silent ones)
 

@@ -2,7 +2,7 @@
 """Prove the pin-window fix: `open_pin`'s "before" price is anchored at the
 headline's own ingest time (not PIN_PRE_SECONDS after it), staleness gets
 rejected, `_resolve_pin` sleeps only the remaining window (not a blind full
-sleep), and `recover_open_pins` reschedules pins left open by a prior run.
+sleep), and restart recovery marks prior-run pins incomplete.
 
 Hermetic: no real websockets, no real time.sleep -- PIN_POST_SECONDS is
 patched small and asyncio.sleep actually runs (fast) rather than being
@@ -56,10 +56,13 @@ class FakeStorage:
         }
         return pin_id
 
-    def resolve_pin(self, pin_id, *, price_after, pct_move, volume_ratio, confirmed):
+    def resolve_pin(self, pin_id, *, price_after, pct_move, volume_ratio, confirmed, window_end=None):
         row = self.pins[pin_id]
-        row.update(window_end=time.time(), price_after=price_after,
+        row.update(window_end=time.time() if window_end is None else window_end, price_after=price_after,
                     pct_move=pct_move, volume_ratio=volume_ratio, confirmed=int(confirmed))
+
+    def mark_pin_incomplete(self, pin_id, reason):
+        self.pins[pin_id].update(window_end=time.time(), incomplete_reason=reason)
 
     def open_pins(self):
         return [row for row in self.pins.values() if row["window_end"] is None]
@@ -76,7 +79,7 @@ async def scenario_before_price_is_ingest_time_anchored() -> None:
     original_post = settings.PIN_POST_SECONDS
     settings.PIN_POST_SECONDS = 0.05
     try:
-        await engine.open_pin(headline_id=1, symbol="QQQ")
+        await engine.open_pin(headline_id=1, symbol="QQQ", window_start=now)
         await asyncio.sleep(0.15)  # let the resolve task run
     finally:
         settings.PIN_POST_SECONDS = original_post
@@ -99,7 +102,7 @@ async def scenario_stale_price_skips_the_pin() -> None:
     settings.PIN_PRE_SECONDS = 5.0
     tracker.on_trade("QQQ", 500.0, 100, now - 60.0)  # far older than PIN_PRE_SECONDS
     try:
-        await engine.open_pin(headline_id=1, symbol="QQQ")
+        await engine.open_pin(headline_id=1, symbol="QQQ", window_start=now)
     finally:
         settings.PIN_PRE_SECONDS = original_pre
     check("no pin was created for a stale price anchor", len(storage.pins) == 0, len(storage.pins))
@@ -136,8 +139,8 @@ async def scenario_resolve_sleeps_only_remaining_time() -> None:
     check("confirmed (moved >= threshold on volume)", row["confirmed"] == 1, row)
 
 
-async def scenario_recovery_reschedules_open_pins() -> None:
-    print("\n4. recover_open_pins: reschedules a pin left open by a prior run")
+async def scenario_recovery_marks_incomplete() -> None:
+    print("\n4. recover_open_pins: prior-run history gaps produce incomplete observations")
     storage = FakeStorage()
     tracker = PriceTracker()
     engine = PinEngine(storage, tracker)
@@ -157,8 +160,9 @@ async def scenario_recovery_reschedules_open_pins() -> None:
         settings.PIN_POST_SECONDS = original_post
 
     row = next(iter(storage.pins.values()))
-    check("recovered pin resolved without waiting a fresh full window",
-          row["window_end"] is not None, row)
+    check("recovered pin is terminal and explicitly incomplete",
+          row["window_end"] is not None
+          and row.get("incomplete_reason") == "restart_lost_price_history", row)
 
 
 def main() -> int:
@@ -166,7 +170,7 @@ def main() -> int:
         scenario_before_price_is_ingest_time_anchored,
         scenario_stale_price_skips_the_pin,
         scenario_resolve_sleeps_only_remaining_time,
-        scenario_recovery_reschedules_open_pins,
+        scenario_recovery_marks_incomplete,
     ):
         asyncio.run(scenario())
 

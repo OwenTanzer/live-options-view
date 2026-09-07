@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Callable
 
 import aiohttp
@@ -37,6 +38,7 @@ async def process_headlines(
 ) -> None:
     async with aiohttp.ClientSession() as session:
         async for headline in source_iter:
+            ingested_at = headline.ingested_at or time.time()
             symbols = [s for s in headline.symbols if s in settings.WATCHLIST]
             if not symbols and settings.WATCHLIST:
                 # general-category headlines (e.g. Finnhub) aren't pre-tagged;
@@ -58,6 +60,7 @@ async def process_headlines(
                 source=headline.source, external_id=headline.external_id,
                 symbols=symbols, headline=headline.headline, summary=headline.summary,
                 url=headline.url, published_at=headline.published_at,
+                ingested_at=ingested_at,
                 is_duplicate_of=duplicate_of,
             )
             if headline_id is None:
@@ -75,7 +78,9 @@ async def process_headlines(
 
             if score >= IMPACT_POST_THRESHOLD:
                 for symbol in symbols:
-                    asyncio.create_task(pin_engine.open_pin(headline_id, symbol))
+                    asyncio.create_task(pin_engine.open_pin(
+                        headline_id, symbol, window_start=ingested_at,
+                    ))
 
 
 async def poll_and_post_results(storage: Storage, outbox: asyncio.Queue) -> None:

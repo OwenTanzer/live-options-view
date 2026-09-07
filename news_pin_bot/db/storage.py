@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS pins (
     pct_move REAL,
     volume_ratio REAL,
     confirmed INTEGER NOT NULL DEFAULT 0,
+    incomplete_reason TEXT,
     posted_to_discord INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     FOREIGN KEY(headline_id) REFERENCES headlines(id)
@@ -71,6 +72,10 @@ class Storage:
         self._db_path = db_path
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            # Existing local databases predate explicit incomplete outcomes.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(pins)")}
+            if "incomplete_reason" not in columns:
+                conn.execute("ALTER TABLE pins ADD COLUMN incomplete_reason TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -92,6 +97,7 @@ class Storage:
         summary: str = "",
         url: str = "",
         published_at: float | None,
+        ingested_at: float | None = None,
         is_duplicate_of: int | None = None,
     ) -> int | None:
         """Returns the new row id, or None if this (source, external_id)
@@ -106,7 +112,7 @@ class Storage:
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         source, external_id, ",".join(symbols), headline, summary, url,
-                        published_at, time.time(), is_duplicate_of,
+                        published_at, time.time() if ingested_at is None else ingested_at, is_duplicate_of,
                     ),
                 )
                 return cur.lastrowid
@@ -142,12 +148,23 @@ class Storage:
             return cur.lastrowid
 
     def resolve_pin(self, pin_id: int, *, price_after: float, pct_move: float,
-                     volume_ratio: float, confirmed: bool) -> None:
+                     volume_ratio: float, confirmed: bool, window_end: float | None = None) -> None:
         with self._connect() as conn:
             conn.execute(
                 """UPDATE pins SET window_end = ?, price_after = ?, pct_move = ?,
-                   volume_ratio = ?, confirmed = ? WHERE id = ?""",
-                (time.time(), price_after, pct_move, volume_ratio, int(confirmed), pin_id),
+                   volume_ratio = ?, confirmed = ? WHERE id = ? AND window_end IS NULL""",
+                (time.time() if window_end is None else window_end,
+                 price_after, pct_move, volume_ratio, int(confirmed), pin_id),
+            )
+
+    def mark_pin_incomplete(self, pin_id: int, reason: str) -> None:
+        """Terminate a missing-data observation without fabricating an outcome."""
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE pins SET window_end = ?, incomplete_reason = ?,
+                   price_after = NULL, pct_move = NULL, volume_ratio = NULL, confirmed = 0
+                   WHERE id = ? AND window_end IS NULL""",
+                (time.time(), reason, pin_id),
             )
 
     def mark_pin_posted(self, pin_id: int) -> None:
@@ -195,7 +212,7 @@ class Storage:
             row = conn.execute(
                 """SELECT COUNT(*) AS total,
                           SUM(confirmed) AS confirmed
-                   FROM pins WHERE window_end IS NOT NULL"""
+                   FROM pins WHERE window_end IS NOT NULL AND incomplete_reason IS NULL"""
             ).fetchone()
             total = row["total"] or 0
             confirmed = row["confirmed"] or 0

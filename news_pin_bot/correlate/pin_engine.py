@@ -15,11 +15,11 @@ tying the headline to the move it (plausibly) caused. An unconfirmed pin is
 still logged -- that's the data that lets accuracy_stats() eventually show
 which sources/keywords actually predict moves and which don't.
 
-`_resolve_pin` sleeps only the *remaining* time to `window_start +
-PIN_POST_SECONDS` rather than a blind full-length sleep, so the same method
-serves both a freshly-opened pin and one recovered from storage after a
-restart (see `recover_open_pins`), where part of the window may have
-already elapsed while the process was down.
+Scoring delay never shifts the observation window: resolution sleeps only
+until the original endpoint and uses prices/volume inside that window.
+Restart loses the in-memory price history, so unfinished pins are marked
+incomplete and excluded from accuracy statistics, never reconstructed from
+unrelated post-restart ticks.
 """
 from __future__ import annotations
 
@@ -39,12 +39,11 @@ class PinEngine:
         self._storage = storage
         self._tracker = tracker
 
-    async def open_pin(self, headline_id: int, symbol: str) -> None:
+    async def open_pin(self, headline_id: int, symbol: str, *, window_start: float) -> None:
         """Called when a headline scores above the impact threshold for a
         watched symbol. window_start is the headline's own ingest time, so
         the pin window actually covers the reaction to the headline instead
         of starting PIN_PRE_SECONDS late."""
-        window_start = time.time()
         state = self._tracker.state(symbol)
         trade = state.trade_at_or_before(window_start) if state else None
         if trade is None or (window_start - trade.ts) > settings.PIN_PRE_SECONDS:
@@ -64,23 +63,29 @@ class PinEngine:
             await asyncio.sleep(remaining)
 
         state = self._tracker.state(symbol)
-        if state is None:
+        after = state.trade_at_or_before(target) if state else None
+        before = state.trade_at_or_before(window_start) if state else None
+        if (after is None or before is None or target - after.ts > settings.PIN_PRE_SECONDS):
+            self._storage.mark_pin_incomplete(pin_id, "missing_window_price_history")
             return
-        price_after = state.last_price() or price_before
-        pct_move = abs(price_after - price_before) / price_before * 100.0 if price_before else 0.0
+        price_after = after.price
+        pct_move = (price_after - price_before) / price_before * 100.0 if price_before else 0.0
 
-        elapsed = max(1.0, time.time() - window_start)
+        elapsed = max(1.0, target - window_start)
         baseline_rate = state.baseline_volume_rate(1800.0, window_start) or 0.0
-        window_rate = state.volume_since(window_start) / elapsed
-        volume_ratio = (window_rate / baseline_rate) if baseline_rate else 0.0
+        if baseline_rate <= 0:
+            self._storage.mark_pin_incomplete(pin_id, "missing_baseline_volume")
+            return
+        window_rate = sum(t.size for t in state.trades_since(window_start) if t.ts <= target) / elapsed
+        volume_ratio = window_rate / baseline_rate
 
         confirmed = (
-            pct_move >= settings.PIN_MOVE_THRESHOLD_PCT
+            abs(pct_move) >= settings.PIN_MOVE_THRESHOLD_PCT
             and volume_ratio >= settings.PIN_VOLUME_RATIO_THRESHOLD
         )
         self._storage.resolve_pin(
             pin_id, price_after=price_after, pct_move=pct_move,
-            volume_ratio=volume_ratio, confirmed=confirmed,
+            volume_ratio=volume_ratio, confirmed=confirmed, window_end=target,
         )
         log.info(
             "pin %s resolved: %s moved %.2f%% (vol ratio %.1fx) confirmed=%s",
@@ -88,16 +93,14 @@ class PinEngine:
         )
 
     def recover_open_pins(self) -> int:
-        """Reschedules every pin left with window_end IS NULL from a prior
-        run -- otherwise a restart silently loses every in-flight pin
-        (Storage.open_pins() existed but nothing ever called it). Each
-        recovered pin resolves after only its remaining time, or immediately
-        if the window already elapsed while the process was down."""
+        """Close unfinished observations as incomplete after losing tick history.
+
+        Called once at startup, before ingest begins. Neither expired nor
+        still-open windows can be evaluated faithfully across that gap.
+        """
         rows = self._storage.open_pins()
         for row in rows:
-            asyncio.create_task(
-                self._resolve_pin(row["id"], row["symbol"], row["price_before"], row["window_start"])
-            )
+            self._storage.mark_pin_incomplete(row["id"], "restart_lost_price_history")
         if rows:
-            log.info("recovered %d open pin(s) from a prior run", len(rows))
+            log.info("marked %d prior-run pin(s) incomplete: price history lost", len(rows))
         return len(rows)

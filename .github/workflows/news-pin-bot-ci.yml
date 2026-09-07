@@ -42,6 +42,9 @@ jobs:
       - name: Run anomaly-scanner return-based z-score/cooldown suite
         working-directory: news_pin_bot
         run: python scripts/verify_anomaly.py
+      - name: Run delayed-score, restart-data-loss and signed-alert regressions
+        working-directory: news_pin_bot
+        run: python scripts/verify_pin_regressions.py
       - name: Run dedup/UTC-timestamp/delivery-confirmation suite
         working-directory: news_pin_bot
         run: python scripts/verify_dedup_and_delivery.py
