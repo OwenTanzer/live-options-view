@@ -37,6 +37,20 @@ class ParamSpec:
     single override may move a numeric parameter by -- e.g. 0.5 permits at
     most a 50% change in either direction per accepted override. `None`
     means no rate-of-change cap (still bounded by min/max).
+
+    `default` is the strategy's own real hardcoded default for this
+    parameter (its `DEFAULT_*` constant in `crassus/strategies/*.py`) --
+    what the strategy actually uses when an account's own `params` doesn't
+    set this key at all. Flagged in review: without this, a momentum
+    account configured with `params={}` (relying entirely on the
+    strategy's real default of 0.003 for `bullish_threshold`) had no
+    baseline to rate-cap against -- `baseline_params.get(name)` read `None`
+    too, `_is_number(None)` is False, so the rate-of-change check silently
+    never ran, and a proposal could jump straight to any in-bounds value
+    (e.g. 0.02, a >500% change) on the very first override. `default` closes
+    that gap by giving `_check_value` a real number to compare against
+    whenever neither a prior accepted value nor an explicit baseline
+    `params` entry exists.
     """
 
     kind: type  # float or bool
@@ -44,6 +58,7 @@ class ParamSpec:
     max: float | None = None
     max_rate_of_change: float | None = None
     nullable: bool = False
+    default: float | bool | None = None
 
 
 # One entry per strategy_id in `crassus.strategy.REGISTRY`, sourced from the
@@ -52,50 +67,64 @@ class ParamSpec:
 # canopus_down_day's HH:MM time-of-day strings) -- time-window edits change
 # *when* a strategy trades, which is a materially different kind of risk
 # than nudging a threshold, and isn't supported by this policy layer yet.
+#
+# `default` values below are each strategy's real `DEFAULT_*` constant --
+# kept in sync by hand, same trust posture as the bounds themselves (see the
+# module docstring: this allowlist is a reviewed decision, not something
+# derived automatically from strategy source).
 STRATEGY_PARAM_SCHEMAS: dict[str, dict[str, ParamSpec]] = {
     "momentum_qqq": {
-        "bullish_threshold": ParamSpec(float, min=0.0005, max=0.02, max_rate_of_change=0.5),
-        "bearish_threshold": ParamSpec(float, min=-0.02, max=-0.0005, max_rate_of_change=0.5),
-        "vwap_confirmation_required": ParamSpec(bool),
-        "rvol_floor": ParamSpec(float, min=0.5, max=5.0, nullable=True, max_rate_of_change=0.5),
+        "bullish_threshold": ParamSpec(float, min=0.0005, max=0.02, max_rate_of_change=0.5, default=0.003),
+        "bearish_threshold": ParamSpec(float, min=-0.02, max=-0.0005, max_rate_of_change=0.5, default=-0.003),
+        "vwap_confirmation_required": ParamSpec(bool, default=False),
+        "rvol_floor": ParamSpec(float, min=0.5, max=5.0, nullable=True, max_rate_of_change=0.5, default=None),
     },
     "reddit_sentiment_qqq": {
-        "min_sample_size": ParamSpec(float, min=1, max=50, max_rate_of_change=1.0),
-        "bullish_threshold": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5),
-        "bearish_threshold": ParamSpec(float, min=-1.0, max=-0.02, max_rate_of_change=0.5),
+        "min_sample_size": ParamSpec(float, min=1, max=50, max_rate_of_change=1.0, default=5),
+        "bullish_threshold": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5, default=0.15),
+        "bearish_threshold": ParamSpec(float, min=-1.0, max=-0.02, max_rate_of_change=0.5, default=-0.15),
     },
     "trump_whisperer_qqq": {
-        "min_sample_size": ParamSpec(float, min=1, max=50, max_rate_of_change=1.0),
-        "bullish_threshold": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5),
-        "bearish_threshold": ParamSpec(float, min=-1.0, max=-0.02, max_rate_of_change=0.5),
+        "min_sample_size": ParamSpec(float, min=1, max=50, max_rate_of_change=1.0, default=2),
+        "bullish_threshold": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5, default=0.2),
+        "bearish_threshold": ParamSpec(float, min=-1.0, max=-0.02, max_rate_of_change=0.5, default=-0.2),
     },
     "max_pain_qqq": {
-        "pin_threshold_pct": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5),
-        "min_strikes_with_oi": ParamSpec(float, min=2, max=20, max_rate_of_change=0.5),
+        "pin_threshold_pct": ParamSpec(float, min=0.02, max=1.0, max_rate_of_change=0.5, default=0.15),
+        "min_strikes_with_oi": ParamSpec(float, min=2, max=20, max_rate_of_change=0.5, default=5),
     },
     "oi_skew_qqq": {
-        "near_money_pct": ParamSpec(float, min=0.005, max=0.1, max_rate_of_change=0.5),
-        "imbalance_threshold": ParamSpec(float, min=0.05, max=0.9, max_rate_of_change=0.5),
-        "min_change_from_session_start": ParamSpec(float, min=0.02, max=0.5, max_rate_of_change=0.5),
-        "min_band_strikes": ParamSpec(float, min=1, max=20, max_rate_of_change=0.5),
+        "near_money_pct": ParamSpec(float, min=0.005, max=0.1, max_rate_of_change=0.5, default=0.02),
+        "imbalance_threshold": ParamSpec(float, min=0.05, max=0.9, max_rate_of_change=0.5, default=0.3),
+        "min_change_from_session_start": ParamSpec(float, min=0.02, max=0.5, max_rate_of_change=0.5, default=0.1),
+        "min_band_strikes": ParamSpec(float, min=1, max=20, max_rate_of_change=0.5, default=4),
     },
     "put_call_ratio_qqq": {
-        "extreme_z_threshold": ParamSpec(float, min=0.5, max=4.0, max_rate_of_change=0.5),
-        "min_baseline_samples": ParamSpec(float, min=5, max=200, max_rate_of_change=0.5),
-        "max_snapshot_age_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5),
+        "extreme_z_threshold": ParamSpec(float, min=0.5, max=4.0, max_rate_of_change=0.5, default=1.5),
+        "min_baseline_samples": ParamSpec(float, min=5, max=200, max_rate_of_change=0.5, default=10),
+        "max_snapshot_age_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5, default=5.0),
     },
     "canopus_down_day_14": {
-        "down_threshold_pct": ParamSpec(float, min=0.0005, max=0.02, max_rate_of_change=0.5),
-        "target_multiplier": ParamSpec(float, min=1.02, max=2.0, max_rate_of_change=0.5),
+        "down_threshold_pct": ParamSpec(float, min=0.0005, max=0.02, max_rate_of_change=0.5, default=0.0025),
+        "target_multiplier": ParamSpec(float, min=1.02, max=2.0, max_rate_of_change=0.5, default=1.14),
     },
     "phelps_pure_qqq": {
-        "phelps_minutes": ParamSpec(float, min=5.0, max=90.0, max_rate_of_change=0.5),
-        "displacement_threshold": ParamSpec(float, min=0.0003, max=0.01, max_rate_of_change=0.5),
-        "displacement_window_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5),
-        "max_anchor_overshoot_minutes": ParamSpec(float, min=0.5, max=10.0, max_rate_of_change=0.5),
-        "max_snapshot_age_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5),
+        "phelps_minutes": ParamSpec(float, min=5.0, max=90.0, max_rate_of_change=0.5, default=27.5),
+        "displacement_threshold": ParamSpec(float, min=0.0003, max=0.01, max_rate_of_change=0.5, default=0.0015),
+        "displacement_window_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5, default=5.0),
+        "max_anchor_overshoot_minutes": ParamSpec(float, min=0.5, max=10.0, max_rate_of_change=0.5, default=2.0),
+        "max_snapshot_age_minutes": ParamSpec(float, min=1.0, max=30.0, max_rate_of_change=0.5, default=5.0),
     },
 }
+
+# The only envelope shape this policy layer knows how to evaluate. Flagged in
+# review: an earlier version applied a proposal regardless of
+# `schema_version`, so `schema_version="incompatible.v999"` (or any future,
+# genuinely incompatible envelope shape) sailed through unexamined. v2 adds
+# `strategy_id`/`strategy_version` to the envelope (see below) -- v1 rows,
+# had any ever been accepted, could not carry that identity and are
+# therefore not in this set either.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({"crassus_override.v2"})
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +145,17 @@ def _is_number(value: Any) -> bool:
 
 
 def _check_value(name: str, spec: ParamSpec, value: Any, prior: Any) -> str | None:
-    """Returns a rejection reason, or None if `value` is acceptable."""
+    """Returns a rejection reason, or None if `value` is acceptable.
+
+    `prior` has already been resolved by the caller through the full
+    fallback chain (prior accepted value -> account's own baseline params
+    -> the strategy's real hardcoded default) -- see `evaluate()`. If a
+    rate-of-change cap is configured but `prior` still isn't a usable
+    number after that chain, this rejects rather than silently skipping
+    the cap: an override with no trustworthy comparison point is exactly
+    the "no rate-of-change enforcement at all" gap flagged in review, and
+    fail-closed here means reject, not "cap doesn't apply."
+    """
     if value is None:
         if spec.nullable:
             return None
@@ -134,13 +173,27 @@ def _check_value(name: str, spec: ParamSpec, value: Any, prior: Any) -> str | No
         return f"{name}: {value} is below minimum {spec.min}"
     if spec.max is not None and value > spec.max:
         return f"{name}: {value} is above maximum {spec.max}"
-    if spec.max_rate_of_change is not None and _is_number(prior) and prior != 0:
-        change = abs(value - prior) / abs(prior)
-        if change > spec.max_rate_of_change:
+    if spec.max_rate_of_change is not None:
+        if not _is_number(prior):
+            if spec.nullable:
+                # This parameter's own "off" state is null by design (e.g.
+                # rvol_floor's real default is None -- no floor). Enabling
+                # it for the first time isn't a rate-of-change from an
+                # existing number, so there's nothing meaningful to cap
+                # against; min/max above still fully bound the value.
+                return None
             return (
-                f"{name}: change of {change:.2%} from prior value {prior} exceeds "
-                f"the {spec.max_rate_of_change:.0%} rate-of-change cap"
+                f"{name}: no trustworthy baseline (no prior accepted value, "
+                f"account params, or strategy default) to enforce the "
+                f"{spec.max_rate_of_change:.0%} rate-of-change cap against"
             )
+        if prior != 0:
+            change = abs(value - prior) / abs(prior)
+            if change > spec.max_rate_of_change:
+                return (
+                    f"{name}: change of {change:.2%} from prior value {prior} exceeds "
+                    f"the {spec.max_rate_of_change:.0%} rate-of-change cap"
+                )
     return None
 
 
@@ -158,6 +211,7 @@ class OverridePolicy:
         *,
         kill_switch: bool | None,
         frozen: bool | None,
+        strategy_version: str | None = None,
     ) -> PolicyResult:
         baseline_params = dict(baseline_params or {})
 
@@ -181,6 +235,29 @@ class OverridePolicy:
             if not schema:
                 return deny(f"no override schema registered for strategy_id {strategy_id!r}")
 
+            # Envelope shape/identity compatibility, checked before anything
+            # about its contents. Flagged in review: an earlier version
+            # applied a proposal regardless of schema_version (so
+            # "incompatible.v999" was accepted) and never compared the
+            # envelope's own strategy identity against the account it's
+            # about to be applied to -- an override proposed against one
+            # strategy_id/version could otherwise be applied to a
+            # differently-configured account sharing some param names.
+            if envelope.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+                return deny(f"unsupported envelope schema_version {envelope.get('schema_version')!r}")
+
+            if envelope.get("strategy_id") != strategy_id:
+                return deny(
+                    f"envelope strategy_id {envelope.get('strategy_id')!r} does not match "
+                    f"this account's strategy_id {strategy_id!r}"
+                )
+
+            if strategy_version is not None and envelope.get("strategy_version") != strategy_version:
+                return deny(
+                    f"envelope strategy_version {envelope.get('strategy_version')!r} does not match "
+                    f"the account's current strategy_version {strategy_version!r}"
+                )
+
             if envelope.get("status") != "accepted":
                 return deny(f"envelope status is {envelope.get('status')!r}, not 'accepted'")
 
@@ -202,7 +279,14 @@ class OverridePolicy:
                 if spec is None:
                     rejections.append(f"{name}: not an overridable parameter for {strategy_id}")
                     continue
-                reason = _check_value(name, spec, value, prior.get(name, baseline_params.get(name)))
+                # Fallback chain for the rate-of-change baseline: the most
+                # recent *accepted* value beats the account's own explicit
+                # `params` entry, which beats the strategy's real hardcoded
+                # default -- each is progressively less specific evidence of
+                # "what this strategy is actually doing right now," but any
+                # of them beats having no trustworthy baseline at all.
+                baseline_for_rate = prior.get(name, baseline_params.get(name, spec.default))
+                reason = _check_value(name, spec, value, baseline_for_rate)
                 if reason:
                     rejections.append(reason)
 

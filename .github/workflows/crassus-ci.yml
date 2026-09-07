@@ -76,6 +76,9 @@ jobs:
       - name: Run Crassus AI policy layer suite
         working-directory: crassus
         run: python scripts/verify_crassus_policy.py
+      - name: Run Crassus AI overrides-client circuit/mirror suite
+        working-directory: crassus
+        run: python scripts/verify_crassus_overrides_client.py
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's

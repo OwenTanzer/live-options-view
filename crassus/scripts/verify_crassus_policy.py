@@ -50,6 +50,19 @@ SIBLING = Account(
     params={"bullish_threshold": 0.003, "bearish_threshold": -0.003},
 )
 
+# An account relying entirely on momentum_qqq's own hardcoded defaults --
+# no explicit params override at all. This is the common case (most
+# accounts.example.json entries set no params for their strategy), and the
+# exact shape review flagged: an implicit baseline must still be rate-capped
+# against, not silently exempted because baseline_params.get(name) is None.
+IMPLICIT_DEFAULTS_ACCOUNT = Account(
+    alias="implicit_defaults_bot",
+    username="implicit_defaults_bot",
+    password="unused",
+    strategy_id="momentum_qqq",
+    params={},
+)
+
 BASELINE = dict(ACCOUNT.params)
 
 
@@ -66,6 +79,9 @@ def envelope(**overrides: Any) -> dict[str, Any]:
         id="ov-1",
         account_alias=ACCOUNT.alias,
         status="accepted",
+        schema_version="crassus_override.v2",
+        strategy_id=ACCOUNT.strategy_id,
+        strategy_version="1.0.0",
         proposed_params={"bullish_threshold": 0.004},
         expires_utc=future(),
     )
@@ -80,7 +96,12 @@ def evaluate(env: dict[str, Any] | None, **kw: Any):
     kw.setdefault("prior_accepted_params", None)
     prior = kw.pop("prior_accepted_params")
     account = kw.pop("account", ACCOUNT)
-    return policy.evaluate(account, BASELINE, env, prior, **kw)
+    # Derived from the account actually being evaluated, not a fixed
+    # global -- IMPLICIT_DEFAULTS_ACCOUNT's whole point is an empty
+    # `params={}` baseline, which a hardcoded BASELINE here would silently
+    # paper over.
+    baseline = dict(account.params)
+    return policy.evaluate(account, baseline, env, prior, **kw)
 
 
 def main() -> int:
@@ -170,6 +191,66 @@ def main() -> int:
         and r.effective_params["bearish_threshold"] == BASELINE["bearish_threshold"],
         f"effective_params={r.effective_params}",
     )
+
+    # 11. Implicit baseline: an account with params={} (relying entirely on
+    #     the strategy's own hardcoded default) must still be rate-capped,
+    #     not silently exempted because baseline_params.get(name) is None.
+    #     momentum_qqq's real default is 0.003; 0.02 is in-bounds
+    #     (max=0.02) but a >500% jump from the real default.
+    r = evaluate(
+        envelope(account_alias=IMPLICIT_DEFAULTS_ACCOUNT.alias, proposed_params={"bullish_threshold": 0.02}),
+        account=IMPLICIT_DEFAULTS_ACCOUNT,
+    )
+    check(
+        "11. An in-bounds value still rejects against the strategy's real (implicit) default rate-of-change cap",
+        not r.applied,
+        f"applied={r.applied} rejections={r.rejections}",
+    )
+    # A modest change from that same real default is accepted.
+    r = evaluate(
+        envelope(account_alias=IMPLICIT_DEFAULTS_ACCOUNT.alias, proposed_params={"bullish_threshold": 0.004}),
+        account=IMPLICIT_DEFAULTS_ACCOUNT,
+    )
+    check(
+        "11b. A modest change from the implicit default (well within the rate cap) is accepted",
+        r.applied,
+        f"applied={r.applied} rejections={r.rejections}",
+    )
+
+    # 12. A nullable parameter with no real default (rvol_floor: None) is not
+    #     penalized for having no baseline -- enabling it for the first time
+    #     isn't a rate-of-change from an existing number.
+    r = evaluate(
+        envelope(account_alias=IMPLICIT_DEFAULTS_ACCOUNT.alias, proposed_params={"rvol_floor": 1.5}),
+        account=IMPLICIT_DEFAULTS_ACCOUNT,
+    )
+    check(
+        "12. A nullable parameter with a null real default can be enabled with no prior baseline",
+        r.applied and r.effective_params["rvol_floor"] == 1.5,
+        f"applied={r.applied} rejections={r.rejections}",
+    )
+
+    # 13. Unsupported/incompatible schema_version is rejected outright.
+    r = evaluate(envelope(schema_version="incompatible.v999"))
+    check("13. Unsupported schema_version rejects the envelope", not r.applied, f"rejections={r.rejections}")
+    r = evaluate(envelope(schema_version=None))
+    check("13b. Missing schema_version rejects the envelope", not r.applied)
+
+    # 14. Envelope strategy identity must match the account it's applied to.
+    r = evaluate(envelope(strategy_id="reddit_sentiment_qqq"))
+    check(
+        "14. An envelope proposed against a different strategy_id is rejected",
+        not r.applied,
+        f"rejections={r.rejections}",
+    )
+    r = evaluate(envelope(), strategy_version="2.0.0")  # envelope's own default strategy_version is "1.0.0"
+    check(
+        "14b. An envelope's strategy_version mismatching the account's current version is rejected",
+        not r.applied,
+        f"rejections={r.rejections}",
+    )
+    r = evaluate(envelope(), strategy_version="1.0.0")
+    check("14c. A matching strategy_version is accepted", r.applied, f"rejections={r.rejections}")
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

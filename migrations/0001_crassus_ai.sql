@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS crassus_overrides (
   id TEXT PRIMARY KEY,
   account_alias TEXT NOT NULL,
   status TEXT NOT NULL,              -- proposed | accepted | rejected | expired | superseded
+  strategy_id TEXT NOT NULL,         -- the account's strategy_id this proposal was made against
+  strategy_version TEXT NOT NULL,    -- and the specific strategy_version, so a later strategy
+                                      -- change invalidates old proposals rather than silently
+                                      -- reusing them (crassus/crassus/policy.py validates both)
   previous_params TEXT NOT NULL,     -- JSON: full baseline params at proposal time
   proposed_params TEXT NOT NULL,     -- JSON: only the changed keys
   rationale TEXT NOT NULL,
@@ -21,7 +25,8 @@ CREATE TABLE IF NOT EXISTS crassus_overrides (
   accepted_utc TEXT,
   accepted_by TEXT,                  -- operator identity, set only via /accept
   rollback_target TEXT,              -- id of the override to revert to
-  schema_version TEXT NOT NULL
+  schema_version TEXT NOT NULL       -- must be a version crassus.policy.SUPPORTED_SCHEMA_VERSIONS
+                                      -- recognizes ("crassus_override.v2" as of this migration)
 );
 
 CREATE INDEX IF NOT EXISTS idx_overrides_account_status

@@ -31,7 +31,13 @@ const MAX_EVIDENCE_REFS = 20;
 const MAX_RATIONALE_LEN = 2000;
 const MAX_MODEL_LEN = 100;
 const MAX_EXPIRES_MINUTES = 24 * 60;
-const CRASSUS_ACCOUNT_ALIAS_RE = /^[A-Za-z0-9_-]{1,40}$/;
+// Matches the *display alias* every real account in accounts.example.json
+// actually uses (e.g. "Max Pain", "OI Skew", "Put-Call Ratio", "Doktor
+// Freuding FW") -- not the stricter username charset. Flagged in review: an
+// earlier version reused a no-spaces pattern here, so a route addressed by
+// alias 400'd for every multi-word alias that already exists in production.
+const CRASSUS_ACCOUNT_ALIAS_RE = /^[A-Za-z0-9 _-]{1,40}$/;
+const STRATEGY_VERSION_RE = /^[A-Za-z0-9_.+-]{1,80}$/;
 
 export default {
   async fetch(request, env) {
@@ -1487,12 +1493,21 @@ function checkOperatorKey(request, env) {
 // actually decides which parameter *names* and *ranges* are safe for a
 // given strategy; this just stops garbage (nested objects, arrays,
 // oversized payloads) from ever reaching D1.
-function validateParamsObject(value) {
+//
+// `requireNonEmpty` distinguishes `proposed_params` (a proposal that changes
+// nothing is not a proposal) from `previous_params` (a perfectly normal
+// baseline for an account whose own accounts.example.json `params` is `{}`,
+// relying entirely on the strategy's hardcoded defaults -- Luigi-style
+// single-strategy bots are the common case, not the exception). Flagged in
+// review: an earlier version required at least one entry for both, so
+// proposing against any such account 400'd on a completely valid empty
+// `previous_params={}`.
+export function validateParamsObject(value, { requireNonEmpty = true } = {}) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return 'must be a JSON object';
   }
   const keys = Object.keys(value);
-  if (keys.length === 0) return 'must have at least one entry';
+  if (requireNonEmpty && keys.length === 0) return 'must have at least one entry';
   if (keys.length > MAX_OVERRIDE_PARAMS) return `too many parameters (max ${MAX_OVERRIDE_PARAMS})`;
   for (const key of keys) {
     if (!OVERRIDE_PARAM_KEY_RE.test(key)) return `invalid parameter name ${key}`;
@@ -1512,6 +1527,8 @@ function rowToOverrideEnvelope(row) {
     id: row.id,
     account_alias: row.account_alias,
     status: row.status,
+    strategy_id: row.strategy_id,
+    strategy_version: row.strategy_version,
     previous_params: JSON.parse(row.previous_params),
     proposed_params: JSON.parse(row.proposed_params),
     rationale: row.rationale,
@@ -1526,7 +1543,41 @@ function rowToOverrideEnvelope(row) {
   };
 }
 
-async function handleCrassusOverrideGet(request, env, alias) {
+// The two new bindings (CRASSUS_CONTROL KV, CRASSUS_DB D1) are not yet
+// provisioned in production (see wrangler.toml) -- deploying with them
+// commented out, as the current config does, means every other route above
+// (auth, trading, settlement, live quotes) works exactly as before, and
+// only these Crassus routes exist to fail. Checked explicitly at the top of
+// every handler that needs one, rather than letting `env.CRASSUS_DB.prepare`
+// throw an unhandled TypeError, so an un-provisioned deploy returns a clear
+// 503 instead of a generic Worker exception -- crassus/overrides_client.py
+// already treats any non-200 response as "fail closed, no override."
+export function checkCrassusStorage(env, ...bindings) {
+  for (const name of bindings) {
+    if (!env[name]) return jsonResponse({ error: `${name.toLowerCase()}_not_provisioned` }, 503);
+  }
+  return null;
+}
+
+// `raw` is `null` only when the key has genuinely never been written --
+// a legitimate default-off state (no bot has ever been frozen; the kill
+// switch has never been touched). Anything else that isn't exactly the
+// literal string this Worker itself writes ('true' or 'false') is
+// corruption -- a bad manual KV edit, a partial write, whatever -- and
+// must not be read as "confirmed off." Flagged in review: an earlier
+// version's `raw === 'true'` check silently treated a corrupt value like
+// 'corrupt' as `false`, i.e. "not engaged" / "not frozen" -- exactly
+// backwards for a control whose job is to fail closed.
+export function parseControlFlag(raw) {
+  if (raw === null) return false;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return true; // unknown/corrupt: fail closed
+}
+
+export async function handleCrassusOverrideGet(request, env, alias) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
   const authError = checkBotKey(request, env);
   if (authError) return authError;
   if (!CRASSUS_ACCOUNT_ALIAS_RE.test(alias)) {
@@ -1540,7 +1591,9 @@ async function handleCrassusOverrideGet(request, env, alias) {
   return jsonResponse(rowToOverrideEnvelope(row), 200);
 }
 
-async function handleCrassusOverridePropose(request, env) {
+export async function handleCrassusOverridePropose(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
   const authError = checkCrassusAiKey(request, env);
   if (authError) return authError;
   const bodyResult = await readJsonBody(request);
@@ -1548,8 +1601,8 @@ async function handleCrassusOverridePropose(request, env) {
   const body = bodyResult.body || {};
 
   const allowedKeys = new Set([
-    'account_alias', 'proposed_params', 'previous_params', 'rationale',
-    'evidence_refs', 'model', 'expires_in_minutes', 'rollback_target',
+    'account_alias', 'strategy_id', 'strategy_version', 'proposed_params', 'previous_params',
+    'rationale', 'evidence_refs', 'model', 'expires_in_minutes', 'rollback_target',
   ]);
   for (const key of Object.keys(body)) {
     if (!allowedKeys.has(key)) {
@@ -1558,16 +1611,30 @@ async function handleCrassusOverridePropose(request, env) {
   }
 
   const {
-    account_alias, proposed_params, previous_params, rationale,
+    account_alias, strategy_id, strategy_version, proposed_params, previous_params, rationale,
     evidence_refs, model, expires_in_minutes, rollback_target,
   } = body;
 
   if (typeof account_alias !== 'string' || !CRASSUS_ACCOUNT_ALIAS_RE.test(account_alias)) {
     return jsonResponse({ error: 'Invalid account_alias' }, 400);
   }
+  // The strategy identity a proposal was made against -- crassus.policy
+  // rejects at evaluation time if this doesn't match the account's actual
+  // current strategy_id/version. Required, not inferred server-side: this
+  // Worker has no access to the Crassus runtime's registry to look it up,
+  // and guessing wrong here would be exactly the identity confusion the
+  // check exists to prevent.
+  if (typeof strategy_id !== 'string' || !STRATEGY_ID_RE.test(strategy_id)) {
+    return jsonResponse({ error: 'Invalid strategy_id' }, 400);
+  }
+  if (typeof strategy_version !== 'string' || !STRATEGY_VERSION_RE.test(strategy_version)) {
+    return jsonResponse({ error: 'Invalid strategy_version' }, 400);
+  }
   const proposedErr = validateParamsObject(proposed_params);
   if (proposedErr) return jsonResponse({ error: `proposed_params: ${proposedErr}` }, 400);
-  const previousErr = validateParamsObject(previous_params);
+  // previous_params may legitimately be {} -- see validateParamsObject's
+  // docstring above.
+  const previousErr = validateParamsObject(previous_params, { requireNonEmpty: false });
   if (previousErr) return jsonResponse({ error: `previous_params: ${previousErr}` }, 400);
   if (typeof rationale !== 'string' || rationale.length === 0 || rationale.length > MAX_RATIONALE_LEN) {
     return jsonResponse({ error: 'rationale must be a non-empty string' }, 400);
@@ -1596,20 +1663,22 @@ async function handleCrassusOverridePropose(request, env) {
   // directly, by construction (the column literal below, not client input).
   await env.CRASSUS_DB.prepare(
     `INSERT INTO crassus_overrides
-       (id, account_alias, status, previous_params, proposed_params, rationale, evidence_refs, model, created_utc, expires_utc, accepted_utc, accepted_by, rollback_target, schema_version)
-     VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+       (id, account_alias, status, strategy_id, strategy_version, previous_params, proposed_params, rationale, evidence_refs, model, created_utc, expires_utc, accepted_utc, accepted_by, rollback_target, schema_version)
+     VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
   ).bind(
-    id, account_alias,
+    id, account_alias, strategy_id, strategy_version,
     JSON.stringify(previous_params), JSON.stringify(proposed_params),
     rationale, JSON.stringify(evidence_refs), model,
     now.toISOString(), expires.toISOString(),
-    rollback_target || null, 'crassus_override.v1',
+    rollback_target || null, 'crassus_override.v2',
   ).run();
 
   return jsonResponse({ id, status: 'proposed' }, 201);
 }
 
-async function handleCrassusOverrideDecision(request, env, id, action) {
+export async function handleCrassusOverrideDecision(request, env, id, action) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
   const authError = checkOperatorKey(request, env);
   if (authError) return authError;
 
@@ -1635,10 +1704,21 @@ async function handleCrassusOverrideDecision(request, env, id, action) {
   return jsonResponse({ id, status: newStatus }, 200);
 }
 
-async function handleCrassusKillSwitch(request, env) {
+// Kill/freeze semantics, documented explicitly per review: engaging either
+// one causes crassus.policy.OverridePolicy.evaluate() to deny the override
+// and fall back to the account's own baseline `params` -- it does NOT stop
+// the account from trading. A frozen/killed bot keeps running its assigned
+// strategy on its normal (pre-override) configuration; only a Crassus AI
+// parameter override is blocked. Do not change this to mean "halt trading"
+// without updating this comment, crassus/crassus/policy.py's module
+// docstring, and crassus/README.md together -- an operator reaching for
+// "stop everything" would otherwise reach for the wrong control.
+export async function handleCrassusKillSwitch(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
   if (request.method === 'GET') {
     const raw = await env.CRASSUS_CONTROL.get('kill_switch');
-    return jsonResponse({ enabled: raw === 'true' }, 200);
+    return jsonResponse({ enabled: parseControlFlag(raw) }, 200);
   }
   const authError = checkOperatorKey(request, env);
   if (authError) return authError;
@@ -1652,17 +1732,21 @@ async function handleCrassusKillSwitch(request, env) {
   return jsonResponse({ enabled }, 200);
 }
 
-async function handleCrassusFreezeGet(request, env, alias) {
+export async function handleCrassusFreezeGet(request, env, alias) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
   const authError = checkBotKey(request, env);
   if (authError) return authError;
   if (!CRASSUS_ACCOUNT_ALIAS_RE.test(alias)) {
     return jsonResponse({ error: 'Invalid account_alias' }, 400);
   }
   const raw = await env.CRASSUS_CONTROL.get(`freeze:${alias}`);
-  return jsonResponse({ frozen: raw === 'true' }, 200);
+  return jsonResponse({ frozen: parseControlFlag(raw) }, 200);
 }
 
-async function handleCrassusFreezePost(request, env) {
+export async function handleCrassusFreezePost(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
   const authError = checkOperatorKey(request, env);
   if (authError) return authError;
   const bodyResult = await readJsonBody(request);
@@ -1681,7 +1765,9 @@ async function handleCrassusFreezePost(request, env) {
   return jsonResponse({ account_alias, frozen }, 200);
 }
 
-async function handleCrassusLedgerMirror(request, env) {
+export async function handleCrassusLedgerMirror(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
   const authError = checkBotKey(request, env);
   if (authError) return authError;
   const bodyResult = await readJsonBody(request);

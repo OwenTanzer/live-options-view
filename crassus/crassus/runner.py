@@ -462,6 +462,7 @@ class Runner:
             self._prior_accepted.get(alias),
             kill_switch=kill_switch,
             frozen=frozen,
+            strategy_version=base["strategy_version"],
         )
         if policy_result.applied:
             self._prior_accepted[alias] = policy_result.effective_params

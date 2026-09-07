@@ -349,6 +349,12 @@ class Handler(BaseHTTPRequestHandler):
                     "id": override_id,
                     "account_alias": body.get("account_alias"),
                     "status": "proposed",
+                    # Mirrors worker.js's v2 envelope: strategy identity is
+                    # part of the stored proposal, and
+                    # crassus.policy.OverridePolicy validates both against
+                    # the account it's being applied to.
+                    "strategy_id": body.get("strategy_id"),
+                    "strategy_version": body.get("strategy_version"),
                     "previous_params": body.get("previous_params"),
                     "proposed_params": body.get("proposed_params"),
                     "rationale": body.get("rationale"),
@@ -359,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
                     "accepted_utc": None,
                     "accepted_by": None,
                     "rollback_target": body.get("rollback_target"),
-                    "schema_version": "crassus_override.v1",
+                    "schema_version": "crassus_override.v2",
                 }
             return self._json(201, {"id": override_id, "status": "proposed"})
 

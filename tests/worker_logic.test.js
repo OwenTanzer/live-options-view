@@ -15,6 +15,10 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
     netPositions, handleBots, handleBotMetadata, settleAllBots,
+    validateParamsObject, parseControlFlag, checkCrassusStorage,
+    handleCrassusOverrideGet, handleCrassusOverridePropose, handleCrassusOverrideDecision,
+    handleCrassusKillSwitch, handleCrassusFreezeGet, handleCrassusFreezePost, handleCrassusLedgerMirror,
+    STRATEGY_ID_RE,
   } = await import('../worker.js');
 
   const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.toml'), 'utf8');
@@ -731,6 +735,294 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(afterRecovery.trades.length, 2, 'the pending short settles once a mark becomes available');
     assert.equal(afterRecovery.trades[1].note, 'exercised against (assigned)', 'settles at its true intrinsic value, not worthless');
     assert.equal(afterRecovery.balance_cash, 50000 - 10 * 100, 'cash debited by the correct intrinsic value once recovered');
+  }
+
+  // ── Crassus AI: policy skeleton routes (PR1 of 3) ──────────────────────────
+  // See crassus/crassus/policy.py for the authoritative trust boundary these
+  // routes exist to enforce -- this section only proves the Worker-side
+  // storage/auth/validation contract, the same split verify_crassus_policy.py
+  // draws for the Python-side decision logic.
+  {
+    const BOT_KEY = 'test-bot-key';
+    const AI_KEY = 'test-ai-key';
+    const OPERATOR_KEY = 'test-operator-key';
+
+    function makeFakeD1() {
+      const overrides = new Map();
+      const ledger = new Map();
+      return {
+        _overrides: overrides,
+        _ledger: ledger,
+        prepare(sql) {
+          return {
+            bind(...args) {
+              return {
+                async first() {
+                  if (sql.includes('SELECT * FROM crassus_overrides WHERE account_alias')) {
+                    const [alias, nowIso] = args;
+                    const rows = [...overrides.values()]
+                      .filter(r => r.account_alias === alias && r.status === 'accepted' && r.expires_utc > nowIso)
+                      .sort((a, b) => b.created_utc.localeCompare(a.created_utc));
+                    return rows[0] || null;
+                  }
+                  if (sql.includes('SELECT id, status FROM crassus_overrides WHERE id')) {
+                    const row = overrides.get(args[0]);
+                    return row ? { id: row.id, status: row.status } : null;
+                  }
+                  throw new Error(`fake D1: unhandled first() query: ${sql}`);
+                },
+                async run() {
+                  if (sql.includes('INSERT INTO crassus_overrides')) {
+                    const [id, account_alias, strategy_id, strategy_version, previous_params, proposed_params,
+                      rationale, evidence_refs, model, created_utc, expires_utc, rollback_target, schema_version] = args;
+                    overrides.set(id, {
+                      id, account_alias, status: 'proposed', strategy_id, strategy_version,
+                      previous_params, proposed_params, rationale, evidence_refs, model,
+                      created_utc, expires_utc, accepted_utc: null, accepted_by: null,
+                      rollback_target, schema_version,
+                    });
+                    return;
+                  }
+                  if (sql.includes('UPDATE crassus_overrides SET status')) {
+                    const [status, accepted_utc, accepted_by, id] = args;
+                    const row = overrides.get(id);
+                    if (row) { row.status = status; row.accepted_utc = accepted_utc; row.accepted_by = accepted_by; }
+                    return;
+                  }
+                  if (sql.includes('INSERT OR REPLACE INTO crassus_ledger_mirror')) {
+                    const [decision_id, run_id, account_alias, outcome_class, timestamp_utc, record] = args;
+                    ledger.set(decision_id, { decision_id, run_id, account_alias, outcome_class, timestamp_utc, record });
+                    return;
+                  }
+                  throw new Error(`fake D1: unhandled run() query: ${sql}`);
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    function makeFakeKv() {
+      const store = new Map();
+      return { _store: store, get: async (k) => store.get(k) ?? null, put: async (k, v) => { store.set(k, v); } };
+    }
+
+    function makeEnv({ withDb = true, withControl = true } = {}) {
+      return {
+        BOT_REGISTRATION_KEY: BOT_KEY,
+        CRASSUS_AI_KEY: AI_KEY,
+        CRASSUS_OPERATOR_KEY: OPERATOR_KEY,
+        ...(withDb ? { CRASSUS_DB: makeFakeD1() } : {}),
+        ...(withControl ? { CRASSUS_CONTROL: makeFakeKv() } : {}),
+      };
+    }
+
+    const validProposal = {
+      account_alias: 'Max Pain',
+      strategy_id: 'max_pain_qqq',
+      strategy_version: '1.0.0',
+      proposed_params: { pin_threshold_pct: 0.2 },
+      previous_params: {},
+      rationale: 'seasonal recalibration',
+      evidence_refs: ['dec-1'],
+      model: 'claude-sonnet-5',
+      expires_in_minutes: 60,
+    };
+    // readJsonBody reads via a ReadableStream reader; simplest correct fake
+    // is a Web ReadableStream wrapping one chunk, which Node's fetch globals
+    // provide natively.
+    function reqWithJson(body, headers = {}) {
+      const bytes = Buffer.from(JSON.stringify(body ?? {}));
+      return {
+        method: 'POST',
+        headers: { get: (name) => ({ 'Content-Length': String(bytes.length), ...headers }[name] ?? null) },
+        body: new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }),
+      };
+    }
+    function reqNoBody(headers = {}) {
+      return { method: 'GET', headers: { get: (name) => headers[name] ?? null } };
+    }
+
+    // -- storage-not-provisioned: deploy-safe disabled packaging ------------
+    {
+      const env = makeEnv({ withDb: false });
+      const resp = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Max Pain');
+      assert.equal(resp.status, 503, 'an un-provisioned CRASSUS_DB must 503, not throw an unhandled exception');
+      const envNoControl = makeEnv({ withControl: false });
+      const killResp = await handleCrassusKillSwitch(reqNoBody(), envNoControl);
+      assert.equal(killResp.status, 503, 'an un-provisioned CRASSUS_CONTROL must 503, not throw');
+    }
+
+    // -- auth separation: bot / AI / operator keys are not interchangeable --
+    {
+      const env = makeEnv();
+      assert.equal(
+        (await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': 'wrong' }), env, 'Max Pain')).status,
+        403, 'a wrong bot key is rejected on the bot-authenticated GET route',
+      );
+      assert.equal(
+        (await handleCrassusOverridePropose(reqWithJson(validProposal, { 'X-Crassus-Ai-Key': BOT_KEY }), env)).status,
+        403, 'the bot key must not authenticate the AI-only propose route',
+      );
+      assert.equal(
+        (await handleCrassusOverrideDecision(reqWithJson({}, { 'X-Crassus-Operator-Key': AI_KEY }), env, 'nope', 'accept')).status,
+        403, 'the AI key must not authenticate the operator-only accept route',
+      );
+      assert.equal(
+        (await handleCrassusKillSwitch(reqWithJson({ enabled: true }, { 'X-Crassus-Operator-Key': 'wrong' }), env)).status,
+        403, 'a wrong operator key is rejected on the kill-switch POST route',
+      );
+    }
+
+    // -- aliases: real production aliases with spaces must not 400 ---------
+    {
+      const env = makeEnv();
+      for (const alias of ['Max Pain', 'OI Skew', 'Put-Call Ratio', 'Doktor Freuding FW']) {
+        const resp = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, alias);
+        assert.equal(resp.status, 404, `real alias ${JSON.stringify(alias)} must reach the not-found path, not 400 on the alias pattern itself`);
+      }
+      const badAlias = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'a'.repeat(41));
+      assert.equal(badAlias.status, 400, 'an alias over the length cap is still rejected');
+    }
+
+    // -- previous_params may be {}; proposed_params may not -----------------
+    {
+      const env = makeEnv();
+      const emptyPrevious = await handleCrassusOverridePropose(
+        reqWithJson({ ...validProposal, previous_params: {} }, { 'X-Crassus-Ai-Key': AI_KEY }), env,
+      );
+      assert.equal(emptyPrevious.status, 201, 'an empty previous_params={} (no baseline params override) must be accepted');
+
+      const emptyProposed = await handleCrassusOverridePropose(
+        reqWithJson({ ...validProposal, proposed_params: {} }, { 'X-Crassus-Ai-Key': AI_KEY }), env,
+      );
+      assert.equal(emptyProposed.status, 400, 'an empty proposed_params={} changes nothing and must be rejected');
+    }
+
+    // -- strategy_id/strategy_version are required and validated ------------
+    {
+      const env = makeEnv();
+      assert.match(STRATEGY_ID_RE.source, /a-z0-9_/, 'sanity: STRATEGY_ID_RE is the lowercase/digits/underscore pattern');
+      const missingStrategy = await handleCrassusOverridePropose(
+        reqWithJson({ ...validProposal, strategy_id: undefined }, { 'X-Crassus-Ai-Key': AI_KEY }), env,
+      );
+      assert.equal(missingStrategy.status, 400, 'a proposal with no strategy_id must be rejected');
+      const badVersion = await handleCrassusOverridePropose(
+        reqWithJson({ ...validProposal, strategy_version: '' }, { 'X-Crassus-Ai-Key': AI_KEY }), env,
+      );
+      assert.equal(badVersion.status, 400, 'an empty strategy_version must be rejected');
+    }
+
+    // -- full propose -> accept lifecycle; envelope carries the new fields --
+    {
+      const env = makeEnv();
+      const proposeResp = await handleCrassusOverridePropose(reqWithJson(validProposal, { 'X-Crassus-Ai-Key': AI_KEY }), env);
+      assert.equal(proposeResp.status, 201);
+      const { id } = await proposeResp.json();
+
+      const beforeAccept = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Max Pain');
+      assert.equal(beforeAccept.status, 404, 'a merely-proposed (not yet accepted) override must not be visible to the bot-facing GET');
+
+      const acceptResp = await handleCrassusOverrideDecision(
+        reqWithJson({ accepted_by: 'owen' }, { 'X-Crassus-Operator-Key': OPERATOR_KEY }), env, id, 'accept',
+      );
+      assert.equal(acceptResp.status, 200);
+      assert.equal((await acceptResp.json()).status, 'accepted');
+
+      const afterAccept = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Max Pain');
+      assert.equal(afterAccept.status, 200);
+      const envelope = await afterAccept.json();
+      assert.equal(envelope.schema_version, 'crassus_override.v2', 'the envelope schema_version is what crassus.policy.SUPPORTED_SCHEMA_VERSIONS recognizes');
+      assert.equal(envelope.strategy_id, 'max_pain_qqq', 'the envelope carries the strategy identity it was proposed against');
+      assert.equal(envelope.strategy_version, '1.0.0');
+      assert.deepEqual(envelope.proposed_params, { pin_threshold_pct: 0.2 });
+
+      // A decision already made cannot be re-decided.
+      const reDecide = await handleCrassusOverrideDecision(
+        reqWithJson({}, { 'X-Crassus-Operator-Key': OPERATOR_KEY }), env, id, 'reject',
+      );
+      assert.equal(reDecide.status, 409, 'an already-decided override cannot be accepted/rejected again');
+    }
+
+    // -- expiry: an accepted-but-expired override is not visible -----------
+    {
+      const env = makeEnv();
+      const past = new Date(Date.now() - 60_000).toISOString();
+      env.CRASSUS_DB._overrides.set('expired-1', {
+        id: 'expired-1', account_alias: 'OI Skew', status: 'accepted',
+        strategy_id: 'oi_skew_qqq', strategy_version: '1.0.0',
+        previous_params: '{}', proposed_params: '{"near_money_pct":0.03}',
+        rationale: 'r', evidence_refs: '[]', model: 'm',
+        created_utc: past, expires_utc: past, accepted_utc: past, accepted_by: 'owen',
+        rollback_target: null, schema_version: 'crassus_override.v2',
+      });
+      const resp = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'OI Skew');
+      assert.equal(resp.status, 404, 'an expired accepted override must not be returned as active');
+    }
+
+    // -- controls: kill switch / freeze toggle, and fail closed on corruption
+    {
+      assert.equal(parseControlFlag(null), false, 'never-set is the legitimate default-off state');
+      assert.equal(parseControlFlag('true'), true);
+      assert.equal(parseControlFlag('false'), false);
+      assert.equal(parseControlFlag('corrupt'), true, 'an unrecognized stored value must fail closed (engaged/frozen), not read as off');
+
+      const env = makeEnv();
+      const initial = await handleCrassusKillSwitch(reqNoBody(), env);
+      assert.equal((await initial.json()).enabled, false, 'kill switch defaults to disengaged when never set');
+
+      await handleCrassusKillSwitch(reqWithJson({ enabled: true }, { 'X-Crassus-Operator-Key': OPERATOR_KEY }), env);
+      const afterEnable = await handleCrassusKillSwitch(reqNoBody(), env);
+      assert.equal((await afterEnable.json()).enabled, true);
+
+      // Simulate a corrupted KV value directly, bypassing the route that
+      // only ever writes 'true'/'false' itself.
+      await env.CRASSUS_CONTROL.put('kill_switch', 'corrupt-value');
+      const corrupted = await handleCrassusKillSwitch(reqNoBody(), env);
+      assert.equal((await corrupted.json()).enabled, true, 'a corrupted kill_switch value must read as engaged, not disengaged');
+
+      const freezeBefore = await handleCrassusFreezeGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Ankit');
+      assert.equal((await freezeBefore.json()).frozen, false);
+      await handleCrassusFreezePost(
+        reqWithJson({ account_alias: 'Ankit', frozen: true }, { 'X-Crassus-Operator-Key': OPERATOR_KEY }), env,
+      );
+      const freezeAfter = await handleCrassusFreezeGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Ankit');
+      assert.equal((await freezeAfter.json()).frozen, true);
+
+      await env.CRASSUS_CONTROL.put('freeze:Ankit', 'garbage');
+      const freezeCorrupted = await handleCrassusFreezeGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'Ankit');
+      assert.equal((await freezeCorrupted.json()).frozen, true, 'a corrupted per-bot freeze value must read as frozen, not unfrozen');
+    }
+
+    // -- ledger mirror route --------------------------------------------------
+    {
+      const env = makeEnv();
+      const record = {
+        decision_id: 'd-1', run_id: 'r-1', account_alias: 'Ankit',
+        outcome_class: 'no_trade', timestamp_utc: new Date().toISOString(),
+      };
+      const ok = await handleCrassusLedgerMirror(reqWithJson(record, { 'X-Bot-Registration-Key': BOT_KEY }), env);
+      assert.equal(ok.status, 200);
+      assert.ok(env.CRASSUS_DB._ledger.has('d-1'), 'a valid ledger record is durably mirrored');
+
+      const missingField = await handleCrassusLedgerMirror(
+        reqWithJson({ decision_id: 'd-2' }, { 'X-Bot-Registration-Key': BOT_KEY }), env,
+      );
+      assert.equal(missingField.status, 400, 'a ledger record missing required fields is rejected');
+
+      const wrongKey = await handleCrassusLedgerMirror(reqWithJson(record, { 'X-Bot-Registration-Key': 'wrong' }), env);
+      assert.equal(wrongKey.status, 403);
+    }
+
+    // -- validateParamsObject: requireNonEmpty distinguishes the two callers
+    {
+      assert.equal(validateParamsObject({}), 'must have at least one entry');
+      assert.equal(validateParamsObject({}, { requireNonEmpty: false }), null);
+      assert.equal(validateParamsObject({ a: 1 }, { requireNonEmpty: false }), null);
+      assert.match(validateParamsObject({ 'bad key': 1 }), /invalid parameter name/);
+      assert.match(validateParamsObject([1, 2]), /must be a JSON object/);
+    }
   }
 
   console.log('PASS worker.js auth/trade/settlement logic');
