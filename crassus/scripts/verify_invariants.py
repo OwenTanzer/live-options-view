@@ -385,6 +385,51 @@ def scenario_strategy_contract(tmp: Path) -> None:
     long_ = smoke_atm_roundtrip(ctx_for(held))
     check("Long -> sells to close, completing the round trip", long_.action == "sell", long_.action)
 
+    drifted_symbol = "QQQ260722C00700000"
+    drifted_held = [{"sym": drifted_symbol, "side": "buy", "qty": 1, "price": 7.5}]
+    drifted_quotes = {
+        drifted_symbol: Quote(
+            drifted_symbol,
+            7.7,
+            7.8,
+            quote_ts=clock.iso_utc(),
+            server_ts=clock.iso_utc(),
+        )
+    }
+    drifted_ctx = StrategyContext(
+        snapshot=FakeSnapshot(),
+        account_state={},
+        book=Book(drifted_held),
+        now_et=clock.now_et(),
+        session_phase="open",
+        quotes=lambda syms: drifted_quotes,
+    )
+    drifted = smoke_atm_roundtrip(drifted_ctx)
+    check(
+        "ATM drift -> closes the actual held strike rather than buying the new ATM",
+        drifted.action == "sell" and drifted.symbol == drifted_symbol,
+        drifted.to_dict(),
+    )
+
+    multiple = [
+        {"sym": SYM, "side": "buy", "qty": 1, "price": 8.34},
+        {"sym": drifted_symbol, "side": "buy", "qty": 1, "price": 7.5},
+    ]
+    multiple_ctx = StrategyContext(
+        snapshot=FakeSnapshot(),
+        account_state={},
+        book=Book(multiple),
+        now_et=clock.now_et(),
+        session_phase="open",
+        quotes=lambda syms: fresh,
+    )
+    guarded = smoke_atm_roundtrip(multiple_ctx)
+    check(
+        "Multiple open positions -> stands down instead of opening or closing arbitrarily",
+        guarded.action == "no_trade" and "more than one" in guarded.reason,
+        guarded.to_dict(),
+    )
+
     stale = {SYM: Quote(SYM, 8.2, 8.34, quote_ts="2026-07-22T12:00:00+00:00", server_ts="2026-07-22T13:00:00+00:00")}
     ctx = StrategyContext(snapshot=FakeSnapshot(), account_state={}, book=Book([]), now_et=clock.now_et(),
                           session_phase="open", quotes=lambda syms: stale)

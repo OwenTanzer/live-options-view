@@ -31,6 +31,8 @@ from crassus.flatten import STRATEGY_ID as FLATTEN_STRATEGY_ID  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.runner import Runner  # noqa: E402
 from crassus.strategies import momentum_qqq  # noqa: E402, F401 (registers momentum_qqq)
+from crassus.strategies.phelps_variants import smoke_atm_roundtrip_phelps  # noqa: E402
+from crassus.strategies.smoke import STRATEGY_VERSION as SMOKE_VERSION  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 
@@ -296,12 +298,57 @@ def scenario_account_strategy_id_survives_crash_recovery() -> None:
         )
 
 
+def scenario_phelps_pass_through_attribution() -> None:
+    print("\n5. Phelps pass-through buys and no_trade retain both audit identities")
+    strategy = smoke_atm_roundtrip_phelps
+    account = FakeAccount(alias="Audit", username="crassus_audit", strategy_id=strategy.strategy_id)
+    state = AccountState(username=account.username, balance_cash=10000.0, trades=[])
+    import crassus.clock as clock_module
+
+    for action, rows in [
+        ("buy", [{"OptionSymbol": "QQQ240102C00400000", "Strike": 400.0,
+                  "Type": "call", "Bid": 1.0, "Ask": 1.1}]),
+        ("no_trade", []),
+    ]:
+        snapshot = MarketSnapshot.from_payload(
+            url="test://phelps-audit", raw=b"{}",
+            payload={"timestamp": "2024-01-02T17:00:00+00:00",
+                     "expiration": "2024-01-02", "underlying_price": 400.0, "rows": rows},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            runner, executor = make_runner(account, state=state, ledger_dir=Path(tmp))
+            original_now_et = clock_module.now_et
+            clock_module.now_et = lambda: datetime(2024, 1, 2, 12, 0, tzinfo=ET)
+            try:
+                runner._run_account(account, snapshot, "open")
+            finally:
+                clock_module.now_et = original_now_et
+            record = last_ledger_record(Path(tmp))
+            check(f"Phelps {action}: ledger records wrapper id/version and assignment",
+                  record.get("strategy_id") == strategy.strategy_id
+                  and record.get("strategy_version") == strategy.strategy_version
+                  and record.get("account_strategy_id") == strategy.strategy_id, record)
+            metadata = record.get("decision", {}).get("metadata", {})
+            check(f"Phelps {action}: ledger retains original smoke identity",
+                  metadata.get("base_strategy_id") == "smoke_atm_roundtrip"
+                  and metadata.get("base_strategy_version") == SMOKE_VERSION)
+            check(f"Phelps {action}: order behavior unchanged",
+                  record.get("decision", {}).get("action") == action
+                  and len(executor.submit_calls) == (1 if action == "buy" else 0))
+            if action == "buy":
+                submitted = executor.submit_calls[0] if executor.submit_calls else {}
+                check("Phelps buy: execution intent also carries wrapper revision",
+                      submitted.get("strategy_id") == strategy.strategy_id
+                      and submitted.get("strategy_version") == strategy.strategy_version)
+
+
 def main() -> int:
     for scenario in (
         scenario_flatten_close_attributed_to_eod_flatten,
         scenario_flatten_runs_without_a_snapshot,
         scenario_no_snapshot_no_flatten_still_errors,
         scenario_account_strategy_id_survives_crash_recovery,
+        scenario_phelps_pass_through_attribution,
     ):
         scenario()
 

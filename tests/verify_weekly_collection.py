@@ -6,6 +6,7 @@ import json
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -122,7 +123,11 @@ def test_chain_load_selects_current_and_actual_weekly_expiration():
         _expiration("2026-08-26", 700),
         _expiration("2026-08-28", 700),
     ]
-    collector.requests.get = lambda *args, **kwargs: FakeResponse(expirations)
+    def get_chain(*args, **kwargs):
+        assert_equal(kwargs["headers"]["Authorization"], "Bearer session-token",
+                     "weekly chain uses OAuth bearer authentication")
+        return FakeResponse(expirations)
+    collector.requests.get = get_chain
     collector._load_calendar = lambda: _weekday_calendar(
         date(2026, 8, 24), date(2026, 8, 28)
     )
@@ -208,6 +213,9 @@ def test_weekly_csv_manifest_and_restart_idempotency():
         "note": "authoritative pipeline metadata",
         "updated_at": "before",
     }
+    for data in feed.state.values():
+        data.update(bid_ts=observed.isoformat(), ask_ts=observed.isoformat(),
+                    last_ts=observed.isoformat())
     s3 = FakeS3(original_manifest)
 
     key = collector.take_weekly_snapshot(
@@ -243,6 +251,96 @@ def test_weekly_csv_manifest_and_restart_idempotency():
     assert_equal(len(weekly_csv_puts), 1, "one CSV per hourly slot")
 
 
+def _snapshot_fixture():
+    observed = collector.ET.localize(datetime(2026, 8, 25, 10, 31))
+    strikes = [{"strike": 700.0, "call_sym": "C", "put_sym": "P",
+                "call_occ": "C", "put_occ": "P"}]
+    state = {
+        "QQQ": {"bid": 699.9, "ask": 700.1},
+        "C": {"bid": 5, "ask": 6, "oi": 0},
+        "P": {"bid": 4, "ask": 5},
+    }
+    for data in state.values():
+        data.update(bid_ts=observed.isoformat(), ask_ts=observed.isoformat())
+    return observed, strikes, state
+
+
+def test_missing_or_stale_data_remains_retryable_after_restart():
+    observed, strikes, state = _snapshot_fixture()
+    for invalid in ({}, {"QQQ": state["QQQ"]},
+                    {key: {**data, "bid_ts": (observed - timedelta(minutes=3)).isoformat()}
+                     for key, data in state.items()}):
+        s3 = FakeS3({"dates": []})
+        key = collector.take_weekly_snapshot(s3, FakeFeed(invalid), strikes,
+                                            "2026-08-28", observed.date(), observed)
+        assert_equal(key, None, "no successful snapshot for unavailable data")
+        assert_equal(s3.put_calls, [], "failed observation claims no CSV or manifest slot")
+        # Fresh feed object simulates restarting with data inside the same slot.
+        key = collector.take_weekly_snapshot(s3, FakeFeed(state), strikes,
+                                            "2026-08-28", observed.date(), observed)
+        rows = list(csv.DictReader(io.StringIO(s3.store[key].decode())))
+        assert_equal(float(rows[0]["OpenInterest"]), 0, "observed zero retained")
+        assert_equal(rows[1]["OpenInterest"], "", "unknown OI stays blank")
+        assert_equal(rows[0]["Volume"], "", "unknown volume stays blank")
+        assert_equal(len(rows[0]), 18, "schema preserved")
+        second = collector.take_weekly_snapshot(s3, FakeFeed({}), strikes,
+                                               "2026-08-28", observed.date(), observed)
+        assert_equal(second, key, "restart reuses only a successful observation")
+
+
+def test_manifest_failure_reuses_written_csv():
+    observed, strikes, state = _snapshot_fixture()
+    class FailOnceS3(FakeS3):
+        fail = True
+        def put_object(self, Bucket, Key, Body, **kwargs):
+            if Key == "manifest.json" and self.fail:
+                self.fail = False
+                raise RuntimeError("simulated manifest failure")
+            return super().put_object(Bucket, Key, Body, **kwargs)
+    s3 = FailOnceS3({"dates": ["preserve"], "metadata": {"keep": True}})
+    try:
+        collector.take_weekly_snapshot(s3, FakeFeed(state), strikes,
+                                       "2026-08-28", observed.date(), observed)
+    except RuntimeError as exc:
+        assert "simulated manifest failure" in str(exc)
+    else:
+        raise AssertionError("manifest failure must propagate for retry")
+    key = collector.take_weekly_snapshot(s3, FakeFeed({}), strikes,
+                                        "2026-08-28", observed.date(), observed)
+    assert_equal(len([k for k in s3.put_calls if k.endswith(".csv")]), 1,
+                 "manifest retry creates no duplicate CSV")
+    manifest = json.loads(s3.store["manifest.json"])
+    assert_equal(manifest["weekly_expirations"]["2026-08-28"], [key], "index repaired")
+    assert_equal(manifest["dates"], ["preserve"], "daily dates retained")
+    assert_equal(manifest["metadata"], {"keep": True}, "metadata retained")
+
+
+def test_early_close_holiday_and_timezone_boundaries():
+    at = lambda day, h, m: collector.ET.localize(datetime(2026, 11, day, h, m))
+    assert_equal(collector._weekly_snapshot_slot(at(27, 12, 59)), at(27, 12, 30),
+                 "last shortened-session slot")
+    for ts in (at(27, 13, 0), at(27, 13, 30), at(26, 10, 30), at(28, 10, 30)):
+        assert_equal(collector._weekly_snapshot_slot(ts), None, "closed exchange")
+    assert_equal(collector._weekly_snapshot_slot(at(27, 12, 59).astimezone(collector.timezone.utc)),
+                 at(27, 12, 30), "slot selection normalizes timezone")
+
+
+def test_calendar_failure_leaves_weekly_slot_retryable():
+    observed, strikes, state = _snapshot_fixture()
+    s3 = FakeS3()
+    with patch.object(collector, "_weekly_session_bounds", side_effect=RuntimeError("calendar offline")):
+        try:
+            collector.take_weekly_snapshot(s3, FakeFeed(state), strikes,
+                                           "2026-08-28", observed.date(), observed)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("calendar failure must not invent a session")
+    assert_equal(s3.put_calls, [], "calendar failure writes nothing")
+    assert collector.take_weekly_snapshot(s3, FakeFeed(state), strikes,
+                                         "2026-08-28", observed.date(), observed)
+
+
 def run():
     tests = [
         test_nearest_weekly_selection_matches_pipeline_behavior,
@@ -250,6 +348,10 @@ def run():
         test_missing_weekly_chain_does_not_break_current_expiration,
         test_hourly_regular_session_slots,
         test_weekly_csv_manifest_and_restart_idempotency,
+        test_missing_or_stale_data_remains_retryable_after_restart,
+        test_manifest_failure_reuses_written_csv,
+        test_early_close_holiday_and_timezone_boundaries,
+        test_calendar_failure_leaves_weekly_slot_retryable,
     ]
     for test in tests:
         test()

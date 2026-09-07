@@ -2121,6 +2121,7 @@ function renderBots() {
     return `<div class="bot-card${isLeader ? ' leader' : ''}">
       <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
       <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
+      ${bot.account_closed ? '<div class="bot-strategy">Closed — trading stopped; history retained</div>' : ''}
       <div class="bot-equity">${complete ? `$${equity.toFixed(2)}` : '<span class="bot-unmarked">pending</span>'}</div>
       <div class="bot-pnl ${dir}">${complete
         ? `${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)`

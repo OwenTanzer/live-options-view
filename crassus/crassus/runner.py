@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
+import os
 import signal
 import sys
 import threading
@@ -23,6 +25,7 @@ from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
+from .archive import from_environment as archive_from_environment
 from .client import (
     AccountLiquidated,
     AccountSession,
@@ -41,6 +44,8 @@ from .config import (
 )
 from .flatten import maybe_flatten
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader
+from .observability import configure_logging, event, rejection_reason
+from .supervisor import HEARTBEAT_FD, report_cycle, supervise
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
@@ -142,6 +147,7 @@ class Runner:
 
         self._stop = threading.Event()
         self.retired: set[str] = set()
+        self.cycle_count = 0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -192,6 +198,8 @@ class Runner:
                 continue
 
             self._recover_pending(account)
+            if getattr(state, "account_closed", False) and not self.executors[account.alias].pending_intent():
+                self._retire_closed(account, state)
 
     def _recover_pending(self, account: Any) -> bool:
         """Resolve an intent left in flight by a crash, idempotently.
@@ -279,27 +287,74 @@ class Runner:
 
         while not self.should_stop:
             started = time.monotonic()
-            phase = clock.session_phase()
-            log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
-
-            try:
-                snapshot = self.snapshots.read()
-            except Exception as exc:  # snapshot is shared; one failure stalls the cycle
-                log.error("Snapshot read failed: %s", exc)
-                snapshot = None
-
-            for account in self.accounts:
-                if self.should_stop:
-                    break
-                if account.alias in self.retired:
-                    continue
-                self._run_account(account, snapshot, phase)
-
+            self.run_cycle()
             if self.should_stop:
                 break
             self._sleep(self.interval_s - (time.monotonic() - started))
 
         log.info("Stopped cleanly. Ledger: %s", self.ledger.paths.ledger)
+
+    def run_cycle(self) -> bool:
+        """Record completion only after all eligible account calls return.
+
+        Completion measures loop progress, not successful trading or healthy
+        data. Individual no_trade/error outcomes remain in the decision ledger.
+        The continuous CLI supervisor also consumes these progress records.
+        """
+        self.cycle_count += 1
+        started = time.monotonic()
+        phase = clock.session_phase()
+        fields = {
+            "run_id": self.ledger.run_id,
+            "cycle_sequence": self.cycle_count,
+            "cycle_started_at": clock.iso_utc(),
+            "phase": phase,
+        }
+        log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
+        event(log, "cycle_started", **fields)
+        report_cycle("cycle_started", **fields)
+        processed = 0
+        skipped = 0
+        try:
+            try:
+                snapshot = self.snapshots.read()
+            except Exception as exc:
+                log.error("Snapshot read failed: %s", exc)
+                snapshot = None
+
+            for account in self.accounts:
+                if self.should_stop:
+                    event(
+                        log, "cycle_interrupted", **fields,
+                        accounts_processed=processed, accounts_skipped=skipped,
+                    )
+                    return False
+                if account.alias in self.retired:
+                    skipped += 1
+                    continue
+                self._run_account(account, snapshot, phase)
+                processed += 1
+        except BaseException as exc:
+            report_cycle("cycle_failed", **fields, error_type=type(exc).__name__)
+            event(
+                log, "cycle_failed", level=logging.ERROR, **fields,
+                accounts_processed=processed, accounts_skipped=skipped,
+                error_type=type(exc).__name__,
+                duration_seconds=round(time.monotonic() - started, 3),
+            )
+            raise
+        completed_at = clock.iso_utc()
+        duration = round(time.monotonic() - started, 3)
+        report_cycle("cycle_completed", **fields, cycle_completed_at=completed_at,
+                     duration_seconds=duration)
+        event(
+            log, "cycle_completed", **fields,
+            cycle_completed_at=completed_at,
+            duration_seconds=duration,
+            accounts_processed=processed, accounts_skipped=skipped,
+            snapshot_available=snapshot is not None,
+        )
+        return True
 
     def _sleep(self, seconds: float) -> None:
         """Interruptible wait, so a stop signal does not have to sit through
@@ -311,6 +366,16 @@ class Runner:
     def _retire(self, account: Any, reason: str) -> None:
         self.retired.add(account.alias)
         log.warning("%s retired: %s", account.alias, reason)
+
+    def _retire_closed(self, account: Any, state: Any) -> None:
+        self.ledger.record(
+            decision_id=self.ledger.new_decision_id(), account_alias=account.alias,
+            strategy_id=account.strategy_id, strategy_version="n/a",
+            outcome_class=Outcome.NO_TRADE, account_closed=True,
+            account_state_before=state.summary(),
+            reason=f"Account closed: {state.closure_reason}; trading permanently stopped.",
+        )
+        self._retire(account, f"Account closed: {state.closure_reason}")
 
     # -- one account, one cycle -------------------------------------------
 
@@ -352,6 +417,10 @@ class Runner:
                 outcome_class=exc.outcome_class,
                 reason=f"Could not reconcile account state: {exc}",
             )
+            return
+
+        if getattr(state, "account_closed", False):
+            self._retire_closed(account, state)
             return
 
         book = Book(state.trades)
@@ -499,6 +568,16 @@ class Runner:
             # Only cleared now that the outcome is durably recorded in the ledger.
             executor.finalize(result.execution_request_id)
         log.info("%s: -> %s (http=%s)", alias, result.outcome_class, result.http_status)
+        if result.outcome_class == Outcome.REJECTED:
+            event(
+                log, "execution_rejected", level=logging.WARNING,
+                run_id=self.ledger.run_id, account_alias=alias,
+                decision_id=decision_id, execution_request_id=result.execution_request_id,
+                http_status=result.http_status,
+                rejection_reason=rejection_reason(result.server_response),
+            )
+            if isinstance(result.server_response, dict) and result.server_response.get("account_closed") is True:
+                self._retire(account, "Worker closed account; terminal rejection preserved in ledger.")
 
     def _record_liquidation(
         self,
@@ -537,10 +616,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-    )
+    configure_logging(args.verbose)
+
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        parser.error("--interval must be finite and positive")
+    if not args.once and HEARTBEAT_FD not in os.environ:
+        return supervise([sys.executable, "-m", "crassus.runner",
+                          *(sys.argv[1:] if argv is None else argv)], args.interval)
 
     accounts = load_accounts(args.accounts)
     if args.only:
@@ -555,19 +637,24 @@ def main(argv: list[str] | None = None) -> int:
         interval_s=args.interval,
         dry_run=args.dry_run,
     )
-    if args.once:
-        runner.install_signal_handlers()
-        runner.startup()
-        snapshot = runner.snapshots.read()
-        phase = clock.session_phase()
-        for account in accounts:
-            if account.alias not in runner.retired:
-                runner._run_account(account, snapshot, phase)
-        log.info("Single cycle complete. Ledger: %s", runner.ledger.paths.ledger)
-        return 0
+    archive = archive_from_environment(runner.ledger.paths.ledger.parent, runner.state_dir)
+    if archive:
+        archive.start()
+    try:
+        if args.once:
+            runner.install_signal_handlers()
+            runner.startup()
+            if not runner.run_cycle():
+                log.warning("Single cycle interrupted. Ledger: %s", runner.ledger.paths.ledger)
+                return 130
+            log.info("Single cycle complete. Ledger: %s", runner.ledger.paths.ledger)
+            return 0
 
-    runner.run()
-    return 0
+        runner.run()
+        return 0
+    finally:
+        if archive:
+            archive.close()
 
 
 if __name__ == "__main__":

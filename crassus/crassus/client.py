@@ -29,6 +29,7 @@ from typing import Any
 
 import requests
 
+from .durability import durable_mkdir, sync_directory
 from . import clock
 from .audit import Outcome
 from .config import BASE_URL, BOT_REGISTRATION_KEY
@@ -236,6 +237,8 @@ class AccountState:
     balance_cash: float
     trades: list[dict[str, Any]]
     fetched_at: str = field(default_factory=clock.iso_utc)
+    account_closed: bool = False
+    closure_reason: str | None = None
 
     def summary(self) -> dict[str, Any]:
         """Compact form for the audit record.
@@ -250,6 +253,7 @@ class AccountState:
             "balance_cash": self.balance_cash,
             "trade_count": len(self.trades),
             "fetched_at": self.fetched_at,
+            **({"account_closed": True, "closure_reason": self.closure_reason} if self.account_closed else {}),
         }
 
 
@@ -404,6 +408,8 @@ class AccountSession:
             username=payload.get("username", self.account.username),
             balance_cash=float(payload.get("balance_cash", 0.0)),
             trades=payload.get("trades", []) or [],
+            account_closed=payload.get("account_closed") is True,
+            closure_reason=payload.get("closure_reason"),
         )
 
 
@@ -443,7 +449,7 @@ class ExecutionClient:
     ):
         self.session = session
         self.state_dir = Path(state_dir)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(self.state_dir)
         self.max_attempts = max_attempts
         self.backoff_base_s = backoff_base_s
 
@@ -466,9 +472,11 @@ class ExecutionClient:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, self._inflight_path)
+        sync_directory(self.state_dir)
 
     def _clear_intent(self) -> None:
         self._inflight_path.unlink(missing_ok=True)
+        sync_directory(self.state_dir)
 
     def finalize(self, execution_request_id: str) -> None:
         """Clear the persisted intent -- but only once its outcome is durably

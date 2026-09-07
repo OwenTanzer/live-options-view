@@ -662,8 +662,11 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     } finally {
       global.fetch = realFetch;
     }
-    assert.equal(store.get('user:crassus_broke'), undefined, 'an unpayable settlement liquidates the bot account');
-    assert.equal(store.get('bot:crassus_broke'), undefined, 'liquidation also drops the roster index entry');
+    const closedBot = JSON.parse(store.get('user:crassus_broke'));
+    assert.equal(closedBot.account_closed, true, 'an unpayable settlement permanently closes a bot');
+    assert.equal(closedBot.closure_reason, 'insolvent_settlement');
+    assert.deepEqual(closedBot.trades, insolventBot.trades, 'closure retains the original trade history');
+    assert.ok(store.get('bot:crassus_broke'), 'closed bots remain visible as historical accounts');
   }
 
   // ── settleAllBots: a missing spot mark must not forgive a real obligation ──

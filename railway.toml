@@ -1,6 +1,9 @@
+# Changes to this deployment contract also run the Collector suite.
+# Keep its CI path filters aligned with Railway collector watch paths.
 [build]
-builder = "nixpacks"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python collector.py"
-restartPolicyType = "always"
+restartPolicyType = "never"
