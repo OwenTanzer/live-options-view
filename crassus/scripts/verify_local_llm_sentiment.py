@@ -117,6 +117,193 @@ def scenario_falls_back_to_vader_on_missing_key() -> None:
     check("still returns a compound score", "compound" in result, result)
 
 
+def scenario_rejects_non_finite_and_boolean_scores() -> None:
+    print("\n5b. polarity_scores: NaN/Infinity/bool compound values fall back to VADER instead of clamping to +-1.0")
+
+    # Real VADER score for this exact text, computed once, to assert the
+    # fallback path actually ran rather than merely returning "some float".
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    text = "Fed unexpectedly cuts rates 50bps"
+    vader_expected = SentimentIntensityAnalyzer().polarity_scores(text)["compound"]
+
+    for label, raw_compound in (
+        ("bare JSON NaN", "NaN"),
+        ("bare JSON Infinity", "Infinity"),
+        ("bare JSON -Infinity", "-Infinity"),
+        ("JSON true", "true"),
+        ("JSON false", "false"),
+        ('string "NaN"', '"NaN"'),
+        ('string "Infinity"', '"Infinity"'),
+    ):
+        session = FakeSession([FakeResponse(200, {"response": f'{{"compound": {raw_compound}}}'})])
+        analyzer = LocalLLMAnalyzer(session=session)
+        result = analyzer.polarity_scores(text)
+        check(
+            f"{label}: falls back to VADER instead of clamping to +-1.0/0.0",
+            result["compound"] == vader_expected,
+            result["compound"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-batch time budget and failure circuit (bounding a whole read, not just
+# each request)
+# ---------------------------------------------------------------------------
+
+
+class FakeClock:
+    """Injectable `monotonic`-shaped clock: advances only when told to, so
+    a budget/timeout test never actually sleeps in real time."""
+
+    def __init__(self, start: float = 0.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class TimeAdvancingSession(FakeSession):
+    """A FakeSession whose `post()` also advances a shared FakeClock by a
+    fixed amount, simulating a request that takes real wall-clock time."""
+
+    def __init__(self, responses: list, clock: FakeClock, seconds_per_call: float):
+        super().__init__(responses)
+        self._clock = clock
+        self._seconds_per_call = seconds_per_call
+
+    def post(self, url, json=None, timeout=None):
+        self._clock.advance(self._seconds_per_call)
+        return super().post(url, json=json, timeout=timeout)
+
+
+def scenario_batch_budget_exhausted_skips_remaining_requests() -> None:
+    print("\n10. Per-batch budget: once exhausted, remaining items in the batch skip Ollama entirely")
+    clock = FakeClock()
+    # One request "takes" 11s of simulated time against a 10s total budget --
+    # the first request still gets a real attempt (budget is only checked at
+    # the start of each call), but the second must skip Ollama outright.
+    session = TimeAdvancingSession([FakeResponse(200, _ollama_body(0.5))], clock, seconds_per_call=11.0)
+    analyzer = LocalLLMAnalyzer(session=session, read_budget_s=10.0, monotonic=clock)
+    analyzer.begin_batch()
+
+    first = analyzer.polarity_scores("first post")
+    check("the first item still gets a real Ollama attempt", first["compound"] == 0.5, first)
+    check("exactly one Ollama request was made so far", len(session.calls) == 1, len(session.calls))
+
+    second = analyzer.polarity_scores("second post")
+    check(
+        "the second item skips Ollama once the batch budget is spent",
+        len(session.calls) == 1,
+        len(session.calls),
+    )
+    check("it still returns a usable (VADER) fallback score, not a crash", "compound" in second, second)
+
+
+def scenario_request_timeout_capped_to_remaining_budget() -> None:
+    print("\n11. Per-batch budget: a request's timeout is capped to what's left of the batch, not the full configured timeout")
+    clock = FakeClock()
+    session = FakeSession([FakeResponse(200, _ollama_body(0.2))])
+    analyzer = LocalLLMAnalyzer(session=session, timeout_s=12.0, read_budget_s=5.0, monotonic=clock)
+    analyzer.begin_batch()
+    analyzer.polarity_scores("some text")
+    used_timeout = session.calls[0]["timeout"]
+    check(
+        "the request was capped to the remaining ~5s budget, not the full 12s configured timeout",
+        used_timeout is not None and 0 < used_timeout <= 5.0,
+        used_timeout,
+    )
+
+
+def scenario_failure_circuit_opens_after_consecutive_failures() -> None:
+    print("\n12. Failure circuit: N consecutive failures stop further Ollama attempts for the rest of the batch")
+    session = FakeSession([FakeResponse(503), FakeResponse(503), FakeResponse(503), FakeResponse(200, _ollama_body(0.9))])
+    analyzer = LocalLLMAnalyzer(session=session, failure_circuit_threshold=3)
+    analyzer.begin_batch()
+
+    for _ in range(3):
+        analyzer.polarity_scores("failing post")
+    check("three consecutive failures made three real Ollama attempts", len(session.calls) == 3, len(session.calls))
+
+    result = analyzer.polarity_scores("a fourth post, after the circuit trips")
+    check(
+        "a fourth call after the circuit trips does not attempt Ollama again",
+        len(session.calls) == 3,
+        len(session.calls),
+    )
+    check("it still returns a usable fallback score", "compound" in result, result)
+
+
+def scenario_begin_batch_resets_circuit_and_budget() -> None:
+    print("\n13. begin_batch(): a fresh batch clears a previously-tripped circuit and starts a new budget")
+    session = FakeSession([
+        FakeResponse(503), FakeResponse(503), FakeResponse(503),  # trips the circuit in batch 1
+        FakeResponse(200, _ollama_body(0.9)),  # batch 2's first (and only) attempt
+    ])
+    analyzer = LocalLLMAnalyzer(session=session, failure_circuit_threshold=3)
+
+    analyzer.begin_batch()
+    for _ in range(3):
+        analyzer.polarity_scores("x")
+    check("circuit is open after three failures in batch 1", analyzer._circuit_open is True)
+
+    analyzer.begin_batch()
+    check("begin_batch() clears the circuit for the new batch", analyzer._circuit_open is False)
+    result = analyzer.polarity_scores("first post of batch 2")
+    check("batch 2 attempts Ollama again rather than staying tripped", len(session.calls) == 4, len(session.calls))
+    check("that attempt succeeds", result["compound"] == 0.9, result)
+
+
+def scenario_reader_begins_batch_on_local_llm_analyzer() -> None:
+    print("\n14. Reader wiring: RedditSentimentReader/TrumpSentimentReader call begin_batch() before scoring a read")
+    calls: list[str] = []
+
+    class TrackingAnalyzer:
+        def begin_batch(self) -> None:
+            calls.append("begin_batch")
+
+        def polarity_scores(self, text: str) -> dict[str, float]:
+            return {"neg": 0.0, "neu": 0.0, "pos": 0.0, "compound": 0.0}
+
+    reddit_reader = sentiment_mod.RedditSentimentReader(
+        symbol="QQQ", subreddits=("wallstreetbets",), post_limit=0,
+        analyzer_factory=TrackingAnalyzer,
+    )
+    reddit_reader.read()
+    check("RedditSentimentReader calls begin_batch() exactly once for this read", calls == ["begin_batch"], calls)
+
+    calls.clear()
+
+    class FakeFeedResponse:
+        status_code = 200
+        content = b"<rss><channel></channel></rss>"
+
+    class FakeFeedSession:
+        def get(self, url, timeout=None):
+            return FakeFeedResponse()
+
+    trump_reader = trump_mod.TrumpSentimentReader(
+        session_factory=FakeFeedSession, analyzer_factory=TrackingAnalyzer,
+    )
+    trump_reader.read()
+    check("TrumpSentimentReader calls begin_batch() exactly once for this read", calls == ["begin_batch"], calls)
+
+
+def scenario_reader_tolerates_analyzer_without_begin_batch() -> None:
+    print("\n15. Reader wiring: a VADER-shaped analyzer with no begin_batch() does not break the read")
+    reader = sentiment_mod.RedditSentimentReader(
+        symbol="QQQ", subreddits=("wallstreetbets",), post_limit=0,
+    )
+    snapshot = reader.read()
+    check(
+        "read() succeeds with the real default (VADER) analyzer, which has no begin_batch",
+        snapshot.sample_size == 0,
+        snapshot,
+    )
+
+
 # ---------------------------------------------------------------------------
 # _default_analyzer_factory backend selection (sentiment.py / trump_sentiment.py)
 # ---------------------------------------------------------------------------
@@ -189,6 +376,13 @@ def main() -> int:
         scenario_falls_back_to_vader_on_http_error,
         scenario_falls_back_to_vader_on_malformed_json,
         scenario_falls_back_to_vader_on_missing_key,
+        scenario_rejects_non_finite_and_boolean_scores,
+        scenario_batch_budget_exhausted_skips_remaining_requests,
+        scenario_request_timeout_capped_to_remaining_budget,
+        scenario_failure_circuit_opens_after_consecutive_failures,
+        scenario_begin_batch_resets_circuit_and_budget,
+        scenario_reader_begins_batch_on_local_llm_analyzer,
+        scenario_reader_tolerates_analyzer_without_begin_batch,
         scenario_sentiment_defaults_to_vader,
         scenario_sentiment_opts_into_local_llm,
         scenario_trump_defaults_to_vader,

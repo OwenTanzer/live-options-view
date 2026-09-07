@@ -55,9 +55,18 @@ TRUMP_FEED_USER_AGENT = os.environ.get("TRUMP_FEED_USER_AGENT")
 # each post/headline: "vader" (default, current production behavior,
 # unchanged) or "local_llm" (crassus/local_llm_sentiment.py -- scores
 # magnitude-of-market-impact via a local Ollama model instead of VADER's
-# generic lexicon sentiment; falls back to VADER on any failure). Per-account
-# `params` in accounts.json/accounts.example.json can override this per bot
-# via the same key; this is only the process-wide default.
+# generic lexicon sentiment; falls back to VADER on any failure).
+#
+# This is a process-wide setting, not a per-account one. Flagged in review:
+# an earlier version of this comment claimed accounts.json/accounts.example.json
+# `params` could override it per bot, but `_default_analyzer_factory()` in
+# both readers only ever consults this module-level value, and each reader
+# (`reddit_sentiment.py`'s `_reader`, `trump_whisperer.py`'s `_reader`) is a
+# single module-level instance shared by every account running that
+# strategy -- there is no per-account analyzer or cache for `params` to
+# select between. Isolated per-account backend selection would need its own
+# reader-per-account wiring and is out of scope here; until that exists,
+# every account sharing a strategy shares this one backend.
 SENTIMENT_ANALYZER_BACKEND = os.environ.get("SENTIMENT_ANALYZER_BACKEND", "vader")
 
 # Local Ollama instance used by local_llm_sentiment.py when

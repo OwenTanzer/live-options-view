@@ -126,6 +126,12 @@ def _default_analyzer_factory() -> Any:
     crassus/local_llm_sentiment.py for why. Either way `analyzer_factory`
     remains a constructor argument, so a caller can also pass a specific
     analyzer directly regardless of this env-driven default.
+
+    Process-wide, not per-account: `_reader` in `trump_whisperer.py` is one
+    module-level `TrumpSentimentReader` shared by every account running
+    `trump_whisperer_qqq`, and this factory only reads the module-level
+    `SENTIMENT_ANALYZER_BACKEND` -- there is no per-account `params` lookup
+    here, so every account sharing this strategy shares this one backend.
     """
     if SENTIMENT_ANALYZER_BACKEND == "local_llm":
         from .local_llm_sentiment import LocalLLMAnalyzer  # noqa: PLC0415
@@ -343,6 +349,15 @@ class TrumpSentimentReader:
             self._session = self._session_factory()
         if self._analyzer is None:
             self._analyzer = self._analyzer_factory()
+
+        # Duck-typed, not a formal part of the VADER-compatible analyzer
+        # contract: only LocalLLMAnalyzer defines begin_batch() (see its
+        # docstring), to reset its per-read time budget/failure circuit
+        # before scoring this read's whole batch of posts. VADER has no
+        # such state and no such method, so this is a no-op for it.
+        begin_batch = getattr(self._analyzer, "begin_batch", None)
+        if begin_batch is not None:
+            begin_batch()
 
         posts = _fetch_posts(self._session, feed_url=self.feed_url, limit=self.post_limit)
         snapshot = aggregate(
