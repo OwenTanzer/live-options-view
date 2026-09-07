@@ -11,6 +11,7 @@ already does at process start.
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -163,6 +164,55 @@ def test_phelps_wrap_never_blocks_buys_or_flat_no_trade() -> None:
     check("a flat no_trade passes through untouched", d_flat.action == "no_trade")
 
 
+def test_phelps_decision_audit_identity() -> None:
+    """Check emitted records, not just attributes on the registered callable."""
+    now = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+    for name, action, held_minutes in [
+        ("flat buy", "buy", None),
+        ("flat no_trade", "no_trade", None),
+        ("held no_trade", "no_trade", 10),
+        ("held buy", "buy", 10),
+        ("deferred sell", "sell", 10),
+        ("released sell", "sell", 30),
+    ]:
+        _entry_times.clear()
+        original = Decision(
+            action=action, reason="base proposal", strategy_id="base",
+            strategy_version="1.2.3", symbol="HELD" if action != "no_trade" else None,
+            quantity=2 if action != "no_trade" else None, confidence=0.7,
+            metadata={"signal": {"value": 0.5}},
+        )
+        before = deepcopy(original.to_dict())
+        wrapped = phelps_wrap(
+            lambda ctx: original, strategy_id="base_phelps",
+            strategy_version="1.2.3+phelps.2",
+        )
+        trades = [] if held_minutes is None else [{
+            "sym": "HELD", "side": "buy", "qty": 2, "price": 1.0,
+            "ts": (now - timedelta(minutes=held_minutes)).isoformat(),
+        }]
+        decision = wrapped(make_ctx(trades=trades, now_et=now))
+        record = decision.to_dict()
+        check(f"{name}: serialized identity includes wrapper revision",
+              record["strategy_id"] == "base_phelps"
+              and record["strategy_version"] == "1.2.3+phelps.2", record)
+        check(f"{name}: base identity survives in metadata",
+              record["metadata"].get("base_strategy_id") == "base"
+              and record["metadata"].get("base_strategy_version") == "1.2.3")
+        check(f"{name}: original decision and metadata remain unchanged",
+              original.to_dict() == before and decision is not original)
+        if name == "deferred sell":
+            check("deferred sell: hold behavior and original metadata survive",
+                  decision.action == "no_trade"
+                  and decision.metadata["deferred_metadata"] == before["metadata"])
+        else:
+            fields = ("action", "symbol", "quantity", "confidence")
+            check(f"{name}: trade proposal is unchanged",
+                  all(record[key] == before[key] for key in fields)
+                  and record["metadata"]["signal"] == before["metadata"]["signal"]
+                  and (name == "released sell" or record["reason"] == before["reason"]))
+
+
 def test_phelps_wrap_rejects_multiple_open_positions() -> None:
     _entry_times.clear()
     base_called = False
@@ -179,7 +229,9 @@ def test_phelps_wrap_rejects_multiple_open_positions() -> None:
             strategy_version="1.0.0",
         )
 
-    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+    base.strategy_id = "base"
+    base.strategy_version = "1.0.0"
+    wrapped = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0+phelps.2")
     trades = [
         {"sym": "FIRST", "side": "buy", "qty": 1, "price": 1.0},
         {"sym": "SECOND", "side": "buy", "qty": 1, "price": 1.0},
@@ -193,6 +245,11 @@ def test_phelps_wrap_rejects_multiple_open_positions() -> None:
     decision = wrapped(ctx)
     check("multiple positions are rejected at the wrapper boundary", decision.action == "no_trade")
     check("the base strategy is not allowed to compound a contaminated book", not base_called)
+    check("guard records wrapper revision and configured base without evaluating it",
+          decision.strategy_id == "base_phelps"
+          and decision.strategy_version == "1.0.0+phelps.2"
+          and decision.metadata.get("base_strategy_id") == "base"
+          and decision.metadata.get("base_strategy_version") == "1.0.0")
     check(
         "the rejection records every held symbol",
         decision.metadata is not None
@@ -467,6 +524,7 @@ def test_phelps_pure_entry_rejected_without_live_quote() -> None:
 test_phelps_variant_versions_include_wrapper_revision()
 test_phelps_wrap_defers_early_close()
 test_phelps_wrap_never_blocks_buys_or_flat_no_trade()
+test_phelps_decision_audit_identity()
 test_phelps_wrap_rejects_multiple_open_positions()
 test_phelps_wrap_respects_custom_window_param()
 test_phelps_wrap_clears_state_on_flat()

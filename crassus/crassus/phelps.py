@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import math
 import threading
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -130,6 +131,11 @@ def _held(ctx: StrategyContext) -> tuple[str, int] | None:
 def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> Strategy:
     """Wrap `base` so a proposed close of a held position waits one Phelps.
 
+    Every returned decision carries the wrapper's audit identity. Base
+    decision identity is retained in metadata without mutating the base's
+    decision or metadata. A pre-evaluation guard records the configured
+    base identity instead, since no base decision exists in that case.
+
     Entry time is tracked in-process, keyed by (account username, symbol),
     seeded from the real fill timestamp when one is recoverable
     (`_fill_time_for_symbol` reads it off `ctx.book.trades`' own `ts` field
@@ -178,6 +184,8 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
                 strategy_id=strategy_id,
                 strategy_version=strategy_version,
                 metadata={
+                    "base_strategy_id": getattr(base, "strategy_id", None),
+                    "base_strategy_version": getattr(base, "strategy_version", None),
                     "open_positions": {
                         symbol: position.quantity
                         for symbol, position in open_positions.items()
@@ -207,9 +215,18 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
                     del _entry_times[stale_key]
 
         decision = base(ctx)
+        provenance = {
+            "base_strategy_id": decision.strategy_id,
+            "base_strategy_version": decision.strategy_version,
+        }
 
         if held is None or decision.action != "sell":
-            return decision
+            return replace(
+                decision,
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={**(decision.metadata or {}), **provenance},
+            )
 
         symbol, _qty = held
         with _lock:
@@ -230,6 +247,7 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
                 strategy_id=strategy_id,
                 strategy_version=strategy_version,
                 metadata={
+                    **provenance,
                     "phelps_elapsed_minutes": round(elapsed_minutes, 2),
                     "phelps_window_minutes": phelps_minutes,
                     "deferred_action": decision.action,
@@ -256,6 +274,7 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
             confidence=decision.confidence,
             metadata={
                 **(decision.metadata or {}),
+                **provenance,
                 "phelps_elapsed_minutes": round(elapsed_minutes, 2),
                 "phelps_window_minutes": phelps_minutes,
                 "phelps_released": True,
