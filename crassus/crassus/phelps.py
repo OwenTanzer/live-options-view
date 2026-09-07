@@ -33,6 +33,16 @@ delays a `sell` of a position it is watching.
 See `crassus/strategies/phelps_variants.py` for the wrapped bots and
 `crassus/strategies/phelps_pure.py` for a strategy whose entry signal, not
 just its exit timing, is built from Phelps directly.
+
+`phelps_wrap` above is a permanent experimental control (MOO-161) and must
+not change. This module also provides `fixed_window_wrap`, a second,
+independent wrapper for the canonical MOO-161 fixed-window rule: instead of
+merely deferring a sell the base strategy already proposed, it imposes a
+true terminal boundary -- suppressing every base-strategy sell while held,
+then forcing the entire position closed unconditionally once one Phelps
+window has elapsed, regardless of what the base strategy currently wants.
+Deliberately no structural-invalidation distinction is made anywhere in
+`fixed_window_wrap` -- see its own docstring.
 """
 
 from __future__ import annotations
@@ -43,6 +53,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
+from .market import EXECUTION_QUOTE_MAX_AGE_S
 from .strategy import Decision, Strategy, StrategyContext
 
 
@@ -278,6 +289,247 @@ def phelps_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> S
                 "phelps_elapsed_minutes": round(elapsed_minutes, 2),
                 "phelps_window_minutes": phelps_minutes,
                 "phelps_released": True,
+            },
+        )
+
+    _decide.strategy_id = strategy_id
+    _decide.strategy_version = strategy_version
+    return _decide
+
+
+# Separate tracking table from `phelps_wrap`'s `_entry_times` -- the two
+# wrappers are never applied to the same strategy_id, but sharing one dict
+# would let a restart/flat-clear cycle for one interfere with the other
+# purely by coincidence of (account, symbol) keys. Same shape and same
+# locking discipline as `_entry_times` above.
+_fixed_window_entry_times: dict[tuple[str, str], datetime] = {}
+_fixed_window_lock = threading.Lock()
+
+
+def fixed_window_wrap(base: Strategy, *, strategy_id: str, strategy_version: str) -> Strategy:
+    """Wrap `base` with the canonical MOO-161 fixed-window rule.
+
+    Unlike `phelps_wrap`, which only ever defers a sell the base strategy
+    itself proposed and lets it through once the base still wants it gone,
+    this wrapper imposes a true terminal boundary: while a position is
+    held and less than one Phelps window has elapsed since the real fill
+    time, every base-strategy sell is suppressed; once the window has
+    elapsed, the entire held position is closed unconditionally on the next
+    executable quote, regardless of what the base strategy currently
+    proposes (including a `no_trade` that would otherwise keep holding).
+    This is the same "recover fill time, hold, force-close at the terminal
+    boundary" shape `phelps_pure_qqq` already uses for its own time-based
+    exit (`strategies/phelps_pure.py`), factored out here so it can be
+    layered onto any of this repo's existing base strategies without
+    touching their entry/signal logic -- but deliberately without that
+    strategy's retracement-based early-invalidation branch: MOO-161 is
+    explicit that this wrapper must not classify reversals, stale data, or
+    any other base-strategy signal as a distinct "structural invalidation"
+    case. Every proposed close is equally deferrable inside the window, and
+    the window's own expiry is the only thing that ever forces an exit.
+
+    The terminal boundary is checked *before* the base strategy is ever
+    invoked for a cycle, and once the window has elapsed the base is not
+    called at all that cycle. Flagged in review: an earlier version called
+    `base(ctx)` unconditionally at the top of every cycle, so a raising or
+    merely stalled base could delay or crash the mandatory close before a
+    close quote was ever requested. Compare `flatten.maybe_flatten`, which
+    the runner checks ahead of any strategy (including this wrapper) for
+    the same "the mandatory exit must not depend on strategy logic" reason
+    -- that precedence lives a level above this wrapper entirely and
+    nothing here changes it.
+
+    A book holding more than one open option position stands down
+    entirely (a `no_trade` naming every held symbol) rather than acting on
+    whichever one `_held`'s first-symbol convention happens to pick --
+    `_held` has no multi-position guard of its own, so a contaminated book
+    could otherwise have this wrapper force-close (or suppress the close
+    of) an arbitrary leg while ignoring the rest. This check runs first,
+    before the base is evaluated or the entry-time table is touched.
+
+    Every returned decision carries the wrapper's own audit identity
+    (`strategy_id`/`strategy_version`); the base strategy's identity is
+    preserved in metadata (`base_strategy_id`/`base_strategy_version`)
+    without mutating the base's own decision or metadata -- taken from the
+    base's emitted decision when it was actually invoked this cycle, or
+    from its configured identity (`getattr(base, ...)`) on the two paths
+    above where the base is never called. Same provenance contract
+    `phelps_wrap` uses.
+
+    Entry-time tracking, fill-time recovery, and per-account state clearing
+    all reuse the exact mechanics `phelps_wrap` already established above
+    (see that function's docstring for the full reasoning) -- only the
+    exit decision differs.
+    """
+
+    def _decide(ctx: StrategyContext) -> Decision:
+        key_prefix = _account_key(ctx)
+
+        open_positions = {
+            symbol: position
+            for symbol, position in ctx.book.positions.items()
+            if position.quantity != 0
+        }
+        if len(open_positions) > 1:
+            return Decision.no_trade(
+                reason=(
+                    "Fixed-window Phelps: holding more than one open option "
+                    "position; standing down rather than tracking an arbitrary "
+                    "symbol or compounding the contaminated book."
+                ),
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={
+                    "base_strategy_id": getattr(base, "strategy_id", None),
+                    "base_strategy_version": getattr(base, "strategy_version", None),
+                    "open_positions": {
+                        symbol: position.quantity
+                        for symbol, position in open_positions.items()
+                    },
+                    "fixed_window_multiple_positions": True,
+                },
+            )
+
+        held = _held(ctx)
+
+        with _fixed_window_lock:
+            if held is None:
+                for key in [k for k in _fixed_window_entry_times if k[0] == key_prefix]:
+                    del _fixed_window_entry_times[key]
+            else:
+                symbol, _qty = held
+                key = (key_prefix, symbol)
+                if key not in _fixed_window_entry_times:
+                    fill_time = _fill_time_for_symbol(ctx, symbol)
+                    _fixed_window_entry_times[key] = fill_time if fill_time is not None else ctx.now_et
+                for stale_key in [
+                    k for k in _fixed_window_entry_times if k[0] == key_prefix and k[1] != symbol
+                ]:
+                    del _fixed_window_entry_times[stale_key]
+
+        if held is None:
+            decision = base(ctx)
+            provenance = {
+                "base_strategy_id": decision.strategy_id,
+                "base_strategy_version": decision.strategy_version,
+            }
+            return replace(
+                decision,
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={**(decision.metadata or {}), **provenance},
+            )
+
+        symbol, quantity = held
+        with _fixed_window_lock:
+            entry_time = _fixed_window_entry_times.get((key_prefix, symbol), ctx.now_et)
+
+        params = ctx.params or {}
+        phelps_minutes = resolve_phelps_minutes(params)
+        elapsed_minutes = (ctx.now_et - entry_time).total_seconds() / 60.0
+
+        if elapsed_minutes >= phelps_minutes:
+            # Terminal boundary reached: close unconditionally on the next
+            # executable quote. The base is deliberately never invoked on
+            # this path -- see the docstring above for why the mandatory
+            # exit must not be able to be delayed or crashed by base logic.
+            provenance = {
+                "base_strategy_id": getattr(base, "strategy_id", None),
+                "base_strategy_version": getattr(base, "strategy_version", None),
+            }
+            quote = ctx.quotes([symbol]).get(symbol)
+            if quote is None:
+                return Decision.no_trade(
+                    reason=(
+                        f"Fixed-window Phelps: {elapsed_minutes:.1f}m elapsed "
+                        f"(>= {phelps_minutes:.1f}m window) but no live quote "
+                        f"returned for {symbol}; will retry the forced close next cycle."
+                    ),
+                    strategy_id=strategy_id,
+                    strategy_version=strategy_version,
+                    metadata={
+                        **provenance,
+                        "phelps_elapsed_minutes": round(elapsed_minutes, 2),
+                        "phelps_window_minutes": phelps_minutes,
+                        "symbol": symbol,
+                        "forced_close_pending": True,
+                    },
+                )
+            if not quote.is_executable:
+                return Decision.no_trade(
+                    reason=(
+                        f"Fixed-window Phelps: {elapsed_minutes:.1f}m elapsed "
+                        f"(>= {phelps_minutes:.1f}m window) but the live quote for "
+                        f"{symbol} is not executable (age={quote.age_seconds}s, "
+                        f"limit={EXECUTION_QUOTE_MAX_AGE_S}s); will retry next cycle."
+                    ),
+                    strategy_id=strategy_id,
+                    strategy_version=strategy_version,
+                    metadata={
+                        **provenance,
+                        "phelps_elapsed_minutes": round(elapsed_minutes, 2),
+                        "phelps_window_minutes": phelps_minutes,
+                        "symbol": symbol,
+                        "forced_close_pending": True,
+                        "bid": quote.bid,
+                        "ask": quote.ask,
+                        "age_seconds": quote.age_seconds,
+                    },
+                )
+
+            return Decision(
+                action="sell",
+                symbol=symbol,
+                quantity=quantity,
+                reason=(
+                    f"Fixed-window Phelps: {elapsed_minutes:.1f}m elapsed "
+                    f"(>= {phelps_minutes:.1f}m window) -- closing the entire "
+                    f"position unconditionally; the base strategy was not "
+                    f"consulted this cycle."
+                ),
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={
+                    **provenance,
+                    "phelps_elapsed_minutes": round(elapsed_minutes, 2),
+                    "phelps_window_minutes": phelps_minutes,
+                    "symbol": symbol,
+                    "forced_close": True,
+                },
+            )
+
+        # Window not yet elapsed: only now consult the base, and only to
+        # suppress a sell it proposes -- an opening buy or a flat/no_trade
+        # passes through untouched, still under the wrapper's own identity.
+        decision = base(ctx)
+        provenance = {
+            "base_strategy_id": decision.strategy_id,
+            "base_strategy_version": decision.strategy_version,
+        }
+        if decision.action != "sell":
+            return replace(
+                decision,
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                metadata={**(decision.metadata or {}), **provenance},
+            )
+        return Decision.no_trade(
+            reason=(
+                f"Fixed-window Phelps: base strategy proposed to close {symbol} "
+                f"after {elapsed_minutes:.1f}m, short of the "
+                f"{phelps_minutes:.1f}m window -- suppressing the sell. "
+                f"Base reason: {decision.reason!r}"
+            ),
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            metadata={
+                **provenance,
+                "phelps_elapsed_minutes": round(elapsed_minutes, 2),
+                "phelps_window_minutes": phelps_minutes,
+                "deferred_action": decision.action,
+                "deferred_reason": decision.reason,
+                "deferred_metadata": decision.metadata,
+                "symbol": symbol,
             },
         )
 

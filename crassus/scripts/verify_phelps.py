@@ -19,7 +19,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from crassus.client import Book  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
-from crassus.phelps import PHELPS_MINUTES_DEFAULT, _entry_times, phelps_wrap  # noqa: E402
+from crassus.phelps import (  # noqa: E402
+    PHELPS_MINUTES_DEFAULT,
+    _entry_times,
+    _fixed_window_entry_times,
+    fixed_window_wrap,
+    phelps_wrap,
+)
 from crassus.strategies import (  # noqa: E402
     momentum_qqq,
     phelps_pure,
@@ -108,6 +114,24 @@ def test_phelps_variant_versions_include_wrapper_revision() -> None:
         actual_version = REGISTRY[strategy_id].strategy_version
         check(
             f"{strategy_id} encodes the Phelps wrapper revision",
+            actual_version == expected_version,
+            actual_version,
+        )
+
+
+def test_fixed_window_variant_versions_include_wrapper_revision() -> None:
+    expected = {
+        "smoke_atm_roundtrip_fixed_window": smoke.STRATEGY_VERSION,
+        "reddit_sentiment_qqq_fixed_window": reddit_sentiment.STRATEGY_VERSION,
+        "trump_whisperer_qqq_fixed_window": trump_whisperer.STRATEGY_VERSION,
+        "momentum_qqq_fixed_window": momentum_qqq.STRATEGY_VERSION,
+    }
+
+    for strategy_id, base_version in expected.items():
+        expected_version = phelps_variants.fixed_window_variant_version(base_version)
+        actual_version = REGISTRY[strategy_id].strategy_version
+        check(
+            f"{strategy_id} encodes the fixed-window wrapper revision",
             actual_version == expected_version,
             actual_version,
         )
@@ -290,6 +314,295 @@ def test_phelps_wrap_clears_state_on_flat() -> None:
 
     wrapped(make_ctx(username="acct4", trades=[], now_et=t0 + timedelta(minutes=1)))
     check("entry cleared once flat", ("acct4", "HELD") not in _entry_times)
+
+
+def stale_quote(symbol: str = "x", bid: float = 1.0, ask: float = 1.1) -> Quote:
+    # server_ts far after quote_ts -- age_seconds exceeds EXECUTION_QUOTE_MAX_AGE_S.
+    return Quote(symbol=symbol, bid=bid, ask=ask, quote_ts="2024-01-01T15:00:00", server_ts="2024-01-01T15:05:00")
+
+
+# --------------------------------------------------------------------------
+# fixed_window_wrap (MOO-161)
+# --------------------------------------------------------------------------
+
+
+def test_fixed_window_wrap_suppresses_early_sell() -> None:
+    _fixed_window_entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision(action="sell", symbol="HELD", quantity=1, reason="signal reversed", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = fixed_window_wrap(base, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0}]
+
+    ctx0 = make_ctx(username="fw1", trades=trades, now_et=t0)
+    d0 = wrapped(ctx0)
+    check("first cycle records entry and does not sell", d0.action == "no_trade", d0.reason)
+
+    ctx1 = make_ctx(username="fw1", trades=trades, now_et=t0 + timedelta(minutes=10))
+    d1 = wrapped(ctx1)
+    check("a sell proposed at 10m (< default window) is suppressed", d1.action == "no_trade", d1.reason)
+    check("suppressed decision is attributed to the wrapper strategy_id", d1.strategy_id == "base_fw")
+
+
+def test_fixed_window_wrap_forces_close_even_when_base_still_holds() -> None:
+    print("\nKey divergence from phelps_wrap: the base strategy never proposed a sell here at all")
+    _fixed_window_entry_times.clear()
+    base_called = False
+
+    def base_holds(ctx: StrategyContext) -> Decision:
+        nonlocal base_called
+        base_called = True
+        return Decision.no_trade(reason="still supports the position", strategy_id="base", strategy_version="1.0.0")
+
+    base_holds.strategy_id = "base"
+    base_holds.strategy_version = "1.0.0"
+    wrapped = fixed_window_wrap(base_holds, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 3, "price": 1.0, "ts": t0.isoformat()}]
+    quote_map = {"HELD": executable_quote(symbol="HELD")}
+
+    ctx = make_ctx(username="fw2", trades=trades, now_et=t0 + timedelta(minutes=PHELPS_MINUTES_DEFAULT + 1), quote_map=quote_map)
+    d = wrapped(ctx)
+    check(
+        "the entire position is force-closed at the boundary despite the base strategy proposing no_trade",
+        d.action == "sell" and d.symbol == "HELD" and d.quantity == 3,
+        d.reason,
+    )
+    check("forced close is attributed to the wrapper strategy_id", d.strategy_id == "base_fw")
+    check(
+        "the base strategy is never consulted once the terminal boundary is reached",
+        not base_called,
+    )
+    check(
+        "metadata still names the configured base for audit purposes without having called it",
+        d.metadata is not None
+        and d.metadata.get("base_strategy_id") == "base"
+        and d.metadata.get("base_strategy_version") == "1.0.0",
+        d.metadata,
+    )
+
+
+def test_fixed_window_wrap_terminal_close_independent_of_base() -> None:
+    print("\nRegression: a raising base must not be able to delay or crash the forced close (review point 1)")
+    _fixed_window_entry_times.clear()
+
+    def raising_base(ctx: StrategyContext) -> Decision:
+        raise RuntimeError("base ingestion exploded")
+
+    raising_base.strategy_id = "base"
+    raising_base.strategy_version = "1.0.0"
+    wrapped = fixed_window_wrap(raising_base, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": t0.isoformat()}]
+    quote_map = {"HELD": executable_quote(symbol="HELD")}
+
+    ctx = make_ctx(
+        username="fw_raising",
+        trades=trades,
+        now_et=t0 + timedelta(minutes=PHELPS_MINUTES_DEFAULT + 1),
+        quote_map=quote_map,
+    )
+    d = wrapped(ctx)
+    check(
+        "the forced close happens without raising, even though the base would explode if called",
+        d.action == "sell" and d.symbol == "HELD",
+        d.reason,
+    )
+
+
+def test_fixed_window_wrap_rejects_multiple_open_positions() -> None:
+    _fixed_window_entry_times.clear()
+    base_called = False
+
+    def base(ctx: StrategyContext) -> Decision:
+        nonlocal base_called
+        base_called = True
+        return Decision(
+            action="buy",
+            symbol="THIRD",
+            quantity=1,
+            reason="would compound the book",
+            strategy_id="base",
+            strategy_version="1.0.0",
+        )
+
+    base.strategy_id = "base"
+    base.strategy_version = "1.0.0"
+    wrapped = fixed_window_wrap(base, strategy_id="base_fw", strategy_version="1.0.0")
+    trades = [
+        {"sym": "FIRST", "side": "buy", "qty": 1, "price": 1.0},
+        {"sym": "SECOND", "side": "buy", "qty": 1, "price": 1.0},
+    ]
+    ctx = make_ctx(
+        username="fw_contaminated",
+        trades=trades,
+        now_et=datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc),
+    )
+
+    decision = wrapped(ctx)
+    check(
+        "a two-symbol fixture stands down entirely rather than sell-FIRSTing an arbitrary leg",
+        decision.action == "no_trade",
+    )
+    check("the base strategy is not allowed to compound a contaminated book", not base_called)
+    check(
+        "the rejection records every held symbol",
+        decision.metadata is not None
+        and decision.metadata.get("open_positions") == {"FIRST": 1, "SECOND": 1},
+        decision.metadata,
+    )
+
+
+def test_fixed_window_decision_audit_identity() -> None:
+    """Check emitted records, not just attributes on the registered callable."""
+    now = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+    for name, action, held_minutes in [
+        ("flat buy", "buy", None),
+        ("flat no_trade", "no_trade", None),
+        ("held no_trade before boundary", "no_trade", 10),
+        ("held sell before boundary (suppressed)", "sell", 10),
+    ]:
+        _fixed_window_entry_times.clear()
+        original = Decision(
+            action=action, reason="base proposal", strategy_id="base",
+            strategy_version="1.2.3", symbol="HELD" if action != "no_trade" else None,
+            quantity=2 if action != "no_trade" else None, confidence=0.7,
+            metadata={"signal": {"value": 0.5}},
+        )
+        before = deepcopy(original.to_dict())
+        wrapped = fixed_window_wrap(
+            lambda ctx: original, strategy_id="base_fw",
+            strategy_version="1.2.3+fixed_window.1",
+        )
+        trades = [] if held_minutes is None else [{
+            "sym": "HELD", "side": "buy", "qty": 2, "price": 1.0,
+            "ts": (now - timedelta(minutes=held_minutes)).isoformat(),
+        }]
+        decision = wrapped(make_ctx(trades=trades, now_et=now))
+        record = decision.to_dict()
+        check(f"{name}: serialized identity includes wrapper revision",
+              record["strategy_id"] == "base_fw"
+              and record["strategy_version"] == "1.2.3+fixed_window.1", record)
+        check(f"{name}: base identity survives in metadata",
+              record["metadata"].get("base_strategy_id") == "base"
+              and record["metadata"].get("base_strategy_version") == "1.2.3")
+        check(f"{name}: original decision and metadata remain unchanged",
+              original.to_dict() == before and decision is not original)
+
+
+def test_fixed_window_wrap_never_blocks_buys_or_flat_no_trade() -> None:
+    _fixed_window_entry_times.clear()
+
+    def base_buy(ctx: StrategyContext) -> Decision:
+        return Decision(action="buy", symbol="NEW", quantity=1, reason="entering", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped_buy = fixed_window_wrap(base_buy, strategy_id="buy_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    ctx_flat = make_ctx(username="fw3", trades=[], now_et=t0)
+
+    d_buy = wrapped_buy(ctx_flat)
+    check("an opening buy passes through untouched while flat", d_buy.action == "buy" and d_buy.symbol == "NEW")
+
+
+def test_fixed_window_wrap_retries_on_missing_quote() -> None:
+    _fixed_window_entry_times.clear()
+
+    def base_holds(ctx: StrategyContext) -> Decision:
+        return Decision.no_trade(reason="still supports the position", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = fixed_window_wrap(base_holds, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": t0.isoformat()}]
+
+    ctx = make_ctx(username="fw4", trades=trades, now_et=t0 + timedelta(minutes=PHELPS_MINUTES_DEFAULT + 1), quote_map={})
+    d = wrapped(ctx)
+    check(
+        "a missing quote at the boundary records a pending retry instead of fabricating a fill",
+        d.action == "no_trade" and d.metadata is not None and d.metadata.get("forced_close_pending") is True,
+        d.reason,
+    )
+
+
+def test_fixed_window_wrap_retries_on_stale_quote() -> None:
+    _fixed_window_entry_times.clear()
+
+    def base_holds(ctx: StrategyContext) -> Decision:
+        return Decision.no_trade(reason="still supports the position", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = fixed_window_wrap(base_holds, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": t0.isoformat()}]
+    quote_map = {"HELD": stale_quote(symbol="HELD")}
+
+    ctx = make_ctx(username="fw5", trades=trades, now_et=t0 + timedelta(minutes=PHELPS_MINUTES_DEFAULT + 1), quote_map=quote_map)
+    d = wrapped(ctx)
+    check(
+        "a stale quote at the boundary records a pending retry instead of executing against it",
+        d.action == "no_trade" and d.metadata is not None and d.metadata.get("forced_close_pending") is True,
+        d.reason,
+    )
+
+
+def test_fixed_window_wrap_recovers_fill_time_from_trade_ts() -> None:
+    print("\nRegression: fixed_window_wrap recovers entry time from the trade's own ts, like phelps_wrap")
+    _fixed_window_entry_times.clear()
+
+    def base_holds(ctx: StrategyContext) -> Decision:
+        return Decision.no_trade(reason="still supports the position", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = fixed_window_wrap(base_holds, strategy_id="base_fw", strategy_version="1.0.0")
+    fill_time = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    now = fill_time + timedelta(minutes=30)  # already past the 27.5m default on the very first observed cycle
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0, "ts": fill_time.isoformat()}]
+    quote_map = {"HELD": executable_quote(symbol="HELD")}
+
+    ctx = make_ctx(username="fw6", trades=trades, now_et=now, quote_map=quote_map)
+    d = wrapped(ctx)
+    check(
+        "forced closed on the first observed cycle because the real fill was already past the window",
+        d.action == "sell" and d.symbol == "HELD",
+        d.reason,
+    )
+
+
+def test_fixed_window_wrap_clears_state_on_flat() -> None:
+    _fixed_window_entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision.no_trade(reason="holding", strategy_id="base", strategy_version="1.0.0")
+
+    wrapped = fixed_window_wrap(base, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0}]
+
+    wrapped(make_ctx(username="fw7", trades=trades, now_et=t0))
+    check("entry recorded while held", ("fw7", "HELD") in _fixed_window_entry_times)
+
+    wrapped(make_ctx(username="fw7", trades=[], now_et=t0 + timedelta(minutes=1)))
+    check("entry cleared once flat", ("fw7", "HELD") not in _fixed_window_entry_times)
+
+
+def test_fixed_window_wrap_state_independent_from_phelps_wrap() -> None:
+    print("\nRegression: fixed_window_wrap and phelps_wrap track entry times independently")
+    _entry_times.clear()
+    _fixed_window_entry_times.clear()
+
+    def base(ctx: StrategyContext) -> Decision:
+        return Decision.no_trade(reason="holding", strategy_id="base", strategy_version="1.0.0")
+
+    sanctuary = phelps_wrap(base, strategy_id="base_phelps", strategy_version="1.0.0")
+    fixed_window = fixed_window_wrap(base, strategy_id="base_fw", strategy_version="1.0.0")
+    t0 = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    trades = [{"sym": "HELD", "side": "buy", "qty": 1, "price": 1.0}]
+
+    sanctuary(make_ctx(username="fw8", trades=trades, now_et=t0))
+    check("phelps_wrap's own table is populated", ("fw8", "HELD") in _entry_times)
+    check("fixed_window_wrap's table is untouched by phelps_wrap", ("fw8", "HELD") not in _fixed_window_entry_times)
+
+    fixed_window(make_ctx(username="fw8", trades=trades, now_et=t0))
+    check("fixed_window_wrap's own table is now populated too", ("fw8", "HELD") in _fixed_window_entry_times)
 
 
 # --------------------------------------------------------------------------
@@ -522,6 +835,7 @@ def test_phelps_pure_entry_rejected_without_live_quote() -> None:
 
 
 test_phelps_variant_versions_include_wrapper_revision()
+test_fixed_window_variant_versions_include_wrapper_revision()
 test_phelps_wrap_defers_early_close()
 test_phelps_wrap_never_blocks_buys_or_flat_no_trade()
 test_phelps_decision_audit_identity()
@@ -530,6 +844,17 @@ test_phelps_wrap_respects_custom_window_param()
 test_phelps_wrap_clears_state_on_flat()
 test_phelps_wrap_recovers_fill_time_from_trade_ts()
 test_phelps_wrap_falls_back_to_now_when_ts_missing()
+test_fixed_window_wrap_suppresses_early_sell()
+test_fixed_window_wrap_forces_close_even_when_base_still_holds()
+test_fixed_window_wrap_terminal_close_independent_of_base()
+test_fixed_window_wrap_rejects_multiple_open_positions()
+test_fixed_window_decision_audit_identity()
+test_fixed_window_wrap_never_blocks_buys_or_flat_no_trade()
+test_fixed_window_wrap_retries_on_missing_quote()
+test_fixed_window_wrap_retries_on_stale_quote()
+test_fixed_window_wrap_recovers_fill_time_from_trade_ts()
+test_fixed_window_wrap_clears_state_on_flat()
+test_fixed_window_wrap_state_independent_from_phelps_wrap()
 test_phelps_pure_enters_on_displacement()
 test_phelps_pure_holds_through_window_then_releases()
 test_phelps_pure_restart_recovery_grants_fresh_window()
