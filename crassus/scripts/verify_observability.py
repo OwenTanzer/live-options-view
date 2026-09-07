@@ -153,6 +153,74 @@ class OperationalDiagnostics(unittest.TestCase):
         self.assertEqual(executor.finalized, ["request-123"])
         self.assertNotIn("secret", str(captured.output))
 
+    def test_closed_account_retires_before_strategy_or_execution(self):
+        account = FakeAccount(alias="closed", username="closed", strategy_id="smoke_atm_roundtrip")
+        state = AccountState("closed", 5.0, [], account_closed=True, closure_reason="insufficient_balance")
+        runner, executor = make_runner(account, state=state, ledger_dir=Path(self.tmp.name))
+        runner._run_account(account, make_snapshot(), "regular")
+        self.assertIn(account.alias, runner.retired)
+        self.assertEqual(executor.submit_calls, [])
+        records = [json.loads(line) for line in runner.ledger.paths.ledger.read_text().splitlines()]
+        self.assertTrue(records[-1]["account_closed"])
+        self.assertEqual(records[-1]["account_state_before"]["balance_cash"], 5.0)
+
+    def test_restart_records_pending_rejection_before_retiring_closed_account(self):
+        account = FakeAccount(alias="closed", username="closed", strategy_id="smoke_atm_roundtrip")
+        state = AccountState("closed", 5.0, [], account_closed=True, closure_reason="insufficient_balance")
+        intent = dict(execution_request_id="closure-request", decision_id="closure-decision", strategy_id=account.strategy_id)
+        runner, executor = make_runner(account, state=state, ledger_dir=Path(self.tmp.name),
+                                       pending=intent, stub_recover=False)
+        executor._result = ExecutionResult(outcome_class=Outcome.REJECTED,
+            execution_request_id="closure-request", http_status=400,
+            server_response={"error": "Insufficient balance", "account_closed": True})
+        runner.sessions[account.alias].ensure_session = Mock(return_value=state)
+        original_finalize = executor.finalize
+        def finalize(request_id):
+            self.assertIsNotNone(runner.ledger.find_by_execution_request_id(request_id))
+            original_finalize(request_id)
+            executor._pending = None  # Match the real executor's durable-marker removal.
+        executor.finalize = finalize
+        runner.startup()
+        record = runner.ledger.find_by_execution_request_id("closure-request")
+        self.assertEqual(record["outcome_class"], Outcome.REJECTED)
+        self.assertTrue(record["server_response"]["account_closed"])
+        self.assertIn(account.alias, runner.retired)
+        self.assertEqual(executor.finalized, ["closure-request"])
+
+    def test_closed_account_keeps_retrying_unresolved_audit_recovery(self):
+        account = FakeAccount(alias="closed", username="closed", strategy_id="smoke_atm_roundtrip")
+        state = AccountState("closed", 5.0, [], account_closed=True, closure_reason="insufficient_balance")
+        intent = dict(execution_request_id="pending-closure", decision_id="closure-decision", strategy_id=account.strategy_id)
+        runner, executor = make_runner(account, state=state, ledger_dir=Path(self.tmp.name),
+                                       pending=intent, stub_recover=False)
+        executor._result = ExecutionResult(outcome_class=Outcome.AMBIGUOUS,
+                                          execution_request_id="pending-closure")
+        runner.sessions[account.alias].ensure_session = Mock(return_value=state)
+        runner.startup()
+        self.assertNotIn(account.alias, runner.retired)
+        self.assertIsNotNone(executor.pending_intent())
+        self.assertEqual(executor.finalized, [])
+
+    def test_terminal_rejection_retires_only_after_durable_record(self):
+        account = FakeAccount(alias="test", username="test", strategy_id="smoke_atm_roundtrip")
+        runner, executor = make_runner(account, state=AccountState("test", 1.0, []),
+                                      ledger_dir=Path(self.tmp.name))
+        executor._result = ExecutionResult(outcome_class=Outcome.REJECTED,
+            execution_request_id="terminal-request", http_status=400,
+            server_response={"error": "Insufficient balance", "account_closed": True})
+        strategy = Mock(return_value=Decision("buy", "test", "smoke_atm_roundtrip", "1",
+                                             symbol="QQQ260904C00711000", quantity=1))
+        strategy.strategy_version = "1"
+        original_retire = runner._retire
+        def retire(account, reason):
+            self.assertIsNotNone(runner.ledger.find_by_execution_request_id("terminal-request"))
+            original_retire(account, reason)
+        runner._retire = retire
+        with patch("crassus.runner.get_strategy", return_value=strategy), \
+             patch("crassus.runner.maybe_flatten", return_value=None):
+            runner._run_account(account, make_snapshot(), "regular")
+        self.assertIn(account.alias, runner.retired)
+
 
 if __name__ == "__main__":
     unittest.main()
