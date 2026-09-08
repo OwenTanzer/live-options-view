@@ -48,33 +48,59 @@ python main.py
 
 ## How it works
 
-1. `ingest/alpaca_stream.py` + `ingest/free_wires.py` push/poll headlines.
-2. `ingest/dedup.py` drops re-reported/near-identical headlines (fuzzy
-   text match, not exact) so one story doesn't count as N signals.
-3. `score/impact_scorer.py` asks a local Ollama model to score 0-10
+1. `main.ingest_loop` (one per source: `ingest/alpaca_stream.py` +
+   `ingest/free_wires.py`) parses, timestamps and durably records every
+   headline immediately, then hands it to `main.score_loop` over a queue --
+   a slow/backlogged scorer delays only scoring, never parsing the next
+   headline off the source. `ingest/dedup.py` drops re-reported/
+   near-identical headlines (fuzzy text match, not exact) so one story
+   doesn't count as N signals; untagged (general-wire) headlines are
+   matched to watchlist tickers with a word-boundary check, not raw
+   substring containment.
+2. `score/impact_scorer.py` asks a local Ollama model to score 0-10
    expected volatility impact; falls back to a VADER-magnitude score if
-   Ollama's unreachable/slow.
-4. A score >= 5.0 opens a "pin" (`correlate/pin_engine.py`): anchor price
+   Ollama's unreachable/slow. The two are never pooled downstream -- the
+   stored `scorer` identity (e.g. `mistral-nemo:latest@v1` vs.
+   `vader-fallback`) keeps them in separate evaluation strata.
+3. A score >= 5.0 opens a "pin" (`correlate/pin_engine.py`): anchor price
    at the original headline ingest time, wait until that time plus
    `PIN_POST_SECONDS`, check whether price actually moved
-   >= `PIN_MOVE_THRESHOLD_PCT` on >= `PIN_VOLUME_RATIO_THRESHOLD`x normal
-   volume. Scoring delays do not move either endpoint; later ticks are
-   excluded. Thresholds use absolute movement, while alerts retain its sign.
-   Only confirmed pins post to Discord.
-5. Independently, `correlate/anomaly.py` sweeps every watched symbol every
-   `ANOMALY_CHECK_INTERVAL_SECS` for a price z-score beyond
-   `ANOMALY_ZSCORE_THRESHOLD` with no matching headline in the last 5
-   minutes, and posts those as "unexplained move, watching for news."
-6. Everything lands in `db/market_pin_bot.sqlite3` -- `Storage.accuracy_stats()`
-   gives a running hit-rate so scoring/thresholds can be tuned against
-   real outcomes instead of guessed once and left alone.
+   >= `PIN_MOVE_THRESHOLD_PCT` on >= `PIN_VOLUME_RATIO_THRESHOLD`x IEX
+   baseline volume. Scoring delays do not move either endpoint; later ticks
+   are excluded. A pre-headline baseline return additionally classifies the
+   pin as `already_moving_before`, `subsequent_move`, `no_qualifying_move`,
+   or `insufficient_evidence` -- an "associated" move is an observation,
+   never a causal claim. A below-threshold headline still opens a
+   non-posting "shadow" pin for evaluation coverage. Only confirmed,
+   non-shadow pins post to Discord.
+4. Independently, `correlate/anomaly.py` sweeps every watched symbol every
+   `ANOMALY_CHECK_INTERVAL_SECS` for a z-scored `ANOMALY_RETURN_INTERVAL_SECS`
+   return (the same fixed interval is both scored and displayed -- never a
+   last-tick score paired with a longer reported window) beyond
+   `ANOMALY_ZSCORE_THRESHOLD`, on a fresh, adequately-warmed-up read. A
+   nearby headline is attached as advisory evidence (`matched_headline_id`,
+   dated `preceding`/`following`), never a blanket suppressor -- the move
+   is always logged, and `run_reconciliation_pass` links a headline that
+   arrives *after* the move was flagged. The per-symbol cooldown persists in
+   `storage`, so a restart mid-move doesn't immediately re-flag.
+5. Everything lands in `db/market_pin_bot.sqlite3` -- `Storage.evaluation_report()`
+   (see `scripts/daily_review.py`) gives a stratified, control-aware summary
+   -- not just a single hit-rate off already-posted alerts -- so
+   scoring/thresholds can be evaluated against real outcomes instead of
+   guessed once and left alone.
 
 Restart loses the in-memory tick history. Open observations from the previous
 run are therefore closed with `incomplete_reason=restart_lost_price_history`;
 missing endpoint prices or baseline volume also produce explicit incomplete
-observations. These have no invented return, are not posted as confirmed,
-and are excluded from accuracy statistics. Existing databases receive an
-additive column migration; completed historical outcomes are preserved.
+observations. `price_observations` persists sparse (ts, price, cum_volume)
+samples for every resolved pin/anomaly so its return can be replayed without
+depending on the in-memory ring buffer, which evicts. These observations have
+no invented return, are not posted as confirmed, and are excluded from
+accuracy statistics. Existing databases receive an additive column
+migration; completed historical outcomes are preserved.
+
+See `docs/moo170_evaluation_protocol.md` for the frozen evaluation rules and
+the proposed bounded market trial.
 
 ## Not yet built (documented gaps, not silent ones)
 

@@ -23,6 +23,12 @@ from config import settings
 
 log = logging.getLogger("score.impact_scorer")
 
+# Bump whenever _SYSTEM_PROMPT's scoring semantics change -- the `scorer`
+# value stored with every headline embeds this so evaluation (MOO-170
+# finding 7) never silently mixes results from two different prompt
+# behaviors, and a scoring run is reproducible from the stored value alone.
+PROMPT_VERSION = "v1"
+
 _SYSTEM_PROMPT = (
     "You are a financial-markets impact scorer. Given a news headline and "
     "the tickers it's tagged to, output ONLY a JSON object like "
@@ -77,8 +83,10 @@ async def score_headline(session: aiohttp.ClientSession, headline: str, symbols:
                 raise ValueError(f"no JSON in ollama response: {text[:200]}")
             parsed = json.loads(match.group(0))
             score = max(0.0, min(10.0, float(parsed["score"])))
-            return score, str(parsed.get("reasoning", "")), settings.OLLAMA_MODEL
+            return score, str(parsed.get("reasoning", "")), f"{settings.OLLAMA_MODEL}@{PROMPT_VERSION}"
     except Exception as exc:
         log.warning("ollama scoring failed (%s), falling back to VADER", exc)
         score, reasoning = _vader_fallback_score(headline)
+        # Never pooled with the primary scorer's identity string above --
+        # evaluation groups strictly by this exact `scorer` value (finding 7).
         return score, reasoning, "vader-fallback"
