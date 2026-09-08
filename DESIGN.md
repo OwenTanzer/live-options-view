@@ -358,13 +358,49 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 `scripts/moo144_tradier_collector.py` productionizes the MOO-144 probe
 (`scripts/moo144_tradier_probe.py`, PR #83) into a permanent daily collector.
 It runs as its own Railway service (project `live-market-monitor`, alongside
-`moo144-tradier-probe`), not as part of the primary `collector.py` service:
+`moo144-tradier-probe`), not as part of the primary `collector.py` service.
+
+**What is actually implemented** (kept accurate here, rather than restating
+MOO-169's aspirational scope, after the first review pass found several
+claimed guarantees weren't yet enforced):
+
+- Calendar-gated session lifecycle: cron-invoked once per weekday, exits 0
+  on a day with no NYSE session, runs to the calendar's actual close
+  (including early closes).
+- A daily contract universe selected once and persisted (`universe.json`),
+  reloaded on any same-day restart instead of re-selected against a
+  possibly-moved spot price.
+- A renewable, fenced lease (`lease.json`): renewal is conditional on still
+  being the current owner, and losing ownership stops ingestion rather than
+  silently continuing or clobbering the new owner's lease.
+- Reconciliation on every startup against R2 by content hash (not just
+  filename): already-durable segments are recognized and not re-uploaded;
+  locally-spooled segments R2 doesn't have yet are resumed; anything that's
+  neither (corrupt, or same name with different content) is reported for
+  manual review rather than silently deleted or silently trusted.
+- A hard spool-size bound: once outstanding spool bytes would exceed
+  `MOO144_MAX_SPOOL_BYTES`, ingestion stops with an explicit `SpoolExhausted`
+  reason rather than growing the spool without limit.
+- `status: "complete"` is derived, not assumed: a run is only "complete" if
+  it started on time, ran to the actual session close with no unrecovered
+  exception, had zero reconnects (any stream gap marks the day "partial" so
+  a dependable/complete-coverage day is distinguishable from a merely
+  successful-exit day), the upload spool fully drained, and reconciliation
+  found nothing needing review. Every other outcome is `"partial"` with an
+  explicit `partial_reasons` list.
+- `health.json` is published periodically during collection (not only at
+  the end), and reports last receipt time, reconnects, measured gap
+  seconds, spool backlog, and upload failures.
+- Manifest counters separate this attempt's counts (`attempt_event_counts`)
+  from prior-owner segments reconciled from R2 (`reconciled_prior_records`,
+  read back via a real decompress-and-count) so the two are never silently
+  conflated into one ambiguous total.
 
 | Setting | Value |
 |---|---|
 | Start command | `python scripts/moo144_tradier_collector.py` |
-| Restart policy | `on_failure` (a mid-session crash is safe to retry — see lease below) |
-| Trigger | Railway Cron Schedule, recurring weekdays shortly before the open (e.g. `25 13 * * 1-5` = 9:25am ET) — the process itself checks the NYSE calendar and exits 0 on a holiday, so the cron firing every weekday is fine |
+| Restart policy | `on_failure` (a mid-session crash is safe to retry — see lease above) |
+| Trigger | Railway Cron Schedule, recurring weekdays (e.g. `15 12 * * 1-5` = 8:15am EDT / 7:15am EST). Railway cron times are fixed UTC and do **not** shift with US DST, so pick a UTC time early enough to precede 9:30am ET under **either** offset — the process waits for the calendar's real open itself (see below), so an early trigger is harmless, but a trigger that's late under one offset would truncate that day's session. |
 | Volume | A mounted persistent volume for `MOO144_SPOOL_DIR`, so the upload spool survives a crash/restart |
 
 Additional env vars beyond the shared `TRADIER_TOKEN`/`R2_*` ones (§8.1):
@@ -375,14 +411,16 @@ Additional env vars beyond the shared `TRADIER_TOKEN`/`R2_*` ones (§8.1):
 | `MOO144_CHECKPOINT_SECONDS` | Segment rotation interval | `180` |
 | `MOO144_MAX_CONSECUTIVE_RECONNECTS` | Stream reconnect budget before giving up | `5` |
 | `MOO144_LEASE_TTL_SECONDS` | Daily-collection lease TTL; a crashed owner's lease can be taken over after this expires | `300` |
-| `MOO144_MAX_SPOOL_BYTES` | Upload spool cap before an `overload` flag is raised (data is never dropped, just reported as backlogged) | `512 MiB` |
+| `MOO144_MAX_SPOOL_BYTES` | Hard upload-spool cap; ingestion stops (reported, not silently dropped) once outstanding spool bytes would exceed this | `512 MiB` |
 | `MOO144_SPOOL_DIR` | Persistent spool directory (must be a mounted volume in production) | temp dir |
 
-Archive layout under `moo144/tradier/<date>/`: `lease.json`, `health.json`
-(overwritten periodically), and per-owner `run-started-<owner>.json` /
-`summary-<owner>.json` / `manifest-<owner>.json` plus the uploaded
-`*-part-*.ndjson.gz` segments. The owner suffix keeps a crash/restart within
-the same day from overwriting the prior attempt's records.
+Archive layout under `moo144/tradier/<date>/`: `universe.json` (written once,
+first writer wins), `lease.json`, `health.json` (overwritten periodically),
+and per-owner `run-started-<owner>.json` / `summary-<owner>.json` /
+`manifest-<owner>.json` plus the uploaded `*-part-*.ndjson.gz` segments. The
+owner suffix keeps a crash/restart within the same day from overwriting the
+prior attempt's records; reconciliation is what ties a new owner's manifest
+back to a prior owner's already-durable or resumed segments.
 
 Retention: same delete-after-verified-upload pattern as the probe (§7 of
 MOO-169 in Linear). Measured/projected volume from the MOO-144 probe's
@@ -390,10 +428,27 @@ MOO-169 in Linear). Measured/projected volume from the MOO-144 probe's
 ~13.33 GB per 252 sessions — a planning estimate, not a hard cap; do not
 silently expand the captured symbol/expiration universe based on it.
 
-**Deployment note:** this repo's contributor doesn't have Railway dashboard
-access (env vars and Cron Schedule edits go through Owen, same as the
-MOO-144 probe's setup) — the table above is the setup checklist for whoever
-has access, not something applied by a code merge alone.
+**Deployment checklist (for whoever has Railway dashboard access — this
+repo's contributor doesn't, per the MOO-144 probe's setup thread):**
+
+- The root `railway.toml` in this repo specifies `python collector.py` /
+  `restartPolicyType: never`. That governs any Railway service that does
+  **not** have its own service-level override. Before this collector's
+  service goes live, explicitly confirm in the Railway dashboard, under
+  that specific service's Settings → Deploy, that its **Custom Start
+  Command** is `python scripts/moo144_tradier_collector.py` and its
+  **Restart Policy** is `On Failure` — do not assume the dashboard value
+  wins without checking it for this service specifically, the same way the
+  probe's service needed its own explicit override to run
+  `moo144_tradier_probe.py` instead of the root `collector.py` command.
+- Confirm the persistent volume is actually mounted at the path
+  `MOO144_SPOOL_DIR` points to (not the container's ephemeral filesystem) --
+  a restart with no real volume can't recover anything to reconcile.
+  Confirm the Cron Schedule value directly in the dashboard rather than
+  inferring it from this document, and re-verify it after any DST
+  transition given the fixed-UTC caveat above.
+- Confirm the archive prefix (`moo144/tradier/`) doesn't collide with the
+  probe's own runs from the same bucket.
 
 ---
 
