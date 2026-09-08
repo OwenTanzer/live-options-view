@@ -353,6 +353,48 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 - Auto-deploys on every push to `master`
 - No build step required
 
+### 8.4 MOO-169: permanent daily Tradier collector
+
+`scripts/moo144_tradier_collector.py` productionizes the MOO-144 probe
+(`scripts/moo144_tradier_probe.py`, PR #83) into a permanent daily collector.
+It runs as its own Railway service (project `live-market-monitor`, alongside
+`moo144-tradier-probe`), not as part of the primary `collector.py` service:
+
+| Setting | Value |
+|---|---|
+| Start command | `python scripts/moo144_tradier_collector.py` |
+| Restart policy | `on_failure` (a mid-session crash is safe to retry — see lease below) |
+| Trigger | Railway Cron Schedule, recurring weekdays shortly before the open (e.g. `25 13 * * 1-5` = 9:25am ET) — the process itself checks the NYSE calendar and exits 0 on a holiday, so the cron firing every weekday is fine |
+| Volume | A mounted persistent volume for `MOO144_SPOOL_DIR`, so the upload spool survives a crash/restart |
+
+Additional env vars beyond the shared `TRADIER_TOKEN`/`R2_*` ones (§8.1):
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `MOO144_STRIKE_COUNT` | Number of nearest 0DTE strikes to capture | `8` |
+| `MOO144_CHECKPOINT_SECONDS` | Segment rotation interval | `180` |
+| `MOO144_MAX_CONSECUTIVE_RECONNECTS` | Stream reconnect budget before giving up | `5` |
+| `MOO144_LEASE_TTL_SECONDS` | Daily-collection lease TTL; a crashed owner's lease can be taken over after this expires | `300` |
+| `MOO144_MAX_SPOOL_BYTES` | Upload spool cap before an `overload` flag is raised (data is never dropped, just reported as backlogged) | `512 MiB` |
+| `MOO144_SPOOL_DIR` | Persistent spool directory (must be a mounted volume in production) | temp dir |
+
+Archive layout under `moo144/tradier/<date>/`: `lease.json`, `health.json`
+(overwritten periodically), and per-owner `run-started-<owner>.json` /
+`summary-<owner>.json` / `manifest-<owner>.json` plus the uploaded
+`*-part-*.ndjson.gz` segments. The owner suffix keeps a crash/restart within
+the same day from overwriting the prior attempt's records.
+
+Retention: same delete-after-verified-upload pattern as the probe (§7 of
+MOO-169 in Linear). Measured/projected volume from the MOO-144 probe's
+2026-09-03 run: ~52.9 MB compressed per session, ~1.11 GB per 21 sessions,
+~13.33 GB per 252 sessions — a planning estimate, not a hard cap; do not
+silently expand the captured symbol/expiration universe based on it.
+
+**Deployment note:** this repo's contributor doesn't have Railway dashboard
+access (env vars and Cron Schedule edits go through Owen, same as the
+MOO-144 probe's setup) — the table above is the setup checklist for whoever
+has access, not something applied by a code merge alone.
+
 ---
 
 ## 9. Known Limitations
