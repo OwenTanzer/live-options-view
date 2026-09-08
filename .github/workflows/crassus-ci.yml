@@ -40,6 +40,9 @@ jobs:
       - name: Run momentum_qqq strategy suite
         working-directory: crassus
         run: python scripts/verify_momentum_qqq.py
+      - name: Run momentum_puts_only_qqq strategy suite
+        working-directory: crassus
+        run: python scripts/verify_momentum_puts_only.py
       - name: Run VWAP/RVOL data contract and gate suite
         working-directory: crassus
         run: python scripts/verify_vwap_rvol.py
