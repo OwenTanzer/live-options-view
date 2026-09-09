@@ -178,13 +178,15 @@
       "alias": "Persephone",
       "username": "crassus_persephone",
       "password_env": "CRASSUS_PW_PERSEPHONE",
-      "strategy_id": "momentum_puts_only_qqq"
+      "strategy_id": "momentum_puts_only_qqq",
+      "active": false
     },
     {
       "alias": "Persephone Phelps",
       "username": "crassus_persphn_phlps",
       "password_env": "CRASSUS_PW_PERSEPHONE_PHELPS",
-      "strategy_id": "momentum_puts_only_qqq_phelps"
+      "strategy_id": "momentum_puts_only_qqq_phelps",
+      "active": false
     },
     {
       "_comment": "MOO-161 fixed-window bots below: exact copies of the four accounts above (Ankit/Bob/Freuding, Luigi/Jesus/Doris, TrumpWhisperer, Newton) -- same alias root, same strategy, same params where the base account has any -- run through phelps_variants.py's fixed_window_wrap() instead of the bare strategy or phelps_wrap(). Unlike the sanctuary-only twins, this arm force-closes the entire position unconditionally once one Phelps window has elapsed, regardless of the base strategy's own signal. Usernames use a short 'fw' suffix rather than 'fixed_window' to stay within the platform's 20-character username limit -- note the existing '_phelps' usernames above (e.g. crassus_trumpwhisp_phelps, 25 chars) already exceed that limit; flagged for Owen rather than silently resolved. Comparing e.g. Ankit vs. Ankit Phelps vs. Ankit FW isolates the fixed-window rule specifically. All eight entries are 'active': false -- cataloged (so CI's 'every registered strategy has a catalog-backed display card' gate is satisfied and the roster is documented in place) but not yet provisioned: Railway has no CRASSUS_PW_*_FW variables yet, and load_accounts() skips an inactive entry's password/password_env entirely, so this catalog cannot abort startup for a credential nobody has created. Flip an entry's 'active' to true (and provision its password_env on Railway, or override it in the ignored accounts.json) only once that specific bot is meant to actually start trading paper -- see crassus/crassus/config.py's load_accounts docstring.",

@@ -5,9 +5,12 @@ existing strategy and changing exactly one thing (see `phelps_variants.py`'s
 docstring, or `canopus_down_day.py` vs. `momentum_qqq`'s differing signal
 sources). This module clones `momentum_qqq` and changes exactly one thing:
 a bullish trailing return is never acted on. The signal, thresholds, ATM
-selection, one-contract-at-a-time position management, and OCC-symbol
-parsing are otherwise identical -- see `momentum_qqq.py`'s own docstring for
-the full reasoning behind all of that, which applies here unmodified.
+selection, one-contract-at-a-time position management, OCC-symbol parsing,
+and the optional `vwap_confirmation_required` / `rvol_floor` gates (applied
+to the bearish/put branch only, via `vwap_rvol.evaluate_gate`, same missing-
+data-retains-held-position treatment as `momentum_qqq`) are otherwise
+identical -- see `momentum_qqq.py`'s own docstring for the full reasoning
+behind all of that, which applies here unmodified.
 
 Why this exists rather than just running `momentum_qqq` at a bearish-only
 account: the requirement was two bots that "only do puts" -- one plain, one
@@ -44,6 +47,7 @@ from typing import Any
 
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
+from ..vwap_rvol import evaluate_gate
 from ..momentum import (
     DEFAULT_LOOKBACK_MINUTES,
     DEFAULT_MAX_ANCHOR_OVERSHOOT_MINUTES,
@@ -227,6 +231,59 @@ def _decide_core(
             f"(return_pct={ret}) -- this strategy only ever holds puts.",
             meta_base,
         )
+
+    vwap_confirmation_required = params.get("vwap_confirmation_required", False)
+    rvol_floor = params.get("rvol_floor", None)
+    if vwap_confirmation_required or rvol_floor is not None:
+        gate = evaluate_gate(
+            ctx.snapshot.underlying_market, "down",
+            rvol_floor=rvol_floor, require_vwap_agreement=vwap_confirmation_required,
+        )
+        gate_meta = dict(
+            meta_base,
+            vwap_gate_status=gate.status,
+            vwap_gate_freshness=gate.freshness,
+            vwap=gate.vwap,
+            price_vs_vwap_pct=gate.price_vs_vwap_pct,
+            vwap_agrees=gate.vwap_agrees,
+            rvol_multiple=gate.rvol_multiple,
+            rvol_floor=rvol_floor,
+            rvol_participation_ok=gate.rvol_participation_ok,
+        )
+        if gate.status != "ok":
+            # No trustworthy VWAP/RVOL reading yet -- an absence of a fresh
+            # gate observation, not a gate that has actually looked and
+            # disagreed. Same reasoning as stale_source_reason above: retain
+            # a held position, don't act on nothing. See momentum_qqq.py's
+            # matching branch.
+            if held_symbol is not None:
+                return no(
+                    f"VWAP/RVOL confirmation data unavailable "
+                    f"(status={gate.status}); retaining the held put "
+                    f"position rather than closing on a missing observation.",
+                    symbol=held_symbol,
+                    held_quantity=held_quantity,
+                    **gate_meta,
+                )
+            return no(
+                f"VWAP/RVOL confirmation data unavailable (status={gate.status}).",
+                **gate_meta,
+            )
+        if vwap_confirmation_required and not gate.vwap_agrees:
+            return _maybe_close_unsupported(
+                ctx, held_symbol, held_quantity, no,
+                f"VWAP does not confirm down momentum "
+                f"(price_vs_vwap_pct={gate.price_vs_vwap_pct}).",
+                gate_meta,
+            )
+        if rvol_floor is not None and not gate.rvol_participation_ok:
+            return _maybe_close_unsupported(
+                ctx, held_symbol, held_quantity, no,
+                f"RVOL {gate.rvol_multiple} is below the required floor "
+                f"{rvol_floor}.",
+                gate_meta,
+            )
+        meta_base = gate_meta
 
     if held_symbol is not None:
         return no(

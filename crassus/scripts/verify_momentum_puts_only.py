@@ -24,6 +24,26 @@ from crassus.strategies import momentum_puts_only as mpo  # noqa: E402
 from crassus.strategies import phelps_variants  # noqa: E402
 from crassus.strategy import REGISTRY, StrategyContext  # noqa: E402
 
+# Same fixture as verify_vwap_rvol.py's FULL_UM_PAYLOAD -- reused rather than
+# imported so this file stays hermetic and independently readable.
+FULL_UM_PAYLOAD = {
+    "symbol": "QQQ",
+    "spot": 402.0, "spot_ts": "2026-07-30T14:32:00+00:00",
+    "vwap": 400.0, "vwap_ts": "2026-07-30T14:32:00+00:00", "vwap_session_date": "2026-07-30",
+    "price_vs_vwap_abs": 2.0, "price_vs_vwap_pct": 0.5,
+    "session_volume": 41823400, "session_volume_ts": "2026-07-30T14:32:00+00:00",
+    "rvol": {
+        "status": "ok", "multiple": 1.5, "bucket_label": "10:30",
+        "baseline_volume": 700000, "baseline_days_used": 10,
+        "baseline_lookback_days": 20, "baseline_updated_through": "2026-07-29",
+    },
+    "momentum": {
+        "status": "ok", "return_pct": 0.42, "lookback_minutes": 60.0,
+        "anchor_age_minutes": 61.0, "sample_count": 30, "direction": "up",
+    },
+    "source": "dxlink", "freshness": "live",
+}
+
 passed, failed = 0, 0
 
 
@@ -37,18 +57,21 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         print(f"  [FAIL] {name}" + (f" -- {detail}" if detail else ""))
 
 
-def make_snapshot(underlying_price: float, rows: list[dict], *, timestamp: str = "2024-01-01T15:00:00+00:00") -> MarketSnapshot:
-    return MarketSnapshot.from_payload(
-        url="test://snapshot",
-        payload={
-            "timestamp": timestamp,
-            "snapshot_time": timestamp,
-            "expiration": "2024-01-01",
-            "underlying_price": underlying_price,
-            "rows": rows,
-        },
-        raw=b"{}",
-    )
+def make_snapshot(
+    underlying_price: float, rows: list[dict], *,
+    timestamp: str = "2024-01-01T15:00:00+00:00",
+    underlying_market_payload: dict | None = None,
+) -> MarketSnapshot:
+    payload = {
+        "timestamp": timestamp,
+        "snapshot_time": timestamp,
+        "expiration": "2024-01-01",
+        "underlying_price": underlying_price,
+        "rows": rows,
+    }
+    if underlying_market_payload is not None:
+        payload["underlying_market"] = underlying_market_payload
+    return MarketSnapshot.from_payload(url="test://snapshot", payload=payload, raw=b"{}")
 
 
 CALL_ROW = {"OptionSymbol": "QQQ240101C00400000", "Strike": 400.0, "Type": "call", "Bid": 1.0, "Ask": 1.1}
@@ -65,8 +88,12 @@ def make_ctx(
     underlying_price: float = 400.0,
     now_et: datetime | None = None,
     snapshot_timestamp: str = "2024-01-01T15:00:00+00:00",
+    underlying_market_payload: dict | None = None,
 ) -> StrategyContext:
-    snapshot = make_snapshot(underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW], timestamp=snapshot_timestamp)
+    snapshot = make_snapshot(
+        underlying_price, rows if rows is not None else [CALL_ROW, PUT_ROW],
+        timestamp=snapshot_timestamp, underlying_market_payload=underlying_market_payload,
+    )
     book = Book(trades or [])
     quote_map = quote_map or {}
     return StrategyContext(
@@ -241,13 +268,130 @@ def scenario_custom_bearish_threshold() -> None:
     check("no_trade -- -0.01 return doesn't clear the widened -0.02 threshold", not decision.is_trade, decision.to_dict())
 
 
+def scenario_vwap_gate_vetoes_bearish_put() -> None:
+    print("\n15. _decide_core(): vwap_confirmation_required vetoes a put when price disagrees with VWAP")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"vwap_confirmation_required": True},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "price_vs_vwap_pct": 0.5},  # above vwap, bearish signal disagrees
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("no_trade -- vwap disagrees with the bearish signal", not decision.is_trade, decision.to_dict())
+    check("reason cites vwap", "vwap" in decision.reason.lower(), decision.reason)
+
+
+def scenario_vwap_gate_allows_agreeing_bearish_put() -> None:
+    print("\n16. _decide_core(): vwap_confirmation_required allows a put when price agrees with VWAP")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"vwap_confirmation_required": True},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "price_vs_vwap_pct": -0.5},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("buys the put -- vwap agrees with the bearish signal", decision.action == "buy", decision.to_dict())
+
+
+def scenario_rvol_gate_vetoes_low_participation() -> None:
+    print("\n17. _decide_core(): rvol_floor vetoes a put when RVOL is below the floor")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"rvol_floor": 1.2},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "rvol": {**FULL_UM_PAYLOAD["rvol"], "multiple": 0.5}},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("no_trade -- rvol below floor", not decision.is_trade, decision.to_dict())
+    check("reason cites rvol", "rvol" in decision.reason.lower(), decision.reason)
+
+
+def scenario_rvol_gate_allows_high_participation() -> None:
+    print("\n18. _decide_core(): rvol_floor allows a put when RVOL clears the floor")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"rvol_floor": 1.2},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "rvol": {**FULL_UM_PAYLOAD["rvol"], "multiple": 1.5}},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("buys the put -- rvol clears the floor", decision.action == "buy", decision.to_dict())
+
+
+def scenario_gate_veto_closes_held_put() -> None:
+    print("\n19. _decide_core(): a gate veto closes a held put momentum alone would keep")
+    trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        params={"vwap_confirmation_required": True},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "price_vs_vwap_pct": 0.5},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("action is sell -- gate veto closes even though momentum still supports it",
+          decision.action == "sell", decision.to_dict())
+    check("closes the actual held put", decision.symbol == "QQQ240101P00400000")
+
+
+def scenario_gate_status_not_ok_retains_held_put() -> None:
+    print("\n20. _decide_core(): RVOL still insufficient_history while holding -- retains, does not close")
+    trades = [{"sym": "QQQ240101P00400000", "side": "buy", "qty": 1, "price": 1.0}]
+    ctx = make_ctx(
+        session_phase="open", trades=trades,
+        params={"rvol_floor": 1.2},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "rvol": {**FULL_UM_PAYLOAD["rvol"], "status": "insufficient_history"}},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("action is no_trade, not sell -- absence of a fresh gate read isn't evidence against",
+          decision.action == "no_trade", decision.to_dict())
+    check("reason mentions retaining", "retaining" in decision.reason.lower(), decision.reason)
+
+
+def scenario_gate_status_not_ok_declines_while_flat() -> None:
+    print("\n21. _decide_core(): RVOL still insufficient_history while flat -- declines, doesn't fabricate a buy")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"rvol_floor": 1.2},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "rvol": {**FULL_UM_PAYLOAD["rvol"], "status": "insufficient_history"}},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("no_trade while flat", not decision.is_trade, decision.to_dict())
+
+
+def scenario_gate_missing_underlying_market_treated_as_no_data() -> None:
+    print("\n22. _decide_core(): gate enabled but underlying_market itself missing -- treated as no_data, not a crash")
+    ctx = make_ctx(
+        session_phase="open",
+        params={"vwap_confirmation_required": True},
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload=None,
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("no_trade rather than crashing on a None underlying_market", not decision.is_trade, decision.to_dict())
+    check("reason cites unavailable data", "unavailable" in decision.reason.lower(), decision.reason)
+
+
+def scenario_gates_off_by_default_no_behavior_change() -> None:
+    print("\n23. _decide_core(): gates off by default -- a disagreeing VWAP/RVOL doesn't matter when params don't opt in")
+    ctx = make_ctx(
+        session_phase="open",
+        quote_map={"QQQ240101P00400000": fresh_quote("QQQ240101P00400000")},
+        underlying_market_payload={**FULL_UM_PAYLOAD, "price_vs_vwap_pct": 0.5,
+                                    "rvol": {**FULL_UM_PAYLOAD["rvol"], "multiple": 0.1}},
+    )
+    decision = mpo._decide_core(ctx, _signal(-0.01))
+    check("buys the put -- gates never consulted without opting in", decision.action == "buy", decision.to_dict())
+
+
 def _reset_tracker() -> None:
     mpo._tracker = PriceHistoryTracker(retain_minutes=1440.0)
     mpo._last_recorded_snapshot = None
 
 
 def scenario_decide_records_using_snapshot_timestamp() -> None:
-    print("\n15. _decide(): records observed_at from snapshot.timestamp, not ctx.now_et")
+    print("\n24. _decide(): records observed_at from snapshot.timestamp, not ctx.now_et")
     _reset_tracker()
     now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
     ctx = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T14:58:00+00:00")
@@ -262,7 +406,7 @@ def scenario_decide_records_using_snapshot_timestamp() -> None:
 
 
 def scenario_decide_rejects_stale_snapshot_while_flat() -> None:
-    print("\n16. _decide(): a snapshot far older than the runner's clock is rejected as a stale source, not recorded")
+    print("\n25. _decide(): a snapshot far older than the runner's clock is rejected as a stale source, not recorded")
     _reset_tracker()
     now = datetime(2026, 1, 1, 15, 0, tzinfo=timezone.utc)
     ctx = make_ctx(session_phase="open", now_et=now, snapshot_timestamp="2026-01-01T09:00:00+00:00")
@@ -287,6 +431,15 @@ def main() -> int:
         scenario_stale_source_while_flat_declines,
         scenario_stale_source_while_positioned_retains,
         scenario_custom_bearish_threshold,
+        scenario_vwap_gate_vetoes_bearish_put,
+        scenario_vwap_gate_allows_agreeing_bearish_put,
+        scenario_rvol_gate_vetoes_low_participation,
+        scenario_rvol_gate_allows_high_participation,
+        scenario_gate_veto_closes_held_put,
+        scenario_gate_status_not_ok_retains_held_put,
+        scenario_gate_status_not_ok_declines_while_flat,
+        scenario_gate_missing_underlying_market_treated_as_no_data,
+        scenario_gates_off_by_default_no_behavior_change,
         scenario_decide_records_using_snapshot_timestamp,
         scenario_decide_rejects_stale_snapshot_while_flat,
     ):
