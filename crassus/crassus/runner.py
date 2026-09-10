@@ -313,6 +313,7 @@ class Runner:
         """
         self.cycle_count += 1
         started = time.monotonic()
+        self.overrides_client.begin_cycle()
         phase = clock.session_phase()
         fields = {
             "run_id": self.ledger.run_id,

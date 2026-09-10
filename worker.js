@@ -1682,7 +1682,7 @@ export async function handleCrassusOverrideDecision(request, env, id, action) {
   const authError = checkOperatorKey(request, env);
   if (authError) return authError;
 
-  const row = await env.CRASSUS_DB.prepare(`SELECT id, status FROM crassus_overrides WHERE id = ?`).bind(id).first();
+  const row = await env.CRASSUS_DB.prepare(`SELECT id, account_alias, status FROM crassus_overrides WHERE id = ?`).bind(id).first();
   if (!row) return jsonResponse({ error: 'not_found' }, 404);
   if (row.status !== 'proposed') {
     return jsonResponse({ error: `override is already ${row.status}, not proposed` }, 409);
@@ -1697,9 +1697,30 @@ export async function handleCrassusOverrideDecision(request, env, id, action) {
 
   const newStatus = action === 'accept' ? 'accepted' : 'rejected';
   const nowIso = new Date().toISOString();
-  await env.CRASSUS_DB.prepare(
-    `UPDATE crassus_overrides SET status = ?, accepted_utc = ?, accepted_by = ? WHERE id = ?`,
-  ).bind(newStatus, action === 'accept' ? nowIso : null, acceptedBy, id).run();
+  // Exactly one row may hold `status = 'accepted'` per account_alias at any
+  // time: a new acceptance must supersede whichever row currently holds it
+  // in the same atomic transaction, not merely become the newest one that
+  // happens to be returned first. Without this, an old accepted row (never
+  // itself superseded) can reappear from handleCrassusOverrideGet's
+  // unexpired-accepted-ORDER-BY-created_utc-DESC query once a later
+  // acceptance expires -- reviving a settings change the operator already
+  // replaced, with no new decision behind it. `.batch()` runs both
+  // statements in one D1 transaction, so a concurrent decision can never
+  // observe an in-between state with zero or two accepted rows.
+  const statements = [];
+  if (newStatus === 'accepted') {
+    statements.push(
+      env.CRASSUS_DB.prepare(
+        `UPDATE crassus_overrides SET status = 'superseded' WHERE account_alias = ? AND status = 'accepted' AND id != ?`,
+      ).bind(row.account_alias, id),
+    );
+  }
+  statements.push(
+    env.CRASSUS_DB.prepare(
+      `UPDATE crassus_overrides SET status = ?, accepted_utc = ?, accepted_by = ? WHERE id = ? AND status = 'proposed'`,
+    ).bind(newStatus, action === 'accept' ? nowIso : null, acceptedBy, id),
+  );
+  await env.CRASSUS_DB.batch(statements);
 
   return jsonResponse({ id, status: newStatus }, 200);
 }

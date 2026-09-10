@@ -765,9 +765,9 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
                       .sort((a, b) => b.created_utc.localeCompare(a.created_utc));
                     return rows[0] || null;
                   }
-                  if (sql.includes('SELECT id, status FROM crassus_overrides WHERE id')) {
+                  if (sql.includes('SELECT id, account_alias, status FROM crassus_overrides WHERE id')) {
                     const row = overrides.get(args[0]);
-                    return row ? { id: row.id, status: row.status } : null;
+                    return row ? { id: row.id, account_alias: row.account_alias, status: row.status } : null;
                   }
                   throw new Error(`fake D1: unhandled first() query: ${sql}`);
                 },
@@ -783,10 +783,19 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
                     });
                     return;
                   }
+                  if (sql.includes("SET status = 'superseded'")) {
+                    const [account_alias, excludeId] = args;
+                    for (const row of overrides.values()) {
+                      if (row.account_alias === account_alias && row.status === 'accepted' && row.id !== excludeId) {
+                        row.status = 'superseded';
+                      }
+                    }
+                    return;
+                  }
                   if (sql.includes('UPDATE crassus_overrides SET status')) {
                     const [status, accepted_utc, accepted_by, id] = args;
                     const row = overrides.get(id);
-                    if (row) { row.status = status; row.accepted_utc = accepted_utc; row.accepted_by = accepted_by; }
+                    if (row && row.status === 'proposed') { row.status = status; row.accepted_utc = accepted_utc; row.accepted_by = accepted_by; }
                     return;
                   }
                   if (sql.includes('INSERT OR REPLACE INTO crassus_ledger_mirror')) {
@@ -799,6 +808,16 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
               };
             },
           };
+        },
+        // Real D1 executes a batch of already-bound statements as one
+        // transaction. This fake has no real transaction to model, but
+        // running them sequentially in order is enough to exercise the
+        // supersede-then-accept sequencing handleCrassusOverrideDecision
+        // relies on.
+        async batch(statements) {
+          const results = [];
+          for (const stmt of statements) results.push(await stmt.run());
+          return results;
         },
       };
     }
@@ -959,6 +978,40 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       });
       const resp = await handleCrassusOverrideGet(reqNoBody({ 'X-Bot-Registration-Key': BOT_KEY }), env, 'OI Skew');
       assert.equal(resp.status, 404, 'an expired accepted override must not be returned as active');
+    }
+
+    // -- supersession: an old accepted override must not silently revive
+    // when its replacement expires (Owen's #92 review, defect 3) ----------
+    {
+      const env = makeEnv();
+      const opHeaders = { 'X-Crassus-Operator-Key': OPERATOR_KEY };
+      const aiHeaders = { 'X-Crassus-Ai-Key': AI_KEY };
+      const botHeaders = { 'X-Bot-Registration-Key': BOT_KEY };
+
+      const proposeA = await handleCrassusOverridePropose(reqWithJson(validProposal, aiHeaders), env);
+      const { id: idA } = await proposeA.json();
+      const acceptA = await handleCrassusOverrideDecision(reqWithJson({ accepted_by: 'owen' }, opHeaders), env, idA, 'accept');
+      assert.equal(acceptA.status, 200);
+      assert.equal(env.CRASSUS_DB._overrides.get(idA).status, 'accepted', 'A starts accepted');
+
+      const proposeB = await handleCrassusOverridePropose(
+        reqWithJson({ ...validProposal, proposed_params: { pin_threshold_pct: 0.3 } }, aiHeaders), env,
+      );
+      const { id: idB } = await proposeB.json();
+      const acceptB = await handleCrassusOverrideDecision(reqWithJson({ accepted_by: 'owen' }, opHeaders), env, idB, 'accept');
+      assert.equal(acceptB.status, 200);
+
+      assert.equal(env.CRASSUS_DB._overrides.get(idA).status, 'superseded', 'accepting B must supersede A in the same transaction, not leave two accepted rows');
+      assert.equal(env.CRASSUS_DB._overrides.get(idB).status, 'accepted');
+
+      const afterB = await handleCrassusOverrideGet(reqNoBody(botHeaders), env, 'Max Pain');
+      assert.equal((await afterB.json()).id, idB, 'B (the newer acceptance) is what bots see while it is live');
+
+      // B expires -- A must NOT reappear just because it is old the row that
+      // was never itself superseded by anything.
+      env.CRASSUS_DB._overrides.get(idB).expires_utc = new Date(Date.now() - 60_000).toISOString();
+      const afterBExpires = await handleCrassusOverrideGet(reqNoBody(botHeaders), env, 'Max Pain');
+      assert.equal(afterBExpires.status, 404, 'once B expires, the bot-facing GET must not silently revive superseded A -- an expiry is not a new operator decision');
     }
 
     // -- controls: kill switch / freeze toggle, and fail closed on corruption
