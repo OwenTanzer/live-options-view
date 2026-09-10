@@ -33,18 +33,24 @@ jobs:
           for mod in ['config.settings', 'bot.discord_bot', 'correlate.anomaly',
                       'correlate.pin_engine', 'correlate.price_tracker', 'db.storage',
                       'ingest.alpaca_stream', 'ingest.dedup', 'ingest.free_wires',
-                      'ingest.types', 'score.impact_scorer']:
+                      'ingest.types', 'score.impact_scorer', 'main']:
               importlib.import_module(mod)
           "
       - name: Run pin-engine reaction-window/recovery suite
         working-directory: news_pin_bot
         run: python scripts/verify_pin_engine.py
-      - name: Run anomaly-scanner return-based z-score/cooldown suite
+      - name: Run anomaly-scanner fixed-interval/cooldown/warm-up suite
         working-directory: news_pin_bot
         run: python scripts/verify_anomaly.py
-      - name: Run delayed-score, restart-data-loss and signed-alert regressions
+      - name: Run ingest/score decoupling, classification, shadow and replay regressions
         working-directory: news_pin_bot
         run: python scripts/verify_pin_regressions.py
       - name: Run dedup/UTC-timestamp/delivery-confirmation suite
         working-directory: news_pin_bot
         run: python scripts/verify_dedup_and_delivery.py
+      - name: Run headline-relevance matching and reconciliation suite
+        working-directory: news_pin_bot
+        run: python scripts/verify_relevance_matching.py
+      - name: Run evaluation-report stratification suite
+        working-directory: news_pin_bot
+        run: python scripts/verify_evaluation.py

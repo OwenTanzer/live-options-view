@@ -43,21 +43,32 @@ async def _authed_connect(url: str):
     return ws
 
 
-def _parse_news_message(msg: dict[str, Any]) -> Headline | None:
-    if msg.get("T") != "n":
+def _parse_utc_rfc3339(raw: str | None) -> float | None:
+    """Parses an Alpaca RFC3339 UTC timestamp ("...Z" or "+00:00", optional
+    fractional seconds) to a Unix epoch. Returns None if `raw` is missing or
+    unparseable -- callers decide the fallback, never silently substitute
+    the wrong clock."""
+    if not raw:
         return None
-    published_raw = msg.get("created_at") or msg.get("updated_at")
     try:
-        # Alpaca sends RFC3339 UTC timestamps ("...Z" or "+00:00"). Parse the
-        # naive "YYYY-MM-DDTHH:MM:SS" prefix as explicitly UTC -- time.mktime
-        # would instead interpret it in the local timezone, skewing every
-        # published_at by the host's UTC offset.
-        published_at = (
-            datetime.strptime(published_raw[:19], "%Y-%m-%dT%H:%M:%S")
+        # Parse the naive "YYYY-MM-DDTHH:MM:SS" prefix as explicitly UTC --
+        # time.mktime would instead interpret it in the local timezone,
+        # skewing the result by the host's UTC offset.
+        return (
+            datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S")
             .replace(tzinfo=timezone.utc)
             .timestamp()
         )
     except Exception:
+        return None
+
+
+def _parse_news_message(msg: dict[str, Any]) -> Headline | None:
+    if msg.get("T") != "n":
+        return None
+    published_raw = msg.get("created_at") or msg.get("updated_at")
+    published_at = _parse_utc_rfc3339(published_raw)
+    if published_at is None:
         published_at = time.time()
     return Headline(
         source="alpaca",
@@ -93,10 +104,16 @@ async def stream_news(watchlist: tuple[str, ...]) -> AsyncIterator[Headline]:
 
 async def stream_trades(
     watchlist: tuple[str, ...],
-    on_trade: Callable[[str, float, float, float], None],
+    on_trade: Callable[[str, float, float, float, float], None],
 ) -> None:
-    """on_trade(symbol, price, size, ts) called for every trade print.
-    Runs forever with reconnect-with-backoff, same as stream_news."""
+    """on_trade(symbol, price, size, ts, received_at) called for every trade
+    print. `ts` is the exchange's own trade time (Alpaca's `t` field on each
+    IEX trade message), not local receipt time -- every pin/anomaly window
+    is keyed off this clock so ingestion or scoring delays elsewhere in the
+    process can never shift it. `received_at` is the local wall-clock time
+    the print was processed, kept only for latency/backlog visibility
+    (MOO-170 finding 1). Runs forever with reconnect-with-backoff, same as
+    stream_news."""
     backoff = 1.0
     while True:
         try:
@@ -107,7 +124,9 @@ async def stream_trades(
                 for msg in json.loads(raw):
                     if msg.get("T") != "t":
                         continue
-                    on_trade(msg["S"], float(msg["p"]), float(msg.get("s", 0)), time.time())
+                    received_at = time.time()
+                    exchange_ts = _parse_utc_rfc3339(msg.get("t")) or received_at
+                    on_trade(msg["S"], float(msg["p"]), float(msg.get("s", 0)), exchange_ts, received_at)
         except Exception as exc:
             log.warning("alpaca trade stream error, reconnecting in %.0fs: %s", backoff, exc)
             await asyncio.sleep(backoff)
