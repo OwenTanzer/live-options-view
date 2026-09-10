@@ -14,6 +14,7 @@ object serving hand-built responses.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -304,6 +305,52 @@ def scenario_reader_tolerates_analyzer_without_begin_batch() -> None:
     )
 
 
+class SlowSession(FakeSession):
+    """A FakeSession whose `post()` blocks in real wall-clock time before
+    returning -- simulating a response trickling in (or a server that
+    stalls) past the configured deadline. This is the exact mechanism from
+    Owen's PR #72 review: `requests`' `timeout=` bounds inactivity between
+    socket reads, not the call's total duration, so a slow/trickling
+    response is never caught by it."""
+
+    def __init__(self, responses: list, seconds: float):
+        super().__init__(responses)
+        self._seconds = seconds
+
+    def post(self, url, json=None, timeout=None):
+        time.sleep(self._seconds)
+        return super().post(url, json=json, timeout=timeout)
+
+
+def scenario_real_deadline_bounds_a_trickling_response() -> None:
+    print(
+        "\n16. _score_via_ollama: a real wall-clock deadline bounds a slow/"
+        "trickling response, not just requests' own socket-inactivity timeout"
+    )
+    # A 0.3s "response" against a 0.05s configured timeout/budget: requests'
+    # own timeout kwarg (passed through unchanged below) would not catch
+    # this, since FakeSession.post's delay isn't socket inactivity -- only
+    # the real-time wait in _call_with_deadline should.
+    session = SlowSession([FakeResponse(200, _ollama_body(0.75))], seconds=0.3)
+    analyzer = LocalLLMAnalyzer(session=session, timeout_s=0.05, read_budget_s=0.05)
+    analyzer.begin_batch()
+
+    start = time.monotonic()
+    result = analyzer.polarity_scores("headline that arrives too slowly")
+    elapsed = time.monotonic() - start
+
+    check(
+        "returns near the ~0.05s deadline rather than waiting out the full 0.3s call",
+        elapsed < 0.3,
+        f"{elapsed:.3f}s",
+    )
+    check(
+        "falls back to VADER instead of returning the stale 0.75 score that arrives after the deadline",
+        result["compound"] != 0.75,
+        result,
+    )
+
+
 # ---------------------------------------------------------------------------
 # _default_analyzer_factory backend selection (sentiment.py / trump_sentiment.py)
 # ---------------------------------------------------------------------------
@@ -381,6 +428,7 @@ def main() -> int:
         scenario_request_timeout_capped_to_remaining_budget,
         scenario_failure_circuit_opens_after_consecutive_failures,
         scenario_begin_batch_resets_circuit_and_budget,
+        scenario_real_deadline_bounds_a_trickling_response,
         scenario_reader_begins_batch_on_local_llm_analyzer,
         scenario_reader_tolerates_analyzer_without_begin_batch,
         scenario_sentiment_defaults_to_vader,

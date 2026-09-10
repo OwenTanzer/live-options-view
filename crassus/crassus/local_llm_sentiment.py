@@ -31,7 +31,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import queue
 import re
+import threading
 import time
 from typing import Any, Callable
 
@@ -90,6 +92,45 @@ def _validate_compound(value: Any) -> float:
     if not math.isfinite(numeric):
         raise ValueError(f"compound is not finite: {value!r}")
     return max(-1.0, min(1.0, numeric))
+
+
+def _call_with_deadline(fn: Callable[[], float], timeout_s: float) -> float:
+    """Run `fn` in a background thread and wait at most `timeout_s` real
+    seconds for it, instead of trusting `requests`' own `timeout=` kwarg.
+
+    Flagged in review (PR #72): `requests`' `timeout` bounds inactivity
+    between socket reads, not the call's total wall-clock duration -- a
+    response trickling in a byte at a time (or a server that stalls after
+    sending a byte) never trips it, so a hung/slow endpoint can return a
+    stale-but-accepted score long after the batch deadline it was supposed
+    to respect. Waiting on `queue.get(timeout=...)` from this thread is a
+    real wall-clock bound regardless of what the socket call is doing.
+
+    If the deadline passes, `fn`'s thread is abandoned -- the blocking
+    call inside it isn't interruptible from Python -- and its eventual
+    result/exception is dropped on arrival (`put_nowait` into a full
+    queue is a no-op) rather than ever reaching the caller.
+    """
+    result: "queue.Queue[Any]" = queue.Queue(maxsize=1)
+
+    def _target() -> None:
+        try:
+            value: Any = fn()
+        except BaseException as exc:  # forwarded to the caller, if it's still waiting
+            value = exc
+        try:
+            result.put_nowait(value)
+        except queue.Full:
+            pass
+
+    threading.Thread(target=_target, daemon=True).start()
+    try:
+        outcome = result.get(timeout=max(0.0, timeout_s))
+    except queue.Empty:
+        raise TimeoutError(f"scoring call exceeded {timeout_s:.3f}s deadline") from None
+    if isinstance(outcome, BaseException):
+        raise outcome
+    return outcome
 
 
 class LocalLLMAnalyzer:
@@ -178,24 +219,31 @@ class LocalLLMAnalyzer:
         return {"neg": 0.0, "neu": 0.0, "pos": 0.0, "compound": compound}
 
     def _score_via_ollama(self, text: str, *, timeout_s: float) -> float:
-        response = self._session.post(
-            f"{self._url}/api/generate",
-            json={
-                "model": self._model,
-                "system": _SYSTEM_PROMPT,
-                "prompt": text,
-                "stream": False,
-                "options": {"temperature": 0.1},
-            },
-            timeout=timeout_s,
-        )
-        response.raise_for_status()
-        body = response.json()
-        raw = body.get("response", "")
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            raise ValueError(f"no JSON in ollama response: {raw[:200]!r}")
-        parsed = json.loads(match.group(0))
-        if "compound" not in parsed:
-            raise ValueError(f"ollama response has no 'compound' key: {parsed!r}")
-        return _validate_compound(parsed["compound"])
+        def _call() -> float:
+            response = self._session.post(
+                f"{self._url}/api/generate",
+                json={
+                    "model": self._model,
+                    "system": _SYSTEM_PROMPT,
+                    "prompt": text,
+                    "stream": False,
+                    "options": {"temperature": 0.1},
+                },
+                timeout=timeout_s,
+            )
+            response.raise_for_status()
+            body = response.json()
+            raw = body.get("response", "")
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                raise ValueError(f"no JSON in ollama response: {raw[:200]!r}")
+            parsed = json.loads(match.group(0))
+            if "compound" not in parsed:
+                raise ValueError(f"ollama response has no 'compound' key: {parsed!r}")
+            return _validate_compound(parsed["compound"])
+
+        # `timeout_s` here is a real wall-clock deadline (see
+        # `_call_with_deadline`), not just the `requests` socket-inactivity
+        # timeout passed to `_call` above -- both are set so a stalled
+        # connection *and* a slowly-trickling one are each bounded.
+        return _call_with_deadline(_call, timeout_s)
