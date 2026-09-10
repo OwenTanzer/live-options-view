@@ -37,6 +37,9 @@ jobs:
       - name: Run trump_whisperer_qqq ingestion suite
         working-directory: crassus
         run: python scripts/verify_trump_ingestion.py
+      - name: Run local-LLM sentiment analyzer suite
+        working-directory: crassus
+        run: python scripts/verify_local_llm_sentiment.py
       - name: Run momentum_qqq strategy suite
         working-directory: crassus
         run: python scripts/verify_momentum_qqq.py
