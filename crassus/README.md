@@ -95,6 +95,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/strategies/` | Strategy implementations |
 | `crassus/strategies/phelps_variants.py` | Phelps-wrapped twins of the four live strategies (`smoke_atm_roundtrip_phelps`, `reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, `momentum_qqq_phelps`) -- same entries, exits deferred one Phelps window |
 | `crassus/strategies/phelps_pure.py` | `phelps_pure_qqq` -- entry *and* exit both derived from Guideline Phelps directly (short-window displacement trigger, hold-until-invalidation-or-window-elapses exit), rather than wrapping another strategy's signal |
+| `crassus/strategies/momentum_puts_only.py` | `momentum_puts_only_qqq` -- `momentum_qqq` with the call side removed entirely: a bullish or neutral trailing return is treated identically (no entry, close if held), a bearish one opens/holds a put. Its Phelps-wrapped twin, `momentum_puts_only_qqq_phelps`, lives in `phelps_variants.py` alongside the other four |
 | `crassus/runner.py` | The loop |
 | `Dockerfile` | Railway's deploy image (`railway.toml`'s `builder = "DOCKERFILE"`) -- bakes a version-matched Chromium in for `reddit_sentiment_qqq`'s browser fallback |
 | `scripts/p0_smoke.py` | P0 deployment smoke test |
@@ -106,6 +107,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `scripts/verify_trump_whisperer.py` | Hermetic checks for `trump_whisperer_qqq`'s aggregation math and decision logic -- no network access required |
 | `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
 | `scripts/verify_phelps.py` | Hermetic checks for `phelps_wrap()`'s defer/release/invalidation-clearing logic and `phelps_pure_qqq`'s entry/exit decision logic -- no network access required |
+| `scripts/verify_momentum_puts_only.py` | Hermetic checks for `momentum_puts_only_qqq`'s decision logic -- registration (including its Phelps twin), the never-a-call guarantee, and the puts-only position-management edge cases -- no network access required |
 
 ## Integrity invariants
 
@@ -150,18 +152,21 @@ The UI has no bot or strategy whitelist, and the ignored `accounts.json` is only
 The six accounts above are the eventual P3 mapping's -- see below for what
 each runs today instead. Six additional base accounts are dedicated to other
 strategies: **TrumpWhisperer**, **Newton**, **Max Pain**, **OI Skew**,
-**Put-Call Ratio**, and **Canopus**. Nine more catalog accounts form the
-Phelps comparison block: eight twins of the original accounts plus **Bowman**.
+**Put-Call Ratio**, and **Canopus**. A seventh, **Persephone**, runs the
+puts-only `momentum_qqq` clone described below. Ten more catalog accounts
+form the Phelps comparison block: nine twins of the original accounts (the
+original eight plus Persephone) plus **Bowman**.
 
-Thirteen strategies are implemented today: the eight base strategies
+Fourteen strategies are implemented today: the nine base strategies
 `smoke_atm_roundtrip`, `reddit_sentiment_qqq`, `trump_whisperer_qqq`,
-`momentum_qqq`, `max_pain_qqq`, `oi_skew_qqq`, `put_call_ratio_qqq`, and
-`canopus_down_day_14`; four wrapped Phelps variants; and `phelps_pure_qqq`.
-The catalog keeps the original six accounts split three/three between smoke
-and Reddit sentiment, assigns one account to every other base strategy, and
-adds the Phelps comparison accounts described below. The runner validates
-every configured `strategy_id` at startup, and CI requires every registered
-strategy to have at least one catalog-backed account.
+`momentum_qqq`, `momentum_puts_only_qqq`, `max_pain_qqq`, `oi_skew_qqq`,
+`put_call_ratio_qqq`, and `canopus_down_day_14`; five wrapped Phelps
+variants; and `phelps_pure_qqq`. The catalog keeps the original six accounts
+split three/three between smoke and Reddit sentiment, assigns one account to
+every other base strategy, and adds the Phelps comparison accounts described
+below. The runner validates every configured `strategy_id` at startup, and
+CI requires every registered strategy to have at least one catalog-backed
+account.
 
 Strategy-level rules — max 3 positions, 2:50pm flatten, the 4-of-5 green-day
 rule, daily loss limits — are **configuration, not platform invariants**, and
@@ -186,18 +191,18 @@ its own signal stops supporting the position), so `phelps_wrap` intercepts
 a proposed close, holds it until `ctx.params["phelps_minutes"]` (default
 `phelps.PHELPS_MINUTES_DEFAULT`, the guideline's 25-30m band's midpoint)
 has elapsed since entry, then releases it. `crassus/strategies/phelps_variants.py`
-applies this to the four live strategies, producing `smoke_atm_roundtrip_phelps`,
-`reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, and
-`momentum_qqq_phelps`.
+applies this to the five live strategies, producing `smoke_atm_roundtrip_phelps`,
+`reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`,
+`momentum_qqq_phelps`, and `momentum_puts_only_qqq_phelps`.
 
-`accounts.example.json`'s **Phelps test bots** are exact copies of the eight
+`accounts.example.json`'s **Phelps test bots** are exact copies of the nine
 live accounts (Ankit, Bob, Doktor Freuding, Luigi, Jesus, Doris,
-TrumpWhisperer, Newton) -- same alias root plus " Phelps", same params where
-the original has any -- moved onto the corresponding `_phelps` strategy_id.
-Comparing e.g. Ankit vs. Ankit Phelps isolates the effect of the hold-time
-floor with nothing else changed.
+TrumpWhisperer, Newton, Persephone) -- same alias root plus " Phelps", same
+params where the original has any -- moved onto the corresponding `_phelps`
+strategy_id. Comparing e.g. Ankit vs. Ankit Phelps isolates the effect of
+the hold-time floor with nothing else changed.
 
-A ninth account, **Bowman** (named for Bob Bowman, Michael Phelps's coach --
+A tenth account, **Bowman** (named for Bob Bowman, Michael Phelps's coach --
 "Phelps" itself is reserved for the guideline), runs `phelps_pure_qqq`
 (`crassus/strategies/phelps_pure.py`), which is not a wrapper: both its
 entry (a short-window, ~5-minute displacement trigger -- see that module's
@@ -211,6 +216,33 @@ not just as an exit-timing floor.
 
 See `scripts/verify_phelps.py` for hermetic coverage of both the wrapper
 and the standalone strategy.
+
+### The puts-only pair: Persephone / Persephone Phelps
+
+None of the account pairs above are directionally restricted -- every base
+strategy they run can open either a call or a put, so their Phelps twin
+isolates the hold-time floor's effect on a two-sided book. To get the same
+isolation on a book that only ever expresses a bearish view, this PR adds
+`crassus/strategies/momentum_puts_only.py`: `momentum_qqq` with the call
+side removed entirely. A bullish or neutral trailing return closes any held
+put and opens nothing; only a bearish reading (past `bearish_threshold`,
+same default magnitude as `momentum_qqq`'s own) opens or holds one put.
+Position management, ATM selection, staleness handling, and OCC-symbol
+parsing are otherwise identical to `momentum_qqq` -- see that module's
+strategy for the shared reasoning, and `momentum_puts_only.py`'s own
+docstring for exactly what differs and why a directionally-restricted base
+strategy earns its own file rather than a `calls_allowed=False` param on the
+existing one (an explicit puts-only mandate, not a momentum bot that merely
+tends bearish).
+
+**Persephone** runs `momentum_puts_only_qqq` bare; **Persephone Phelps**
+runs the identical strategy/params through `phelps_wrap()`, registered as
+`momentum_puts_only_qqq_phelps` in `phelps_variants.py` alongside the other
+four twins. Comparing the two isolates exactly one variable -- the Phelps
+hold-time floor -- on a puts-only book, the same way Ankit vs. Ankit Phelps
+isolates it for `smoke_atm_roundtrip`. Named for Persephone's seasonal
+descent, matching the strategy's one-directional (bearish) mandate. See
+`scripts/verify_momentum_puts_only.py` for hermetic coverage.
 
 ## `reddit_sentiment_qqq`
 

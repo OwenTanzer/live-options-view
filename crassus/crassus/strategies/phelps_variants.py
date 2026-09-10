@@ -13,6 +13,16 @@ strategies, and are meant to run against the same accounts.example.json
 `reddit_sentiment_qqq` thresholds) so a side-by-side comparison isolates the
 effect of the hold-time floor and nothing else.
 
+`momentum_puts_only_qqq` (`momentum_puts_only.py`) gets the same treatment
+below, producing `momentum_puts_only_qqq_phelps`. It's listed separately
+from the four above because it isn't part of the original live roster this
+module started with -- it's a puts-only clone of `momentum_qqq` added
+specifically so a puts-only book has its own Phelps-vs-no-Phelps comparison
+pair (Persephone vs. Persephone Phelps in accounts.example.json), the same
+way Ankit vs. Ankit Phelps isolates the wrapper for `smoke_atm_roundtrip`.
+None of the four base twins above are directionally restricted, so this
+pair does not duplicate an existing comparison.
+
 The wrapper behavior is part of each variant's audit identity.  Its revision
 is therefore composed with the base strategy version below, so changing
 either layer creates a new strategy_version instead of mixing behavior under
@@ -42,6 +52,8 @@ rather than silently mixing new behavior under an existing one.
 from __future__ import annotations
 
 from ..phelps import fixed_window_wrap, phelps_wrap
+from .momentum_puts_only import STRATEGY_VERSION as _MOMENTUM_PUTS_ONLY_VERSION
+from .momentum_puts_only import momentum_puts_only_qqq as _momentum_puts_only_qqq
 from .momentum_qqq import STRATEGY_VERSION as _MOMENTUM_VERSION
 from .momentum_qqq import momentum_qqq as _momentum_qqq
 from .reddit_sentiment import STRATEGY_VERSION as _REDDIT_VERSION
@@ -88,6 +100,14 @@ momentum_qqq_phelps = register(
         _momentum_qqq,
         strategy_id="momentum_qqq_phelps",
         strategy_version=phelps_variant_version(_MOMENTUM_VERSION),
+    )
+)
+
+momentum_puts_only_qqq_phelps = register(
+    phelps_wrap(
+        _momentum_puts_only_qqq,
+        strategy_id="momentum_puts_only_qqq_phelps",
+        strategy_version=phelps_variant_version(_MOMENTUM_PUTS_ONLY_VERSION),
     )
 )
 
