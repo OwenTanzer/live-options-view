@@ -361,8 +361,8 @@ It runs as its own Railway service (project `live-market-monitor`, alongside
 `moo144-tradier-probe`), not as part of the primary `collector.py` service.
 
 **What is actually implemented** (kept accurate here, rather than restating
-MOO-169's aspirational scope, after the first review pass found several
-claimed guarantees weren't yet enforced):
+MOO-169's aspirational scope; updated after each review pass rather than
+restating fixed claims):
 
 - Calendar-gated session lifecycle: cron-invoked once per weekday, exits 0
   on a day with no NYSE session, runs to the calendar's actual close
@@ -371,30 +371,60 @@ claimed guarantees weren't yet enforced):
   reloaded on any same-day restart instead of re-selected against a
   possibly-moved spot price.
 - A renewable, fenced lease (`lease.json`): renewal is conditional on still
-  being the current owner, and losing ownership stops ingestion rather than
-  silently continuing or clobbering the new owner's lease.
-- Reconciliation on every startup against R2 by content hash (not just
-  filename): already-durable segments are recognized and not re-uploaded;
-  locally-spooled segments R2 doesn't have yet are resumed; anything that's
-  neither (corrupt, or same name with different content) is reported for
-  manual review rather than silently deleted or silently trusted.
+  being the current owner, and a confirmed loss (another owner's lease is
+  now live) stops ingestion rather than silently continuing or clobbering
+  it. A *transient* renewal failure (network/storage) is retried on the
+  normal cadence, not treated as an immediate loss or allowed to kill the
+  heartbeat thread silently -- ownership is only relinquished once the
+  last confirmed deadline actually elapses without a fresh renewal.
+- Each session spools under its own `<MOO144_SPOOL_DIR>/<run_date>/`
+  subdirectory, so segments from different dates can never collide or be
+  misfiled under the wrong archive prefix. Any other date's leftover spool
+  (left behind by a crash before a date rollover) is reconciled and
+  resumed under *that date's own* prefix, before today's session starts --
+  never merged into today's.
+- Reconciliation on every startup against R2 by verified content identity
+  (not just filename or a trusted ETag): already-durable segments are
+  recognized and not re-uploaded; locally-spooled segments R2 doesn't have
+  yet are resumed; anything that's neither (corrupt, same name with
+  different content, or an unverifiable identity such as a multipart
+  ETag) is reported for manual review rather than silently deleted or
+  silently trusted. An ETag that can't be compared directly (multipart or
+  missing) triggers an actual download-and-hash of the remote object
+  rather than assuming a match.
 - A hard spool-size bound: once outstanding spool bytes would exceed
   `MOO144_MAX_SPOOL_BYTES`, ingestion stops with an explicit `SpoolExhausted`
   reason rather than growing the spool without limit.
 - `status: "complete"` is derived, not assumed: a run is only "complete" if
-  it started on time, ran to the actual session close with no unrecovered
-  exception, had zero reconnects (any stream gap marks the day "partial" so
-  a dependable/complete-coverage day is distinguishable from a merely
-  successful-exit day), the upload spool fully drained, and reconciliation
-  found nothing needing review. Every other outcome is `"partial"` with an
-  explicit `partial_reasons` list.
+  setup-through-capture-start was on time (not just the open-wait itself),
+  it ran to the actual session close with no unrecovered exception, had
+  zero reconnects (any stream gap marks the day "partial"), captured at
+  least one event, the upload spool fully drained, and reconciliation
+  (today's and any recovered stale date's) found nothing needing review.
+  Every other outcome is `"partial"` with an explicit `partial_reasons`
+  list, and a *recoverable* partial outcome (spool exhaustion, an
+  undrained upload backlog, or zero captured events) makes the process
+  exit non-zero so the `on_failure` restart policy actually fires -- a
+  partial summary object alone doesn't trigger anything. Losing the lease
+  is the deliberate exception: it exits 0, since another owner is already
+  legitimately active for that `run_date` and restarting would only start
+  a competing-restart loop against them.
+- A stream gap stays open -- measuring the full outage, not just backoff
+  sleep time -- until an event is actually received again; a
+  `stream_reconnect_resumed` marker is never written for a reconnect
+  attempt that hasn't actually succeeded yet.
 - `health.json` is published periodically during collection (not only at
-  the end), and reports last receipt time, reconnects, measured gap
-  seconds, spool backlog, and upload failures.
-- Manifest counters separate this attempt's counts (`attempt_event_counts`)
-  from prior-owner segments reconciled from R2 (`reconciled_prior_records`,
-  read back via a real decompress-and-count) so the two are never silently
-  conflated into one ambiguous total.
+  the end) from the *same* mutable result object the capture loop updates
+  live, so a health snapshot taken mid-outage reflects the in-progress
+  reconnect count and gap duration rather than the pre-capture initial
+  state.
+- Manifest counters separate three non-overlapping totals: this attempt's
+  own captured counts (`attempt_event_counts`), already-durable segments
+  reconciled from R2 before this run (`reconciled_prior_records`), and
+  this-run-uploaded segments that were actually a prior owner's orphaned
+  local files (`resumed_local_records`) -- each read back via a real
+  decompress-and-count so none are silently conflated, omitted, or
+  double-counted.
 
 | Setting | Value |
 |---|---|

@@ -243,6 +243,95 @@ class LeaseTests(unittest.TestCase):
             collector.renew_lease(r2, "bucket", "2026-09-08", "owner-a", ttl_seconds=300)
 
 
+class LeaseHeartbeatTests(unittest.TestCase):
+    """The review's exact reproduction: a transient renewal exception must
+    never kill the heartbeat thread silently. It must either keep retrying
+    (if the last confirmed ownership window hasn't elapsed) or explicitly
+    set lease_lost (once it has) -- never just vanish."""
+
+    def test_transient_failure_before_deadline_keeps_retrying_without_raising(self):
+        calls = {"n": 0}
+
+        def flaky_renew(*_a, **_k):
+            calls["n"] += 1
+            raise TimeoutError("simulated network timeout")
+
+        with patch.object(collector, "renew_lease", side_effect=flaky_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            wait_calls = {"n": 0}
+
+            def wait(_timeout):
+                wait_calls["n"] += 1
+                return wait_calls["n"] > 3  # stop after 3 retry ticks
+
+            # now() never reaches confirmed_until across all 3 ticks.
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                wait=wait,
+            )
+        self.assertEqual(calls["n"], 3)
+        self.assertFalse(lease_lost.is_set())
+
+    def test_transient_failure_past_deadline_sets_lease_lost_without_raising(self):
+        def flaky_renew(*_a, **_k):
+            raise TimeoutError("simulated network timeout")
+
+        with patch.object(collector, "renew_lease", side_effect=flaky_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            # now() is already past confirmed_until on the very first tick --
+            # ownership can no longer be guaranteed.
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc),
+                wait=lambda _timeout: False if not lease_lost.is_set() else True,
+            )
+        self.assertTrue(lease_lost.is_set())
+
+    def test_lease_lost_from_renewal_stops_immediately(self):
+        def losing_renew(*_a, **_k):
+            raise collector.LeaseLost("taken by another owner")
+
+        with patch.object(collector, "renew_lease", side_effect=losing_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                wait=lambda _timeout: False,
+            )
+        self.assertTrue(lease_lost.is_set())
+
+    def test_successful_renewal_advances_confirmed_deadline(self):
+        renewed = {"expires_at": "2026-09-08T13:00:00+00:00"}
+
+        with patch.object(collector, "renew_lease", return_value=renewed):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            wait_calls = {"n": 0}
+
+            def wait(_timeout):
+                wait_calls["n"] += 1
+                return wait_calls["n"] > 1
+
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                wait=wait,
+            )
+        self.assertFalse(lease_lost.is_set())
+
+
 class UniverseTests(unittest.TestCase):
     def test_first_call_selects_and_persists(self):
         r2 = FakeR2()
@@ -406,6 +495,57 @@ class ReconcileTests(unittest.TestCase):
             result = collector.reconcile_existing_segments(r2, "bucket", "moo144/tradier/2026-09-08", Path(tmp))
             self.assertEqual(len(result["artifacts"]), 5)
 
+    def test_multipart_etag_with_matching_content_is_verified_by_download_and_deleted(self):
+        """A multipart/missing ETag can't be trusted from the listing alone
+        -- the review's exact finding. Matching content must still be
+        established by actually fetching and hashing the remote bytes."""
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            spool_dir = Path(tmp)
+            local = spool_dir / "owner-a-part-0000.ndjson.gz"
+            local.write_bytes(b"identical-bytes")
+            key = "moo144/tradier/2026-09-08/owner-a-part-0000.ndjson.gz"
+            r2.objects[("bucket", key)] = b"identical-bytes"
+            # A multipart-style ETag contains a dash and can't be compared
+            # directly to a single-part MD5.
+            r2.etags[("bucket", key)] = "abcdef0123456789-3"
+            result = collector.reconcile_existing_segments(r2, "bucket", "moo144/tradier/2026-09-08", spool_dir)
+            self.assertEqual(len(result["artifacts"]), 1)
+            self.assertEqual(result["needs_review"], [])
+            self.assertFalse(local.exists())
+
+    def test_multipart_etag_with_mismatched_content_is_retained_not_deleted(self):
+        """Unknown/unverifiable identity must never authorize deletion --
+        the review's exact finding. A multipart ETag whose actual remote
+        content differs must be flagged and the local evidence kept."""
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            spool_dir = Path(tmp)
+            local = spool_dir / "owner-a-part-0000.ndjson.gz"
+            local.write_bytes(b"local-bytes")
+            key = "moo144/tradier/2026-09-08/owner-a-part-0000.ndjson.gz"
+            r2.objects[("bucket", key)] = b"different-remote-bytes"
+            r2.etags[("bucket", key)] = "abcdef0123456789-3"
+            result = collector.reconcile_existing_segments(r2, "bucket", "moo144/tradier/2026-09-08", spool_dir)
+            self.assertEqual(len(result["needs_review"]), 1)
+            self.assertTrue(local.exists())
+
+    def test_unfetchable_remote_object_is_retained_not_deleted(self):
+        """If the remote object can't even be fetched to verify, that is
+        definitionally unverifiable identity -- retain, don't delete."""
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            spool_dir = Path(tmp)
+            local = spool_dir / "owner-a-part-0000.ndjson.gz"
+            local.write_bytes(b"local-bytes")
+            key = "moo144/tradier/2026-09-08/owner-a-part-0000.ndjson.gz"
+            r2.objects[("bucket", key)] = b"local-bytes"
+            r2.etags[("bucket", key)] = "abcdef0123456789-3"
+            r2.get_object = Mock(side_effect=RuntimeError("network down"))
+            result = collector.reconcile_existing_segments(r2, "bucket", "moo144/tradier/2026-09-08", spool_dir)
+            self.assertEqual(len(result["needs_review"]), 1)
+            self.assertTrue(local.exists())
+
     def test_listing_failure_propagates_instead_of_certifying_empty_archive(self):
         r2 = FakeR2()
         r2.list_objects_v2 = Mock(side_effect=RuntimeError("network down"))
@@ -476,7 +616,14 @@ class CaptureSessionTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "spool_exhausted")
 
     def test_gap_brackets_actual_outage_with_disconnect_then_resumed(self):
+        """The gap must close only once an event is actually received again
+        -- not merely after the backoff sleep for a connection attempt that
+        hasn't even happened yet."""
         client = FakeStreamClient()
+        client.session.get.side_effect = [
+            requests.ConnectionError("boom"),
+            FakeResponseWithLines(['{"type": "quote", "symbol": "QQQ"}']),
+        ]
         events = []
 
         class MemorySpool:
@@ -488,11 +635,13 @@ class CaptureSessionTests(unittest.TestCase):
 
         def now_et():
             close_holder["n"] += 1
-            # stay open for a few iterations then close, so exactly one
-            # reconnect cycle happens before the loop naturally ends
-            return datetime(2026, 9, 8, 15, 0, tzinfo=ET) if close_holder["n"] < 6 else close
+            # 3 "still open" reads: the failed attempt's while-check, the
+            # successful attempt's while-check, and the in-loop stop-check
+            # right before that attempt's one line is processed -- then the
+            # post-line stop-check can safely see the session has closed.
+            return datetime(2026, 9, 8, 15, 0, tzinfo=ET) if close_holder["n"] <= 3 else close
 
-        collector.capture_session(
+        result = collector.capture_session(
             client, ["QQQ"], MemorySpool(), collector.BoundedStats(), close,
             max_consecutive_reconnects=5,
             monotonic=lambda: close_holder["n"] * 1.0,
@@ -500,8 +649,52 @@ class CaptureSessionTests(unittest.TestCase):
             now_et=now_et,
         )
         gap_events = [e for e in events if e["type"] == "gap"]
-        self.assertTrue(any(e["reason"] == "stream_disconnect" for e in gap_events))
-        self.assertTrue(any(e["reason"] == "stream_reconnect_resumed" for e in gap_events))
+        disconnects = [e for e in gap_events if e["reason"] == "stream_disconnect"]
+        resumes = [e for e in gap_events if e["reason"] == "stream_reconnect_resumed"]
+        self.assertEqual(len(disconnects), 1)
+        self.assertEqual(len(resumes), 1)
+        self.assertGreater(result.gap_seconds, 0.0)
+
+    def test_gap_stays_open_across_repeated_failed_reconnects(self):
+        """Multiple consecutive failed reconnect attempts within the same
+        outage must emit exactly one stream_disconnect (not one per retry)
+        and no stream_reconnect_resumed until data actually flows again."""
+        client = FakeStreamClient()
+        client.session.get.side_effect = [
+            requests.ConnectionError("boom-1"),
+            requests.ConnectionError("boom-2"),
+            requests.ConnectionError("boom-3"),
+        ]
+        events = []
+
+        class MemorySpool:
+            def write(self, event):
+                events.append(event)
+
+        close = datetime(2026, 9, 8, 16, 0, 0, tzinfo=ET)
+        now_calls = {"n": 0}
+
+        def now_et():
+            # Exactly 3 "still open" reads (one per queued connection
+            # attempt), then closed -- so the loop stops cleanly right
+            # after the 3rd failure instead of attempting a 4th connection
+            # the fake has no side_effect queued for.
+            now_calls["n"] += 1
+            return datetime(2026, 9, 8, 10, 0, tzinfo=ET) if now_calls["n"] <= 3 else close
+
+        result = collector.capture_session(
+            client, ["QQQ"], MemorySpool(), collector.BoundedStats(), close,
+            max_consecutive_reconnects=5,
+            monotonic=lambda: 0.0,
+            sleeper=lambda _s: None,
+            now_et=now_et,
+        )
+        gap_events = [e for e in events if e["type"] == "gap"]
+        disconnects = [e for e in gap_events if e["reason"] == "stream_disconnect"]
+        resumes = [e for e in gap_events if e["reason"] == "stream_reconnect_resumed"]
+        self.assertEqual(len(disconnects), 1)
+        self.assertEqual(len(resumes), 0)
+        self.assertEqual(result.reconnects, 3)
 
     def test_exceeding_reconnect_budget_raises_with_counters_attached(self):
         client = FakeStreamClient()
@@ -571,7 +764,7 @@ class MainLifecycleTests(unittest.TestCase):
 
     def _run_main(
         self, tmp_spool, capture_fn, session_open, session_close, clock_sequence,
-        r2=None, drain_timeout_seconds=5.0,
+        r2=None, drain_timeout_seconds=5.0, expect_failure=False,
     ):
         r2 = r2 if r2 is not None else FakeR2()
         client = FakeTradier()
@@ -592,13 +785,19 @@ class MainLifecycleTests(unittest.TestCase):
             patch.object(collector, "Tradier", return_value=client),
             patch.object(collector, "capture_session", side_effect=capture_fn),
         ):
-            result = collector.main(
-                clock_et=clock_et,
-                sleeper=lambda _s: None,
-                session_bounds=lambda _day: (session_open, session_close),
-                uploader_sleeper=lambda _s: None,
-                drain_timeout_seconds=drain_timeout_seconds,
-            )
+            def call():
+                return collector.main(
+                    clock_et=clock_et,
+                    sleeper=lambda _s: None,
+                    session_bounds=lambda _day: (session_open, session_close),
+                    uploader_sleeper=lambda _s: None,
+                    drain_timeout_seconds=drain_timeout_seconds,
+                )
+            if expect_failure:
+                with self.assertRaises(RuntimeError):
+                    call()
+                return None, r2
+            result = call()
         return result, r2
 
     def test_holiday_is_a_clean_noop(self):
@@ -630,7 +829,7 @@ class MainLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
                 Path(tmp), fake_capture, session_open, session_close,
-                clock_sequence=[session_open] * 5 + [session_close],
+                clock_sequence=[session_open] * 6 + [session_close],
             )
         self.assertEqual(result, 0)
         summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
@@ -643,23 +842,144 @@ class MainLifecycleTests(unittest.TestCase):
         session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
         late_now = datetime(2026, 9, 8, 9, 32, tzinfo=ET)  # 2 minutes late
 
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            # An event this attempt, so this test isolates the late-start
+            # finding from the separate no_events_captured one.
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
+            return collector.CaptureResult()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self._run_main(
+                Path(tmp), fake_capture, session_open, session_close,
+                clock_sequence=[late_now] * 6 + [session_close],
+            )
+        summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
+        self.assertEqual(summaries[0]["status"], "partial")
+        self.assertTrue(any("late_start" in reason for reason in summaries[0]["partial_reasons"]))
+
+    def test_setup_delay_after_open_wait_counts_toward_lateness(self):
+        """A late_start_seconds of 0 (the open-wait itself was on time) must
+        not certify an on-time session if everything AFTER that wait --
+        lease acquisition, universe selection, reconciliation -- took long
+        enough that capture didn't actually start until well after open.
+        The review's exact finding: late_start_seconds is measured too
+        early to catch this."""
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+        slow_setup_done = datetime(2026, 9, 8, 9, 40, tzinfo=ET)  # 10 min of setup
+
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
+            return collector.CaptureResult()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self._run_main(
+                Path(tmp), fake_capture, session_open, session_close,
+                # calls: today, now_et(open-check), late_start_seconds,
+                # close-check, universe-selection, capture_started_at, final
+                # close-check -- only the capture_started_at read reflects
+                # the slow setup.
+                clock_sequence=[
+                    session_open, session_open, session_open, session_open,
+                    session_open, slow_setup_done, session_close,
+                ],
+            )
+        summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
+        self.assertEqual(summaries[0]["status"], "partial")
+        self.assertEqual(summaries[0]["late_start_seconds"], 0.0)
+        self.assertEqual(summaries[0]["effective_late_start_seconds"], 600.0)
+        self.assertTrue(any("late_start_seconds=600.0" in reason for reason in summaries[0]["partial_reasons"]))
+
+    def test_zero_events_over_a_full_session_reports_partial_and_requires_restart(self):
+        """Reaching wall-clock close alone must not certify a complete
+        capture -- a connection that established but received nothing all
+        day is exactly the case the review's completeness finding named."""
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+
         def fake_capture(_client, _symbols, _spool, _stats, _close, *_a, **_k):
             return collector.CaptureResult()
 
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
                 Path(tmp), fake_capture, session_open, session_close,
-                clock_sequence=[late_now] * 5 + [session_close],
+                clock_sequence=[session_open] * 6 + [session_close],
+                expect_failure=True,
             )
         summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
         self.assertEqual(summaries[0]["status"], "partial")
-        self.assertTrue(any("late_start" in reason for reason in summaries[0]["partial_reasons"]))
+        self.assertIn("no_events_captured", summaries[0]["partial_reasons"])
+
+    def test_spool_exhausted_requires_restart(self):
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
+            result = collector.CaptureResult()
+            result.stop_reason = "spool_exhausted"
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self._run_main(
+                Path(tmp), fake_capture, session_open, session_close,
+                clock_sequence=[session_open] * 6 + [session_close],
+                expect_failure=True,
+            )
+        summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
+        self.assertEqual(summaries[0]["status"], "partial")
+        self.assertIn("spool_exhausted", summaries[0]["partial_reasons"])
+
+    def test_lease_lost_does_not_trigger_a_competing_restart(self):
+        """Unlike spool_exhausted, losing the lease means another owner is
+        legitimately active for this run_date -- restarting would only
+        fight that owner instead of recovering anything, so this must exit
+        cleanly rather than raise."""
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
+            result = collector.CaptureResult()
+            result.stop_reason = "lease_lost"
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self._run_main(
+                Path(tmp), fake_capture, session_open, session_close,
+                clock_sequence=[session_open] * 6 + [session_close],
+            )
+        self.assertEqual(result, 0)
+        summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
+        self.assertEqual(summaries[0]["status"], "partial")
+        self.assertIn("lease_lost", summaries[0]["partial_reasons"])
 
     def test_reconnects_report_partial_even_when_recovered(self):
         session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
         session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
 
-        def fake_capture(_client, _symbols, _spool, _stats, _close, *_a, **_k):
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
             result = collector.CaptureResult()
             result.reconnects = 3
             return result
@@ -667,7 +987,7 @@ class MainLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
                 Path(tmp), fake_capture, session_open, session_close,
-                clock_sequence=[session_open] * 5 + [session_close],
+                clock_sequence=[session_open] * 6 + [session_close],
             )
         summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
         self.assertEqual(summaries[0]["status"], "partial")
@@ -690,42 +1010,94 @@ class MainLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
                 Path(tmp), fake_capture, session_open, session_close,
-                clock_sequence=[session_open] * 5 + [session_close],
-                r2=r2, drain_timeout_seconds=0.5,
+                clock_sequence=[session_open] * 6 + [session_close],
+                r2=r2, drain_timeout_seconds=0.5, expect_failure=True,
             )
         summaries = [json.loads(v) for (_b, k), v in r2.objects.items() if "/summary-" in k]
         self.assertEqual(summaries[0]["status"], "partial")
         self.assertTrue(any("spool_not_fully_drained" in reason for reason in summaries[0]["partial_reasons"]))
 
-    def test_restart_resumes_orphaned_local_segment(self):
+    def test_restart_resumes_orphaned_local_segment_same_day(self):
         """A prior owner's crash can leave a finalized-but-unuploaded segment
-        on the persistent spool volume. The next run (any owner_id, since a
-        crash always starts a fresh process) must resume and upload it, not
-        strand it -- this is exactly what the review's reconciliation
-        finding required at the main() level, not just the helper function.
+        on the persistent spool volume for TODAY's date. The next run (any
+        owner_id, since a crash always starts a fresh process) must resume
+        and upload it under today's own prefix, not strand it.
         """
         session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
         session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
 
-        def fake_capture(_client, _symbols, _spool, _stats, _close, *_a, **_k):
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
             return collector.CaptureResult()
 
         with tempfile.TemporaryDirectory() as tmp:
             import gzip
-            # main() spools under <MOO144_SPOOL_DIR>/moo144-collector-spool.
-            actual_spool_dir = Path(tmp) / "moo144-collector-spool"
-            actual_spool_dir.mkdir()
-            orphan = actual_spool_dir / "previous-owner-part-0000.ndjson.gz"
+            # main() spools under <MOO144_SPOOL_DIR>/moo144-collector-spool/<run_date>.
+            todays_spool_dir = Path(tmp) / "moo144-collector-spool" / "2026-09-08"
+            todays_spool_dir.mkdir(parents=True)
+            orphan = todays_spool_dir / "previous-owner-part-0000.ndjson.gz"
             with gzip.open(orphan, "wt") as handle:
                 handle.write('{"type":"quote"}\n')
             result, r2 = self._run_main(
                 Path(tmp), fake_capture, session_open, session_close,
-                clock_sequence=[session_open] * 5 + [session_close],
+                clock_sequence=[session_open] * 6 + [session_close],
             )
         self.assertEqual(result, 0)
         uploaded_names = {Path(k).name for (_b, k) in r2.objects if k.endswith(".ndjson.gz")}
         self.assertIn("previous-owner-part-0000.ndjson.gz", uploaded_names)
         self.assertFalse(orphan.exists())
+        uploaded_keys = {k for (_b, k) in r2.objects if k.endswith(".ndjson.gz")}
+        self.assertTrue(any(k.startswith("moo144/tradier/2026-09-08/") for k in uploaded_keys))
+
+    def test_restart_recovers_stale_prior_date_under_its_own_prefix(self):
+        """A crash on 2026-09-07 that never uploaded must be recovered under
+        moo144/tradier/2026-09-07/ when today's run is 2026-09-08 -- never
+        under today's prefix. This is the review's exact reproduction:
+        session identity was previously lost across a date rollover.
+        """
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+
+        def fake_capture(_client, _symbols, spool, stats, _close, *_a, **_k):
+            spool.write(stats.observe({
+                "type": "timesale", "symbol": "OPT", "date": "1000", "seq": 1,
+                "flag": "", "cancel": False, "correction": False, "session": "normal",
+                "collector_receipt_timestamp": collector.utc_now(),
+            }))
+            return collector.CaptureResult()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            import gzip
+            stale_spool_dir = Path(tmp) / "moo144-collector-spool" / "2026-09-07"
+            stale_spool_dir.mkdir(parents=True)
+            stale_orphan = stale_spool_dir / "prior-owner-part-0000.ndjson.gz"
+            with gzip.open(stale_orphan, "wt") as handle:
+                handle.write('{"type":"quote","note":"september 7 receipt"}\n')
+            result, r2 = self._run_main(
+                Path(tmp), fake_capture, session_open, session_close,
+                clock_sequence=[session_open] * 6 + [session_close],
+            )
+        self.assertEqual(result, 0)
+        self.assertFalse(stale_orphan.exists())
+        stale_keys = [k for (_b, k) in r2.objects if k.endswith("prior-owner-part-0000.ndjson.gz")]
+        self.assertEqual(len(stale_keys), 1)
+        self.assertTrue(stale_keys[0].startswith("moo144/tradier/2026-09-07/"))
+        self.assertFalse(stale_keys[0].startswith("moo144/tradier/2026-09-08/"))
+        # Today's own summary must not double-count or omit the recovered
+        # stale segment -- it's neither this attempt's own coverage nor
+        # already-remote-before-this-run for TODAY's prefix.
+        today_summaries = [
+            json.loads(v) for (_b, k), v in r2.objects.items()
+            if k.startswith("moo144/tradier/2026-09-08/summary-")
+        ]
+        self.assertEqual(len(today_summaries), 1)
+        recovered = today_summaries[0]["stale_sessions_recovered"]
+        self.assertIn("2026-09-07", recovered)
+        self.assertEqual(len(recovered["2026-09-07"]["resumed_artifacts"]), 1)
 
 
 if __name__ == "__main__":

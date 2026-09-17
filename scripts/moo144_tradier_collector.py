@@ -21,14 +21,31 @@ process:
   ever silently dropping an event.
 - claims the day with a renewable, fenced lease: a heartbeat renews it
   conditionally against the owner's own copy, and loses ownership (stopping
-  ingestion) rather than clobbering another owner's lease. A crash/restart
-  reconciles against R2 by content hash before resuming, and re-enqueues
-  any locally-spooled segment R2 doesn't already have.
+  ingestion) rather than clobbering another owner's lease. A renewal
+  failure that isn't a confirmed loss (a transient network/storage error)
+  is retried, not swallowed -- ownership is only relinquished once the
+  last *confirmed* deadline actually elapses. A crash/restart reconciles
+  against R2 by content hash before resuming, and re-enqueues any
+  locally-spooled segment R2 doesn't already have -- content identity is
+  always verified (downloading and hashing when the listing ETag alone
+  can't establish it), never assumed, before deleting local evidence.
+- spools each session under its own per-date subdirectory, so a crash on
+  one date can never be resumed under a different date's archive prefix;
+  any other date's leftover spool is recovered under its own prefix
+  before today's session starts.
 - persists the day's selected contract universe once and reloads it on any
   same-day restart, instead of re-selecting against the current spot price.
-- derives "complete" vs "partial" from actual coverage (no late start, no
-  reconnect gaps, spool fully drained, reconciliation clean) rather than
-  merely "no exception was raised".
+- derives "complete" vs "partial" from actual coverage -- on-time setup
+  (not just an on-time open-wait), at least one captured event, no
+  reconnect gaps, spool fully drained, reconciliation clean -- rather than
+  merely "reached wall-clock close without an exception". A gap stays open
+  (measuring the full outage) until data actually resumes, not merely
+  after a backoff sleep.
+- exits non-zero on a recoverable operational failure (spool exhaustion,
+  an undrained upload backlog, zero captured events) so the deployment's
+  restart policy actually fires, while deliberately exiting 0 on lease
+  loss -- another owner is legitimately active for that run_date, and
+  restarting would only start a competing-restart loop against them.
 """
 
 from __future__ import annotations
@@ -356,6 +373,46 @@ def renew_lease(
     return lease
 
 
+def run_lease_heartbeat(
+    r2: Any,
+    bucket: str,
+    run_date: str,
+    owner_id: str,
+    ttl_seconds: int,
+    confirmed_until: datetime,
+    stop: threading.Event,
+    lease_lost: threading.Event,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    wait: Callable[[float], bool] | None = None,
+) -> None:
+    """Renew the collection lease every ``ttl_seconds/3`` until told to stop.
+
+    A renewal failure comes in two shapes and both must be handled here so
+    the thread never dies silently: a confirmed ``LeaseLost`` (another
+    owner already holds it) stops ingestion immediately, while a transient
+    error (network/storage) must not be swallowed forever either -- once
+    ``now()`` reaches ``confirmed_until`` (the last deadline this process
+    actually proved it held the lease through) without a fresh confirmed
+    renewal, ownership can no longer be guaranteed, so ``lease_lost`` is
+    set and ingestion must stop even though no explicit takeover was ever
+    observed.
+    """
+    wait = wait if wait is not None else stop.wait
+    while not wait(ttl_seconds / 3):
+        try:
+            lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now)
+            confirmed_until = datetime.fromisoformat(lease["expires_at"])
+        except LeaseLost:
+            lease_lost.set()
+            return
+        except Exception:
+            if now() >= confirmed_until:
+                lease_lost.set()
+                return
+            # Transient failure, but our last confirmed ownership window
+            # hasn't elapsed yet -- keep retrying on the normal cadence.
+
+
 def universe_key(prefix: str) -> str:
     return f"{prefix}/universe.json"
 
@@ -458,6 +515,9 @@ class Uploader:
                     artifact = upload_file_verified(
                         self.r2, self.bucket, path, key, "application/x-ndjson", "gzip"
                     )
+                    # Only read the file for a record count once the upload
+                    # has actually succeeded -- not on every failed retry.
+                    artifact["records"] = count_ndjson_gz_records_local(path)
                     self.artifacts.append(artifact)
                     path.unlink(missing_ok=True)
                     with self.lock:
@@ -570,22 +630,34 @@ def _is_readable_gzip_ndjson(path: Path) -> bool:
         return False
 
 
-def _remote_content_matches(local_path: Path, remote_item: dict[str, Any]) -> bool | None:
-    """Compare local file content against a remote listing entry.
+def _remote_content_matches(
+    r2: Any, bucket: str, key: str, local_path: Path, remote_item: dict[str, Any],
+) -> bool:
+    """Verify local file content against the durable remote object.
 
-    Returns True/False when a definitive comparison was possible, or None
-    when the remote ETag isn't a plain MD5 (e.g. a multipart upload) and
-    content identity can't be established from the listing alone.
+    Always returns a definitive True/False -- unknown identity must never
+    authorize deletion. When the listing's ETag is a plain MD5 (the normal
+    case for our single-part uploads) it's compared directly. When it
+    isn't (e.g. a multipart upload, or missing), the listing alone can't
+    establish identity, so the actual remote bytes are fetched and hashed
+    instead of trusting the upload's own historical verification.
     """
-    etag = str(remote_item.get("ETag") or "").strip('"')
-    if not etag or "-" in etag:
-        return None
     import hashlib
-    digest = hashlib.md5()
+    local_digest = hashlib.md5()
     with local_path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest() == etag
+            local_digest.update(chunk)
+    local_hex = local_digest.hexdigest()
+
+    etag = str(remote_item.get("ETag") or "").strip('"')
+    if etag and "-" not in etag:
+        return local_hex == etag
+
+    try:
+        remote_bytes = r2.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except Exception:
+        return False  # can't verify -- never delete on an unverifiable identity
+    return local_hex == hashlib.md5(remote_bytes).hexdigest()
 
 
 def reconcile_existing_segments(
@@ -632,14 +704,11 @@ def reconcile_existing_segments(
         for path in sorted(spool_dir.glob("*.ndjson.gz")):
             remote = uploaded.get(path.name)
             if remote is not None:
-                matches = _remote_content_matches(path, remote)
-                if matches is False:
+                key = f"{prefix}/{path.name}"
+                if _remote_content_matches(r2, bucket, key, path, remote):
+                    path.unlink(missing_ok=True)
+                else:
                     needs_review.append(f"{path.name}: local content differs from archived object of the same name")
-                    continue
-                # matches is True, or None (can't verify -- trust the durable
-                # upload's own head-verification at write time) either way
-                # the archive already has this segment; don't re-upload it.
-                path.unlink(missing_ok=True)
                 continue
             if _is_readable_gzip_ndjson(path):
                 resume.append(path)
@@ -649,12 +718,81 @@ def reconcile_existing_segments(
     return {"artifacts": artifacts, "resume": resume, "needs_review": needs_review}
 
 
+def spool_dir_for(base_spool_dir: Path, run_date: str) -> Path:
+    """Per-date spool subdirectory, so segments from different sessions never
+    share a directory or filename-collide, and a stale date's leftovers are
+    trivially distinguishable from today's."""
+    return base_spool_dir / run_date
+
+
+def recover_stale_sessions(
+    base_spool_dir: Path,
+    current_run_date: str,
+    r2: Any,
+    bucket: str,
+    uploader_sleeper: Callable[[float], None] = time.sleep,
+    drain_timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Recover any prior day's spool left behind by a crash, before today's
+    session starts.
+
+    Each stale date subdirectory is reconciled and resumed against its OWN
+    archive prefix (``moo144/tradier/<that date>``) -- never today's -- so a
+    leftover segment from a previous session is never misfiled under the
+    current one. Best-effort and time-bounded: a date that doesn't finish
+    draining within ``drain_timeout_seconds`` is left on disk for the next
+    run rather than blocking today's collection indefinitely.
+    """
+    report: dict[str, Any] = {}
+    if not base_spool_dir.exists():
+        return report
+    for entry in sorted(base_spool_dir.iterdir()):
+        if not entry.is_dir() or entry.name == current_run_date:
+            continue
+        try:
+            date.fromisoformat(entry.name)
+        except ValueError:
+            continue  # not a session date directory -- leave it alone
+        stale_prefix = f"moo144/tradier/{entry.name}"
+        reconciliation = reconcile_existing_segments(r2, bucket, stale_prefix, entry)
+        resumed_artifacts: list[dict[str, Any]] = []
+        if reconciliation["resume"]:
+            stale_uploader = Uploader(
+                r2, bucket, stale_prefix, max_spool_bytes=1 << 62, sleeper=uploader_sleeper,
+            )
+            for path in reconciliation["resume"]:
+                stale_uploader.enqueue(path)
+            stale_uploader.start()
+            stale_uploader.drain_and_stop(timeout=drain_timeout_seconds)
+            resumed_artifacts = list(stale_uploader.artifacts)
+        report[entry.name] = {
+            "prefix": stale_prefix,
+            "reconciled_artifacts": len(reconciliation["artifacts"]),
+            "resumed_artifacts": resumed_artifacts,
+            "resume_incomplete": len(resumed_artifacts) < len(reconciliation["resume"]),
+            "needs_review": reconciliation["needs_review"],
+        }
+    return report
+
+
 def count_ndjson_gz_records(r2: Any, bucket: str, key: str) -> int | None:
     """Best-effort record count for a reconciled segment this process didn't
     write itself, so manifest totals can be audited against event_parts."""
     try:
         body = r2.get_object(Bucket=bucket, Key=key)["Body"].read()
         return sum(1 for line in gzip.decompress(body).splitlines() if line.strip())
+    except Exception:
+        return None
+
+
+def count_ndjson_gz_records_local(path: Path) -> int | None:
+    """Best-effort record count for a local segment before/at upload time --
+    covers both freshly-rotated and resumed-orphan segments uniformly, so
+    every uploaded artifact carries a durable count, not only reconciled
+    remote ones."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            return sum(1 for line in handle if line.strip())
     except Exception:
         return None
 
@@ -707,16 +845,34 @@ def capture_session(
     monotonic: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
     now_et: Callable[[], datetime] = lambda: datetime.now(ET),
+    result: CaptureResult | None = None,
 ) -> CaptureResult:
-    result = CaptureResult()
+    """Run the stream-read loop until session close, a lost lease, or an
+    exhausted spool.
+
+    ``result`` may be supplied by the caller so it can be shared with a
+    concurrently-running health publisher: this function mutates it in
+    place (rather than only returning a fresh one at the end) so
+    ``reconnects``/``gap_seconds`` are visible to another thread *during*
+    a long-running capture, not just after it returns.
+
+    A gap stays open (no ``stream_reconnect_resumed`` is written, and
+    ``consecutive_failures`` keeps climbing) across every failed reconnect
+    attempt following one ``stream_disconnect`` -- it only closes once an
+    actual event is received again, and ``gap_seconds`` accumulates the
+    full outage, not just backoff sleep time.
+    """
+    result = result if result is not None else CaptureResult()
     lease_lost = lease_lost or threading.Event()
     consecutive_failures = 0
+    gap_open = False
+    gap_started_at: float | None = None
 
     def stop_requested() -> bool:
         return STOP or lease_lost.is_set()
 
     while not stop_requested() and now_et() < session_close:
-        received = False
+        attempt_started = monotonic()
         try:
             session_id = client.create_market_session()
             payload = stream_payload(symbols, session_id)
@@ -729,7 +885,19 @@ def capture_session(
                         break
                     if not line:
                         continue
-                    received = True
+                    if gap_open:
+                        outage_seconds = monotonic() - gap_started_at
+                        result.gap_seconds += outage_seconds
+                        spool.write({
+                            "type": "gap",
+                            "reason": "stream_reconnect_resumed",
+                            "receipt_timestamp": utc_now(),
+                            "reconnect": result.reconnects,
+                            "outage_seconds": round(outage_seconds, 3),
+                        })
+                        gap_open = False
+                        gap_started_at = None
+                        consecutive_failures = 0
                     receipt = utc_now()
                     try:
                         event = json.loads(line)
@@ -756,21 +924,27 @@ def capture_session(
         except (requests.RequestException, OSError) as exc:
             if not is_retryable(exc):
                 raise
-            disconnect_at = monotonic()
-            spool.write({
-                "type": "gap",
-                "reason": "stream_disconnect",
-                "receipt_timestamp": utc_now(),
-                "error_type": type(exc).__name__,
-            })
+            if not gap_open:
+                gap_open = True
+                gap_started_at = attempt_started
+                consecutive_failures = 1
+                spool.write({
+                    "type": "gap",
+                    "reason": "stream_disconnect",
+                    "receipt_timestamp": utc_now(),
+                    "error_type": type(exc).__name__,
+                })
+            else:
+                consecutive_failures += 1
             result.reconnects += 1
-            consecutive_failures = 1 if received else consecutive_failures + 1
             if consecutive_failures > max_consecutive_reconnects:
                 budget_exceeded = RuntimeError(
                     f"Tradier stream exceeded {max_consecutive_reconnects} consecutive reconnects"
                 )
                 budget_exceeded.reconnects = result.reconnects  # type: ignore[attr-defined]
-                budget_exceeded.gap_seconds = result.gap_seconds  # type: ignore[attr-defined]
+                budget_exceeded.gap_seconds = (  # type: ignore[attr-defined]
+                    result.gap_seconds + (monotonic() - gap_started_at)
+                )
                 raise budget_exceeded from exc
             delay = min(2 ** (consecutive_failures - 1), 15)
             remaining = delay
@@ -778,17 +952,12 @@ def capture_session(
                 interval = min(0.5, remaining)
                 sleeper(interval)
                 remaining -= interval
-            result.gap_seconds += monotonic() - disconnect_at
-            spool.write({
-                "type": "gap",
-                "reason": "stream_reconnect_resumed",
-                "receipt_timestamp": utc_now(),
-                "reconnect": result.reconnects,
-                "outage_seconds": round(monotonic() - disconnect_at, 3),
-                "error_type": type(exc).__name__,
-            })
     if lease_lost.is_set():
         result.stop_reason = "lease_lost"
+    if gap_open and gap_started_at is not None:
+        # Terminal stop/close while still disconnected -- preserve the
+        # unresolved outage instead of silently discarding its duration.
+        result.gap_seconds += monotonic() - gap_started_at
     return result
 
 
@@ -808,7 +977,7 @@ def main(
     max_reconnects = int(os.getenv("MOO144_MAX_CONSECUTIVE_RECONNECTS", "5"))
     lease_ttl_seconds = int(os.getenv("MOO144_LEASE_TTL_SECONDS", "300"))
     max_spool_bytes = int(os.getenv("MOO144_MAX_SPOOL_BYTES", str(512 * 1024 * 1024)))
-    spool_dir = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir())) / "moo144-collector-spool"
+    base_spool_dir = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir())) / "moo144-collector-spool"
     if not 2 <= strike_count <= 20:
         raise RuntimeError("MOO144_STRIKE_COUNT must be between 2 and 20")
     if not 30 <= checkpoint_seconds <= 300:
@@ -846,7 +1015,13 @@ def main(
     symbols, universe = load_or_select_universe(
         client, r2, bucket, prefix, strike_count, run_date, clock_et()
     )
+    stale_recovery = recover_stale_sessions(
+        base_spool_dir, run_date, r2, bucket,
+        uploader_sleeper=uploader_sleeper, drain_timeout_seconds=drain_timeout_seconds,
+    )
+    spool_dir = spool_dir_for(base_spool_dir, run_date)
     reconciliation = reconcile_existing_segments(r2, bucket, prefix, spool_dir)
+    resumed_names = {path.name for path in reconciliation["resume"]}
 
     start_payload = {
         "schema_version": 2,
@@ -861,6 +1036,7 @@ def main(
         "reconciled_segments": len(reconciliation["artifacts"]),
         "resumed_segments": len(reconciliation["resume"]),
         "needs_review": reconciliation["needs_review"],
+        "stale_sessions_recovered": stale_recovery,
     }
     preflight = json_artifact(r2, bucket, f"{prefix}/run-started-{owner_id}.json", start_payload)
     print(json.dumps({"event": "r2_preflight_pass", "key": preflight["key"]}), flush=True)
@@ -876,14 +1052,7 @@ def main(
 
     lease_stop = threading.Event()
     lease_lost_event = threading.Event()
-
-    def lease_heartbeat() -> None:
-        while not lease_stop.wait(lease_ttl_seconds / 3):
-            try:
-                renew_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds)
-            except LeaseLost:
-                lease_lost_event.set()
-                return
+    lease_confirmed_until = datetime.fromisoformat(lease["expires_at"])
 
     def health_publisher() -> None:
         while not lease_stop.wait(HEALTH_PUBLISH_INTERVAL_SECONDS):
@@ -892,20 +1061,27 @@ def main(
             except Exception:
                 pass
 
-    heartbeat_thread = threading.Thread(target=lease_heartbeat, daemon=True)
+    heartbeat_thread = threading.Thread(
+        target=run_lease_heartbeat,
+        args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until, lease_stop, lease_lost_event),
+        kwargs={"now": lambda: datetime.now(timezone.utc)},
+        daemon=True,
+    )
     heartbeat_thread.start()
     health_thread = threading.Thread(target=health_publisher, daemon=True)
     health_thread.start()
 
+    capture_started_at = clock_et()
     try:
         capture_result = capture_session(
             client, symbols, spool, stats, session_close, max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
+            result=capture_result,
         )
     except Exception as exc:
         fatal_error = f"{type(exc).__name__}: {exc}"
-        capture_result.reconnects = getattr(exc, "reconnects", 0)
-        capture_result.gap_seconds = getattr(exc, "gap_seconds", 0.0)
+        capture_result.reconnects = getattr(exc, "reconnects", capture_result.reconnects)
+        capture_result.gap_seconds = getattr(exc, "gap_seconds", capture_result.gap_seconds)
     finally:
         lease_stop.set()
         spool.close()
@@ -923,7 +1099,16 @@ def main(
         if records is not None:
             reconciled_records_total += records
 
+    resumed_records_total = 0
+    for artifact in uploader.artifacts:
+        if Path(artifact["key"]).name in resumed_names and artifact.get("records") is not None:
+            resumed_records_total += artifact["records"]
+
     finished_at = utc_now()
+    effective_late_start_seconds = max(0.0, (capture_started_at - session_open).total_seconds())
+    attempt_event_counts = dict(stats.counts)
+    attempt_total_events = sum(attempt_event_counts.values())
+
     partial_reasons: list[str] = []
     if fatal_error is not None:
         partial_reasons.append(f"fatal_error: {fatal_error}")
@@ -933,17 +1118,20 @@ def main(
         partial_reasons.append("stopped_by_signal")
     if clock_et() < session_close:
         partial_reasons.append("did_not_reach_session_close")
-    if late_start_seconds > LATE_START_TOLERANCE_SECONDS:
-        partial_reasons.append(f"late_start_seconds={late_start_seconds:.1f}")
+    if effective_late_start_seconds > LATE_START_TOLERANCE_SECONDS:
+        partial_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
     if capture_result.reconnects > 0:
         partial_reasons.append(f"reconnects={capture_result.reconnects}")
     if not uploader.fully_drained():
         partial_reasons.append("upload_spool_not_fully_drained")
     if reconciliation["needs_review"]:
         partial_reasons.append("reconciliation_needs_review")
+    if any(session.get("needs_review") for session in stale_recovery.values()):
+        partial_reasons.append("stale_session_needs_review")
+    if attempt_total_events == 0:
+        partial_reasons.append("no_events_captured")
     status = "partial" if partial_reasons else "complete"
 
-    attempt_event_counts = dict(stats.counts)
     summary = {
         "schema_version": 2,
         "issue": "MOO-169",
@@ -954,6 +1142,7 @@ def main(
         "session_open": session_open.isoformat(),
         "session_close": session_close.isoformat(),
         "late_start_seconds": late_start_seconds,
+        "effective_late_start_seconds": effective_late_start_seconds,
         "stopped_by_signal": STOP,
         "fatal_error": fatal_error,
         "status": status,
@@ -965,8 +1154,12 @@ def main(
         "upload_failures": uploader.failures,
         "attempt_event_counts": attempt_event_counts,
         "reconciled_prior_records": reconciled_records_total,
-        "total_records_this_run_plus_reconciled": sum(attempt_event_counts.values()) + reconciled_records_total,
+        "resumed_local_records": resumed_records_total,
+        "total_records_this_run_plus_reconciled": (
+            attempt_total_events + reconciled_records_total + resumed_records_total
+        ),
         "needs_review": reconciliation["needs_review"],
+        "stale_sessions_recovered": stale_recovery,
         **stats.summary(),
         "limitations": [
             "The preserved payload is normalized/enriched JSON, not byte-exact wire data.",
@@ -996,8 +1189,26 @@ def main(
         "manifest": manifest_meta,
         "event_counts": attempt_event_counts,
     }), flush=True)
+
     if fatal_error is not None:
         raise RuntimeError(fatal_error)
+
+    # Recoverable operational failures must exit non-zero so the deployment's
+    # on_failure restart policy actually fires -- a partial *summary* is not
+    # enough on its own, since nothing reads it synchronously. Ownership loss
+    # is deliberately excluded: another owner is legitimately active for this
+    # run_date, and restarting this process would only fight that owner in a
+    # competing-restart loop instead of recovering anything.
+    recoverable = (
+        capture_result.stop_reason == "spool_exhausted"
+        or not uploader.fully_drained()
+        or (attempt_total_events == 0 and capture_result.stop_reason != "lease_lost" and not STOP)
+    )
+    if recoverable:
+        raise RuntimeError(
+            f"MOO-169 collection for {run_date} ended in a recoverable state "
+            f"requiring restart: {', '.join(partial_reasons) or 'incomplete coverage'}"
+        )
     return 0
 
 
