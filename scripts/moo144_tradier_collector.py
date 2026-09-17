@@ -96,6 +96,13 @@ class LeaseLost(RuntimeError):
     """Raised when this process's collection lease was taken by another owner."""
 
 
+class LeaseUnavailable(RuntimeError):
+    """Raised when the lease object could not be read due to a transient
+    storage/service failure -- distinct from a *confirmed* absence
+    (never created) or a confirmed takeover (another owner_id present).
+    Ownership is neither proven lost nor proven held in this case."""
+
+
 class SpoolExhausted(RuntimeError):
     """Raised when the upload spool has grown past its configured cap."""
 
@@ -271,7 +278,25 @@ def lease_key(run_date: str) -> str:
     return f"moo144/tradier/{run_date}/lease.json"
 
 
+def _is_confirmed_absent(exc: Exception) -> bool:
+    """True only for a response that positively confirms the object doesn't
+    exist (a 404/NoSuchKey) -- never for a 5xx or other service/transport
+    failure, which proves nothing about whether the lease exists."""
+    response = getattr(exc, "response", {}) or {}
+    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    code = (response.get("Error") or {}).get("Code")
+    return status == 404 or code in {"NoSuchKey", "404", "NotFound"}
+
+
 def _read_lease(client: Any, bucket: str, run_date: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Read the lease object, or (None, None) for a *confirmed* absence.
+
+    A transient storage/service failure (a 5xx, timeout, or any ClientError
+    that isn't a positive 404) raises ``LeaseUnavailable`` instead of being
+    silently treated as "no lease" -- that conflation is what let a single
+    InternalError look identical to a genuinely deleted/never-created lease
+    to every caller.
+    """
     key = lease_key(run_date)
     try:
         head = client.head_object(Bucket=bucket, Key=key)
@@ -279,8 +304,10 @@ def _read_lease(client: Any, bucket: str, run_date: str) -> tuple[dict[str, Any]
         return json.loads(body), head.get("ETag")
     except client.exceptions.NoSuchKey:
         return None, None
-    except client.exceptions.ClientError:
-        return None, None
+    except client.exceptions.ClientError as exc:
+        if _is_confirmed_absent(exc):
+            return None, None
+        raise LeaseUnavailable(f"transient error reading lease for {run_date}") from exc
 
 
 def acquire_lease(
@@ -384,18 +411,29 @@ def run_lease_heartbeat(
     lease_lost: threading.Event,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     wait: Callable[[float], bool] | None = None,
+    loss_reason: dict[str, str] | None = None,
 ) -> None:
     """Renew the collection lease every ``ttl_seconds/3`` until told to stop.
 
-    A renewal failure comes in two shapes and both must be handled here so
-    the thread never dies silently: a confirmed ``LeaseLost`` (another
-    owner already holds it) stops ingestion immediately, while a transient
-    error (network/storage) must not be swallowed forever either -- once
-    ``now()`` reaches ``confirmed_until`` (the last deadline this process
-    actually proved it held the lease through) without a fresh confirmed
-    renewal, ownership can no longer be guaranteed, so ``lease_lost`` is
-    set and ingestion must stop even though no explicit takeover was ever
-    observed.
+    A renewal failure comes in two distinct shapes, and both must be
+    handled here so the thread never dies silently -- but they are NOT the
+    same outcome and ``loss_reason`` (when given) records which one
+    happened, so the caller can react differently:
+
+    - A confirmed ``LeaseLost`` (another owner's lease is now live) means
+      this process is definitively no longer the owner. Ingestion must
+      stop immediately; restarting would only compete with the new owner.
+      ``loss_reason["reason"] = "confirmed_takeover"``.
+    - A transient failure (``LeaseUnavailable``, or any other
+      network/storage error) proves nothing about ownership either way.
+      It's retried on the normal cadence -- bounded by ``confirmed_until``,
+      the last deadline this process actually proved it held the lease
+      through. Only once that confirmed deadline elapses without a fresh
+      renewal does ownership become unguaranteed, at which point ingestion
+      must still stop (fail-safe), but this is an *uncertain* loss, not a
+      confirmed one -- restarting is appropriate here, since no other
+      owner is known to exist yet.
+      ``loss_reason["reason"] = "ownership_uncertain"``.
     """
     wait = wait if wait is not None else stop.wait
     while not wait(ttl_seconds / 3):
@@ -403,10 +441,14 @@ def run_lease_heartbeat(
             lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now)
             confirmed_until = datetime.fromisoformat(lease["expires_at"])
         except LeaseLost:
+            if loss_reason is not None:
+                loss_reason["reason"] = "confirmed_takeover"
             lease_lost.set()
             return
         except Exception:
             if now() >= confirmed_until:
+                if loss_reason is not None:
+                    loss_reason["reason"] = "ownership_uncertain"
                 lease_lost.set()
                 return
             # Transient failure, but our last confirmed ownership window
@@ -867,12 +909,16 @@ def capture_session(
     consecutive_failures = 0
     gap_open = False
     gap_started_at: float | None = None
+    # The boundary a gap starts from is the last moment the stream was known
+    # to be alive -- not when the current connection attempt began. A long
+    # healthy connection that later drops must not have its entire lifetime
+    # counted as outage.
+    last_good_at = monotonic()
 
     def stop_requested() -> bool:
         return STOP or lease_lost.is_set()
 
     while not stop_requested() and now_et() < session_close:
-        attempt_started = monotonic()
         try:
             session_id = client.create_market_session()
             payload = stream_payload(symbols, session_id)
@@ -885,6 +931,7 @@ def capture_session(
                         break
                     if not line:
                         continue
+                    last_good_at = monotonic()
                     if gap_open:
                         outage_seconds = monotonic() - gap_started_at
                         result.gap_seconds += outage_seconds
@@ -926,7 +973,7 @@ def capture_session(
                 raise
             if not gap_open:
                 gap_open = True
-                gap_started_at = attempt_started
+                gap_started_at = last_good_at
                 consecutive_failures = 1
                 spool.write({
                     "type": "gap",
@@ -1053,6 +1100,7 @@ def main(
     lease_stop = threading.Event()
     lease_lost_event = threading.Event()
     lease_confirmed_until = datetime.fromisoformat(lease["expires_at"])
+    lease_loss_reason: dict[str, str] = {}
 
     def health_publisher() -> None:
         while not lease_stop.wait(HEALTH_PUBLISH_INTERVAL_SECONDS):
@@ -1064,7 +1112,7 @@ def main(
     heartbeat_thread = threading.Thread(
         target=run_lease_heartbeat,
         args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until, lease_stop, lease_lost_event),
-        kwargs={"now": lambda: datetime.now(timezone.utc)},
+        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason},
         daemon=True,
     )
     heartbeat_thread.start()
@@ -1109,11 +1157,20 @@ def main(
     attempt_event_counts = dict(stats.counts)
     attempt_total_events = sum(attempt_event_counts.values())
 
+    lease_loss_kind = lease_loss_reason.get("reason") if capture_result.stop_reason == "lease_lost" else None
+
     partial_reasons: list[str] = []
     if fatal_error is not None:
         partial_reasons.append(f"fatal_error: {fatal_error}")
     if capture_result.stop_reason:
-        partial_reasons.append(capture_result.stop_reason)
+        reason_label = capture_result.stop_reason
+        if lease_loss_kind:
+            # Distinguish a confirmed takeover (another owner is now live --
+            # restarting would only compete with them) from an uncertain
+            # loss after repeated transient renewal failures (no competing
+            # owner is known to exist -- restarting is the right recovery).
+            reason_label = f"{reason_label}:{lease_loss_kind}"
+        partial_reasons.append(reason_label)
     if STOP:
         partial_reasons.append("stopped_by_signal")
     if clock_et() < session_close:
@@ -1195,13 +1252,17 @@ def main(
 
     # Recoverable operational failures must exit non-zero so the deployment's
     # on_failure restart policy actually fires -- a partial *summary* is not
-    # enough on its own, since nothing reads it synchronously. Ownership loss
-    # is deliberately excluded: another owner is legitimately active for this
-    # run_date, and restarting this process would only fight that owner in a
-    # competing-restart loop instead of recovering anything.
+    # enough on its own, since nothing reads it synchronously. A *confirmed*
+    # ownership takeover is deliberately excluded: another owner is
+    # legitimately active for this run_date, and restarting this process
+    # would only fight them in a competing-restart loop. An *uncertain* loss
+    # (repeated transient renewal failures past the confirmed deadline, with
+    # no observed competing owner) is the opposite case -- it IS recoverable,
+    # since restarting can only help and there's nothing to compete with.
     recoverable = (
         capture_result.stop_reason == "spool_exhausted"
         or not uploader.fully_drained()
+        or lease_loss_kind == "ownership_uncertain"
         or (attempt_total_events == 0 and capture_result.stop_reason != "lease_lost" and not STOP)
     )
     if recoverable:

@@ -242,6 +242,33 @@ class LeaseTests(unittest.TestCase):
         with self.assertRaises(collector.LeaseLost):
             collector.renew_lease(r2, "bucket", "2026-09-08", "owner-a", ttl_seconds=300)
 
+    def test_transient_storage_error_is_not_treated_as_confirmed_absence(self):
+        """The review's exact reproduction: a 500/InternalError reading the
+        lease must never be silently folded into 'no lease exists' -- that
+        conflation is what let a storage hiccup masquerade as a confirmed
+        takeover."""
+        r2 = FakeR2()
+        collector.acquire_lease(r2, "bucket", "2026-09-08", "owner-a", ttl_seconds=300)
+        r2.head_object = Mock(side_effect=ClientError(status=500, code="InternalError"))
+        with self.assertRaises(collector.LeaseUnavailable):
+            collector._read_lease(r2, "bucket", "2026-09-08")
+
+    def test_confirmed_404_is_still_treated_as_absent(self):
+        r2 = FakeR2()
+        r2.head_object = Mock(side_effect=ClientError(status=404, code="NoSuchKey"))
+        current, etag = collector._read_lease(r2, "bucket", "2026-09-08")
+        self.assertIsNone(current)
+        self.assertIsNone(etag)
+
+    def test_renew_propagates_transient_failure_instead_of_declaring_loss(self):
+        """A transient storage error during renewal must not be reported as
+        LeaseLost -- it proves nothing about ownership either way."""
+        r2 = FakeR2()
+        collector.acquire_lease(r2, "bucket", "2026-09-08", "owner-a", ttl_seconds=300)
+        r2.head_object = Mock(side_effect=ClientError(status=503, code="ServiceUnavailable"))
+        with self.assertRaises(collector.LeaseUnavailable):
+            collector.renew_lease(r2, "bucket", "2026-09-08", "owner-a", ttl_seconds=300)
+
 
 class LeaseHeartbeatTests(unittest.TestCase):
     """The review's exact reproduction: a transient renewal exception must
@@ -277,6 +304,9 @@ class LeaseHeartbeatTests(unittest.TestCase):
         self.assertFalse(lease_lost.is_set())
 
     def test_transient_failure_past_deadline_sets_lease_lost_without_raising(self):
+        """Also verifies this is recorded as an *uncertain* loss, not a
+        confirmed takeover -- main() needs that distinction to decide
+        whether restarting is safe."""
         def flaky_renew(*_a, **_k):
             raise TimeoutError("simulated network timeout")
 
@@ -284,6 +314,7 @@ class LeaseHeartbeatTests(unittest.TestCase):
             stop = threading.Event()
             lease_lost = threading.Event()
             confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            loss_reason: dict[str, str] = {}
             # now() is already past confirmed_until on the very first tick --
             # ownership can no longer be guaranteed.
             collector.run_lease_heartbeat(
@@ -291,8 +322,33 @@ class LeaseHeartbeatTests(unittest.TestCase):
                 stop, lease_lost,
                 now=lambda: datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc),
                 wait=lambda _timeout: False if not lease_lost.is_set() else True,
+                loss_reason=loss_reason,
             )
         self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
+
+    def test_lease_unavailable_is_handled_the_same_as_any_other_transient_error(self):
+        """LeaseUnavailable (the new exception _read_lease/renew_lease raise
+        for a transient storage error) must flow through the same
+        retry-then-uncertain-loss path as any other Exception -- not be
+        mistaken for LeaseLost."""
+        def flaky_renew(*_a, **_k):
+            raise collector.LeaseUnavailable("simulated 500 reading lease")
+
+        with patch.object(collector, "renew_lease", side_effect=flaky_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            loss_reason: dict[str, str] = {}
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc),
+                wait=lambda _timeout: False if not lease_lost.is_set() else True,
+                loss_reason=loss_reason,
+            )
+        self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
 
     def test_lease_lost_from_renewal_stops_immediately(self):
         def losing_renew(*_a, **_k):
@@ -302,13 +358,16 @@ class LeaseHeartbeatTests(unittest.TestCase):
             stop = threading.Event()
             lease_lost = threading.Event()
             confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            loss_reason: dict[str, str] = {}
             collector.run_lease_heartbeat(
                 None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
                 stop, lease_lost,
                 now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
                 wait=lambda _timeout: False,
+                loss_reason=loss_reason,
             )
         self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "confirmed_takeover")
 
     def test_successful_renewal_advances_confirmed_deadline(self):
         renewed = {"expires_at": "2026-09-08T13:00:00+00:00"}
@@ -654,6 +713,52 @@ class CaptureSessionTests(unittest.TestCase):
         self.assertEqual(len(disconnects), 1)
         self.assertEqual(len(resumes), 1)
         self.assertGreater(result.gap_seconds, 0.0)
+
+    def test_gap_excludes_the_preceding_healthy_connection_duration(self):
+        """Owen's exact reproduction: a healthy quote long before the
+        disconnect, then disconnect, then a quote 1 second later, must
+        report ~1 second of outage -- not the entire healthy connection's
+        lifetime up to that point."""
+        clock = {"t": 0.0}
+
+        def timed_lines(pairs):
+            for line, t in pairs:
+                clock["t"] = t
+                yield line
+
+        client = FakeStreamClient()
+        client.session.get.side_effect = [
+            FakeResponseWithLines(timed_lines([
+                ('{"type": "quote", "symbol": "QQQ"}', 10.0),
+            ])),
+            FakeResponseWithLines(timed_lines([
+                ('{"type": "quote", "symbol": "QQQ"}', 11.0),
+            ])),
+        ]
+        events = []
+
+        class MemorySpool:
+            def write(self, event):
+                events.append(event)
+
+        close = datetime(2026, 9, 8, 16, 0, 0, tzinfo=ET)
+        now_calls = {"n": 0}
+
+        def now_et():
+            now_calls["n"] += 1
+            return datetime(2026, 9, 8, 10, 0, tzinfo=ET) if now_calls["n"] <= 5 else close
+
+        result = collector.capture_session(
+            client, ["QQQ"], MemorySpool(), collector.BoundedStats(), close,
+            max_consecutive_reconnects=5,
+            monotonic=lambda: clock["t"],
+            sleeper=lambda _s: None,
+            now_et=now_et,
+        )
+        resumes = [e for e in events if e.get("type") == "gap" and e["reason"] == "stream_reconnect_resumed"]
+        self.assertEqual(len(resumes), 1)
+        self.assertAlmostEqual(resumes[0]["outage_seconds"], 1.0)
+        self.assertAlmostEqual(result.gap_seconds, 1.0)
 
     def test_gap_stays_open_across_repeated_failed_reconnects(self):
         """Multiple consecutive failed reconnect attempts within the same
