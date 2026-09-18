@@ -378,11 +378,10 @@ class LeaseHeartbeatTests(unittest.TestCase):
         self.assertTrue(lease_lost.is_set())
         self.assertEqual(loss_reason["reason"], "confirmed_absence")
 
-    def test_bare_lease_lost_fallback_defaults_to_confirmed_takeover(self):
+    def test_bare_lease_lost_fallback_requires_recovery(self):
         """Defensive coverage: an unforeseen bare LeaseLost (neither
         specific subclass) must still stop ingestion, and conservatively
-        default to the never-restart classification rather than guessing
-        it's safe to restart."""
+        use the recoverable classification because takeover is unverified."""
         def bare_lost_renew(*_a, **_k):
             raise collector.LeaseLost("unclassified loss")
 
@@ -399,7 +398,7 @@ class LeaseHeartbeatTests(unittest.TestCase):
                 loss_reason=loss_reason,
             )
         self.assertTrue(lease_lost.is_set())
-        self.assertEqual(loss_reason["reason"], "confirmed_takeover")
+        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
 
     def test_successful_renewal_updates_shared_confirmed_until_ref(self):
         renewed = {"expires_at": "2026-09-08T13:00:00+00:00"}
@@ -1064,7 +1063,7 @@ class MainLifecycleTests(unittest.TestCase):
                     clock_et=clock_et,
                     sleeper=lambda _s: None,
                     session_bounds=lambda _day: (session_open, session_close),
-                    uploader_sleeper=lambda _s: None,
+                    uploader_sleeper=time.sleep,
                     drain_timeout_seconds=drain_timeout_seconds,
                 )
             if expect_failure:
@@ -1073,6 +1072,90 @@ class MainLifecycleTests(unittest.TestCase):
                 return None, r2
             result = call()
         return result, r2
+
+    def test_renewal_conflict_recovery_through_main(self):
+        # Exercise actual storage classification, heartbeat, and main exit
+        # semantics together, including deletion AFTER a successful read.
+        cases = [
+            ("missing_at_read", "confirmed_absence", True),
+            ("deleted_during_write", "confirmed_absence", True),
+            ("live_competitor", "confirmed_takeover", False),
+            ("expired_competitor", "ownership_uncertain", True),
+            ("unreadable_after_conflict", "ownership_uncertain", True),
+            ("same_owner_after_conflict", "ownership_uncertain", True),
+            ("invalid_after_conflict", "ownership_uncertain", True),
+        ]
+        real_heartbeat = collector.run_lease_heartbeat
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+        for scenario, expected_reason, recoverable in cases:
+            with self.subTest(scenario=scenario):
+                r2 = FakeR2()
+                ready = threading.Event()
+                errors = []
+
+                def heartbeat(storage, bucket, day, owner, ttl, ref, stop, lost, **kwargs):
+                    try:
+                        key = collector.lease_key(day)
+                        original_put = storage.put_object
+                        if scenario == "missing_at_read":
+                            storage.objects.pop((bucket, key))
+                        else:
+                            def conflict(**args):
+                                if args.get("IfMatch") is not None:
+                                    if scenario == "deleted_during_write":
+                                        storage.objects.pop((bucket, key))
+                                        storage.etags.pop((bucket, key))
+                                    elif scenario == "unreadable_after_conflict":
+                                        original_head = storage.head_object
+                                        def unavailable_lease(**head_args):
+                                            if head_args["Key"] == key:
+                                                raise ClientError(500, "InternalError")
+                                            return original_head(**head_args)
+                                        storage.head_object = unavailable_lease
+                                    elif scenario != "same_owner_after_conflict":
+                                        lease = json.loads(storage.objects[(bucket, key)])
+                                        lease["owner_id"] = "other-owner"
+                                        lease["expires_at"] = (
+                                            "invalid" if scenario == "invalid_after_conflict" else
+                                            (datetime.now(timezone.utc) + timedelta(
+                                                seconds=-70 if scenario == "expired_competitor" else 300
+                                            )).isoformat()
+                                        )
+                                        original_put(Bucket=bucket, Key=key, Body=json.dumps(lease).encode())
+                                    raise ClientError(412, "PreconditionFailed")
+                                return original_put(**args)
+                            storage.put_object = conflict
+                        real_heartbeat(storage, bucket, day, owner, ttl, ref, stop, lost,
+                                       wait=lambda _: False, **kwargs)
+                    except BaseException as exc:
+                        errors.append(exc)
+                    finally:
+                        ready.set()
+
+                def capture(_client, _symbols, _spool, _stats, _close, *_a, **kwargs):
+                    self.assertTrue(ready.wait(2), "heartbeat did not finish")
+                    if errors:
+                        raise errors[0]
+                    self.assertTrue(kwargs["lease_lost"].is_set())
+                    result = collector.CaptureResult()
+                    result.stop_reason = "lease_lost"
+                    return result
+
+                with tempfile.TemporaryDirectory() as tmp, patch.object(
+                    collector, "run_lease_heartbeat", side_effect=heartbeat
+                ):
+                    result, storage = self._run_main(
+                        Path(tmp), capture, session_open, session_close,
+                        [session_open] * 8, r2=r2, expect_failure=recoverable,
+                    )
+                self.assertEqual(errors, [])
+                summary = next(json.loads(v) for (_b, k), v in storage.objects.items()
+                               if "/summary-" in k)
+                self.assertIn("lease_lost:" + expected_reason, summary["partial_reasons"])
+                self.assertEqual(summary["status"], "partial")
+                if not recoverable:
+                    self.assertEqual(result, 0)
 
     def test_holiday_is_a_clean_noop(self):
         r2 = FakeR2()
@@ -1376,3 +1459,4 @@ class MainLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

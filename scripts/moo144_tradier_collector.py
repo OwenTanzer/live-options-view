@@ -116,6 +116,10 @@ class LeaseMissing(LeaseLost):
     is known to be collecting, so a fresh process should reacquire."""
 
 
+class LeaseOwnershipUncertain(LeaseLost):
+    """Stop intake and recover; no live competing owner has been verified."""
+
+
 class LeaseUnavailable(RuntimeError):
     """Raised when the lease object could not be read due to a transient
     storage/service failure -- distinct from a *confirmed* absence
@@ -375,6 +379,28 @@ def acquire_lease(
     return lease
 
 
+def _require_live_lease_owner(
+    current: dict[str, Any] | None, owner_id: str, run_date: str,
+    now: Callable[[], datetime],
+) -> None:
+    if current is None:
+        raise LeaseMissing(f"MOO-144 lease for {run_date} is confirmed absent")
+    try:
+        current_owner = current["owner_id"]
+        expires_at = datetime.fromisoformat(current["expires_at"])
+        if not isinstance(current_owner, str) or not current_owner or expires_at.tzinfo is None:
+            raise ValueError("invalid lease identity or expiry")
+        live = expires_at > now()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LeaseOwnershipUncertain(f"MOO-144 lease for {run_date} is invalid") from exc
+    if not live:
+        raise LeaseOwnershipUncertain(f"MOO-144 lease for {run_date} has expired")
+    if current_owner != owner_id:
+        raise LeaseTakenByAnotherOwner(
+            f"MOO-144 lease for {run_date} is now owned by {current_owner!r}"
+        )
+
+
 def renew_lease(
     client: Any,
     bucket: str,
@@ -397,12 +423,7 @@ def renew_lease(
     ``_read_lease`` unchanged.
     """
     current, etag = _read_lease(client, bucket, run_date)
-    if current is None:
-        raise LeaseMissing(f"MOO-144 lease for {run_date} is confirmed absent")
-    if current.get("owner_id") != owner_id:
-        raise LeaseTakenByAnotherOwner(
-            f"MOO-144 lease for {run_date} is now owned by {current.get('owner_id')!r}"
-        )
+    _require_live_lease_owner(current, owner_id, run_date, now)
     lease = {
         "run_date": run_date,
         "owner_id": owner_id,
@@ -420,10 +441,17 @@ def renew_lease(
         status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
         code = (response.get("Error") or {}).get("Code")
         if status in (412, 409) or code in {"PreconditionFailed", "412"}:
-            # Someone else won a concurrent renewal race -- a live competing
-            # owner, confirmed, not an absence.
-            raise LeaseTakenByAnotherOwner(
-                f"MOO-144 lease for {run_date} was renewed concurrently"
+            # A failed conditional write proves only that renewal failed.
+            # Deletion also causes this response; verify ownership afresh.
+            try:
+                current, _ = _read_lease(client, bucket, run_date)
+            except Exception as read_exc:
+                raise LeaseOwnershipUncertain(
+                    f"MOO-144 lease for {run_date} could not be verified after renewal conflict"
+                ) from read_exc
+            _require_live_lease_owner(current, owner_id, run_date, now)
+            raise LeaseOwnershipUncertain(
+                f"MOO-144 lease for {run_date} renewal conflicted without a verified takeover"
             ) from exc
         raise
     return lease
@@ -484,13 +512,11 @@ def run_lease_heartbeat(
             lease_lost.set()
             return
         except LeaseLost:
-            # Defensive fallback for an unforeseen bare LeaseLost/subclass:
-            # treat conservatively as a confirmed takeover so we never risk
-            # a competing restart against a real owner we failed to
-            # classify. setdefault so a reason the watchdog already
-            # recorded independently isn't clobbered.
+            # Unclassified loss is not proof of a live competing owner.
+            # Reacquisition remains conditional, so recovery cannot steal
+            # a lease from a verified live owner.
             if loss_reason is not None:
-                loss_reason.setdefault("reason", "confirmed_takeover")
+                loss_reason.setdefault("reason", "ownership_uncertain")
             lease_lost.set()
             return
         except Exception:

@@ -391,8 +391,12 @@ restating fixed claims):
     competing owner, but no confirmed continued ownership either) and,
     like a confirmed absence, recovers via restart rather than exiting
     clean.
-  Only a confirmed takeover skips the restart; both other lease-loss
-  kinds are treated as recoverable failures.
+  A conditional renewal conflict (409/412) triggers a fresh lease read;
+  the conflict alone never proves takeover. Only a different, nonempty
+  owner identity with a valid, unexpired deadline suppresses restart.
+  Missing, expired, malformed, unreadable-after-conflict, and unclassified
+  ownership all stop intake and enter recoverable handling. Reacquisition
+  remains conditional and cannot overwrite a live competing lease.
 - Each session spools under its own `<MOO144_SPOOL_DIR>/<run_date>/`
   subdirectory, so segments from different dates can never collide or be
   misfiled under the wrong archive prefix. Any other date's leftover spool
@@ -520,3 +524,4 @@ repo's contributor doesn't, per the MOO-144 probe's setup thread):**
 - **Alert system** — detect strike crossing from p75 → p90 OI bucket and push notification
 - **Access control** — gate behind Cloudflare Access for subscriber-only distribution
 - **Historical replay** — scrub through today's intraday snapshots in the viewer
+
