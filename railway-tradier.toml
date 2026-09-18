@@ -1,0 +1,12 @@
+# Dedicated OA-169 worker; select /railway-tradier.toml for this service only.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/scripts/moo144_tradier_collector.py", "/scripts/moo144_tradier_probe.py", "/requirements.txt", "/Dockerfile", "/railway-tradier.toml"]
+
+[deploy]
+startCommand = "python -u scripts/moo144_tradier_collector.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+cronSchedule = "15 12 * * 1-5"
+numReplicas = 1
