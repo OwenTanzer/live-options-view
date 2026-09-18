@@ -1,0 +1,34 @@
+name: MOO-171 snapshot analysis tests
+
+# All tests run against synthetic in-memory fixtures (FakeSource in
+# tests/test_panel.py) -- no R2 credentials, network access, or the checked-in
+# real archive is needed. The committed out/ evidence (report, plots,
+# aggregated CSVs) is generated separately via run_audit.py/run_measures.py/
+# run_report.py against the live R2 bucket, not by this workflow.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "moo171_snapshot_analysis/**"
+      - ".github/workflows/moo171-snapshot-analysis-ci.yml"
+  pull_request:
+    paths:
+      - "moo171_snapshot_analysis/**"
+      - ".github/workflows/moo171-snapshot-analysis-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: moo171_snapshot_analysis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run test suite
+        run: python -m pytest tests/ -v
