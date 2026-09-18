@@ -93,7 +93,27 @@ HEALTH_PUBLISH_INTERVAL_SECONDS = 60
 
 
 class LeaseLost(RuntimeError):
-    """Raised when this process's collection lease was taken by another owner."""
+    """Base class: this process can no longer prove it holds the lease.
+
+    Never raised directly by renew_lease -- always one of the two specific
+    subclasses below, since "confirmed takeover" and "confirmed absence"
+    require different recovery behavior (see run_lease_heartbeat). Kept as
+    a common base so any code that only needs "should ingestion stop" can
+    still catch it broadly.
+    """
+
+
+class LeaseTakenByAnotherOwner(LeaseLost):
+    """A verified, live competing owner now holds the lease. This process
+    is definitively no longer the owner -- restarting would only compete
+    with the real new owner, so this must never trigger a restart."""
+
+
+class LeaseMissing(LeaseLost):
+    """The lease object is confirmed absent (deleted, or expired and never
+    recreated) -- NOT evidence that another owner exists. Unlike a
+    confirmed takeover, restarting here is the correct recovery: nobody
+    is known to be collecting, so a fresh process should reacquire."""
 
 
 class LeaseUnavailable(RuntimeError):
@@ -368,14 +388,19 @@ def renew_lease(
     Unlike acquisition, a renewal must never be able to clobber a newer
     owner's lease: it reads the current object first and requires both a
     matching owner_id and a conditional ``IfMatch`` on that exact version.
-    Raises ``LeaseLost`` if the lease disappeared or now belongs to someone
-    else -- the caller must stop ingesting in that case, not swallow it.
+
+    Raises ``LeaseMissing`` if the lease object is confirmed absent (never
+    proof of a competing owner), or ``LeaseTakenByAnotherOwner`` if a live
+    competing owner is actually present -- these require different
+    recovery behavior and must never be conflated (see run_lease_heartbeat).
+    A transient read failure propagates as ``LeaseUnavailable`` from
+    ``_read_lease`` unchanged.
     """
     current, etag = _read_lease(client, bucket, run_date)
     if current is None:
-        raise LeaseLost(f"MOO-144 lease for {run_date} disappeared")
+        raise LeaseMissing(f"MOO-144 lease for {run_date} is confirmed absent")
     if current.get("owner_id") != owner_id:
-        raise LeaseLost(
+        raise LeaseTakenByAnotherOwner(
             f"MOO-144 lease for {run_date} is now owned by {current.get('owner_id')!r}"
         )
     lease = {
@@ -395,7 +420,11 @@ def renew_lease(
         status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
         code = (response.get("Error") or {}).get("Code")
         if status in (412, 409) or code in {"PreconditionFailed", "412"}:
-            raise LeaseLost(f"MOO-144 lease for {run_date} was renewed concurrently") from exc
+            # Someone else won a concurrent renewal race -- a live competing
+            # owner, confirmed, not an absence.
+            raise LeaseTakenByAnotherOwner(
+                f"MOO-144 lease for {run_date} was renewed concurrently"
+            ) from exc
         raise
     return lease
 
@@ -406,7 +435,7 @@ def run_lease_heartbeat(
     run_date: str,
     owner_id: str,
     ttl_seconds: int,
-    confirmed_until: datetime,
+    confirmed_until_ref: dict[str, datetime],
     stop: threading.Event,
     lease_lost: threading.Event,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -415,44 +444,93 @@ def run_lease_heartbeat(
 ) -> None:
     """Renew the collection lease every ``ttl_seconds/3`` until told to stop.
 
-    A renewal failure comes in two distinct shapes, and both must be
-    handled here so the thread never dies silently -- but they are NOT the
-    same outcome and ``loss_reason`` (when given) records which one
-    happened, so the caller can react differently:
+    This function does NOT enforce the confirmed-ownership deadline itself
+    -- that used to happen here (checked only after a renewal request
+    returned), which meant a slow/blocked request could carry the process
+    past its deadline before the check ever ran. Deadline enforcement is
+    now ``run_lease_deadline_watchdog``'s job, on its own tight polling
+    cadence that is never blocked by a network call. This function's only
+    responsibilities are: attempt renewals, keep ``confirmed_until_ref``
+    current on success (read by the watchdog), and record *why* ownership
+    was confirmed lost when that happens -- three genuinely different
+    outcomes, via ``loss_reason``:
 
-    - A confirmed ``LeaseLost`` (another owner's lease is now live) means
-      this process is definitively no longer the owner. Ingestion must
-      stop immediately; restarting would only compete with the new owner.
+    - ``LeaseTakenByAnotherOwner`` (a verified, live competing owner) means
+      this process is definitively no longer the owner. Restarting would
+      only compete with the real new owner.
       ``loss_reason["reason"] = "confirmed_takeover"``.
-    - A transient failure (``LeaseUnavailable``, or any other
-      network/storage error) proves nothing about ownership either way.
-      It's retried on the normal cadence -- bounded by ``confirmed_until``,
-      the last deadline this process actually proved it held the lease
-      through. Only once that confirmed deadline elapses without a fresh
-      renewal does ownership become unguaranteed, at which point ingestion
-      must still stop (fail-safe), but this is an *uncertain* loss, not a
-      confirmed one -- restarting is appropriate here, since no other
-      owner is known to exist yet.
-      ``loss_reason["reason"] = "ownership_uncertain"``.
+    - ``LeaseMissing`` (the lease object is confirmed absent -- deleted or
+      never recreated) is NOT evidence of a competing owner. Restarting is
+      the correct recovery here: nobody is known to be collecting.
+      ``loss_reason["reason"] = "confirmed_absence"``.
+    - Any other failure (``LeaseUnavailable``, or an unexpected exception)
+      proves nothing about ownership either way and is simply retried;
+      the watchdog is what eventually stops intake if this keeps failing
+      long enough to cross the confirmed deadline.
     """
     wait = wait if wait is not None else stop.wait
     while not wait(ttl_seconds / 3):
         try:
             lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now)
-            confirmed_until = datetime.fromisoformat(lease["expires_at"])
-        except LeaseLost:
+            confirmed_until_ref["value"] = datetime.fromisoformat(lease["expires_at"])
+        except LeaseTakenByAnotherOwner:
             if loss_reason is not None:
                 loss_reason["reason"] = "confirmed_takeover"
             lease_lost.set()
             return
+        except LeaseMissing:
+            if loss_reason is not None:
+                loss_reason["reason"] = "confirmed_absence"
+            lease_lost.set()
+            return
+        except LeaseLost:
+            # Defensive fallback for an unforeseen bare LeaseLost/subclass:
+            # treat conservatively as a confirmed takeover so we never risk
+            # a competing restart against a real owner we failed to
+            # classify. setdefault so a reason the watchdog already
+            # recorded independently isn't clobbered.
+            if loss_reason is not None:
+                loss_reason.setdefault("reason", "confirmed_takeover")
+            lease_lost.set()
+            return
         except Exception:
-            if now() >= confirmed_until:
-                if loss_reason is not None:
-                    loss_reason["reason"] = "ownership_uncertain"
-                lease_lost.set()
-                return
-            # Transient failure, but our last confirmed ownership window
-            # hasn't elapsed yet -- keep retrying on the normal cadence.
+            # Transient failure -- keep retrying. The confirmed deadline is
+            # enforced independently by run_lease_deadline_watchdog.
+            pass
+
+
+def run_lease_deadline_watchdog(
+    confirmed_until_ref: dict[str, datetime],
+    stop: threading.Event,
+    lease_lost: threading.Event,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    wait: Callable[[float], bool] | None = None,
+    poll_seconds: float = 1.0,
+    loss_reason: dict[str, str] | None = None,
+) -> None:
+    """Independently enforce the confirmed-ownership deadline.
+
+    Runs on its own short, fixed polling cadence -- never blocked by a
+    network call -- so a renewal request that hangs or takes far longer
+    than expected can never postpone stopping intake past the deadline
+    this process last actually proved it held. ``confirmed_until_ref`` is
+    the same shared reference ``run_lease_heartbeat`` updates on every
+    successful renewal, so an extended deadline is picked up on this
+    thread's very next poll.
+
+    Uses ``loss_reason.setdefault`` rather than overwriting: if the
+    heartbeat has already recorded a more specific reason (a confirmed
+    takeover or confirmed absence) for the same ``lease_lost`` signal,
+    that stays authoritative over this fail-safe's generic
+    ``"ownership_uncertain"``.
+    """
+    wait = wait if wait is not None else stop.wait
+    while not wait(poll_seconds):
+        if now() >= confirmed_until_ref["value"]:
+            if loss_reason is not None:
+                loss_reason.setdefault("reason", "ownership_uncertain")
+            lease_lost.set()
+            return
 
 
 def universe_key(prefix: str) -> str:
@@ -1099,7 +1177,7 @@ def main(
 
     lease_stop = threading.Event()
     lease_lost_event = threading.Event()
-    lease_confirmed_until = datetime.fromisoformat(lease["expires_at"])
+    lease_confirmed_until_ref: dict[str, datetime] = {"value": datetime.fromisoformat(lease["expires_at"])}
     lease_loss_reason: dict[str, str] = {}
 
     def health_publisher() -> None:
@@ -1111,11 +1189,21 @@ def main(
 
     heartbeat_thread = threading.Thread(
         target=run_lease_heartbeat,
-        args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until, lease_stop, lease_lost_event),
+        args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until_ref, lease_stop, lease_lost_event),
         kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason},
         daemon=True,
     )
     heartbeat_thread.start()
+    # Independent of the heartbeat: enforces the confirmed deadline on its
+    # own tight poll so a slow/hung renewal request can never postpone
+    # stopping intake past the moment ownership can no longer be proven.
+    watchdog_thread = threading.Thread(
+        target=run_lease_deadline_watchdog,
+        args=(lease_confirmed_until_ref, lease_stop, lease_lost_event),
+        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason},
+        daemon=True,
+    )
+    watchdog_thread.start()
     health_thread = threading.Thread(target=health_publisher, daemon=True)
     health_thread.start()
 
@@ -1252,17 +1340,19 @@ def main(
 
     # Recoverable operational failures must exit non-zero so the deployment's
     # on_failure restart policy actually fires -- a partial *summary* is not
-    # enough on its own, since nothing reads it synchronously. A *confirmed*
-    # ownership takeover is deliberately excluded: another owner is
-    # legitimately active for this run_date, and restarting this process
-    # would only fight them in a competing-restart loop. An *uncertain* loss
-    # (repeated transient renewal failures past the confirmed deadline, with
-    # no observed competing owner) is the opposite case -- it IS recoverable,
-    # since restarting can only help and there's nothing to compete with.
+    # enough on its own, since nothing reads it synchronously. Exactly one
+    # lease-loss kind is excluded from recovery: a *confirmed* takeover,
+    # where another owner is verified live for this run_date and restarting
+    # this process would only fight them in a competing-restart loop. The
+    # other two kinds ARE recoverable, since restarting can only help and
+    # there's no real owner to compete with: a *confirmed absence* (the
+    # lease object is simply gone -- nobody is known to be collecting) and
+    # an *uncertain* loss (repeated transient renewal failures past the
+    # confirmed deadline, with no observed competing owner either).
     recoverable = (
         capture_result.stop_reason == "spool_exhausted"
         or not uploader.fully_drained()
-        or lease_loss_kind == "ownership_uncertain"
+        or lease_loss_kind in ("ownership_uncertain", "confirmed_absence")
         or (attempt_total_events == 0 and capture_result.stop_reason != "lease_lost" and not STOP)
     )
     if recoverable:

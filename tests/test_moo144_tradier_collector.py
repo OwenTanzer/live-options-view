@@ -271,12 +271,15 @@ class LeaseTests(unittest.TestCase):
 
 
 class LeaseHeartbeatTests(unittest.TestCase):
-    """The review's exact reproduction: a transient renewal exception must
-    never kill the heartbeat thread silently. It must either keep retrying
-    (if the last confirmed ownership window hasn't elapsed) or explicitly
-    set lease_lost (once it has) -- never just vanish."""
+    """The heartbeat no longer enforces the confirmed deadline itself (that
+    moved to run_lease_deadline_watchdog, so a slow/blocked renewal request
+    can't postpone stopping intake past the deadline -- see
+    LeaseDeadlineWatchdogTests). Its job here is just: retry transient
+    failures forever without dying silently, and classify a genuine
+    LeaseLost into the right kind so main() can decide whether restarting
+    is safe."""
 
-    def test_transient_failure_before_deadline_keeps_retrying_without_raising(self):
+    def test_transient_failure_keeps_retrying_indefinitely_without_setting_lease_lost(self):
         calls = {"n": 0}
 
         def flaky_renew(*_a, **_k):
@@ -286,81 +289,65 @@ class LeaseHeartbeatTests(unittest.TestCase):
         with patch.object(collector, "renew_lease", side_effect=flaky_renew):
             stop = threading.Event()
             lease_lost = threading.Event()
-            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
             wait_calls = {"n": 0}
 
             def wait(_timeout):
                 wait_calls["n"] += 1
                 return wait_calls["n"] > 3  # stop after 3 retry ticks
 
-            # now() never reaches confirmed_until across all 3 ticks.
             collector.run_lease_heartbeat(
-                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
                 stop, lease_lost,
-                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                now=lambda: datetime(2026, 9, 8, 13, 0, tzinfo=timezone.utc),  # already "past deadline"
                 wait=wait,
             )
+        # Even with now() past confirmed_until, the heartbeat itself must
+        # never set lease_lost for a transient failure -- that's the
+        # watchdog's exclusive responsibility now.
         self.assertEqual(calls["n"], 3)
         self.assertFalse(lease_lost.is_set())
 
-    def test_transient_failure_past_deadline_sets_lease_lost_without_raising(self):
-        """Also verifies this is recorded as an *uncertain* loss, not a
-        confirmed takeover -- main() needs that distinction to decide
-        whether restarting is safe."""
-        def flaky_renew(*_a, **_k):
-            raise TimeoutError("simulated network timeout")
+    def test_lease_unavailable_is_treated_as_transient_and_retried(self):
+        """LeaseUnavailable (raised for a transient storage error) must
+        flow through the same retry-forever path as any other Exception --
+        never mistaken for a confirmed LeaseLost subclass."""
+        calls = {"n": 0}
 
-        with patch.object(collector, "renew_lease", side_effect=flaky_renew):
-            stop = threading.Event()
-            lease_lost = threading.Event()
-            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
-            loss_reason: dict[str, str] = {}
-            # now() is already past confirmed_until on the very first tick --
-            # ownership can no longer be guaranteed.
-            collector.run_lease_heartbeat(
-                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
-                stop, lease_lost,
-                now=lambda: datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc),
-                wait=lambda _timeout: False if not lease_lost.is_set() else True,
-                loss_reason=loss_reason,
-            )
-        self.assertTrue(lease_lost.is_set())
-        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
-
-    def test_lease_unavailable_is_handled_the_same_as_any_other_transient_error(self):
-        """LeaseUnavailable (the new exception _read_lease/renew_lease raise
-        for a transient storage error) must flow through the same
-        retry-then-uncertain-loss path as any other Exception -- not be
-        mistaken for LeaseLost."""
         def flaky_renew(*_a, **_k):
+            calls["n"] += 1
             raise collector.LeaseUnavailable("simulated 500 reading lease")
 
         with patch.object(collector, "renew_lease", side_effect=flaky_renew):
             stop = threading.Event()
             lease_lost = threading.Event()
-            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
-            loss_reason: dict[str, str] = {}
-            collector.run_lease_heartbeat(
-                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
-                stop, lease_lost,
-                now=lambda: datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc),
-                wait=lambda _timeout: False if not lease_lost.is_set() else True,
-                loss_reason=loss_reason,
-            )
-        self.assertTrue(lease_lost.is_set())
-        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+            wait_calls = {"n": 0}
 
-    def test_lease_lost_from_renewal_stops_immediately(self):
+            def wait(_timeout):
+                wait_calls["n"] += 1
+                return wait_calls["n"] > 3
+
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 13, 0, tzinfo=timezone.utc),
+                wait=wait,
+            )
+        self.assertEqual(calls["n"], 3)
+        self.assertFalse(lease_lost.is_set())
+
+    def test_confirmed_takeover_stops_immediately_with_reason(self):
         def losing_renew(*_a, **_k):
-            raise collector.LeaseLost("taken by another owner")
+            raise collector.LeaseTakenByAnotherOwner("taken by another owner")
 
         with patch.object(collector, "renew_lease", side_effect=losing_renew):
             stop = threading.Event()
             lease_lost = threading.Event()
-            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
             loss_reason: dict[str, str] = {}
             collector.run_lease_heartbeat(
-                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
                 stop, lease_lost,
                 now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
                 wait=lambda _timeout: False,
@@ -369,13 +356,58 @@ class LeaseHeartbeatTests(unittest.TestCase):
         self.assertTrue(lease_lost.is_set())
         self.assertEqual(loss_reason["reason"], "confirmed_takeover")
 
-    def test_successful_renewal_advances_confirmed_deadline(self):
+    def test_confirmed_absence_stops_immediately_with_distinct_reason(self):
+        """The review's exact finding: a missing lease is NOT the same as a
+        verified competing owner, and must recover differently (restart is
+        appropriate; a real takeover must not restart)."""
+        def missing_renew(*_a, **_k):
+            raise collector.LeaseMissing("lease is confirmed absent")
+
+        with patch.object(collector, "renew_lease", side_effect=missing_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+            loss_reason: dict[str, str] = {}
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                wait=lambda _timeout: False,
+                loss_reason=loss_reason,
+            )
+        self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "confirmed_absence")
+
+    def test_bare_lease_lost_fallback_defaults_to_confirmed_takeover(self):
+        """Defensive coverage: an unforeseen bare LeaseLost (neither
+        specific subclass) must still stop ingestion, and conservatively
+        default to the never-restart classification rather than guessing
+        it's safe to restart."""
+        def bare_lost_renew(*_a, **_k):
+            raise collector.LeaseLost("unclassified loss")
+
+        with patch.object(collector, "renew_lease", side_effect=bare_lost_renew):
+            stop = threading.Event()
+            lease_lost = threading.Event()
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+            loss_reason: dict[str, str] = {}
+            collector.run_lease_heartbeat(
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
+                stop, lease_lost,
+                now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
+                wait=lambda _timeout: False,
+                loss_reason=loss_reason,
+            )
+        self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "confirmed_takeover")
+
+    def test_successful_renewal_updates_shared_confirmed_until_ref(self):
         renewed = {"expires_at": "2026-09-08T13:00:00+00:00"}
 
         with patch.object(collector, "renew_lease", return_value=renewed):
             stop = threading.Event()
             lease_lost = threading.Event()
-            confirmed_until = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+            confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
             wait_calls = {"n": 0}
 
             def wait(_timeout):
@@ -383,12 +415,149 @@ class LeaseHeartbeatTests(unittest.TestCase):
                 return wait_calls["n"] > 1
 
             collector.run_lease_heartbeat(
-                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until,
+                None, "bucket", "2026-09-08", "owner-a", 300, confirmed_until_ref,
                 stop, lease_lost,
                 now=lambda: datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc),
                 wait=wait,
             )
         self.assertFalse(lease_lost.is_set())
+        self.assertEqual(
+            confirmed_until_ref["value"],
+            datetime(2026, 9, 8, 13, 0, tzinfo=timezone.utc),
+        )
+
+
+class LeaseDeadlineWatchdogTests(unittest.TestCase):
+    """The review's exact finding: deadline enforcement must run
+    independently of whatever the heartbeat's renewal request is doing --
+    a slow/blocked request must never be able to postpone stopping intake
+    past the confirmed deadline. This watchdog polls on its own fixed
+    cadence and never blocks on a network call."""
+
+    def test_fires_once_deadline_passes(self):
+        confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+        stop = threading.Event()
+        lease_lost = threading.Event()
+        loss_reason: dict[str, str] = {}
+        collector.run_lease_deadline_watchdog(
+            confirmed_until_ref, stop, lease_lost,
+            now=lambda: datetime(2026, 9, 8, 12, 0, 1, tzinfo=timezone.utc),
+            wait=lambda _timeout: False if not lease_lost.is_set() else True,
+            loss_reason=loss_reason,
+        )
+        self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
+
+    def test_does_not_fire_before_deadline(self):
+        confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+        stop = threading.Event()
+        lease_lost = threading.Event()
+        wait_calls = {"n": 0}
+
+        def wait(_timeout):
+            wait_calls["n"] += 1
+            return wait_calls["n"] > 3  # stop the loop after 3 polls
+
+        collector.run_lease_deadline_watchdog(
+            confirmed_until_ref, stop, lease_lost,
+            now=lambda: datetime(2026, 9, 8, 11, 59, tzinfo=timezone.utc),
+            wait=wait,
+        )
+        self.assertFalse(lease_lost.is_set())
+
+    def test_extended_deadline_observed_before_firing(self):
+        """A renewal that succeeds and pushes confirmed_until_ref out must
+        be picked up on the watchdog's very next poll -- it must not fire
+        using a stale deadline it read once at startup."""
+        confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+        stop = threading.Event()
+        lease_lost = threading.Event()
+        poll_count = {"n": 0}
+
+        def wait(_timeout):
+            poll_count["n"] += 1
+            if poll_count["n"] == 1:
+                # Simulate the heartbeat renewing successfully between the
+                # 1st and 2nd poll, extending the deadline well past "now".
+                confirmed_until_ref["value"] = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
+            return poll_count["n"] > 3
+
+        collector.run_lease_deadline_watchdog(
+            confirmed_until_ref, stop, lease_lost,
+            now=lambda: datetime(2026, 9, 8, 12, 0, 30, tzinfo=timezone.utc),  # past the ORIGINAL deadline
+            wait=wait,
+        )
+        self.assertFalse(lease_lost.is_set())
+
+    def test_does_not_overwrite_a_more_specific_reason_already_set(self):
+        """If the heartbeat has already classified the loss more
+        specifically (e.g. a confirmed takeover discovered concurrently),
+        the watchdog's generic fail-safe label must not clobber it."""
+        confirmed_until_ref = {"value": datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)}
+        stop = threading.Event()
+        lease_lost = threading.Event()
+        loss_reason = {"reason": "confirmed_takeover"}
+        collector.run_lease_deadline_watchdog(
+            confirmed_until_ref, stop, lease_lost,
+            now=lambda: datetime(2026, 9, 8, 12, 0, 1, tzinfo=timezone.utc),
+            wait=lambda _timeout: False if not lease_lost.is_set() else True,
+            loss_reason=loss_reason,
+        )
+        self.assertTrue(lease_lost.is_set())
+        self.assertEqual(loss_reason["reason"], "confirmed_takeover")
+
+    def test_concurrent_blocked_renewal_does_not_delay_the_watchdog(self):
+        """Owen's exact reproduction, run for real: a renewal request that
+        blocks past the confirmed deadline must not be able to postpone
+        stopping intake. Runs the heartbeat and watchdog as real concurrent
+        threads with real wall-clock time (compressed to fractions of a
+        second) -- not fake clocks -- so this actually exercises two
+        threads racing, not just each function's logic in isolation.
+        """
+        real_now = lambda: datetime.now(timezone.utc)  # noqa: E731
+        confirmed_until_ref = {"value": real_now() + timedelta(seconds=0.1)}
+        stop = threading.Event()
+        lease_lost = threading.Event()
+        loss_reason: dict[str, str] = {}
+
+        def blocked_renew(*_a, **_k):
+            # Simulates a renewal request that hangs well past the
+            # deadline (e.g. the review's 80-second stall) before failing.
+            time.sleep(0.4)
+            raise TimeoutError("simulated slow/hung renewal request")
+
+        with patch.object(collector, "renew_lease", side_effect=blocked_renew):
+            heartbeat_thread = threading.Thread(
+                target=collector.run_lease_heartbeat,
+                # ttl_seconds tiny so the first renewal attempt starts almost
+                # immediately (wait cadence = ttl/3) -- it must actually be
+                # mid-blocked-call when the watchdog's deadline hits.
+                args=(None, "bucket", "2026-09-08", "owner-a", 0.03, confirmed_until_ref, stop, lease_lost),
+                kwargs={"now": real_now, "loss_reason": loss_reason},
+                daemon=True,
+            )
+            watchdog_thread = threading.Thread(
+                target=collector.run_lease_deadline_watchdog,
+                args=(confirmed_until_ref, stop, lease_lost),
+                kwargs={"now": real_now, "poll_seconds": 0.02, "loss_reason": loss_reason},
+                daemon=True,
+            )
+            heartbeat_thread.start()
+            watchdog_thread.start()
+            try:
+                # The blocked renewal doesn't return for 0.4s; the deadline
+                # is 0.1s out. If deadline enforcement depended on the
+                # heartbeat (the pre-fix bug), lease_lost would stay unset
+                # this entire time. Asserting well before 0.4s proves the
+                # watchdog acted independently.
+                fired = lease_lost.wait(timeout=0.3)
+            finally:
+                stop.set()
+                heartbeat_thread.join(timeout=1.0)
+                watchdog_thread.join(timeout=1.0)
+
+        self.assertTrue(fired, "watchdog must fire without waiting for the blocked renewal")
+        self.assertEqual(loss_reason["reason"], "ownership_uncertain")
 
 
 class UniverseTests(unittest.TestCase):

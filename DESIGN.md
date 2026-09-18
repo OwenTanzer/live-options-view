@@ -370,13 +370,29 @@ restating fixed claims):
 - A daily contract universe selected once and persisted (`universe.json`),
   reloaded on any same-day restart instead of re-selected against a
   possibly-moved spot price.
-- A renewable, fenced lease (`lease.json`): renewal is conditional on still
-  being the current owner, and a confirmed loss (another owner's lease is
-  now live) stops ingestion rather than silently continuing or clobbering
-  it. A *transient* renewal failure (network/storage) is retried on the
-  normal cadence, not treated as an immediate loss or allowed to kill the
-  heartbeat thread silently -- ownership is only relinquished once the
-  last confirmed deadline actually elapses without a fresh renewal.
+- A renewable, fenced lease (`lease.json`) with the confirmed deadline
+  enforced by two independent mechanisms, not one:
+  - A heartbeat thread attempts renewal every `ttl/3` and classifies a
+    genuine loss into one of two distinct kinds, since they require
+    opposite recovery: a **confirmed takeover** (a verified, live
+    competing owner) must never trigger a restart -- that would only
+    fight the real new owner; a **confirmed absence** (the lease object
+    is simply gone, deleted or never recreated) is NOT evidence of a
+    competing owner, so a restart to reacquire is the correct recovery.
+    A *transient* renewal failure (network/storage) is just retried on
+    the normal cadence, never treated as either of the above.
+  - A separate watchdog thread polls the confirmed deadline on its own
+    short, fixed cadence (independent of whatever the heartbeat's
+    renewal request is doing) and stops intake the moment that deadline
+    passes without a fresh confirmed renewal -- this is what actually
+    enforces "ownership can no longer be guaranteed," since a renewal
+    request that hangs or runs long can't be trusted to notice its own
+    lateness. This case is an **ownership-uncertain** loss (no confirmed
+    competing owner, but no confirmed continued ownership either) and,
+    like a confirmed absence, recovers via restart rather than exiting
+    clean.
+  Only a confirmed takeover skips the restart; both other lease-loss
+  kinds are treated as recoverable failures.
 - Each session spools under its own `<MOO144_SPOOL_DIR>/<run_date>/`
   subdirectory, so segments from different dates can never collide or be
   misfiled under the wrong archive prefix. Any other date's leftover spool
