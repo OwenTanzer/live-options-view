@@ -353,6 +353,153 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 - Auto-deploys on every push to `master`
 - No build step required
 
+### 8.4 MOO-169: permanent daily Tradier collector
+
+`scripts/moo144_tradier_collector.py` productionizes the MOO-144 probe
+(`scripts/moo144_tradier_probe.py`, PR #83) into a permanent daily collector.
+It runs as its own Railway service (project `live-market-monitor`, alongside
+`moo144-tradier-probe`), not as part of the primary `collector.py` service.
+
+**What is actually implemented** (kept accurate here, rather than restating
+MOO-169's aspirational scope; updated after each review pass rather than
+restating fixed claims):
+
+- Calendar-gated session lifecycle: cron-invoked once per weekday, exits 0
+  on a day with no NYSE session, runs to the calendar's actual close
+  (including early closes).
+- A daily contract universe selected once and persisted (`universe.json`),
+  reloaded on any same-day restart instead of re-selected against a
+  possibly-moved spot price.
+- A renewable, fenced lease (`lease.json`) with the confirmed deadline
+  enforced by two independent mechanisms, not one:
+  - A heartbeat thread attempts renewal every `ttl/3` and classifies a
+    genuine loss into one of two distinct kinds, since they require
+    opposite recovery: a **confirmed takeover** (a verified, live
+    competing owner) must never trigger a restart -- that would only
+    fight the real new owner; a **confirmed absence** (the lease object
+    is simply gone, deleted or never recreated) is NOT evidence of a
+    competing owner, so a restart to reacquire is the correct recovery.
+    A *transient* renewal failure (network/storage) is just retried on
+    the normal cadence, never treated as either of the above.
+  - A separate watchdog thread polls the confirmed deadline on its own
+    short, fixed cadence (independent of whatever the heartbeat's
+    renewal request is doing) and stops intake the moment that deadline
+    passes without a fresh confirmed renewal -- this is what actually
+    enforces "ownership can no longer be guaranteed," since a renewal
+    request that hangs or runs long can't be trusted to notice its own
+    lateness. This case is an **ownership-uncertain** loss (no confirmed
+    competing owner, but no confirmed continued ownership either) and,
+    like a confirmed absence, recovers via restart rather than exiting
+    clean.
+  A conditional renewal conflict (409/412) triggers a fresh lease read;
+  the conflict alone never proves takeover. Only a different, nonempty
+  owner identity with a valid, unexpired deadline suppresses restart.
+  Missing, expired, malformed, unreadable-after-conflict, and unclassified
+  ownership all stop intake and enter recoverable handling. Reacquisition
+  remains conditional and cannot overwrite a live competing lease.
+- Each session spools under its own `<MOO144_SPOOL_DIR>/<run_date>/`
+  subdirectory, so segments from different dates can never collide or be
+  misfiled under the wrong archive prefix. Any other date's leftover spool
+  (left behind by a crash before a date rollover) is reconciled and
+  resumed under *that date's own* prefix, before today's session starts --
+  never merged into today's.
+- Reconciliation on every startup against R2 by verified content identity
+  (not just filename or a trusted ETag): already-durable segments are
+  recognized and not re-uploaded; locally-spooled segments R2 doesn't have
+  yet are resumed; anything that's neither (corrupt, same name with
+  different content, or an unverifiable identity such as a multipart
+  ETag) is reported for manual review rather than silently deleted or
+  silently trusted. An ETag that can't be compared directly (multipart or
+  missing) triggers an actual download-and-hash of the remote object
+  rather than assuming a match.
+- A hard spool-size bound: once outstanding spool bytes would exceed
+  `MOO144_MAX_SPOOL_BYTES`, ingestion stops with an explicit `SpoolExhausted`
+  reason rather than growing the spool without limit.
+- `status: "complete"` is derived, not assumed: a run is only "complete" if
+  setup-through-capture-start was on time (not just the open-wait itself),
+  it ran to the actual session close with no unrecovered exception, had
+  zero reconnects (any stream gap marks the day "partial"), captured at
+  least one event, the upload spool fully drained, and reconciliation
+  (today's and any recovered stale date's) found nothing needing review.
+  Every other outcome is `"partial"` with an explicit `partial_reasons`
+  list, and a *recoverable* partial outcome (spool exhaustion, an
+  undrained upload backlog, or zero captured events) makes the process
+  exit non-zero so the `on_failure` restart policy actually fires -- a
+  partial summary object alone doesn't trigger anything. Losing the lease
+  is the deliberate exception: it exits 0, since another owner is already
+  legitimately active for that `run_date` and restarting would only start
+  a competing-restart loop against them.
+- A stream gap stays open -- measuring the full outage, not just backoff
+  sleep time -- until an event is actually received again; a
+  `stream_reconnect_resumed` marker is never written for a reconnect
+  attempt that hasn't actually succeeded yet.
+- `health.json` is published periodically during collection (not only at
+  the end) from the *same* mutable result object the capture loop updates
+  live, so a health snapshot taken mid-outage reflects the in-progress
+  reconnect count and gap duration rather than the pre-capture initial
+  state.
+- Manifest counters separate three non-overlapping totals: this attempt's
+  own captured counts (`attempt_event_counts`), already-durable segments
+  reconciled from R2 before this run (`reconciled_prior_records`), and
+  this-run-uploaded segments that were actually a prior owner's orphaned
+  local files (`resumed_local_records`) -- each read back via a real
+  decompress-and-count so none are silently conflated, omitted, or
+  double-counted.
+
+| Setting | Value |
+|---|---|
+| Start command | `python scripts/moo144_tradier_collector.py` |
+| Restart policy | `on_failure` (a mid-session crash is safe to retry — see lease above) |
+| Trigger | Railway Cron Schedule, recurring weekdays (e.g. `15 12 * * 1-5` = 8:15am EDT / 7:15am EST). Railway cron times are fixed UTC and do **not** shift with US DST, so pick a UTC time early enough to precede 9:30am ET under **either** offset — the process waits for the calendar's real open itself (see below), so an early trigger is harmless, but a trigger that's late under one offset would truncate that day's session. |
+| Volume | A mounted persistent volume for `MOO144_SPOOL_DIR`, so the upload spool survives a crash/restart |
+
+Additional env vars beyond the shared `TRADIER_TOKEN`/`R2_*` ones (§8.1):
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `MOO144_STRIKE_COUNT` | Number of nearest 0DTE strikes to capture | `8` |
+| `MOO144_CHECKPOINT_SECONDS` | Segment rotation interval | `180` |
+| `MOO144_MAX_CONSECUTIVE_RECONNECTS` | Stream reconnect budget before giving up | `5` |
+| `MOO144_LEASE_TTL_SECONDS` | Daily-collection lease TTL; a crashed owner's lease can be taken over after this expires | `300` |
+| `MOO144_MAX_SPOOL_BYTES` | Hard upload-spool cap; ingestion stops (reported, not silently dropped) once outstanding spool bytes would exceed this | `512 MiB` |
+| `MOO144_SPOOL_DIR` | Persistent spool directory (must be a mounted volume in production) | temp dir |
+
+Archive layout under `moo144/tradier/<date>/`: `universe.json` (written once,
+first writer wins), `lease.json`, `health.json` (overwritten periodically),
+and per-owner `run-started-<owner>.json` / `summary-<owner>.json` /
+`manifest-<owner>.json` plus the uploaded `*-part-*.ndjson.gz` segments. The
+owner suffix keeps a crash/restart within the same day from overwriting the
+prior attempt's records; reconciliation is what ties a new owner's manifest
+back to a prior owner's already-durable or resumed segments.
+
+Retention: same delete-after-verified-upload pattern as the probe (§7 of
+MOO-169 in Linear). Measured/projected volume from the MOO-144 probe's
+2026-09-03 run: ~52.9 MB compressed per session, ~1.11 GB per 21 sessions,
+~13.33 GB per 252 sessions — a planning estimate, not a hard cap; do not
+silently expand the captured symbol/expiration universe based on it.
+
+**Deployment checklist (for whoever has Railway dashboard access — this
+repo's contributor doesn't, per the MOO-144 probe's setup thread):**
+
+- The root `railway.toml` in this repo specifies `python collector.py` /
+  `restartPolicyType: never`. That governs any Railway service that does
+  **not** have its own service-level override. Before this collector's
+  service goes live, explicitly confirm in the Railway dashboard, under
+  that specific service's Settings → Deploy, that its **Custom Start
+  Command** is `python scripts/moo144_tradier_collector.py` and its
+  **Restart Policy** is `On Failure` — do not assume the dashboard value
+  wins without checking it for this service specifically, the same way the
+  probe's service needed its own explicit override to run
+  `moo144_tradier_probe.py` instead of the root `collector.py` command.
+- Confirm the persistent volume is actually mounted at the path
+  `MOO144_SPOOL_DIR` points to (not the container's ephemeral filesystem) --
+  a restart with no real volume can't recover anything to reconcile.
+  Confirm the Cron Schedule value directly in the dashboard rather than
+  inferring it from this document, and re-verify it after any DST
+  transition given the fixed-UTC caveat above.
+- Confirm the archive prefix (`moo144/tradier/`) doesn't collide with the
+  probe's own runs from the same bucket.
+
 ---
 
 ## 9. Known Limitations
@@ -377,3 +524,4 @@ Client-side paper trading (average-cost book, multiple named accounts for separa
 - **Alert system** — detect strike crossing from p75 → p90 OI bucket and push notification
 - **Access control** — gate behind Cloudflare Access for subscriber-only distribution
 - **Historical replay** — scrub through today's intraday snapshots in the viewer
+
