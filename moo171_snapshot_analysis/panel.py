@@ -70,6 +70,34 @@ def is_regular_hours(ts_et: pd.Timestamp) -> bool:
     return open_t <= ts_et < close_t
 
 
+def session_phase(ts_et: pd.Timestamp) -> str:
+    """One of "premarket" / "regular" / "afterhours" -- disjoint and
+    exhaustive, unlike a single is_regular_hours() bool which conflates
+    the other two phases into "not regular"."""
+    open_t = ts_et.replace(hour=REGULAR_OPEN[0], minute=REGULAR_OPEN[1], second=0, microsecond=0)
+    close_t = ts_et.replace(hour=REGULAR_CLOSE[0], minute=REGULAR_CLOSE[1], second=0, microsecond=0)
+    if ts_et < open_t:
+        return "premarket"
+    if ts_et >= close_t:
+        return "afterhours"
+    return "regular"
+
+
+def parse_option_symbol(symbol: str) -> tuple[str, str, str, float] | None:
+    """('QQQ', '260910', 'C', 682.0) from 'QQQ260910C00682000', or None if
+    the symbol doesn't match the expected OCC-style root+YYMMDD+C/P+strike*1000
+    encoding. Used to cross-check the Strike/Type/Expiration columns against
+    the symbol itself -- an independent identity check, not a trust in
+    either source alone."""
+    import re
+
+    m = re.match(r"^([A-Z]+)(\d{6})([CP])(\d{8})$", symbol)
+    if not m:
+        return None
+    root, yymmdd, type_char, strike_digits = m.groups()
+    return root, yymmdd, type_char, int(strike_digits) / 1000.0
+
+
 @dataclass
 class SessionAudit:
     date: str
@@ -92,6 +120,12 @@ class SessionAudit:
     negative_volumes: int
     negative_open_interest: int
     crossed_quotes: int
+    duplicate_snapshot_symbol_rows: int  # (ts_et, OptionSymbol) keys appearing more than once
+    symbol_mismatch_rows: int  # OptionSymbol-encoded strike/type/expiry disagrees with the row's own columns
+    spot_inconsistent_snapshots: int  # snapshots where option rows don't all report the same finite UnderlyingPrice
+    contracts_with_oi_change: int  # contracts whose OpenInterest changed at least once intra-session
+    contracts_with_oi_baseline: int  # contracts with a usable first-eligible-session OI baseline
+    max_repeated_mid_run: int  # longest run of consecutive identical Mid values for any single contract
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -133,12 +167,13 @@ def load_raw_snapshots(
 
         session_option_rows = []
         session_spot_rows = []
-        snap_meta = []  # (ts_et, regular)
+        snap_meta = []  # (ts_et, regular, phase)
 
         for obj in snap_objects:
             _, ts_et, ts_utc = parse_snapshot_key(obj["key"])
-            regular = is_regular_hours(ts_et)
-            snap_meta.append((ts_et, regular))
+            phase = session_phase(ts_et)
+            regular = phase == "regular"
+            snap_meta.append((ts_et, regular, phase))
 
             rows = source.snapshot_csv_rows(obj["key"])
             if not rows:
@@ -152,28 +187,35 @@ def load_raw_snapshots(
                 r["regular_hours"] = regular
             session_option_rows.extend(rows)
 
-            spot_val = rows[0].get("UnderlyingPrice")
+            # Spot consistency: every option row in a snapshot repeats the
+            # same UnderlyingPrice -- check they actually agree (finite,
+            # positive, identical) rather than trusting row[0] alone.
+            snapshot_spots = pd.to_numeric(pd.Series([r.get("UnderlyingPrice") for r in rows]), errors="coerce")
+            finite_spots = snapshot_spots[np.isfinite(snapshot_spots) & (snapshot_spots > 0)]
+            spot_consistent = len(finite_spots.unique()) == 1 and len(finite_spots) == len(snapshot_spots)
+            spot_val = finite_spots.iloc[0] if len(finite_spots) else np.nan
             session_spot_rows.append({
                 "date": yyyymmdd, "snapshot_key": obj["key"],
                 "ts_et": ts_et, "ts_utc": ts_utc, "regular_hours": regular,
-                "underlying_price": pd.to_numeric(spot_val, errors="coerce"),
+                "underlying_price": spot_val, "spot_consistent": spot_consistent,
             })
 
         opt_df = pd.DataFrame(session_option_rows)
         if not opt_df.empty:
             opt_df = _coerce_numeric(opt_df)
         option_frames.append(opt_df)
-        spot_frames.append(pd.DataFrame(session_spot_rows))
+        spot_df = pd.DataFrame(session_spot_rows)
+        spot_frames.append(spot_df)
 
         snap_meta.sort(key=lambda t: t[0])
-        regular_ts = [ts for ts, reg in snap_meta if reg]
+        regular_ts = [ts for ts, reg, _ in snap_meta if reg]
         gaps = [
             (b - a).total_seconds()
             for a, b in zip(regular_ts[:-1], regular_ts[1:])
         ]
 
         audits.append(_build_session_audit(
-            yyyymmdd, all_objects, excluded, snap_meta, gaps, opt_df,
+            yyyymmdd, all_objects, excluded, snap_meta, gaps, opt_df, spot_df,
         ))
 
     option_rows = pd.concat(option_frames, ignore_index=True) if option_frames else pd.DataFrame()
@@ -183,11 +225,13 @@ def load_raw_snapshots(
 
 def _build_session_audit(
     yyyymmdd: str, all_objects: list[dict], excluded: list[str],
-    snap_meta: list[tuple[pd.Timestamp, bool]], gaps: list[float],
-    opt_df: pd.DataFrame,
+    snap_meta: list[tuple[pd.Timestamp, bool, str]], gaps: list[float],
+    opt_df: pd.DataFrame, spot_df: pd.DataFrame,
 ) -> SessionAudit:
-    premarket = sum(1 for _, reg in snap_meta if not reg)
-    regular = sum(1 for _, reg in snap_meta if reg)
+    premarket = sum(1 for _, _, phase in snap_meta if phase == "premarket")
+    regular = sum(1 for _, _, phase in snap_meta if phase == "regular")
+    afterhours = sum(1 for _, _, phase in snap_meta if phase == "afterhours")
+    spot_inconsistent = int((~spot_df["spot_consistent"]).sum()) if not spot_df.empty else 0
 
     if opt_df.empty:
         return SessionAudit(
@@ -196,11 +240,15 @@ def _build_session_audit(
             first_ts_et=snap_meta[0][0] if snap_meta else None,
             last_ts_et=snap_meta[-1][0] if snap_meta else None,
             premarket_snapshots=premarket, regular_hours_snapshots=regular,
-            afterhours_snapshots=0, gap_seconds=gaps,
+            afterhours_snapshots=afterhours, gap_seconds=gaps,
             max_gap_seconds=max(gaps) if gaps else None,
             distinct_strikes=0, distinct_contracts=0, rows_total=0,
             field_coverage={}, nonfinite_greeks=0, negative_volumes=0,
             negative_open_interest=0, crossed_quotes=0,
+            duplicate_snapshot_symbol_rows=0, symbol_mismatch_rows=0,
+            spot_inconsistent_snapshots=spot_inconsistent,
+            contracts_with_oi_change=0, contracts_with_oi_baseline=0,
+            max_repeated_mid_run=0,
         )
 
     coverage = {}
@@ -213,13 +261,57 @@ def _build_session_audit(
     neg_oi = int((opt_df["OpenInterest"] < 0).sum())
     crossed = int((opt_df["Bid"] > opt_df["Ask"]).sum())
 
+    # (snapshot timestamp, OptionSymbol) uniqueness.
+    dup_mask = opt_df.duplicated(subset=["ts_et", "OptionSymbol"], keep=False)
+    duplicate_rows = int(dup_mask.sum())
+
+    # Symbol-encoded strike/type/expiry vs. the row's own columns -- an
+    # independent identity check (also documents the strike*1000/multiplier
+    # encoding convention, rather than asserting it only in a comment).
+    parsed = opt_df["OptionSymbol"].map(parse_option_symbol)
+    symbol_mismatches = 0
+    for row_type, row_strike, row_exp, p in zip(opt_df["Type"], opt_df["Strike"], opt_df["Expiration"], parsed):
+        if p is None:
+            symbol_mismatches += 1
+            continue
+        _root, yymmdd, type_char, strike = p
+        expected_type = "call" if type_char == "C" else "put"
+        exp_yymmdd = pd.to_datetime(row_exp).strftime("%y%m%d") if pd.notna(row_exp) else None
+        if row_type != expected_type or abs(float(row_strike) - strike) > 1e-6 or yymmdd != exp_yymmdd:
+            symbol_mismatches += 1
+
+    # Per-contract OI stability: does reported OpenInterest ever change
+    # within the (regular-hours) session, and is there a usable
+    # first-eligible-session baseline to compare later readings against.
+    regular_df = opt_df[opt_df["regular_hours"]].sort_values("ts_et")
+    oi_change_contracts = 0
+    oi_baseline_contracts = 0
+    max_repeated_mid_run = 0
+    for _symbol, g in regular_df.groupby("OptionSymbol"):
+        oi_vals = g["OpenInterest"].dropna()
+        if len(oi_vals) and oi_vals.nunique() > 1:
+            oi_change_contracts += 1
+        if len(oi_vals):
+            oi_baseline_contracts += 1  # first-eligible-session value exists and is usable as a baseline
+        mid_vals = g["Mid"].to_numpy()
+        if len(mid_vals):
+            run = 1
+            best = 1
+            for i in range(1, len(mid_vals)):
+                if mid_vals[i] == mid_vals[i - 1] and not np.isnan(mid_vals[i]):
+                    run += 1
+                    best = max(best, run)
+                else:
+                    run = 1
+            max_repeated_mid_run = max(max_repeated_mid_run, best)
+
     return SessionAudit(
         date=yyyymmdd, listed_objects=len(all_objects), excluded_non_snapshot=excluded,
         snapshot_count=len(snap_meta), reported_count=REPORTED_SNAPSHOT_COUNTS.get(yyyymmdd),
         first_ts_et=snap_meta[0][0] if snap_meta else None,
         last_ts_et=snap_meta[-1][0] if snap_meta else None,
         premarket_snapshots=premarket, regular_hours_snapshots=regular,
-        afterhours_snapshots=0, gap_seconds=gaps,
+        afterhours_snapshots=afterhours, gap_seconds=gaps,
         max_gap_seconds=max(gaps) if gaps else None,
         distinct_strikes=int(opt_df["Strike"].nunique()),
         distinct_contracts=int(opt_df["OptionSymbol"].nunique()),
@@ -227,6 +319,12 @@ def _build_session_audit(
         field_coverage=coverage, nonfinite_greeks=nonfinite,
         negative_volumes=neg_vol, negative_open_interest=neg_oi,
         crossed_quotes=crossed,
+        duplicate_snapshot_symbol_rows=duplicate_rows,
+        symbol_mismatch_rows=symbol_mismatches,
+        spot_inconsistent_snapshots=spot_inconsistent,
+        contracts_with_oi_change=oi_change_contracts,
+        contracts_with_oi_baseline=oi_baseline_contracts,
+        max_repeated_mid_run=max_repeated_mid_run,
     )
 
 
@@ -252,7 +350,10 @@ def recompute_interval_volume(option_rows: pd.DataFrame) -> pd.DataFrame:
     through them.
     """
     if option_rows.empty:
-        return option_rows.assign(dV=pd.Series(dtype=float), dv_flag=pd.Series(dtype=object))
+        return option_rows.assign(
+            dV=pd.Series(dtype=float), dv_flag=pd.Series(dtype=object),
+            interval_seconds=pd.Series(dtype=float),
+        )
 
     df = option_rows.sort_values(["date", "OptionSymbol", "ts_et"]).reset_index(drop=True)
 
@@ -266,6 +367,7 @@ def recompute_interval_volume(option_rows: pd.DataFrame) -> pd.DataFrame:
 
     dV = np.full(len(df), np.nan)
     flags = np.empty(len(df), dtype=object)
+    interval_seconds = np.full(len(df), np.nan)
 
     for (date, symbol), g in df.groupby(["date", "OptionSymbol"]):
         idx = g.index.to_numpy()
@@ -281,6 +383,7 @@ def recompute_interval_volume(option_rows: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             gap = (pd.Timestamp(ts[i]) - pd.Timestamp(ts[i - 1])).total_seconds()
+            interval_seconds[row_idx] = gap
             prev_global_pos = order_pos[ts[i - 1]]
             this_global_pos = order_pos[ts[i]]
             contiguous = (this_global_pos - prev_global_pos) == 1
@@ -303,4 +406,5 @@ def recompute_interval_volume(option_rows: pd.DataFrame) -> pd.DataFrame:
 
     df["dV"] = dV
     df["dv_flag"] = flags
+    df["interval_seconds"] = interval_seconds
     return df

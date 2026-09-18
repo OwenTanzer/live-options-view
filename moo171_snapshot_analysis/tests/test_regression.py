@@ -35,11 +35,35 @@ def _synthetic_dataset(n_days=3, anchors_per_day=20, seed=0):
 def test_prepare_model_frame_adds_transforms_and_drops_nan_rows():
     df = _synthetic_dataset()
     df.loc[0, "vol_30min"] = np.nan
-    prepared, dropped = prepare_model_frame(df)
-    assert dropped == 1
+    prepared, drop_reasons = prepare_model_frame(df)
+    assert drop_reasons["_total_dropped_rows"] == 1
+    assert drop_reasons["vol_30min"] == 1
+    assert drop_reasons["_total_kept_rows"] == len(prepared)
     assert "log_C" in prepared.columns
     assert "cluster_id" in prepared.columns
     assert prepared["side_above"].isin([0, 1]).all()
+
+
+def test_prepare_model_frame_attributes_drops_to_the_specific_missing_field():
+    """Distinct fields missing on distinct rows must be attributed to the
+    right cause, not just counted as one lump 'dropped' total."""
+    df = _synthetic_dataset()
+    df.loc[0, "vol_30min"] = np.nan
+    df.loc[1, "prev_5min_return"] = np.nan
+    _, drop_reasons = prepare_model_frame(df)
+    assert drop_reasons["vol_30min"] == 1
+    assert drop_reasons["prev_5min_return"] == 1
+    assert drop_reasons["_total_dropped_rows"] == 2
+
+
+def test_prepare_model_frame_does_not_clip_negative_measurements():
+    """The review's finding: negative/invalid measurement values must not
+    be silently clipped to zero -- they should surface as nonfinite after
+    log1p (for a value <= -1) or otherwise be left visible, never masked."""
+    df = _synthetic_dataset()
+    df.loc[0, "C"] = -5.0  # log1p(-5) is NaN -- must propagate, not clip-to-zero first
+    prepared, drop_reasons = prepare_model_frame(df)
+    assert drop_reasons["log_C"] == 1
 
 
 def test_fit_clustered_ols_recovers_planted_direction():
@@ -55,6 +79,23 @@ def test_day_by_day_returns_one_row_per_date():
     out = day_by_day(prepared, "log_C")
     assert len(out) == 3
     assert set(out["date"]) == set(prepared["date"].unique())
+    assert "n_anchor_clusters" in out.columns
+
+
+def test_day_by_day_uses_anchor_clustering_not_independent_row_uncertainty():
+    """The review's exact finding: day_by_day() must use the same
+    shared-anchor clustered covariance as the pooled model -- not fall
+    back to HC1 (independent-row) uncertainty, which ignores that 6
+    strikes at one anchor share a future price path. Verified by checking
+    day_by_day's per-day SE against an explicit same-subset clustered fit."""
+    df = _synthetic_dataset(n_days=2, anchors_per_day=25, seed=7)
+    prepared, _ = prepare_model_frame(df)
+    out = day_by_day(prepared, "log_C")
+    for _, row in out.iterrows():
+        subset = prepared[prepared["date"] == row["date"]]
+        direct = fit_clustered_ols(subset, "log_C")
+        assert row["se"] == direct.bse["log_C"]
+        assert row["n_anchor_clusters"] == subset["cluster_id"].nunique()
 
 
 def test_leave_one_day_out_returns_one_row_per_held_out_date():
@@ -71,3 +112,16 @@ def test_compare_predictors_includes_baseline_and_all_three_predictors():
     prepared, _ = prepare_model_frame(df)
     out = compare_predictors(prepared)
     assert set(out["predictor"]) == {"(baseline only)", "log_C", "log_A", "log_gamma_alone"}
+
+
+def test_compare_predictors_reports_sd_scaled_coefficients_for_comparability():
+    """The review's finding: raw coefficients on log_C/log_A/log_gamma_alone
+    are not comparable across predictors with different scales. The
+    SD-scaled coefficient must equal coef * that predictor's own std."""
+    df = _synthetic_dataset(n_days=3, seed=3)
+    prepared, _ = prepare_model_frame(df)
+    out = compare_predictors(prepared)
+    for _, row in out[out["predictor"] != "(baseline only)"].iterrows():
+        expected_std = prepared[row["predictor"]].std()
+        assert row["predictor_std"] == expected_std
+        assert row["sd_scaled_coef"] == row["coef"] * expected_std

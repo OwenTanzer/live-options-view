@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 
 from outcomes import (
+    assert_non_overlapping,
     build_outcome_dataset,
     generate_anchors,
     select_strikes_for_anchor,
@@ -36,11 +37,12 @@ def test_generate_anchors_resolves_5min_bins_within_staleness():
         ("09:35:05", 701.0),
         ("09:40:02", 702.0),
     ])
-    anchors = generate_anchors(spot)
+    anchors, excluded = generate_anchors(spot)
     assert len(anchors) >= 1
     first = anchors.iloc[0]
     assert first["anchor_spot"] == 700.0
     assert first["outcome_spot"] == 701.0  # first valid snapshot >= 09:35:00
+    assert_non_overlapping(anchors)
 
 
 def test_generate_anchors_skips_bin_with_no_close_enough_snapshot():
@@ -50,10 +52,57 @@ def test_generate_anchors_skips_bin_with_no_close_enough_snapshot():
         ("09:30:10", 700.0),
         ("09:41:00", 705.0),
     ])
-    anchors = generate_anchors(spot)
-    # 09:30 bin: before-snapshot is 09:30:10 (fine), outcome target 09:35:10,
-    # nearest after is 09:41:00 -> 350s late -> no outcome -> anchor dropped.
+    anchors, excluded = generate_anchors(spot)
+    # Every nominal bin is too far from the sparse data (>90s in at least
+    # one direction) -- none should be retained, and every drop must be
+    # recorded with a reason rather than silently vanishing.
     assert len(anchors) == 0
+    assert len(excluded) > 0
+    assert set(excluded["reason"]) <= {"no_anchor_snapshot", "no_outcome_snapshot"}
+
+
+def test_generate_anchors_rejects_a_candidate_that_overlaps_the_prior_window():
+    """The review's exact reproduction: a nominal 5-minute grid does not
+    guarantee non-overlapping realized windows once anchor resolution goes
+    backward and outcome resolution goes forward. A candidate whose actual
+    anchor timestamp falls before the previous retained window's outcome
+    timestamp must be excluded, not retained."""
+    spot = _spot_rows("20260910", [
+        ("09:30:00", 700.0),   # bin 09:30 anchor
+        ("09:34:00", 700.5),   # would resolve as bin 09:35's "before" anchor
+        ("09:36:00", 701.0),   # resolves as bin 09:30's outcome (target 09:35, 60s late, ok)
+        ("09:39:00", 703.0),   # resolves as bin 09:40's "before" anchor
+        ("09:44:00", 704.0),   # resolves as bin 09:40's outcome
+    ])
+    anchors, excluded = generate_anchors(spot)
+    assert_non_overlapping(anchors)
+    # bin 09:30 -> anchor 09:30:00, outcome 09:36:00 (retained).
+    # bin 09:35 -> would anchor at 09:34:00, which is BEFORE the prior
+    # window's outcome (09:36:00) -- must be excluded as overlapping.
+    # bin 09:40 -> anchor 09:39:00 (after 09:36:00, no overlap), outcome 09:44:00 (retained).
+    retained_anchor_ts = set(anchors["anchor_ts_et"])
+    assert pd.Timestamp("2026-09-10 09:34:00", tz="America/New_York") not in retained_anchor_ts
+    assert len(anchors) == 2
+    assert "overlaps_prior_window" in excluded["reason"].tolist()
+
+
+def test_assert_non_overlapping_raises_on_a_constructed_overlap():
+    """Direct unit test of the checker itself, independent of
+    generate_anchors, per the review's request for a generated-data
+    assertion of the non-overlap property."""
+    bad_anchors = pd.DataFrame([
+        {"date": "20260910", "anchor_ts_et": pd.Timestamp("2026-09-10 09:30:00", tz="America/New_York"),
+         "outcome_ts_et": pd.Timestamp("2026-09-10 09:35:00", tz="America/New_York")},
+        {"date": "20260910", "anchor_ts_et": pd.Timestamp("2026-09-10 09:34:00", tz="America/New_York"),
+         "outcome_ts_et": pd.Timestamp("2026-09-10 09:39:00", tz="America/New_York")},
+    ])
+    with pytest_raises_assertion():
+        assert_non_overlapping(bad_anchors)
+
+
+def pytest_raises_assertion():
+    import pytest
+    return pytest.raises(AssertionError)
 
 
 def test_select_strikes_picks_three_nearest_each_side_only():
@@ -87,9 +136,11 @@ def test_build_outcome_dataset_end_to_end():
     }])
     measures = pd.DataFrame([
         {"date": "20260910", "snapshot_key": "snap_a", "Strike": 705.0, "side": "above", "distance": 5.0,
-         "C": 10.0, "A": 5.0, "total_gamma": 0.1, "total_oi": 100, "total_dv": 20},
+         "C": 10.0, "A": 5.0, "total_gamma": 0.1, "total_oi": 100, "total_dv": 20,
+         "n_contracts": 2, "n_oi_gamma_valid": 2, "n_dv_valid": 2, "n_dv_excluded": 0},
         {"date": "20260910", "snapshot_key": "snap_a", "Strike": 695.0, "side": "below", "distance": -5.0,
-         "C": 8.0, "A": 4.0, "total_gamma": 0.08, "total_oi": 90, "total_dv": 15},
+         "C": 8.0, "A": 4.0, "total_gamma": 0.08, "total_oi": 90, "total_dv": 15,
+         "n_contracts": 2, "n_oi_gamma_valid": 2, "n_dv_valid": 2, "n_dv_excluded": 0},
     ])
     out = build_outcome_dataset(anchors, measures)
     assert len(out) == 2

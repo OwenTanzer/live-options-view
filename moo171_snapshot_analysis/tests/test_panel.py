@@ -9,8 +9,10 @@ import pytest
 from panel import (
     is_regular_hours,
     load_raw_snapshots,
+    parse_option_symbol,
     parse_snapshot_key,
     recompute_interval_volume,
+    session_phase,
 )
 from r2_source import SnapshotSource
 
@@ -31,6 +33,30 @@ def test_is_regular_hours_boundaries():
     assert is_regular_hours(day.replace(hour=9, minute=30, second=0))
     assert is_regular_hours(day.replace(hour=15, minute=59, second=59))
     assert not is_regular_hours(day.replace(hour=16, minute=0, second=0))
+
+
+def test_session_phase_is_disjoint_and_exhaustive():
+    """The review's exact finding: every non-regular snapshot was being
+    labeled 'premarket', including ones at/after the close. Verify all
+    three phases are distinguished."""
+    day = pd.Timestamp(2026, 9, 10, tz="America/New_York")
+    assert session_phase(day.replace(hour=6, minute=0)) == "premarket"
+    assert session_phase(day.replace(hour=9, minute=29, second=59)) == "premarket"
+    assert session_phase(day.replace(hour=9, minute=30, second=0)) == "regular"
+    assert session_phase(day.replace(hour=15, minute=59, second=59)) == "regular"
+    assert session_phase(day.replace(hour=16, minute=0, second=0)) == "afterhours"
+    assert session_phase(day.replace(hour=16, minute=14)) == "afterhours"
+
+
+def test_parse_option_symbol_extracts_strike_and_type():
+    parsed = parse_option_symbol("QQQ260910C00682000")
+    assert parsed == ("QQQ", "260910", "C", 682.0)
+    parsed_put = parse_option_symbol("QQQ260910P00700500")
+    assert parsed_put == ("QQQ", "260910", "P", 700.5)
+
+
+def test_parse_option_symbol_returns_none_for_unrecognized_format():
+    assert parse_option_symbol("NOT_A_SYMBOL") is None
 
 
 class FakeSource(SnapshotSource):
@@ -170,3 +196,77 @@ def test_crossed_quote_and_negative_volume_flagged_in_audit():
     audit = audits[0]
     assert audit.crossed_quotes == 1
     assert audit.negative_volumes == 1
+
+
+def test_afterhours_snapshots_are_not_miscounted_as_premarket():
+    """The review's exact reproduction: an after-hours (16:00+ ET)
+    snapshot must be counted in afterhours_snapshots, not silently folded
+    into premarket_snapshots."""
+    source = FakeSource({
+        "20260910": [
+            ("060000000000", [make_row()]),   # premarket
+            ("100000000000", [make_row()]),   # regular
+            ("161000000000", [make_row()]),   # afterhours
+        ],
+    })
+    _, _, audits = load_raw_snapshots(source, ["20260910"])
+    audit = audits[0]
+    assert audit.premarket_snapshots == 1
+    assert audit.regular_hours_snapshots == 1
+    assert audit.afterhours_snapshots == 1
+
+
+def test_duplicate_snapshot_symbol_rows_detected():
+    source = FakeSource({
+        "20260910": [
+            ("100000000000", [make_row(), make_row()]),  # same symbol, same snapshot -- a duplicate
+        ],
+    })
+    _, _, audits = load_raw_snapshots(source, ["20260910"])
+    assert audits[0].duplicate_snapshot_symbol_rows == 2  # both rows of the duplicated pair
+
+
+def test_symbol_mismatch_detected_against_strike_and_type_columns():
+    bad_row = make_row(symbol="QQQ260910C00682000", strike="999.0", opt_type="put")
+    source = FakeSource({"20260910": [("100000000000", [bad_row])]})
+    _, _, audits = load_raw_snapshots(source, ["20260910"])
+    assert audits[0].symbol_mismatch_rows == 1
+
+
+def test_spot_inconsistent_snapshot_detected():
+    source = FakeSource({
+        "20260910": [
+            ("100000000000", [make_row(spot="700.0"), make_row(symbol="OTHER", spot="701.0")]),
+        ],
+    })
+    _, spot_series, audits = load_raw_snapshots(source, ["20260910"])
+    assert audits[0].spot_inconsistent_snapshots == 1
+    assert bool(spot_series.iloc[0]["spot_consistent"]) is False
+
+
+def test_oi_change_and_baseline_tracked_per_contract():
+    source = FakeSource({
+        "20260910": [
+            ("100000000000", [make_row(oi="10")]),
+            ("100100000000", [make_row(oi="15")]),  # OI changed intra-session
+        ],
+    })
+    _, _, audits = load_raw_snapshots(source, ["20260910"])
+    audit = audits[0]
+    assert audit.contracts_with_oi_change == 1
+    assert audit.contracts_with_oi_baseline == 1
+
+
+def test_interval_seconds_is_exposed_per_row():
+    source = FakeSource({
+        "20260910": [
+            ("093000000000", [make_row(volume="10")]),
+            ("093100000000", [make_row(volume="15")]),
+        ],
+    })
+    option_rows, _, _ = load_raw_snapshots(source, ["20260910"])
+    result = recompute_interval_volume(option_rows)
+    second = result[result["ts_et"] == result["ts_et"].max()].iloc[0]
+    assert second["interval_seconds"] == 60.0
+    first = result[result["ts_et"] == result["ts_et"].min()].iloc[0]
+    assert pd.isna(first["interval_seconds"])

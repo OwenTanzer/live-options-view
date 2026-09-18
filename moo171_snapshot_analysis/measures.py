@@ -11,6 +11,13 @@ assigned from option type here.
 
 Kept deliberately separate (never combined into one composite) per the
 issue's instruction not to choose a composite after inspecting results.
+
+Missing/unusable inputs are preserved as unavailable (NaN), never admitted
+as an observed zero: a strike where every contract is missing OI or Gamma
+has C = NaN, not C = 0, and a strike with no `dv_flag == "ok"` observation
+at all has A = NaN, not A = 0. This matters because a numeric 0 and "we
+don't know" are not the same thing, and only the former should be eligible
+for the outcome/regression pipeline as a genuine observation.
 """
 
 from __future__ import annotations
@@ -26,9 +33,19 @@ def compute_concentration_and_activity(option_rows: pd.DataFrame) -> pd.DataFram
     unweighted/diagnostic components.
 
     Requires `dV`/`dv_flag` columns from `panel.recompute_interval_volume`.
-    Rows whose dv_flag != "ok" contribute 0 to A's dV sum (their activity is
-    unknown, not zero) but are still counted in `dv_excluded_contracts` so
-    the exclusion is visible rather than silently absorbed into a lower A.
+
+    Eligibility is tracked and computed separately for C and A:
+    - C[k,t] is NaN unless at least one contract at that strike/time has
+      both a finite OpenInterest and a finite Gamma; otherwise there is no
+      OI/gamma information for that strike at all, and 0 would falsely
+      claim "reported open interest is zero" instead of "unknown."
+    - A[k,t] is NaN unless at least one contract has a `dv_flag == "ok"`
+      (i.e. genuinely usable) interval volume observation; a strike whose
+      only contracts are first-observations/re-entries/resets/long-gaps has
+      no usable activity information, not zero activity.
+    Contracts that individually lack OI/Gamma (for C) or a usable dV (for
+    A) are simply excluded from that strike's sum -- they don't zero out
+    the whole strike as long as at least one contract is usable.
     """
     required = {"dV", "dv_flag"}
     missing = required - set(option_rows.columns)
@@ -39,14 +56,16 @@ def compute_concentration_and_activity(option_rows: pd.DataFrame) -> pd.DataFram
     df["Gamma"] = pd.to_numeric(df["Gamma"], errors="coerce")
     df["OpenInterest"] = pd.to_numeric(df["OpenInterest"], errors="coerce")
 
-    usable_dv = df["dV"].where(df["dv_flag"] == "ok", 0.0).fillna(0.0)
-    excluded_dv = (df["dv_flag"] != "ok").astype(int)
+    oi_gamma_valid = df["Gamma"].notna() & df["OpenInterest"].notna() & np.isfinite(df["Gamma"]) & np.isfinite(df["OpenInterest"])
+    dv_valid = (df["dv_flag"] == "ok") & df["dV"].notna()
 
-    df["_oi_gamma"] = CONTRACT_MULTIPLIER * df["OpenInterest"].fillna(0.0) * df["Gamma"].fillna(0.0)
-    df["_dv_gamma"] = CONTRACT_MULTIPLIER * usable_dv * df["Gamma"].fillna(0.0)
+    df["_oi_gamma"] = np.where(oi_gamma_valid, CONTRACT_MULTIPLIER * df["OpenInterest"] * df["Gamma"], 0.0)
+    df["_dv_gamma"] = np.where(dv_valid, CONTRACT_MULTIPLIER * df["dV"] * df["Gamma"], 0.0)
     df["_call_oi_gamma"] = np.where(df["Type"] == "call", df["_oi_gamma"], 0.0)
     df["_put_oi_gamma"] = np.where(df["Type"] == "put", df["_oi_gamma"], 0.0)
-    df["_excluded_dv"] = excluded_dv
+    df["_oi_gamma_valid"] = oi_gamma_valid.astype(int)
+    df["_dv_valid"] = dv_valid.astype(int)
+    df["_excluded_dv"] = (~dv_valid).astype(int)
 
     grouped = (
         df.groupby(["date", "snapshot_key", "ts_et", "Strike"], as_index=False)
@@ -60,13 +79,15 @@ def compute_concentration_and_activity(option_rows: pd.DataFrame) -> pd.DataFram
             total_dv=("dV", lambda s: s.fillna(0.0).sum()),
             total_gamma=("Gamma", "sum"),
             n_contracts=("OptionSymbol", "nunique"),
+            n_oi_gamma_valid=("_oi_gamma_valid", "sum"),
+            n_dv_valid=("_dv_valid", "sum"),
             n_dv_excluded=("_excluded_dv", "sum"),
         )
     )
 
     spot2 = grouped["spot"].astype(float) ** 2
-    grouped["C"] = spot2 * grouped["sum_oi_gamma"]
-    grouped["A"] = spot2 * grouped["sum_dv_gamma"]
+    grouped["C"] = np.where(grouped["n_oi_gamma_valid"] > 0, spot2 * grouped["sum_oi_gamma"], np.nan)
+    grouped["A"] = np.where(grouped["n_dv_valid"] > 0, spot2 * grouped["sum_dv_gamma"], np.nan)
     grouped["distance"] = grouped["Strike"].astype(float) - grouped["spot"].astype(float)
     grouped["side"] = np.where(grouped["distance"] >= 0, "above", "below")
 

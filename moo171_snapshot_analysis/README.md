@@ -9,17 +9,30 @@ not signed dealer inventory, not a hedging-flow estimate. See
 ## Pipeline
 
 1. `r2_source.py` — cached, read-only R2 access (`intraday/` prefix only).
-2. `panel.py` — causal panel construction + coverage/exclusion audit;
-   recomputes interval volume from consecutive cumulative `Volume`
-   observations (never trusts the saved `VolDelta`).
+2. `panel.py` — causal panel construction + coverage/exclusion audit:
+   duplicate (timestamp, OptionSymbol) detection, OptionSymbol-vs-column
+   identity checks, snapshot-level spot consistency, per-contract OI
+   stability against a first-eligible-session baseline, repeated-value run
+   lengths, and a three-way premarket/regular/afterhours session-phase
+   classification. Recomputes interval volume from consecutive cumulative
+   `Volume` observations (never trusts the saved `VolDelta`).
 3. `measures.py` — `C[k,t]` and `A[k,t]` per the issue's formulas, kept
-   deliberately separate.
-4. `outcomes.py` — five-minute anchors, 3-nearest-strikes-per-side
-   selection, and the `toward[k,t]` outcome.
-5. `baselines.py` — prior 5-min return, preceding 30-min realized vol,
-   minutes since open (all causal, anchor-at-or-before only).
-6. `regression.py` — the clustered-by-anchor baseline-comparison model,
-   day-by-day coefficients, and leave-one-day-out stability.
+   deliberately separate. Missing/unusable inputs are preserved as
+   unavailable (NaN), never admitted as an observed zero.
+4. `outcomes.py` — five-minute anchors (verified non-overlapping against
+   the actual retained timestamps, not just a nominal grid --
+   `assert_non_overlapping` is a generated-data check, not only a unit
+   test), 3-nearest-strikes-per-side selection, and the `toward[k,t]`
+   outcome.
+5. `baselines.py` — prior 5-min return, a preceding 30-min realized-vol
+   estimate that REQUIRES actual ~30-minute coverage (not merely enough
+   observation count), minutes since open (all causal, anchor-at-or-before
+   only).
+6. `regression.py` — the baseline-comparison model with standard errors
+   clustered by anchor in every fitted model (pooled AND per-day -- never
+   falls back to independent-row uncertainty), day-by-day coefficients,
+   leave-one-day-out stability, and SD-scaled coefficients so predictors
+   with different scales are actually comparable.
 
 ## Running
 
@@ -38,8 +51,9 @@ python run_report.py     # step 3 analysis -> out/MOO171_report.md, out/plots/, 
 `out/option_rows.parquet` and `out/measures.parquet` are gitignored (large,
 trivially regenerable from the immutable R2 archive) along with `r2_cache/`
 (the local disk cache of raw R2 reads). Everything else under `out/` --
-the report, plots, and small aggregated CSVs/parquets -- is committed as
-the actual evidence.
+the report, plots, small aggregated CSVs/parquets, `audit_report.json`, and
+`source_manifest.json` (the frozen object keys/etags/config/code-revision
+used by the run that produced the committed evidence) -- is committed.
 
 ## Tests
 

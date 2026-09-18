@@ -52,12 +52,28 @@ def _nearest_valid_snapshot(
     return row
 
 
-def generate_anchors(spot_series: pd.DataFrame) -> pd.DataFrame:
+def generate_anchors(spot_series: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Non-overlapping 5-minute anchor points per date, each resolved to the
-    actual snapshot used (may be None if no snapshot is close enough to a
-    given bin boundary -- those bins are simply absent from the result,
-    per the issue's 'record fewer available candidates' instruction)."""
+    actual snapshot used.
+
+    A nominal 5-minute grid does NOT by itself guarantee non-overlapping
+    *realized* windows: the anchor is resolved backward (latest at/before
+    the bin) and the outcome forward (first at/after +5min), so a late
+    anchor resolution can push a window's actual end past the next nominal
+    bin's actual start. This is enforced explicitly here, chronologically,
+    against the actual retained timestamps -- never by looking at returns
+    to decide which windows to keep:
+
+        retain candidate anchor only if anchor_ts_et >= last retained
+        outcome_ts_et (for this date)
+
+    Returns (anchors, excluded) -- `excluded` records every candidate bin
+    that was dropped and why (`no_anchor_snapshot`, `no_outcome_snapshot`,
+    or `overlaps_prior_window`), so coverage loss is auditable rather than
+    silent.
+    """
     rows = []
+    excluded_rows = []
     for date, group in spot_series.groupby("date"):
         regular = group[group["regular_hours"]]
         if regular.empty:
@@ -67,13 +83,19 @@ def generate_anchors(spot_series: pd.DataFrame) -> pd.DataFrame:
         bin_starts = pd.date_range(
             session_start, session_end, freq=f"{ANCHOR_INTERVAL_MINUTES}min", tz=session_start.tz,
         )
+        last_outcome_ts: pd.Timestamp | None = None
         for bin_start in bin_starts:
             anchor_row = _nearest_valid_snapshot(spot_series, date, bin_start, "before")
             if anchor_row is None:
+                excluded_rows.append({"date": date, "anchor_bin": bin_start, "reason": "no_anchor_snapshot"})
+                continue
+            if last_outcome_ts is not None and anchor_row["ts_et"] < last_outcome_ts:
+                excluded_rows.append({"date": date, "anchor_bin": bin_start, "reason": "overlaps_prior_window"})
                 continue
             outcome_target = anchor_row["ts_et"] + pd.Timedelta(minutes=OUTCOME_HORIZON_MINUTES)
             outcome_row = _nearest_valid_snapshot(spot_series, date, outcome_target, "after")
             if outcome_row is None:
+                excluded_rows.append({"date": date, "anchor_bin": bin_start, "reason": "no_outcome_snapshot"})
                 continue
             rows.append({
                 "date": date,
@@ -86,7 +108,23 @@ def generate_anchors(spot_series: pd.DataFrame) -> pd.DataFrame:
                 "outcome_spot": outcome_row["underlying_price"],
                 "realized_horizon_seconds": (outcome_row["ts_et"] - anchor_row["ts_et"]).total_seconds(),
             })
-    return pd.DataFrame(rows)
+            last_outcome_ts = outcome_row["ts_et"]
+    return pd.DataFrame(rows), pd.DataFrame(excluded_rows)
+
+
+def assert_non_overlapping(anchors: pd.DataFrame) -> None:
+    """Raises AssertionError if any two retained anchors on the same date
+    have overlapping [anchor_ts_et, outcome_ts_et) windows. Intended as a
+    generated-data check after generate_anchors, not a silent filter."""
+    for date, group in anchors.sort_values("anchor_ts_et").groupby("date"):
+        prev_outcome_ts = None
+        for _, row in group.iterrows():
+            if prev_outcome_ts is not None and row["anchor_ts_et"] < prev_outcome_ts:
+                raise AssertionError(
+                    f"{date}: anchor at {row['anchor_ts_et']} starts before the prior "
+                    f"retained window's outcome at {prev_outcome_ts}"
+                )
+            prev_outcome_ts = row["outcome_ts_et"]
 
 
 def select_strikes_for_anchor(measures_at_snapshot: pd.DataFrame, spot: float) -> pd.DataFrame:
@@ -129,6 +167,10 @@ def build_outcome_dataset(anchors: pd.DataFrame, measures: pd.DataFrame) -> pd.D
                 "gamma_alone": strike_row["total_gamma"],
                 "unweighted_oi": strike_row["total_oi"],
                 "unweighted_activity": strike_row["total_dv"],
+                "n_contracts": strike_row["n_contracts"],
+                "n_oi_gamma_valid": strike_row["n_oi_gamma_valid"],
+                "n_dv_valid": strike_row["n_dv_valid"],
+                "n_dv_excluded": strike_row["n_dv_excluded"],
                 "anchor_spot": anchor["anchor_spot"],
                 "outcome_spot": anchor["outcome_spot"],
                 "realized_horizon_seconds": anchor["realized_horizon_seconds"],

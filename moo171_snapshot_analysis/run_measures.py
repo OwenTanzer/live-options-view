@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from measures import compute_concentration_and_activity
-from outcomes import build_outcome_dataset, generate_anchors
+from outcomes import assert_non_overlapping, build_outcome_dataset, generate_anchors
 
 OUT_DIR = Path(__file__).parent / "out"
 
@@ -27,10 +27,15 @@ def main() -> int:
     print(f"Computed measures for {len(measures)} (snapshot, strike) pairs.")
     print(measures[["C", "A", "distance", "side"]].describe())
 
-    anchors = generate_anchors(spot_series)
+    anchors, excluded = generate_anchors(spot_series)
+    assert_non_overlapping(anchors)  # generated-data check, not just a unit test
     anchors.to_parquet(OUT_DIR / "anchors.parquet", index=False)
-    print(f"\nGenerated {len(anchors)} anchors (5 sessions x ~78 five-min bins expected).")
+    excluded.to_parquet(OUT_DIR / "excluded_anchor_bins.parquet", index=False)
+    print(f"\nGenerated {len(anchors)} anchors (verified non-overlapping); "
+          f"{len(excluded)} candidate bins excluded.")
     print(anchors.groupby("date").size())
+    print("\nExclusion reasons:")
+    print(excluded["reason"].value_counts() if not excluded.empty else "(none)")
 
     outcome_ds = build_outcome_dataset(anchors, measures)
     outcome_ds.to_parquet(OUT_DIR / "outcome_dataset.parquet", index=False)

@@ -9,69 +9,136 @@ beyond ordinary proximity and unweighted activity?
 
 ## Data
 
-Five sessions (2026-09-10, 11, 14, 15, 16), tastytrade/DXLink intraday QQQ
-0DTE snapshots archived at ~60s cadence, `intraday/{date}/snapshot_*.csv`.
-Coverage audit: all 5 sessions reconcile exactly against collector logs
-(595/598/598/598/597 snapshots); 400,124 option rows; zero nonfinite Greeks,
-negative volumes, or negative OI; 99.65% of interval-volume observations
-usable (`ok`) after excluding first-observations, re-entries, resets, and
-gaps >90s per the issue's rules. Full detail in `out/audit_report.json`.
+5 sessions (20260910, 20260911, 20260914, 20260915, 20260916), tastytrade/DXLink intraday QQQ
+0DTE snapshots archived at ~60s cadence, `intraday/<date>/snapshot_*.csv`.
 
-Outcome dataset: 2304 (anchor, strike) rows from 384 non-overlapping
-5-minute anchors x up to 6 selected strikes (3 nearest strictly above spot,
-3 strictly below), each requiring an anchor snapshot <=90s old and an outcome
-snapshot 5 minutes later, <=90s late. 30 rows dropped for missing
-baseline features (mostly the first ~30 minutes of each session, before a
-full preceding-volatility window exists) -> 2274 modeled rows.
+Coverage audit (`out/audit_report.json`, `out/source_manifest.json` for the
+exact object keys/etags/config/code-revision used by this run): all
+5 sessions reconcile exactly against collector logs = True.
+400124 option rows. 400124 interval-volume observations
+computed; 398472 (99.59%) usable (`ok`) after
+excluding first-observations, re-entries, resets, and gaps >90s per the
+issue's rules -- see `flag_counts_overall` in the audit report for the exact
+breakdown. Session audits also check (timestamp, OptionSymbol) uniqueness,
+OptionSymbol-vs-column identity, snapshot-level spot consistency, per-contract
+OI stability against a first-eligible-session baseline, and repeated-value
+run lengths: 0 duplicate (timestamp, OptionSymbol) rows,
+0 OptionSymbol/column mismatches, and
+0 spot-inconsistent snapshots found across all 5
+sessions (see each session's entry in the audit report for the full detail).
+**OpenInterest never changed within any regular-hours session for any of the
+754 distinct contracts observed across all 5 days
+(0 contracts with any intra-session OI change)** --
+OI here is genuinely static prior-day-settled data for the entire session,
+exactly as DESIGN.md's known-limitations section states, not something this
+analysis's OI-weighting could confuse with a live position change. Separately,
+at least one contract's Mid quote was unchanged for 378
+consecutive regular-hours snapshots on the session with the longest such run
+-- reported as a repetition count only, per the issue's caution that
+repetition alone does not prove staleness.
+
+Anchors: 325 retained (verified non-overlapping by
+`outcomes.assert_non_overlapping`), 65 candidate
+5-minute bins excluded (reasons in `out/excluded_anchor_bins.parquet`).
+Outcome dataset: 1950 (anchor, strike) rows from up to 6 selected
+strikes per anchor (3 nearest strictly above spot, 3 strictly below), each
+requiring an anchor snapshot and a +5-minute outcome snapshot both within 90s
+of their targets. Eligibility for C and A is tracked separately per strike
+(`n_oi_gamma_valid`, `n_dv_valid` in the outcome dataset) -- a strike is only
+selected if it has a real (non-missing) C and A, never a numeric zero
+standing in for unavailable data.
+
+126 of 1950 outcome rows
+dropped before modeling, by cause: {'prev_5min_return': 30, 'vol_30min': 126}
+-> 1824 modeled rows.
 
 ## Method
 
 `toward[k,t] = (|S[t]-k| - |S[t+5m]-k|) / S[t]`, positive = closer to k at
 the outcome snapshot. Regressed on log1p(C) / log1p(A) / log1p(gamma alone)
 each in turn, plus a fixed baseline (|distance|, |distance|^2, side of spot,
-prior 5-min return, preceding 30-min realized vol, minutes since open,
-log unweighted OI, log unweighted activity). Standard errors are clustered
-by (date, anchor) throughout -- the 6 strikes at one anchor share one future
-price path and are never treated as independent observations.
+prior 5-min return, a preceding 30-minute realized-volatility estimate that
+REQUIRES actual ~30-minute coverage back from the anchor -- not merely enough
+observation count, minutes since open, log unweighted OI, log unweighted
+activity). Standard errors are clustered by (date, anchor) in every fitted
+model here, pooled AND per-day -- the 6 strikes at one anchor share one
+future price path and are never treated as independent observations.
+
+This clustering does not by itself resolve every dependence concern: the
+pooled model has 1824
+modeled rows across many more anchor clusters than there are trading days --
+there is no day-level clustering computed anywhere in this analysis, and
+anchor-clustering does not address serial dependence *between* successive
+anchors within the same session. Day-by-day and leave-one-day-out below are
+descriptive session-level stability/sensitivity checks, not a resolution of
+that residual dependence, and "leave-one-day-out" means refitting after
+omitting one day's rows -- not held-out predictive validation.
+
+Because log_C, log_A, and log_gamma_alone have different scales, their raw
+fitted coefficients are not comparable to each other. The predictor
+comparison below also reports each predictor's own standard deviation and an
+SD-scaled coefficient (the fitted change in `toward` for a one-SD change in
+that specific predictor).
 
 ## Findings — read the day-by-day results before the pooled ones
 
-**The pooled coefficients are small and not stable across days.** Pooling
-all 5 sessions, log(C), log(A), and log(gamma alone) each show a positive,
-nominally significant association with `toward` (predictor-comparison table
-below) -- but the R^2 gain over the baseline-only model (0.0423) is on
-the order of 0.002-0.003 in every case: detectable, not large.
+### log(C)
 
-Critically, **with only 5 day-clusters this pooled significance is not
-trustworthy on its own** (per the issue's explicit caution), and the
-day-by-day breakdown confirms why: for log(C), 3 of 5 sessions (9/10, 9/11,
-9/14) show a positive, individually significant coefficient, while the other
-2 (9/15, 9/16) show no relationship or a negative point estimate with a wide
-CI spanning zero. Leave-one-day-out refits move the pooled coefficient by
-roughly 3x depending on which day is excluded (lowest when 9/14 -- one of
-the strong-positive days -- is held out; highest when 9/16 -- the
-negative-point-estimate day -- is held out). The same pattern holds for
-log(A). **This is not a stable, session-independent relationship on this
-evidence; it is at most a candidate worth watching across more sessions.**
+Pooled (n=1824, clustered by anchor): coefficient 8.79006e-05
+(SE 3.4e-05, p=0.01004), SD-scaled effect 6.6342e-05
+(predictor SD 0.7547). R^2 gain over baseline
+(0.0411): 0.0018.
 
-**Gamma alone (unweighted by OI or activity) shows an equal or larger
-coefficient than either C or A**, and the same day-by-day instability.
-Since the baseline already controls for |distance| and |distance|^2, this
-raises a real possibility that the OI/activity weighting in C and A is not
-adding information beyond what gamma's own mechanical dependence on
-moneyness and time-to-expiry already contributes -- exactly the concern the
-issue's spec named in advance. This analysis does not resolve that question;
-it flags it as the main reason not to read C or A as validated signals from
-this pass alone.
+Day-by-day: 3 of 5 sessions show a positive
+coefficient with p<0.05 individually; the remaining 2
+do not (see `out/day_by_day_log_C.csv` / `out/plots/day_by_day_log_C.png`
+for every session's own coefficient, SE, and cluster count).
+
+Leave-one-day-out: the pooled coefficient ranges from 4.50167e-05 to
+0.000202891 depending on which single day is excluded (`out/leave_one_day_out_log_C.csv`).
+
+### log(A)
+
+Pooled (n=1824, clustered by anchor): coefficient 8.58749e-05
+(SE 3.7e-05, p=0.01935), SD-scaled effect 0.000126732
+(predictor SD 1.476). R^2 gain over baseline
+(0.0411): 0.0015.
+
+Day-by-day: 3 of 5 sessions show a positive
+coefficient with p<0.05 individually; the remaining 2
+do not (see `out/day_by_day_log_A.csv` / `out/plots/day_by_day_log_A.png`
+for every session's own coefficient, SE, and cluster count).
+
+Leave-one-day-out: the pooled coefficient ranges from 4.51799e-05 to
+0.000220322 depending on which single day is excluded (`out/leave_one_day_out_log_A.csv`).
+
+### log(gamma alone)
+
+Pooled (n=1824, clustered by anchor): coefficient 0.000579708
+(SE 0.00018, p=0.001129), SD-scaled effect 5.71246e-05
+(predictor SD 0.09854). R^2 gain over baseline
+(0.0411): 0.0028.
+
+Day-by-day: 2 of 5 sessions show a positive
+coefficient with p<0.05 individually; the remaining 3
+do not (see `out/day_by_day_log_gamma_alone.csv` / `out/plots/day_by_day_log_gamma_alone.png`
+for every session's own coefficient, SE, and cluster count).
+
+Leave-one-day-out: the pooled coefficient ranges from 0.000406834 to
+0.000865105 depending on which single day is excluded (`out/leave_one_day_out_log_gamma_alone.csv`).
 
 ## Explicit limitations (do not read past these)
 
 - Unsigned measures only. C and A are gamma-weighted open-interest and
   activity concentration -- not signed dealer inventory, not a hedging-flow
   estimate, and not validated against any independent position/trade data.
-- 5 trading days. Every inference above is over 5 day-clusters; nothing here
+- Every inference above is over a handful of trading days; nothing here
   supports a trading gate, a causal dealer-hedging claim, or a
-  predictive-performance claim.
+  predictive-performance claim. Anchor-level clustering addresses the
+  shared-future-path dependence within an anchor; it does not establish
+  that sessions or successive anchors are independent, and day-by-day /
+  leave-one-day-out are reported as descriptive stability checks, not a
+  substitute asymptotic guarantee.
 - No threshold search was performed; the 5-minute horizon, 90-second
   staleness cap, and 3-strikes-per-side selection are exactly the issue's
   specified values, not tuned choices.
@@ -79,82 +146,80 @@ this pass alone.
   not intraminute touches/crossings; it does not establish sustained
   pinning.
 - Reported OI can legitimately read 0 well into a session for a given 0DTE
-  contract (no settled prior-day OI yet) -- this is a real data-quality
-  constraint on C specifically, not an artifact of this analysis.
+  contract, and some historical unknown OI/volume values were already
+  serialized as zero upstream of this analysis and cannot be reconstructed
+  by this code -- this is a real data-quality/provenance limitation on C
+  specifically, not an artifact of this analysis, and not evidence that
+  every zero observed here is an ordinary settled-position reading.
+- This revision's source manifest (`out/source_manifest.json`) freezes the
+  configuration and exact object keys used AS OF THIS RUN. It is not a
+  claim that the original pre-review analysis was frozen before its
+  outcomes were inspected -- this correction is retrospective.
 
+## Predictor comparison table (pooled, clustered by anchor)
+| predictor       |          coef |            se |           p |   predictor_std |   sd_scaled_coef |   r_squared |    n |
+|:----------------|--------------:|--------------:|------------:|----------------:|-----------------:|------------:|-----:|
+| (baseline only) | nan           | nan           | nan         |     nan         |    nan           |   0.0410797 | 1824 |
+| log_C           |   8.79006e-05 |   3.41416e-05 |   0.0100359 |       0.754739  |      6.6342e-05  |   0.0428445 | 1824 |
+| log_A           |   8.58749e-05 |   3.67194e-05 |   0.0193519 |       1.47578   |      0.000126732 |   0.0426124 | 1824 |
+| log_gamma_alone |   0.000579708 |   0.00017803  |   0.001129  |       0.0985403 |      5.71246e-05 |   0.0439249 | 1824 |
 
-## Predictor comparison (pooled, clustered by anchor)
-
-| predictor       |          coef |            se |             p |   r_squared |    n |
-|:----------------|--------------:|--------------:|--------------:|------------:|-----:|
-| (baseline only) | nan           | nan           | nan           |   0.0423034 | 2274 |
-| log_C           |   0.00010334  |   3.5588e-05  |   0.00368659  |   0.044397  | 2274 |
-| log_A           |   0.000102396 |   3.8636e-05  |   0.00804265  |   0.0441807 | 2274 |
-| log_gamma_alone |   0.000659548 |   0.000179265 |   0.000233978 |   0.0455059 | 2274 |
-
-
-
-## log(C)
+## log(C) tables
 
 ### Day-by-day
-|     date |   n |         coef |          se |           p |
-|---------:|----:|-------------:|------------:|------------:|
-| 20260910 | 456 |  0.00042811  | 0.000187946 | 0.0227368   |
-| 20260911 | 456 |  0.000261662 | 0.000100222 | 0.00903231  |
-| 20260914 | 450 |  0.00035296  | 9.79744e-05 | 0.000315077 |
-| 20260915 | 456 | -4.78678e-06 | 7.32738e-05 | 0.947913    |
-| 20260916 | 456 | -0.000139302 | 0.000351939 | 0.692244    |
+|     date |   n |   n_anchor_clusters |         coef |          se |           p |
+|---------:|----:|--------------------:|-------------:|------------:|------------:|
+| 20260910 | 360 |                  60 |  0.000345284 | 0.000172422 | 0.0452254   |
+| 20260911 | 366 |                  61 |  0.000278255 | 9.93806e-05 | 0.00511204  |
+| 20260914 | 366 |                  61 |  0.00031084  | 8.44565e-05 | 0.000232801 |
+| 20260915 | 366 |                  61 | -2.16206e-05 | 0.000120589 | 0.857709    |
+| 20260916 | 366 |                  61 | -0.00038561  | 0.000472428 | 0.414368    |
 
+### Leave-one-day-out
+|   held_out |    n |        coef |          se |          p |
+|-----------:|-----:|------------:|------------:|-----------:|
+|   20260910 | 1464 | 9.27834e-05 | 3.37232e-05 | 0.00593547 |
+|   20260911 | 1458 | 8.01981e-05 | 3.86912e-05 | 0.0381935  |
+|   20260914 | 1458 | 4.50167e-05 | 4.28961e-05 | 0.293977   |
+|   20260915 | 1458 | 9.87109e-05 | 3.58605e-05 | 0.00591173 |
+|   20260916 | 1458 | 0.000202891 | 5.53358e-05 | 0.00024586 |
+
+## log(A) tables
+
+### Day-by-day
+|     date |   n |   n_anchor_clusters |         coef |          se |           p |
+|---------:|----:|--------------------:|-------------:|------------:|------------:|
+| 20260910 | 360 |                  60 |  0.000368521 | 0.000187345 | 0.049175    |
+| 20260911 | 366 |                  61 |  0.000270833 | 9.37005e-05 | 0.00384739  |
+| 20260914 | 366 |                  61 |  0.000409524 | 0.000118599 | 0.000554378 |
+| 20260915 | 366 |                  61 | -2.42475e-05 | 0.000122584 | 0.843199    |
+| 20260916 | 366 |                  61 | -0.000407012 | 0.000475657 | 0.392173    |
 
 ### Leave-one-day-out
 |   held_out |    n |        coef |          se |           p |
 |-----------:|-----:|------------:|------------:|------------:|
-|   20260910 | 1818 | 0.000102346 | 3.52916e-05 | 0.00373155  |
-|   20260911 | 1818 | 0.000101109 | 4.12613e-05 | 0.0142672   |
-|   20260914 | 1824 | 7.13646e-05 | 4.25567e-05 | 0.0935558   |
-|   20260915 | 1818 | 0.000115041 | 4.04655e-05 | 0.00447001  |
-|   20260916 | 1818 | 0.000215813 | 5.43796e-05 | 7.22831e-05 |
+|   20260910 | 1464 | 9.19728e-05 | 3.59779e-05 | 0.0105772   |
+|   20260911 | 1458 | 7.36696e-05 | 4.26279e-05 | 0.0839518   |
+|   20260914 | 1458 | 4.51799e-05 | 4.27404e-05 | 0.290476    |
+|   20260915 | 1458 | 9.62362e-05 | 3.94332e-05 | 0.0146675   |
+|   20260916 | 1458 | 0.000220322 | 6.37461e-05 | 0.000547774 |
 
-
-## log(A)
+## log(gamma alone) tables
 
 ### Day-by-day
-|     date |   n |         coef |          se |          p |
-|---------:|----:|-------------:|------------:|-----------:|
-| 20260910 | 456 |  0.00045417  | 0.000200377 | 0.0234156  |
-| 20260911 | 456 |  0.000266773 | 9.75225e-05 | 0.00622848 |
-| 20260914 | 450 |  0.000440202 | 0.000138592 | 0.00149194 |
-| 20260915 | 456 | -8.46017e-06 | 7.89718e-05 | 0.914687   |
-| 20260916 | 456 | -0.000157725 | 0.000354955 | 0.656788   |
-
+|     date |   n |   n_anchor_clusters |        coef |          se |          p |
+|---------:|----:|--------------------:|------------:|------------:|-----------:|
+| 20260910 | 360 |                  60 |  0.0014097  | 0.000719362 | 0.0500366  |
+| 20260911 | 366 |                  61 |  0.00101787 | 0.000328441 | 0.00194119 |
+| 20260914 | 366 |                  61 |  0.00156246 | 0.000480953 | 0.00115949 |
+| 20260915 | 366 |                  61 |  7.2575e-05 | 0.000499956 | 0.884582   |
+| 20260916 | 366 |                  61 | -0.0013209  | 0.00209441  | 0.528249   |
 
 ### Leave-one-day-out
 |   held_out |    n |        coef |          se |           p |
 |-----------:|-----:|------------:|------------:|------------:|
-|   20260910 | 1818 | 0.000101968 | 3.8233e-05  | 0.00765287  |
-|   20260911 | 1818 | 9.63225e-05 | 4.54924e-05 | 0.0342318   |
-|   20260914 | 1824 | 7.17037e-05 | 4.34944e-05 | 0.0992353   |
-|   20260915 | 1818 | 0.000113398 | 4.43596e-05 | 0.0105781   |
-|   20260916 | 1818 | 0.000233993 | 6.22134e-05 | 0.000169146 |
-
-
-## log(gamma alone)
-
-### Day-by-day
-|     date |   n |         coef |          se |          p |
-|---------:|----:|-------------:|------------:|-----------:|
-| 20260910 | 456 |  0.00176426  | 0.000889053 | 0.0472087  |
-| 20260911 | 456 |  0.000962678 | 0.000397947 | 0.0155584  |
-| 20260914 | 450 |  0.00183789  | 0.000592811 | 0.00193325 |
-| 20260915 | 456 |  0.000110674 | 0.000323853 | 0.732545   |
-| 20260916 | 456 | -0.00015473  | 0.00175379  | 0.929697   |
-
-
-### Leave-one-day-out
-|   held_out |    n |        coef |          se |           p |
-|-----------:|-----:|------------:|------------:|------------:|
-|   20260910 | 1818 | 0.000708597 | 0.000179041 | 7.5661e-05  |
-|   20260911 | 1818 | 0.000649826 | 0.000220785 | 0.00324783  |
-|   20260914 | 1824 | 0.000519429 | 0.000207568 | 0.0123335   |
-|   20260915 | 1818 | 0.00073458  | 0.000206464 | 0.000373829 |
-|   20260916 | 1818 | 0.000907864 | 0.000211547 | 1.77425e-05 |
+|   20260910 | 1464 | 0.00063901  | 0.000178186 | 0.000335526 |
+|   20260911 | 1458 | 0.000537733 | 0.000215764 | 0.0126944   |
+|   20260914 | 1458 | 0.000406834 | 0.000211571 | 0.0544901   |
+|   20260915 | 1458 | 0.000646952 | 0.000190336 | 0.000676328 |
+|   20260916 | 1458 | 0.000865105 | 0.000228562 | 0.000153714 |

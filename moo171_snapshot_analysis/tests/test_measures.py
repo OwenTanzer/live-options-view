@@ -3,6 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import math
+
 import pandas as pd
 
 from measures import compute_concentration_and_activity
@@ -25,7 +27,7 @@ def test_concentration_uses_oi_gamma_spot_squared():
     row = out.iloc[0]
     expected_c = (700.0 ** 2) * 100 * (10 * 0.02 + 5 * 0.01)
     assert row["C"] == expected_c
-    assert row["A"] == 0.0  # no usable dV yet
+    assert math.isnan(row["A"])  # no usable dV yet -- unavailable, not zero activity
     assert row["n_contracts"] == 2
 
 
@@ -61,3 +63,46 @@ def test_never_combines_c_and_a_into_one_composite_column():
     out = compute_concentration_and_activity(df)
     assert "C" in out.columns and "A" in out.columns
     assert not any(col.lower() in ("score", "composite", "combined") for col in out.columns)
+
+
+def test_strike_with_no_oi_gamma_and_no_usable_activity_is_fully_unavailable():
+    """The review's reproduction 1: a strike where every contract is
+    missing Gamma, missing OpenInterest, and has no usable dV must have
+    BOTH C and A as NaN (unavailable), not 0 -- and must therefore fail
+    the eligibility gate a caller applies (e.g. dropna), not silently pass
+    it as if it were an observed all-zero strike."""
+    df = pd.DataFrame([_row(700, "call", oi=None, gamma=None, dv=None, dv_flag="first_observation")])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert math.isnan(row["C"])
+    assert math.isnan(row["A"])
+
+
+def test_strike_with_valid_oi_gamma_but_no_usable_activity_has_available_c_and_unavailable_a():
+    """The review's reproduction 2: valid gamma/open-interest but the only
+    contract's activity observation is a first-observation (no usable dV)
+    must produce a real C, an unavailable (NaN) A, and n_dv_excluded=1 --
+    not a numeric A=0 that looks like a real zero-activity observation."""
+    df = pd.DataFrame([_row(700, "call", oi=10, gamma=0.02, dv=None, dv_flag="first_observation")])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert row["C"] == (700.0 ** 2) * 100 * 10 * 0.02
+    assert math.isnan(row["A"])
+    assert row["n_dv_excluded"] == 1
+    assert row["n_dv_valid"] == 0
+
+
+def test_partial_coverage_strike_uses_only_the_valid_contract_not_zero_for_missing_one():
+    """One contract usable, one contract missing OI/Gamma at the same
+    strike: C must reflect only the valid contract's contribution (not be
+    zeroed out by the missing one), while still being a real, available
+    number since at least one contract is usable."""
+    df = pd.DataFrame([
+        _row(700, "call", oi=10, gamma=0.02, dv=None, dv_flag="first_observation", symbol="valid"),
+        _row(700, "put", oi=None, gamma=None, dv=None, dv_flag="first_observation", symbol="missing"),
+    ])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert row["C"] == (700.0 ** 2) * 100 * 10 * 0.02
+    assert row["n_oi_gamma_valid"] == 1
+    assert row["n_contracts"] == 2

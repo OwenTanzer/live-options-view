@@ -26,11 +26,7 @@ def test_previous_return_uses_snapshot_at_or_before_lookback_point():
     spot = _spot_rows("20260910", [("09:25:00", 700.0), ("09:30:00", 707.0)])
     anchor_ts = pd.Timestamp("2026-09-10 09:30:00", tz="America/New_York")
     r = previous_return(spot, "20260910", anchor_ts, anchor_spot=707.0)
-    assert r == pytest_close((707.0 - 700.0) / 700.0)
-
-
-def pytest_close(x, tol=1e-9):
-    return x
+    assert r == (707.0 - 700.0) / 700.0
 
 
 def test_previous_return_nan_when_lookback_too_stale():
@@ -48,19 +44,44 @@ def test_minutes_since_open():
 def test_preceding_volatility_nan_with_too_few_observations():
     spot = _spot_rows("20260910", [("09:59:00", 700.0), ("10:00:00", 701.0)])
     anchor_ts = pd.Timestamp("2026-09-10 10:00:00", tz="America/New_York")
-    v = preceding_volatility(spot, "20260910", anchor_ts)
-    assert math.isnan(v)
+    info = preceding_volatility(spot, "20260910", anchor_ts)
+    assert math.isnan(info["vol_30min"])
+    assert info["vol_30min_n_obs"] == 2
 
 
-def test_preceding_volatility_computes_with_enough_observations():
-    times = [f"09:{30+i:02d}:00" for i in range(6)]
+def test_preceding_volatility_nan_when_window_not_actually_complete():
+    """The review's exact finding: enough OBSERVATIONS (>= 5) inside the
+    nominal window is not the same as the window actually reaching back
+    ~30 minutes -- e.g. near session open, where history simply doesn't
+    exist yet. This must be NaN, not silently computed over the shorter
+    span that happens to be available."""
+    times = [f"09:{30+i:02d}:00" for i in range(6)]  # 09:30..09:35, session "opens" at 09:30
     prices = [700.0, 700.5, 699.8, 700.2, 700.9, 700.4]
     spot = _spot_rows("20260910", list(zip(times, prices)))
     anchor_ts = pd.Timestamp("2026-09-10 09:35:00", tz="America/New_York")
-    v = preceding_volatility(spot, "20260910", anchor_ts)
-    assert v > 0
-    expected = np.std(np.diff(np.log(prices)), ddof=1)
-    assert abs(v - expected) < 1e-12
+    # window_start would be 09:05, but data only goes back to 09:30 -- a
+    # 25-minute shortfall, far more than the 90s staleness tolerance.
+    info = preceding_volatility(spot, "20260910", anchor_ts)
+    assert math.isnan(info["vol_30min"])
+    assert info["vol_30min_n_obs"] == 6  # observations existed; the window just wasn't complete
+
+
+def test_preceding_volatility_computes_with_a_genuinely_complete_window():
+    base = pd.Timestamp("2026-09-10 09:30:00", tz="America/New_York")
+    times_and_prices = [
+        ((base + pd.Timedelta(minutes=i)).strftime("%H:%M:%S"), 700.0 + 0.1 * ((-1) ** i) * i)
+        for i in range(31)  # 09:30 .. 10:00, one per minute
+    ]
+    spot = _spot_rows("20260910", times_and_prices)
+    anchor_ts = pd.Timestamp("2026-09-10 10:00:00", tz="America/New_York")
+    info = preceding_volatility(spot, "20260910", anchor_ts)
+    assert info["vol_30min"] > 0
+    assert info["vol_30min_n_obs"] == 31
+    assert info["vol_30min_span_seconds"] == pytest_close_seconds(30 * 60)
+
+
+def pytest_close_seconds(x, tol=1e-6):
+    return x
 
 
 def test_add_baseline_features_shares_computation_across_strikes_at_same_anchor():
@@ -75,3 +96,5 @@ def test_add_baseline_features_shares_computation_across_strikes_at_same_anchor(
     assert len(out) == 2
     assert out["prev_5min_return"].nunique() == 1  # same anchor -> same baseline for both strikes
     assert out["minutes_since_open"].iloc[0] == 5.0
+    assert "vol_30min_n_obs" in out.columns
+    assert "vol_30min_span_seconds" in out.columns
