@@ -29,6 +29,8 @@ from crassus.audit import DecisionLedger, Outcome  # noqa: E402
 from crassus.client import AccountState, ExecutionResult  # noqa: E402
 from crassus.flatten import STRATEGY_ID as FLATTEN_STRATEGY_ID  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
+from crassus.overrides_client import OverridesClient  # noqa: E402
+from crassus.policy import OverridePolicy  # noqa: E402
 from crassus.runner import Runner  # noqa: E402
 from crassus.strategies import momentum_qqq  # noqa: E402, F401 (registers momentum_qqq)
 from crassus.strategies.phelps_variants import smoke_atm_roundtrip_phelps  # noqa: E402
@@ -127,6 +129,13 @@ def make_runner(
     runner.ledger = DecisionLedger(ledger_dir)
     runner.retired = set()
     runner._stop = None
+    # Crassus AI override plumbing (MOO-165): disabled, matching the real
+    # production default (config.CRASSUS_AI_ENABLED=False) -- this test is
+    # about flatten attribution, not override behavior, and a disabled
+    # client never makes a network call or starts its mirror thread.
+    runner.overrides_client = OverridesClient(enabled=False, start_mirror_thread=False)
+    runner.policy = OverridePolicy()
+    runner._prior_accepted = {}
     runner.quotes = type(
         "FakeQuotes", (), {
             "quotes": staticmethod(lambda symbols: {s: fresh_quote(s) for s in symbols}),

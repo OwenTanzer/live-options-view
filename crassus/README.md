@@ -121,6 +121,96 @@ Enforced in `client.py`, each verified by a scenario in `verify_invariants.py`:
 6. **429 and `Retry-After` are honored globally.** The binding limit is per-IP, so all accounts share one budget.
 7. **HTTP 410 is terminal and recorded as a margin call.** The Worker deletes the user outright. ⚠️ This invariant is verified against the *documented* contract (the mock), not the real deployed Worker's actual settlement behavior — see "Known gaps" below.
 
+## Crassus AI overrides (skeleton, PR1 of 3)
+
+Crassus AI is an LLM layer that will eventually propose bounded parameter
+adjustments for these bots. **This PR ships only the deterministic safety
+layer** -- durable storage, the policy gate, and its wiring into the
+runner -- with no code yet that calls an LLM or accepts human chat; those
+are PR2 and PR3. Collaborator sign-off required exactly this split: the
+trust boundary had to be reviewable before any model output could reach it.
+
+**The rule this system exists to enforce:** Crassus AI may only ever
+produce a *proposed* parameter override. `crassus/crassus/policy.py`'s
+`OverridePolicy.evaluate()` is the sole authority on whether it becomes
+effective -- called fresh every account-processing cycle in
+`runner.py::_run_account`, fail-closed at every step (any missing,
+malformed, expired, unapproved, out-of-bounds, incompatible-schema,
+strategy-identity-mismatched, or unreachable input yields the account's own
+baseline `params`, never a crash and never a partially applied override).
+The rate-of-change cap is enforced against a real baseline even when an
+account sets no explicit `params` for the parameter in question -- the
+strategy's own hardcoded default (`ParamSpec.default`) is the fallback, not
+a silent skip of the cap. Order execution, `strategy_id`, and account
+identity are never in scope for an override -- see
+`policy.STRATEGY_PARAM_SCHEMAS` for the full allowlist, which only ever
+contains the scalar thresholds/flags a strategy already reads out of
+`ctx.params`.
+
+**Kill switch and per-bot freeze disable the override, not trading.**
+Engaging either one makes `OverridePolicy.evaluate()` deny and fall back to
+the account's own baseline `params` -- the bot keeps running its assigned
+strategy exactly as configured. Neither one halts an account. This is by
+design (see the trust-boundary rule above) but worth stating plainly since
+"kill switch" and "freeze" read as stronger than that.
+
+**No-traffic disabled path:** `CRASSUS_AI_ENABLED` (`crassus/crassus/config.py`)
+defaults to `false`. While disabled, `OverridesClient` makes zero HTTP
+requests of any kind -- not even a reachability check -- for any account,
+any cycle; every account simply runs on its own baseline `params`, same as
+before this PR existed. This matches production reality until the bindings
+below are actually provisioned, and is also the fix for a bounded-network
+regression flagged in review: without it (or once enabled against a
+genuinely unreachable Worker), a consecutive-failure circuit
+(`OverridesClient`'s `failure_circuit_threshold`/`circuit_cooldown_s`)
+still caps one outage to a handful of real timeout attempts total across an
+entire run, not one timeout per account per call -- see
+`scripts/verify_crassus_overrides_client.py`. The decision-ledger mirror
+(`post_ledger_mirror`) is additionally always non-blocking: it enqueues
+onto a bounded background queue drained by one dedicated thread and never
+adds latency to the runner's own cycle, regardless of `CRASSUS_AI_ENABLED`.
+
+Storage is Cloudflare D1 (`migrations/0001_crassus_ai.sql`) plus a new KV
+namespace (`CRASSUS_CONTROL`, for the kill switch and per-bot freeze
+flags), reached only through new `worker.js` routes -- not a file shared
+between Railway services, which collaborators flagged as unsafe.
+**Not yet provisioned**: both bindings are commented out in `wrangler.toml`
+on purpose (a literal placeholder id would have broken every deploy, since
+master auto-deploys the Worker and wrangler refuses to deploy against an
+unknown KV/D1 id) -- every other route is unaffected by their absence, and
+the Crassus AI routes themselves return a clean `503` via
+`worker.js`'s `checkCrassusStorage()` guard rather than throwing. To turn
+this on:
+
+```
+wrangler kv:namespace create CRASSUS_CONTROL   # then uncomment + paste the id into wrangler.toml
+wrangler d1 create crassus_ai                  # then uncomment + paste the database_id into wrangler.toml
+wrangler d1 execute crassus_ai --file=migrations/0001_crassus_ai.sql
+wrangler secret put CRASSUS_AI_KEY             # held by the (not-yet-built) crassus_ai service
+wrangler secret put CRASSUS_OPERATOR_KEY       # held only by human operators (Jake/Owen), used from a CLI
+```
+
+...and set `CRASSUS_AI_ENABLED=true` for the Railway runner once the
+bindings exist and an operator actually wants the override channel live --
+it stays off by default independent of whether the Worker side is deployed.
+
+`BOT_REGISTRATION_KEY` (already provisioned) doubles as the read-only
+credential the runner uses against `GET /api/crassus/overrides/:alias`,
+`GET /api/crassus/kill-switch`, `GET /api/crassus/freeze/:alias`, and
+`POST /api/crassus/ledger` -- no new runner-side secret is required for
+this PR.
+
+Also recommended, outside this repo: attach a Railway persistent volume to
+the Crassus service for `logs/`/`state/`, so the local decision ledger
+survives a redeploy independently of the new D1 mirror.
+
+Run `python crassus/scripts/verify_crassus_policy.py` to exercise the
+fail-closed guarantees directly, `python
+crassus/scripts/verify_crassus_overrides_client.py` for the circuit/
+non-blocking-mirror guarantees, and `node tests/worker_logic.test.js` for
+the Worker-side route/auth/storage contract (propose/accept/reject,
+expiry, aliases with real display names, and fail-closed control values).
+
 ## Server constraints worth knowing
 
 - **No `account_id`** — an account *is* a login. Twenty-one catalog bots = twenty-one registrations, twenty-one cookie jars.

@@ -21,6 +21,24 @@ const MAX_KV_WRITE_ATTEMPTS = 5;
 const SETTLEMENT_ID_PREFIX = 'settle';
 export const EXECUTION_RESERVATION_LEASE_MS = 30 * 1000;
 
+// -- Crassus AI override channel --------------------------------------------
+// Defense-in-depth only -- the Python policy layer (crassus/crassus/policy.py)
+// is the authoritative gate. Bounds here just stop an obviously malformed or
+// oversized envelope from ever reaching D1, regardless of what proposed it.
+const OVERRIDE_PARAM_KEY_RE = /^[a-z][a-z0-9_]{0,60}$/;
+const MAX_OVERRIDE_PARAMS = 20;
+const MAX_EVIDENCE_REFS = 20;
+const MAX_RATIONALE_LEN = 2000;
+const MAX_MODEL_LEN = 100;
+const MAX_EXPIRES_MINUTES = 24 * 60;
+// Matches the *display alias* every real account in accounts.example.json
+// actually uses (e.g. "Max Pain", "OI Skew", "Put-Call Ratio", "Doktor
+// Freuding FW") -- not the stricter username charset. Flagged in review: an
+// earlier version reused a no-spaces pattern here, so a route addressed by
+// alias 400'd for every multi-word alias that already exists in production.
+const CRASSUS_ACCOUNT_ALIAS_RE = /^[A-Za-z0-9 _-]{1,40}$/;
+const STRATEGY_VERSION_RE = /^[A-Za-z0-9_.+-]{1,80}$/;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -74,6 +92,46 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
       return handleLiveQuotes(url, env);
+    }
+
+    // -- Crassus AI: proposal storage + deterministic controls -----------
+    // See crassus/crassus/policy.py for the authoritative statement of the
+    // trust boundary these routes exist to enforce: this Worker only ever
+    // stores a *proposed* override and gates who may flip it to `accepted`;
+    // whether an accepted override actually changes a strategy's behavior
+    // is decided again, independently, by the Python policy layer on every
+    // single account-processing cycle. Nothing here executes a trade or
+    // touches strategy_id/account identity.
+
+    const overrideMatch = url.pathname.match(/^\/api\/crassus\/overrides\/([^/]+)$/);
+    if (request.method === 'GET' && overrideMatch) {
+      return handleCrassusOverrideGet(request, env, decodeURIComponent(overrideMatch[1]));
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crassus/overrides') {
+      return handleCrassusOverridePropose(request, env);
+    }
+
+    const decisionMatch = url.pathname.match(/^\/api\/crassus\/overrides\/([^/]+)\/(accept|reject)$/);
+    if (request.method === 'POST' && decisionMatch) {
+      return handleCrassusOverrideDecision(request, env, decisionMatch[1], decisionMatch[2]);
+    }
+
+    if (url.pathname === '/api/crassus/kill-switch' && (request.method === 'GET' || request.method === 'POST')) {
+      return handleCrassusKillSwitch(request, env);
+    }
+
+    const freezeGetMatch = url.pathname.match(/^\/api\/crassus\/freeze\/([^/]+)$/);
+    if (request.method === 'GET' && freezeGetMatch) {
+      return handleCrassusFreezeGet(request, env, decodeURIComponent(freezeGetMatch[1]));
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crassus/freeze') {
+      return handleCrassusFreezePost(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crassus/ledger') {
+      return handleCrassusLedgerMirror(request, env);
     }
 
     const response = await env.ASSETS.fetch(request);
@@ -1393,6 +1451,365 @@ function exactContractQuote(payload, symbol, side, nowMs) {
     askTs: Number.isFinite(askMs) ? new Date(askMs).toISOString() : null,
     quoteTs: new Date(sideMs).toISOString(),
   };
+}
+
+// -- Crassus AI handlers -----------------------------------------------
+// Auth mirrors the existing X-Bot-Registration-Key pattern (handleRegister,
+// handleBotMetadata above) rather than sessions, since every caller here is
+// a machine, not a browser. Three distinct keys, least-privilege: the bot
+// key (existing secret, already held by the Crassus runner) can only ever
+// read overrides/kill-switch/freeze and mirror ledger records; the new
+// Crassus AI key can only ever create a `proposed` row; the new operator
+// key is the only one that can accept/reject a proposal or flip the kill
+// switch/freeze -- held by Jake/Owen only, used from a CLI, never by
+// Crassus AI or the browser.
+
+function checkBotKey(request, env) {
+  const key = request.headers.get('X-Bot-Registration-Key');
+  if (!env.BOT_REGISTRATION_KEY || key !== env.BOT_REGISTRATION_KEY) {
+    return jsonResponse({ error: 'Invalid bot registration key' }, 403);
+  }
+  return null;
+}
+
+function checkCrassusAiKey(request, env) {
+  const key = request.headers.get('X-Crassus-Ai-Key');
+  if (!env.CRASSUS_AI_KEY || key !== env.CRASSUS_AI_KEY) {
+    return jsonResponse({ error: 'Invalid Crassus AI key' }, 403);
+  }
+  return null;
+}
+
+function checkOperatorKey(request, env) {
+  const key = request.headers.get('X-Crassus-Operator-Key');
+  if (!env.CRASSUS_OPERATOR_KEY || key !== env.CRASSUS_OPERATOR_KEY) {
+    return jsonResponse({ error: 'Invalid operator key' }, 403);
+  }
+  return null;
+}
+
+// Defense-in-depth structural check only -- rejects anything that isn't a
+// flat object of short scalar leaves. The Python policy layer is what
+// actually decides which parameter *names* and *ranges* are safe for a
+// given strategy; this just stops garbage (nested objects, arrays,
+// oversized payloads) from ever reaching D1.
+//
+// `requireNonEmpty` distinguishes `proposed_params` (a proposal that changes
+// nothing is not a proposal) from `previous_params` (a perfectly normal
+// baseline for an account whose own accounts.example.json `params` is `{}`,
+// relying entirely on the strategy's hardcoded defaults -- Luigi-style
+// single-strategy bots are the common case, not the exception). Flagged in
+// review: an earlier version required at least one entry for both, so
+// proposing against any such account 400'd on a completely valid empty
+// `previous_params={}`.
+export function validateParamsObject(value, { requireNonEmpty = true } = {}) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return 'must be a JSON object';
+  }
+  const keys = Object.keys(value);
+  if (requireNonEmpty && keys.length === 0) return 'must have at least one entry';
+  if (keys.length > MAX_OVERRIDE_PARAMS) return `too many parameters (max ${MAX_OVERRIDE_PARAMS})`;
+  for (const key of keys) {
+    if (!OVERRIDE_PARAM_KEY_RE.test(key)) return `invalid parameter name ${key}`;
+    const v = value[key];
+    const t = typeof v;
+    if (v !== null && t !== 'number' && t !== 'boolean' && t !== 'string') {
+      return `parameter ${key} must be a number, boolean, string, or null`;
+    }
+    if (t === 'number' && !Number.isFinite(v)) return `parameter ${key} must be finite`;
+    if (t === 'string' && v.length > 200) return `parameter ${key} value too long`;
+  }
+  return null;
+}
+
+function rowToOverrideEnvelope(row) {
+  return {
+    id: row.id,
+    account_alias: row.account_alias,
+    status: row.status,
+    strategy_id: row.strategy_id,
+    strategy_version: row.strategy_version,
+    previous_params: JSON.parse(row.previous_params),
+    proposed_params: JSON.parse(row.proposed_params),
+    rationale: row.rationale,
+    evidence_refs: JSON.parse(row.evidence_refs),
+    model: row.model,
+    created_utc: row.created_utc,
+    expires_utc: row.expires_utc,
+    accepted_utc: row.accepted_utc,
+    accepted_by: row.accepted_by,
+    rollback_target: row.rollback_target,
+    schema_version: row.schema_version,
+  };
+}
+
+// The two new bindings (CRASSUS_CONTROL KV, CRASSUS_DB D1) are not yet
+// provisioned in production (see wrangler.toml) -- deploying with them
+// commented out, as the current config does, means every other route above
+// (auth, trading, settlement, live quotes) works exactly as before, and
+// only these Crassus routes exist to fail. Checked explicitly at the top of
+// every handler that needs one, rather than letting `env.CRASSUS_DB.prepare`
+// throw an unhandled TypeError, so an un-provisioned deploy returns a clear
+// 503 instead of a generic Worker exception -- crassus/overrides_client.py
+// already treats any non-200 response as "fail closed, no override."
+export function checkCrassusStorage(env, ...bindings) {
+  for (const name of bindings) {
+    if (!env[name]) return jsonResponse({ error: `${name.toLowerCase()}_not_provisioned` }, 503);
+  }
+  return null;
+}
+
+// `raw` is `null` only when the key has genuinely never been written --
+// a legitimate default-off state (no bot has ever been frozen; the kill
+// switch has never been touched). Anything else that isn't exactly the
+// literal string this Worker itself writes ('true' or 'false') is
+// corruption -- a bad manual KV edit, a partial write, whatever -- and
+// must not be read as "confirmed off." Flagged in review: an earlier
+// version's `raw === 'true'` check silently treated a corrupt value like
+// 'corrupt' as `false`, i.e. "not engaged" / "not frozen" -- exactly
+// backwards for a control whose job is to fail closed.
+export function parseControlFlag(raw) {
+  if (raw === null) return false;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return true; // unknown/corrupt: fail closed
+}
+
+export async function handleCrassusOverrideGet(request, env, alias) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
+  const authError = checkBotKey(request, env);
+  if (authError) return authError;
+  if (!CRASSUS_ACCOUNT_ALIAS_RE.test(alias)) {
+    return jsonResponse({ error: 'Invalid account_alias' }, 400);
+  }
+  const nowIso = new Date().toISOString();
+  const row = await env.CRASSUS_DB.prepare(
+    `SELECT * FROM crassus_overrides WHERE account_alias = ? AND status = 'accepted' AND expires_utc > ? ORDER BY created_utc DESC LIMIT 1`,
+  ).bind(alias, nowIso).first();
+  if (!row) return jsonResponse({ error: 'not_found' }, 404);
+  return jsonResponse(rowToOverrideEnvelope(row), 200);
+}
+
+export async function handleCrassusOverridePropose(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
+  const authError = checkCrassusAiKey(request, env);
+  if (authError) return authError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const body = bodyResult.body || {};
+
+  const allowedKeys = new Set([
+    'account_alias', 'strategy_id', 'strategy_version', 'proposed_params', 'previous_params',
+    'rationale', 'evidence_refs', 'model', 'expires_in_minutes', 'rollback_target',
+  ]);
+  for (const key of Object.keys(body)) {
+    if (!allowedKeys.has(key)) {
+      return jsonResponse({ error: `Unknown field: ${key}` }, 400);
+    }
+  }
+
+  const {
+    account_alias, strategy_id, strategy_version, proposed_params, previous_params, rationale,
+    evidence_refs, model, expires_in_minutes, rollback_target,
+  } = body;
+
+  if (typeof account_alias !== 'string' || !CRASSUS_ACCOUNT_ALIAS_RE.test(account_alias)) {
+    return jsonResponse({ error: 'Invalid account_alias' }, 400);
+  }
+  // The strategy identity a proposal was made against -- crassus.policy
+  // rejects at evaluation time if this doesn't match the account's actual
+  // current strategy_id/version. Required, not inferred server-side: this
+  // Worker has no access to the Crassus runtime's registry to look it up,
+  // and guessing wrong here would be exactly the identity confusion the
+  // check exists to prevent.
+  if (typeof strategy_id !== 'string' || !STRATEGY_ID_RE.test(strategy_id)) {
+    return jsonResponse({ error: 'Invalid strategy_id' }, 400);
+  }
+  if (typeof strategy_version !== 'string' || !STRATEGY_VERSION_RE.test(strategy_version)) {
+    return jsonResponse({ error: 'Invalid strategy_version' }, 400);
+  }
+  const proposedErr = validateParamsObject(proposed_params);
+  if (proposedErr) return jsonResponse({ error: `proposed_params: ${proposedErr}` }, 400);
+  // previous_params may legitimately be {} -- see validateParamsObject's
+  // docstring above.
+  const previousErr = validateParamsObject(previous_params, { requireNonEmpty: false });
+  if (previousErr) return jsonResponse({ error: `previous_params: ${previousErr}` }, 400);
+  if (typeof rationale !== 'string' || rationale.length === 0 || rationale.length > MAX_RATIONALE_LEN) {
+    return jsonResponse({ error: 'rationale must be a non-empty string' }, 400);
+  }
+  if (
+    !Array.isArray(evidence_refs) || evidence_refs.length > MAX_EVIDENCE_REFS ||
+    !evidence_refs.every((r) => typeof r === 'string' && r.length <= 200)
+  ) {
+    return jsonResponse({ error: 'evidence_refs must be an array of short strings' }, 400);
+  }
+  if (typeof model !== 'string' || model.length === 0 || model.length > MAX_MODEL_LEN) {
+    return jsonResponse({ error: 'model must be a non-empty string' }, 400);
+  }
+  if (!Number.isFinite(expires_in_minutes) || expires_in_minutes <= 0 || expires_in_minutes > MAX_EXPIRES_MINUTES) {
+    return jsonResponse({ error: `expires_in_minutes must be between 0 and ${MAX_EXPIRES_MINUTES}` }, 400);
+  }
+  if (rollback_target !== undefined && rollback_target !== null && typeof rollback_target !== 'string') {
+    return jsonResponse({ error: 'rollback_target must be a string id or omitted' }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  const now = new Date();
+  const expires = new Date(now.getTime() + expires_in_minutes * 60 * 1000);
+
+  // Always inserted as 'proposed' -- this key can never write 'accepted'
+  // directly, by construction (the column literal below, not client input).
+  await env.CRASSUS_DB.prepare(
+    `INSERT INTO crassus_overrides
+       (id, account_alias, status, strategy_id, strategy_version, previous_params, proposed_params, rationale, evidence_refs, model, created_utc, expires_utc, accepted_utc, accepted_by, rollback_target, schema_version)
+     VALUES (?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+  ).bind(
+    id, account_alias, strategy_id, strategy_version,
+    JSON.stringify(previous_params), JSON.stringify(proposed_params),
+    rationale, JSON.stringify(evidence_refs), model,
+    now.toISOString(), expires.toISOString(),
+    rollback_target || null, 'crassus_override.v2',
+  ).run();
+
+  return jsonResponse({ id, status: 'proposed' }, 201);
+}
+
+export async function handleCrassusOverrideDecision(request, env, id, action) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
+  const authError = checkOperatorKey(request, env);
+  if (authError) return authError;
+
+  const row = await env.CRASSUS_DB.prepare(`SELECT id, account_alias, status FROM crassus_overrides WHERE id = ?`).bind(id).first();
+  if (!row) return jsonResponse({ error: 'not_found' }, 404);
+  if (row.status !== 'proposed') {
+    return jsonResponse({ error: `override is already ${row.status}, not proposed` }, 409);
+  }
+
+  let acceptedBy = null;
+  if (action === 'accept') {
+    const bodyResult = await readJsonBody(request);
+    const body = (!bodyResult.error && bodyResult.body) || {};
+    acceptedBy = typeof body.accepted_by === 'string' && body.accepted_by.length <= 100 ? body.accepted_by : 'operator';
+  }
+
+  const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+  const nowIso = new Date().toISOString();
+  // Exactly one row may hold `status = 'accepted'` per account_alias at any
+  // time: a new acceptance must supersede whichever row currently holds it
+  // in the same atomic transaction, not merely become the newest one that
+  // happens to be returned first. Without this, an old accepted row (never
+  // itself superseded) can reappear from handleCrassusOverrideGet's
+  // unexpired-accepted-ORDER-BY-created_utc-DESC query once a later
+  // acceptance expires -- reviving a settings change the operator already
+  // replaced, with no new decision behind it. `.batch()` runs both
+  // statements in one D1 transaction, so a concurrent decision can never
+  // observe an in-between state with zero or two accepted rows.
+  const statements = [];
+  if (newStatus === 'accepted') {
+    statements.push(
+      env.CRASSUS_DB.prepare(
+        `UPDATE crassus_overrides SET status = 'superseded' WHERE account_alias = ? AND status = 'accepted' AND id != ?`,
+      ).bind(row.account_alias, id),
+    );
+  }
+  statements.push(
+    env.CRASSUS_DB.prepare(
+      `UPDATE crassus_overrides SET status = ?, accepted_utc = ?, accepted_by = ? WHERE id = ? AND status = 'proposed'`,
+    ).bind(newStatus, action === 'accept' ? nowIso : null, acceptedBy, id),
+  );
+  await env.CRASSUS_DB.batch(statements);
+
+  return jsonResponse({ id, status: newStatus }, 200);
+}
+
+// Kill/freeze semantics, documented explicitly per review: engaging either
+// one causes crassus.policy.OverridePolicy.evaluate() to deny the override
+// and fall back to the account's own baseline `params` -- it does NOT stop
+// the account from trading. A frozen/killed bot keeps running its assigned
+// strategy on its normal (pre-override) configuration; only a Crassus AI
+// parameter override is blocked. Do not change this to mean "halt trading"
+// without updating this comment, crassus/crassus/policy.py's module
+// docstring, and crassus/README.md together -- an operator reaching for
+// "stop everything" would otherwise reach for the wrong control.
+export async function handleCrassusKillSwitch(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
+  if (request.method === 'GET') {
+    const raw = await env.CRASSUS_CONTROL.get('kill_switch');
+    return jsonResponse({ enabled: parseControlFlag(raw) }, 200);
+  }
+  const authError = checkOperatorKey(request, env);
+  if (authError) return authError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const enabled = bodyResult.body && bodyResult.body.enabled;
+  if (typeof enabled !== 'boolean') {
+    return jsonResponse({ error: 'enabled must be a boolean' }, 400);
+  }
+  await env.CRASSUS_CONTROL.put('kill_switch', enabled ? 'true' : 'false');
+  return jsonResponse({ enabled }, 200);
+}
+
+export async function handleCrassusFreezeGet(request, env, alias) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
+  const authError = checkBotKey(request, env);
+  if (authError) return authError;
+  if (!CRASSUS_ACCOUNT_ALIAS_RE.test(alias)) {
+    return jsonResponse({ error: 'Invalid account_alias' }, 400);
+  }
+  const raw = await env.CRASSUS_CONTROL.get(`freeze:${alias}`);
+  return jsonResponse({ frozen: parseControlFlag(raw) }, 200);
+}
+
+export async function handleCrassusFreezePost(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_CONTROL');
+  if (storageError) return storageError;
+  const authError = checkOperatorKey(request, env);
+  if (authError) return authError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const { account_alias, frozen, reason } = bodyResult.body || {};
+  if (typeof account_alias !== 'string' || !CRASSUS_ACCOUNT_ALIAS_RE.test(account_alias)) {
+    return jsonResponse({ error: 'Invalid account_alias' }, 400);
+  }
+  if (typeof frozen !== 'boolean') {
+    return jsonResponse({ error: 'frozen must be a boolean' }, 400);
+  }
+  if (reason !== undefined && (typeof reason !== 'string' || reason.length > 500)) {
+    return jsonResponse({ error: 'reason must be a short string' }, 400);
+  }
+  await env.CRASSUS_CONTROL.put(`freeze:${account_alias}`, frozen ? 'true' : 'false');
+  return jsonResponse({ account_alias, frozen }, 200);
+}
+
+export async function handleCrassusLedgerMirror(request, env) {
+  const storageError = checkCrassusStorage(env, 'CRASSUS_DB');
+  if (storageError) return storageError;
+  const authError = checkBotKey(request, env);
+  if (authError) return authError;
+  const bodyResult = await readJsonBody(request);
+  if (bodyResult.error) return bodyResult.error;
+  const record = bodyResult.body;
+  if (
+    !record || typeof record !== 'object' ||
+    typeof record.decision_id !== 'string' || typeof record.run_id !== 'string' ||
+    typeof record.account_alias !== 'string' || typeof record.outcome_class !== 'string' ||
+    typeof record.timestamp_utc !== 'string'
+  ) {
+    return jsonResponse({ error: 'Missing required ledger fields' }, 400);
+  }
+  // Fire-and-forget mirror, never the primary record -- see audit.py /
+  // overrides_client.post_ledger_mirror. INSERT OR REPLACE keeps this
+  // idempotent if the same decision_id is ever mirrored twice.
+  await env.CRASSUS_DB.prepare(
+    `INSERT OR REPLACE INTO crassus_ledger_mirror (decision_id, run_id, account_alias, outcome_class, timestamp_utc, record)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).bind(record.decision_id, record.run_id, record.account_alias, record.outcome_class, record.timestamp_utc, JSON.stringify(record)).run();
+  return jsonResponse({ ok: true }, 200);
 }
 
 function jsonResponse(value, status, extraHeaders = {}) {

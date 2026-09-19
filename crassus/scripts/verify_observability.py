@@ -37,6 +37,7 @@ class OperationalDiagnostics(unittest.TestCase):
         self.runner.stop_file = Path(self.tmp.name) / "STOP"
         self.runner.snapshots = Mock()
         self.runner._run_account = Mock()
+        self.runner.overrides_client = Mock()
 
     @staticmethod
     def events(captured):

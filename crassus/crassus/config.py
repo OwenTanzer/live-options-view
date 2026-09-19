@@ -26,6 +26,23 @@ DEFAULT_LEDGER_DIR = DATA_ROOT / "logs"
 DEFAULT_STATE_DIR = DATA_ROOT / "state"
 
 BASE_URL = os.environ.get("CRASSUS_BASE_URL", "https://options.moopertonic.net")
+
+# Override/kill-switch/freeze/ledger-mirror channel (see crassus/policy.py,
+# crassus/overrides_client.py). Same Worker as BASE_URL by default -- a
+# separate env var only so a test/mock deployment can point the override
+# channel elsewhere without also redirecting live trading traffic.
+CRASSUS_AI_OVERRIDES_URL = os.environ.get("CRASSUS_AI_OVERRIDES_URL", BASE_URL)
+
+# The no-traffic disabled path, flagged in review as missing: defaults to
+# off. When false, `OverridesClient` never makes a single HTTP request --
+# not even to check reachability -- for any account, any cycle. This also
+# matches production reality until CRASSUS_CONTROL/CRASSUS_DB are actually
+# provisioned (see wrangler.toml): there is no override channel to call yet,
+# so the runner shouldn't be attempting three GETs and a ledger POST per
+# account per cycle against endpoints that don't exist. Flip to true only
+# once those bindings are deployed and an operator actually wants the
+# override channel live.
+CRASSUS_AI_ENABLED = os.environ.get("CRASSUS_AI_ENABLED", "false").strip().lower() == "true"
 SNAPSHOT_URL = os.environ.get(
     "CRASSUS_SNAPSHOT_URL",
     "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
