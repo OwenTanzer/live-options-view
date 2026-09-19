@@ -13,7 +13,12 @@ beyond ordinary proximity and unweighted activity?
 0DTE snapshots archived at ~60s cadence, `intraday/<date>/snapshot_*.csv`.
 
 Coverage audit (`out/audit_report.json`, `out/source_manifest.json` for the
-exact object keys/etags/config/code-revision used by this run): all
+exact object keys/verified-content-sha256/config/executed-source-hashes used
+by this run -- see its `git_base_revision`/`git_dirty`/`source_file_sha256`
+fields for how the executed code itself is identified independent of commit
+state, `representative_reconciliation` for one hand-checked source-row-to-C
+calculation, and `multiplier_evidence` for what the archive can and cannot
+establish about the 100-share contract multiplier): all
 5 sessions reconcile exactly against collector logs = True.
 400124 option rows. 400124 interval-volume observations
 computed; 398472 (99.59%) usable (`ok`) after
@@ -29,9 +34,12 @@ sessions (see each session's entry in the audit report for the full detail).
 **OpenInterest never changed within any regular-hours session for any of the
 754 distinct contracts observed across all 5 days
 (0 contracts with any intra-session OI change)** --
-OI here is genuinely static prior-day-settled data for the entire session,
-exactly as DESIGN.md's known-limitations section states, not something this
-analysis's OI-weighting could confuse with a live position change. Separately,
+this audit establishes only that recorded OI did not change within the
+observed regular-session contract histories. It does NOT independently
+verify freshness, settlement origin, or that an unknown OI value was never
+serialized as zero upstream of this analysis; it is consistent with (not
+independent proof of) DESIGN.md's known-limitations statement that OI is
+prior-day-settled data for the entire session. Separately,
 at least one contract's Mid quote was unchanged for 378
 consecutive regular-hours snapshots on the session with the longest such run
 -- reported as a repetition count only, per the issue's caution that
@@ -90,9 +98,12 @@ Pooled (n=1824, clustered by anchor): coefficient 8.79006e-05
 (0.0411): 0.0018.
 
 Day-by-day: 3 of 5 sessions show a positive
-coefficient with p<0.05 individually; the remaining 2
-do not (see `out/day_by_day_log_C.csv` / `out/plots/day_by_day_log_C.png`
-for every session's own coefficient, SE, and cluster count).
+coefficient with a nominal p<0.05 individually (nominal under this day's
+own anchor-clustering assumption, not a claim that residual serial
+dependence between anchors is resolved); the remaining
+2 do not (see `out/day_by_day_log_C.csv`
+/ `out/plots/day_by_day_log_C.png` for every session's own
+coefficient, SE, and cluster count).
 
 Leave-one-day-out: the pooled coefficient ranges from 4.50167e-05 to
 0.000202891 depending on which single day is excluded (`out/leave_one_day_out_log_C.csv`).
@@ -105,9 +116,12 @@ Pooled (n=1824, clustered by anchor): coefficient 8.58749e-05
 (0.0411): 0.0015.
 
 Day-by-day: 3 of 5 sessions show a positive
-coefficient with p<0.05 individually; the remaining 2
-do not (see `out/day_by_day_log_A.csv` / `out/plots/day_by_day_log_A.png`
-for every session's own coefficient, SE, and cluster count).
+coefficient with a nominal p<0.05 individually (nominal under this day's
+own anchor-clustering assumption, not a claim that residual serial
+dependence between anchors is resolved); the remaining
+2 do not (see `out/day_by_day_log_A.csv`
+/ `out/plots/day_by_day_log_A.png` for every session's own
+coefficient, SE, and cluster count).
 
 Leave-one-day-out: the pooled coefficient ranges from 4.51799e-05 to
 0.000220322 depending on which single day is excluded (`out/leave_one_day_out_log_A.csv`).
@@ -120,12 +134,37 @@ Pooled (n=1824, clustered by anchor): coefficient 0.000579708
 (0.0411): 0.0028.
 
 Day-by-day: 2 of 5 sessions show a positive
-coefficient with p<0.05 individually; the remaining 3
-do not (see `out/day_by_day_log_gamma_alone.csv` / `out/plots/day_by_day_log_gamma_alone.png`
-for every session's own coefficient, SE, and cluster count).
+coefficient with a nominal p<0.05 individually (nominal under this day's
+own anchor-clustering assumption, not a claim that residual serial
+dependence between anchors is resolved); the remaining
+3 do not (see `out/day_by_day_log_gamma_alone.csv`
+/ `out/plots/day_by_day_log_gamma_alone.png` for every session's own
+coefficient, SE, and cluster count).
 
 Leave-one-day-out: the pooled coefficient ranges from 0.000406834 to
 0.000865105 depending on which single day is excluded (`out/leave_one_day_out_log_gamma_alone.csv`).
+
+### Reconciling SD-scaled effect size against R^2 gain
+
+log(gamma alone) has the smallest SD-scaled coefficient of the
+three predictors (5.71246e-05),
+and its own separate model also has
+the largest R^2 gain over baseline
+(0.0028 for log(gamma alone)). This is
+not a contradiction to resolve away: a standardized partial coefficient (the
+fitted change in `toward` per one-SD change in that specific predictor,
+holding the baseline terms fixed) and a separate model's R^2 gain (how much
+additional outcome variance that predictor plus the baseline jointly
+explain, relative to the baseline alone) answer different questions. A
+predictor can contribute more in-sample variance than another while having
+a smaller per-SD marginal effect on `toward` -- for instance through its
+correlation structure with the baseline terms already in the model, or
+through nonlinearity in its relationship to the outcome that R^2 picks up
+but a single linear coefficient does not. Neither number by itself
+establishes whether gamma-weighting by OI (C) or activity (A) adds
+information beyond gamma alone, or the reverse; a nested comparison against
+a baseline-plus-gamma model would speak to that more directly and is not
+reported here (it would be a post-hoc addition, not a pre-specified test).
 
 ## Explicit limitations (do not read past these)
 
