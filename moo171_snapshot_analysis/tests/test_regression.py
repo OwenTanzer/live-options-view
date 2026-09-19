@@ -66,6 +66,32 @@ def test_prepare_model_frame_does_not_clip_negative_measurements():
     assert drop_reasons["log_C"] == 1
 
 
+def test_prepare_model_frame_rejects_small_negative_measurement_between_minus_one_and_zero():
+    """Review 5252887319 finding 1's exact gap: log1p(-0.5) is finite
+    (~-0.69), so the plain finite-check alone lets a small negative,
+    physically-impossible unsigned measurement silently enter the model.
+    The explicit non-negativity check must catch this even though log1p
+    itself does not."""
+    df = _synthetic_dataset()
+    df.loc[0, "C"] = -0.5
+    assert np.isfinite(np.log1p(-0.5))  # confirms the finite-check alone would miss this
+    prepared, drop_reasons = prepare_model_frame(df)
+    assert drop_reasons["C"] == 1
+    assert 0 not in prepared.index
+
+
+def test_prepare_model_frame_rejects_zero_or_negative_anchor_spot_when_present():
+    df = _synthetic_dataset()
+    df["anchor_spot"] = 700.0
+    df["outcome_spot"] = 701.0
+    df.loc[0, "anchor_spot"] = 0.0
+    df.loc[1, "outcome_spot"] = -1.0
+    prepared, drop_reasons = prepare_model_frame(df)
+    assert drop_reasons["anchor_spot"] == 1
+    assert drop_reasons["outcome_spot"] == 1
+    assert drop_reasons["_total_dropped_rows"] == 2
+
+
 def test_fit_clustered_ols_recovers_planted_direction():
     df = _synthetic_dataset(n_days=4, anchors_per_day=30, seed=1)
     prepared, _ = prepare_model_frame(df)

@@ -35,7 +35,8 @@ def matched_summary(df: pd.DataFrame, measure: str) -> pd.DataFrame:
     bucket x measure tertile -- the plain, assumption-light comparison the
     issue asks for before any regression. `measure` is "C" or "A".
 
-    Reports descriptive spread (population std) and BOTH row count and
+    Reports descriptive spread (sample std, pandas' default ddof=1 -- not
+    a population std) and BOTH row count and
     unique-anchor count -- not an inferential standard error, since rows
     sharing an anchor are not independent (the same dependence concern as
     the regression's clustering). Sparse cells are visible via their own
@@ -67,7 +68,7 @@ def plot_matched_summary(summary: pd.DataFrame, measure: str, path: Path) -> Non
                 if t.empty:
                     continue
                 ax.plot(t["distance_bucket"].astype(str), t["mean"], marker="o", label=f"{tertile}", color=color)
-                # Descriptive spread only (population std, not a
+                # Descriptive spread only (sample std, ddof=1 -- not a
                 # standard-error-of-the-mean) -- rows share anchors, so an
                 # inferential SE here would understate dependence.
                 ax.fill_between(
@@ -142,7 +143,12 @@ beyond ordinary proximity and unweighted activity?
 0DTE snapshots archived at ~60s cadence, `intraday/<date>/snapshot_*.csv`.
 
 Coverage audit (`out/audit_report.json`, `out/source_manifest.json` for the
-exact object keys/etags/config/code-revision used by this run): all
+exact object keys/verified-content-sha256/config/executed-source-hashes used
+by this run -- see its `git_base_revision`/`git_dirty`/`source_file_sha256`
+fields for how the executed code itself is identified independent of commit
+state, `representative_reconciliation` for one hand-checked source-row-to-C
+calculation, and `multiplier_evidence` for what the archive can and cannot
+establish about the 100-share contract multiplier): all
 {len(dates)} sessions reconcile exactly against collector logs = {reconciled_all}.
 {total_option_rows} option rows. {total_flagged} interval-volume observations
 computed; {flag_counts.get("ok", 0)} ({ok_frac:.2%}) usable (`ok`) after
@@ -158,9 +164,12 @@ sessions (see each session's entry in the audit report for the full detail).
 **OpenInterest never changed within any regular-hours session for any of the
 {total_contracts} distinct contracts observed across all 5 days
 ({total_oi_change_contracts} contracts with any intra-session OI change)** --
-OI here is genuinely static prior-day-settled data for the entire session,
-exactly as DESIGN.md's known-limitations section states, not something this
-analysis's OI-weighting could confuse with a live position change. Separately,
+this audit establishes only that recorded OI did not change within the
+observed regular-session contract histories. It does NOT independently
+verify freshness, settlement origin, or that an unknown OI value was never
+serialized as zero upstream of this analysis; it is consistent with (not
+independent proof of) DESIGN.md's known-limitations statement that OI is
+prior-day-settled data for the entire session. Separately,
 at least one contract's Mid quote was unchanged for {max_repeated_mid_run_overall}
 consecutive regular-hours snapshots on the session with the longest such run
 -- reported as a repetition count only, per the issue's caution that
@@ -228,13 +237,44 @@ Pooled (n={int(row['n'])}, clustered by anchor): coefficient {row['coef']:.6g}
 ({baseline_r2:.4f}): {r2_gains[predictor]:.4f}.
 
 Day-by-day: {n_positive_significant} of {n_days} sessions show a positive
-coefficient with p<0.05 individually; the remaining {n_days - n_positive_significant}
-do not (see `out/day_by_day_{predictor}.csv` / `out/plots/day_by_day_{predictor}.png`
-for every session's own coefficient, SE, and cluster count).
+coefficient with a nominal p<0.05 individually (nominal under this day's
+own anchor-clustering assumption, not a claim that residual serial
+dependence between anchors is resolved); the remaining
+{n_days - n_positive_significant} do not (see `out/day_by_day_{predictor}.csv`
+/ `out/plots/day_by_day_{predictor}.png` for every session's own
+coefficient, SE, and cluster count).
 
 Leave-one-day-out: the pooled coefficient ranges from {loo_min:.6g} to
 {loo_max:.6g} depending on which single day is excluded (`out/leave_one_day_out_{predictor}.csv`).
 """)
+
+    predictor_rows = {p: comparison[comparison["predictor"] == p].iloc[0] for p in r2_gains}
+    smallest_sd_scaled = min(predictor_rows, key=lambda p: abs(predictor_rows[p]["sd_scaled_coef"]))
+    largest_r2_gain = max(r2_gains, key=r2_gains.get)
+    label_of = {"log_C": "log(C)", "log_A": "log(A)", "log_gamma_alone": "log(gamma alone)"}
+    reconciliation = f"""
+### Reconciling SD-scaled effect size against R^2 gain
+
+{label_of[smallest_sd_scaled]} has the smallest SD-scaled coefficient of the
+three predictors ({predictor_rows[smallest_sd_scaled]['sd_scaled_coef']:.6g}),
+{"and its own separate model also has" if smallest_sd_scaled == largest_r2_gain else "although its separate model has"}
+the largest R^2 gain over baseline
+({r2_gains[largest_r2_gain]:.4f} for {label_of[largest_r2_gain]}). This is
+not a contradiction to resolve away: a standardized partial coefficient (the
+fitted change in `toward` per one-SD change in that specific predictor,
+holding the baseline terms fixed) and a separate model's R^2 gain (how much
+additional outcome variance that predictor plus the baseline jointly
+explain, relative to the baseline alone) answer different questions. A
+predictor can contribute more in-sample variance than another while having
+a smaller per-SD marginal effect on `toward` -- for instance through its
+correlation structure with the baseline terms already in the model, or
+through nonlinearity in its relationship to the outcome that R^2 picks up
+but a single linear coefficient does not. Neither number by itself
+establishes whether gamma-weighting by OI (C) or activity (A) adds
+information beyond gamma alone, or the reverse; a nested comparison against
+a baseline-plus-gamma model would speak to that more directly and is not
+reported here (it would be a post-hoc addition, not a pre-specified test)."""
+    lines.append(reconciliation + "\n")
 
     lines.append("""
 ## Explicit limitations (do not read past these)

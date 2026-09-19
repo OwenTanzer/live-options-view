@@ -78,10 +78,30 @@ def test_preceding_volatility_computes_with_a_genuinely_complete_window():
     assert info["vol_30min"] > 0
     assert info["vol_30min_n_obs"] == 31
     assert info["vol_30min_span_seconds"] == pytest_close_seconds(30 * 60)
+    assert info["vol_30min_max_internal_gap_seconds"] == 60.0
 
 
 def pytest_close_seconds(x, tol=1e-6):
     return x
+
+
+def test_preceding_volatility_nan_when_internal_gap_exceeds_staleness_even_with_good_endpoints():
+    """Review 5252887319 finding 3's exact reproduction: observations at
+    09:30, 09:31, 09:32, 09:59, 10:00 ET span exactly the nominal 30
+    minutes and clear MIN_VOL_OBSERVATIONS, but there is a 27-minute gap
+    between 09:32 and 09:59 -- the window is not actually sampled across
+    that gap and must be reported unavailable, not computed as if it were
+    one consecutive minute-scale return."""
+    spot = _spot_rows("20260910", [
+        ("09:30:00", 700.0), ("09:31:00", 700.1), ("09:32:00", 700.2),
+        ("09:59:00", 700.3), ("10:00:00", 700.4),
+    ])
+    anchor_ts = pd.Timestamp("2026-09-10 10:00:00", tz="America/New_York")
+    info = preceding_volatility(spot, "20260910", anchor_ts)
+    assert math.isnan(info["vol_30min"])
+    assert info["vol_30min_n_obs"] == 5
+    assert info["vol_30min_span_seconds"] == 1800.0
+    assert info["vol_30min_max_internal_gap_seconds"] == pytest_close_seconds(27 * 60)
 
 
 def test_add_baseline_features_shares_computation_across_strikes_at_same_anchor():
@@ -98,3 +118,4 @@ def test_add_baseline_features_shares_computation_across_strikes_at_same_anchor(
     assert out["minutes_since_open"].iloc[0] == 5.0
     assert "vol_30min_n_obs" in out.columns
     assert "vol_30min_span_seconds" in out.columns
+    assert "vol_30min_max_internal_gap_seconds" in out.columns

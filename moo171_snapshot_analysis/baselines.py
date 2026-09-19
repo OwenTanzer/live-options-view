@@ -45,14 +45,20 @@ def preceding_volatility(spot_series: pd.DataFrame, date: str, anchor_ts: pd.Tim
     """Sample stdev of consecutive log returns over a REQUIRED, actually
     complete VOL_WINDOW_MINUTES before the anchor.
 
-    "Complete" is enforced, not just "however many observations happen to
-    fall in the window": the earliest observation used must itself be
-    within STALENESS_SECONDS of the window's start, so the computed value
-    genuinely covers close to the full 30 minutes rather than a shorter
-    span that happens to contain >= MIN_VOL_OBSERVATIONS points. Returns a
-    dict with the value AND its diagnostics (`n_obs`, `span_seconds`) so a
-    report can state the real coverage instead of assuming "30-minute"
-    means what the docstring says without checking.
+    "Complete" is enforced on the whole window, not just at its edges:
+    the earliest observation used must itself be within STALENESS_SECONDS
+    of the window's start (checked below), AND every consecutive pair of
+    observations inside the window must be within STALENESS_SECONDS of
+    each other. Checking only the two endpoints is not sufficient -- a
+    fixture (or a real session) can have valid observations right at the
+    start and end of the nominal 30-minute window with a long gap in the
+    middle (e.g. a >25-minute outage), which would otherwise pass the
+    endpoint check and MIN_VOL_OBSERVATIONS count while actually covering
+    only a few scattered minutes, not a genuine 30-minute sample. Returns a
+    dict with the value AND its diagnostics (`n_obs`, `span_seconds`,
+    `max_internal_gap_seconds`) so a report can state the real coverage
+    instead of assuming "30-minute" means what the docstring says without
+    checking.
     """
     day_spots = spot_series[(spot_series["date"] == date) & spot_series["regular_hours"]]
     day_spots = day_spots.dropna(subset=["underlying_price"])
@@ -60,7 +66,10 @@ def preceding_volatility(spot_series: pd.DataFrame, date: str, anchor_ts: pd.Tim
     window = day_spots[(day_spots["ts_et"] >= window_start) & (day_spots["ts_et"] <= anchor_ts)]
     window = window.sort_values("ts_et")
 
-    empty = {"vol_30min": np.nan, "vol_30min_n_obs": len(window), "vol_30min_span_seconds": np.nan}
+    empty = {
+        "vol_30min": np.nan, "vol_30min_n_obs": len(window),
+        "vol_30min_span_seconds": np.nan, "vol_30min_max_internal_gap_seconds": np.nan,
+    }
     if len(window) < MIN_VOL_OBSERVATIONS:
         return empty
 
@@ -71,17 +80,37 @@ def preceding_volatility(spot_series: pd.DataFrame, date: str, anchor_ts: pd.Tim
         # than silently computing over whatever shorter span exists.
         return empty
 
+    gaps = window["ts_et"].diff().dt.total_seconds().dropna()
+    max_internal_gap = float(gaps.max()) if not gaps.empty else 0.0
+    if max_internal_gap > STALENESS_SECONDS:
+        # A gap inside the window means the observations don't actually
+        # cover the full ~30 minutes even though both endpoints are
+        # present -- report as unavailable rather than computing log
+        # returns across a hole in the data.
+        return {
+            "vol_30min": np.nan, "vol_30min_n_obs": len(window),
+            "vol_30min_span_seconds": (window["ts_et"].iloc[-1] - window["ts_et"].iloc[0]).total_seconds(),
+            "vol_30min_max_internal_gap_seconds": max_internal_gap,
+        }
+
     prices = window["underlying_price"].astype(float).to_numpy()
     span_seconds = (window["ts_et"].iloc[-1] - window["ts_et"].iloc[0]).total_seconds()
     if (prices <= 0).any():
-        return {"vol_30min": np.nan, "vol_30min_n_obs": len(window), "vol_30min_span_seconds": span_seconds}
+        return {
+            "vol_30min": np.nan, "vol_30min_n_obs": len(window),
+            "vol_30min_span_seconds": span_seconds, "vol_30min_max_internal_gap_seconds": max_internal_gap,
+        }
     log_returns = np.diff(np.log(prices))
     if len(log_returns) < MIN_VOL_OBSERVATIONS - 1:
-        return {"vol_30min": np.nan, "vol_30min_n_obs": len(window), "vol_30min_span_seconds": span_seconds}
+        return {
+            "vol_30min": np.nan, "vol_30min_n_obs": len(window),
+            "vol_30min_span_seconds": span_seconds, "vol_30min_max_internal_gap_seconds": max_internal_gap,
+        }
     return {
         "vol_30min": float(np.std(log_returns, ddof=1)),
         "vol_30min_n_obs": len(window),
         "vol_30min_span_seconds": span_seconds,
+        "vol_30min_max_internal_gap_seconds": max_internal_gap,
     }
 
 
@@ -110,6 +139,9 @@ def add_baseline_features(outcome_dataset: pd.DataFrame, spot_series: pd.DataFra
     df["vol_30min_n_obs"] = df.apply(lambda r: vol_info[(r["date"], r["anchor_ts_et"])]["vol_30min_n_obs"], axis=1)
     df["vol_30min_span_seconds"] = df.apply(
         lambda r: vol_info[(r["date"], r["anchor_ts_et"])]["vol_30min_span_seconds"], axis=1
+    )
+    df["vol_30min_max_internal_gap_seconds"] = df.apply(
+        lambda r: vol_info[(r["date"], r["anchor_ts_et"])]["vol_30min_max_internal_gap_seconds"], axis=1
     )
     df["minutes_since_open"] = df.apply(lambda r: tod[(r["date"], r["anchor_ts_et"])], axis=1)
     return df

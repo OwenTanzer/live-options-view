@@ -92,6 +92,52 @@ def test_strike_with_valid_oi_gamma_but_no_usable_activity_has_available_c_and_u
     assert row["n_dv_valid"] == 0
 
 
+def test_activity_requires_joint_valid_gamma_and_volume_on_the_same_contract():
+    """Review 5252887319 finding 1's exact reproduction: contract 1 has a
+    usable Gamma but no usable dV; contract 2 has a usable dV but no usable
+    Gamma. Neither contract alone has BOTH -- A must be unavailable (NaN),
+    not a numeric 0 built from pairing one contract's volume with the
+    other's gamma. C is unaffected (contract 1 alone makes it available)."""
+    df = pd.DataFrame([
+        _row(700, "call", oi=10, gamma=0.02, dv=None, dv_flag="first_observation", symbol="c1"),
+        _row(700, "put", oi=10, gamma=None, dv=5, dv_flag="ok", symbol="c2"),
+    ])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert row["C"] == (700.0 ** 2) * 100 * 10 * 0.02
+    assert math.isnan(row["A"])
+    assert row["n_dv_valid"] == 0
+
+
+def test_negative_gamma_excluded_from_c_and_a_like_a_missing_value():
+    df = pd.DataFrame([
+        _row(700, "call", oi=10, gamma=-0.02, dv=5, dv_flag="ok", symbol="bad"),
+        _row(700, "put", oi=10, gamma=0.01, dv=5, dv_flag="ok", symbol="good"),
+    ])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert row["C"] == (700.0 ** 2) * 100 * 10 * 0.01
+    assert row["A"] == (700.0 ** 2) * 100 * 5 * 0.01
+    assert row["n_oi_gamma_valid"] == 1
+    assert row["n_dv_valid"] == 1
+
+
+def test_negative_open_interest_excluded_from_c():
+    df = pd.DataFrame([_row(700, "call", oi=-10, gamma=0.02, dv=None, dv_flag="first_observation")])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert math.isnan(row["C"])
+    assert row["n_oi_gamma_valid"] == 0
+
+
+def test_negative_dv_excluded_from_a():
+    df = pd.DataFrame([_row(700, "call", oi=10, gamma=0.02, dv=-5, dv_flag="ok")])
+    out = compute_concentration_and_activity(df)
+    row = out.iloc[0]
+    assert math.isnan(row["A"])
+    assert row["n_dv_valid"] == 0
+
+
 def test_partial_coverage_strike_uses_only_the_valid_contract_not_zero_for_missing_one():
     """One contract usable, one contract missing OI/Gamma at the same
     strike: C must reflect only the valid contract's contribution (not be

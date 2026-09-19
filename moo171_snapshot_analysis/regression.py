@@ -42,6 +42,9 @@ BASELINE_TERMS = [
 ]
 
 
+NONNEGATIVE_TERMS = ["C", "A", "gamma_alone", "unweighted_oi", "unweighted_activity"]
+
+
 def prepare_model_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     """Returns (prepared_df, drop_reason_counts). Rows are dropped for a
     missing/nonfinite required field -- never silently clipped into a
@@ -49,6 +52,14 @@ def prepare_model_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]
     specific field(s) missing on that row (a row can count under more than
     one reason if multiple fields are missing), so a report can state the
     real cause instead of guessing from the row count alone.
+
+    C, A, gamma_alone, unweighted_oi and unweighted_activity are all
+    unsigned quantities by construction (measures.py already excludes
+    negative inputs from their sums), but a negative value is rejected here
+    too, defense-in-depth: log1p of a small negative number is still a
+    finite (small negative) number and would otherwise silently pass the
+    finite-check below and enter the model as if it were a valid
+    observation, rather than being caught as a data-quality violation.
     """
     df = df.copy()
     df["log_C"] = np.log1p(df["C"])
@@ -64,7 +75,16 @@ def prepare_model_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]
     required = [c for c in required if c != "side_above"]
 
     finite = np.isfinite(df[required].astype(float))
-    drop_reason_counts = {col: int((~finite[col]).sum()) for col in required}
+    for col in NONNEGATIVE_TERMS:
+        finite[col] = df[col].notna() & np.isfinite(df[col].astype(float)) & (df[col].astype(float) >= 0)
+    # anchor_spot/outcome_spot are prices and must be strictly positive and
+    # finite; checked here too (defense-in-depth -- outcomes.py's snapshot
+    # selection already guarantees this) only when present, so this stays
+    # compatible with a regression-only frame that doesn't carry them.
+    for col in ("anchor_spot", "outcome_spot"):
+        if col in df.columns:
+            finite[col] = df[col].notna() & np.isfinite(df[col].astype(float)) & (df[col].astype(float) > 0)
+    drop_reason_counts = {col: int((~finite[col]).sum()) for col in finite.columns}
     keep_mask = finite.all(axis=1)
     dropped_df = df[~keep_mask]
     drop_reason_counts["_total_dropped_rows"] = int(len(dropped_df))

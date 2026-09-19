@@ -12,6 +12,7 @@ R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -47,6 +48,11 @@ class SnapshotSource:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._s3 = s3
         self._s3_tried = s3 is not None
+        # sha256 of the exact bytes returned by _get_bytes for each key
+        # actually read THIS run -- not copied from R2/cache listing
+        # metadata, so it verifies the bytes that were actually parsed
+        # rather than trusting a reported ETag/size alone.
+        self._read_sha256: dict[str, str] = {}
 
     @property
     def s3(self):
@@ -64,7 +70,9 @@ class SnapshotSource:
     def _get_bytes(self, key: str) -> bytes | None:
         cache_path = self._cache_path(key)
         if cache_path.exists():
-            return cache_path.read_bytes()
+            body = cache_path.read_bytes()
+            self._read_sha256[key] = hashlib.sha256(body).hexdigest()
+            return body
         if self.s3 is None:
             return None
         try:
@@ -73,6 +81,7 @@ class SnapshotSource:
             return None
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_bytes(body)
+        self._read_sha256[key] = hashlib.sha256(body).hexdigest()
         return body
 
     def list_all_objects(self, prefix: str) -> list[dict[str, Any]]:
@@ -111,6 +120,19 @@ class SnapshotSource:
             (o for o in objects if pattern.search(o["key"])),
             key=lambda o: o["key"],
         )
+
+    def verified_manifest(self, yyyymmdd: str) -> list[dict[str, Any]]:
+        """snapshot_objects() entries augmented with `sha256` computed from
+        the actual bytes returned by `_get_bytes` for that key THIS run
+        (via `snapshot_csv_rows`, which every audit call already makes).
+        `sha256` is None for a key that was never actually read this run
+        (e.g. a listing-only call) -- callers should treat that as
+        unverified, not silently trust the listing's `etag`/`size` alone.
+        """
+        return [
+            {**obj, "sha256": self._read_sha256.get(obj["key"])}
+            for obj in self.snapshot_objects(yyyymmdd)
+        ]
 
     def snapshot_csv_rows(self, key: str) -> list[dict[str, str]]:
         import csv

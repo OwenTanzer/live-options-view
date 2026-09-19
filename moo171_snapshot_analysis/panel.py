@@ -37,6 +37,18 @@ REPORTED_SNAPSHOT_COUNTS = {
     "20260916": 597,
 }
 
+CONTRACT_MULTIPLIER_EVIDENCE = (
+    "QQQ 0DTE equity-ETF options carry the standard OCC 100-share-per-"
+    "contract deliverable. This is an external fact about the contract, "
+    "not something the archive's own fields encode; the archive can only "
+    "provide evidence AGAINST the presence of an adjusted (non-standard-"
+    "multiplier) contract, which is what run_audit.py's multiplier-"
+    "evidence check does by confirming every retained OptionSymbol matches "
+    "the plain unadjusted root+YYMMDD+C/P+strike*1000 pattern with zero "
+    "symbol_mismatch_rows -- an adjusted contract is conventionally "
+    "flagged with a differently-shaped symbol that would fail this check."
+)
+
 OPTION_NUMERIC_FIELDS = [
     "Strike", "DTE", "OpenInterest", "Volume", "VolDelta",
     "Bid", "Mid", "Ask", "Last", "IV", "Delta", "Gamma", "Theta", "Vega",
