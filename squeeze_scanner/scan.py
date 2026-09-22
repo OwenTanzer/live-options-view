@@ -18,6 +18,9 @@ import csv
 import sys
 import time
 
+import requests
+from dotenv import load_dotenv
+
 from squeeze_scanner.finviz_client import fetch_candidates
 from squeeze_scanner.scoring import compute_composite_score
 from squeeze_scanner.tradier_options import (
@@ -28,35 +31,62 @@ from squeeze_scanner.tradier_options import (
     to_options_inputs,
 )
 
+# Three distinct outcomes for a candidate's options lookup, per PR #99
+# review finding 5: a real Tradier/network failure must not be silently
+# indistinguishable from "this name genuinely has no usable options
+# market" -- both used to fall through to the same factor-only score with
+# no way to tell them apart in the output.
+OPTIONS_STATUS_VALID = "valid"  # a real chain-derived options score
+OPTIONS_STATUS_UNAVAILABLE = "unavailable"  # chain fetched fine, but too thin / no greeks
+OPTIONS_STATUS_ERROR = "error"  # the Tradier lookup itself failed (network, auth, rate limit, ...)
+
+
+def _fetch_options_inputs(ticker: str, price: float):
+    """Returns (OptionsInputs | None, options_status). Raises nothing --
+    any Tradier-side failure is caught here and reported as
+    OPTIONS_STATUS_ERROR rather than propagating, so one bad ticker can't
+    kill the whole scan; but unlike the pre-review version, it's tagged
+    distinctly from a legitimately thin/no-options name."""
+    try:
+        expiration = get_nearest_expiration(ticker)
+        if not expiration:
+            return None, OPTIONS_STATUS_UNAVAILABLE
+
+        quote = get_quote(ticker)
+        spot = quote.get("last") or price
+        if not spot:
+            return None, OPTIONS_STATUS_UNAVAILABLE
+
+        chain = get_option_chain(ticker, expiration)
+        if not chain:
+            return None, OPTIONS_STATUS_UNAVAILABLE
+
+        summary = summarize_chain(chain, spot_price=spot)
+        avg_dollar_volume = (quote.get("average_volume") or 0) * spot
+        # iv_rank proxy: relative position of ATM IV within a generic
+        # 20-150% band. This is NOT a real 52-week IV rank -- see
+        # tradier_options.to_options_inputs's docstring and the "Known
+        # gaps" section of the plan doc.
+        iv_rank_proxy = 0.0
+        if summary.atm_iv:
+            iv_rank_proxy = max(0.0, min(100.0, (summary.atm_iv - 0.20) / (1.50 - 0.20) * 100))
+
+        options_inputs = to_options_inputs(summary, iv_rank=iv_rank_proxy, avg_dollar_volume=avg_dollar_volume)
+        if options_inputs is None:
+            return None, OPTIONS_STATUS_UNAVAILABLE
+        return options_inputs, OPTIONS_STATUS_VALID
+
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"  [warn] {ticker}: options lookup failed ({exc})", file=sys.stderr)
+        return None, OPTIONS_STATUS_ERROR
+
 
 def scan(limit: int = 50) -> list[dict]:
     candidates = fetch_candidates(limit=limit)
     results = []
 
     for candidate in candidates:
-        options_inputs = None
-        try:
-            expiration = get_nearest_expiration(candidate.ticker)
-            if expiration:
-                quote = get_quote(candidate.ticker)
-                spot = quote.get("last") or candidate.price
-                chain = get_option_chain(candidate.ticker, expiration)
-                if chain and spot:
-                    summary = summarize_chain(chain, spot_price=spot)
-                    avg_dollar_volume = (quote.get("average_volume") or 0) * spot
-                    # iv_rank proxy: relative position of ATM IV within a
-                    # generic 20-150% band. This is NOT a real 52-week IV
-                    # rank -- see tradier_options.to_options_inputs's
-                    # docstring and the "Known gaps" section of the plan doc.
-                    iv_rank_proxy = 0.0
-                    if summary.atm_iv:
-                        iv_rank_proxy = max(0.0, min(100.0, (summary.atm_iv - 0.20) / (1.50 - 0.20) * 100))
-                    options_inputs = to_options_inputs(
-                        summary, iv_rank=iv_rank_proxy, avg_dollar_volume=avg_dollar_volume
-                    )
-        except Exception as exc:  # noqa: BLE001 - a single bad ticker must not kill the scan
-            print(f"  [warn] {candidate.ticker}: options lookup failed ({exc})", file=sys.stderr)
-
+        options_inputs, options_status = _fetch_options_inputs(candidate.ticker, candidate.price)
         composite = compute_composite_score(candidate.factor_inputs, options_inputs)
         results.append(
             {
@@ -66,18 +96,26 @@ def scan(limit: int = 50) -> list[dict]:
                 "composite_score": round(composite.composite, 4),
                 "factor_score": round(composite.factor.score, 4),
                 "options_score": round(composite.options.score, 4),
+                "options_status": options_status,
                 "short_float_pct": candidate.factor_inputs.short_float_pct,
                 "days_to_cover": candidate.factor_inputs.days_to_cover,
-                "has_options_signal": options_inputs is not None,
             }
         )
         time.sleep(0.2)  # stay well under Tradier's rate limit across a full scan
 
-    results.sort(key=lambda r: r["composite_score"], reverse=True)
+    # Composite scores are only directly comparable across rows with the
+    # same options_status: "valid" rows have a real 60/40 blend, while
+    # "unavailable"/"error" rows are factor-only. Rank within each group
+    # rather than pretending a full mixed-basis sort is meaningful (PR #99
+    # review finding 5).
+    status_rank = {OPTIONS_STATUS_VALID: 0, OPTIONS_STATUS_UNAVAILABLE: 1, OPTIONS_STATUS_ERROR: 2}
+    results.sort(key=lambda r: (status_rank[r["options_status"]], -r["composite_score"]))
     return results
 
 
 def main() -> None:
+    load_dotenv()  # local dev convenience (matches tradier_opra_pull.py's pattern) --
+    # a Railway deployment injects TRADIER_TOKEN directly and doesn't need a .env file.
     parser = argparse.ArgumentParser(description="Short-squeeze scanner: factor + options composite score")
     parser.add_argument("--limit", type=int, default=50, help="max finviz candidates to pull")
     parser.add_argument("--out", type=str, default=None, help="optional CSV output path")
@@ -85,7 +123,10 @@ def main() -> None:
 
     results = scan(limit=args.limit)
 
-    header = ["ticker", "composite_score", "factor_score", "options_score", "short_float_pct", "days_to_cover", "price"]
+    header = [
+        "ticker", "options_status", "composite_score", "factor_score", "options_score",
+        "short_float_pct", "days_to_cover", "price",
+    ]
     print("\t".join(header))
     for row in results:
         print("\t".join(str(row[h]) for h in header))

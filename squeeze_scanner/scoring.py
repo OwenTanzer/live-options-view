@@ -24,6 +24,7 @@ are (tests/test_squeeze_scanner_scoring.py).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -32,7 +33,18 @@ def _clamp01(x: float) -> float:
 
 
 def _normalize(value: float, low: float, high: float) -> float:
-    """Linearly map value from [low, high] to [0, 1], clamped at the ends."""
+    """Linearly map value from [low, high] to [0, 1], clamped at the ends.
+
+    Rejects non-finite input outright (ValueError) rather than letting NaN
+    silently reach _clamp01: `max`/`min` treat NaN inconsistently depending
+    on argument order, and a NaN factor here previously produced a false
+    perfect 1.0 composite score (PR #99 review, finding 3). Callers that
+    source data externally (finviz_client, tradier_options) are expected to
+    have already filtered non-finite values out before construction --
+    this is the scoring layer's own backstop, not the primary defense.
+    """
+    if not math.isfinite(value):
+        raise ValueError(f"_normalize received a non-finite value: {value!r}")
     if high == low:
         return 0.0
     return _clamp01((value - low) / (high - low))

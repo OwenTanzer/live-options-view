@@ -6,3 +6,4 @@ pytz>=2024.1
 pandas_market_calendars>=4.3
 yfinance>=0.2
 finvizfinance>=1.1  # squeeze_scanner/finviz_client.py
+python-dotenv>=1.0  # squeeze_scanner/scan.py local-dev .env loading

@@ -15,12 +15,19 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 import requests
 
 from squeeze_scanner.scoring import OptionsInputs
 
 BASE_URL = "https://api.tradier.com/v1"
+REQUEST_TIMEOUT_SECONDS = 10  # every Tradier call below is bounded; an unbounded
+# call previously let one stalled response block the whole sequential scan
+# (PR #99 review, additional reliability gap).
+MIN_DAYS_TO_EXPIRATION = 5  # skip 0-4 DTE expirations: single-name gamma/IV
+# from a contract expiring almost immediately is mostly pin-risk noise, not
+# the multi-session squeeze-catalyst window this scanner is looking for.
 
 
 def _headers() -> dict[str, str]:
@@ -30,38 +37,58 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
 
-def get_quote(symbol: str) -> dict:
-    resp = requests.get(f"{BASE_URL}/markets/quotes", params={"symbols": symbol}, headers=_headers())
+def _get(path: str, params: dict) -> dict:
+    resp = requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(), timeout=REQUEST_TIMEOUT_SECONDS)
+    if resp.status_code == 429:
+        raise RuntimeError(f"Tradier rate limit hit on {path} (429) -- back off before retrying")
     resp.raise_for_status()
-    quote = resp.json()["quotes"]["quote"]
+    return resp.json()
+
+
+def get_quote(symbol: str) -> dict:
+    data = _get("/markets/quotes", {"symbols": symbol})
+    quote = data["quotes"]["quote"]
     return quote[0] if isinstance(quote, list) else quote
 
 
-def get_nearest_expiration(symbol: str) -> str | None:
-    """Nearest expiration with at least ~5 trading days left, to skip 0-1 DTE
-    noise that dominates single-name gamma calcs without being a real
-    squeeze-catalyst window."""
-    resp = requests.get(
-        f"{BASE_URL}/markets/options/expirations",
-        params={"symbol": symbol, "includeAllRoots": "true"},
-        headers=_headers(),
-    )
-    resp.raise_for_status()
-    dates = resp.json().get("expirations", {}).get("date")
+def select_expiration(dates: list[str], today: date) -> str | None:
+    """Pure selection logic: first of `dates` (each "YYYY-MM-DD") at least
+    MIN_DAYS_TO_EXPIRATION calendar days past `today`, or the furthest-out
+    date if none clear that horizon. None only for an empty `dates`.
+
+    Fixes PR #99 review finding: the previous version took array index 1
+    (or 0 for a singleton) with no date check at all, so a same-day
+    singleton expiration was accepted outright. Split out from
+    get_nearest_expiration so tests/test_squeeze_scanner_tradier_options.py
+    can exercise singleton/monthly/near-expiry cases without a network call.
+    """
+    if not dates:
+        return None
+    parsed = [(d, datetime.strptime(d, "%Y-%m-%d").date()) for d in dates]
+    far_enough = [d for d, exp_date in parsed if (exp_date - today) >= timedelta(days=MIN_DAYS_TO_EXPIRATION)]
+    if far_enough:
+        return far_enough[0]
+    return parsed[-1][0]  # every listed expiration is inside the horizon -- take the furthest-out anyway
+
+
+def get_nearest_expiration(symbol: str, *, today: date | None = None) -> str | None:
+    """First expiration at least MIN_DAYS_TO_EXPIRATION calendar days out
+    (see select_expiration for the actual selection logic)."""
+    today = today or date.today()
+    data = _get("/markets/options/expirations", {"symbol": symbol, "includeAllRoots": "true"})
+    # Tradier returns {"expirations": null} outright for a symbol with no
+    # listed options at all (not {"expirations": {"date": null}}) -- caught
+    # live while re-verifying this fix, not in the original review.
+    dates = (data.get("expirations") or {}).get("date")
     if not dates:
         return None
     dates = [dates] if isinstance(dates, str) else dates
-    return dates[min(1, len(dates) - 1)]  # index 1 skips the nearest (often weekly/0-2 DTE) expiry when available
+    return select_expiration(dates, today)
 
 
 def get_option_chain(symbol: str, expiration: str) -> list[dict]:
-    resp = requests.get(
-        f"{BASE_URL}/markets/options/chains",
-        params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
-        headers=_headers(),
-    )
-    resp.raise_for_status()
-    options = resp.json().get("options", {}).get("option")
+    data = _get("/markets/options/chains", {"symbol": symbol, "expiration": expiration, "greeks": "true"})
+    options = data.get("options", {}).get("option")
     if options is None:
         return []
     return options if isinstance(options, list) else [options]
@@ -74,36 +101,63 @@ class ChainSummary:
     net_dealer_gamma: float  # negative = dealers net short gamma
     gamma_notional_per_1pct_move: float  # $ dealers must transact per 1% underlying move
     atm_iv: float | None  # decimal (0.85 = 85% IV), from the strike nearest spot
+    has_usable_greeks: bool  # False if no contract in the chain carried greeks at all
 
 
 def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
     """Aggregate a single expiration's chain into the inputs OptionsInputs needs.
 
-    Dealer positioning convention: retail/institutional flow is assumed net
-    long calls and net short puts against dealers (the standard simplifying
-    assumption used by every public "gamma exposure" tracker, e.g. SqueezeMetrics'
-    GEX) -- so dealer gamma = sum(call_gamma * call_OI) - sum(put_gamma * put_OI).
-    This is a market-wide convention, not specific to any single-name
-    positioning we'd actually know; treat it as an approximation, not fact.
+    Dealer positioning convention: customers (retail/institutional flow) are
+    assumed net LONG calls and net SHORT puts against dealers (the standard
+    simplifying assumption used by every public "gamma exposure" tracker,
+    e.g. SqueezeMetrics' GEX) -- so:
+
+        customer_net_gamma = sum(call_gamma * call_OI) - sum(put_gamma * put_OI)
+        dealer_net_gamma   = -customer_net_gamma
+
+    (customers long calls contributes positive gamma to the customer side;
+    customers short puts contributes negative gamma to the customer side,
+    since being short an option is short gamma regardless of call/put --
+    puts' own gamma value is positive, so a short-put position is
+    -put_gamma. Dealers are the customers' counterparty on both legs, so
+    dealer gamma is the negative of all of that.)
+
+    PR #99 review caught this backwards: the previous version returned
+    customer_net_gamma and labeled it dealer gamma, so a call-heavy chain
+    (dealers actually net SHORT gamma, squeeze fuel) reported as positive
+    net_dealer_gamma, which compute_options_score treats as dealers being
+    LONG gamma (stabilizing, i.e. exactly the wrong squeeze signal). This is
+    still a market-wide positioning convention, not known fact about any
+    specific name's actual dealer book -- treat it as a proxy.
     """
     call_oi = 0
     put_oi = 0
-    net_gamma = 0.0
+    customer_net_gamma = 0.0
     atm_iv = None
     atm_distance = math.inf
+    has_usable_greeks = False
 
     for contract in chain:
         oi = contract.get("open_interest") or 0
         greeks = contract.get("greeks") or {}
-        gamma = greeks.get("gamma") or 0.0
+        gamma = greeks.get("gamma")
         strike = contract.get("strike") or 0.0
 
-        if contract.get("option_type") == "call":
-            call_oi += oi
-            net_gamma += gamma * oi
-        elif contract.get("option_type") == "put":
-            put_oi += oi
-            net_gamma -= gamma * oi
+        if gamma is not None:
+            has_usable_greeks = True
+            if contract.get("option_type") == "call":
+                call_oi += oi
+                customer_net_gamma += gamma * oi
+            elif contract.get("option_type") == "put":
+                put_oi += oi
+                customer_net_gamma -= gamma * oi
+        else:
+            # Still count OI for the call/put skew even without greeks --
+            # only the gamma aggregate needs has_usable_greeks to gate it.
+            if contract.get("option_type") == "call":
+                call_oi += oi
+            elif contract.get("option_type") == "put":
+                put_oi += oi
 
         distance = abs(strike - spot_price)
         iv = greeks.get("mid_iv") or greeks.get("smv_vol")
@@ -111,25 +165,34 @@ def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
             atm_distance = distance
             atm_iv = iv
 
+    dealer_net_gamma = -customer_net_gamma
+
     # Standard GEX-style dollarization: gamma is "delta change per $1 move,"
     # so scaling by spot^2 * 0.01 * 100 (shares/contract) converts it to a
     # dollar amount dealers must trade for a 1% move in the underlying.
-    gamma_notional = abs(net_gamma) * (spot_price**2) * 0.01 * 100
+    gamma_notional = abs(dealer_net_gamma) * (spot_price**2) * 0.01 * 100
 
     return ChainSummary(
         call_open_interest=call_oi,
         put_open_interest=put_oi,
-        net_dealer_gamma=net_gamma,
+        net_dealer_gamma=dealer_net_gamma,
         gamma_notional_per_1pct_move=gamma_notional,
         atm_iv=atm_iv,
+        has_usable_greeks=has_usable_greeks,
     )
 
 
 def to_options_inputs(summary: ChainSummary, *, iv_rank: float, avg_dollar_volume: float) -> OptionsInputs | None:
     """Normalize a ChainSummary + externally-supplied iv_rank into scoring's
     OptionsInputs. Returns None (no usable signal) when the chain was too
-    thin to mean anything -- see scoring.compute_composite_score for how a
-    None here falls back to the factor score alone rather than zeroing it.
+    thin, or carried no greeks at all, to mean anything -- see
+    scoring.compute_composite_score for how a None here falls back to the
+    factor score alone rather than zeroing it.
+
+    PR #99 review caught a chain with 100 call contracts and zero greeks
+    passing this check (total_oi >= 50 alone), producing a spurious
+    "valid" options score built entirely from OI skew with silently-zeroed
+    gamma/IV components. `has_usable_greeks` now gates that explicitly.
 
     iv_rank is NOT computed in this module: a real IV rank needs a rolling
     52-week history of this underlying's own IV, which this scanner doesn't
@@ -138,7 +201,7 @@ def to_options_inputs(summary: ChainSummary, *, iv_rank: float, avg_dollar_volum
     iv_rank-driven ranking as provisional until that history exists.
     """
     total_oi = summary.call_open_interest + summary.put_open_interest
-    if total_oi < 50 or avg_dollar_volume <= 0:
+    if total_oi < 50 or avg_dollar_volume <= 0 or not summary.has_usable_greeks or summary.atm_iv is None:
         return None
 
     call_put_ratio = summary.call_open_interest / max(summary.put_open_interest, 1)
