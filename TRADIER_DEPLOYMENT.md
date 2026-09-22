@@ -47,7 +47,23 @@ time/reference source are persisted. The one-shot probe remains open-only.
 
 The subscription is consumed continuously through the open. Pre-open provider
 events are counted separately as discarded warmup and excluded from regular-session
-event counts and statistics. The reader processes complete lines without waiting
+event counts and statistics. The latest timestamped warmup quote per subscribed
+symbol is retained as opening context. When it supplies a regular trade's quote age,
+that trade carries `preceding_quote_source: preopen` and the original quote payload
+(including its receipt timestamp) in `preceding_quote_context`. A newer regular
+quote replaces it; older out-of-order quotes cannot overwrite newer context.
+
+After the opening boundary, timesales are classified using provider `date` and
+`session`, separately from receipt time. Timestamps must be inside the calendar's
+regular interval (open inclusive, close exclusive); a supplied nonempty session
+label must be `normal`. Missing labels are allowed when provider time is valid.
+Excluded trades are archived as `excluded_timesale` diagnostic records with a
+reason and original payload, and counted separately from regular timesales.
+Missing/invalid provider timestamps make the session partial. The summary's
+`excluded_timesales` reports counts by reason. Diagnostic records remain included
+in total archive record counts, while quote context does not add extra records.
+
+The reader processes complete lines without waiting
 for the default 512-byte requests buffer. Contract scope, same-day reuse, date
 attribution, holiday/early-close calendar, archive prefixes, and launcher remain intact.
 

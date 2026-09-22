@@ -181,6 +181,7 @@ class BoundedStats:
         self.sequence_discontinuities: Counter[str] = Counter()
         self.sequence_out_of_order: Counter[str] = Counter()
         self.quote_timestamps: dict[str, int] = {}
+        self.preopen_quote_context: dict[str, dict[str, Any]] = {}
         self.quote_age_reservoir: deque[int] = deque(maxlen=reservoir_size)
         self.quote_age_count = 0
         self.quote_age_sum = 0
@@ -188,6 +189,23 @@ class BoundedStats:
         self.quote_age_max: int | None = None
         self.last_receipt_ts: str | None = None
         self.first_receipt_ts: str | None = None
+
+    def retain_quote(self, event: dict[str, Any], *, preopen: bool = False) -> None:
+        """Retain quote context without adding a regular-session observation."""
+        symbol = str(event.get("symbol", "unknown"))
+        candidates = [value for value in (
+            parse_epoch_ms(event.get("biddate")), parse_epoch_ms(event.get("askdate"))
+        ) if value is not None]
+        if not candidates:
+            return
+        timestamp = max(candidates)
+        if timestamp < self.quote_timestamps.get(symbol, 0):
+            return
+        self.quote_timestamps[symbol] = timestamp
+        if preopen:
+            self.preopen_quote_context[symbol] = dict(event)
+        else:
+            self.preopen_quote_context.pop(symbol, None)
 
     def observe(self, event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("type", "unknown"))
@@ -198,15 +216,7 @@ class BoundedStats:
             self.last_receipt_ts = receipt
         symbol = str(event.get("symbol", "unknown"))
         if event_type == "quote":
-            candidates = [
-                value for value in (
-                    parse_epoch_ms(event.get("biddate")),
-                    parse_epoch_ms(event.get("askdate")),
-                )
-                if value is not None
-            ]
-            if candidates:
-                self.quote_timestamps[symbol] = max(candidates)
+            self.retain_quote(event)
             return event
         if event_type != "timesale":
             return event
@@ -254,6 +264,9 @@ class BoundedStats:
             self.quote_age_min = age if self.quote_age_min is None else min(self.quote_age_min, age)
             self.quote_age_max = age if self.quote_age_max is None else max(self.quote_age_max, age)
             event["preceding_quote_age_ms"] = age
+            if symbol in self.preopen_quote_context:
+                event["preceding_quote_source"] = "preopen"
+                event["preceding_quote_context"] = self.preopen_quote_context[symbol]
         return event
 
     def age_summary(self) -> dict[str, Any]:
@@ -984,6 +997,7 @@ class CaptureResult:
         self.stream_connected_at: datetime | None = None
         self.opening_stream_ready_at: datetime | None = None
         self.preopen_events_discarded = 0
+        self.excluded_timesales: Counter[str] = Counter()
 
 
 def capture_session(
@@ -1081,6 +1095,8 @@ def capture_session(
                             "provider_payload": raw,
                         })
                         continue
+                    event["collector_receipt_timestamp"] = receipt
+                    event["provider"] = "tradier"
                     if session_open is not None:
                         valid = (event.get("type") == "heartbeat" or (
                             event.get("type") in {"quote", "timesale"}
@@ -1090,12 +1106,31 @@ def capture_session(
                             print(json.dumps({"event": "stream_ready", "at": observed_at.isoformat(),
                                               "before_open": observed_at <= session_open}), flush=True)
                         if observed_at < session_open:
+                            if valid and event.get("type") == "quote":
+                                stats.retain_quote(event, preopen=True)
                             result.preopen_events_discarded += 1
                             continue
                         if result.opening_stream_ready_at is None and valid:
                             result.opening_stream_ready_at = connection_ready_at
-                    event["collector_receipt_timestamp"] = receipt
-                    event["provider"] = "tradier"
+                        if event.get("type") == "timesale":
+                            trade_ms = parse_epoch_ms(event.get("date"))
+                            session = event.get("session")
+                            reason = None
+                            if trade_ms is None:
+                                reason = "missing_or_invalid_provider_time"
+                            elif not session_open.timestamp() * 1000 <= trade_ms < session_close.timestamp() * 1000:
+                                reason = "outside_regular_session"
+                            elif session not in (None, "", "normal"):
+                                reason = "non_regular_session_label"
+                            if reason:
+                                result.excluded_timesales[reason] += 1
+                                # Keep the original evidence, but never expose it
+                                # as a regular timesale or feed it into trade stats.
+                                spool.write({"type": "excluded_timesale", "reason": reason,
+                                             "collector_receipt_timestamp": receipt,
+                                             "provider_payload": event})
+                                stats.counts["excluded_timesale"] += 1
+                                continue
                     spool.write(stats.observe(event))
                 if stop_requested() or now_et() >= session_close:
                     break
@@ -1339,6 +1374,8 @@ def main(
         partial_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
     if capture_result.reconnects > 0:
         partial_reasons.append(f"reconnects={capture_result.reconnects}")
+    if capture_result.excluded_timesales.get("missing_or_invalid_provider_time"):
+        partial_reasons.append("unclassifiable_timesale_provider_time")
     if not uploader.fully_drained():
         partial_reasons.append("upload_spool_not_fully_drained")
     if reconciliation["needs_review"]:
@@ -1364,6 +1401,7 @@ def main(
                                 if capture_result.stream_connected_at else None),
         "opening_stream_ready_at": opening_ready.isoformat() if opening_ready else None,
         "preopen_events_discarded": capture_result.preopen_events_discarded,
+        "excluded_timesales": dict(capture_result.excluded_timesales),
         "stopped_by_signal": STOP,
         "fatal_error": fatal_error,
         "status": status,
