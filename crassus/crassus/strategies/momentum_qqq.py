@@ -75,6 +75,20 @@ looked yet (RVOL still building its baseline, or a missing snapshot field)
 retains a held position rather than closing it, same "absence of evidence
 isn't evidence against" treatment as `stale_source_reason` above -- not the
 same as a gate that has looked and genuinely disagrees, which does close.
+
+A third optional param, `bs_edge_confirmation_required` (bool, default
+`False`), gates the *opening* leg only: before buying, the candidate ATM
+row's own live IV (from the feed's `Greeks` event, see `market.py`) is run
+through `crassus/crassus/black_scholes.py` to get a theoretical fair value,
+and `crassus/crassus/bs_edge.py`'s `evaluate_edge_gate` checks the live
+quote hasn't decoupled from it by more than `bs_max_edge_pct` (default
+0.15, i.e. 15%). This is a quote-sanity check, not a second momentum
+opinion -- it exists to catch a corrupted or stale-IV feed read before it
+turns into a real fill, not to second-guess a trade the momentum/VWAP/RVOL
+signals already support. Unlike the VWAP/RVOL gate, it is never consulted
+on the closing leg: standing down from closing a held position because a
+quote looks off is exactly backwards for risk management, so a close always
+proceeds regardless of this gate's reading.
 """
 
 from __future__ import annotations
@@ -83,6 +97,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from ..bs_edge import DEFAULT_RISK_FREE_RATE, evaluate_edge_gate
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
 from ..vwap_rvol import evaluate_gate
@@ -101,6 +116,8 @@ STRATEGY_VERSION = "1.0.0"
 
 DEFAULT_BULLISH_THRESHOLD = 0.003  # +0.30% trailing return
 DEFAULT_BEARISH_THRESHOLD = -0.003  # -0.30% trailing return
+
+DEFAULT_MAX_EDGE_PCT = 0.15  # 15% away from Black-Scholes theoretical value
 
 # The board is republished roughly once a minute (market.py); a snapshot
 # whose own timestamp is older than this by the runner's clock means the
@@ -362,6 +379,48 @@ def _decide_core(
             age_seconds=quote.age_seconds,
             **meta_base,
         )
+
+    if params.get("bs_edge_confirmation_required", False):
+        max_edge_pct = params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT)
+        risk_free_rate = params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE)
+        quote_mid = (quote.bid + quote.ask) / 2.0
+        expiration = datetime.strptime(ctx.snapshot.expiration, "%Y-%m-%d").date()
+        edge_gate = evaluate_edge_gate(
+            row, ctx.snapshot.underlying_price, ctx.now_et, expiration, quote_mid,
+            max_edge_pct=max_edge_pct, risk_free_rate=risk_free_rate,
+        )
+        edge_meta = dict(
+            meta_base,
+            bs_gate_status=edge_gate.status,
+            bs_theoretical_price=edge_gate.theoretical_price,
+            bs_quoted_price=edge_gate.quoted_price,
+            bs_edge_pct=edge_gate.edge_pct,
+            bs_iv=edge_gate.iv,
+        )
+        if edge_gate.status != "ok":
+            # No trustworthy row IV yet, or T has already collapsed to the
+            # expiry floor -- an absence of a usable theoretical read, not a
+            # gate that looked and found the quote implausible. This only
+            # ever guards an *open*, so there's no held position to retain;
+            # standing down on missing data is the whole effect.
+            return no(
+                f"Black-Scholes edge confirmation unavailable "
+                f"(status={edge_gate.status}); standing down rather than "
+                f"opening on an unconfirmed quote.",
+                symbol=symbol,
+                **edge_meta,
+            )
+        if not edge_gate.edge_ok:
+            return no(
+                f"Quote for {symbol} (mid={quote_mid:.2f}) is "
+                f"{edge_gate.edge_pct:+.1%} away from Black-Scholes "
+                f"theoretical value ({edge_gate.theoretical_price:.2f} at "
+                f"IV={edge_gate.iv}), outside the {max_edge_pct:.0%} band; "
+                f"standing down rather than trading a possibly-broken quote.",
+                symbol=symbol,
+                **edge_meta,
+            )
+        meta_base = edge_meta
 
     return Decision(
         action="buy",
