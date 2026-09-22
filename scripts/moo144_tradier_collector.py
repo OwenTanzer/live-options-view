@@ -88,7 +88,7 @@ EXPECTED_TIMESALE_FIELDS = (
     "flag", "cancel", "correction", "session",
 )
 QUOTE_AGE_RESERVOIR_SIZE = 5000
-LATE_START_TOLERANCE_SECONDS = 5
+PREOPEN_SETUP_SECONDS = 60
 HEALTH_PUBLISH_INTERVAL_SECONDS = 60
 
 
@@ -571,6 +571,7 @@ def load_or_select_universe(
     strike_count: int,
     run_date: str,
     now_et: datetime,
+    session_open: datetime | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Load the day's already-selected contract universe, or select and
     persist it once. A same-day restart must never re-select against a
@@ -587,7 +588,9 @@ def load_or_select_universe(
     except r2.exceptions.ClientError:
         pass
 
-    symbols, universe = select_symbols(client, strike_count, 0, run_date, now_et)
+    symbols, universe = select_symbols(
+        client, strike_count, 0, run_date, now_et, session_open=session_open
+    )
     payload = {"symbols": symbols, "universe": universe}
     body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     try:
@@ -978,6 +981,9 @@ class CaptureResult:
         self.reconnects = 0
         self.gap_seconds = 0.0
         self.stop_reason: str | None = None  # None, "lease_lost", or "spool_exhausted"
+        self.stream_connected_at: datetime | None = None
+        self.opening_stream_ready_at: datetime | None = None
+        self.preopen_events_discarded = 0
 
 
 def capture_session(
@@ -992,6 +998,7 @@ def capture_session(
     sleeper: Callable[[float], None] = time.sleep,
     now_et: Callable[[], datetime] = lambda: datetime.now(ET),
     result: CaptureResult | None = None,
+    session_open: datetime | None = None,
 ) -> CaptureResult:
     """Run the stream-read loop until session close, a lost lease, or an
     exhausted spool.
@@ -1030,8 +1037,17 @@ def capture_session(
                 STREAM, params=payload, stream=True, timeout=(15, 10)
             ) as response:
                 response.raise_for_status()
-                for line in response.iter_lines(decode_unicode=True):
-                    if stop_requested() or now_et() >= session_close:
+                connected_at = now_et() if session_open is not None else None
+                if result.stream_connected_at is None:
+                    result.stream_connected_at = connected_at
+                # Readiness belongs to this connection, never an old one that
+                # disconnected before the open. A 200 response alone is insufficient.
+                connection_ready_at = None
+                # Do not wait for requests' default 512-byte buffer to fill at
+                # the boundary; process each complete provider line immediately.
+                for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                    observed_at = now_et()
+                    if stop_requested() or observed_at >= session_close:
                         break
                     if not line:
                         continue
@@ -1055,6 +1071,8 @@ def capture_session(
                         if not isinstance(event, dict):
                             raise ValueError("non-object event")
                     except (json.JSONDecodeError, ValueError, TypeError):
+                        if session_open is not None and observed_at < session_open:
+                            continue
                         stats.malformed += 1
                         raw = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
                         spool.write({
@@ -1063,6 +1081,19 @@ def capture_session(
                             "provider_payload": raw,
                         })
                         continue
+                    if session_open is not None:
+                        valid = (event.get("type") == "heartbeat" or (
+                            event.get("type") in {"quote", "timesale"}
+                            and event.get("symbol") in symbols))
+                        if valid and connection_ready_at is None:
+                            connection_ready_at = observed_at
+                            print(json.dumps({"event": "stream_ready", "at": observed_at.isoformat(),
+                                              "before_open": observed_at <= session_open}), flush=True)
+                        if observed_at < session_open:
+                            result.preopen_events_discarded += 1
+                            continue
+                        if result.opening_stream_ready_at is None and valid:
+                            result.opening_stream_ready_at = connection_ready_at
                     event["collector_receipt_timestamp"] = receipt
                     event["provider"] = "tradier"
                     spool.write(stats.observe(event))
@@ -1145,10 +1176,16 @@ def main(
     run_date = today.isoformat()
 
     now_et = clock_et()
-    if now_et < session_open:
-        wait_seconds = (session_open - now_et).total_seconds()
-        print(json.dumps({"event": "waiting_for_open", "seconds": wait_seconds}), flush=True)
-        sleeper(max(0.0, wait_seconds))
+    setup_at = session_open - timedelta(seconds=PREOPEN_SETUP_SECONDS)
+    if now_et < setup_at:
+        print(json.dumps({"event": "waiting_for_preopen_setup", "at": setup_at.isoformat()}), flush=True)
+        while now_et < setup_at:
+            if STOP:
+                return 0
+            sleeper(min(1.0, (setup_at - now_et).total_seconds()))
+            now_et = clock_et()
+    if STOP:
+        return 0
     late_start_seconds = max(0.0, (clock_et() - session_open).total_seconds())
     if clock_et() >= session_close:
         print(json.dumps({"event": "session_already_closed", "date": run_date}), flush=True)
@@ -1164,7 +1201,7 @@ def main(
     r2, bucket = r2_client()
     lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds)
     symbols, universe = load_or_select_universe(
-        client, r2, bucket, prefix, strike_count, run_date, clock_et()
+        client, r2, bucket, prefix, strike_count, run_date, clock_et(), session_open=session_open
     )
     stale_recovery = recover_stale_sessions(
         base_spool_dir, run_date, r2, bucket,
@@ -1235,10 +1272,14 @@ def main(
 
     capture_started_at = clock_et()
     try:
+        if datetime.now(timezone.utc) >= lease_confirmed_until_ref["value"]:
+            lease_loss_reason.setdefault("reason", "ownership_uncertain")
+            lease_lost_event.set()
         capture_result = capture_session(
             client, symbols, spool, stats, session_close, max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
             result=capture_result,
+            session_open=session_open,
         )
     except Exception as exc:
         fatal_error = f"{type(exc).__name__}: {exc}"
@@ -1267,7 +1308,10 @@ def main(
             resumed_records_total += artifact["records"]
 
     finished_at = utc_now()
-    effective_late_start_seconds = max(0.0, (capture_started_at - session_open).total_seconds())
+    opening_ready = capture_result.opening_stream_ready_at
+    effective_late_start_seconds = max(
+        0.0, ((opening_ready or capture_started_at) - session_open).total_seconds()
+    )
     attempt_event_counts = dict(stats.counts)
     attempt_total_events = sum(attempt_event_counts.values())
 
@@ -1289,7 +1333,9 @@ def main(
         partial_reasons.append("stopped_by_signal")
     if clock_et() < session_close:
         partial_reasons.append("did_not_reach_session_close")
-    if effective_late_start_seconds > LATE_START_TOLERANCE_SECONDS:
+    if opening_ready is None:
+        partial_reasons.append("opening_stream_readiness_unproven")
+    if effective_late_start_seconds > 0:
         partial_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
     if capture_result.reconnects > 0:
         partial_reasons.append(f"reconnects={capture_result.reconnects}")
@@ -1299,7 +1345,7 @@ def main(
         partial_reasons.append("reconciliation_needs_review")
     if any(session.get("needs_review") for session in stale_recovery.values()):
         partial_reasons.append("stale_session_needs_review")
-    if attempt_total_events == 0:
+    if stats.counts.get("quote", 0) + stats.counts.get("timesale", 0) == 0:
         partial_reasons.append("no_events_captured")
     status = "partial" if partial_reasons else "complete"
 
@@ -1314,6 +1360,10 @@ def main(
         "session_close": session_close.isoformat(),
         "late_start_seconds": late_start_seconds,
         "effective_late_start_seconds": effective_late_start_seconds,
+        "stream_connected_at": (capture_result.stream_connected_at.isoformat()
+                                if capture_result.stream_connected_at else None),
+        "opening_stream_ready_at": opening_ready.isoformat() if opening_ready else None,
+        "preopen_events_discarded": capture_result.preopen_events_discarded,
         "stopped_by_signal": STOP,
         "fatal_error": fatal_error,
         "status": status,

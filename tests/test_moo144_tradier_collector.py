@@ -152,7 +152,7 @@ class FakeResponse:
     def raise_for_status(self):
         return None
 
-    def iter_lines(self, decode_unicode=True):
+    def iter_lines(self, decode_unicode=True, chunk_size=None):
         return iter(())
 
 
@@ -1003,7 +1003,7 @@ class FakeResponseWithLines:
     def raise_for_status(self):
         return None
 
-    def iter_lines(self, decode_unicode=True):
+    def iter_lines(self, decode_unicode=True, chunk_size=None):
         return iter(self.lines)
 
 
@@ -1181,7 +1181,9 @@ class MainLifecycleTests(unittest.TestCase):
                 "flag": "", "cancel": False, "correction": False, "session": "normal",
                 "collector_receipt_timestamp": collector.utc_now(),
             }))
-            return collector.CaptureResult()
+            result = collector.CaptureResult()
+            result.opening_stream_ready_at = session_open - timedelta(seconds=30)
+            return result
 
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
@@ -1457,6 +1459,153 @@ class MainLifecycleTests(unittest.TestCase):
         self.assertEqual(len(recovered["2026-09-07"]["resumed_artifacts"]), 1)
 
 
+class PreopenReadinessTests(unittest.TestCase):
+    def setUp(self):
+        collector.STOP = False
+        self.open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+
+    def capture(self, connections, close_hour=16, lease_lost=None):
+        current = [self.open - timedelta(seconds=60)]
+        close = self.open.replace(hour=close_hour, minute=0)
+        events = []
+        spool = Mock()
+        spool.write.side_effect = events.append
+        plans = iter(connections)
+        client = FakeStreamClient()
+
+        def response(*_a, **_k):
+            plan = next(plans)
+            class Response(FakeResponse):
+                def iter_lines(inner, decode_unicode=True, chunk_size=None):
+                    self.assertEqual(chunk_size, 1)
+                    for offset, value in plan:
+                        current[0] = self.open + timedelta(seconds=offset)
+                        if isinstance(value, Exception):
+                            raise value
+                        if value == "lose_lease":
+                            lease_lost.set()
+                            yield '{"type":"heartbeat"}'
+                        else:
+                            yield value if isinstance(value, str) else json.dumps(value)
+                    current[0] = close
+            return Response()
+
+        client.session.get.side_effect = response
+        stats = collector.BoundedStats()
+        result = collector.capture_session(
+            client, ["QQQ"], spool, stats, close, 5, session_open=self.open,
+            now_et=lambda: current[0], sleeper=lambda _: None,
+            lease_lost=lease_lost,
+        )
+        return result, stats, events
+
+    def test_preopen_stream_continues_through_exact_open_without_counting_warmup(self):
+        result, stats, events = self.capture([[
+            (-30, {"type": "quote", "symbol": "QQQ"}),
+            (0, {"type": "timesale", "symbol": "QQQ", "seq": 1}),
+            (1, {"type": "timesale", "symbol": "QQQ", "seq": 2}),
+        ]])
+        self.assertEqual(result.opening_stream_ready_at, self.open - timedelta(seconds=30))
+        self.assertEqual(result.preopen_events_discarded, 1)
+        self.assertEqual(dict(stats.counts), {"timesale": 2})
+        self.assertEqual([e["seq"] for e in events], [1, 2])
+
+    def test_http_success_without_preopen_event_does_not_prove_opening_readiness(self):
+        result, _, _ = self.capture([[(3, {"type": "timesale", "symbol": "QQQ"})]])
+        self.assertLess(result.stream_connected_at, self.open)
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=3))
+
+    def test_malformed_or_unexpected_preopen_payload_does_not_establish_readiness(self):
+        result, stats, _ = self.capture([[
+            (-30, 'not json'), (-20, {"error": "unavailable"}),
+            (-10, {"type": "quote", "symbol": "UNSUBSCRIBED"}),
+            (1, {"type": "timesale", "symbol": "QQQ"}),
+        ]])
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=1))
+        self.assertEqual(stats.malformed, 0)
+
+    def test_preopen_readiness_is_invalidated_by_disconnect_before_open(self):
+        result, _, _ = self.capture([
+            [(-30, {"type": "heartbeat"}), (-1, collector.requests.ConnectionError("lost"))],
+            [(2, {"type": "timesale", "symbol": "QQQ"})],
+        ])
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=2))
+        self.assertEqual(result.reconnects, 1)
+
+    def test_lease_loss_during_warmup_stops_without_market_capture(self):
+        lost = threading.Event()
+        result, stats, _ = self.capture([[(-30, "lose_lease")]], lease_lost=lost)
+        self.assertEqual(result.stop_reason, "lease_lost")
+        self.assertFalse(stats.counts)
+        self.assertIsNone(result.opening_stream_ready_at)
+
+    def test_early_close_preserved(self):
+        result, stats, _ = self.capture([[
+            (-30, {"type": "heartbeat"}), (0, {"type": "quote", "symbol": "QQQ"}),
+        ]], close_hour=13)
+        self.assertIsNone(result.stop_reason)
+        self.assertEqual(stats.counts["quote"], 1)
+
+    def test_stop_during_preopen_wait_performs_no_storage_or_provider_setup(self):
+        def stop(_):
+            collector.STOP = True
+        with patch.dict(os.environ, {"TRADIER_TOKEN": "test"}), patch.object(
+            collector, "r2_client"
+        ) as storage, patch.object(collector, "Tradier") as provider:
+            self.assertEqual(collector.main(
+                clock_et=lambda: self.open - timedelta(minutes=10), sleeper=stop,
+                session_bounds=lambda _: (self.open, self.open.replace(hour=16, minute=0)),
+            ), 0)
+        storage.assert_not_called()
+        provider.assert_not_called()
+
+    def test_full_lifecycle_prepares_before_open_and_rejects_sub_five_second_lateness(self):
+        for ready_before_open in (True, False):
+            with self.subTest(ready_before_open=ready_before_open), tempfile.TemporaryDirectory() as tmp:
+                current = [self.open - timedelta(seconds=70)]
+                close = self.open.replace(hour=16, minute=0)
+                r2 = FakeR2()
+                client = FakeTradier()
+                original_get = client.get
+                def get(path, **kwargs):
+                    if path == "/markets/clock":
+                        self.assertEqual(current[0], self.open - timedelta(seconds=60))
+                        return {"clock": {"date": "2026-09-08", "state": "premarket", "next_change": "09:30"}}
+                    if path == "/markets/quotes":
+                        return {"quotes": {"quote": {"bid": 599.9, "ask": 600.1, "last": 400,
+                            "bid_date": current[0].timestamp()*1000, "ask_date": current[0].timestamp()*1000}}}
+                    return original_get(path, **kwargs)
+                client.get = get
+                client.create_market_session = Mock(return_value="session")
+                class Response(FakeResponse):
+                    def iter_lines(inner, **kwargs):
+                        if ready_before_open:
+                            current[0] = self.open - timedelta(seconds=30)
+                            yield '{"type":"heartbeat"}'
+                        current[0] = self.open + timedelta(seconds=0 if ready_before_open else 3)
+                        yield '{"type":"timesale","symbol":"QQQ","seq":1}'
+                        current[0] = close
+                client.session = Mock()
+                client.session.get.return_value = Response()
+                sleeps = []
+                def sleep(seconds):
+                    sleeps.append(seconds)
+                    current[0] += timedelta(seconds=seconds)
+                with patch.dict(os.environ, {"TRADIER_TOKEN": "test", "MOO144_STRIKE_COUNT": "2",
+                      "MOO144_SPOOL_DIR": tmp}), patch.object(collector, "r2_client", return_value=(r2, "bucket")), patch.object(
+                      collector, "Tradier", return_value=client):
+                    rc = collector.main(clock_et=lambda: current[0], sleeper=sleep,
+                                        session_bounds=lambda _: (self.open, close))
+                self.assertEqual(rc, 0)
+                self.assertEqual(sum(sleeps), 10)
+                summary = next(json.loads(v) for (_b,k),v in r2.objects.items() if "/summary-" in k)
+                self.assertEqual(summary["event_counts"], {"timesale": 1})
+                self.assertEqual(summary["universe"]["spot"], 600)
+                self.assertEqual(summary["status"], "complete" if ready_before_open else "partial")
+                self.assertEqual(summary["effective_late_start_seconds"], 0 if ready_before_open else 3)
+                if not ready_before_open:
+                    self.assertIn("late_start_seconds=3.0", summary["partial_reasons"])
+
+
 if __name__ == "__main__":
     unittest.main()
-
