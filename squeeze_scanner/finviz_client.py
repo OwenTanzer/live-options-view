@@ -29,6 +29,7 @@ before (PR #99 review) and are documented inline rather than left implicit:
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass
 
 from squeeze_scanner.scoring import FactorInputs
@@ -50,6 +51,22 @@ DEFAULT_ORDER = "Short Interest Share"  # finvizfinance order_dict key, sorts by
 # in the order we want them to come back: Ticker, Company, Short Float,
 # Short Ratio, Float, Rel Volume, Perf Week, Price.
 _CUSTOM_SCREENER_COLUMN_IDS = [1, 2, 30, 31, 25, 64, 42, 65]
+
+# The live column-header names parse_candidate_row actually reads. Checked
+# against df.columns before parsing any row -- PR #99 follow-up review, gap
+# 3: with these columns silently absent (e.g. a future finvizfinance
+# release renumbers/renames them, or a finviz-side layout change), every
+# row previously failed parse_candidate_row's required-field check and
+# fetch_candidates returned [] -- indistinguishable from "the filter
+# genuinely matched zero stocks today," a real and unremarkable outcome.
+_REQUIRED_COLUMNS = {"Ticker", "Short Float", "Short Ratio", "Float"}
+
+
+class FinvizSchemaError(RuntimeError):
+    """Raised when finviz's response is missing a column this module reads
+    by name. Distinct from an empty screener result: a caller (or Owen's
+    scheduled collector, per OA-191) should treat this as "the scan is
+    broken," not "no candidates today."""
 
 
 @dataclass(frozen=True)
@@ -147,9 +164,25 @@ def fetch_candidates(filters: dict[str, str] | None = None, limit: int = 50) -> 
     if df is None or df.empty:
         return []
 
+    missing = _REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        raise FinvizSchemaError(
+            f"finviz screener response is missing required column(s) {sorted(missing)} -- "
+            f"likely a finvizfinance/finviz schema change, not a genuinely empty scan. "
+            f"Got columns: {list(df.columns)}"
+        )
+
     candidates = []
+    dropped = 0
     for _, row in df.iterrows():
         candidate = parse_candidate_row(row.to_dict())
         if candidate is not None:
             candidates.append(candidate)
+        else:
+            dropped += 1
+    if dropped:
+        # Required columns are present (checked above), so these are
+        # genuinely bad individual rows (NaN, "-", etc.), not a schema
+        # problem -- worth surfacing, but not fatal to the scan.
+        print(f"[finviz_client] dropped {dropped}/{len(df)} row(s) with unusable required fields", file=sys.stderr)
     return candidates

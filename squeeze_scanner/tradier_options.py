@@ -30,6 +30,18 @@ MIN_DAYS_TO_EXPIRATION = 5  # skip 0-4 DTE expirations: single-name gamma/IV
 # the multi-session squeeze-catalyst window this scanner is looking for.
 
 
+class TradierDataError(RuntimeError):
+    """Raised when a Tradier response doesn't have the shape this module
+    expects (missing/null 'quotes' or 'options' objects, etc.), as opposed
+    to a network-level failure (requests.RequestException) or a rate limit.
+    Still a RuntimeError so scan.py's existing except clause catches it, but
+    named distinctly so a malformed/unexpected payload reads as its own
+    thing in a traceback or log line rather than an unrelated AttributeError
+    from `.get()`-ing into None (PR #99 follow-up review, gap 1: previously
+    a null 'quotes'/'options' object raised AttributeError uncaught by
+    scan.py's except tuple, aborting the whole scan on one bad ticker)."""
+
+
 def _headers() -> dict[str, str]:
     token = os.environ.get("TRADIER_TOKEN")
     if not token:
@@ -47,28 +59,38 @@ def _get(path: str, params: dict) -> dict:
 
 def get_quote(symbol: str) -> dict:
     data = _get("/markets/quotes", {"symbols": symbol})
-    quote = data["quotes"]["quote"]
+    quotes = data.get("quotes")
+    if not isinstance(quotes, dict):
+        raise TradierDataError(f"Tradier quote response for {symbol} had no usable 'quotes' object: {data!r}")
+    quote = quotes.get("quote")
+    if quote is None:
+        raise TradierDataError(f"Tradier returned no quote data for {symbol}")
     return quote[0] if isinstance(quote, list) else quote
 
 
 def select_expiration(dates: list[str], today: date) -> str | None:
-    """Pure selection logic: first of `dates` (each "YYYY-MM-DD") at least
-    MIN_DAYS_TO_EXPIRATION calendar days past `today`, or the furthest-out
-    date if none clear that horizon. None only for an empty `dates`.
+    """Pure selection logic: first of `dates` (each "YYYY-MM-DD"), sorted,
+    at least MIN_DAYS_TO_EXPIRATION calendar days past `today`. None if
+    `dates` is empty OR if nothing clears that horizon.
 
-    Fixes PR #99 review finding: the previous version took array index 1
-    (or 0 for a singleton) with no date check at all, so a same-day
-    singleton expiration was accepted outright. Split out from
-    get_nearest_expiration so tests/test_squeeze_scanner_tradier_options.py
-    can exercise singleton/monthly/near-expiry cases without a network call.
+    PR #99 review, round 1: the previous version took array index 1 (or 0
+    for a singleton) with no date check at all, so a same-day singleton
+    expiration was accepted outright.
+
+    PR #99 review, round 2 (gap 2): the round-1 fix still fell back to
+    "the furthest-out listed date" when nothing cleared the horizon, so a
+    same-day singleton was STILL accepted -- just via the fallback branch
+    instead of the array-index bug. There is no "close enough" here: a
+    caller with no eligible expiration gets None and must treat this
+    ticker as OPTIONS_STATUS_UNAVAILABLE (see scan.py's
+    _fetch_options_inputs), the same as if Tradier had listed no
+    expirations at all -- not a degraded-but-normal result.
     """
     if not dates:
         return None
-    parsed = [(d, datetime.strptime(d, "%Y-%m-%d").date()) for d in dates]
-    far_enough = [d for d, exp_date in parsed if (exp_date - today) >= timedelta(days=MIN_DAYS_TO_EXPIRATION)]
-    if far_enough:
-        return far_enough[0]
-    return parsed[-1][0]  # every listed expiration is inside the horizon -- take the furthest-out anyway
+    parsed = sorted((datetime.strptime(d, "%Y-%m-%d").date(), d) for d in dates)
+    far_enough = [d for exp_date, d in parsed if (exp_date - today) >= timedelta(days=MIN_DAYS_TO_EXPIRATION)]
+    return far_enough[0] if far_enough else None
 
 
 def get_nearest_expiration(symbol: str, *, today: date | None = None) -> str | None:
@@ -88,7 +110,16 @@ def get_nearest_expiration(symbol: str, *, today: date | None = None) -> str | N
 
 def get_option_chain(symbol: str, expiration: str) -> list[dict]:
     data = _get("/markets/options/chains", {"symbol": symbol, "expiration": expiration, "greeks": "true"})
-    options = data.get("options", {}).get("option")
+    options_obj = data.get("options")
+    if not isinstance(options_obj, dict):
+        raise TradierDataError(
+            f"Tradier chain response for {symbol}@{expiration} had no usable 'options' object: {data!r}"
+        )
+    # Unlike get_quote, an actually-empty chain ({"option": None} under a
+    # present, well-formed 'options' object) is a real "no contracts at
+    # this expiration" answer, not malformed data -- treated as
+    # OPTIONS_STATUS_UNAVAILABLE downstream, not an error.
+    options = options_obj.get("option")
     if options is None:
         return []
     return options if isinstance(options, list) else [options]
@@ -129,7 +160,20 @@ def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
     LONG gamma (stabilizing, i.e. exactly the wrong squeeze signal). This is
     still a market-wide positioning convention, not known fact about any
     specific name's actual dealer book -- treat it as a proxy.
+
+    PR #99 follow-up review (gap 4): a per-contract `gamma` that is present
+    but non-finite (NaN, from a bad/degenerate Greeks calc on Tradier's
+    side) previously still set has_usable_greeks=True and poisoned the
+    whole aggregate with NaN, which then silently zeroed the downstream
+    gamma_component (NaN < 0 is False) rather than being rejected. Every
+    numeric field read from a contract -- gamma, open_interest, strike,
+    iv -- is now validated finite before use; a non-finite value is
+    treated the same as a missing one (contributes to OI/skew if it's the
+    OI field, but never reaches the gamma/IV aggregate).
     """
+    if not math.isfinite(spot_price):
+        raise ValueError(f"summarize_chain received a non-finite spot_price: {spot_price!r}")
+
     call_oi = 0
     put_oi = 0
     customer_net_gamma = 0.0
@@ -138,30 +182,35 @@ def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
     has_usable_greeks = False
 
     for contract in chain:
-        oi = contract.get("open_interest") or 0
+        raw_oi = contract.get("open_interest") or 0
+        oi = raw_oi if isinstance(raw_oi, (int, float)) and math.isfinite(raw_oi) else 0
         greeks = contract.get("greeks") or {}
-        gamma = greeks.get("gamma")
-        strike = contract.get("strike") or 0.0
+        raw_gamma = greeks.get("gamma")
+        gamma = raw_gamma if isinstance(raw_gamma, (int, float)) and math.isfinite(raw_gamma) else None
+        raw_strike = contract.get("strike") or 0.0
+        strike = raw_strike if isinstance(raw_strike, (int, float)) and math.isfinite(raw_strike) else 0.0
+        option_type = contract.get("option_type")
 
         if gamma is not None:
             has_usable_greeks = True
-            if contract.get("option_type") == "call":
+            if option_type == "call":
                 call_oi += oi
                 customer_net_gamma += gamma * oi
-            elif contract.get("option_type") == "put":
+            elif option_type == "put":
                 put_oi += oi
                 customer_net_gamma -= gamma * oi
         else:
             # Still count OI for the call/put skew even without greeks --
             # only the gamma aggregate needs has_usable_greeks to gate it.
-            if contract.get("option_type") == "call":
+            if option_type == "call":
                 call_oi += oi
-            elif contract.get("option_type") == "put":
+            elif option_type == "put":
                 put_oi += oi
 
+        raw_iv = greeks.get("mid_iv") or greeks.get("smv_vol")
+        iv = raw_iv if isinstance(raw_iv, (int, float)) and math.isfinite(raw_iv) and raw_iv > 0 else None
         distance = abs(strike - spot_price)
-        iv = greeks.get("mid_iv") or greeks.get("smv_vol")
-        if iv and distance < atm_distance:
+        if iv is not None and distance < atm_distance:
             atm_distance = distance
             atm_iv = iv
 
@@ -201,7 +250,8 @@ def to_options_inputs(summary: ChainSummary, *, iv_rank: float, avg_dollar_volum
     iv_rank-driven ranking as provisional until that history exists.
     """
     total_oi = summary.call_open_interest + summary.put_open_interest
-    if total_oi < 50 or avg_dollar_volume <= 0 or not summary.has_usable_greeks or summary.atm_iv is None:
+    volume_is_usable = math.isfinite(avg_dollar_volume) and avg_dollar_volume > 0
+    if total_oi < 50 or not volume_is_usable or not summary.has_usable_greeks or summary.atm_iv is None:
         return None
 
     call_put_ratio = summary.call_open_interest / max(summary.put_open_interest, 1)

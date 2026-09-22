@@ -6,8 +6,12 @@ gap PR #99's review flagged directly: the original tests never covered the
 finviz-row-to-FactorInputs translation at all."""
 
 import math
+from unittest.mock import MagicMock, patch
 
-from squeeze_scanner.finviz_client import _to_float, parse_candidate_row
+import pandas as pd
+import pytest
+
+from squeeze_scanner.finviz_client import FinvizSchemaError, _to_float, fetch_candidates, parse_candidate_row
 
 
 def test_parses_a_representative_finviz_1_5_0_row():
@@ -84,3 +88,29 @@ def test_missing_optional_fields_default_rather_than_drop_the_row():
     assert candidate.factor_inputs.relative_volume == 1.0
     assert candidate.factor_inputs.price_change_5d_pct == 0.0
     assert candidate.price == 0.0
+
+
+# -- gap 3: a finviz schema change must not look like a genuine empty scan --
+
+
+def test_fetch_candidates_raises_schema_error_when_required_columns_are_missing():
+    # A provider header/schema change: only Ticker and Price came back.
+    # Before this fix, every row failed parse_candidate_row's required-
+    # field check and fetch_candidates returned [] -- indistinguishable
+    # from "the filter genuinely matched zero stocks today."
+    fake_df = pd.DataFrame({"Ticker": ["AAA"], "Price": [10.0]})
+    fake_screener = MagicMock()
+    fake_screener.screener_view.return_value = fake_df
+    with patch("finvizfinance.screener.custom.Custom", return_value=fake_screener):
+        with pytest.raises(FinvizSchemaError):
+            fetch_candidates(limit=10)
+
+
+def test_fetch_candidates_returns_empty_list_for_a_genuinely_empty_result_with_correct_schema():
+    # All required columns present, just zero matching rows -- a real
+    # empty scan, must NOT raise.
+    fake_df = pd.DataFrame(columns=["Ticker", "Company", "Short Float", "Short Ratio", "Float", "Rel Volume", "Perf Week", "Price"])
+    fake_screener = MagicMock()
+    fake_screener.screener_view.return_value = fake_df
+    with patch("finvizfinance.screener.custom.Custom", return_value=fake_screener):
+        assert fetch_candidates(limit=10) == []
