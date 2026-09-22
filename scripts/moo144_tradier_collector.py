@@ -88,7 +88,7 @@ EXPECTED_TIMESALE_FIELDS = (
     "flag", "cancel", "correction", "session",
 )
 QUOTE_AGE_RESERVOIR_SIZE = 5000
-LATE_START_TOLERANCE_SECONDS = 5
+PREOPEN_SETUP_SECONDS = 60
 HEALTH_PUBLISH_INTERVAL_SECONDS = 60
 
 
@@ -181,6 +181,7 @@ class BoundedStats:
         self.sequence_discontinuities: Counter[str] = Counter()
         self.sequence_out_of_order: Counter[str] = Counter()
         self.quote_timestamps: dict[str, int] = {}
+        self.preopen_quote_context: dict[str, dict[str, Any]] = {}
         self.quote_age_reservoir: deque[int] = deque(maxlen=reservoir_size)
         self.quote_age_count = 0
         self.quote_age_sum = 0
@@ -188,6 +189,23 @@ class BoundedStats:
         self.quote_age_max: int | None = None
         self.last_receipt_ts: str | None = None
         self.first_receipt_ts: str | None = None
+
+    def retain_quote(self, event: dict[str, Any], *, preopen: bool = False) -> None:
+        """Retain quote context without adding a regular-session observation."""
+        symbol = str(event.get("symbol", "unknown"))
+        candidates = [value for value in (
+            parse_epoch_ms(event.get("biddate")), parse_epoch_ms(event.get("askdate"))
+        ) if value is not None]
+        if not candidates:
+            return
+        timestamp = max(candidates)
+        if timestamp < self.quote_timestamps.get(symbol, 0):
+            return
+        self.quote_timestamps[symbol] = timestamp
+        if preopen:
+            self.preopen_quote_context[symbol] = dict(event)
+        else:
+            self.preopen_quote_context.pop(symbol, None)
 
     def observe(self, event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("type", "unknown"))
@@ -198,15 +216,7 @@ class BoundedStats:
             self.last_receipt_ts = receipt
         symbol = str(event.get("symbol", "unknown"))
         if event_type == "quote":
-            candidates = [
-                value for value in (
-                    parse_epoch_ms(event.get("biddate")),
-                    parse_epoch_ms(event.get("askdate")),
-                )
-                if value is not None
-            ]
-            if candidates:
-                self.quote_timestamps[symbol] = max(candidates)
+            self.retain_quote(event)
             return event
         if event_type != "timesale":
             return event
@@ -254,6 +264,9 @@ class BoundedStats:
             self.quote_age_min = age if self.quote_age_min is None else min(self.quote_age_min, age)
             self.quote_age_max = age if self.quote_age_max is None else max(self.quote_age_max, age)
             event["preceding_quote_age_ms"] = age
+            if symbol in self.preopen_quote_context:
+                event["preceding_quote_source"] = "preopen"
+                event["preceding_quote_context"] = self.preopen_quote_context[symbol]
         return event
 
     def age_summary(self) -> dict[str, Any]:
@@ -571,6 +584,7 @@ def load_or_select_universe(
     strike_count: int,
     run_date: str,
     now_et: datetime,
+    session_open: datetime | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Load the day's already-selected contract universe, or select and
     persist it once. A same-day restart must never re-select against a
@@ -587,7 +601,9 @@ def load_or_select_universe(
     except r2.exceptions.ClientError:
         pass
 
-    symbols, universe = select_symbols(client, strike_count, 0, run_date, now_et)
+    symbols, universe = select_symbols(
+        client, strike_count, 0, run_date, now_et, session_open=session_open
+    )
     payload = {"symbols": symbols, "universe": universe}
     body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     try:
@@ -978,6 +994,10 @@ class CaptureResult:
         self.reconnects = 0
         self.gap_seconds = 0.0
         self.stop_reason: str | None = None  # None, "lease_lost", or "spool_exhausted"
+        self.stream_connected_at: datetime | None = None
+        self.opening_stream_ready_at: datetime | None = None
+        self.preopen_events_discarded = 0
+        self.excluded_timesales: Counter[str] = Counter()
 
 
 def capture_session(
@@ -992,6 +1012,7 @@ def capture_session(
     sleeper: Callable[[float], None] = time.sleep,
     now_et: Callable[[], datetime] = lambda: datetime.now(ET),
     result: CaptureResult | None = None,
+    session_open: datetime | None = None,
 ) -> CaptureResult:
     """Run the stream-read loop until session close, a lost lease, or an
     exhausted spool.
@@ -1030,8 +1051,17 @@ def capture_session(
                 STREAM, params=payload, stream=True, timeout=(15, 10)
             ) as response:
                 response.raise_for_status()
-                for line in response.iter_lines(decode_unicode=True):
-                    if stop_requested() or now_et() >= session_close:
+                connected_at = now_et() if session_open is not None else None
+                if result.stream_connected_at is None:
+                    result.stream_connected_at = connected_at
+                # Readiness belongs to this connection, never an old one that
+                # disconnected before the open. A 200 response alone is insufficient.
+                connection_ready_at = None
+                # Do not wait for requests' default 512-byte buffer to fill at
+                # the boundary; process each complete provider line immediately.
+                for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                    observed_at = now_et()
+                    if stop_requested() or observed_at >= session_close:
                         break
                     if not line:
                         continue
@@ -1055,6 +1085,8 @@ def capture_session(
                         if not isinstance(event, dict):
                             raise ValueError("non-object event")
                     except (json.JSONDecodeError, ValueError, TypeError):
+                        if session_open is not None and observed_at < session_open:
+                            continue
                         stats.malformed += 1
                         raw = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
                         spool.write({
@@ -1065,6 +1097,40 @@ def capture_session(
                         continue
                     event["collector_receipt_timestamp"] = receipt
                     event["provider"] = "tradier"
+                    if session_open is not None:
+                        valid = (event.get("type") == "heartbeat" or (
+                            event.get("type") in {"quote", "timesale"}
+                            and event.get("symbol") in symbols))
+                        if valid and connection_ready_at is None:
+                            connection_ready_at = observed_at
+                            print(json.dumps({"event": "stream_ready", "at": observed_at.isoformat(),
+                                              "before_open": observed_at <= session_open}), flush=True)
+                        if observed_at < session_open:
+                            if valid and event.get("type") == "quote":
+                                stats.retain_quote(event, preopen=True)
+                            result.preopen_events_discarded += 1
+                            continue
+                        if result.opening_stream_ready_at is None and valid:
+                            result.opening_stream_ready_at = connection_ready_at
+                        if event.get("type") == "timesale":
+                            trade_ms = parse_epoch_ms(event.get("date"))
+                            session = event.get("session")
+                            reason = None
+                            if trade_ms is None:
+                                reason = "missing_or_invalid_provider_time"
+                            elif not session_open.timestamp() * 1000 <= trade_ms < session_close.timestamp() * 1000:
+                                reason = "outside_regular_session"
+                            elif session not in (None, "", "normal"):
+                                reason = "non_regular_session_label"
+                            if reason:
+                                result.excluded_timesales[reason] += 1
+                                # Keep the original evidence, but never expose it
+                                # as a regular timesale or feed it into trade stats.
+                                spool.write({"type": "excluded_timesale", "reason": reason,
+                                             "collector_receipt_timestamp": receipt,
+                                             "provider_payload": event})
+                                stats.counts["excluded_timesale"] += 1
+                                continue
                     spool.write(stats.observe(event))
                 if stop_requested() or now_et() >= session_close:
                     break
@@ -1145,10 +1211,16 @@ def main(
     run_date = today.isoformat()
 
     now_et = clock_et()
-    if now_et < session_open:
-        wait_seconds = (session_open - now_et).total_seconds()
-        print(json.dumps({"event": "waiting_for_open", "seconds": wait_seconds}), flush=True)
-        sleeper(max(0.0, wait_seconds))
+    setup_at = session_open - timedelta(seconds=PREOPEN_SETUP_SECONDS)
+    if now_et < setup_at:
+        print(json.dumps({"event": "waiting_for_preopen_setup", "at": setup_at.isoformat()}), flush=True)
+        while now_et < setup_at:
+            if STOP:
+                return 0
+            sleeper(min(1.0, (setup_at - now_et).total_seconds()))
+            now_et = clock_et()
+    if STOP:
+        return 0
     late_start_seconds = max(0.0, (clock_et() - session_open).total_seconds())
     if clock_et() >= session_close:
         print(json.dumps({"event": "session_already_closed", "date": run_date}), flush=True)
@@ -1164,7 +1236,7 @@ def main(
     r2, bucket = r2_client()
     lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds)
     symbols, universe = load_or_select_universe(
-        client, r2, bucket, prefix, strike_count, run_date, clock_et()
+        client, r2, bucket, prefix, strike_count, run_date, clock_et(), session_open=session_open
     )
     stale_recovery = recover_stale_sessions(
         base_spool_dir, run_date, r2, bucket,
@@ -1235,10 +1307,14 @@ def main(
 
     capture_started_at = clock_et()
     try:
+        if datetime.now(timezone.utc) >= lease_confirmed_until_ref["value"]:
+            lease_loss_reason.setdefault("reason", "ownership_uncertain")
+            lease_lost_event.set()
         capture_result = capture_session(
             client, symbols, spool, stats, session_close, max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
             result=capture_result,
+            session_open=session_open,
         )
     except Exception as exc:
         fatal_error = f"{type(exc).__name__}: {exc}"
@@ -1267,7 +1343,10 @@ def main(
             resumed_records_total += artifact["records"]
 
     finished_at = utc_now()
-    effective_late_start_seconds = max(0.0, (capture_started_at - session_open).total_seconds())
+    opening_ready = capture_result.opening_stream_ready_at
+    effective_late_start_seconds = max(
+        0.0, ((opening_ready or capture_started_at) - session_open).total_seconds()
+    )
     attempt_event_counts = dict(stats.counts)
     attempt_total_events = sum(attempt_event_counts.values())
 
@@ -1289,17 +1368,21 @@ def main(
         partial_reasons.append("stopped_by_signal")
     if clock_et() < session_close:
         partial_reasons.append("did_not_reach_session_close")
-    if effective_late_start_seconds > LATE_START_TOLERANCE_SECONDS:
+    if opening_ready is None:
+        partial_reasons.append("opening_stream_readiness_unproven")
+    if effective_late_start_seconds > 0:
         partial_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
     if capture_result.reconnects > 0:
         partial_reasons.append(f"reconnects={capture_result.reconnects}")
+    if capture_result.excluded_timesales.get("missing_or_invalid_provider_time"):
+        partial_reasons.append("unclassifiable_timesale_provider_time")
     if not uploader.fully_drained():
         partial_reasons.append("upload_spool_not_fully_drained")
     if reconciliation["needs_review"]:
         partial_reasons.append("reconciliation_needs_review")
     if any(session.get("needs_review") for session in stale_recovery.values()):
         partial_reasons.append("stale_session_needs_review")
-    if attempt_total_events == 0:
+    if stats.counts.get("quote", 0) + stats.counts.get("timesale", 0) == 0:
         partial_reasons.append("no_events_captured")
     status = "partial" if partial_reasons else "complete"
 
@@ -1314,6 +1397,11 @@ def main(
         "session_close": session_close.isoformat(),
         "late_start_seconds": late_start_seconds,
         "effective_late_start_seconds": effective_late_start_seconds,
+        "stream_connected_at": (capture_result.stream_connected_at.isoformat()
+                                if capture_result.stream_connected_at else None),
+        "opening_stream_ready_at": opening_ready.isoformat() if opening_ready else None,
+        "preopen_events_discarded": capture_result.preopen_events_discarded,
+        "excluded_timesales": dict(capture_result.excluded_timesales),
         "stopped_by_signal": STOP,
         "fatal_error": fatal_error,
         "status": status,

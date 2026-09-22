@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import io
 import json
@@ -152,7 +153,7 @@ class FakeResponse:
     def raise_for_status(self):
         return None
 
-    def iter_lines(self, decode_unicode=True):
+    def iter_lines(self, decode_unicode=True, chunk_size=None):
         return iter(())
 
 
@@ -1003,7 +1004,7 @@ class FakeResponseWithLines:
     def raise_for_status(self):
         return None
 
-    def iter_lines(self, decode_unicode=True):
+    def iter_lines(self, decode_unicode=True, chunk_size=None):
         return iter(self.lines)
 
 
@@ -1181,7 +1182,9 @@ class MainLifecycleTests(unittest.TestCase):
                 "flag": "", "cancel": False, "correction": False, "session": "normal",
                 "collector_receipt_timestamp": collector.utc_now(),
             }))
-            return collector.CaptureResult()
+            result = collector.CaptureResult()
+            result.opening_stream_ready_at = session_open - timedelta(seconds=30)
+            return result
 
         with tempfile.TemporaryDirectory() as tmp:
             result, r2 = self._run_main(
@@ -1457,6 +1460,250 @@ class MainLifecycleTests(unittest.TestCase):
         self.assertEqual(len(recovered["2026-09-07"]["resumed_artifacts"]), 1)
 
 
+class PreopenReadinessTests(unittest.TestCase):
+    def setUp(self):
+        collector.STOP = False
+        self.open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+
+    def capture(self, connections, close_hour=16, lease_lost=None):
+        current = [self.open - timedelta(seconds=60)]
+        close = self.open.replace(hour=close_hour, minute=0)
+        events = []
+        spool = Mock()
+        spool.write.side_effect = events.append
+        plans = iter(connections)
+        client = FakeStreamClient()
+
+        def response(*_a, **_k):
+            plan = next(plans)
+            class Response(FakeResponse):
+                def iter_lines(inner, decode_unicode=True, chunk_size=None):
+                    self.assertEqual(chunk_size, 1)
+                    for offset, value in plan:
+                        current[0] = self.open + timedelta(seconds=offset)
+                        if isinstance(value, Exception):
+                            raise value
+                        if value == "lose_lease":
+                            lease_lost.set()
+                            yield '{"type":"heartbeat"}'
+                        else:
+                            yield value if isinstance(value, str) else json.dumps(value)
+                    current[0] = close
+            return Response()
+
+        client.session.get.side_effect = response
+        stats = collector.BoundedStats()
+        result = collector.capture_session(
+            client, ["QQQ"], spool, stats, close, 5, session_open=self.open,
+            now_et=lambda: current[0], sleeper=lambda _: None,
+            lease_lost=lease_lost,
+        )
+        return result, stats, events
+
+    def test_preopen_stream_continues_through_exact_open_without_counting_warmup(self):
+        result, stats, events = self.capture([[
+            (-30, {"type": "quote", "symbol": "QQQ"}),
+            (0, {"type": "timesale", "date": int(self.open.timestamp()*1000), "symbol": "QQQ", "seq": 1}),
+            (1, {"type": "timesale", "date": int(self.open.timestamp()*1000), "symbol": "QQQ", "seq": 2}),
+        ]])
+        self.assertEqual(result.opening_stream_ready_at, self.open - timedelta(seconds=30))
+        self.assertEqual(result.preopen_events_discarded, 1)
+        self.assertEqual(dict(stats.counts), {"timesale": 2})
+        self.assertEqual([e["seq"] for e in events], [1, 2])
+
+    def test_http_success_without_preopen_event_does_not_prove_opening_readiness(self):
+        result, _, _ = self.capture([[(3, {"type": "timesale", "date": int(self.open.timestamp()*1000), "symbol": "QQQ"})]])
+        self.assertLess(result.stream_connected_at, self.open)
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=3))
+
+    def test_delayed_premarket_trade_excluded_but_quote_context_survives(self):
+        opening_ms = int(self.open.timestamp() * 1000)
+        quote = {"type": "quote", "symbol": "QQQ", "bid": 600, "ask": 600.02,
+                 "biddate": opening_ms - 100, "askdate": opening_ms - 100}
+        result, stats, events = self.capture([[
+            (-0.1, quote),
+            (0.1, {"type": "timesale", "symbol": "QQQ", "seq": 1,
+                   "date": opening_ms - 50, "session": "pre"}),
+            (0.2, {"type": "timesale", "symbol": "QQQ", "seq": 2,
+                   "date": opening_ms + 100, "session": "normal"}),
+        ]])
+        self.assertEqual(dict(stats.counts), {"excluded_timesale": 1, "timesale": 1})
+        self.assertEqual(stats.timesale_by_symbol["QQQ"], 1)
+        self.assertEqual(stats.last_sequence["QQQ"], 2)
+        self.assertEqual(events[0]["provider_payload"]["seq"], 1)
+        trade = events[1]
+        self.assertEqual(trade["preceding_quote_age_ms"], 200)
+        self.assertEqual(trade["preceding_quote_source"], "preopen")
+        context = trade["preceding_quote_context"]
+        self.assertEqual(context["biddate"], opening_ms - 100)
+        self.assertEqual(context["bid"], 600)
+        self.assertIn("collector_receipt_timestamp", context)
+        self.assertEqual(stats.first_receipt_ts, trade["collector_receipt_timestamp"])
+        self.assertEqual(result.preopen_events_discarded, 1)
+        self.assertEqual(result.excluded_timesales, {"outside_regular_session": 1})
+
+    def test_provider_time_and_session_label_independently_exclude_trades(self):
+        opening_ms = int(self.open.timestamp() * 1000)
+        for provider_ms, session, reason in [
+            (opening_ms - 1, "normal", "outside_regular_session"),
+            (opening_ms - 86400000, None, "outside_regular_session"),
+            (opening_ms, "pre", "non_regular_session_label"),
+            (opening_ms, "post", "non_regular_session_label"),
+            (None, "normal", "missing_or_invalid_provider_time"),
+            ("bad", "normal", "missing_or_invalid_provider_time"),
+            (int(self.open.replace(hour=13, minute=0).timestamp()*1000),
+             "normal", "outside_regular_session"),
+        ]:
+            with self.subTest(provider_ms=provider_ms, session=session):
+                result, stats, events = self.capture([[
+                    (-1, {"type": "heartbeat"}),
+                    (0.1, {"type": "timesale", "symbol": "QQQ", "date": provider_ms,
+                           "session": session, "seq": 1}),
+                ]], close_hour=13)
+                self.assertEqual(stats.counts["timesale"], 0)
+                self.assertFalse(stats.timesale_by_symbol)
+                self.assertEqual(result.excluded_timesales, {reason: 1})
+                self.assertEqual(events[0]["type"], "excluded_timesale")
+                self.assertEqual(events[0]["provider_payload"]["date"], provider_ms)
+
+    def test_latest_warmup_quote_is_replaced_by_regular_quote(self):
+        opening_ms = int(self.open.timestamp() * 1000)
+        def quote(offset):
+            return {"type": "quote", "symbol": "QQQ", "biddate": opening_ms + offset,
+                    "askdate": opening_ms + offset}
+        def trade(offset):
+            return {"type": "timesale", "symbol": "QQQ", "date": opening_ms + offset}
+        _, stats, events = self.capture([[
+            (-0.3, quote(-300)), (-0.1, quote(-100)), (-0.05, quote(-200)),
+            (0, trade(0)), (0.1, quote(100)), (0.2, trade(200)),
+        ]])
+        self.assertEqual(events[0]["preceding_quote_age_ms"], 100)
+        self.assertEqual(events[0]["preceding_quote_context"]["biddate"], opening_ms - 100)
+        self.assertEqual(events[2]["preceding_quote_age_ms"], 100)
+        self.assertNotIn("preceding_quote_context", events[2])
+        self.assertEqual(dict(stats.counts), {"timesale": 2, "quote": 1})
+        self.assertFalse(stats.preopen_quote_context)
+
+    def test_warmup_context_is_symbol_specific_and_never_future_dated(self):
+        opening_ms = int(self.open.timestamp() * 1000)
+        _, stats, events = self.capture([[
+            (-1, {"type": "quote", "symbol": "UNSUBSCRIBED", "biddate": opening_ms - 100}),
+            (-0.5, {"type": "quote", "symbol": "QQQ", "biddate": opening_ms + 100}),
+            (0, {"type": "timesale", "symbol": "QQQ", "date": opening_ms}),
+        ]])
+        self.assertNotIn("UNSUBSCRIBED", stats.quote_timestamps)
+        self.assertNotIn("preceding_quote_age_ms", events[0])
+        self.assertNotIn("preceding_quote_context", events[0])
+
+    def test_malformed_or_unexpected_preopen_payload_does_not_establish_readiness(self):
+        result, stats, _ = self.capture([[
+            (-30, 'not json'), (-20, {"error": "unavailable"}),
+            (-10, {"type": "quote", "symbol": "UNSUBSCRIBED"}),
+            (1, {"type": "timesale", "date": int(self.open.timestamp()*1000), "symbol": "QQQ"}),
+        ]])
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=1))
+        self.assertEqual(stats.malformed, 0)
+
+    def test_preopen_readiness_is_invalidated_by_disconnect_before_open(self):
+        result, _, _ = self.capture([
+            [(-30, {"type": "heartbeat"}), (-1, collector.requests.ConnectionError("lost"))],
+            [(2, {"type": "timesale", "date": int(self.open.timestamp()*1000), "symbol": "QQQ"})],
+        ])
+        self.assertEqual(result.opening_stream_ready_at, self.open + timedelta(seconds=2))
+        self.assertEqual(result.reconnects, 1)
+
+    def test_lease_loss_during_warmup_stops_without_market_capture(self):
+        lost = threading.Event()
+        result, stats, _ = self.capture([[(-30, "lose_lease")]], lease_lost=lost)
+        self.assertEqual(result.stop_reason, "lease_lost")
+        self.assertFalse(stats.counts)
+        self.assertIsNone(result.opening_stream_ready_at)
+
+    def test_early_close_preserved(self):
+        result, stats, _ = self.capture([[
+            (-30, {"type": "heartbeat"}), (0, {"type": "quote", "symbol": "QQQ"}),
+        ]], close_hour=13)
+        self.assertIsNone(result.stop_reason)
+        self.assertEqual(stats.counts["quote"], 1)
+
+    def test_stop_during_preopen_wait_performs_no_storage_or_provider_setup(self):
+        def stop(_):
+            collector.STOP = True
+        with patch.dict(os.environ, {"TRADIER_TOKEN": "test"}), patch.object(
+            collector, "r2_client"
+        ) as storage, patch.object(collector, "Tradier") as provider:
+            self.assertEqual(collector.main(
+                clock_et=lambda: self.open - timedelta(minutes=10), sleeper=stop,
+                session_bounds=lambda _: (self.open, self.open.replace(hour=16, minute=0)),
+            ), 0)
+        storage.assert_not_called()
+        provider.assert_not_called()
+
+    def test_full_lifecycle_prepares_before_open_and_rejects_sub_five_second_lateness(self):
+        for ready_before_open, invalid_trade in ((True, False), (False, False), (True, True)):
+            with self.subTest(ready_before_open=ready_before_open, invalid_trade=invalid_trade), tempfile.TemporaryDirectory() as tmp:
+                current = [self.open - timedelta(seconds=70)]
+                close = self.open.replace(hour=16, minute=0)
+                r2 = FakeR2()
+                client = FakeTradier()
+                original_get = client.get
+                def get(path, **kwargs):
+                    if path == "/markets/clock":
+                        self.assertEqual(current[0], self.open - timedelta(seconds=60))
+                        return {"clock": {"date": "2026-09-08", "state": "premarket", "next_change": "09:30"}}
+                    if path == "/markets/quotes":
+                        return {"quotes": {"quote": {"bid": 599.9, "ask": 600.1, "last": 400,
+                            "bid_date": current[0].timestamp()*1000, "ask_date": current[0].timestamp()*1000}}}
+                    return original_get(path, **kwargs)
+                client.get = get
+                client.create_market_session = Mock(return_value="session")
+                class Response(FakeResponse):
+                    def iter_lines(inner, **kwargs):
+                        if ready_before_open:
+                            current[0] = self.open - timedelta(seconds=30)
+                            yield json.dumps({"type": "quote", "symbol": "QQQ", "bid": 599.9,
+                                              "ask": 600.1, "biddate": int(current[0].timestamp()*1000),
+                                              "askdate": int(current[0].timestamp()*1000)})
+                        current[0] = self.open + timedelta(seconds=0 if ready_before_open else 3)
+                        if invalid_trade:
+                            yield '{"type":"timesale","symbol":"QQQ","date":"bad"}'
+                        yield json.dumps({"type": "timesale", "symbol": "QQQ", "seq": 1,
+                                          "date": int(current[0].timestamp()*1000), "session": "normal"})
+                        current[0] = close
+                client.session = Mock()
+                client.session.get.return_value = Response()
+                sleeps = []
+                def sleep(seconds):
+                    sleeps.append(seconds)
+                    current[0] += timedelta(seconds=seconds)
+                with patch.dict(os.environ, {"TRADIER_TOKEN": "test", "MOO144_STRIKE_COUNT": "2",
+                      "MOO144_SPOOL_DIR": tmp}), patch.object(collector, "r2_client", return_value=(r2, "bucket")), patch.object(
+                      collector, "Tradier", return_value=client):
+                    rc = collector.main(clock_et=lambda: current[0], sleeper=sleep,
+                                        session_bounds=lambda _: (self.open, close))
+                self.assertEqual(rc, 0)
+                self.assertEqual(sum(sleeps), 10)
+                summary = next(json.loads(v) for (_b,k),v in r2.objects.items() if "/summary-" in k)
+                expected_counts = {"timesale": 1}
+                if invalid_trade:
+                    expected_counts["excluded_timesale"] = 1
+                self.assertEqual(summary["event_counts"], expected_counts)
+                self.assertEqual(summary["universe"]["spot"], 600)
+                self.assertEqual(summary["status"], "complete" if ready_before_open and not invalid_trade else "partial")
+                self.assertEqual(summary["effective_late_start_seconds"], 0 if ready_before_open else 3)
+                archived = [json.loads(line) for (_b, key), value in r2.objects.items()
+                            if key.endswith(".ndjson.gz") for line in gzip.decompress(value).splitlines()]
+                self.assertEqual(len(archived), sum(expected_counts.values()))
+                if ready_before_open:
+                    trade = next(e for e in archived if e["type"] == "timesale")
+                    self.assertEqual(trade["preceding_quote_age_ms"], 30000)
+                    self.assertEqual(trade["preceding_quote_context"]["bid"], 599.9)
+                if invalid_trade:
+                    self.assertIn("unclassifiable_timesale_provider_time", summary["partial_reasons"])
+                    self.assertEqual(summary["excluded_timesales"], {"missing_or_invalid_provider_time": 1})
+                if not ready_before_open:
+                    self.assertIn("late_start_seconds=3.0", summary["partial_reasons"])
+
+
 if __name__ == "__main__":
     unittest.main()
-

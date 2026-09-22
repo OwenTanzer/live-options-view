@@ -32,3 +32,58 @@ Cron was restored; final scheduled deployment requested as `ab27a53d-c513-4cf8-b
 ## Rollback
 
 Disable this dedicated service's cron and stop its active execution if necessary. Preserve its volume and archived evidence. Revert only its source/start configuration to an explicitly reviewed revision. Do not substitute the old one-shot probe or alter the dashboard/Crassus services. Never label a rollback-interrupted session complete.
+
+## Pre-open readiness fix (prepared September 22; live verification pending)
+
+September 21–22 archives remain usable for explicitly bounded preliminary analysis;
+their roughly 2–4 second opening gaps are not the permanent production standard.
+
+The daily worker now waits until exchange open minus 60 seconds (09:29 Eastern
+on normal sessions), then acquires ownership, selects/persists the day's universe,
+reconciles storage, and connects the streaming subscription. Selection uses a
+positive, noncrossed QQQ bid/ask midpoint with both quote timestamps no older than
+120 seconds; it fails rather than silently using yesterday's last price. Selection
+time/reference source are persisted. The one-shot probe remains open-only.
+
+The subscription is consumed continuously through the open. Pre-open provider
+events are counted separately as discarded warmup and excluded from regular-session
+event counts and statistics. The latest timestamped warmup quote per subscribed
+symbol is retained as opening context. When it supplies a regular trade's quote age,
+that trade carries `preceding_quote_source: preopen` and the original quote payload
+(including its receipt timestamp) in `preceding_quote_context`. A newer regular
+quote replaces it; older out-of-order quotes cannot overwrite newer context.
+
+After the opening boundary, timesales are classified using provider `date` and
+`session`, separately from receipt time. Timestamps must be inside the calendar's
+regular interval (open inclusive, close exclusive); a supplied nonempty session
+label must be `normal`. Missing labels are allowed when provider time is valid.
+Excluded trades are archived as `excluded_timesale` diagnostic records with a
+reason and original payload, and counted separately from regular timesales.
+Missing/invalid provider timestamps make the session partial. The summary's
+`excluded_timesales` reports counts by reason. Diagnostic records remain included
+in total archive record counts, while quote context does not add extra records.
+
+The reader processes complete lines without waiting
+for the default 512-byte requests buffer. Contract scope, same-day reuse, date
+attribution, holiday/early-close calendar, archive prefixes, and launcher remain intact.
+
+`stream_ready` logs valid provider traffic on each connection; readiness from a
+connection that dropped before the open cannot certify its replacement. Summaries
+include `stream_connected_at`, `opening_stream_ready_at`, and
+`preopen_events_discarded`. Completion requires proven stream readiness by the
+opening boundary. There is no five-second lateness exemption. HTTP success alone
+does not prove readiness. Reconnects remain conservatively partial, including any
+pre-open reconnects; this patch does not relax existing outage acceptance.
+
+Before merge/deploy: run collector/probe tests and inspect only these source changes.
+Merge touches watched paths and may automatically deploy the dedicated service.
+Keep the existing cron, variables, volume, and single replica. After deployment,
+verify the next live session logs `stream_ready` before 09:30 on the connection
+that survives the boundary, correct fresh universe, first event/provider times,
+and final reconciled archive/health. Unit tests cannot certify provider-side
+opening delivery; readiness is operational evidence, not exchange-feed completeness.
+
+Provider references: https://docs.tradier.com/docs/clock,
+https://docs.tradier.com/docs/quotes, and
+https://docs.tradier.com/reference/http-streaming. The streaming session is created
+immediately before connection, within the documented five-minute session-ID lifetime.

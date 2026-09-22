@@ -326,5 +326,61 @@ class ProbeTests(unittest.TestCase):
         self.assertIn("TRADIER_TOKEN", payload["message"])
 
 
+class PreopenSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 9, 3, 9, 29, 0, tzinfo=ET)
+        self.open = self.now.replace(minute=30)
+        self.clock = {"date": "2026-09-03", "state": "premarket", "next_change": "09:30"}
+        self.quote = {"symbol": "QQQ", "last": 400, "bid": 599.9, "ask": 600.1,
+                      "bid_date": self.now.timestamp() * 1000, "ask_date": self.now.timestamp() * 1000}
+        self.client = FakeTradier()
+        original = self.client.get
+        def get(path, **kwargs):
+            if path == "/markets/clock":
+                return {"clock": self.clock}
+            if path == "/markets/quotes":
+                return {"quotes": {"quote": self.quote}}
+            return original(path, **kwargs)
+        self.client.get = get
+
+    def select(self, **kwargs):
+        return probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now,
+                                    session_open=self.open, **kwargs)
+
+    def test_fresh_premarket_midpoint_not_previous_close_selects_universe(self):
+        _, universe = self.select()
+        self.assertEqual(universe["spot"], 600)
+        self.assertEqual(universe["spot_source"], "premarket_bid_ask_midpoint")
+        self.assertEqual(universe["selected_at"], self.now.isoformat())
+
+    def test_one_shot_still_rejects_premarket_without_explicit_collector_window(self):
+        with self.assertRaisesRegex(RuntimeError, "not open"):
+            probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now)
+
+    def test_wrong_date_state_or_open_boundary_rejected(self):
+        for field, value in [("date", "2026-09-02"), ("state", "closed"), ("next_change", "09:00")]:
+            with self.subTest(field=field), patch.dict(self.clock, {field: value}):
+                with self.assertRaisesRegex(RuntimeError, "pre-open selection"):
+                    self.select()
+
+    def test_stale_missing_future_or_crossed_reference_rejected(self):
+        for values in [dict(bid_date=1), dict(ask_date=None), dict(ask_date=self.now.timestamp()*1000+600000), dict(bid=601)]:
+            with self.subTest(values=values), patch.dict(self.quote, values):
+                with self.assertRaisesRegex(RuntimeError, "fresh two-sided"):
+                    self.select()
+
+    def test_quote_updated_during_http_requests_is_not_mistaken_for_future_data(self):
+        self.quote.update(bid_date=self.now.timestamp()*1000+1000,
+                          ask_date=self.now.timestamp()*1000+1000)
+        with patch.object(probe.time, "monotonic", side_effect=[0, 2]):
+            _, universe = self.select()
+        self.assertEqual(universe["spot"], 600)
+
+    def test_selection_too_early_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "pre-open selection"):
+            probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now.replace(minute=28),
+                                 session_open=self.open)
+
+
 if __name__ == "__main__":
     unittest.main()

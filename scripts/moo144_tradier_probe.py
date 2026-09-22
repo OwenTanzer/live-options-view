@@ -125,17 +125,48 @@ def select_symbols(
     duration_seconds: int,
     run_date: str | None,
     now_et: datetime | None = None,
+    *,
+    session_open: datetime | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
+    selection_started = time.monotonic()
     now_et = now_et or datetime.now(ET)
     clock = client.get("/markets/clock").get("clock") or {}
-    trade_date = validate_run_window(run_date, clock, duration_seconds, now_et)
+    preopen = session_open is not None and now_et < session_open
+    if preopen:
+        # Explicit daily-collector opt-in; the one-shot probe stays open-only.
+        if (run_date != now_et.date().isoformat()
+                or session_open.date() != now_et.date()
+                or clock.get("date") != run_date
+                or clock.get("state") != "premarket"
+                or clock.get("next_change") != session_open.strftime("%H:%M")
+                or not 0 < (session_open - now_et).total_seconds() <= 60
+                or duration_seconds != 0):
+            raise RuntimeError("Invalid daily collector pre-open selection window")
+        trade_date = run_date
+    else:
+        trade_date = validate_run_window(run_date, clock, duration_seconds, now_et)
 
     quote_payload = client.get("/markets/quotes", symbols="QQQ")
     quotes = normalize((quote_payload.get("quotes") or {}).get("quote"))
     if not quotes:
         raise RuntimeError("Tradier returned no QQQ quote")
     quote = quotes[0]
+    spot_source = "last_or_quote"
+    spot_timestamp = None
     price_values = [quote.get("last"), quote.get("bid"), quote.get("ask")]
+    if preopen:
+        # Yesterday's regular-session last is not a premarket reference.
+        bid, ask = float(quote.get("bid") or 0), float(quote.get("ask") or 0)
+        timestamps = [parse_epoch_ms(quote.get(k)) for k in ("bid_date", "ask_date")]
+        # The quote can update while the clock/quote HTTP requests are in
+        # flight. Compare to response time, not the earlier selection time.
+        now_ms = now_et.timestamp() * 1000 + (time.monotonic() - selection_started) * 1000
+        if (not 0 < bid <= ask or any(t is None or not 0 <= now_ms - t <= 120000
+                                     for t in timestamps)):
+            raise RuntimeError("No fresh two-sided QQQ quote for pre-open selection")
+        price_values = [(bid + ask) / 2]
+        spot_source = "premarket_bid_ask_midpoint"
+        spot_timestamp = min(timestamps)
     try:
         spot = next(float(value) for value in price_values if value not in (None, "") and float(value) > 0)
     except StopIteration as exc:
@@ -198,6 +229,9 @@ def select_symbols(
         "option_symbols": selected,
         "option_metadata": {symbol: metadata[symbol] for symbol in selected},
         "clock": clock,
+        "selected_at": now_et.isoformat(),
+        "spot_source": spot_source,
+        "spot_timestamp_ms": spot_timestamp,
     }
     return ["QQQ", *selected], universe
 
