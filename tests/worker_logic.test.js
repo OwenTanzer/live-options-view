@@ -15,7 +15,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
     netPositions, handleBots, handleBotMetadata, settleAllBots,
-    default: worker, BOT_INDEX_KEY, updateBotIndex, handleBotIndexReconcile,
+    default: worker, BOT_INDEX_KEY, updateBotIndex, handleBotIndexReconcile, repairLegacyBotMarker,
   } = await import('../worker.js');
 
   function indexBucket(names = [], ready = true) {
@@ -131,6 +131,67 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal((await call('/api/login', credentials)).status, 200);
     assert.equal(store.get('user:repair_bot'), before);
     assert.deepEqual((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).members, ['repair_bot']);
+  }
+
+  // Model the provider's one-write/key/second limit across the actual HTTP
+  // startup sequence. Unchanged metadata must also avoid rewriting user:<name>.
+  for (const mode of ['legacy', 'r2']) {
+    const store = new Map(), lastWrite = new Map(), writes = new Map();
+    const now = 10000;
+    const env = { BOT_INDEX_READS: mode, PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator',
+      USERS: {
+        get: async k => store.get(k) ?? null,
+        put: async (k,v) => {
+          if (now - (lastWrite.get(k) ?? -Infinity) < 1000) throw new Error('KV PUT failed: 429 Too Many Requests');
+          lastWrite.set(k, now); writes.set(k, (writes.get(k) || 0) + 1); store.set(k,v);
+        },
+      }, SESSIONS: { put: async () => {} } };
+    const call = (path, body, operator = false) => worker.fetch(new Request(`https://example.test${path}`, {
+      method: 'POST', body: JSON.stringify(body),
+      headers: operator ? { 'X-Bot-Registration-Key': 'operator' } : {},
+    }), env);
+    const credentials = { username: 'startup_bot', password: 'fixture-password' };
+    const metadata = { username: 'startup_bot', alias: 'Startup', strategy_id: 'momentum_qqq' };
+    assert.equal((await call('/api/register', { ...credentials, ...metadata }, true)).status, 201);
+    assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
+    assert.equal((await call('/api/login', credentials)).status, 200);
+    assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
+    assert.equal(writes.get('bot:startup_bot'), 1, `${mode}: no redundant marker writes`);
+    assert.equal(writes.get('user:startup_bot'), 1, `${mode}: unchanged metadata does not rewrite account`);
+    // An older account with a missing marker is repaired at login exactly once.
+    store.delete('bot:startup_bot'); lastWrite.delete('bot:startup_bot');
+    assert.equal((await call('/api/login', credentials)).status, 200);
+    assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
+    assert.equal(writes.get('bot:startup_bot'), 2);
+  }
+
+  // Contending repairs may see stale KV reads even after another writer wins.
+  // Delay is injected here so both the retry interval and bound are deterministic.
+  {
+    let now = 0, puts = 0;
+    const waits = [];
+    const env = { USERS: { get: async () => null, put: async () => {
+      puts++;
+      if (now < 1000) throw new Error('KV PUT failed: 429 Too Many Requests');
+    } } };
+    await repairLegacyBotMarker(env, 'repair_bot', async ms => { waits.push(ms); now += ms; });
+    assert.equal(puts, 2); assert.deepEqual(waits, [1100]);
+    let raw = null;
+    env.USERS.get = async () => raw;
+    env.USERS.put = async () => { throw Object.assign(new Error('rate limited'), { status: 429 }); };
+    await repairLegacyBotMarker(env, 'repair_bot', async ms => {
+      assert.equal(ms, 1100); raw = JSON.stringify({ username: 'REPAIR_BOT' });
+    });
+    raw = null; puts = 0; waits.length = 0;
+    env.USERS.put = async () => { puts++; throw new Error('KV PUT failed: 429 Too Many Requests'); };
+    await assert.rejects(repairLegacyBotMarker(env, 'repair_bot', async ms => waits.push(ms)), /429/);
+    assert.equal(puts, 3); assert.deepEqual(waits, [1100, 1100]);
+    env.USERS.put = async () => { throw new Error('storage unavailable'); };
+    await assert.rejects(repairLegacyBotMarker(env, 'repair_bot', async () => assert.fail('must not retry non-rate errors')), /unavailable/);
+    raw = '{invalid';
+    env.USERS.put = async (_key, value) => { raw = value; };
+    await repairLegacyBotMarker(env, 'repair_bot');
+    assert.equal(JSON.parse(raw).username, 'repair_bot');
   }
 
   // The rollout override is explicit, paginated and bounded. It is never an

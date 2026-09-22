@@ -228,10 +228,32 @@ async function botUsernames(env) {
   return current.value.members;
 }
 
+export async function repairLegacyBotMarker(env, username, sleeper = sleep) {
+  const key = botKey(username);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const raw = await env.USERS.get(key);
+    let marker;
+    try { marker = raw ? JSON.parse(raw) : null; } catch { marker = null; }
+    if (typeof marker?.username === 'string' &&
+        marker.username.toLowerCase() === username.toLowerCase()) return;
+    try {
+      await env.USERS.put(key, JSON.stringify({ username }));
+      return;
+    } catch (error) {
+      // A competing repair or an eventually consistent stale read can still
+      // cause a same-key PUT. Retry only rate limits, outside the one-second
+      // write window, and re-read so a completed competing repair is a no-op.
+      const rateLimited = error?.status === 429 || /\b429\b/.test(String(error?.message));
+      if (!rateLimited || attempt === 2) throw error;
+      await sleeper(1100);
+    }
+  }
+}
+
 async function syncBotMembership(env, username) {
   // Keep the legacy marker during rollout/rollback. The account already exists;
   // login and metadata sync retry this sequence after any interrupted write.
-  await env.USERS.put(botKey(username), JSON.stringify({ username }));
+  await repairLegacyBotMarker(env, username);
   await updateBotIndex(env, [username]);
 }
 
@@ -535,7 +557,9 @@ export async function handleBotMetadata(request, env) {
     const next = { ...record };
     if (strategy_id !== undefined) next.strategy_id = strategy_id;
     if (alias !== undefined) next.alias = alias;
-    return { record: next, result: { strategy_id: next.strategy_id, alias: next.alias } };
+    const result = { strategy_id: next.strategy_id, alias: next.alias };
+    if (next.strategy_id === record.strategy_id && next.alias === record.alias) return { result };
+    return { record: next, result };
   });
 
   if (outcome.error === 'not_found') return jsonResponse({ error: 'No such account' }, 404);

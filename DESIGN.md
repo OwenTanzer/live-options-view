@@ -535,6 +535,11 @@ readiness flag. It contains no balances, credentials, sessions, or trade history
 Conditional object writes merge membership against the last-read entity tag;
 conflicting writers retry up to five times. Registration, authenticated bot login,
 and operator metadata sync repair both the legacy marker and the R2 membership.
+Matching legacy markers and unchanged account metadata are not rewritten during
+startup. Necessary marker repairs retry only rate-limit errors, at most three
+attempts with 1.1-second waits and a fresh read before each attempt. Other storage
+errors remain visible. This covers concurrent repairs and stale KV reads without
+making login followed immediately by metadata sync consume two marker writes.
 An absent index can accept new members but remains unready until reconciliation.
 
 Bot insolvency retains the account and index membership, preserving closed-account
@@ -589,4 +594,3 @@ clients imply about 16,080 account reads before mutations and other endpoints.
 One reconciliation uses at most five lists and 500 account reads; idempotent
 membership repair avoids an R2 write when membership is unchanged. Capacity must
 be checked against actual account-wide usage before scaling clients or bot count.
-
