@@ -15,7 +15,152 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     derivePasswordHash, randomSaltBase64, parseCookies,
     USERNAME_RE, MIN_PASSWORD_LEN, MAX_PASSWORD_LEN, STARTING_BALANCE,
     netPositions, handleBots, handleBotMetadata, settleAllBots,
+    default: worker, BOT_INDEX_KEY, updateBotIndex, handleBotIndexReconcile,
   } = await import('../worker.js');
+
+  function indexBucket(names = [], ready = true) {
+    let value = JSON.stringify({ schema_version: 1, ready, members: names.sort() });
+    let version = 1;
+    return {
+      reads: 0, writes: 0, conflicts: 0, failWrites: false,
+      reset(names) { value = JSON.stringify({ schema_version: 1, ready: true, members: names }); version++; },
+      corrupt() { value = '{bad'; version++; },
+      async get(key) {
+        assert.equal(key, BOT_INDEX_KEY);
+        this.reads++;
+        const snapshot = value, etag = String(version);
+        return snapshot === null ? null : { etag, json: async () => JSON.parse(snapshot) };
+      },
+      async put(key, body, options) {
+        assert.equal(key, BOT_INDEX_KEY);
+        if (this.failWrites) throw new Error('injected write failure');
+        if ((options.onlyIf?.etagMatches && options.onlyIf.etagMatches !== String(version)) ||
+            (options.onlyIf?.etagDoesNotMatch === '*' && value !== null)) {
+          this.conflicts++; return null;
+        }
+        this.writes++; value = body; version++;
+        return { etag: String(version) };
+      },
+    };
+  }
+  const indexedNames = entries => Object.keys(entries).filter(k => k.startsWith('bot:')).map(k => k.slice(4));
+
+  // Membership is shared across Worker instances; CAS retries preserve both writers.
+  {
+    const env = { PAPER_TRADES: indexBucket([], false) };
+    await Promise.all([updateBotIndex(env, ['Bot_A']), updateBotIndex(env, ['bot_b'])]);
+    let index = await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json();
+    assert.deepEqual(index.members, ['bot_a', 'bot_b']);
+    assert.equal(index.ready, false, 'one registration cannot certify migration');
+    assert.ok(env.PAPER_TRADES.conflicts > 0, 'exercise a genuine conflicting snapshot');
+    const writes = env.PAPER_TRADES.writes;
+    await updateBotIndex(env, ['bot_a']);
+    assert.equal(env.PAPER_TRADES.writes, writes, 'idempotent repair needs no R2 write');
+    env.USERS = { list: async () => { throw new Error('must not list on fallback'); } };
+    assert.equal((await handleBots({}, env)).status, 503);
+    await assert.rejects(settleAllBots(env), /not ready/);
+    env.PAPER_TRADES.corrupt();
+    assert.equal((await handleBots({}, env)).status, 503);
+    await assert.rejects(settleAllBots(env));
+    await assert.rejects(updateBotIndex({ PAPER_TRADES: {
+      get: async () => null, put: async () => null,
+    } }, ['bot_a']), /conflicted/);
+  }
+
+  // Full pagination before publish; include orphaned bots, exclude humans, and
+  // merge concurrent registrations rather than overwrite the newer membership.
+  {
+    const records = {
+      'user:old_bot': JSON.stringify({ username: 'old_bot', is_bot: true, trades: [] }),
+      'user:orphan_bot': JSON.stringify({ username: 'orphan_bot', is_bot: true, account_closed: true, trades: [] }),
+      'user:human': JSON.stringify({ username: 'human', trades: [] }),
+      'user:new_bot': JSON.stringify({ username: 'new_bot', is_bot: true, trades: [] }),
+    };
+    let listCalls = 0, failPage = true;
+    const env = { BOT_REGISTRATION_KEY: 'operator', PAPER_TRADES: indexBucket([], false), USERS: {
+      get: async key => records[key] ?? null,
+      list: async ({ prefix, cursor }) => {
+        assert.equal(prefix, 'user:'); listCalls++;
+        if (!cursor) return { keys: [{ name: 'user:old_bot' }], list_complete: false, cursor: 'page2' };
+        if (failPage) throw new Error('interrupted migration');
+        await updateBotIndex(env, ['new_bot']);
+        return { keys: [{ name: 'user:orphan_bot' }, { name: 'user:human' }], list_complete: true };
+      },
+    } };
+    const request = key => new Request('https://example.test/api/bot-index/reconcile', {
+      method: 'POST', headers: { 'X-Bot-Registration-Key': key },
+    });
+    assert.equal((await handleBotIndexReconcile(request('wrong'), env)).status, 403);
+    assert.equal(listCalls, 0);
+    assert.equal((await handleBotIndexReconcile(request('operator'), env)).status, 503);
+    assert.equal((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).ready, false);
+    failPage = false;
+    assert.equal((await handleBotIndexReconcile(request('operator'), env)).status, 200);
+    assert.deepEqual((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).members,
+      ['new_bot', 'old_bot', 'orphan_bot']);
+    const listsAfterMigration = listCalls;
+    for (let i = 0; i < 20; i++) assert.equal((await handleBots({}, env)).status, 200);
+    await settleAllBots(env);
+    assert.equal(listCalls, listsAfterMigration, 'refresh and settlement never enumerate');
+    records['user:old_bot'] = JSON.stringify({ username: 'old_bot', is_bot: true, balance_cash: 123, trades: [] });
+    const roster = await (await handleBots({}, env)).json();
+    assert.equal(roster.bots.find(b => b.username === 'old_bot').balance_cash, 123,
+      'membership optimization does not cache balances');
+    assert.equal(roster.bots.find(b => b.username === 'orphan_bot').account_closed, true);
+    delete records['user:old_bot'];
+    assert.equal((await handleBots({}, env)).status, 503);
+    await assert.rejects(settleAllBots(env), /account unavailable/);
+  }
+
+  // Registration can persist the account before the index fails. Login must
+  // repair membership without provisioning a new account or resetting history.
+  {
+    const store = new Map(), sessions = new Map();
+    const env = { PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator',
+      USERS: { get: async k => store.get(k) ?? null, put: async (k,v) => store.set(k,v) },
+      SESSIONS: { put: async (k,v) => sessions.set(k,v) } };
+    const call = (path, body, headers = {}) => worker.fetch(new Request(`https://example.test${path}`, {
+      method: 'POST', headers, body: JSON.stringify(body),
+    }), env);
+    env.PAPER_TRADES.failWrites = true;
+    const credentials = { username: 'repair_bot', password: 'fixture-password' };
+    assert.equal((await call('/api/register', credentials, { 'X-Bot-Registration-Key': 'operator' })).status, 503);
+    assert.ok(store.has('user:repair_bot'));
+    const before = store.get('user:repair_bot');
+    env.PAPER_TRADES.failWrites = false;
+    assert.equal((await call('/api/login', credentials)).status, 200);
+    assert.equal(store.get('user:repair_bot'), before);
+    assert.deepEqual((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).members, ['repair_bot']);
+  }
+
+  // The rollout override is explicit, paginated and bounded. It is never an
+  // automatic fallback when the R2 index is unavailable.
+  {
+    let lists = 0;
+    const env = { BOT_INDEX_READS: 'legacy', USERS: {
+      list: async ({ cursor }) => {
+        lists++;
+        return cursor ? { keys: [{ name: 'bot:bot_b' }], list_complete: true }
+          : { keys: [{ name: 'bot:bot_a' }], list_complete: false, cursor: 'next' };
+      },
+      get: async key => JSON.stringify({ username: key.slice(5), is_bot: true, trades: [] }),
+    } };
+    assert.equal((await (await handleBots({}, env)).json()).bots.length, 2);
+    assert.equal(lists, 2);
+    env.BOT_INDEX_READS = 'typo';
+    assert.equal((await handleBots({}, env)).status, 503);
+    assert.equal(lists, 2);
+    env.BOT_INDEX_READS = 'r2';
+    env.PAPER_TRADES = indexBucket([], false);
+    env.BOT_REGISTRATION_KEY = 'operator';
+    env.USERS.list = async () => ({ keys: [], list_complete: false, cursor: String(++lists) });
+    const response = await handleBotIndexReconcile(new Request('https://example.test/api/bot-index/reconcile', {
+      method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
+    }), env);
+    assert.equal(response.status, 503);
+    assert.equal(lists, 7, 'reconciliation stops after five pages');
+    assert.equal((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).ready, false);
+  }
 
   const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.toml'), 'utf8');
   assert.match(wrangler, /crons\s*=\s*\["\*\/15 12-23 \* \* 1-5"\]/,
@@ -440,10 +585,9 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     };
     const env = {
       BOT_REGISTRATION_KEY: 'operator-key',
+      PAPER_TRADES: indexBucket(indexedNames(store)),
       USERS: {
-        list: async ({ prefix }) => ({
-          keys: Object.keys(store).filter(k => k.startsWith(prefix)).map(name => ({ name })),
-        }),
+        list: async () => { throw new Error('unexpected KV list'); },
         get: async (k) => store[k] ?? null,
         put: async (k, v) => { store[k] = v; },
       },
@@ -481,6 +625,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     // because the username is taken. The metadata sync every startup performs
     // must therefore repair it.
     delete store['bot:crassus_bob'];
+    env.PAPER_TRADES.reset([]);
     assert.equal((await (await handleBots({}, env)).json()).bots.length, 0,
       'precondition: a lost index entry hides the account from the roster');
 
@@ -501,10 +646,9 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   // ── handleBots ──────────────────────────────────────────────────────────────
   {
     const makeEnv = (entries) => ({
+      PAPER_TRADES: indexBucket(indexedNames(entries)),
       USERS: {
-        list: async ({ prefix }) => ({
-          keys: Object.keys(entries).filter(k => k.startsWith(prefix)).map(name => ({ name })),
-        }),
+        list: async () => { throw new Error('unexpected KV list'); },
         get: async (key) => entries[key] ?? null,
       },
     });
@@ -562,8 +706,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
     // A liquidated bot leaves a dangling index entry; the roster tolerates it.
     const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
-    assert.equal((await (await handleBots({}, dangling)).json()).bots.length, 0,
-      'an index entry with no account behind it is skipped, not fatal');
+    assert.equal((await handleBots({}, dangling)).status, 503,
+      'an unavailable indexed account must not look like a successful empty roster');
   }
 
   // ── settleAllBots (issue #42: unattended settlement for bot accounts) ───────
@@ -572,10 +716,9 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const makeKvEnv = (entries) => {
       for (const [k, v] of Object.entries(entries)) store.set(k, v);
       return {
+        PAPER_TRADES: indexBucket(indexedNames(entries)),
         USERS: {
-          list: async ({ prefix }) => ({
-            keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
-          }),
+          list: async () => { throw new Error('unexpected KV list'); },
           get: async (key) => store.get(key) ?? null,
           put: async (key, value) => { store.set(key, value); },
           delete: async (key) => { store.delete(key); },
@@ -655,6 +798,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     };
     store.set('bot:crassus_broke', JSON.stringify({ username: 'crassus_broke' }));
     store.set('user:crassus_broke', JSON.stringify(insolventBot));
+    await updateBotIndex(env, ['crassus_broke']);
 
     global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
     try {
@@ -675,10 +819,9 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const makeKvEnv = (entries) => {
       for (const [k, v] of Object.entries(entries)) store.set(k, v);
       return {
+        PAPER_TRADES: indexBucket(indexedNames(entries)),
         USERS: {
-          list: async ({ prefix }) => ({
-            keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })),
-          }),
+          list: async () => { throw new Error('unexpected KV list'); },
           get: async (key) => store.get(key) ?? null,
           put: async (key, value) => { store.set(key, value); },
           delete: async (key) => { store.delete(key); },

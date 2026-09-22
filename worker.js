@@ -20,6 +20,8 @@ export const MAX_PASSWORD_LEN = 256;
 const MAX_KV_WRITE_ATTEMPTS = 5;
 const SETTLEMENT_ID_PREFIX = 'settle';
 export const EXECUTION_RESERVATION_LEASE_MS = 30 * 1000;
+export const BOT_INDEX_KEY = 'system/bot-membership-v1.json';
+const MAX_BOT_INDEX_MEMBERS = 500;
 
 export default {
   async fetch(request, env) {
@@ -58,6 +60,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/api/bot-metadata') {
       return handleBotMetadata(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/bot-index/reconcile') {
+      return handleBotIndexReconcile(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/api/me') {
@@ -156,14 +162,108 @@ function userKey(username) {
   return `user:${username.toLowerCase()}`;
 }
 
-// Membership index for the public /api/bots roster. Bot accounts are marked
-// here at registration by an operator holding BOT_REGISTRATION_KEY -- the
-// roster is driven off this index rather than off a `crassus_` username
-// prefix, because usernames are self-chosen: anyone could register
-// `crassus_whatever` and publish their own balance. Nothing a client sends
-// can put a record in this index.
+// Legacy membership markers are retained for migration and rollback. The R2
+// index holds the same public bot identifiers; account records remain authoritative.
 function botKey(username) {
   return `bot:${username.toLowerCase()}`;
+}
+
+function validateBotIndex(value) {
+  if (!value || value.schema_version !== 1 || typeof value.ready !== 'boolean' ||
+      !Array.isArray(value.members) || value.members.length > MAX_BOT_INDEX_MEMBERS ||
+      value.members.some(n => typeof n !== 'string' || !BOT_USERNAME_RE.test(n) || n !== n.toLowerCase()) ||
+      new Set(value.members).size !== value.members.length) {
+    throw new Error('Invalid bot membership index');
+  }
+  return value;
+}
+
+async function loadBotIndex(env) {
+  const object = await env.PAPER_TRADES.get(BOT_INDEX_KEY);
+  return object ? { value: validateBotIndex(await object.json()), etag: object.etag } : null;
+}
+
+// Conditional writes protect against lost membership when separate Workers
+// register bots concurrently. An absent index is explicitly NOT migration-ready.
+export async function updateBotIndex(env, additions, { ready = false } = {}) {
+  const names = additions.map(n => n.toLowerCase());
+  if (names.some(n => !BOT_USERNAME_RE.test(n))) throw new Error('Invalid bot membership');
+  for (let attempt = 0; attempt < MAX_KV_WRITE_ATTEMPTS; attempt++) {
+    const current = await loadBotIndex(env);
+    const members = [...new Set([...(current?.value.members || []), ...names])].sort();
+    const next = validateBotIndex({ schema_version: 1, ready: ready || current?.value.ready || false, members });
+    if (current && JSON.stringify(current.value) === JSON.stringify(next)) return next;
+    const stored = await env.PAPER_TRADES.put(BOT_INDEX_KEY, JSON.stringify(next), {
+      onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' },
+      httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
+    });
+    if (stored) return next;
+  }
+  throw new Error('Bot membership update conflicted; retry');
+}
+
+// Only migration/reconciliation and the explicit staged rollout mode enumerate
+// KV. Never fall back to listing on an ordinary index read failure.
+async function listMigrationKeys(env, prefix) {
+  const names = [];
+  let cursor;
+  for (let page = 0; page < 5; page++) {
+    const result = await env.USERS.list({ prefix, limit: 100, ...(cursor ? { cursor } : {}) });
+    names.push(...result.keys.map(k => k.name));
+    if (names.length > MAX_BOT_INDEX_MEMBERS) throw new Error('Bot migration scan limit exceeded');
+    if (result.list_complete === true) return names;
+    if (!result.cursor || result.cursor === cursor) throw new Error('Incomplete bot migration scan');
+    cursor = result.cursor;
+  }
+  throw new Error('Bot migration scan limit exceeded');
+}
+
+async function botUsernames(env) {
+  if (env.BOT_INDEX_READS === 'legacy') {
+    return (await listMigrationKeys(env, 'bot:')).map(k => k.slice(4));
+  }
+  if (env.BOT_INDEX_READS && env.BOT_INDEX_READS !== 'r2') throw new Error('Invalid bot index mode');
+  const current = await loadBotIndex(env);
+  if (!current?.value.ready) throw new Error('Bot membership migration is not ready');
+  return current.value.members;
+}
+
+async function syncBotMembership(env, username) {
+  // Keep the legacy marker during rollout/rollback. The account already exists;
+  // login and metadata sync retry this sequence after any interrupted write.
+  await env.USERS.put(botKey(username), JSON.stringify({ username }));
+  await updateBotIndex(env, [username]);
+}
+
+export async function handleBotIndexReconcile(request, env) {
+  if (!env.BOT_REGISTRATION_KEY || request.headers.get('X-Bot-Registration-Key') !== env.BOT_REGISTRATION_KEY) {
+    return jsonResponse({ error: 'Invalid bot registration key' }, 403);
+  }
+  try {
+    // Scan account records, not just bot: markers, to repair interrupted legacy
+    // registrations. A bounded, fully paginated scan must finish before publish.
+    const keys = await listMigrationKeys(env, 'user:');
+    const members = [];
+    for (const key of keys) {
+      const raw = await env.USERS.get(key);
+      if (!raw) throw new Error('Migration account unavailable; retry');
+      const record = JSON.parse(raw);
+      if (record.is_bot === true) {
+        if (typeof record.username !== 'string' || userKey(record.username) !== key) {
+          throw new Error('Migration account identity mismatch');
+        }
+        members.push(record.username);
+      }
+    }
+    // Union with the newest version: a registration during scanning must survive.
+    // Closed bots retain identity/history; reconciliation never prunes on KV misses.
+    const index = await updateBotIndex(env, members, { ready: true });
+    console.log(JSON.stringify({ event: 'bot_index_reconciled', scanned: keys.length, members: index.members.length }));
+    return jsonResponse({ ready: index.ready, scanned: keys.length, members: index.members.length }, 200);
+  } catch (error) {
+    console.error('bot_index_reconciliation_failed');
+    return jsonResponse({ error: 'Bot index reconciliation failed; retry or inspect storage' }, 503);
+  }
 }
 
 function sessionKey(token) {
@@ -343,7 +443,10 @@ async function handleRegister(request, env) {
   await env.USERS.put(key, JSON.stringify(record));
   // Index after the record exists, so the roster can never point at a
   // username that has no account behind it.
-  if (isBot) await env.USERS.put(botKey(username), JSON.stringify({ username }));
+  if (isBot) {
+    try { await syncBotMembership(env, username); }
+    catch { return jsonResponse({ error: 'Bot membership update failed; login to retry' }, 503); }
+  }
 
   return startSession(request, env, record, 201);
 }
@@ -366,6 +469,11 @@ async function handleLogin(request, env) {
   const candidateHash = await derivePasswordHash(password, record.salt, record.iterations);
   if (!constantTimeEqual(candidateHash, record.hash)) {
     return jsonResponse({ error: 'Invalid username or password' }, 401);
+  }
+
+  if (record.is_bot === true) {
+    try { await syncBotMembership(env, record.username); }
+    catch { return jsonResponse({ error: 'Bot membership update failed; retry login' }, 503); }
   }
 
   return startSession(request, env, record, 200);
@@ -436,16 +544,10 @@ export async function handleBotMetadata(request, env) {
   if (outcome.error === 'not_a_bot') return jsonResponse({ error: 'Not a bot account' }, 409);
   if (outcome.error) return jsonResponse({ error: 'Metadata could not be updated, try again' }, 503);
 
-  // Repair the roster index, idempotently.
-  //
-  // Registration writes the user record and the `bot:` index as two separate
-  // KV puts with no transaction between them. If the second fails, the account
-  // exists and is flagged is_bot but is missing from the roster -- and the
-  // runner cannot recover by re-registering, because the username is taken, so
-  // it logs in instead and this endpoint is the only code that runs again.
-  // Writing the index here unconditionally turns the every-startup metadata
-  // sync into the repair path for that window.
-  await env.USERS.put(botKey(username), JSON.stringify({ username }));
+  // Repair both membership representations after an interrupted registration.
+  // Authenticated bot login also retries this operation.
+  try { await syncBotMembership(env, username); }
+  catch { return jsonResponse({ error: 'Bot membership update failed; retry metadata sync' }, 503); }
 
   return jsonResponse({ username, ...outcome.result }, 200);
 }
@@ -455,8 +557,8 @@ export async function handleBotMetadata(request, env) {
 // are paper-money bots whose whole purpose is to be observed. Two invariants
 // hold it safe to expose:
 //
-//   1. Only accounts in the `bot:` index appear. Human accounts are never in
-//      it (see botKey), so no real user's balance is ever published here.
+//   1. Only indexed accounts whose record is still marked is_bot appear.
+//      Membership alone can never publish a human account.
 //   2. Only the whitelisted fields below are returned. `salt`, `hash`,
 //      `iterations` and session state never leave this function -- a
 //      spread-the-record-and-delete-secrets approach would leak any field a
@@ -466,35 +568,39 @@ export async function handleBotMetadata(request, env) {
 // against the same live quotes the paper panel already polls, so the roster
 // and the single-account view can never disagree about the mark.
 export async function handleBots(request, env) {
-  const index = await env.USERS.list({ prefix: 'bot:' });
-  const usernames = index.keys.map(k => k.name.slice('bot:'.length));
+  try {
+    const usernames = await botUsernames(env);
 
-  const bots = [];
-  for (const name of usernames) {
-    const raw = await env.USERS.get(`user:${name}`);
-    if (!raw) continue;              // liquidated out from under the index
-    const record = JSON.parse(raw);
-    if (!record.is_bot) continue;    // index and record disagree -- trust the record
-    const trades = Array.isArray(record.trades) ? record.trades : [];
-    bots.push({
-      username: record.username,
-      alias: record.alias || record.username,
-      strategy_id: record.strategy_id ?? null,
-      balance_cash: record.balance_cash,
-      starting_balance: record.starting_balance ?? STARTING_BALANCE,
-      account_closed: record.account_closed === true,
-      closed_at: record.closed_at ?? null,
-      closure_reason: record.closure_reason ?? null,
-      trade_count: trades.length,
-      first_trade_ts: trades.length ? trades[0].ts : null,
-      last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
-      positions: netPositions(trades),
-      created_at: record.createdAt ?? null,
-    });
+    const bots = [];
+    for (const name of usernames) {
+      const raw = await env.USERS.get(`user:${name}`);
+      if (!raw) throw new Error('Indexed bot account unavailable');
+      const record = JSON.parse(raw);
+      if (!record.is_bot) continue;    // index and record disagree -- trust the record
+      const trades = Array.isArray(record.trades) ? record.trades : [];
+      bots.push({
+        username: record.username,
+        alias: record.alias || record.username,
+        strategy_id: record.strategy_id ?? null,
+        balance_cash: record.balance_cash,
+        starting_balance: record.starting_balance ?? STARTING_BALANCE,
+        account_closed: record.account_closed === true,
+        closed_at: record.closed_at ?? null,
+        closure_reason: record.closure_reason ?? null,
+        trade_count: trades.length,
+        first_trade_ts: trades.length ? trades[0].ts : null,
+        last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
+        positions: netPositions(trades),
+        created_at: record.createdAt ?? null,
+      });
+    }
+
+    bots.sort((a, b) => a.alias.localeCompare(b.alias));
+    return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
+  } catch {
+    console.error('bot_roster_read_failed');
+    return jsonResponse({ error: 'Bot roster temporarily unavailable' }, 503);
   }
-
-  bots.sort((a, b) => a.alias.localeCompare(b.alias));
-  return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
 }
 
 // Projects the account's position book into the roster's wire shape.
@@ -1093,15 +1199,14 @@ async function fetchSpotMarkForDate(dateStr) {
 // archived chain data, independent of whether anyone's dashboard is open.
 export async function settleAllBots(env, now = new Date()) {
   const asOf = settlementAsOfNY(now);
-  const index = await env.USERS.list({ prefix: 'bot:' });
-  const usernames = index.keys.map(k => k.name.slice('bot:'.length));
+  const usernames = await botUsernames(env);
 
   const pendingByUsername = new Map();
   const neededExpirations = new Set();
 
   for (const username of usernames) {
     const raw = await env.USERS.get(userKey(username));
-    if (!raw) continue;
+    if (!raw) throw new Error('Indexed settlement account unavailable');
     const record = JSON.parse(raw);
     if (!record.is_bot || record.account_closed) continue;
     const book = computeBookFromTrades(record.trades);

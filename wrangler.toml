@@ -3,6 +3,11 @@ main = "worker.js"
 compatibility_date = "2026-06-23"
 account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 
+# Stage 1 of #102: deploy dual writers, reconcile and verify membership, then
+# change this to "r2" in the cutover commit. Never merge a blind reader cutover.
+[vars]
+BOT_INDEX_READS = "legacy"
+
 [assets]
 directory = "docs"
 binding = "ASSETS"

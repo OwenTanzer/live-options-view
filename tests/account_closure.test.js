@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 
 (async () => {
-  const { default: worker, derivePasswordHash, randomSaltBase64 } = await import('../worker.js');
+  const { default: worker, derivePasswordHash, randomSaltBase64, updateBotIndex } = await import('../worker.js');
   const users = new Map(), sessions = new Map(), objects = new Map();
   let revision = 0, failFinalization = false, quotes = 0;
   const kv = store => ({
@@ -31,6 +31,7 @@ const assert = require('node:assert/strict');
       },
     },
   };
+  await updateBotIndex(env, [], { ready: true });
   const realFetch = global.fetch;
   global.fetch = async () => {
     quotes++;
