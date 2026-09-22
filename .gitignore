@@ -2,3 +2,5 @@
 __pycache__/
 news_pin_bot/.env
 news_pin_bot/db/*.sqlite3
+squeeze_scanner/.env
+.env
