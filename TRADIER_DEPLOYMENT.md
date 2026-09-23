@@ -90,29 +90,53 @@ immediately before connection, within the documented five-minute session-ID life
 
 ## IBIT collection (proposed; not deployed)
 
-The daily collector now accepts two optional variables. Unset, both default to
-the existing QQQ behavior, so the deployed QQQ service needs no change:
+Tradier permits one simultaneous market-data stream per account
+(https://docs.tradier.com/docs/streaming-data, Limits). IBIT is therefore
+collected by the **same** worker and stream as QQQ, never by a second service
+or a second process sharing `TRADIER_TOKEN`. Do not deploy another Tradier
+stream collector with this token without explicit Tradier confirmation that
+the access arrangement permits concurrent streams.
 
-- `MOO144_UNDERLYING` (default `QQQ`).
-- `MOO144_EXPIRATION_POLICY`: `same_day` (default; requires a 0DTE expiration,
-  fails otherwise) or `nearest` (first listed expiration on/after the trade date).
+`MOO144_UNDERLYINGS` lists the underlyings sharing the stream as comma-separated
+`SYMBOL[:policy]` (1-4 entries). It defaults to `QQQ`, so the deployed service
+is unchanged until the variable is set. Policies:
 
-IBIT lists Monday/Wednesday/Friday expirations only (since February 2026), so
-`same_day` would fail every Tuesday/Thursday and exhaust launcher retries. The
-IBIT service should use `nearest`: 0DTE on Mon/Wed/Fri, 1DTE on Tue/Thu. The
-persisted universe records `underlying`, `expiration`, `expiration_policy` and
-`days_to_expiration`, so 1DTE sessions are never confused with 0DTE ones.
+- `same_day` (default): requires a 0DTE expiration.
+- `nearest`: first listed expiration on/after the trade date. IBIT lists only
+  Monday/Wednesday/Friday expirations (since February 2026), so
+  `IBIT:nearest` gives 0DTE on Mon/Wed/Fri and 1DTE on Tue/Thu. The universe
+  records `expiration`, `expiration_policy` and `days_to_expiration`.
 
-Non-QQQ underlyings are fully isolated from QQQ: archive/lease/universe under
-`moo144/tradier-<symbol>/<date>/` (e.g. `moo144/tradier-ibit/2026-09-24/`) and
-spool under `<MOO144_SPOOL_DIR>/moo144-collector-spool-<symbol>/`. QQQ keeps
-`moo144/tradier/<date>/` and `moo144-collector-spool/` byte-for-byte.
+How the shared stream works:
 
-Proposed rollout after review: a second dedicated Railway service
-(e.g. `ibit-tradier-collector`) with the same source, start command, cron, watch
-paths, single replica and `TRADIER_TOKEN`/R2 reference variables as
-moo169-tradier-collector, plus `MOO144_UNDERLYING=IBIT`,
-`MOO144_EXPIRATION_POLICY=nearest`, and its own volume at `/data`. Strike count
-(8) is a starting point; IBIT's price and strike spacing differ from QQQ's, so
-check the percentage band 8 strikes actually covers on the first session. Acceptance gates mirror QQQ:
-first full-session audit, then a second automatic startup, before any analysis.
+- One stream lease per day at the original key `moo144/tradier/<date>/lease.json`,
+  whatever underlyings are configured, so every collector build and
+  configuration contends for it: at most one stream owner, fenced and renewed
+  exactly as before.
+- Each underlying's universe is selected once and persisted in its own archive,
+  then the union is subscribed on one `create_market_session()` stream.
+- A router writes each event to its underlying's lane: separate archive
+  (`moo144/tradier/<date>/` for QQQ, unchanged; `moo144/tradier-ibit/<date>/`
+  for IBIT), spool (`moo144-collector-spool[-ibit]/`), uploader, stats,
+  reconciliation, stale-date recovery, health, summary and manifest.
+- Stream-level records (gaps, heartbeats, malformed payloads) are copied to
+  every lane; stream-level partial reasons (reconnects, late start, readiness,
+  lease loss, fatal error) apply to every lane.
+- If one underlying cannot select a universe, the others still stream and
+  that lane writes a partial summary (`universe_selection_failed`); this is not
+  treated as restart-recoverable, since a restart would interrupt the healthy
+  lanes. All lanes failing is fatal before any stream is opened.
+- `MOO144_MAX_SPOOL_BYTES` bounds the whole volume and is split evenly across
+  lanes (512 MiB default -> 256 MiB each for QQQ + IBIT).
+
+Proposed rollout after review: on moo169-tradier-collector only, set
+`MOO144_UNDERLYINGS=QQQ,IBIT:nearest`. No new service, token, cron or volume.
+It takes effect on the next scheduled start. Strike count (8) applies per
+underlying; IBIT's price and strike spacing differ from QQQ's, so check the
+band 8 strikes covers on the first session. IBIT needs its own first
+full-session audit and second automatic startup before any analysis, and
+adding it should not be allowed to disturb QQQ's open acceptance gates
+(OA-169/OA-180); see the PR for timing.
+
+Rollback: unset `MOO144_UNDERLYINGS` (or set it to `QQQ`). QQQ archives are
+unaffected either way.

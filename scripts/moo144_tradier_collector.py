@@ -35,6 +35,11 @@ process:
   before today's session starts.
 - persists the day's selected contract universe once and reloads it on any
   same-day restart, instead of re-selecting against the current spot price.
+- owns the account's single Tradier market-data stream. Tradier permits one
+  simultaneous market-data stream, so several underlyings (``MOO144_UNDERLYINGS``,
+  e.g. ``QQQ,IBIT:nearest``) share one subscription and one stream lease; a
+  ``StreamRouter`` fans events out to per-underlying archive lanes, each with
+  its own universe, spool, uploader, reconciliation, stats and summary.
 - derives "complete" vs "partial" from actual coverage -- on-time setup
   (not just an on-time open-wait), at least one captured event, no
   reconnect gaps, spool fully drained, reconciliation clean -- rather than
@@ -92,6 +97,7 @@ EXPECTED_TIMESALE_FIELDS = (
 QUOTE_AGE_RESERVOIR_SIZE = 5000
 PREOPEN_SETUP_SECONDS = 60
 HEALTH_PUBLISH_INTERVAL_SECONDS = 60
+MAX_UNDERLYINGS = 4
 # QQQ keeps the original layout so existing archives, leases and the deployed
 # service are unaffected; other underlyings get a sibling namespace.
 QQQ_ARCHIVE_ROOT = "moo144/tradier"
@@ -107,6 +113,34 @@ def spool_dir_name(underlying: str) -> str:
     if underlying == DEFAULT_UNDERLYING:
         return "moo144-collector-spool"
     return f"moo144-collector-spool-{underlying.lower()}"
+
+
+def parse_underlyings(raw: str) -> list[tuple[str, str]]:
+    """Parse ``MOO144_UNDERLYINGS``: comma-separated ``SYMBOL[:policy]``.
+
+    All listed underlyings share this process's one Tradier market-data
+    stream, so they are configured together rather than as separate services.
+    The policy defaults to ``same_day`` (strict 0DTE).
+    """
+    entries: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        symbol, _, policy = item.partition(":")
+        symbol = symbol.strip().upper()
+        policy = policy.strip().lower() or "same_day"
+        if not (symbol.isascii() and symbol.isalpha() and 1 <= len(symbol) <= 6):
+            raise RuntimeError(f"MOO144_UNDERLYINGS: invalid symbol {symbol!r}")
+        if policy not in EXPIRATION_POLICIES:
+            raise RuntimeError(
+                f"MOO144_UNDERLYINGS: {symbol} policy must be one of {', '.join(EXPIRATION_POLICIES)}"
+            )
+        if any(symbol == existing for existing, _ in entries):
+            raise RuntimeError(f"MOO144_UNDERLYINGS: duplicate symbol {symbol}")
+        entries.append((symbol, policy))
+    if not 1 <= len(entries) <= MAX_UNDERLYINGS:
+        raise RuntimeError(f"MOO144_UNDERLYINGS must list 1-{MAX_UNDERLYINGS} underlyings")
+    return entries
 
 
 class LeaseLost(RuntimeError):
@@ -206,6 +240,14 @@ class BoundedStats:
         self.quote_age_max: int | None = None
         self.last_receipt_ts: str | None = None
         self.first_receipt_ts: str | None = None
+        self.excluded_timesales: Counter[str] = Counter()
+
+    def observe_malformed(self) -> None:
+        self.malformed += 1
+
+    def observe_excluded(self, _event: dict[str, Any], reason: str) -> None:
+        self.counts["excluded_timesale"] += 1
+        self.excluded_timesales[reason] += 1
 
     def retain_quote(self, event: dict[str, Any], *, preopen: bool = False) -> None:
         """Retain quote context without adding a regular-session observation."""
@@ -328,8 +370,12 @@ class BoundedStats:
         }
 
 
-def lease_key(run_date: str, *, root: str = QQQ_ARCHIVE_ROOT) -> str:
-    return f"{root}/{run_date}/lease.json"
+def lease_key(run_date: str) -> str:
+    """The day's single stream lease. It guards the one Tradier market-data
+    stream, not an archive, so it stays at this fixed key whichever
+    underlyings a collector is configured for: any two collectors sharing
+    the token contend here and at most one can open a stream."""
+    return f"{QQQ_ARCHIVE_ROOT}/{run_date}/lease.json"
 
 
 def _is_confirmed_absent(exc: Exception) -> bool:
@@ -342,9 +388,7 @@ def _is_confirmed_absent(exc: Exception) -> bool:
     return status == 404 or code in {"NoSuchKey", "404", "NotFound"}
 
 
-def _read_lease(
-    client: Any, bucket: str, run_date: str, *, root: str = QQQ_ARCHIVE_ROOT,
-) -> tuple[dict[str, Any] | None, str | None]:
+def _read_lease(client: Any, bucket: str, run_date: str) -> tuple[dict[str, Any] | None, str | None]:
     """Read the lease object, or (None, None) for a *confirmed* absence.
 
     A transient storage/service failure (a 5xx, timeout, or any ClientError
@@ -353,7 +397,7 @@ def _read_lease(
     InternalError look identical to a genuinely deleted/never-created lease
     to every caller.
     """
-    key = lease_key(run_date, root=root)
+    key = lease_key(run_date)
     try:
         head = client.head_object(Bucket=bucket, Key=key)
         body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -373,16 +417,14 @@ def acquire_lease(
     owner_id: str,
     ttl_seconds: int,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    *,
-    root: str = QQQ_ARCHIVE_ROOT,
 ) -> dict[str, Any]:
     """Acquire or take over the day's collection lease.
 
     Raises RuntimeError if another owner's lease is still live. A lease
     that exists but has expired may be taken over by a new owner.
     """
-    key = lease_key(run_date, root=root)
-    current, existing_etag = _read_lease(client, bucket, run_date, root=root)
+    key = lease_key(run_date)
+    current, existing_etag = _read_lease(client, bucket, run_date)
     if current is not None:
         expires_at = datetime.fromisoformat(current["expires_at"])
         if expires_at > now() and current.get("owner_id") != owner_id:
@@ -442,8 +484,6 @@ def renew_lease(
     owner_id: str,
     ttl_seconds: int,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    *,
-    root: str = QQQ_ARCHIVE_ROOT,
 ) -> dict[str, Any]:
     """Renew this owner's lease, fenced against having lost ownership.
 
@@ -458,7 +498,7 @@ def renew_lease(
     A transient read failure propagates as ``LeaseUnavailable`` from
     ``_read_lease`` unchanged.
     """
-    current, etag = _read_lease(client, bucket, run_date, root=root)
+    current, etag = _read_lease(client, bucket, run_date)
     _require_live_lease_owner(current, owner_id, run_date, now)
     lease = {
         "run_date": run_date,
@@ -469,7 +509,7 @@ def renew_lease(
     body = (json.dumps(lease, indent=2, sort_keys=True) + "\n").encode()
     try:
         client.put_object(
-            Bucket=bucket, Key=lease_key(run_date, root=root), Body=body,
+            Bucket=bucket, Key=lease_key(run_date), Body=body,
             ContentType="application/json", IfMatch=etag,
         )
     except Exception as exc:
@@ -480,7 +520,7 @@ def renew_lease(
             # A failed conditional write proves only that renewal failed.
             # Deletion also causes this response; verify ownership afresh.
             try:
-                current, _ = _read_lease(client, bucket, run_date, root=root)
+                current, _ = _read_lease(client, bucket, run_date)
             except Exception as read_exc:
                 raise LeaseOwnershipUncertain(
                     f"MOO-144 lease for {run_date} could not be verified after renewal conflict"
@@ -505,7 +545,6 @@ def run_lease_heartbeat(
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     wait: Callable[[float], bool] | None = None,
     loss_reason: dict[str, str] | None = None,
-    root: str = QQQ_ARCHIVE_ROOT,
 ) -> None:
     """Renew the collection lease every ``ttl_seconds/3`` until told to stop.
 
@@ -536,7 +575,7 @@ def run_lease_heartbeat(
     wait = wait if wait is not None else stop.wait
     while not wait(ttl_seconds / 3):
         try:
-            lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now, root=root)
+            lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now)
             confirmed_until_ref["value"] = datetime.fromisoformat(lease["expires_at"])
         except LeaseTakenByAnotherOwner:
             if loss_reason is not None:
@@ -680,8 +719,16 @@ class Uploader:
         self._thread: threading.Thread | None = None
 
     def spool_bytes(self) -> int:
+        total = 0
         with self.lock:
-            return sum(path.stat().st_size for path in self.queue if path.exists())
+            for path in self.queue:
+                # The upload thread unlinks a finished segment before taking the
+                # lock to dequeue it; a vanished file is uploaded, not an error.
+                try:
+                    total += path.stat().st_size
+                except FileNotFoundError:
+                    pass
+        return total
 
     def enqueue(self, path: Path) -> None:
         with self.lock:
@@ -1019,6 +1066,78 @@ def write_health(
     json_artifact(r2, bucket, f"{prefix}/health.json", payload)
 
 
+class Lane:
+    """One underlying's archive state, fed by the shared stream."""
+
+    def __init__(self, underlying: str, expiration_policy: str, run_date: str, spool_base: Path) -> None:
+        self.underlying = underlying
+        self.expiration_policy = expiration_policy
+        self.root = archive_root(underlying)
+        self.prefix = f"{self.root}/{run_date}"
+        self.base_spool_dir = spool_base / spool_dir_name(underlying)
+        self.spool_dir = spool_dir_for(self.base_spool_dir, run_date)
+        self.symbols: list[str] = []
+        self.universe: dict[str, Any] | None = None
+        self.selection_error: str | None = None
+        self.stats = BoundedStats()
+        self.stale_recovery: dict[str, Any] = {}
+        self.reconciliation: dict[str, Any] = {"artifacts": [], "resume": [], "needs_review": []}
+        self.resumed_names: set[str] = set()
+        self.preflight: dict[str, Any] | None = None
+        self.uploader: Uploader | None = None
+        self.spool: SegmentSpool | None = None
+
+
+class StreamRouter:
+    """Fans the single provider stream out to per-underlying lanes.
+
+    Provides the spool/stats calls ``capture_session`` makes. An event for a
+    subscribed symbol goes only to that symbol's lane. Records without a
+    routable symbol (gaps, heartbeats, malformed payloads) describe the
+    shared connection, so they go to every lane: each archive stays
+    self-describing about its coverage and nothing is dropped.
+    """
+
+    def __init__(self, lanes: list[Lane]) -> None:
+        self.lanes = lanes
+        self.by_symbol: dict[str, Lane] = {}
+        for lane in lanes:
+            for symbol in lane.symbols:
+                if symbol in self.by_symbol:
+                    raise RuntimeError(
+                        f"{symbol} selected for both {self.by_symbol[symbol].underlying} and {lane.underlying}"
+                    )
+                self.by_symbol[symbol] = lane
+        self.symbols = list(self.by_symbol)
+
+    def lanes_for(self, event: dict[str, Any]) -> list[Lane]:
+        payload = event.get("provider_payload") if event.get("type") == "excluded_timesale" else event
+        symbol = payload.get("symbol") if isinstance(payload, dict) else None
+        lane = self.by_symbol.get(symbol) if isinstance(symbol, str) else None
+        return [lane] if lane is not None else self.lanes
+
+    def write(self, event: dict[str, Any]) -> None:
+        for lane in self.lanes_for(event):
+            lane.spool.write(event)
+
+    def observe(self, event: dict[str, Any]) -> dict[str, Any]:
+        for lane in self.lanes_for(event):
+            lane.stats.observe(event)
+        return event
+
+    def retain_quote(self, event: dict[str, Any], *, preopen: bool = False) -> None:
+        for lane in self.lanes_for(event):
+            lane.stats.retain_quote(event, preopen=preopen)
+
+    def observe_malformed(self) -> None:
+        for lane in self.lanes:
+            lane.stats.observe_malformed()
+
+    def observe_excluded(self, event: dict[str, Any], reason: str) -> None:
+        for lane in self.lanes_for(event):
+            lane.stats.observe_excluded(event, reason)
+
+
 class CaptureResult:
     def __init__(self) -> None:
         self.reconnects = 0
@@ -1117,7 +1236,7 @@ def capture_session(
                     except (json.JSONDecodeError, ValueError, TypeError):
                         if session_open is not None and observed_at < session_open:
                             continue
-                        stats.malformed += 1
+                        stats.observe_malformed()
                         raw = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
                         spool.write({
                             "type": "malformed",
@@ -1159,7 +1278,7 @@ def capture_session(
                                 spool.write({"type": "excluded_timesale", "reason": reason,
                                              "collector_receipt_timestamp": receipt,
                                              "provider_payload": event})
-                                stats.counts["excluded_timesale"] += 1
+                                stats.observe_excluded(event, reason)
                                 continue
                     spool.write(stats.observe(event))
                 if stop_requested() or now_et() >= session_close:
@@ -1224,14 +1343,8 @@ def main(
     max_reconnects = int(os.getenv("MOO144_MAX_CONSECUTIVE_RECONNECTS", "5"))
     lease_ttl_seconds = int(os.getenv("MOO144_LEASE_TTL_SECONDS", "300"))
     max_spool_bytes = int(os.getenv("MOO144_MAX_SPOOL_BYTES", str(512 * 1024 * 1024)))
-    underlying = os.getenv("MOO144_UNDERLYING", DEFAULT_UNDERLYING).strip().upper()
-    expiration_policy = os.getenv("MOO144_EXPIRATION_POLICY", "same_day").strip().lower()
-    if not (underlying.isascii() and underlying.isalpha() and 1 <= len(underlying) <= 6):
-        raise RuntimeError("MOO144_UNDERLYING must be 1-6 letters")
-    if expiration_policy not in EXPIRATION_POLICIES:
-        raise RuntimeError(f"MOO144_EXPIRATION_POLICY must be one of {', '.join(EXPIRATION_POLICIES)}")
-    root = archive_root(underlying)
-    base_spool_dir = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir())) / spool_dir_name(underlying)
+    lane_specs = parse_underlyings(os.getenv("MOO144_UNDERLYINGS", DEFAULT_UNDERLYING))
+    spool_base = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir()))
     if not 2 <= strike_count <= 20:
         raise RuntimeError("MOO144_STRIKE_COUNT must be between 2 and 20")
     if not 30 <= checkpoint_seconds <= 300:
@@ -1265,50 +1378,90 @@ def main(
 
     owner_id = uuid.uuid4().hex[:12]
     run_id = f"{run_date}-{owner_id}"
-    prefix = f"{root}/{run_date}"
     started_at = utc_now()
-    print(json.dumps({"event": "collector_start", "run_id": run_id, "underlying": underlying,
-                      "expiration_policy": expiration_policy}), flush=True)
+    print(json.dumps({"event": "collector_start", "run_id": run_id,
+                      "underlyings": [symbol for symbol, _ in lane_specs]}), flush=True)
 
     client = Tradier(token)
     r2, bucket = r2_client()
-    lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds, root=root)
-    symbols, universe = load_or_select_universe(
-        client, r2, bucket, prefix, strike_count, run_date, clock_et(), session_open=session_open,
-        underlying=underlying, expiration_policy=expiration_policy,
-    )
-    stale_recovery = recover_stale_sessions(
-        base_spool_dir, run_date, r2, bucket,
-        uploader_sleeper=uploader_sleeper, drain_timeout_seconds=drain_timeout_seconds, root=root,
-    )
-    spool_dir = spool_dir_for(base_spool_dir, run_date)
-    reconciliation = reconcile_existing_segments(r2, bucket, prefix, spool_dir)
-    resumed_names = {path.name for path in reconciliation["resume"]}
-
-    start_payload = {
-        "schema_version": 2,
-        "issue": "MOO-169",
-        "run_id": run_id,
-        "started_at": started_at,
-        "session_open": session_open.isoformat(),
-        "session_close": session_close.isoformat(),
-        "late_start_seconds": late_start_seconds,
-        "universe": universe,
-        "lease": lease,
-        "reconciled_segments": len(reconciliation["artifacts"]),
-        "resumed_segments": len(reconciliation["resume"]),
-        "needs_review": reconciliation["needs_review"],
-        "stale_sessions_recovered": stale_recovery,
+    # One lease for the one provider stream, taken before any stream exists.
+    lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds)
+    lanes = [Lane(symbol, policy, run_date, spool_base) for symbol, policy in lane_specs]
+    for lane in lanes:
+        try:
+            lane.symbols, lane.universe = load_or_select_universe(
+                client, r2, bucket, lane.prefix, strike_count, run_date, clock_et(),
+                session_open=session_open, underlying=lane.underlying,
+                expiration_policy=lane.expiration_policy,
+            )
+        except Exception as exc:
+            if len(lanes) == 1:
+                raise
+            # One underlying's selection failure must not cost the others their
+            # session; it is reported as that lane's partial summary instead.
+            lane.selection_error = f"{type(exc).__name__}: {exc}"
+            print(json.dumps({"event": "universe_selection_failed", "underlying": lane.underlying,
+                              "error": lane.selection_error}), flush=True)
+    active = [lane for lane in lanes if lane.universe is not None]
+    if not active:
+        raise RuntimeError("No underlying universe could be selected: " + "; ".join(
+            f"{lane.underlying}: {lane.selection_error}" for lane in lanes))
+    router = StreamRouter(active)
+    stream_info = {
+        "shared_stream": True,
+        "underlyings": [lane.underlying for lane in lanes],
+        "active_underlyings": [lane.underlying for lane in active],
+        "subscribed_symbols": len(router.symbols),
+        "lease_key": lease_key(run_date),
     }
-    preflight = json_artifact(r2, bucket, f"{prefix}/run-started-{owner_id}.json", start_payload)
-    print(json.dumps({"event": "r2_preflight_pass", "key": preflight["key"]}), flush=True)
+    # The cap bounds the whole volume, so lanes split it rather than each
+    # claiming all of it.
+    lane_spool_cap = max_spool_bytes // len(lanes)
 
-    uploader = Uploader(r2, bucket, prefix, max_spool_bytes, sleeper=uploader_sleeper)
-    for path in reconciliation["resume"]:
-        uploader.enqueue(path)
-    uploader.start()
-    spool = SegmentSpool(spool_dir, owner_id, uploader, checkpoint_seconds)
-    stats = BoundedStats()
+    for lane in lanes:
+        lane.stale_recovery = recover_stale_sessions(
+            lane.base_spool_dir, run_date, r2, bucket,
+            uploader_sleeper=uploader_sleeper, drain_timeout_seconds=drain_timeout_seconds,
+            root=lane.root,
+        )
+        lane.reconciliation = reconcile_existing_segments(r2, bucket, lane.prefix, lane.spool_dir)
+        lane.resumed_names = {path.name for path in lane.reconciliation["resume"]}
+        start_payload = {
+            "schema_version": 2,
+            "issue": "MOO-169",
+            "run_id": run_id,
+            "started_at": started_at,
+            "session_open": session_open.isoformat(),
+            "session_close": session_close.isoformat(),
+            "late_start_seconds": late_start_seconds,
+            "underlying": lane.underlying,
+            "expiration_policy": lane.expiration_policy,
+            "universe": lane.universe,
+            "universe_selection_error": lane.selection_error,
+            "stream": stream_info,
+            "spool_cap_bytes": lane_spool_cap,
+            "lease": lease,
+            "reconciled_segments": len(lane.reconciliation["artifacts"]),
+            "resumed_segments": len(lane.reconciliation["resume"]),
+            "needs_review": lane.reconciliation["needs_review"],
+            "stale_sessions_recovered": lane.stale_recovery,
+        }
+        lane.preflight = json_artifact(r2, bucket, f"{lane.prefix}/run-started-{owner_id}.json", start_payload)
+        print(json.dumps({"event": "r2_preflight_pass", "underlying": lane.underlying,
+                          "key": lane.preflight["key"]}), flush=True)
+
+    for lane in lanes:
+        lane.uploader = Uploader(r2, bucket, lane.prefix, lane_spool_cap, sleeper=uploader_sleeper)
+        for path in lane.reconciliation["resume"]:
+            lane.uploader.enqueue(path)
+        lane.uploader.start()
+        lane.spool = SegmentSpool(lane.spool_dir, owner_id, lane.uploader, checkpoint_seconds)
+    # A single underlying writes straight to its lane, exactly as before.
+    if len(active) == 1:
+        stream_spool: Any = active[0].spool
+        stream_stats: Any = active[0].stats
+    else:
+        stream_spool = stream_stats = router
     fatal_error: str | None = None
     capture_result = CaptureResult()
 
@@ -1317,17 +1470,22 @@ def main(
     lease_confirmed_until_ref: dict[str, datetime] = {"value": datetime.fromisoformat(lease["expires_at"])}
     lease_loss_reason: dict[str, str] = {}
 
+    def publish_health() -> None:
+        for lane in lanes:
+            write_health(r2, bucket, lane.prefix, lane.stats, lane.uploader,
+                         capture_result.reconnects, capture_result.gap_seconds)
+
     def health_publisher() -> None:
         while not lease_stop.wait(HEALTH_PUBLISH_INTERVAL_SECONDS):
             try:
-                write_health(r2, bucket, prefix, stats, uploader, capture_result.reconnects, capture_result.gap_seconds)
+                publish_health()
             except Exception:
                 pass
 
     heartbeat_thread = threading.Thread(
         target=run_lease_heartbeat,
         args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until_ref, lease_stop, lease_lost_event),
-        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason, "root": root},
+        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason},
         daemon=True,
     )
     heartbeat_thread.start()
@@ -1350,7 +1508,7 @@ def main(
             lease_loss_reason.setdefault("reason", "ownership_uncertain")
             lease_lost_event.set()
         capture_result = capture_session(
-            client, symbols, spool, stats, session_close, max_reconnects,
+            client, router.symbols, stream_spool, stream_stats, session_close, max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
             result=capture_result,
             session_open=session_open,
@@ -1361,39 +1519,29 @@ def main(
         capture_result.gap_seconds = getattr(exc, "gap_seconds", capture_result.gap_seconds)
     finally:
         lease_stop.set()
-        spool.close()
-        uploader.drain_and_stop(timeout=drain_timeout_seconds)
+        for lane in lanes:
+            lane.spool.close()
+        for lane in lanes:
+            lane.uploader.drain_and_stop(timeout=drain_timeout_seconds)
 
     try:
-        write_health(r2, bucket, prefix, stats, uploader, capture_result.reconnects, capture_result.gap_seconds)
+        publish_health()
     except Exception:
         pass
-
-    reconciled_records_total = 0
-    for artifact in reconciliation["artifacts"]:
-        records = count_ndjson_gz_records(r2, bucket, artifact["key"])
-        artifact["records"] = records
-        if records is not None:
-            reconciled_records_total += records
-
-    resumed_records_total = 0
-    for artifact in uploader.artifacts:
-        if Path(artifact["key"]).name in resumed_names and artifact.get("records") is not None:
-            resumed_records_total += artifact["records"]
 
     finished_at = utc_now()
     opening_ready = capture_result.opening_stream_ready_at
     effective_late_start_seconds = max(
         0.0, ((opening_ready or capture_started_at) - session_open).total_seconds()
     )
-    attempt_event_counts = dict(stats.counts)
-    attempt_total_events = sum(attempt_event_counts.values())
+    attempt_total_events = sum(sum(lane.stats.counts.values()) for lane in lanes)
 
     lease_loss_kind = lease_loss_reason.get("reason") if capture_result.stop_reason == "lease_lost" else None
 
-    partial_reasons: list[str] = []
+    # Stream-level coverage applies to every lane sharing the connection.
+    stream_reasons: list[str] = []
     if fatal_error is not None:
-        partial_reasons.append(f"fatal_error: {fatal_error}")
+        stream_reasons.append(f"fatal_error: {fatal_error}")
     if capture_result.stop_reason:
         reason_label = capture_result.stop_reason
         if lease_loss_kind:
@@ -1402,90 +1550,122 @@ def main(
             # loss after repeated transient renewal failures (no competing
             # owner is known to exist -- restarting is the right recovery).
             reason_label = f"{reason_label}:{lease_loss_kind}"
-        partial_reasons.append(reason_label)
+        stream_reasons.append(reason_label)
     if STOP:
-        partial_reasons.append("stopped_by_signal")
+        stream_reasons.append("stopped_by_signal")
     if clock_et() < session_close:
-        partial_reasons.append("did_not_reach_session_close")
+        stream_reasons.append("did_not_reach_session_close")
     if opening_ready is None:
-        partial_reasons.append("opening_stream_readiness_unproven")
+        stream_reasons.append("opening_stream_readiness_unproven")
     if effective_late_start_seconds > 0:
-        partial_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
+        stream_reasons.append(f"late_start_seconds={effective_late_start_seconds:.1f}")
     if capture_result.reconnects > 0:
-        partial_reasons.append(f"reconnects={capture_result.reconnects}")
-    if capture_result.excluded_timesales.get("missing_or_invalid_provider_time"):
-        partial_reasons.append("unclassifiable_timesale_provider_time")
-    if not uploader.fully_drained():
-        partial_reasons.append("upload_spool_not_fully_drained")
-    if reconciliation["needs_review"]:
-        partial_reasons.append("reconciliation_needs_review")
-    if any(session.get("needs_review") for session in stale_recovery.values()):
-        partial_reasons.append("stale_session_needs_review")
-    if stats.counts.get("quote", 0) + stats.counts.get("timesale", 0) == 0:
-        partial_reasons.append("no_events_captured")
-    status = "partial" if partial_reasons else "complete"
+        stream_reasons.append(f"reconnects={capture_result.reconnects}")
 
-    summary = {
-        "schema_version": 2,
-        "issue": "MOO-169",
-        "run_id": run_id,
-        "provider": "tradier",
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "session_open": session_open.isoformat(),
-        "session_close": session_close.isoformat(),
-        "late_start_seconds": late_start_seconds,
-        "effective_late_start_seconds": effective_late_start_seconds,
-        "stream_connected_at": (capture_result.stream_connected_at.isoformat()
-                                if capture_result.stream_connected_at else None),
-        "opening_stream_ready_at": opening_ready.isoformat() if opening_ready else None,
-        "preopen_events_discarded": capture_result.preopen_events_discarded,
-        "excluded_timesales": dict(capture_result.excluded_timesales),
-        "stopped_by_signal": STOP,
-        "fatal_error": fatal_error,
-        "status": status,
-        "partial_reasons": partial_reasons,
-        "universe": universe,
-        "reconnects": capture_result.reconnects,
-        "gap_seconds": round(capture_result.gap_seconds, 3),
-        "spool_overloaded": uploader.overloaded,
-        "upload_failures": uploader.failures,
-        "attempt_event_counts": attempt_event_counts,
-        "reconciled_prior_records": reconciled_records_total,
-        "resumed_local_records": resumed_records_total,
-        "total_records_this_run_plus_reconciled": (
-            attempt_total_events + reconciled_records_total + resumed_records_total
-        ),
-        "needs_review": reconciliation["needs_review"],
-        "stale_sessions_recovered": stale_recovery,
-        **stats.summary(),
-        "limitations": [
-            "The preserved payload is normalized/enriched JSON, not byte-exact wire data.",
-            "Dedup horizon is per-symbol last-seen sequence only; it resets on restart.",
-            "Reconnecting does not backfill missed transactions; gap_seconds is the measured outage total.",
-            "Customer identity, opening/closing status, and multi-leg grouping are not inferred.",
-        ],
-        "event_parts": [*reconciliation["artifacts"], *uploader.artifacts],
-    }
-    summary_meta = json_artifact(r2, bucket, f"{prefix}/summary-{owner_id}.json", summary)
-    manifest = {
-        "schema_version": 2,
-        "issue": "MOO-169",
-        "run_id": run_id,
-        "prefix": prefix,
-        "status": status,
-        "partial_reasons": partial_reasons,
-        "artifacts": [preflight, *reconciliation["artifacts"], *uploader.artifacts, summary_meta],
-        "lease": lease,
-    }
-    manifest_meta = json_artifact(r2, bucket, f"{prefix}/manifest-{owner_id}.json", manifest)
+    lane_results: dict[str, dict[str, Any]] = {}
+    for lane in lanes:
+        stats, uploader, reconciliation = lane.stats, lane.uploader, lane.reconciliation
+        reconciled_records_total = 0
+        for artifact in reconciliation["artifacts"]:
+            records = count_ndjson_gz_records(r2, bucket, artifact["key"])
+            artifact["records"] = records
+            if records is not None:
+                reconciled_records_total += records
+
+        resumed_records_total = 0
+        for artifact in uploader.artifacts:
+            if Path(artifact["key"]).name in lane.resumed_names and artifact.get("records") is not None:
+                resumed_records_total += artifact["records"]
+
+        attempt_event_counts = dict(stats.counts)
+        partial_reasons = list(stream_reasons)
+        if lane.selection_error is not None:
+            partial_reasons.append(f"universe_selection_failed: {lane.selection_error}")
+        if stats.excluded_timesales.get("missing_or_invalid_provider_time"):
+            partial_reasons.append("unclassifiable_timesale_provider_time")
+        if not uploader.fully_drained():
+            partial_reasons.append("upload_spool_not_fully_drained")
+        if reconciliation["needs_review"]:
+            partial_reasons.append("reconciliation_needs_review")
+        if any(session.get("needs_review") for session in lane.stale_recovery.values()):
+            partial_reasons.append("stale_session_needs_review")
+        if stats.counts.get("quote", 0) + stats.counts.get("timesale", 0) == 0:
+            partial_reasons.append("no_events_captured")
+        status = "partial" if partial_reasons else "complete"
+
+        summary = {
+            "schema_version": 2,
+            "issue": "MOO-169",
+            "run_id": run_id,
+            "provider": "tradier",
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "session_open": session_open.isoformat(),
+            "session_close": session_close.isoformat(),
+            "late_start_seconds": late_start_seconds,
+            "effective_late_start_seconds": effective_late_start_seconds,
+            "stream_connected_at": (capture_result.stream_connected_at.isoformat()
+                                    if capture_result.stream_connected_at else None),
+            "opening_stream_ready_at": opening_ready.isoformat() if opening_ready else None,
+            "preopen_events_discarded": capture_result.preopen_events_discarded,
+            "excluded_timesales": dict(stats.excluded_timesales),
+            "stopped_by_signal": STOP,
+            "fatal_error": fatal_error,
+            "status": status,
+            "partial_reasons": partial_reasons,
+            "underlying": lane.underlying,
+            "expiration_policy": lane.expiration_policy,
+            "universe": lane.universe,
+            "universe_selection_error": lane.selection_error,
+            "stream": stream_info,
+            "reconnects": capture_result.reconnects,
+            "gap_seconds": round(capture_result.gap_seconds, 3),
+            "spool_cap_bytes": lane_spool_cap,
+            "spool_overloaded": uploader.overloaded,
+            "upload_failures": uploader.failures,
+            "attempt_event_counts": attempt_event_counts,
+            "reconciled_prior_records": reconciled_records_total,
+            "resumed_local_records": resumed_records_total,
+            "total_records_this_run_plus_reconciled": (
+                sum(attempt_event_counts.values()) + reconciled_records_total + resumed_records_total
+            ),
+            "needs_review": reconciliation["needs_review"],
+            "stale_sessions_recovered": lane.stale_recovery,
+            **stats.summary(),
+            "limitations": [
+                "The preserved payload is normalized/enriched JSON, not byte-exact wire data.",
+                "Dedup horizon is per-symbol last-seen sequence only; it resets on restart.",
+                "Reconnecting does not backfill missed transactions; gap_seconds is the measured outage total.",
+                "Customer identity, opening/closing status, and multi-leg grouping are not inferred.",
+                "Stream-level records (gaps, heartbeats, malformed payloads) are copied to every "
+                "underlying sharing the stream; preopen_events_discarded counts the whole stream.",
+            ],
+            "event_parts": [*reconciliation["artifacts"], *uploader.artifacts],
+        }
+        summary_meta = json_artifact(r2, bucket, f"{lane.prefix}/summary-{owner_id}.json", summary)
+        manifest = {
+            "schema_version": 2,
+            "issue": "MOO-169",
+            "run_id": run_id,
+            "prefix": lane.prefix,
+            "underlying": lane.underlying,
+            "status": status,
+            "partial_reasons": partial_reasons,
+            "artifacts": [lane.preflight, *reconciliation["artifacts"], *uploader.artifacts, summary_meta],
+            "lease": lease,
+        }
+        manifest_meta = json_artifact(r2, bucket, f"{lane.prefix}/manifest-{owner_id}.json", manifest)
+        lane_results[lane.underlying] = {
+            "status": status,
+            "partial_reasons": partial_reasons,
+            "manifest": manifest_meta,
+            "event_counts": attempt_event_counts,
+        }
     print(json.dumps({
         "event": "collector_complete",
         "run_id": run_id,
-        "status": status,
-        "partial_reasons": partial_reasons,
-        "manifest": manifest_meta,
-        "event_counts": attempt_event_counts,
+        "status": "complete" if all(r["status"] == "complete" for r in lane_results.values()) else "partial",
+        "lanes": lane_results,
     }), flush=True)
 
     if fatal_error is not None:
@@ -1502,16 +1682,19 @@ def main(
     # lease object is simply gone -- nobody is known to be collecting) and
     # an *uncertain* loss (repeated transient renewal failures past the
     # confirmed deadline, with no observed competing owner either).
+    # A lane's universe-selection failure is deliberately not recoverable:
+    # restarting would interrupt the shared stream for the healthy lanes.
     recoverable = (
         capture_result.stop_reason == "spool_exhausted"
-        or not uploader.fully_drained()
+        or any(not lane.uploader.fully_drained() for lane in lanes)
         or lease_loss_kind in ("ownership_uncertain", "confirmed_absence")
         or (attempt_total_events == 0 and capture_result.stop_reason != "lease_lost" and not STOP)
     )
     if recoverable:
         raise RuntimeError(
-            f"MOO-169 collection for {run_date} ended in a recoverable state "
-            f"requiring restart: {', '.join(partial_reasons) or 'incomplete coverage'}"
+            f"MOO-169 collection for {run_date} ended in a recoverable state requiring restart: "
+            + "; ".join(f"{name}: {', '.join(r['partial_reasons']) or 'incomplete coverage'}"
+                        for name, r in lane_results.items())
         )
     return 0
 

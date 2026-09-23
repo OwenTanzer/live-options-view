@@ -637,6 +637,30 @@ class UploaderTests(unittest.TestCase):
         self.assertGreaterEqual(uploader.failures, 2)
 
 
+class UploaderSpoolBytesRaceTests(unittest.TestCase):
+    def test_segment_unlinked_mid_measurement_is_not_an_ingest_error(self):
+        """The upload thread unlinks a finished segment before dequeuing it.
+        A concurrent spool_bytes() (called on every ingest write) must not
+        raise -- an OSError there was treated as a stream failure, forcing a
+        spurious reconnect and a partial session."""
+        class VanishingPath:
+            name = "owner-part-0000.ndjson.gz"
+
+            def exists(self):
+                return True
+
+            def stat(self):
+                raise FileNotFoundError(self.name)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kept = Path(tmp) / "kept.ndjson.gz"
+            kept.write_bytes(b"12345")
+            uploader = collector.Uploader(FakeR2(), "bucket", "p", max_spool_bytes=100)
+            uploader.enqueue(VanishingPath())
+            uploader.enqueue(kept)
+            self.assertEqual(uploader.spool_bytes(), 5)
+
+
 class SegmentSpoolExhaustionTests(unittest.TestCase):
     def test_write_raises_and_flags_overload_once_cap_exceeded(self):
         r2 = FakeR2()
@@ -1038,11 +1062,11 @@ class MainLifecycleTests(unittest.TestCase):
 
     def _run_main(
         self, tmp_spool, capture_fn, session_open, session_close, clock_sequence,
-        r2=None, drain_timeout_seconds=5.0, expect_failure=False, client=None, env_overrides=None,
+        r2=None, drain_timeout_seconds=5.0, expect_failure=False,
     ):
         r2 = r2 if r2 is not None else FakeR2()
-        client = client if client is not None else FakeTradier()
-        env = dict(self.env, MOO144_SPOOL_DIR=str(tmp_spool), **(env_overrides or {}))
+        client = FakeTradier()
+        env = dict(self.env, MOO144_SPOOL_DIR=str(tmp_spool))
         clock_iter = iter(clock_sequence)
         last = {"t": clock_sequence[0]}
 
@@ -1706,123 +1730,359 @@ class PreopenReadinessTests(unittest.TestCase):
 
 
 
-def make_fake_ibit_tradier(trade_date="2026-09-08", expirations=("2026-09-09", "2026-09-11")):
-    """IBIT lists Mon/Wed/Fri expirations; 2026-09-08 is a Tuesday."""
-    class FakeIbitTradier:
-        def __init__(self):
-            self.calls = []
-
-        def get(self, path, **params):
-            self.calls.append((path, params))
-            if path == "/markets/clock":
-                return {"clock": {"date": trade_date, "state": "open", "next_change": "16:00"}}
-            if path == "/markets/quotes":
-                return {"quotes": {"quote": {"symbol": "IBIT", "last": 60}}}
-            if path == "/markets/options/expirations":
-                return {"expirations": {"date": list(expirations)}}
-            if path == "/markets/options/chains":
-                return {"options": {"option": [
-                    {"symbol": "IBIT-C60", "strike": 60, "option_type": "call"},
-                    {"symbol": "IBIT-P60", "strike": 60, "option_type": "put"},
-                    {"symbol": "IBIT-C61", "strike": 61, "option_type": "call"},
-                    {"symbol": "IBIT-P61", "strike": 61, "option_type": "put"},
-                ]}}
-            raise AssertionError(path)
-    return FakeIbitTradier()
+UNIVERSES = {
+    # 2026-09-08 is a Tuesday: QQQ lists a 0DTE, IBIT (Mon/Wed/Fri) does not.
+    "QQQ": {"spot": 600, "expirations": ["2026-09-08", "2026-09-09"], "strikes": (600, 601)},
+    "IBIT": {"spot": 60, "expirations": ["2026-09-09", "2026-09-11"], "strikes": (60, 61)},
+}
 
 
-class UnderlyingNamespaceTests(unittest.TestCase):
+class MultiTradier:
+    """REST + stream fake for several underlyings that records every
+    market-data session created and every stream subscription opened."""
+
+    def __init__(self, stream_lines=(), on_stream_end=None, spots=None, trade_date="2026-09-08",
+                 expirations=None):
+        self.trade_date = trade_date
+        self.expirations = {symbol: spec["expirations"] for symbol, spec in UNIVERSES.items()}
+        self.expirations.update(expirations or {})
+        self.spots = {symbol: spec["spot"] for symbol, spec in UNIVERSES.items()}
+        self.spots.update(spots or {})
+        self.stream_lines = list(stream_lines)
+        self.on_stream_end = on_stream_end
+        self.calls = []
+        self.sessions = 0
+        self.subscriptions = []
+        self.session = Mock()
+        self.session.get.side_effect = self._stream
+
+    def get(self, path, **params):
+        self.calls.append((path, params))
+        if path == "/markets/clock":
+            return {"clock": {"date": self.trade_date, "state": "open", "next_change": "16:00"}}
+        if path == "/markets/quotes":
+            symbol = params["symbols"]
+            return {"quotes": {"quote": {"symbol": symbol, "last": self.spots[symbol]}}}
+        if path == "/markets/options/expirations":
+            return {"expirations": {"date": self.expirations[params["symbol"]]}}
+        if path == "/markets/options/chains":
+            symbol = params["symbol"]
+            return {"options": {"option": [
+                {"symbol": f"{symbol}-{kind}{strike}", "strike": strike, "option_type": name}
+                for strike in UNIVERSES[symbol]["strikes"]
+                for kind, name in (("C", "call"), ("P", "put"))
+            ]}}
+        raise AssertionError(path)
+
+    def create_market_session(self):
+        self.sessions += 1
+        return f"session-{self.sessions}"
+
+    def _stream(self, _url, params=None, **_kwargs):
+        self.subscriptions.append(params["symbols"].split(","))
+        lines, on_end = self.stream_lines, self.on_stream_end
+
+        class Response(FakeResponse):
+            def iter_lines(inner, decode_unicode=True, chunk_size=None):
+                for line in lines:
+                    yield line if isinstance(line, str) else json.dumps(line)
+                if on_end:
+                    on_end()
+        return Response()
+
+
+def archived_records(r2, prefix):
+    records = []
+    for (_bucket, key), body in sorted(r2.objects.items()):
+        if key.startswith(prefix + "/") and key.endswith(".ndjson.gz"):
+            records.extend(json.loads(line) for line in gzip.decompress(body).splitlines() if line.strip())
+    return records
+
+
+def only_json(r2, prefix, name):
+    matches = [json.loads(body) for (_b, key), body in r2.objects.items()
+               if key.startswith(f"{prefix}/{name}")]
+    assert len(matches) == 1, (prefix, name, len(matches))
+    return matches[0]
+
+
+QQQ_PREFIX = "moo144/tradier/2026-09-08"
+IBIT_PREFIX = "moo144/tradier-ibit/2026-09-08"
+
+
+class UnderlyingConfigTests(unittest.TestCase):
+    def test_default_is_qqq_same_day(self):
+        self.assertEqual(collector.parse_underlyings("QQQ"), [("QQQ", "same_day")])
+
+    def test_symbols_normalized_and_policies_parsed(self):
+        self.assertEqual(collector.parse_underlyings(" qqq , ibit:Nearest ,"),
+                         [("QQQ", "same_day"), ("IBIT", "nearest")])
+
+    def test_invalid_configurations_rejected(self):
+        for raw, message in (
+            ("IB/IT", "invalid symbol"),
+            ("IBIT:weekly", "policy must be one of"),
+            ("QQQ,qqq:nearest", "duplicate symbol"),
+            ("", "must list 1-4"),
+            ("A,B,C,D,E", "must list 1-4"),
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(RuntimeError, message):
+                collector.parse_underlyings(raw)
+
     def test_qqq_keeps_original_layout(self):
         self.assertEqual(collector.archive_root("QQQ"), "moo144/tradier")
         self.assertEqual(collector.spool_dir_name("QQQ"), "moo144-collector-spool")
+
+    def test_other_underlyings_get_sibling_archive_but_share_stream_lease(self):
+        self.assertEqual(collector.archive_root("IBIT"), "moo144/tradier-ibit")
+        self.assertEqual(collector.spool_dir_name("IBIT"), "moo144-collector-spool-ibit")
+        # The lease guards the provider stream, so it has no per-underlying form.
         self.assertEqual(collector.lease_key("2026-09-08"), "moo144/tradier/2026-09-08/lease.json")
 
-    def test_other_underlyings_get_sibling_namespace(self):
-        root = collector.archive_root("IBIT")
-        self.assertEqual(root, "moo144/tradier-ibit")
-        self.assertEqual(collector.spool_dir_name("IBIT"), "moo144-collector-spool-ibit")
-        self.assertEqual(collector.lease_key("2026-09-08", root=root),
-                         "moo144/tradier-ibit/2026-09-08/lease.json")
 
-    def test_leases_for_different_roots_do_not_contend(self):
-        r2 = FakeR2()
-        collector.acquire_lease(r2, "bucket", "2026-09-08", "qqq-owner", ttl_seconds=300)
-        lease = collector.acquire_lease(r2, "bucket", "2026-09-08", "ibit-owner", ttl_seconds=300,
-                                        root="moo144/tradier-ibit")
-        self.assertEqual(lease["owner_id"], "ibit-owner")
-        renewed = collector.renew_lease(r2, "bucket", "2026-09-08", "ibit-owner", ttl_seconds=300,
-                                        root="moo144/tradier-ibit")
-        self.assertEqual(renewed["owner_id"], "ibit-owner")
-        qqq = json.loads(r2.objects[("bucket", "moo144/tradier/2026-09-08/lease.json")])
-        self.assertEqual(qqq["owner_id"], "qqq-owner")
+class StreamRouterTests(unittest.TestCase):
+    def lanes(self):
+        lanes = []
+        for underlying, symbols in (("QQQ", ["QQQ", "QQQ-C600"]), ("IBIT", ["IBIT", "IBIT-C60"])):
+            lane = collector.Lane(underlying, "same_day", "2026-09-08", Path("unused"))
+            lane.symbols = symbols
+            lane.spool = Mock()
+            lanes.append(lane)
+        return lanes
 
-    def test_stale_recovery_uses_supplied_root(self):
-        r2 = FakeR2()
-        with tempfile.TemporaryDirectory() as tmp:
-            stale = Path(tmp) / "2026-09-07"
-            stale.mkdir()
-            with gzip.open(stale / "old-part-0000.ndjson.gz", "wt") as handle:
-                handle.write('{"type":"quote"}\n')
-            report = collector.recover_stale_sessions(
-                Path(tmp), "2026-09-08", r2, "bucket", root="moo144/tradier-ibit",
-            )
-        self.assertEqual(report["2026-09-07"]["prefix"], "moo144/tradier-ibit/2026-09-07")
-        keys = [k for (_b, k) in r2.objects]
-        self.assertIn("moo144/tradier-ibit/2026-09-07/old-part-0000.ndjson.gz", keys)
-        self.assertFalse(any(k.startswith("moo144/tradier/") for k in keys))
+    def written(self, lane):
+        return [call.args[0] for call in lane.spool.write.call_args_list]
+
+    def test_symbol_events_route_to_one_lane_and_stream_records_to_all(self):
+        qqq, ibit = self.lanes()
+        router = collector.StreamRouter([qqq, ibit])
+        self.assertEqual(router.symbols, ["QQQ", "QQQ-C600", "IBIT", "IBIT-C60"])
+        trade = {"type": "timesale", "symbol": "IBIT-C60", "seq": 1, "date": 1000}
+        router.write(router.observe(trade))
+        router.write(router.observe({"type": "quote", "symbol": "QQQ-C600", "biddate": 900}))
+        router.write({"type": "gap", "reason": "stream_disconnect"})
+        router.write(router.observe({"type": "heartbeat"}))
+        router.observe_malformed()
+        router.write({"type": "malformed", "provider_payload": "{"})
+        excluded = {"type": "timesale", "symbol": "QQQ-C600", "date": None}
+        router.observe_excluded(excluded, "missing_or_invalid_provider_time")
+        router.write({"type": "excluded_timesale", "provider_payload": excluded})
+
+        self.assertEqual([e["type"] for e in self.written(qqq)],
+                         ["quote", "gap", "heartbeat", "malformed", "excluded_timesale"])
+        self.assertEqual([e["type"] for e in self.written(ibit)],
+                         ["timesale", "gap", "heartbeat", "malformed"])
+        self.assertEqual(dict(ibit.stats.timesale_by_symbol), {"IBIT-C60": 1})
+        self.assertFalse(qqq.stats.timesale_by_symbol)
+        self.assertEqual(qqq.stats.quote_timestamps, {"QQQ-C600": 900})
+        self.assertEqual((qqq.stats.malformed, ibit.stats.malformed), (1, 1))
+        self.assertEqual(dict(qqq.stats.excluded_timesales), {"missing_or_invalid_provider_time": 1})
+        self.assertFalse(ibit.stats.excluded_timesales)
+
+    def test_overlapping_universes_rejected(self):
+        qqq, ibit = self.lanes()
+        ibit.symbols.append("QQQ-C600")
+        with self.assertRaisesRegex(RuntimeError, "selected for both"):
+            collector.StreamRouter([qqq, ibit])
+
+    def test_any_lane_spool_exhaustion_stops_the_shared_capture(self):
+        qqq, ibit = self.lanes()
+        ibit.spool.write.side_effect = collector.SpoolExhausted("cap")
+        router = collector.StreamRouter([qqq, ibit])
+        client = FakeStreamClient()
+        client.session.get.side_effect = lambda *_a, **_k: FakeResponseWithLines(
+            ['{"type": "quote", "symbol": "IBIT"}'])
+        result = collector.capture_session(
+            client, router.symbols, router, router, datetime(2026, 9, 8, 16, 0, tzinfo=ET), 5,
+            now_et=lambda: datetime(2026, 9, 8, 10, 0, tzinfo=ET),
+        )
+        self.assertEqual(result.stop_reason, "spool_exhausted")
+        self.assertEqual(client.sessions, 1)
 
 
-class IbitMainTests(unittest.TestCase):
-    """End-to-end main() for a non-QQQ underlying beside a live QQQ session."""
+class SharedStreamMainTests(unittest.TestCase):
+    """main() end-to-end for several underlyings through the real
+    capture_session: one provider session, routed per-underlying archives."""
 
-    setUp = MainLifecycleTests.setUp
-    _run_main = MainLifecycleTests._run_main
+    def setUp(self):
+        collector.STOP = False
+        self.open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        self.close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+        self.now = {"t": self.open}
+        self.open_ms = int(self.open.timestamp() * 1000)
 
-    def _capture_one(self, _client, symbols, spool, stats, _close, *_a, **_k):
-        self.captured_symbols = list(symbols)
-        spool.write(stats.observe({
-            "type": "timesale", "symbol": symbols[1], "date": "1000", "seq": 1,
-            "flag": "", "cancel": False, "correction": False, "session": "normal",
-            "collector_receipt_timestamp": collector.utc_now(),
-        }))
-        return collector.CaptureResult()
+    def end_stream(self):
+        self.now["t"] = self.close
 
-    def test_ibit_archives_under_own_prefix_while_qqq_lease_is_live(self):
-        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
-        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
-        r2 = FakeR2()
-        collector.acquire_lease(r2, "bucket", "2026-09-08", "qqq-owner", ttl_seconds=3600)
-        qqq_before = {k: v for k, v in r2.objects.items()}
-        with tempfile.TemporaryDirectory() as tmp:
-            result, r2 = self._run_main(
-                Path(tmp), self._capture_one, session_open, session_close,
-                clock_sequence=[session_open] * 6 + [session_close], r2=r2,
-                client=make_fake_ibit_tradier(),
-                env_overrides={"MOO144_UNDERLYING": "ibit", "MOO144_EXPIRATION_POLICY": "nearest"},
-            )
-            self.assertTrue((Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-08").is_dir())
-            self.assertFalse((Path(tmp) / "moo144-collector-spool").exists())
-        self.assertEqual(result, 0)
-        self.assertEqual(self.captured_symbols[0], "IBIT")
-        new_keys = {k for (_b, k) in r2.objects} - {k for (_b, k) in qqq_before}
-        self.assertTrue(new_keys)
-        self.assertTrue(all(k.startswith("moo144/tradier-ibit/2026-09-08/") for k in new_keys), new_keys)
-        for key, value in qqq_before.items():
-            self.assertEqual(r2.objects[key], value)  # QQQ lease untouched
-        universe = json.loads(r2.objects[("bucket", "moo144/tradier-ibit/2026-09-08/universe.json")])
-        self.assertEqual(universe["universe"]["underlying"], "IBIT")
-        self.assertEqual(universe["universe"]["expiration"], "2026-09-09")
-        self.assertEqual(universe["universe"]["days_to_expiration"], 1)
+    def client(self, **kwargs):
+        return MultiTradier(on_stream_end=self.end_stream, **kwargs)
 
-    def test_invalid_underlying_or_policy_rejected(self):
-        for overrides, message in (
-            ({"MOO144_UNDERLYING": "IB/IT"}, "MOO144_UNDERLYING"),
-            ({"MOO144_EXPIRATION_POLICY": "weekly"}, "MOO144_EXPIRATION_POLICY"),
+    def lines(self):
+        return [
+            {"type": "quote", "symbol": "QQQ", "biddate": self.open_ms, "askdate": self.open_ms},
+            {"type": "timesale", "symbol": "QQQ-C600", "seq": 1, "session": "normal",
+             "date": self.open_ms + 1000},
+            {"type": "quote", "symbol": "IBIT-P61", "biddate": self.open_ms, "askdate": self.open_ms},
+            {"type": "timesale", "symbol": "IBIT-P61", "seq": 7, "session": "normal",
+             "date": self.open_ms + 2000},
+            {"type": "heartbeat"},
+        ]
+
+    def run_main(self, tmp, client, underlyings, r2=None):
+        r2 = r2 if r2 is not None else FakeR2()
+        env = {
+            "TRADIER_TOKEN": "token",
+            "MOO144_STRIKE_COUNT": "2",
+            "MOO144_CHECKPOINT_SECONDS": "30",
+            "MOO144_MAX_CONSECUTIVE_RECONNECTS": "5",
+            "MOO144_LEASE_TTL_SECONDS": "300",
+            "MOO144_SPOOL_DIR": str(tmp),
+            "MOO144_UNDERLYINGS": underlyings,
+        }
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.object(collector, "r2_client", return_value=(r2, "bucket")),
+            patch.object(collector, "Tradier", return_value=client),
         ):
-            with self.subTest(overrides=overrides), \
-                    patch.dict(os.environ, dict(self.env, **overrides), clear=False), \
-                    self.assertRaisesRegex(RuntimeError, message):
-                collector.main(session_bounds=lambda _day: None)
+            result = collector.main(
+                clock_et=lambda: self.now["t"],
+                sleeper=lambda _s: None,
+                session_bounds=lambda _day: (self.open, self.close),
+                uploader_sleeper=time.sleep,
+                drain_timeout_seconds=5.0,
+            )
+        return result, r2
+
+    def test_combined_collection_uses_one_provider_session_and_routes_by_underlying(self):
+        client = self.client(stream_lines=self.lines())
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest")
+            self.assertTrue((Path(tmp) / "moo144-collector-spool" / "2026-09-08").is_dir())
+            self.assertTrue((Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-08").is_dir())
+        self.assertEqual(result, 0)
+
+        # Exactly one market-data session and one subscription covering both universes.
+        self.assertEqual(client.sessions, 1)
+        self.assertEqual(len(client.subscriptions), 1)
+        self.assertEqual(set(client.subscriptions[0]), {
+            "QQQ", "QQQ-C600", "QQQ-P600", "QQQ-C601", "QQQ-P601",
+            "IBIT", "IBIT-C60", "IBIT-P60", "IBIT-C61", "IBIT-P61",
+        })
+        # One stream lease, at the fixed key; none per underlying.
+        self.assertEqual([k for (_b, k) in r2.objects if k.endswith("lease.json")],
+                         [f"{QQQ_PREFIX}/lease.json"])
+
+        qqq_records = archived_records(r2, QQQ_PREFIX)
+        ibit_records = archived_records(r2, IBIT_PREFIX)
+        self.assertEqual([(r["type"], r.get("symbol")) for r in qqq_records],
+                         [("quote", "QQQ"), ("timesale", "QQQ-C600"), ("heartbeat", None)])
+        self.assertEqual([(r["type"], r.get("symbol")) for r in ibit_records],
+                         [("quote", "IBIT-P61"), ("timesale", "IBIT-P61"), ("heartbeat", None)])
+        self.assertEqual(ibit_records[1]["preceding_quote_age_ms"], 2000)
+
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        for summary, underlying in ((qqq, "QQQ"), (ibit, "IBIT")):
+            self.assertEqual(summary["status"], "complete", summary["partial_reasons"])
+            self.assertEqual(summary["underlying"], underlying)
+            self.assertEqual(summary["universe"]["underlying"], underlying)
+            self.assertEqual(summary["stream"]["active_underlyings"], ["QQQ", "IBIT"])
+            self.assertEqual(summary["stream"]["subscribed_symbols"], 10)
+            self.assertEqual(summary["spool_cap_bytes"], 512 * 1024 * 1024 // 2)
+        self.assertEqual((qqq["universe"]["expiration"], qqq["universe"]["days_to_expiration"]),
+                         ("2026-09-08", 0))
+        self.assertEqual((ibit["universe"]["expiration"], ibit["universe"]["days_to_expiration"]),
+                         ("2026-09-09", 1))
+        self.assertEqual(ibit["expiration_policy"], "nearest")
+        self.assertEqual(qqq["timesale_counts_by_symbol"], {"QQQ-C600": 1})
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+        for prefix in (QQQ_PREFIX, IBIT_PREFIX):
+            manifest = only_json(r2, prefix, "manifest-")
+            self.assertEqual(manifest["status"], "complete")
+            self.assertTrue(all(a["key"].startswith(prefix + "/") for a in manifest["artifacts"]))
+
+    def test_second_collector_sharing_the_token_cannot_open_a_stream(self):
+        """Whatever it is configured for, a second collector contends for the
+        same stream lease and fails before creating a provider session."""
+        for underlyings in ("IBIT:nearest", "QQQ,IBIT:nearest", "QQQ"):
+            with self.subTest(underlyings=underlyings), tempfile.TemporaryDirectory() as tmp:
+                r2 = FakeR2()
+                collector.acquire_lease(r2, "bucket", "2026-09-08", "live-owner", ttl_seconds=3600)
+                before = dict(r2.objects)
+                client = self.client(stream_lines=self.lines())
+                with self.assertRaisesRegex(RuntimeError, "held by"):
+                    self.run_main(tmp, client, underlyings, r2=r2)
+                self.assertEqual(client.sessions, 0)
+                self.assertFalse(client.session.get.called)
+                self.assertEqual(r2.objects, before)
+
+    def test_restart_resumes_each_lane_under_its_own_prefix_with_fixed_universes(self):
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            spool = Path(tmp)
+            # A previous owner selected both universes, then crashed with
+            # unuploaded segments today and a stale IBIT segment from yesterday.
+            first = MultiTradier()
+            for underlying, policy, prefix in (("QQQ", "same_day", QQQ_PREFIX),
+                                               ("IBIT", "nearest", IBIT_PREFIX)):
+                collector.load_or_select_universe(
+                    first, r2, "bucket", prefix, 2, "2026-09-08", self.open,
+                    underlying=underlying, expiration_policy=policy,
+                )
+            orphans = {
+                QQQ_PREFIX: spool / "moo144-collector-spool" / "2026-09-08",
+                IBIT_PREFIX: spool / "moo144-collector-spool-ibit" / "2026-09-08",
+                "moo144/tradier-ibit/2026-09-07": spool / "moo144-collector-spool-ibit" / "2026-09-07",
+            }
+            for prefix, directory in orphans.items():
+                directory.mkdir(parents=True)
+                with gzip.open(directory / "prior-owner-part-0000.ndjson.gz", "wt") as handle:
+                    handle.write(json.dumps({"type": "quote", "archive": prefix}) + "\n")
+
+            # Spot has moved; a restart must reuse, never re-select, the universes.
+            client = self.client(stream_lines=self.lines(), spots={"QQQ": 640, "IBIT": 70})
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+            for directory in orphans.values():
+                self.assertFalse((directory / "prior-owner-part-0000.ndjson.gz").exists())
+        self.assertEqual(result, 0)
+        self.assertEqual(client.sessions, 1)
+        self.assertFalse([path for path, _ in client.calls if path.startswith("/markets/options")])
+        for prefix in orphans:
+            body = r2.objects[("bucket", f"{prefix}/prior-owner-part-0000.ndjson.gz")]
+            self.assertEqual(json.loads(gzip.decompress(body))["archive"], prefix)
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(qqq["universe"]["spot"], 600)
+        self.assertEqual(ibit["universe"]["spot"], 60)
+        self.assertEqual((qqq["resumed_local_records"], ibit["resumed_local_records"]), (1, 1))
+        self.assertIn("2026-09-07", ibit["stale_sessions_recovered"])
+        self.assertEqual(qqq["stale_sessions_recovered"], {})
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+
+    def test_one_lane_selection_failure_keeps_other_lanes_streaming(self):
+        # IBIT under strict 0DTE on a Tuesday cannot select a universe.
+        client = self.client(stream_lines=self.lines()[:2])
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT")
+        self.assertEqual(result, 0)
+        self.assertEqual(client.sessions, 1)
+        self.assertFalse([s for s in client.subscriptions[0] if s.startswith("IBIT")])
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+        self.assertEqual(qqq["stream"]["active_underlyings"], ["QQQ"])
+        self.assertEqual(ibit["status"], "partial")
+        self.assertIsNone(ibit["universe"])
+        self.assertTrue(ibit["partial_reasons"][0].startswith(
+            "universe_selection_failed: RuntimeError: IBIT has no 0DTE expiration"))
+        self.assertEqual(ibit["event_parts"], [])
+        self.assertNotIn(("bucket", f"{IBIT_PREFIX}/universe.json"), r2.objects)
+
+    def test_all_lanes_failing_selection_is_fatal_before_any_stream(self):
+        client = self.client(expirations={"QQQ": ["2026-09-09"]})
+        with tempfile.TemporaryDirectory() as tmp,                 self.assertRaisesRegex(RuntimeError, "No underlying universe could be selected"):
+            self.run_main(tmp, client, "QQQ,IBIT")
+        self.assertEqual(client.sessions, 0)
 
 
 if __name__ == "__main__":
