@@ -31,41 +31,81 @@ MIN_DAYS_TO_EXPIRATION = 5  # skip 0-4 DTE expirations: single-name gamma/IV
 
 
 class TradierDataError(RuntimeError):
-    """Raised when a Tradier response doesn't have the shape this module
-    expects (missing/null 'quotes' or 'options' objects, etc.), as opposed
-    to a network-level failure (requests.RequestException) or a rate limit.
-    Still a RuntimeError so scan.py's existing except clause catches it, but
-    named distinctly so a malformed/unexpected payload reads as its own
-    thing in a traceback or log line rather than an unrelated AttributeError
-    from `.get()`-ing into None (PR #99 follow-up review, gap 1: previously
-    a null 'quotes'/'options' object raised AttributeError uncaught by
-    scan.py's except tuple, aborting the whole scan on one bad ticker)."""
+    """Malformed provider shapes, values or derived numeric overflow.
+
+    The scanner catches this explicitly, separately from transport failures
+    and rate limits, without masking arbitrary programming exceptions.
+    """
+
+
+class TradierRateLimitError(RuntimeError):
+    """Stop further Tradier requests for this scan; retry in a later run."""
+
+
+class TradierConfigurationError(RuntimeError):
+    """The scanner cannot authenticate with its current configuration."""
+
+
+def _object(value, context: str) -> dict:
+    if not isinstance(value, dict):
+        raise TradierDataError(f"Tradier {context} must be an object")
+    return value
+
+
+def _field(obj: dict, key: str, context: str):
+    if key not in obj:
+        raise TradierDataError(f"Tradier {context} is missing {key}")
+    return obj[key]
+
+
+def validate_number(value, context: str, *, positive: bool = False) -> float:
+    """Require a finite JSON number in the provider field's physical range."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TradierDataError(f"Tradier {context} must be numeric")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise TradierDataError(f"Tradier {context} is outside numeric range") from exc
+    if not math.isfinite(number) or number < 0 or (positive and number == 0):
+        raise TradierDataError(f"Tradier {context} must be finite and {'positive' if positive else 'nonnegative'}")
+    return number
 
 
 def _headers() -> dict[str, str]:
     token = os.environ.get("TRADIER_TOKEN")
     if not token:
-        raise RuntimeError("TRADIER_TOKEN is required (see .env / Railway variable)")
+        raise TradierConfigurationError("TRADIER_TOKEN is required (see .env / Railway variable)")
     return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
 
 def _get(path: str, params: dict) -> dict:
     resp = requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(), timeout=REQUEST_TIMEOUT_SECONDS)
     if resp.status_code == 429:
-        raise RuntimeError(f"Tradier rate limit hit on {path} (429) -- back off before retrying")
+        raise TradierRateLimitError(f"Tradier rate limit hit on {path} (429); stopping options requests for this run")
     resp.raise_for_status()
-    return resp.json()
+    try:
+        data = resp.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        raise TradierDataError(f"Tradier {path} returned invalid JSON") from exc
+    return _object(data, path)
 
 
 def get_quote(symbol: str) -> dict:
     data = _get("/markets/quotes", {"symbols": symbol})
-    quotes = data.get("quotes")
-    if not isinstance(quotes, dict):
-        raise TradierDataError(f"Tradier quote response for {symbol} had no usable 'quotes' object: {data!r}")
-    quote = quotes.get("quote")
-    if quote is None:
-        raise TradierDataError(f"Tradier returned no quote data for {symbol}")
-    return quote[0] if isinstance(quote, list) else quote
+    data = _object(data, "quote response")
+    quotes = _object(data.get("quotes"), "quotes")
+    quote = _field(quotes, "quote", "quotes")
+    if isinstance(quote, list):
+        if len(quote) != 1:
+            raise TradierDataError(f"Tradier expected one quote for {symbol}")
+        quote = quote[0]
+    quote = dict(_object(quote, "quote"))
+    # Null/missing fields are unavailable; malformed supplied values are
+    # errors, not permission to silently substitute another price.
+    for key in ("last", "average_volume"):
+        if quote.get(key) is not None:
+            quote[key] = validate_number(quote[key], key, positive=(key == "last"))
+    return quote
 
 
 def select_expiration(dates: list[str], today: date) -> str | None:
@@ -101,28 +141,53 @@ def get_nearest_expiration(symbol: str, *, today: date | None = None) -> str | N
     # Tradier returns {"expirations": null} outright for a symbol with no
     # listed options at all (not {"expirations": {"date": null}}) -- caught
     # live while re-verifying this fix, not in the original review.
-    dates = (data.get("expirations") or {}).get("date")
-    if not dates:
+    data = _object(data, "expiration response")
+    expirations = _field(data, "expirations", "expiration response")
+    if expirations is None:
+        return None
+    dates = _field(_object(expirations, "expirations"), "date", "expirations")
+    if dates is None:
         return None
     dates = [dates] if isinstance(dates, str) else dates
-    return select_expiration(dates, today)
+    if not isinstance(dates, list) or any(not isinstance(d, str) for d in dates):
+        raise TradierDataError("Tradier expiration dates must be strings")
+    try:
+        return select_expiration(dates, today)
+    except ValueError as exc:
+        raise TradierDataError("Tradier returned an invalid expiration date") from exc
 
 
 def get_option_chain(symbol: str, expiration: str) -> list[dict]:
     data = _get("/markets/options/chains", {"symbol": symbol, "expiration": expiration, "greeks": "true"})
-    options_obj = data.get("options")
-    if not isinstance(options_obj, dict):
-        raise TradierDataError(
-            f"Tradier chain response for {symbol}@{expiration} had no usable 'options' object: {data!r}"
-        )
+    data = _object(data, "chain response")
+    options_obj = _object(data.get("options"), "options")
     # Unlike get_quote, an actually-empty chain ({"option": None} under a
     # present, well-formed 'options' object) is a real "no contracts at
     # this expiration" answer, not malformed data -- treated as
     # OPTIONS_STATUS_UNAVAILABLE downstream, not an error.
-    options = options_obj.get("option")
+    options = _field(options_obj, "option", "options")
     if options is None:
         return []
-    return options if isinstance(options, list) else [options]
+    options = options if isinstance(options, list) else [options]
+    validated = []
+    for item in options:
+        contract = dict(_object(item, "option contract"))
+        if contract.get("option_type") not in ("call", "put"):
+            raise TradierDataError("Tradier option_type must be call or put")
+        contract["strike"] = validate_number(contract.get("strike"), "strike", positive=True)
+        if contract.get("open_interest") is not None:
+            oi = validate_number(contract["open_interest"], "open_interest")
+            if not oi.is_integer():
+                raise TradierDataError("Tradier open_interest must be an integer")
+            contract["open_interest"] = oi
+        raw_greeks = contract.get("greeks")
+        greeks = {} if raw_greeks is None else dict(_object(raw_greeks, "greeks"))
+        for key in ("gamma", "mid_iv", "smv_vol"):
+            if greeks.get(key) is not None:
+                greeks[key] = validate_number(greeks[key], key)
+        contract["greeks"] = greeks
+        validated.append(contract)
+    return validated
 
 
 @dataclass(frozen=True)
@@ -139,9 +204,9 @@ def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
     """Aggregate a single expiration's chain into the inputs OptionsInputs needs.
 
     Dealer positioning convention: customers (retail/institutional flow) are
-    assumed net LONG calls and net SHORT puts against dealers (the standard
-    simplifying assumption used by every public "gamma exposure" tracker,
-    e.g. SqueezeMetrics' GEX) -- so:
+    assumed net LONG calls and net SHORT puts against dealers. This is an
+    explicit positioning proxy, not an observation of dealer inventories
+    or a convention shared by every public gamma tracker. Under it:
 
         customer_net_gamma = sum(call_gamma * call_OI) - sum(put_gamma * put_OI)
         dealer_net_gamma   = -customer_net_gamma
@@ -215,11 +280,19 @@ def summarize_chain(chain: list[dict], spot_price: float) -> ChainSummary:
             atm_iv = iv
 
     dealer_net_gamma = -customer_net_gamma
+    validate_number(call_oi, "aggregate call open interest")
+    validate_number(put_oi, "aggregate put open interest")
+    validate_number(call_oi + put_oi, "aggregate open interest")
 
     # Standard GEX-style dollarization: gamma is "delta change per $1 move,"
     # so scaling by spot^2 * 0.01 * 100 (shares/contract) converts it to a
     # dollar amount dealers must trade for a 1% move in the underlying.
-    gamma_notional = abs(dealer_net_gamma) * (spot_price**2) * 0.01 * 100
+    # Multiplication yields inf on overflow instead of an uncaught power
+    # OverflowError. Reject derived overflow before it reaches scoring.
+    gamma_notional = abs(dealer_net_gamma) * spot_price * spot_price * 0.01 * 100
+    if not math.isfinite(dealer_net_gamma):
+        raise TradierDataError("Tradier chain gamma aggregate is outside numeric range")
+    validate_number(gamma_notional, "gamma notional")
 
     return ChainSummary(
         call_open_interest=call_oi,
@@ -255,10 +328,12 @@ def to_options_inputs(summary: ChainSummary, *, iv_rank: float, avg_dollar_volum
         return None
 
     call_put_ratio = summary.call_open_interest / max(summary.put_open_interest, 1)
+    validate_number(call_put_ratio, "call/put open-interest ratio")
     # Normalize gamma notional against the name's own dollar volume so a
     # $2 microcap and a $200 stock are comparable (see scoring.py's
     # _GAMMA_PRESSURE_RANGE docstring note).
     normalized_gamma_pressure = summary.gamma_notional_per_1pct_move / avg_dollar_volume
+    validate_number(normalized_gamma_pressure, "normalized gamma pressure")
 
     return OptionsInputs(
         iv_rank=iv_rank,

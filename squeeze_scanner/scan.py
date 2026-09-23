@@ -24,14 +24,18 @@ from dotenv import load_dotenv
 from squeeze_scanner.finviz_client import fetch_candidates
 from squeeze_scanner.scoring import compute_composite_score
 from squeeze_scanner.tradier_options import (
+    TradierConfigurationError,
+    TradierDataError,
+    TradierRateLimitError,
     get_nearest_expiration,
     get_option_chain,
     get_quote,
     summarize_chain,
     to_options_inputs,
+    validate_number,
 )
 
-# Three distinct outcomes for a candidate's options lookup, per PR #99
+# Distinct outcomes for a candidate's options lookup, per PR #99
 # review finding 5: a real Tradier/network failure must not be silently
 # indistinguishable from "this name genuinely has no usable options
 # market" -- both used to fall through to the same factor-only score with
@@ -39,30 +43,35 @@ from squeeze_scanner.tradier_options import (
 OPTIONS_STATUS_VALID = "valid"  # a real chain-derived options score
 OPTIONS_STATUS_UNAVAILABLE = "unavailable"  # chain fetched fine, but too thin / no greeks
 OPTIONS_STATUS_ERROR = "error"  # the Tradier lookup itself failed (network, auth, rate limit, ...)
+OPTIONS_STATUS_SKIPPED_RATE_LIMIT = "skipped_rate_limit"  # not requested after a 429
 
 
 def _fetch_options_inputs(ticker: str, price: float):
-    """Returns (OptionsInputs | None, options_status). Raises nothing --
-    any Tradier-side failure is caught here and reported as
-    OPTIONS_STATUS_ERROR rather than propagating, so one bad ticker can't
-    kill the whole scan; but unlike the pre-review version, it's tagged
-    distinctly from a legitimately thin/no-options name."""
+    """Isolate expected provider failures; let programming errors surface.
+
+    Rate limits propagate to scan() to stop further options requests.
+    """
     try:
         expiration = get_nearest_expiration(ticker)
         if not expiration:
             return None, OPTIONS_STATUS_UNAVAILABLE
 
         quote = get_quote(ticker)
-        spot = quote.get("last") or price
-        if not spot:
+        spot = quote.get("last")
+        if spot is None:
+            spot = price
+        if spot is None or spot == 0:
             return None, OPTIONS_STATUS_UNAVAILABLE
+        spot = validate_number(spot, "spot price", positive=True)
 
         chain = get_option_chain(ticker, expiration)
         if not chain:
             return None, OPTIONS_STATUS_UNAVAILABLE
 
         summary = summarize_chain(chain, spot_price=spot)
-        avg_dollar_volume = (quote.get("average_volume") or 0) * spot
+        volume = quote.get("average_volume")
+        volume = 0.0 if volume is None else validate_number(volume, "average_volume")
+        avg_dollar_volume = validate_number(volume * spot, "average dollar volume")
         # iv_rank proxy: relative position of ATM IV within a generic
         # 20-150% band. This is NOT a real 52-week IV rank -- see
         # tradier_options.to_options_inputs's docstring and the "Known
@@ -76,7 +85,7 @@ def _fetch_options_inputs(ticker: str, price: float):
             return None, OPTIONS_STATUS_UNAVAILABLE
         return options_inputs, OPTIONS_STATUS_VALID
 
-    except (requests.RequestException, RuntimeError) as exc:
+    except (requests.RequestException, TradierDataError, TradierConfigurationError) as exc:
         print(f"  [warn] {ticker}: options lookup failed ({exc})", file=sys.stderr)
         return None, OPTIONS_STATUS_ERROR
 
@@ -84,9 +93,18 @@ def _fetch_options_inputs(ticker: str, price: float):
 def scan(limit: int = 50) -> list[dict]:
     candidates = fetch_candidates(limit=limit)
     results = []
+    rate_limited = False
 
     for candidate in candidates:
-        options_inputs, options_status = _fetch_options_inputs(candidate.ticker, candidate.price)
+        if rate_limited:
+            options_inputs, options_status = None, OPTIONS_STATUS_SKIPPED_RATE_LIMIT
+        else:
+            try:
+                options_inputs, options_status = _fetch_options_inputs(candidate.ticker, candidate.price)
+            except TradierRateLimitError as exc:
+                print(f"  [warn] {candidate.ticker}: {exc}", file=sys.stderr)
+                rate_limited = True
+                options_inputs, options_status = None, OPTIONS_STATUS_ERROR
         composite = compute_composite_score(candidate.factor_inputs, options_inputs)
         results.append(
             {
@@ -101,14 +119,18 @@ def scan(limit: int = 50) -> list[dict]:
                 "days_to_cover": candidate.factor_inputs.days_to_cover,
             }
         )
-        time.sleep(0.2)  # stay well under Tradier's rate limit across a full scan
+        if not rate_limited:
+            time.sleep(0.2)  # pacing only; a 429 stops requests for this run
 
     # Composite scores are only directly comparable across rows with the
     # same options_status: "valid" rows have a real 60/40 blend, while
     # "unavailable"/"error" rows are factor-only. Rank within each group
     # rather than pretending a full mixed-basis sort is meaningful (PR #99
     # review finding 5).
-    status_rank = {OPTIONS_STATUS_VALID: 0, OPTIONS_STATUS_UNAVAILABLE: 1, OPTIONS_STATUS_ERROR: 2}
+    status_rank = {
+        OPTIONS_STATUS_VALID: 0, OPTIONS_STATUS_UNAVAILABLE: 1,
+        OPTIONS_STATUS_ERROR: 2, OPTIONS_STATUS_SKIPPED_RATE_LIMIT: 3,
+    }
     results.sort(key=lambda r: (status_rank[r["options_status"]], -r["composite_score"]))
     return results
 
@@ -137,6 +159,10 @@ def main() -> None:
             writer.writeheader()
             writer.writerows(results)
         print(f"\nWrote {len(results)} rows to {args.out}", file=sys.stderr)
+
+    if any(row["options_status"] in (OPTIONS_STATUS_ERROR, OPTIONS_STATUS_SKIPPED_RATE_LIMIT) for row in results):
+        print("Scan incomplete: provider errors; see options_status in the exported rows.", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

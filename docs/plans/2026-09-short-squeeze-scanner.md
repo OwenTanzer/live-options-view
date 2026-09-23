@@ -20,9 +20,9 @@ loop).
    performance) via the `finvizfinance` package.
 2. `tradier_options.py` pulls each candidate's near-dated options chain from
    Tradier (this repo's existing token, `TRADIER_TOKEN`) and computes a
-   dealer-gamma-exposure estimate (standard "customers net long calls / net
-   short puts" convention, same one public GEX trackers use) plus a call/put
-   OI skew.
+   dealer-gamma-exposure estimate under an explicit "customers net long
+   calls / net short puts" positioning assumption, plus a call/put
+   open-interest ratio. Actual dealer inventories are not observed.
 3. `scoring.py` turns both into two independent 0-1 scores (pure functions,
    unit-tested, no I/O) and blends them 60/40 factor/options into a single
    composite -- see that module's docstring for the exact weights and why a
@@ -30,6 +30,37 @@ loop).
    being zeroed.
 4. `scan.py` is the CLI: finviz candidates -> per-candidate Tradier lookup ->
    ranked table, optionally written to CSV.
+
+## Provider failures and validation
+
+Tradier adapters validate response objects, singleton/list shapes, expiration
+dates, quote prices/volume, and contract/Greeks fields before scoring.
+Malformed supplied values produce `options_status=error`; genuinely absent
+options, missing Greeks or insufficient volume produce `unavailable`.
+An absent last price may use the Finviz price only if that price is positive
+and finite. Unexpected programming exceptions still surface.
+
+Every request has a ten-second timeout. An HTTP 429 stops all further
+Tradier requests for the current run, preserves completed results, marks the
+affected candidate `error`, and marks subsequent candidates
+`skipped_rate_limit`. Their factor-only results remain in the output. There
+is no automatic retry in this command; a later run must respect the provider's
+reset window. The 0.2-second pacing is not a guarantee of quota compliance.
+
+The command exports all rows before exiting with code 1 if any options lookup
+failed or was skipped after a rate limit. Clean scans, including genuinely
+empty or unavailable results, exit 0. Scores are ranked within availability
+groups; factor-only results are not compared directly with blended results.
+
+`finvizfinance` is pinned to 1.5.0 because the parser depends on its column and
+unit conventions. Updating it requires rechecking representative provider
+output, including the raw `Short Float` percent string, fractional `Perf
+Week`, and absolute-share `Float` value. Nonempty responses must contain the
+required columns.
+
+Validation includes HTTP-boundary malformed-payload,
+numeric-overflow, multi-candidate CSV export, and rate-limit regressions.
+These deterministic tests do not claim live-provider or deployed validation.
 
 ## Known gaps (deliberately deferred, not forgotten)
 
