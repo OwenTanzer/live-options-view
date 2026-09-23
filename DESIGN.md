@@ -525,3 +525,76 @@ repo's contributor doesn't, per the MOO-144 probe's setup thread):**
 - **Access control** — gate behind Cloudflare Access for subscriber-only distribution
 - **Historical replay** — scrub through today's intraday snapshots in the viewer
 
+## 11. Bot membership index (#102; staged rollout)
+
+The Automated tab still polls every 30 seconds. In `BOT_INDEX_READS=r2` mode,
+`/api/bots` and the settlement sweep read `system/bot-membership-v1.json` through
+the existing `PAPER_TRADES` R2 binding, then fetch current KV account records.
+The object contains only public bot identifiers, a schema version, and a migration
+readiness flag. It contains no balances, credentials, sessions, or trade history.
+Conditional object writes merge membership against the last-read entity tag;
+conflicting or rate-limited writers make at most five attempts, waiting 1.1 seconds
+between attempts and re-reading/merging current membership each time. R2 binding
+error 10058 / TooManyRequests and HTTP 429 are recognized; other failures remain
+visible. Exhaustion fails the caller and remains repairable on its next login or
+metadata sync. Registration, authenticated bot login,
+and operator metadata sync repair both the legacy marker and the R2 membership.
+Matching legacy markers and unchanged account metadata are not rewritten during
+startup. Necessary marker repairs retry only rate-limit errors, at most three
+attempts with 1.1-second waits and a fresh read before each attempt. Other storage
+errors remain visible. This covers concurrent repairs and stale KV reads without
+making login followed immediately by metadata sync consume two marker writes.
+An absent index can accept new members but remains unready until reconciliation.
+
+Bot insolvency retains the account and index membership, preserving closed-account
+history. There is no new account deletion endpoint. Reconciliation is additive:
+it does not prune missing accounts on an eventually consistent KV read. An indexed
+account that cannot be read makes the roster fail visibly and aborts the settlement
+sweep before mutations, rather than silently omitting it. A missing, invalid, or
+unready R2 index also fails visibly; there is no automatic KV-list fallback.
+
+### Rollout and recovery
+
+1. Deploy this change with the checked-in `BOT_INDEX_READS=legacy` setting. This
+   stage preserves existing readers while enabling dual writes and the protected
+   reconciliation endpoint. It does **not** yet eliminate ordinary list usage.
+2. Allow old Worker invocations to finish and KV writes to propagate. Invoke
+   `POST /api/bot-index/reconcile` using the existing `X-Bot-Registration-Key`
+   operator credential from the deployment's secret store; never place it in a
+   command history or log. No request body is needed. The endpoint scans `user:`
+   records so bots missing legacy markers are recovered, including closed bots,
+   while human accounts are excluded. It follows cursors and refuses to publish
+   an incomplete scan. The current safety bound is five pages / 500 account keys;
+   exceeding it requires an explicitly designed larger migration, not truncation.
+3. Inspect the private R2 binding's index and compare membership with the known bot
+   account inventory. Repeat reconciliation after KV propagation and verify stable
+   membership; a successful single scan is not proof of an atomic KV snapshot.
+   Concurrent registrations are unioned using a conditional write. Interrupted
+   scans do not publish partial membership or mark an unready index ready.
+4. Only after verification, commit `BOT_INDEX_READS = "r2"` in `wrangler.toml`
+   and deploy that cutover. Check roster identities/current balances and a
+   settlement run, including retained closed accounts. Keep the 30-second client
+   refresh and existing settlement schedule unchanged.
+5. Verify Cloudflare KV list metrics flatten during normal dashboard polling and
+   settlement. The reconciliation endpoint logs scan/member counts; roster failures
+   log `bot_roster_read_failed`, and scheduled errors fail the scheduled invocation.
+   Record actual read/write/list usage before closing #102.
+
+For a rollout rollback, explicitly redeploy `BOT_INDEX_READS=legacy`; this restores
+the former quota exposure. Do not silently switch modes on a failed index read.
+For interrupted membership writes, retry bot login or metadata sync; neither
+recreates the account nor resets history. Re-run bounded reconciliation after a
+known legacy repair. For a corrupt index, investigate and restore a verified object
+version through the binding before reconciling; do not replace it with an empty list.
+
+### Operation budget
+
+With B bots and C continuously polling clients, a 6.5-hour session uses roughly
+780*C R2 index reads and 780*C*B KV account reads, plus 48 daily settlement index
+reads and up to 48*B settlement account reads (and any reads/writes for actual
+settlement). This removes ordinary KV **list** operations after cutover; it does
+not remove KV reads or other application usage. For example, ten bots and two
+clients imply about 16,080 account reads before mutations and other endpoints.
+One reconciliation uses at most five lists and 500 account reads; idempotent
+membership repair avoids an R2 write when membership is unchanged. Capacity must
+be checked against actual account-wide usage before scaling clients or bot count.
