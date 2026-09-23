@@ -117,22 +117,34 @@ How the shared stream works:
   single-underlying startup path unchanged: its universe selection, stale-date
   recovery, reconciliation and preflight happen on the main thread, and a
   failure there is fatal/restart-recoverable exactly as today.
-- Other underlyings are **optional** (IBIT). Their preparation (load persisted
-  universe or select one, reconcile local spool) starts concurrently with the
-  primary's, in daemon threads that are read-only toward the archive. The main
-  thread waits for them only until the **cutoff: open - 20 s**, leaving time to
-  persist/preflight admitted lanes, create the stream session, connect and
-  prove readiness before 09:30. If the primary is itself only ready after the
-  cutoff (late start/restart), optional lanes get at most 5 s more.
-- At the cutoff every optional lane is frozen. Ready lanes join the one initial
-  subscription; the main thread then persists a freshly selected universe and
-  writes their preflight. Lanes that failed or were not ready are excluded for
-  the session (`lane_unavailable: preparation_failed: ...` /
-  `missed_preparation_cutoff`) and get a partial summary at the end. A late
-  result is discarded (`optional_lane_result_discarded` log): it cannot change
-  the subscription or write anything, and nothing waits for its thread.
+- Other underlyings are **optional** (IBIT). Their whole admission path runs in
+  a daemon thread concurrently with the primary: load the persisted universe
+  or select one, reconcile the local spool, then persist a fresh universe and
+  write the lane's preflight. The main thread waits for it only until the
+  **cutoff: open - 20 s**, leaving time to create the stream session, connect
+  and prove readiness before 09:30. If the primary is itself only ready after
+  the cutoff (late start/restart), optional lanes get at most 5 s more.
+- At the cutoff every optional lane is frozen; only lanes whose admission
+  (including both writes) completed join the one initial subscription. Slow or
+  failed selection, reconciliation, universe persistence or preflight excludes
+  that lane for the session (`missed_preparation_cutoff`,
+  `selection_failed: ...`, `universe_persist_failed: ...`, `preflight_failed: ...`)
+  with a partial summary; it never delays or aborts the primary.
+- Each optional write starts only while the lane is unfrozen and the stream
+  lease is held. A write already in flight at the cutoff may still land, but
+  cannot overwrite anything: the universe is a conditional create (a same-day
+  restart reuses that pre-open selection, keeping the universe fixed) and the
+  preflight key is unique per owner. The late result is discarded and logged
+  (`optional_lane_result_discarded`, with the stage and completed writes);
+  nothing waits for the thread.
 - Optional lanes recover prior-date spool leftovers after the close, off the
-  pre-open path, and only while this process still owns the stream lease.
+  pre-open path, and only while this process still owns the stream lease. A
+  recovery failure is recorded per date (`recovery_failed`,
+  `retained_local_files`), reported as `stale_recovery_failed` in that lane's
+  partial summary, and the files stay on disk for a later run.
+- The primary is finalized first; an optional lane's finalization error is
+  reported (`lane_finalization_failed`) without costing the primary its
+  summary/manifest.
 - A router writes each event to its underlying's lane: separate archive
   (`moo144/tradier/<date>/` for QQQ, unchanged; `moo144/tradier-ibit/<date>/`
   for IBIT), spool (`moo144-collector-spool[-ibit]/`), uploader, stats,

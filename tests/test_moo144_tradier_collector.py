@@ -1817,6 +1817,27 @@ class MultiTradier:
         return Response()
 
 
+class FaultR2(FakeR2):
+    """FakeR2 whose writes/listings can be delayed or failed by key prefix."""
+
+    def __init__(self):
+        super().__init__()
+        self.put_faults = []   # (key prefix, hook)
+        self.list_faults = []  # (listing prefix, hook)
+
+    def put_object(self, **kwargs):
+        for prefix, hook in self.put_faults:
+            if kwargs["Key"].startswith(prefix):
+                hook()
+        return super().put_object(**kwargs)
+
+    def list_objects_v2(self, **kwargs):
+        for prefix, hook in self.list_faults:
+            if kwargs["Prefix"].startswith(prefix):
+                hook()
+        return super().list_objects_v2(**kwargs)
+
+
 def archived_records(r2, prefix):
     records = []
     for (_bucket, key), body in sorted(r2.objects.items()):
@@ -2162,8 +2183,10 @@ class SharedStreamMainTests(unittest.TestCase):
                 self.assertEqual([Path(k).name.split("-")[0] for k in ibit_keys], ["manifest", "summary"])
                 discarded = self.log_events("optional_lane_result_discarded")
                 self.assertEqual([d["underlying"] for d in discarded], ["IBIT"])
-                expected_error = None if failure is None else "TimeoutError: simulated slow IBIT"
-                self.assertEqual(discarded[0]["error"], expected_error)
+                expected = ("LaneAdmissionClosed: lane frozen before universe_persist" if failure is None
+                            else "TimeoutError: simulated slow IBIT")
+                self.assertEqual(discarded[0]["error"], expected)
+                self.assertEqual(discarded[0]["writes_completed"], [])
 
     def test_optional_lanes_require_an_explicit_spool_allocation(self):
         for env, reason in (
@@ -2259,7 +2282,7 @@ class SharedStreamMainTests(unittest.TestCase):
         self.assertEqual(ibit["status"], "partial")
         self.assertIsNone(ibit["universe"])
         self.assertTrue(ibit["partial_reasons"][0].startswith(
-            "lane_unavailable: preparation_failed: RuntimeError: IBIT has no 0DTE expiration"))
+            "lane_unavailable: selection_failed: RuntimeError: IBIT has no 0DTE expiration"))
         self.assertEqual(ibit["event_parts"], [])
         self.assertNotIn(("bucket", f"{IBIT_PREFIX}/universe.json"), r2.objects)
 
@@ -2269,6 +2292,106 @@ class SharedStreamMainTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "QQQ has no 0DTE expiration"):
             self.run_main(tmp, client, "QQQ,IBIT:nearest")
         self.assertEqual(client.sessions, 0)
+
+
+    def unavailable(self, *_a):
+        raise ClientError(status=503, code="ServiceUnavailable")
+
+    def test_optional_storage_faults_cannot_delay_or_abort_the_primary(self):
+        """Slow or failing IBIT universe persistence or preflight is bounded by
+        the same cutoff: QQQ connects in time on exactly one provider stream,
+        and IBIT is excluded with an explicit reason."""
+        universe_key = f"{IBIT_PREFIX}/universe.json"
+        preflight_key = f"{IBIT_PREFIX}/run-started-"
+        cases = [
+            # The in-flight persist lands late, but the frozen lane then stops
+            # before its preflight: nothing further is written.
+            ("slow_universe_persist", universe_key, "slow", "missed_preparation_cutoff",
+             ("preflight", ["universe"], "LaneAdmissionClosed: lane frozen before preflight")),
+            ("slow_preflight", preflight_key, "slow", "missed_preparation_cutoff",
+             ("preflight", ["universe", "preflight"], None)),
+            ("failed_universe_persist", universe_key, "fail",
+             "universe_persist_failed: ClientError: ServiceUnavailable", None),
+            ("failed_preflight", preflight_key, "fail",
+             "preflight_failed: ClientError: ServiceUnavailable", None),
+        ]
+        for name, key, mode, reason, discard in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                self.setUp()
+                r2 = FaultR2()
+                holder = {}
+
+                def slow(*_a):
+                    # The write is in flight until the shared stream is connected.
+                    self.assertTrue(holder["client"].stream_opened.wait(timeout=5))
+
+                r2.put_faults.append((key, slow if mode == "slow" else self.unavailable))
+
+                def end_stream():
+                    if mode == "slow":
+                        self.wait_for_log("optional_lane_result_discarded")
+                    self.set_clock(self.close)
+
+                client = self.client(stream_lines=self.lines(ibit=False), on_stream_end=end_stream)
+                holder["client"] = client
+                result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(client.sessions, 1)
+                self.assertEqual(len(client.subscriptions), 1)
+                self.assertFalse([s for s in client.subscriptions[0] if s.startswith("IBIT")])
+                qqq = only_json(r2, QQQ_PREFIX, "summary-")
+                self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+                self.assertLessEqual(datetime.fromisoformat(qqq["stream_connected_at"]), self.cutoff)
+                self.assertTrue(only_json(r2, QQQ_PREFIX, "manifest-"))
+                ibit = only_json(r2, IBIT_PREFIX, "summary-")
+                self.assertEqual(ibit["partial_reasons"][0], f"lane_unavailable: {reason}")
+                self.assertIsNone(ibit["universe"])
+                if mode == "slow":
+                    discarded = self.log_events("optional_lane_result_discarded")
+                    self.assertEqual([(d["stage"], d["writes_completed"], d["error"]) for d in discarded],
+                                     [discard])
+
+    def test_optional_stale_recovery_failure_is_contained_and_reported(self):
+        r2 = FaultR2()
+        r2.list_faults.append(("moo144/tradier-ibit/2026-09-07/", self.unavailable))
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-07"
+            stale.mkdir(parents=True)
+            orphan = stale / "prior-owner-part-0000.ndjson.gz"
+            with gzip.open(orphan, "wt") as handle:
+                handle.write('{"type":"quote"}\n')
+            client = self.client(stream_lines=self.lines())
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+            self.assertTrue(orphan.exists())  # retained for a later recovery
+        self.assertEqual(result, 0)
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "manifest-")["status"], "complete")
+        self.assertEqual(qqq["timesale_counts_by_symbol"], {"QQQ-C600": 1})
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(ibit["status"], "partial")
+        self.assertEqual(ibit["partial_reasons"],
+                         ["stale_recovery_failed: 2026-09-07: ClientError: ServiceUnavailable"])
+        entry = ibit["stale_sessions_recovered"]["2026-09-07"]
+        self.assertEqual(entry["recovery_failed"], "ClientError: ServiceUnavailable")
+        self.assertEqual(entry["retained_local_files"], ["prior-owner-part-0000.ndjson.gz"])
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+        self.assertFalse([k for (_b, k) in r2.objects if k.startswith("moo144/tradier-ibit/2026-09-07/")])
+        self.assertEqual([e["underlying"] for e in self.log_events("stale_recovery_failed")], ["IBIT"])
+
+    def test_optional_finalization_failure_does_not_cost_primary_its_report(self):
+        r2 = FaultR2()
+        r2.put_faults.append((f"{IBIT_PREFIX}/summary-", self.unavailable))
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, self.client(stream_lines=self.lines()), "QQQ,IBIT:nearest", r2=r2)
+        self.assertEqual(result, 0)
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "summary-")["status"], "complete")
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "manifest-")["status"], "complete")
+        lanes = self.log_events("collector_complete")[0]["lanes"]
+        self.assertEqual(lanes["QQQ"]["status"], "complete")
+        self.assertEqual(lanes["IBIT"]["partial_reasons"],
+                         ["lane_finalization_failed: ClientError: ServiceUnavailable"])
 
 
 if __name__ == "__main__":
