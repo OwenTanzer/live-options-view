@@ -45,6 +45,10 @@ jobs:
         run: node tests/momentum_display.test.js
       - name: eia steo calibration display
         run: node tests/steo_calibration_display.test.js
+      - name: squeeze scanner panel display
+        run: node tests/squeeze_scanner_display.test.js
+      - name: squeeze scanner panel
+        run: node tests/squeeze_panel.test.js
       # Catches syntax errors in the inline <script> that the panel test would
       # otherwise only surface for the section it extracts.
       - name: parse check

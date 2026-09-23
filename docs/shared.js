@@ -234,6 +234,60 @@ function formatMomentum(underlyingMarket, nowMs = Date.now()) {
   return { text, state: um.freshness === 'live' ? 'live' : 'stale' };
 }
 
+// -- short-squeeze scanner panel formatting (OA-191) -------------------------
+// Pure formatting/tracking for docs/index.html's squeeze panel, which
+// displays the independently-maintained scanner's published `latest.json`
+// pointer (OwenTanzer/short-squeeze-scanner's squeeze_scanner/storage.py
+// `upload()`). Same producer/display split as formatVwapRvol/formatMomentum
+// above: this page never computes a score, only formats what was published.
+const SQUEEZE_SCAN_STALE_AFTER_MS = 6 * 60 * 60 * 1000; // no scheduled runs exist
+// yet (OA-191 step 3 is unimplemented) -- manual runs are irregular, so
+// "stale" here means "old enough a reader shouldn't assume this reflects
+// current prices," not a violated SLA against a real schedule.
+
+function formatSqueezeScanStatus(pointer, nowMs = Date.now()) {
+  if (!pointer) return { text: 'No scan published yet', state: 'fallback' };
+  const publishedMs = Date.parse(pointer.published_at || '');
+  const time = Number.isFinite(publishedMs)
+    ? new Date(publishedMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  if (pointer.status === 'empty') {
+    return { text: `Scan complete ${time} ET — no eligible candidates`, state: 'stale' };
+  }
+  const ageMs = Number.isFinite(publishedMs) ? nowMs - publishedMs : null;
+  const stale = ageMs == null || ageMs > SQUEEZE_SCAN_STALE_AFTER_MS;
+  return { text: `Scan published ${time} ET${stale ? ' (stale)' : ''}`, state: stale ? 'stale' : 'live' };
+}
+
+// Client-side "first seen today" tracking for the New badge.
+//
+// KNOWN LIMITATION: this is a per-viewer fact, not a canonical page-level
+// one. Two browsers opening the page for the first time on different days'
+// runs (e.g. one right after the 9am scan, another right after the noon
+// scan) will each treat whatever they first see as "not new," so the same
+// ticker can show as New to one viewer and not another. The pointer schema
+// (storage.py's `upload()`) does not yet publish a first-seen-at field or a
+// same-day run history this page could diff against instead -- see
+// docs/plans/2026-09-squeeze-scanner-panel.md. Accurate "first seen today"
+// needs either of those from the scanner side; this is a reasonable
+// approximation until then, not a permanent design choice.
+//
+// `previouslySeen` / the return value are plain {dateKey, tickers} objects
+// (tickers: {ticker: true}), not real localStorage -- callers own the actual
+// storage read/write so this stays testable without a DOM.
+function trackFirstSeenToday(tickers, previouslySeen, todayKey) {
+  const carriedOver = previouslySeen && previouslySeen.dateKey === todayKey;
+  const seen = carriedOver ? { ...previouslySeen.tickers } : {};
+  const newlySeen = new Set();
+  for (const ticker of tickers) {
+    if (!(ticker in seen)) {
+      seen[ticker] = true;
+      newlySeen.add(ticker);
+    }
+  }
+  return { dateKey: todayKey, tickers: seen, newlySeen };
+}
+
 // EIA STEO crude calibration panel formatting (docs/index.html's
 // fetchSteoCalibration). Pure, DOM-free -- same rationale as
 // formatVwapRvol/formatMomentum above: testable directly, no fixture DOM
@@ -773,7 +827,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
-    fmtSteoDelta, findRevision,
+    fmtSteoDelta, findRevision, formatSqueezeScanStatus, trackFirstSeenToday,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
