@@ -87,3 +87,32 @@ Provider references: https://docs.tradier.com/docs/clock,
 https://docs.tradier.com/docs/quotes, and
 https://docs.tradier.com/reference/http-streaming. The streaming session is created
 immediately before connection, within the documented five-minute session-ID lifetime.
+
+## IBIT collection (proposed; not deployed)
+
+The daily collector now accepts two optional variables. Unset, both default to
+the existing QQQ behavior, so the deployed QQQ service needs no change:
+
+- `MOO144_UNDERLYING` (default `QQQ`).
+- `MOO144_EXPIRATION_POLICY`: `same_day` (default; requires a 0DTE expiration,
+  fails otherwise) or `nearest` (first listed expiration on/after the trade date).
+
+IBIT lists Monday/Wednesday/Friday expirations only (since February 2026), so
+`same_day` would fail every Tuesday/Thursday and exhaust launcher retries. The
+IBIT service should use `nearest`: 0DTE on Mon/Wed/Fri, 1DTE on Tue/Thu. The
+persisted universe records `underlying`, `expiration`, `expiration_policy` and
+`days_to_expiration`, so 1DTE sessions are never confused with 0DTE ones.
+
+Non-QQQ underlyings are fully isolated from QQQ: archive/lease/universe under
+`moo144/tradier-<symbol>/<date>/` (e.g. `moo144/tradier-ibit/2026-09-24/`) and
+spool under `<MOO144_SPOOL_DIR>/moo144-collector-spool-<symbol>/`. QQQ keeps
+`moo144/tradier/<date>/` and `moo144-collector-spool/` byte-for-byte.
+
+Proposed rollout after review: a second dedicated Railway service
+(e.g. `ibit-tradier-collector`) with the same source, start command, cron, watch
+paths, single replica and `TRADIER_TOKEN`/R2 reference variables as
+moo169-tradier-collector, plus `MOO144_UNDERLYING=IBIT`,
+`MOO144_EXPIRATION_POLICY=nearest`, and its own volume at `/data`. Strike count
+(8) is a starting point; IBIT's price and strike spacing differ from QQQ's, so
+check the percentage band 8 strikes actually covers on the first session. Acceptance gates mirror QQQ:
+first full-session audit, then a second automatic startup, before any analysis.

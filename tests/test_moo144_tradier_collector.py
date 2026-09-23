@@ -1038,11 +1038,11 @@ class MainLifecycleTests(unittest.TestCase):
 
     def _run_main(
         self, tmp_spool, capture_fn, session_open, session_close, clock_sequence,
-        r2=None, drain_timeout_seconds=5.0, expect_failure=False,
+        r2=None, drain_timeout_seconds=5.0, expect_failure=False, client=None, env_overrides=None,
     ):
         r2 = r2 if r2 is not None else FakeR2()
-        client = FakeTradier()
-        env = dict(self.env, MOO144_SPOOL_DIR=str(tmp_spool))
+        client = client if client is not None else FakeTradier()
+        env = dict(self.env, MOO144_SPOOL_DIR=str(tmp_spool), **(env_overrides or {}))
         clock_iter = iter(clock_sequence)
         last = {"t": clock_sequence[0]}
 
@@ -1703,6 +1703,126 @@ class PreopenReadinessTests(unittest.TestCase):
                     self.assertEqual(summary["excluded_timesales"], {"missing_or_invalid_provider_time": 1})
                 if not ready_before_open:
                     self.assertIn("late_start_seconds=3.0", summary["partial_reasons"])
+
+
+
+def make_fake_ibit_tradier(trade_date="2026-09-08", expirations=("2026-09-09", "2026-09-11")):
+    """IBIT lists Mon/Wed/Fri expirations; 2026-09-08 is a Tuesday."""
+    class FakeIbitTradier:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, path, **params):
+            self.calls.append((path, params))
+            if path == "/markets/clock":
+                return {"clock": {"date": trade_date, "state": "open", "next_change": "16:00"}}
+            if path == "/markets/quotes":
+                return {"quotes": {"quote": {"symbol": "IBIT", "last": 60}}}
+            if path == "/markets/options/expirations":
+                return {"expirations": {"date": list(expirations)}}
+            if path == "/markets/options/chains":
+                return {"options": {"option": [
+                    {"symbol": "IBIT-C60", "strike": 60, "option_type": "call"},
+                    {"symbol": "IBIT-P60", "strike": 60, "option_type": "put"},
+                    {"symbol": "IBIT-C61", "strike": 61, "option_type": "call"},
+                    {"symbol": "IBIT-P61", "strike": 61, "option_type": "put"},
+                ]}}
+            raise AssertionError(path)
+    return FakeIbitTradier()
+
+
+class UnderlyingNamespaceTests(unittest.TestCase):
+    def test_qqq_keeps_original_layout(self):
+        self.assertEqual(collector.archive_root("QQQ"), "moo144/tradier")
+        self.assertEqual(collector.spool_dir_name("QQQ"), "moo144-collector-spool")
+        self.assertEqual(collector.lease_key("2026-09-08"), "moo144/tradier/2026-09-08/lease.json")
+
+    def test_other_underlyings_get_sibling_namespace(self):
+        root = collector.archive_root("IBIT")
+        self.assertEqual(root, "moo144/tradier-ibit")
+        self.assertEqual(collector.spool_dir_name("IBIT"), "moo144-collector-spool-ibit")
+        self.assertEqual(collector.lease_key("2026-09-08", root=root),
+                         "moo144/tradier-ibit/2026-09-08/lease.json")
+
+    def test_leases_for_different_roots_do_not_contend(self):
+        r2 = FakeR2()
+        collector.acquire_lease(r2, "bucket", "2026-09-08", "qqq-owner", ttl_seconds=300)
+        lease = collector.acquire_lease(r2, "bucket", "2026-09-08", "ibit-owner", ttl_seconds=300,
+                                        root="moo144/tradier-ibit")
+        self.assertEqual(lease["owner_id"], "ibit-owner")
+        renewed = collector.renew_lease(r2, "bucket", "2026-09-08", "ibit-owner", ttl_seconds=300,
+                                        root="moo144/tradier-ibit")
+        self.assertEqual(renewed["owner_id"], "ibit-owner")
+        qqq = json.loads(r2.objects[("bucket", "moo144/tradier/2026-09-08/lease.json")])
+        self.assertEqual(qqq["owner_id"], "qqq-owner")
+
+    def test_stale_recovery_uses_supplied_root(self):
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / "2026-09-07"
+            stale.mkdir()
+            with gzip.open(stale / "old-part-0000.ndjson.gz", "wt") as handle:
+                handle.write('{"type":"quote"}\n')
+            report = collector.recover_stale_sessions(
+                Path(tmp), "2026-09-08", r2, "bucket", root="moo144/tradier-ibit",
+            )
+        self.assertEqual(report["2026-09-07"]["prefix"], "moo144/tradier-ibit/2026-09-07")
+        keys = [k for (_b, k) in r2.objects]
+        self.assertIn("moo144/tradier-ibit/2026-09-07/old-part-0000.ndjson.gz", keys)
+        self.assertFalse(any(k.startswith("moo144/tradier/") for k in keys))
+
+
+class IbitMainTests(unittest.TestCase):
+    """End-to-end main() for a non-QQQ underlying beside a live QQQ session."""
+
+    setUp = MainLifecycleTests.setUp
+    _run_main = MainLifecycleTests._run_main
+
+    def _capture_one(self, _client, symbols, spool, stats, _close, *_a, **_k):
+        self.captured_symbols = list(symbols)
+        spool.write(stats.observe({
+            "type": "timesale", "symbol": symbols[1], "date": "1000", "seq": 1,
+            "flag": "", "cancel": False, "correction": False, "session": "normal",
+            "collector_receipt_timestamp": collector.utc_now(),
+        }))
+        return collector.CaptureResult()
+
+    def test_ibit_archives_under_own_prefix_while_qqq_lease_is_live(self):
+        session_open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        session_close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+        r2 = FakeR2()
+        collector.acquire_lease(r2, "bucket", "2026-09-08", "qqq-owner", ttl_seconds=3600)
+        qqq_before = {k: v for k, v in r2.objects.items()}
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self._run_main(
+                Path(tmp), self._capture_one, session_open, session_close,
+                clock_sequence=[session_open] * 6 + [session_close], r2=r2,
+                client=make_fake_ibit_tradier(),
+                env_overrides={"MOO144_UNDERLYING": "ibit", "MOO144_EXPIRATION_POLICY": "nearest"},
+            )
+            self.assertTrue((Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-08").is_dir())
+            self.assertFalse((Path(tmp) / "moo144-collector-spool").exists())
+        self.assertEqual(result, 0)
+        self.assertEqual(self.captured_symbols[0], "IBIT")
+        new_keys = {k for (_b, k) in r2.objects} - {k for (_b, k) in qqq_before}
+        self.assertTrue(new_keys)
+        self.assertTrue(all(k.startswith("moo144/tradier-ibit/2026-09-08/") for k in new_keys), new_keys)
+        for key, value in qqq_before.items():
+            self.assertEqual(r2.objects[key], value)  # QQQ lease untouched
+        universe = json.loads(r2.objects[("bucket", "moo144/tradier-ibit/2026-09-08/universe.json")])
+        self.assertEqual(universe["universe"]["underlying"], "IBIT")
+        self.assertEqual(universe["universe"]["expiration"], "2026-09-09")
+        self.assertEqual(universe["universe"]["days_to_expiration"], 1)
+
+    def test_invalid_underlying_or_policy_rejected(self):
+        for overrides, message in (
+            ({"MOO144_UNDERLYING": "IB/IT"}, "MOO144_UNDERLYING"),
+            ({"MOO144_EXPIRATION_POLICY": "weekly"}, "MOO144_EXPIRATION_POLICY"),
+        ):
+            with self.subTest(overrides=overrides), \
+                    patch.dict(os.environ, dict(self.env, **overrides), clear=False), \
+                    self.assertRaisesRegex(RuntimeError, message):
+                collector.main(session_bounds=lambda _day: None)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 from moo144_tradier_probe import (
+    DEFAULT_UNDERLYING,
+    EXPIRATION_POLICIES,
     STREAM,
     Tradier,
     is_retryable,
@@ -90,6 +92,21 @@ EXPECTED_TIMESALE_FIELDS = (
 QUOTE_AGE_RESERVOIR_SIZE = 5000
 PREOPEN_SETUP_SECONDS = 60
 HEALTH_PUBLISH_INTERVAL_SECONDS = 60
+# QQQ keeps the original layout so existing archives, leases and the deployed
+# service are unaffected; other underlyings get a sibling namespace.
+QQQ_ARCHIVE_ROOT = "moo144/tradier"
+
+
+def archive_root(underlying: str) -> str:
+    if underlying == DEFAULT_UNDERLYING:
+        return QQQ_ARCHIVE_ROOT
+    return f"{QQQ_ARCHIVE_ROOT}-{underlying.lower()}"
+
+
+def spool_dir_name(underlying: str) -> str:
+    if underlying == DEFAULT_UNDERLYING:
+        return "moo144-collector-spool"
+    return f"moo144-collector-spool-{underlying.lower()}"
 
 
 class LeaseLost(RuntimeError):
@@ -311,8 +328,8 @@ class BoundedStats:
         }
 
 
-def lease_key(run_date: str) -> str:
-    return f"moo144/tradier/{run_date}/lease.json"
+def lease_key(run_date: str, *, root: str = QQQ_ARCHIVE_ROOT) -> str:
+    return f"{root}/{run_date}/lease.json"
 
 
 def _is_confirmed_absent(exc: Exception) -> bool:
@@ -325,7 +342,9 @@ def _is_confirmed_absent(exc: Exception) -> bool:
     return status == 404 or code in {"NoSuchKey", "404", "NotFound"}
 
 
-def _read_lease(client: Any, bucket: str, run_date: str) -> tuple[dict[str, Any] | None, str | None]:
+def _read_lease(
+    client: Any, bucket: str, run_date: str, *, root: str = QQQ_ARCHIVE_ROOT,
+) -> tuple[dict[str, Any] | None, str | None]:
     """Read the lease object, or (None, None) for a *confirmed* absence.
 
     A transient storage/service failure (a 5xx, timeout, or any ClientError
@@ -334,7 +353,7 @@ def _read_lease(client: Any, bucket: str, run_date: str) -> tuple[dict[str, Any]
     InternalError look identical to a genuinely deleted/never-created lease
     to every caller.
     """
-    key = lease_key(run_date)
+    key = lease_key(run_date, root=root)
     try:
         head = client.head_object(Bucket=bucket, Key=key)
         body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -354,14 +373,16 @@ def acquire_lease(
     owner_id: str,
     ttl_seconds: int,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    *,
+    root: str = QQQ_ARCHIVE_ROOT,
 ) -> dict[str, Any]:
     """Acquire or take over the day's collection lease.
 
     Raises RuntimeError if another owner's lease is still live. A lease
     that exists but has expired may be taken over by a new owner.
     """
-    key = lease_key(run_date)
-    current, existing_etag = _read_lease(client, bucket, run_date)
+    key = lease_key(run_date, root=root)
+    current, existing_etag = _read_lease(client, bucket, run_date, root=root)
     if current is not None:
         expires_at = datetime.fromisoformat(current["expires_at"])
         if expires_at > now() and current.get("owner_id") != owner_id:
@@ -421,6 +442,8 @@ def renew_lease(
     owner_id: str,
     ttl_seconds: int,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    *,
+    root: str = QQQ_ARCHIVE_ROOT,
 ) -> dict[str, Any]:
     """Renew this owner's lease, fenced against having lost ownership.
 
@@ -435,7 +458,7 @@ def renew_lease(
     A transient read failure propagates as ``LeaseUnavailable`` from
     ``_read_lease`` unchanged.
     """
-    current, etag = _read_lease(client, bucket, run_date)
+    current, etag = _read_lease(client, bucket, run_date, root=root)
     _require_live_lease_owner(current, owner_id, run_date, now)
     lease = {
         "run_date": run_date,
@@ -446,7 +469,7 @@ def renew_lease(
     body = (json.dumps(lease, indent=2, sort_keys=True) + "\n").encode()
     try:
         client.put_object(
-            Bucket=bucket, Key=lease_key(run_date), Body=body,
+            Bucket=bucket, Key=lease_key(run_date, root=root), Body=body,
             ContentType="application/json", IfMatch=etag,
         )
     except Exception as exc:
@@ -457,7 +480,7 @@ def renew_lease(
             # A failed conditional write proves only that renewal failed.
             # Deletion also causes this response; verify ownership afresh.
             try:
-                current, _ = _read_lease(client, bucket, run_date)
+                current, _ = _read_lease(client, bucket, run_date, root=root)
             except Exception as read_exc:
                 raise LeaseOwnershipUncertain(
                     f"MOO-144 lease for {run_date} could not be verified after renewal conflict"
@@ -482,6 +505,7 @@ def run_lease_heartbeat(
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     wait: Callable[[float], bool] | None = None,
     loss_reason: dict[str, str] | None = None,
+    root: str = QQQ_ARCHIVE_ROOT,
 ) -> None:
     """Renew the collection lease every ``ttl_seconds/3`` until told to stop.
 
@@ -512,7 +536,7 @@ def run_lease_heartbeat(
     wait = wait if wait is not None else stop.wait
     while not wait(ttl_seconds / 3):
         try:
-            lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now)
+            lease = renew_lease(r2, bucket, run_date, owner_id, ttl_seconds, now=now, root=root)
             confirmed_until_ref["value"] = datetime.fromisoformat(lease["expires_at"])
         except LeaseTakenByAnotherOwner:
             if loss_reason is not None:
@@ -585,6 +609,9 @@ def load_or_select_universe(
     run_date: str,
     now_et: datetime,
     session_open: datetime | None = None,
+    *,
+    underlying: str = DEFAULT_UNDERLYING,
+    expiration_policy: str = "same_day",
 ) -> tuple[list[str], dict[str, Any]]:
     """Load the day's already-selected contract universe, or select and
     persist it once. A same-day restart must never re-select against a
@@ -602,7 +629,8 @@ def load_or_select_universe(
         pass
 
     symbols, universe = select_symbols(
-        client, strike_count, 0, run_date, now_et, session_open=session_open
+        client, strike_count, 0, run_date, now_et, session_open=session_open,
+        underlying=underlying, expiration_policy=expiration_policy,
     )
     payload = {"symbols": symbols, "universe": universe}
     body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
@@ -894,12 +922,14 @@ def recover_stale_sessions(
     bucket: str,
     uploader_sleeper: Callable[[float], None] = time.sleep,
     drain_timeout_seconds: float = 30.0,
+    *,
+    root: str = QQQ_ARCHIVE_ROOT,
 ) -> dict[str, Any]:
     """Recover any prior day's spool left behind by a crash, before today's
     session starts.
 
     Each stale date subdirectory is reconciled and resumed against its OWN
-    archive prefix (``moo144/tradier/<that date>``) -- never today's -- so a
+    archive prefix (``<root>/<that date>``) -- never today's -- so a
     leftover segment from a previous session is never misfiled under the
     current one. Best-effort and time-bounded: a date that doesn't finish
     draining within ``drain_timeout_seconds`` is left on disk for the next
@@ -915,7 +945,7 @@ def recover_stale_sessions(
             date.fromisoformat(entry.name)
         except ValueError:
             continue  # not a session date directory -- leave it alone
-        stale_prefix = f"moo144/tradier/{entry.name}"
+        stale_prefix = f"{root}/{entry.name}"
         reconciliation = reconcile_existing_segments(r2, bucket, stale_prefix, entry)
         resumed_artifacts: list[dict[str, Any]] = []
         if reconciliation["resume"]:
@@ -1194,7 +1224,14 @@ def main(
     max_reconnects = int(os.getenv("MOO144_MAX_CONSECUTIVE_RECONNECTS", "5"))
     lease_ttl_seconds = int(os.getenv("MOO144_LEASE_TTL_SECONDS", "300"))
     max_spool_bytes = int(os.getenv("MOO144_MAX_SPOOL_BYTES", str(512 * 1024 * 1024)))
-    base_spool_dir = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir())) / "moo144-collector-spool"
+    underlying = os.getenv("MOO144_UNDERLYING", DEFAULT_UNDERLYING).strip().upper()
+    expiration_policy = os.getenv("MOO144_EXPIRATION_POLICY", "same_day").strip().lower()
+    if not (underlying.isascii() and underlying.isalpha() and 1 <= len(underlying) <= 6):
+        raise RuntimeError("MOO144_UNDERLYING must be 1-6 letters")
+    if expiration_policy not in EXPIRATION_POLICIES:
+        raise RuntimeError(f"MOO144_EXPIRATION_POLICY must be one of {', '.join(EXPIRATION_POLICIES)}")
+    root = archive_root(underlying)
+    base_spool_dir = Path(os.getenv("MOO144_SPOOL_DIR", tempfile.gettempdir())) / spool_dir_name(underlying)
     if not 2 <= strike_count <= 20:
         raise RuntimeError("MOO144_STRIKE_COUNT must be between 2 and 20")
     if not 30 <= checkpoint_seconds <= 300:
@@ -1228,19 +1265,21 @@ def main(
 
     owner_id = uuid.uuid4().hex[:12]
     run_id = f"{run_date}-{owner_id}"
-    prefix = f"moo144/tradier/{run_date}"
+    prefix = f"{root}/{run_date}"
     started_at = utc_now()
-    print(json.dumps({"event": "collector_start", "run_id": run_id}), flush=True)
+    print(json.dumps({"event": "collector_start", "run_id": run_id, "underlying": underlying,
+                      "expiration_policy": expiration_policy}), flush=True)
 
     client = Tradier(token)
     r2, bucket = r2_client()
-    lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds)
+    lease = acquire_lease(r2, bucket, run_date, owner_id, lease_ttl_seconds, root=root)
     symbols, universe = load_or_select_universe(
-        client, r2, bucket, prefix, strike_count, run_date, clock_et(), session_open=session_open
+        client, r2, bucket, prefix, strike_count, run_date, clock_et(), session_open=session_open,
+        underlying=underlying, expiration_policy=expiration_policy,
     )
     stale_recovery = recover_stale_sessions(
         base_spool_dir, run_date, r2, bucket,
-        uploader_sleeper=uploader_sleeper, drain_timeout_seconds=drain_timeout_seconds,
+        uploader_sleeper=uploader_sleeper, drain_timeout_seconds=drain_timeout_seconds, root=root,
     )
     spool_dir = spool_dir_for(base_spool_dir, run_date)
     reconciliation = reconcile_existing_segments(r2, bucket, prefix, spool_dir)
@@ -1288,7 +1327,7 @@ def main(
     heartbeat_thread = threading.Thread(
         target=run_lease_heartbeat,
         args=(r2, bucket, run_date, owner_id, lease_ttl_seconds, lease_confirmed_until_ref, lease_stop, lease_lost_event),
-        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason},
+        kwargs={"now": lambda: datetime.now(timezone.utc), "loss_reason": lease_loss_reason, "root": root},
         daemon=True,
     )
     heartbeat_thread.start()
