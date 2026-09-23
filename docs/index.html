@@ -537,6 +537,16 @@
   #squeeze-title { font-weight: 600; color: var(--bright); }
   #squeeze-status { color: var(--dim); font-size: 0.76rem; }
   #squeeze-status[data-state="stale"], #squeeze-status[data-state="fallback"] { opacity: 0.72; }
+  #squeeze-warning {
+    background: #2d1f0a;
+    border: 1px solid #d49a00;
+    color: #ffcc66;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    margin-bottom: 0.7rem;
+  }
+  #squeeze-warning.hidden { display: none; }
   #squeeze-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
   #squeeze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
   #squeeze-table th {
@@ -551,14 +561,7 @@
   #squeeze-table td a { color: #58a6ff; text-decoration: none; }
   #squeeze-table td a:hover { text-decoration: underline; }
   .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
-  .squeeze-new-badge {
-    background: #167a3f;
-    color: #fff;
-    font-size: 0.66rem;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 4px;
-  }
+  .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
 
   /* ── automated (bot) panel ───────────────────────────────────────────── */
   #bots-header {
@@ -942,6 +945,7 @@
     <span id="squeeze-title">Ranked Candidates</span>
     <span id="squeeze-status" data-state="fallback">—</span>
   </div>
+  <div id="squeeze-warning" class="hidden"></div>
   <div id="squeeze-hint">
     Experimental short-squeeze scanner (<a href="https://linear.app/objecta/issue/OA-191" target="_blank" rel="noopener">OA-191</a>),
     an independently maintained producer (<a href="https://github.com/OwenTanzer/short-squeeze-scanner" target="_blank" rel="noopener">source</a>) --
@@ -1946,44 +1950,34 @@ const SQUEEZE_POLL_MS = 60_000; // no scheduled runs exist yet (OA-191 step 3 is
 // unimplemented); manual runs are irregular, so this is "notice a new run
 // reasonably soon and keep the displayed age accurate," not matched to a
 // real cadence -- same reasoning as fetchSteoCalibration's poll above.
-const SQUEEZE_SEEN_STORAGE_KEY = 'squeezeSeenTickers';
-let squeezePointer = null;
+let squeezePointer = null; // parsed latest.json (last SUCCESSFUL run only)
+let squeezeAttemptPointer = null; // parsed latest-attempt.json (every attempt, success or not)
 let squeezeError = null;
 
-function squeezeTodayKey(nowMs = Date.now()) {
-  // America/New_York calendar day, matching the scanner's own valuation_date
-  // (capture.py) and OA-191's 9am/noon ET cadence -- a UTC-midnight boundary
-  // would flip the "day" mid-session for viewers in ET.
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(nowMs));
-}
-
-function loadSqueezeSeenTickers() {
-  try {
-    const raw = localStorage.getItem(SQUEEZE_SEEN_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    return null; // private browsing / storage blocked -- every candidate just reads "New" today
-  }
-}
-
-function saveSqueezeSeenTickers(state) {
-  try {
-    localStorage.setItem(SQUEEZE_SEEN_STORAGE_KEY, JSON.stringify(state));
-  } catch (e) { /* best-effort; a dropped write just means "New" badges reappear next reload */ }
-}
+// Injectable clock (PR #105 review, finding 4): renderSqueezePanel calling
+// Date.now() directly made tests/squeeze_panel.test.js's fixed-date
+// fixtures assert fresh/stale against whatever day the suite happened to
+// run on, rather than the fixture's own intended "now." Same pattern this
+// file's LiveQuotePoller/TickerStateStore already use for nowFn, just as a
+// free variable instead of a constructor option since this panel has no
+// class of its own.
+function squeezeNow() { return Date.now(); }
 
 async function fetchSqueezeLatest() {
   try {
-    const resp = await fetch(`${R2}/squeeze-scanner/v1/manual/latest.json?_=${Date.now()}`, { cache: 'no-store' });
-    if (resp.status === 404) {
-      squeezePointer = null;
-      squeezeError = null; // no run has ever been published -- not an error state
-    } else if (!resp.ok) {
-      squeezeError = `HTTP ${resp.status}`;
-    } else {
-      squeezePointer = await resp.json();
-      squeezeError = null;
-    }
+    const base = `${R2}/squeeze-scanner/v1/manual`;
+    const cacheBust = squeezeNow();
+    const [successResp, attemptResp] = await Promise.all([
+      fetch(`${base}/latest.json?_=${cacheBust}`, { cache: 'no-store' }),
+      fetch(`${base}/latest-attempt.json?_=${cacheBust}`, { cache: 'no-store' }),
+    ]);
+    // A 404 on either path just means "nothing has ever been published
+    // there" -- not a fetch error. Any other non-OK status is.
+    if (!successResp.ok && successResp.status !== 404) throw new Error(`HTTP ${successResp.status} (latest.json)`);
+    if (!attemptResp.ok && attemptResp.status !== 404) throw new Error(`HTTP ${attemptResp.status} (latest-attempt.json)`);
+    squeezePointer = successResp.status === 404 ? null : await successResp.json();
+    squeezeAttemptPointer = attemptResp.status === 404 ? null : await attemptResp.json();
+    squeezeError = null;
   } catch (e) {
     squeezeError = e.message || 'fetch failed';
   }
@@ -1992,6 +1986,7 @@ async function fetchSqueezeLatest() {
 
 function renderSqueezePanel() {
   const statusEl = document.getElementById('squeeze-status');
+  const warningEl = document.getElementById('squeeze-warning');
   const tbody = document.getElementById('squeeze-tbody');
 
   if (squeezeError) {
@@ -2003,16 +1998,19 @@ function renderSqueezePanel() {
     return;
   }
 
-  const status = formatSqueezeScanStatus(squeezePointer);
+  const status = formatSqueezeScanStatus(squeezePointer, squeezeNow());
   statusEl.textContent = status.text;
   statusEl.dataset.state = status.state;
 
-  const rows = (squeezePointer && squeezePointer.candidates) || [];
-  const todayKey = squeezeTodayKey();
-  const previouslySeen = loadSqueezeSeenTickers();
-  const tracked = trackFirstSeenToday(rows.map(r => r.ticker), previouslySeen, todayKey);
-  saveSqueezeSeenTickers({ dateKey: tracked.dateKey, tickers: tracked.tickers });
+  // PR #105 review, finding 1: latest.json only advances on a successful
+  // run, so a failed/partial attempt newer than the last success is
+  // otherwise invisible -- the old successful table would keep looking
+  // like nothing had gone wrong since.
+  const failureNotice = describeSqueezeAcquisitionFailure(squeezePointer, squeezeAttemptPointer);
+  warningEl.textContent = failureNotice || '';
+  warningEl.classList.toggle('hidden', !failureNotice);
 
+  const rows = (squeezePointer && squeezePointer.candidates) || [];
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>';
     return;
@@ -2022,14 +2020,25 @@ function renderSqueezePanel() {
     const factor = row.scores.factor != null ? row.scores.factor.toFixed(3) : '—';
     const options = row.scores.options != null ? row.scores.options.toFixed(3) : 'unavailable';
     const price = row.price != null ? `$${row.price.toFixed(2)}` : '—';
-    const isNew = tracked.newlySeen.has(row.ticker);
+    // PR #105 review, finding 3: no client-side heuristic (localStorage,
+    // calendar-day tracking) substitutes for a canonical "first seen"
+    // fact -- it can't be established across viewers, and the prior
+    // implementation's badge disappeared on the very next poll of an
+    // unchanged run because it was recomputed as state instead of read
+    // from data. The producer is adding first-seen metadata to
+    // short-squeeze-scanner's published schema in a separate PR (OA-191);
+    // this column reads that field directly once it exists (name TBD by
+    // that PR's contract) and shows "unavailable" until then -- stable
+    // across any number of polls of the same run, since it's now a pure
+    // function of the row's own data, not tracked state.
+    const firstSeen = row.first_seen_at ? 'New' : 'unavailable';
     return `<tr>
       <td><a href="https://www.tradingview.com/symbols/${encodeURIComponent(row.ticker)}/" target="_blank" rel="noopener">${escapeHtml(row.ticker)}</a></td>
       <td>${price}</td>
       <td>${factor}</td>
       <td>${options}</td>
       <td>${combined}</td>
-      <td>${isNew ? '<span class="squeeze-new-badge">New</span>' : ''}</td>
+      <td class="squeeze-first-seen">${firstSeen}</td>
     </tr>`;
   }).join('');
 }

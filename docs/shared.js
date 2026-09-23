@@ -245,47 +245,61 @@ const SQUEEZE_SCAN_STALE_AFTER_MS = 6 * 60 * 60 * 1000; // no scheduled runs exi
 // "stale" here means "old enough a reader shouldn't assume this reflects
 // current prices," not a violated SLA against a real schedule.
 
+// PR #105 review, finding 2: freshness must be judged against ACQUISITION
+// time (when the scan actually ran), not `published_at` (when the pointer
+// file happened to be written to R2) -- those can differ by a day if an
+// upload is delayed, and `published_at` alone would render a September 22
+// scan uploaded September 23 as fresh ("live"). `finished_at` (falling back
+// to `started_at`) is the acquisition-time field; `published_at` is never
+// used for the age/staleness judgment here anymore.
 function formatSqueezeScanStatus(pointer, nowMs = Date.now()) {
   if (!pointer) return { text: 'No scan published yet', state: 'fallback' };
-  const publishedMs = Date.parse(pointer.published_at || '');
-  const time = Number.isFinite(publishedMs)
-    ? new Date(publishedMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+  const acquiredMs = Date.parse(pointer.finished_at || pointer.started_at || '');
+  const dateText = Number.isFinite(acquiredMs)
+    ? new Date(acquiredMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+    : 'unknown date';
+  const timeText = Number.isFinite(acquiredMs)
+    ? new Date(acquiredMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
     : 'unknown time';
+  // A prior-day scan is explicitly stale regardless of raw age in ms -- a
+  // 9pm run is under SQUEEZE_SCAN_STALE_AFTER_MS old at 11pm the same
+  // night, but is still yesterday's data once a new session has started.
+  const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(nowMs));
+  const scanDateKey = Number.isFinite(acquiredMs)
+    ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(acquiredMs))
+    : null;
+  const priorDay = scanDateKey != null && scanDateKey !== todayKey;
+  const label = priorDay ? `${dateText}, ${timeText}` : timeText;
+
   if (pointer.status === 'empty') {
-    return { text: `Scan complete ${time} ET — no eligible candidates`, state: 'stale' };
+    return { text: `Scan complete ${label} ET — no eligible candidates`, state: 'stale' };
   }
-  const ageMs = Number.isFinite(publishedMs) ? nowMs - publishedMs : null;
-  const stale = ageMs == null || ageMs > SQUEEZE_SCAN_STALE_AFTER_MS;
-  return { text: `Scan published ${time} ET${stale ? ' (stale)' : ''}`, state: stale ? 'stale' : 'live' };
+  const ageMs = Number.isFinite(acquiredMs) ? nowMs - acquiredMs : null;
+  const stale = priorDay || ageMs == null || ageMs > SQUEEZE_SCAN_STALE_AFTER_MS;
+  return { text: `Scan ${label} ET${stale ? ' (stale)' : ''}`, state: stale ? 'stale' : 'live' };
 }
 
-// Client-side "first seen today" tracking for the New badge.
-//
-// KNOWN LIMITATION: this is a per-viewer fact, not a canonical page-level
-// one. Two browsers opening the page for the first time on different days'
-// runs (e.g. one right after the 9am scan, another right after the noon
-// scan) will each treat whatever they first see as "not new," so the same
-// ticker can show as New to one viewer and not another. The pointer schema
-// (storage.py's `upload()`) does not yet publish a first-seen-at field or a
-// same-day run history this page could diff against instead -- see
-// docs/plans/2026-09-squeeze-scanner-panel.md. Accurate "first seen today"
-// needs either of those from the scanner side; this is a reasonable
-// approximation until then, not a permanent design choice.
-//
-// `previouslySeen` / the return value are plain {dateKey, tickers} objects
-// (tickers: {ticker: true}), not real localStorage -- callers own the actual
-// storage read/write so this stays testable without a DOM.
-function trackFirstSeenToday(tickers, previouslySeen, todayKey) {
-  const carriedOver = previouslySeen && previouslySeen.dateKey === todayKey;
-  const seen = carriedOver ? { ...previouslySeen.tickers } : {};
-  const newlySeen = new Set();
-  for (const ticker of tickers) {
-    if (!(ticker in seen)) {
-      seen[ticker] = true;
-      newlySeen.add(ticker);
-    }
-  }
-  return { dateKey: todayKey, tickers: seen, newlySeen };
+// PR #105 review, finding 1: `latest.json` only ever advances on a
+// successful (complete/empty) run -- storage.py's `upload()` always
+// advances `latest-attempt.json` regardless of outcome. Without checking
+// the attempt pointer too, a failed or partial noon scan is invisible: the
+// morning's successful result keeps showing as if nothing had gone wrong
+// since. `successPointer`/`attemptPointer` are the parsed latest.json /
+// latest-attempt.json bodies (either may be null if nothing was ever
+// published to that path yet).
+function describeSqueezeAcquisitionFailure(successPointer, attemptPointer) {
+  if (!attemptPointer) return null;
+  if (attemptPointer.status === 'complete' || attemptPointer.status === 'empty') return null; // the attempt succeeded
+  const attemptIsNewer = !successPointer ||
+    Date.parse(attemptPointer.started_at || '') > Date.parse(successPointer.started_at || '');
+  if (!attemptIsNewer) return null; // the failure is older than the successful result already shown
+  const startedMs = Date.parse(attemptPointer.started_at || '');
+  const time = Number.isFinite(startedMs)
+    ? new Date(startedMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  return successPointer
+    ? `Most recent scan (started ${time} ET) did not complete: ${attemptPointer.status}. Showing the last successful result below.`
+    : `No successful scan yet. Most recent attempt (started ${time} ET): ${attemptPointer.status}.`;
 }
 
 // EIA STEO crude calibration panel formatting (docs/index.html's
@@ -827,7 +841,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
-    fmtSteoDelta, findRevision, formatSqueezeScanStatus, trackFirstSeenToday,
+    fmtSteoDelta, findRevision, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };
