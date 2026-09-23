@@ -1,3 +1,4 @@
+import contextlib
 import gzip
 import hashlib
 import io
@@ -635,6 +636,30 @@ class UploaderTests(unittest.TestCase):
         self.assertEqual(len(uploader.artifacts), 1)
         self.assertGreaterEqual(attempts["n"], 3)
         self.assertGreaterEqual(uploader.failures, 2)
+
+
+class UploaderSpoolBytesRaceTests(unittest.TestCase):
+    def test_segment_unlinked_mid_measurement_is_not_an_ingest_error(self):
+        """The upload thread unlinks a finished segment before dequeuing it.
+        A concurrent spool_bytes() (called on every ingest write) must not
+        raise -- an OSError there was treated as a stream failure, forcing a
+        spurious reconnect and a partial session."""
+        class VanishingPath:
+            name = "owner-part-0000.ndjson.gz"
+
+            def exists(self):
+                return True
+
+            def stat(self):
+                raise FileNotFoundError(self.name)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kept = Path(tmp) / "kept.ndjson.gz"
+            kept.write_bytes(b"12345")
+            uploader = collector.Uploader(FakeR2(), "bucket", "p", max_spool_bytes=100)
+            uploader.enqueue(VanishingPath())
+            uploader.enqueue(kept)
+            self.assertEqual(uploader.spool_bytes(), 5)
 
 
 class SegmentSpoolExhaustionTests(unittest.TestCase):
@@ -1703,6 +1728,670 @@ class PreopenReadinessTests(unittest.TestCase):
                     self.assertEqual(summary["excluded_timesales"], {"missing_or_invalid_provider_time": 1})
                 if not ready_before_open:
                     self.assertIn("late_start_seconds=3.0", summary["partial_reasons"])
+
+
+
+UNIVERSES = {
+    # 2026-09-08 is a Tuesday: QQQ lists a 0DTE, IBIT (Mon/Wed/Fri) does not.
+    "QQQ": {"spot": 600, "expirations": ["2026-09-08", "2026-09-09"], "strikes": (600, 601)},
+    "IBIT": {"spot": 60, "expirations": ["2026-09-09", "2026-09-11"], "strikes": (60, 61)},
+}
+
+
+class MultiTradier:
+    """REST + stream fake for several underlyings that records every
+    market-data session created and every stream subscription opened.
+
+    ``now`` (the test clock) switches the clock/quote endpoints to premarket
+    before 09:30. ``chain_hooks`` run inside a symbol's chain request, so a
+    test can block, synchronise or fail one underlying's preparation. Stream
+    lines may be callables, run in order (e.g. to move the clock to the open).
+    """
+
+    def __init__(self, stream_lines=(), on_stream_end=None, spots=None, trade_date="2026-09-08",
+                 expirations=None, now=None, chain_hooks=None):
+        self.trade_date = trade_date
+        self.expirations = {symbol: spec["expirations"] for symbol, spec in UNIVERSES.items()}
+        self.expirations.update(expirations or {})
+        self.spots = {symbol: spec["spot"] for symbol, spec in UNIVERSES.items()}
+        self.spots.update(spots or {})
+        self.stream_lines = list(stream_lines)
+        self.on_stream_end = on_stream_end
+        self.now = now
+        self.chain_hooks = chain_hooks or {}
+        self.calls = []
+        self.sessions = 0
+        self.subscriptions = []
+        self.stream_opened = threading.Event()
+        self.session = Mock()
+        self.session.get.side_effect = self._stream
+
+    def premarket(self):
+        return self.now is not None and self.now() < datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+
+    def get(self, path, **params):
+        self.calls.append((path, params))
+        if path == "/markets/clock":
+            if self.premarket():
+                return {"clock": {"date": self.trade_date, "state": "premarket", "next_change": "09:30"}}
+            return {"clock": {"date": self.trade_date, "state": "open", "next_change": "16:00"}}
+        if path == "/markets/quotes":
+            symbol = params["symbols"]
+            spot = self.spots[symbol]
+            quote = {"symbol": symbol, "last": spot}
+            if self.premarket():
+                stamp = int(self.now().timestamp() * 1000)
+                quote.update(bid=spot - 0.01, ask=spot + 0.01, bid_date=stamp, ask_date=stamp)
+            return {"quotes": {"quote": quote}}
+        if path == "/markets/options/expirations":
+            return {"expirations": {"date": self.expirations[params["symbol"]]}}
+        if path == "/markets/options/chains":
+            symbol = params["symbol"]
+            if symbol in self.chain_hooks:
+                self.chain_hooks[symbol]()
+            return {"options": {"option": [
+                {"symbol": f"{symbol}-{kind}{strike}", "strike": strike, "option_type": name}
+                for strike in UNIVERSES[symbol]["strikes"]
+                for kind, name in (("C", "call"), ("P", "put"))
+            ]}}
+        raise AssertionError(path)
+
+    def create_market_session(self):
+        self.sessions += 1
+        return f"session-{self.sessions}"
+
+    def _stream(self, _url, params=None, **_kwargs):
+        self.subscriptions.append(params["symbols"].split(","))
+        self.stream_opened.set()
+        lines, on_end = self.stream_lines, self.on_stream_end
+
+        class Response(FakeResponse):
+            def iter_lines(inner, decode_unicode=True, chunk_size=None):
+                for line in lines:
+                    if callable(line):
+                        line()
+                        continue
+                    yield line if isinstance(line, str) else json.dumps(line)
+                if on_end:
+                    on_end()
+        return Response()
+
+
+class FaultR2(FakeR2):
+    """FakeR2 whose writes/listings can be delayed or failed by key prefix."""
+
+    def __init__(self):
+        super().__init__()
+        self.put_faults = []   # (key prefix, hook)
+        self.list_faults = []  # (listing prefix, hook)
+
+    def put_object(self, **kwargs):
+        for prefix, hook in self.put_faults:
+            if kwargs["Key"].startswith(prefix):
+                hook()
+        return super().put_object(**kwargs)
+
+    def list_objects_v2(self, **kwargs):
+        for prefix, hook in self.list_faults:
+            if kwargs["Prefix"].startswith(prefix):
+                hook()
+        return super().list_objects_v2(**kwargs)
+
+
+def archived_records(r2, prefix):
+    records = []
+    for (_bucket, key), body in sorted(r2.objects.items()):
+        if key.startswith(prefix + "/") and key.endswith(".ndjson.gz"):
+            records.extend(json.loads(line) for line in gzip.decompress(body).splitlines() if line.strip())
+    return records
+
+
+def only_json(r2, prefix, name):
+    matches = [json.loads(body) for (_b, key), body in r2.objects.items()
+               if key.startswith(f"{prefix}/{name}")]
+    assert len(matches) == 1, (prefix, name, len(matches))
+    return matches[0]
+
+
+QQQ_PREFIX = "moo144/tradier/2026-09-08"
+IBIT_PREFIX = "moo144/tradier-ibit/2026-09-08"
+
+
+class UnderlyingConfigTests(unittest.TestCase):
+    def test_default_is_qqq_same_day(self):
+        self.assertEqual(collector.parse_underlyings("QQQ"), [("QQQ", "same_day")])
+
+    def test_symbols_normalized_and_policies_parsed(self):
+        self.assertEqual(collector.parse_underlyings(" qqq , ibit:Nearest ,"),
+                         [("QQQ", "same_day"), ("IBIT", "nearest")])
+
+    def test_invalid_configurations_rejected(self):
+        for raw, message in (
+            ("IB/IT", "invalid symbol"),
+            ("IBIT:weekly", "policy must be one of"),
+            ("QQQ,qqq:nearest", "duplicate symbol"),
+            ("", "must list 1-4"),
+            ("A,B,C,D,E", "must list 1-4"),
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(RuntimeError, message):
+                collector.parse_underlyings(raw)
+
+    def test_qqq_keeps_original_layout(self):
+        self.assertEqual(collector.archive_root("QQQ"), "moo144/tradier")
+        self.assertEqual(collector.spool_dir_name("QQQ"), "moo144-collector-spool")
+
+    def test_other_underlyings_get_sibling_archive_but_share_stream_lease(self):
+        self.assertEqual(collector.archive_root("IBIT"), "moo144/tradier-ibit")
+        self.assertEqual(collector.spool_dir_name("IBIT"), "moo144-collector-spool-ibit")
+        # The lease guards the provider stream, so it has no per-underlying form.
+        self.assertEqual(collector.lease_key("2026-09-08"), "moo144/tradier/2026-09-08/lease.json")
+
+
+class StreamRouterTests(unittest.TestCase):
+    def lanes(self):
+        lanes = []
+        for underlying, symbols in (("QQQ", ["QQQ", "QQQ-C600"]), ("IBIT", ["IBIT", "IBIT-C60"])):
+            lane = collector.Lane(underlying, "same_day", "2026-09-08", Path("unused"))
+            lane.symbols = symbols
+            lane.spool = Mock()
+            lanes.append(lane)
+        return lanes
+
+    def written(self, lane):
+        return [call.args[0] for call in lane.spool.write.call_args_list]
+
+    def test_symbol_events_route_to_one_lane_and_stream_records_to_all(self):
+        qqq, ibit = self.lanes()
+        router = collector.StreamRouter([qqq, ibit])
+        self.assertEqual(router.symbols, ["QQQ", "QQQ-C600", "IBIT", "IBIT-C60"])
+        trade = {"type": "timesale", "symbol": "IBIT-C60", "seq": 1, "date": 1000}
+        router.write(router.observe(trade))
+        router.write(router.observe({"type": "quote", "symbol": "QQQ-C600", "biddate": 900}))
+        router.write({"type": "gap", "reason": "stream_disconnect"})
+        router.write(router.observe({"type": "heartbeat"}))
+        router.observe_malformed()
+        router.write({"type": "malformed", "provider_payload": "{"})
+        excluded = {"type": "timesale", "symbol": "QQQ-C600", "date": None}
+        router.observe_excluded(excluded, "missing_or_invalid_provider_time")
+        router.write({"type": "excluded_timesale", "provider_payload": excluded})
+
+        self.assertEqual([e["type"] for e in self.written(qqq)],
+                         ["quote", "gap", "heartbeat", "malformed", "excluded_timesale"])
+        self.assertEqual([e["type"] for e in self.written(ibit)],
+                         ["timesale", "gap", "heartbeat", "malformed"])
+        self.assertEqual(dict(ibit.stats.timesale_by_symbol), {"IBIT-C60": 1})
+        self.assertFalse(qqq.stats.timesale_by_symbol)
+        self.assertEqual(qqq.stats.quote_timestamps, {"QQQ-C600": 900})
+        self.assertEqual((qqq.stats.malformed, ibit.stats.malformed), (1, 1))
+        self.assertEqual(dict(qqq.stats.excluded_timesales), {"missing_or_invalid_provider_time": 1})
+        self.assertFalse(ibit.stats.excluded_timesales)
+
+    def test_overlapping_universes_rejected(self):
+        qqq, ibit = self.lanes()
+        ibit.symbols.append("QQQ-C600")
+        with self.assertRaisesRegex(RuntimeError, "selected for both"):
+            collector.StreamRouter([qqq, ibit])
+
+    def test_any_lane_spool_exhaustion_stops_the_shared_capture(self):
+        qqq, ibit = self.lanes()
+        ibit.spool.write.side_effect = collector.SpoolExhausted("cap")
+        router = collector.StreamRouter([qqq, ibit])
+        client = FakeStreamClient()
+        client.session.get.side_effect = lambda *_a, **_k: FakeResponseWithLines(
+            ['{"type": "quote", "symbol": "IBIT"}'])
+        result = collector.capture_session(
+            client, router.symbols, router, router, datetime(2026, 9, 8, 16, 0, tzinfo=ET), 5,
+            now_et=lambda: datetime(2026, 9, 8, 10, 0, tzinfo=ET),
+        )
+        self.assertEqual(result.stop_reason, "spool_exhausted")
+        self.assertEqual(client.sessions, 1)
+
+
+class SharedStreamMainTests(unittest.TestCase):
+    """main() end-to-end for several underlyings through the real
+    capture_session: one provider session, routed per-underlying archives,
+    concurrent bounded startup."""
+
+    def setUp(self):
+        collector.STOP = False
+        self.open = datetime(2026, 9, 8, 9, 30, tzinfo=ET)
+        self.close = datetime(2026, 9, 8, 16, 0, tzinfo=ET)
+        self.cutoff = self.open - timedelta(seconds=collector.OPTIONAL_LANE_RESERVE_SECONDS)
+        self.now = {"t": self.open - timedelta(seconds=60)}
+        self.clock_lock = threading.Lock()
+        self.open_ms = int(self.open.timestamp() * 1000)
+        self.logs = io.StringIO()
+
+    def clock(self):
+        with self.clock_lock:
+            return self.now["t"]
+
+    def set_clock(self, value):
+        with self.clock_lock:
+            self.now["t"] = value
+
+    def sleep(self, seconds):
+        # Simulated time advances by the requested amount; the short real
+        # pause lets preparation threads make progress meanwhile.
+        with self.clock_lock:
+            self.now["t"] += timedelta(seconds=seconds)
+        time.sleep(0.005)
+
+    def end_stream(self):
+        self.set_clock(self.close)
+
+    def client(self, **kwargs):
+        kwargs.setdefault("on_stream_end", self.end_stream)
+        return MultiTradier(now=self.clock, **kwargs)
+
+    def to_open(self):
+        self.set_clock(self.open)
+
+    def lines(self, preopen=True, ibit=True):
+        """Default: a pre-open warm-up quote on the connection, then the open."""
+        warmup = [{"type": "quote", "symbol": "QQQ", "biddate": self.open_ms - 5000,
+                   "askdate": self.open_ms - 5000}, self.to_open] if preopen else []
+        qqq = [
+            {"type": "quote", "symbol": "QQQ", "biddate": self.open_ms, "askdate": self.open_ms},
+            {"type": "timesale", "symbol": "QQQ-C600", "seq": 1, "session": "normal",
+             "date": self.open_ms + 1000},
+        ]
+        ibit_lines = [
+            {"type": "quote", "symbol": "IBIT-P61", "biddate": self.open_ms, "askdate": self.open_ms},
+            {"type": "timesale", "symbol": "IBIT-P61", "seq": 7, "session": "normal",
+             "date": self.open_ms + 2000},
+        ] if ibit else []
+        return warmup + qqq + ibit_lines + [{"type": "heartbeat"}]
+
+    def run_main(self, tmp, client, underlyings, r2=None, env=None):
+        r2 = r2 if r2 is not None else FakeR2()
+        full_env = {
+            "TRADIER_TOKEN": "token",
+            "MOO144_STRIKE_COUNT": "2",
+            "MOO144_CHECKPOINT_SECONDS": "30",
+            "MOO144_MAX_CONSECUTIVE_RECONNECTS": "5",
+            "MOO144_LEASE_TTL_SECONDS": "300",
+            "MOO144_SPOOL_DIR": str(tmp),
+            "MOO144_UNDERLYINGS": underlyings,
+            "MOO144_OPTIONAL_SPOOL_BYTES": str(128 * 1024 * 1024),
+            **(env or {}),
+        }
+        with (
+            patch.dict(os.environ, full_env, clear=False),
+            patch.object(collector, "r2_client", return_value=(r2, "bucket")),
+            patch.object(collector, "Tradier", return_value=client),
+            contextlib.redirect_stdout(self.logs),
+        ):
+            result = collector.main(
+                clock_et=self.clock,
+                sleeper=self.sleep,
+                session_bounds=lambda _day: (self.open, self.close),
+                uploader_sleeper=time.sleep,
+                drain_timeout_seconds=5.0,
+            )
+        return result, r2
+
+    def log_events(self, name):
+        return [json.loads(line) for line in self.logs.getvalue().splitlines()
+                if line.startswith("{") and json.loads(line).get("event") == name]
+
+    def wait_for_log(self, name, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.log_events(name):
+                return
+            time.sleep(0.01)
+        raise AssertionError(f"no {name} log within {timeout}s")
+
+    def test_combined_collection_uses_one_provider_session_and_routes_by_underlying(self):
+        client = self.client(stream_lines=self.lines())
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest")
+            self.assertTrue((Path(tmp) / "moo144-collector-spool" / "2026-09-08").is_dir())
+            self.assertTrue((Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-08").is_dir())
+        self.assertEqual(result, 0)
+
+        # Exactly one market-data session and one subscription covering both universes.
+        self.assertEqual(client.sessions, 1)
+        self.assertEqual(len(client.subscriptions), 1)
+        self.assertEqual(set(client.subscriptions[0]), {
+            "QQQ", "QQQ-C600", "QQQ-P600", "QQQ-C601", "QQQ-P601",
+            "IBIT", "IBIT-C60", "IBIT-P60", "IBIT-C61", "IBIT-P61",
+        })
+        # One stream lease, at the fixed key; none per underlying.
+        self.assertEqual([k for (_b, k) in r2.objects if k.endswith("lease.json")],
+                         [f"{QQQ_PREFIX}/lease.json"])
+
+        qqq_records = archived_records(r2, QQQ_PREFIX)
+        ibit_records = archived_records(r2, IBIT_PREFIX)
+        self.assertEqual([(r["type"], r.get("symbol")) for r in qqq_records],
+                         [("quote", "QQQ"), ("timesale", "QQQ-C600"), ("heartbeat", None)])
+        self.assertEqual([(r["type"], r.get("symbol")) for r in ibit_records],
+                         [("quote", "IBIT-P61"), ("timesale", "IBIT-P61"), ("heartbeat", None)])
+        self.assertEqual(ibit_records[1]["preceding_quote_age_ms"], 2000)
+
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        for summary, underlying in ((qqq, "QQQ"), (ibit, "IBIT")):
+            self.assertEqual(summary["status"], "complete", summary["partial_reasons"])
+            self.assertEqual(summary["underlying"], underlying)
+            self.assertEqual(summary["universe"]["underlying"], underlying)
+            self.assertEqual(summary["stream"]["active_underlyings"], ["QQQ", "IBIT"])
+            self.assertEqual(summary["stream"]["subscribed_symbols"], 10)
+        # The primary keeps its full existing cap; the optional lane has its own.
+        self.assertEqual(qqq["spool_cap_bytes"], 512 * 1024 * 1024)
+        self.assertEqual(ibit["spool_cap_bytes"], 128 * 1024 * 1024)
+        self.assertEqual((qqq["universe"]["expiration"], qqq["universe"]["days_to_expiration"]),
+                         ("2026-09-08", 0))
+        self.assertEqual((ibit["universe"]["expiration"], ibit["universe"]["days_to_expiration"]),
+                         ("2026-09-09", 1))
+        self.assertEqual(ibit["expiration_policy"], "nearest")
+        self.assertEqual(qqq["timesale_counts_by_symbol"], {"QQQ-C600": 1})
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+        for prefix in (QQQ_PREFIX, IBIT_PREFIX):
+            manifest = only_json(r2, prefix, "manifest-")
+            self.assertEqual(manifest["status"], "complete")
+            self.assertTrue(all(a["key"].startswith(prefix + "/") for a in manifest["artifacts"]))
+
+    def test_preparations_overlap_and_join_one_initial_preopen_subscription(self):
+        # Each chain request waits for the other: serial preparation would
+        # break the barrier instead of passing it.
+        barrier = threading.Barrier(2, timeout=5)
+        overlapped = []
+
+        def meet(symbol):
+            def hook():
+                barrier.wait()
+                overlapped.append(symbol)
+            return hook
+
+        client = self.client(stream_lines=self.lines(),
+                             chain_hooks={"QQQ": meet("QQQ"), "IBIT": meet("IBIT")})
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest")
+        self.assertEqual(result, 0)
+        self.assertEqual(sorted(overlapped), ["IBIT", "QQQ"])
+        self.assertEqual(client.sessions, 1)
+        self.assertEqual(len(client.subscriptions), 1)
+        self.assertIn("IBIT-P61", client.subscriptions[0])
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        for summary in (qqq, ibit):
+            self.assertEqual(summary["status"], "complete", summary["partial_reasons"])
+            self.assertLessEqual(datetime.fromisoformat(summary["stream_connected_at"]), self.cutoff)
+            self.assertLessEqual(datetime.fromisoformat(summary["opening_stream_ready_at"]), self.open)
+        self.assertEqual(qqq["universe"]["spot_source"], "premarket_bid_ask_midpoint")
+        self.assertEqual(ibit["universe"]["spot_source"], "premarket_bid_ask_midpoint")
+        self.assertFalse(self.log_events("optional_lane_excluded"))
+
+    def test_slow_optional_lane_cannot_delay_ready_primary(self):
+        """Owen's reproduction, made concurrency-correct: QQQ is ready at once
+        while IBIT's preparation stays blocked until after the stream has
+        connected, then fails or completes. QQQ connects at the cutoff (or
+        within the late-start budget), IBIT is excluded, and its late result
+        is discarded without touching the subscription or the archive."""
+        cases = [
+            ("preopen_timeout", self.open - timedelta(seconds=60), TimeoutError("simulated slow IBIT")),
+            ("preopen_late_success", self.open - timedelta(seconds=60), None),
+            ("restart_after_open_timeout", self.open.replace(hour=11), TimeoutError("simulated slow IBIT")),
+        ]
+        for name, start, failure in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                self.setUp()
+                self.set_clock(start)
+                preopen = start < self.open
+                holder = {}
+
+                def slow_ibit(failure=failure):
+                    # Blocks until the shared stream is already connected.
+                    self.assertTrue(holder["client"].stream_opened.wait(timeout=5))
+                    if failure is not None:
+                        raise failure
+
+                def end_after_discard():
+                    self.wait_for_log("optional_lane_result_discarded")
+                    self.set_clock(self.close)
+
+                client = self.client(
+                    stream_lines=self.lines(preopen=preopen, ibit=False),
+                    chain_hooks={"IBIT": slow_ibit}, on_stream_end=end_after_discard,
+                )
+                holder["client"] = client
+                result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest")
+
+                self.assertEqual(result, 0)
+                self.assertEqual(client.sessions, 1)
+                self.assertEqual(len(client.subscriptions), 1)
+                self.assertFalse([s for s in client.subscriptions[0] if s.startswith("IBIT")])
+                qqq = only_json(r2, QQQ_PREFIX, "summary-")
+                connected = datetime.fromisoformat(qqq["stream_connected_at"])
+                if preopen:
+                    self.assertEqual(connected, self.cutoff)
+                    self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+                else:
+                    budget = timedelta(seconds=collector.LATE_START_OPTIONAL_BUDGET_SECONDS)
+                    self.assertLessEqual(connected, start + budget)
+                    self.assertTrue(any(r.startswith("late_start_seconds=") for r in qqq["partial_reasons"]))
+                self.assertEqual(qqq["stream"]["unavailable_underlyings"], {"IBIT": "missed_preparation_cutoff"})
+
+                ibit = only_json(r2, IBIT_PREFIX, "summary-")
+                self.assertEqual(ibit["status"], "partial")
+                self.assertEqual(ibit["partial_reasons"], ["lane_unavailable: missed_preparation_cutoff"])
+                self.assertIsNone(ibit["universe"])
+                # The late worker published nothing: only main's final summary/manifest.
+                ibit_keys = sorted(k for (_b, k) in r2.objects if k.startswith(IBIT_PREFIX + "/"))
+                self.assertEqual([Path(k).name.split("-")[0] for k in ibit_keys], ["manifest", "summary"])
+                discarded = self.log_events("optional_lane_result_discarded")
+                self.assertEqual([d["underlying"] for d in discarded], ["IBIT"])
+                expected = ("LaneAdmissionClosed: lane frozen before universe_persist" if failure is None
+                            else "TimeoutError: simulated slow IBIT")
+                self.assertEqual(discarded[0]["error"], expected)
+                self.assertEqual(discarded[0]["writes_completed"], [])
+
+    def test_optional_lanes_require_an_explicit_spool_allocation(self):
+        for env, reason in (
+            ({"MOO144_OPTIONAL_SPOOL_BYTES": ""}, "optional_spool_allocation_unset"),
+            ({"MOO144_OPTIONAL_SPOOL_BYTES": str(1 << 60)}, "spool_allocation_exceeds_volume"),
+        ):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                self.setUp()
+                client = self.client(stream_lines=self.lines(ibit=False))
+                result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", env=env)
+                self.assertEqual(result, 0)
+                self.assertFalse([p for p, params in client.calls
+                                  if params.get("symbol") == "IBIT" or params.get("symbols") == "IBIT"])
+                qqq = only_json(r2, QQQ_PREFIX, "summary-")
+                self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+                self.assertEqual(qqq["spool_cap_bytes"], 512 * 1024 * 1024)
+                ibit = only_json(r2, IBIT_PREFIX, "summary-")
+                self.assertEqual(ibit["partial_reasons"], [f"lane_unavailable: {reason}"])
+
+    def test_second_collector_sharing_the_token_cannot_open_a_stream(self):
+        """Whatever it is configured for, a second collector contends for the
+        same stream lease and fails before creating a provider session."""
+        for underlyings in ("IBIT:nearest", "QQQ,IBIT:nearest", "QQQ"):
+            with self.subTest(underlyings=underlyings), tempfile.TemporaryDirectory() as tmp:
+                r2 = FakeR2()
+                collector.acquire_lease(r2, "bucket", "2026-09-08", "live-owner", ttl_seconds=3600)
+                before = dict(r2.objects)
+                client = self.client(stream_lines=self.lines())
+                with self.assertRaisesRegex(RuntimeError, "held by"):
+                    self.run_main(tmp, client, underlyings, r2=r2)
+                self.assertEqual(client.sessions, 0)
+                self.assertFalse(client.session.get.called)
+                self.assertEqual(r2.objects, before)
+
+    def test_restart_resumes_each_lane_under_its_own_prefix_with_fixed_universes(self):
+        r2 = FakeR2()
+        with tempfile.TemporaryDirectory() as tmp:
+            spool = Path(tmp)
+            # A previous owner selected both universes, then crashed with
+            # unuploaded segments today and a stale IBIT segment from yesterday.
+            first = MultiTradier()
+            for underlying, policy, prefix in (("QQQ", "same_day", QQQ_PREFIX),
+                                               ("IBIT", "nearest", IBIT_PREFIX)):
+                collector.load_or_select_universe(
+                    first, r2, "bucket", prefix, 2, "2026-09-08", self.open,
+                    underlying=underlying, expiration_policy=policy,
+                )
+            orphans = {
+                QQQ_PREFIX: spool / "moo144-collector-spool" / "2026-09-08",
+                IBIT_PREFIX: spool / "moo144-collector-spool-ibit" / "2026-09-08",
+                "moo144/tradier-ibit/2026-09-07": spool / "moo144-collector-spool-ibit" / "2026-09-07",
+            }
+            for prefix, directory in orphans.items():
+                directory.mkdir(parents=True)
+                with gzip.open(directory / "prior-owner-part-0000.ndjson.gz", "wt") as handle:
+                    handle.write(json.dumps({"type": "quote", "archive": prefix}) + "\n")
+
+            # Spot has moved; a restart must reuse, never re-select, the universes.
+            client = self.client(stream_lines=self.lines(), spots={"QQQ": 640, "IBIT": 70})
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+            for directory in orphans.values():
+                self.assertFalse((directory / "prior-owner-part-0000.ndjson.gz").exists())
+        self.assertEqual(result, 0)
+        self.assertEqual(client.sessions, 1)
+        self.assertFalse([path for path, _ in client.calls if path.startswith("/markets/options")])
+        for prefix in orphans:
+            body = r2.objects[("bucket", f"{prefix}/prior-owner-part-0000.ndjson.gz")]
+            self.assertEqual(json.loads(gzip.decompress(body))["archive"], prefix)
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(qqq["universe"]["spot"], 600)
+        self.assertEqual(ibit["universe"]["spot"], 60)
+        self.assertEqual((qqq["resumed_local_records"], ibit["resumed_local_records"]), (1, 1))
+        # Optional lanes recover prior dates after the close, still under their own root.
+        self.assertIn("2026-09-07", ibit["stale_sessions_recovered"])
+        self.assertEqual(qqq["stale_sessions_recovered"], {})
+        preflight = only_json(r2, IBIT_PREFIX, "run-started-")
+        self.assertEqual(preflight["stale_sessions_recovered"], "deferred_until_after_close")
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+
+    def test_one_lane_selection_failure_keeps_other_lanes_streaming(self):
+        # IBIT under strict 0DTE on a Tuesday cannot select a universe.
+        client = self.client(stream_lines=self.lines(ibit=False))
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT")
+        self.assertEqual(result, 0)
+        self.assertEqual(client.sessions, 1)
+        self.assertFalse([s for s in client.subscriptions[0] if s.startswith("IBIT")])
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+        self.assertEqual(qqq["stream"]["active_underlyings"], ["QQQ"])
+        self.assertEqual(ibit["status"], "partial")
+        self.assertIsNone(ibit["universe"])
+        self.assertTrue(ibit["partial_reasons"][0].startswith(
+            "lane_unavailable: selection_failed: RuntimeError: IBIT has no 0DTE expiration"))
+        self.assertEqual(ibit["event_parts"], [])
+        self.assertNotIn(("bucket", f"{IBIT_PREFIX}/universe.json"), r2.objects)
+
+    def test_primary_selection_failure_is_fatal_before_any_stream(self):
+        client = self.client(expirations={"QQQ": ["2026-09-09"]})
+        with tempfile.TemporaryDirectory() as tmp, \
+                self.assertRaisesRegex(RuntimeError, "QQQ has no 0DTE expiration"):
+            self.run_main(tmp, client, "QQQ,IBIT:nearest")
+        self.assertEqual(client.sessions, 0)
+
+
+    def unavailable(self, *_a):
+        raise ClientError(status=503, code="ServiceUnavailable")
+
+    def test_optional_storage_faults_cannot_delay_or_abort_the_primary(self):
+        """Slow or failing IBIT universe persistence or preflight is bounded by
+        the same cutoff: QQQ connects in time on exactly one provider stream,
+        and IBIT is excluded with an explicit reason."""
+        universe_key = f"{IBIT_PREFIX}/universe.json"
+        preflight_key = f"{IBIT_PREFIX}/run-started-"
+        cases = [
+            # The in-flight persist lands late, but the frozen lane then stops
+            # before its preflight: nothing further is written.
+            ("slow_universe_persist", universe_key, "slow", "missed_preparation_cutoff",
+             ("preflight", ["universe"], "LaneAdmissionClosed: lane frozen before preflight")),
+            ("slow_preflight", preflight_key, "slow", "missed_preparation_cutoff",
+             ("preflight", ["universe", "preflight"], None)),
+            ("failed_universe_persist", universe_key, "fail",
+             "universe_persist_failed: ClientError: ServiceUnavailable", None),
+            ("failed_preflight", preflight_key, "fail",
+             "preflight_failed: ClientError: ServiceUnavailable", None),
+        ]
+        for name, key, mode, reason, discard in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                self.setUp()
+                r2 = FaultR2()
+                holder = {}
+
+                def slow(*_a):
+                    # The write is in flight until the shared stream is connected.
+                    self.assertTrue(holder["client"].stream_opened.wait(timeout=5))
+
+                r2.put_faults.append((key, slow if mode == "slow" else self.unavailable))
+
+                def end_stream():
+                    if mode == "slow":
+                        self.wait_for_log("optional_lane_result_discarded")
+                    self.set_clock(self.close)
+
+                client = self.client(stream_lines=self.lines(ibit=False), on_stream_end=end_stream)
+                holder["client"] = client
+                result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+
+                self.assertEqual(result, 0)
+                self.assertEqual(client.sessions, 1)
+                self.assertEqual(len(client.subscriptions), 1)
+                self.assertFalse([s for s in client.subscriptions[0] if s.startswith("IBIT")])
+                qqq = only_json(r2, QQQ_PREFIX, "summary-")
+                self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+                self.assertLessEqual(datetime.fromisoformat(qqq["stream_connected_at"]), self.cutoff)
+                self.assertTrue(only_json(r2, QQQ_PREFIX, "manifest-"))
+                ibit = only_json(r2, IBIT_PREFIX, "summary-")
+                self.assertEqual(ibit["partial_reasons"][0], f"lane_unavailable: {reason}")
+                self.assertIsNone(ibit["universe"])
+                if mode == "slow":
+                    discarded = self.log_events("optional_lane_result_discarded")
+                    self.assertEqual([(d["stage"], d["writes_completed"], d["error"]) for d in discarded],
+                                     [discard])
+
+    def test_optional_stale_recovery_failure_is_contained_and_reported(self):
+        r2 = FaultR2()
+        r2.list_faults.append(("moo144/tradier-ibit/2026-09-07/", self.unavailable))
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / "moo144-collector-spool-ibit" / "2026-09-07"
+            stale.mkdir(parents=True)
+            orphan = stale / "prior-owner-part-0000.ndjson.gz"
+            with gzip.open(orphan, "wt") as handle:
+                handle.write('{"type":"quote"}\n')
+            client = self.client(stream_lines=self.lines())
+            result, r2 = self.run_main(tmp, client, "QQQ,IBIT:nearest", r2=r2)
+            self.assertTrue(orphan.exists())  # retained for a later recovery
+        self.assertEqual(result, 0)
+        qqq = only_json(r2, QQQ_PREFIX, "summary-")
+        self.assertEqual(qqq["status"], "complete", qqq["partial_reasons"])
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "manifest-")["status"], "complete")
+        self.assertEqual(qqq["timesale_counts_by_symbol"], {"QQQ-C600": 1})
+        ibit = only_json(r2, IBIT_PREFIX, "summary-")
+        self.assertEqual(ibit["status"], "partial")
+        self.assertEqual(ibit["partial_reasons"],
+                         ["stale_recovery_failed: 2026-09-07: ClientError: ServiceUnavailable"])
+        entry = ibit["stale_sessions_recovered"]["2026-09-07"]
+        self.assertEqual(entry["recovery_failed"], "ClientError: ServiceUnavailable")
+        self.assertEqual(entry["retained_local_files"], ["prior-owner-part-0000.ndjson.gz"])
+        self.assertEqual(ibit["timesale_counts_by_symbol"], {"IBIT-P61": 1})
+        self.assertFalse([k for (_b, k) in r2.objects if k.startswith("moo144/tradier-ibit/2026-09-07/")])
+        self.assertEqual([e["underlying"] for e in self.log_events("stale_recovery_failed")], ["IBIT"])
+
+    def test_optional_finalization_failure_does_not_cost_primary_its_report(self):
+        r2 = FaultR2()
+        r2.put_faults.append((f"{IBIT_PREFIX}/summary-", self.unavailable))
+        with tempfile.TemporaryDirectory() as tmp:
+            result, r2 = self.run_main(tmp, self.client(stream_lines=self.lines()), "QQQ,IBIT:nearest", r2=r2)
+        self.assertEqual(result, 0)
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "summary-")["status"], "complete")
+        self.assertEqual(only_json(r2, QQQ_PREFIX, "manifest-")["status"], "complete")
+        lanes = self.log_events("collector_complete")[0]["lanes"]
+        self.assertEqual(lanes["QQQ"]["status"], "complete")
+        self.assertEqual(lanes["IBIT"]["partial_reasons"],
+                         ["lane_finalization_failed: ClientError: ServiceUnavailable"])
 
 
 if __name__ == "__main__":

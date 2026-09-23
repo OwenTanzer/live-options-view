@@ -3,7 +3,8 @@
 
 Captures a narrow near-the-money QQQ 0DTE universe, writes normalized provider
 payloads to immutable gzip NDJSON checkpoints, and uploads verified artifacts
-to an isolated R2 prefix. It never accesses account or order endpoints.
+to an isolated R2 prefix. (The daily collector reuses ``select_symbols`` with
+other underlyings/expiration policies.) It never accesses account or order endpoints.
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ API = "https://api.tradier.com/v1"
 STREAM = "https://stream.tradier.com/v1/markets/events"
 ET = ZoneInfo("America/New_York")
 STOP = False
+DEFAULT_UNDERLYING = "QQQ"
+# "same_day" requires a 0DTE expiration (QQQ lists one every session).
+# "nearest" takes the first expiration on/after the trade date, for
+# underlyings such as IBIT that list only Mon/Wed/Fri expirations.
+EXPIRATION_POLICIES = ("same_day", "nearest")
 EXPECTED_TIMESALE_FIELDS = (
     "symbol", "exch", "bid", "ask", "last", "size", "date", "seq",
     "flag", "cancel", "correction", "session",
@@ -127,7 +133,11 @@ def select_symbols(
     now_et: datetime | None = None,
     *,
     session_open: datetime | None = None,
+    underlying: str = DEFAULT_UNDERLYING,
+    expiration_policy: str = "same_day",
 ) -> tuple[list[str], dict[str, Any]]:
+    if expiration_policy not in EXPIRATION_POLICIES:
+        raise RuntimeError(f"Unknown expiration policy: {expiration_policy!r}")
     selection_started = time.monotonic()
     now_et = now_et or datetime.now(ET)
     clock = client.get("/markets/clock").get("clock") or {}
@@ -146,10 +156,10 @@ def select_symbols(
     else:
         trade_date = validate_run_window(run_date, clock, duration_seconds, now_et)
 
-    quote_payload = client.get("/markets/quotes", symbols="QQQ")
+    quote_payload = client.get("/markets/quotes", symbols=underlying)
     quotes = normalize((quote_payload.get("quotes") or {}).get("quote"))
     if not quotes:
-        raise RuntimeError("Tradier returned no QQQ quote")
+        raise RuntimeError(f"Tradier returned no {underlying} quote")
     quote = quotes[0]
     spot_source = "last_or_quote"
     spot_timestamp = None
@@ -163,28 +173,42 @@ def select_symbols(
         now_ms = now_et.timestamp() * 1000 + (time.monotonic() - selection_started) * 1000
         if (not 0 < bid <= ask or any(t is None or not 0 <= now_ms - t <= 120000
                                      for t in timestamps)):
-            raise RuntimeError("No fresh two-sided QQQ quote for pre-open selection")
+            raise RuntimeError(f"No fresh two-sided {underlying} quote for pre-open selection")
         price_values = [(bid + ask) / 2]
         spot_source = "premarket_bid_ask_midpoint"
         spot_timestamp = min(timestamps)
     try:
         spot = next(float(value) for value in price_values if value not in (None, "") and float(value) > 0)
     except StopIteration as exc:
-        raise RuntimeError("Tradier returned no positive QQQ reference price") from exc
+        raise RuntimeError(f"Tradier returned no positive {underlying} reference price") from exc
 
     expiration_payload = client.get(
-        "/markets/options/expirations", symbol="QQQ", includeAllRoots="true"
+        "/markets/options/expirations", symbol=underlying, includeAllRoots="true"
     )
     expirations = (expiration_payload.get("expirations") or {}).get("date") or []
     if isinstance(expirations, str):
         expirations = [expirations]
-    if trade_date not in expirations:
-        raise RuntimeError(
-            f"QQQ has no 0DTE expiration for {trade_date}; available head={expirations[:3]}"
-        )
+    if expiration_policy == "same_day":
+        if trade_date not in expirations:
+            raise RuntimeError(
+                f"{underlying} has no 0DTE expiration for {trade_date}; available head={expirations[:3]}"
+            )
+        expiration = trade_date
+    else:
+        # ISO dates compare correctly as strings.
+        upcoming = sorted(str(value) for value in expirations if str(value) >= trade_date)
+        if not upcoming:
+            raise RuntimeError(
+                f"{underlying} has no expiration on or after {trade_date}; available head={expirations[:3]}"
+            )
+        expiration = upcoming[0]
+    days_to_expiration = (
+        datetime.strptime(expiration, "%Y-%m-%d").date()
+        - datetime.strptime(trade_date, "%Y-%m-%d").date()
+    ).days
 
     chain_payload = client.get(
-        "/markets/options/chains", symbol="QQQ", expiration=trade_date, greeks="true"
+        "/markets/options/chains", symbol=underlying, expiration=expiration, greeks="true"
     )
     chain = normalize((chain_payload.get("options") or {}).get("option"))
     by_strike: dict[float, dict[str, str]] = defaultdict(dict)
@@ -199,7 +223,7 @@ def select_symbols(
         if kind in {"call", "put"}:
             by_strike[strike][kind] = symbol
             metadata[symbol] = {
-                "expiration": trade_date,
+                "expiration": expiration,
                 "strike": strike,
                 "option_type": kind,
             }
@@ -219,11 +243,13 @@ def select_symbols(
         if kind in by_strike[strike]
     ]
     if len(selected) < 4:
-        raise RuntimeError(f"Too few usable 0DTE contracts: {len(selected)}")
+        raise RuntimeError(f"Too few usable {days_to_expiration}DTE contracts: {len(selected)}")
 
     universe = {
-        "underlying": "QQQ",
-        "expiration": trade_date,
+        "underlying": underlying,
+        "expiration": expiration,
+        "expiration_policy": expiration_policy,
+        "days_to_expiration": days_to_expiration,
         "spot": spot,
         "strikes": sorted(nearest),
         "option_symbols": selected,
@@ -233,7 +259,7 @@ def select_symbols(
         "spot_source": spot_source,
         "spot_timestamp_ms": spot_timestamp,
     }
-    return ["QQQ", *selected], universe
+    return [underlying, *selected], universe
 
 
 def sha256_file(path: Path) -> str:

@@ -87,3 +87,114 @@ Provider references: https://docs.tradier.com/docs/clock,
 https://docs.tradier.com/docs/quotes, and
 https://docs.tradier.com/reference/http-streaming. The streaming session is created
 immediately before connection, within the documented five-minute session-ID lifetime.
+
+## IBIT collection (proposed; not deployed)
+
+Tradier permits one simultaneous market-data stream per account
+(https://docs.tradier.com/docs/streaming-data, Limits). IBIT is therefore
+collected by the **same** worker and stream as QQQ, never by a second service
+or a second process sharing `TRADIER_TOKEN`. Do not deploy another Tradier
+stream collector with this token without explicit Tradier confirmation that
+the access arrangement permits concurrent streams.
+
+`MOO144_UNDERLYINGS` lists the underlyings sharing the stream as comma-separated
+`SYMBOL[:policy]` (1-4 entries; the first is the primary). It defaults to `QQQ`, so the deployed service
+is unchanged until the variable is set. Policies:
+
+- `same_day` (default): requires a 0DTE expiration.
+- `nearest`: first listed expiration on/after the trade date. IBIT lists only
+  Monday/Wednesday/Friday expirations (since February 2026), so
+  `IBIT:nearest` gives 0DTE on Mon/Wed/Fri and 1DTE on Tue/Thu. The universe
+  records `expiration`, `expiration_policy` and `days_to_expiration`.
+
+How the shared stream works:
+
+- One stream lease per day at the original key `moo144/tradier/<date>/lease.json`,
+  whatever underlyings are configured, so every collector build and
+  configuration contends for it: at most one stream owner, fenced and renewed
+  exactly as before.
+- The first-listed underlying is the **primary** (QQQ). It keeps the
+  single-underlying startup path unchanged: its universe selection, stale-date
+  recovery, reconciliation and preflight happen on the main thread, and a
+  failure there is fatal/restart-recoverable exactly as today.
+- Other underlyings are **optional** (IBIT). Their whole admission path runs in
+  a daemon thread concurrently with the primary: load the persisted universe
+  or select one, reconcile the local spool, then persist a fresh universe and
+  write the lane's preflight. The main thread waits for it only until the
+  **cutoff: open - 20 s**, leaving time to create the stream session, connect
+  and prove readiness before 09:30. If the primary is itself only ready after
+  the cutoff (late start/restart), optional lanes get at most 5 s more.
+- At the cutoff every optional lane is frozen; only lanes whose admission
+  (including both writes) completed join the one initial subscription. Slow or
+  failed selection, reconciliation, universe persistence or preflight excludes
+  that lane for the session (`missed_preparation_cutoff`,
+  `selection_failed: ...`, `universe_persist_failed: ...`, `preflight_failed: ...`)
+  with a partial summary; it never delays or aborts the primary.
+- Each optional write starts only while the lane is unfrozen and the stream
+  lease is held. A write already in flight at the cutoff may still land, but
+  cannot overwrite anything: the universe is a conditional create (a same-day
+  restart reuses that pre-open selection, keeping the universe fixed) and the
+  preflight key is unique per owner. The late result is discarded and logged
+  (`optional_lane_result_discarded`, with the stage and completed writes);
+  nothing waits for the thread.
+- Optional lanes recover prior-date spool leftovers after the close, off the
+  pre-open path, and only while this process still owns the stream lease. A
+  recovery failure is recorded per date (`recovery_failed`,
+  `retained_local_files`), reported as `stale_recovery_failed` in that lane's
+  partial summary, and the files stay on disk for a later run.
+- The primary is finalized first; an optional lane's finalization error is
+  reported (`lane_finalization_failed`) without costing the primary its
+  summary/manifest.
+- A router writes each event to its underlying's lane: separate archive
+  (`moo144/tradier/<date>/` for QQQ, unchanged; `moo144/tradier-ibit/<date>/`
+  for IBIT), spool (`moo144-collector-spool[-ibit]/`), uploader, stats,
+  reconciliation, health, summary and manifest. Stream-level records (gaps,
+  heartbeats, malformed payloads) are copied to every lane; stream-level
+  partial reasons apply to every lane. An unavailable optional lane is not
+  restart-recoverable, since a restart would interrupt the primary.
+
+## IBIT spool allocation (enablement gate)
+
+The primary keeps `MOO144_MAX_SPOOL_BYTES` (512 MiB default) unchanged. Optional
+lanes do not share it: they require an explicit `MOO144_OPTIONAL_SPOOL_BYTES`
+cap each. If it is unset, or the primary cap plus all optional caps exceed 80%
+of the spool volume, optional lanes are excluded for the session
+(`optional_spool_allocation_unset` / `spool_allocation_exceeds_volume`) and QQQ
+runs alone. Exhaustion of any lane's cap still stops the shared capture.
+
+Observed evidence (2026-09-23, Railway `DISK_USAGE_GB` for
+moo169-tradier-collector, 72 h at 15-min samples covering the Sep 21-23
+sessions): peak 0.035 GB, average 0.020 GB. That is about 7% of QQQ's 512 MiB
+cap. Railway reports this per service, so confirm it matches the `/data` volume
+(1 GiB) in the volume view before relying on it.
+
+Proposed allocation, pending that confirmation: `MOO144_OPTIONAL_SPOOL_BYTES=134217728`
+(128 MiB). Caps then total 640 MiB, within the 80% (819 MiB) guard, leaving at
+least 384 MiB for recovery files and filesystem overhead. IBIT's event rate is
+unmeasured; check its peak backlog on the first sessions and adjust, or grow the
+volume, before treating the allocation as verified.
+
+## IBIT rollout plan
+
+1. Merge in a window that does not interrupt live capture (after the close):
+   merging touches watched paths and redeploys moo169-tradier-collector. With
+   `MOO144_UNDERLYINGS` unset it runs QQQ alone, as today.
+2. Keep IBIT disabled until QQQ's OA-169/OA-180 acceptance requirements are
+   satisfied and the volume/capacity check above is done.
+3. Then, on moo169-tradier-collector only, set
+   `MOO144_UNDERLYINGS=QQQ,IBIT:nearest` and `MOO144_OPTIONAL_SPOOL_BYTES`. No new
+   service, token, cron or volume, and no second stream.
+4. Verify IBIT's own full-session archive/coverage audit plus a subsequent
+   automatic startup. Unit tests do not satisfy these live gates.
+
+Configuration decisions to confirm at enablement (not code defects):
+
+- `IBIT:nearest` (0DTE Mon/Wed/Fri, 1DTE Tue/Thu; `expiration_policy` and
+  `days_to_expiration` recorded in every universe) vs `IBIT` (`same_day`),
+  which collects only on expiration days and records the lane as unavailable
+  on Tue/Thu.
+- `MOO144_STRIKE_COUNT` (8) applies per underlying. Check the actual price and
+  strike band 8 IBIT strikes cover on the first session.
+
+Rollback: unset `MOO144_UNDERLYINGS` (or set it to `QQQ`). QQQ archives are
+unaffected either way.

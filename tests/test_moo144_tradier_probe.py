@@ -382,5 +382,86 @@ class PreopenSelectionTests(unittest.TestCase):
                                  session_open=self.open)
 
 
+
+class IbitTradier:
+    """IBIT lists Mon/Wed/Fri expirations only; 2026-09-08 is a Tuesday."""
+
+    def __init__(self, trade_date="2026-09-08", expirations=("2026-09-09", "2026-09-11")):
+        self.trade_date = trade_date
+        self.expirations = list(expirations)
+        self.calls = []
+
+    def get(self, path, **params):
+        self.calls.append((path, params))
+        if path == "/markets/clock":
+            return {"clock": {"date": self.trade_date, "state": "open", "next_change": "16:00"}}
+        if path == "/markets/quotes":
+            return {"quotes": {"quote": {"symbol": "IBIT", "last": 60.2}}}
+        if path == "/markets/options/expirations":
+            return {"expirations": {"date": ["2026-09-04", *self.expirations]}}
+        if path == "/markets/options/chains":
+            exp = params["expiration"].replace("-", "")[2:]
+            return {"options": {"option": [
+                {"symbol": f"IBIT{exp}{kind}{strike}", "strike": strike, "option_type": name}
+                for strike in (59, 60, 61, 62)
+                for kind, name in (("C", "call"), ("P", "put"))
+            ]}}
+        raise AssertionError(path)
+
+
+class UnderlyingSelectionTests(unittest.TestCase):
+    now = datetime(2026, 9, 8, 10, 0, tzinfo=ET)
+
+    def test_nearest_policy_uses_next_listed_expiration_when_no_0dte(self):
+        client = IbitTradier()
+        symbols, universe = probe.select_symbols(
+            client, 2, 1800, "2026-09-08", self.now,
+            underlying="IBIT", expiration_policy="nearest",
+        )
+        self.assertEqual(symbols[0], "IBIT")
+        self.assertEqual(universe["underlying"], "IBIT")
+        self.assertEqual(universe["expiration"], "2026-09-09")
+        self.assertEqual(universe["days_to_expiration"], 1)
+        self.assertEqual(universe["expiration_policy"], "nearest")
+        self.assertEqual(universe["strikes"], [60, 61])
+        self.assertTrue(all(meta["expiration"] == "2026-09-09"
+                            for meta in universe["option_metadata"].values()))
+        requested = {path: params for path, params in client.calls}
+        self.assertEqual(requested["/markets/quotes"]["symbols"], "IBIT")
+        self.assertEqual(requested["/markets/options/chains"]["symbol"], "IBIT")
+        self.assertEqual(requested["/markets/options/chains"]["expiration"], "2026-09-09")
+
+    def test_nearest_policy_prefers_same_day_expiration(self):
+        client = IbitTradier(expirations=("2026-09-08", "2026-09-09"))
+        _symbols, universe = probe.select_symbols(
+            client, 2, 1800, "2026-09-08", self.now,
+            underlying="IBIT", expiration_policy="nearest",
+        )
+        self.assertEqual(universe["expiration"], "2026-09-08")
+        self.assertEqual(universe["days_to_expiration"], 0)
+
+    def test_same_day_policy_still_refuses_non_0dte(self):
+        with self.assertRaisesRegex(RuntimeError, "IBIT has no 0DTE expiration"):
+            probe.select_symbols(IbitTradier(), 2, 1800, "2026-09-08", self.now, underlying="IBIT")
+
+    def test_nearest_policy_fails_without_future_expiration(self):
+        with self.assertRaisesRegex(RuntimeError, "no expiration on or after"):
+            probe.select_symbols(IbitTradier(expirations=()), 2, 1800, "2026-09-08", self.now,
+                                 underlying="IBIT", expiration_policy="nearest")
+
+    def test_unknown_policy_rejected_before_any_request(self):
+        client = IbitTradier()
+        with self.assertRaisesRegex(RuntimeError, "Unknown expiration policy"):
+            probe.select_symbols(client, 2, 1800, "2026-09-08", self.now, expiration_policy="weekly")
+        self.assertEqual(client.calls, [])
+
+    def test_default_selection_is_unchanged_qqq_0dte(self):
+        _symbols, universe = probe.select_symbols(FakeTradier(), 2, 1800, "2026-09-03",
+                                                  datetime(2026, 9, 3, 10, 0, tzinfo=ET))
+        self.assertEqual(universe["underlying"], "QQQ")
+        self.assertEqual(universe["expiration_policy"], "same_day")
+        self.assertEqual(universe["days_to_expiration"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
