@@ -302,6 +302,27 @@ function describeSqueezeAcquisitionFailure(successPointer, attemptPointer) {
     : `No successful scan yet. Most recent attempt (started ${time} ET): ${attemptPointer.status}.`;
 }
 
+// PR #105 review round 2: renders the "First seen today" column against
+// the real producer contract (short-squeeze-scanner#2's
+// docs/archive-contract.md, "Display contract v1: canonical first
+// appearance") -- `first_seen_at` (UTC write-attempt timestamp, null if
+// unknown) and `is_new` (true only for the run that first introduces the
+// ticker; false for a known existing candidate, including a reappearance;
+// null if unknown/legacy). The round-1 placeholder
+// (`row.first_seen_at ? 'New' : 'unavailable'`) treated ANY non-null
+// first_seen_at as New and never rendered the time itself -- both an
+// incumbent (is_new=false) and a genuine newcomer (is_new=true) rendered
+// identically as bare "New" text. `is_new` alone decides the New label;
+// first_seen_at (New York time) is shown either way when known.
+function formatSqueezeFirstSeen(row) {
+  if (row.first_seen_at == null || row.is_new == null) return { text: 'unavailable', isNew: false };
+  const seenMs = Date.parse(row.first_seen_at);
+  const time = Number.isFinite(seenMs)
+    ? new Date(seenMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  return { text: time, isNew: row.is_new === true };
+}
+
 // EIA STEO crude calibration panel formatting (docs/index.html's
 // fetchSteoCalibration). Pure, DOM-free -- same rationale as
 // formatVwapRvol/formatMomentum above: testable directly, no fixture DOM
@@ -841,7 +862,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
-    fmtSteoDelta, findRevision, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure,
+    fmtSteoDelta, findRevision, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };

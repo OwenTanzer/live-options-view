@@ -12,7 +12,7 @@
 // per that review's explicit instruction not to invent browser-local
 // history in place of real producer-owned first-seen metadata.
 const assert = require('node:assert/strict');
-const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure } = require('../docs/shared.js');
+const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen } = require('../docs/shared.js');
 
 // -- formatSqueezeScanStatus --------------------------------------------------
 
@@ -115,4 +115,37 @@ const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure } = require('
   assert.match(notice, /failed/);
 }
 
-console.log('PASS squeeze scanner scan-status and acquisition-failure formatting');
+// -- formatSqueezeFirstSeen ----------------------------------------------------
+// Against the real producer contract (short-squeeze-scanner#2's
+// docs/archive-contract.md): first_seen_at (UTC write-attempt timestamp,
+// null if unknown) + is_new (true only for the introducing run; false for
+// a known existing candidate including a reappearance; null if unknown).
+
+// -- PR #105 round-2 review's exact reproduction: a morning incumbent and a
+// noon newcomer must NOT render identically -----------------------------------
+{
+  const incumbent = formatSqueezeFirstSeen({ first_seen_at: '2026-09-23T13:01:00Z', is_new: false }); // 9:01am ET
+  const newcomer = formatSqueezeFirstSeen({ first_seen_at: '2026-09-23T16:01:00Z', is_new: true }); // 12:01pm ET
+  assert.equal(incumbent.isNew, false, 'is_new=false must not render as New');
+  assert.equal(newcomer.isNew, true);
+  assert.match(incumbent.text, /9:01/, 'an incumbent still shows its actual first-seen time');
+  assert.match(newcomer.text, /12:01/, 'a newcomer also shows its first-seen time, not just a bare "New"');
+  assert.notEqual(incumbent.text, newcomer.text, 'the two must not render identically');
+}
+
+// -- legacy/unknown metadata (null fields) reads "unavailable", not New -----
+{
+  const legacy = formatSqueezeFirstSeen({ first_seen_at: null, is_new: null });
+  assert.equal(legacy.text, 'unavailable');
+  assert.equal(legacy.isNew, false);
+}
+
+// -- a null is_new with a present first_seen_at is still "unavailable" --
+// (same-day migration from a legacy pointer per the contract: unknown
+// history, not a guess) -------------------------------------------------------
+{
+  const ambiguous = formatSqueezeFirstSeen({ first_seen_at: '2026-09-23T13:01:00Z', is_new: null });
+  assert.equal(ambiguous.text, 'unavailable');
+}
+
+console.log('PASS squeeze scanner scan-status, acquisition-failure, and first-seen formatting');

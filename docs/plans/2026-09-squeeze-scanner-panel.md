@@ -22,8 +22,7 @@ in `tests/squeeze_panel.test.js` the same section-extraction way
 ## Revision history
 
 - **2026-09-22**: initial version.
-- **2026-09-23**: PR #105 review (round 1) found four issues, all fixed
-  here:
+- **2026-09-23, round 1**: PR #105 review found four issues, all fixed:
   1. `latest.json` only advances on a successful run, so a newer failed/
      partial attempt was invisible. Now also fetches `latest-attempt.json`
      and surfaces `describeSqueezeAcquisitionFailure`'s warning banner
@@ -34,12 +33,23 @@ in `tests/squeeze_panel.test.js` the same section-extraction way
      and explicitly renders the scan's calendar date for a prior-day
      result rather than relying on raw age alone.
   3. The localStorage-based "first seen today" tracking (`trackFirstSeenToday`)
-     was removed outright, not patched -- see "First-seen tracking" below.
+     was removed outright, not patched, in favor of reading a producer-owned
+     field once one existed -- see "First-seen tracking" below.
   4. `tests/squeeze_panel.test.js` asserted fixed-date fixtures against
      the real, unfrozen `Date.now()`. `squeezeNow()` is now an injectable
      free-variable clock (matching this file's existing `nowFn`
      convention on `LiveQuotePoller`/`TickerStateStore`), overridden in
      tests instead of ever reading the system clock.
+- **2026-09-23, round 2**: the producer's real first-seen contract landed
+  ([short-squeeze-scanner#2](https://github.com/OwenTanzer/short-squeeze-scanner/pull/2),
+  `docs/archive-contract.md`'s "Display contract v1"). The round-1
+  placeholder (`row.first_seen_at ? 'New' : 'unavailable'`) predated that
+  contract and got it wrong on both counts it needed right: it treated any
+  non-null `first_seen_at` as New regardless of `is_new`, and never
+  rendered the time itself -- an incumbent and a genuine newcomer rendered
+  identically. `formatSqueezeFirstSeen` now uses `is_new` alone to decide
+  the New label and always shows `first_seen_at` in New York time when
+  known.
 
 ## Why `pointer.candidates` needs no re-filtering or re-sorting here
 
@@ -58,7 +68,7 @@ assume it's dead code covering something that can't happen; it's covering
 a contract the storage layer happens to currently guarantee, not one this
 page enforces itself.
 
-## First-seen tracking: removed, not fixed
+## First-seen tracking
 
 OA-191's page spec calls for a "First seen today" / "New" badge. The
 initial version of this panel approximated that client-side via
@@ -74,16 +84,24 @@ for two independent reasons:
    "newness" was computed once and consumed immediately as mutated state,
    rather than being a stable property of the run itself.
 
-Per that review, the producer side (`OwenTanzer/short-squeeze-scanner`) is
-adding real first-seen metadata to its published schema in a separate PR,
-with a documented contract. Until that lands, the "first seen" column
-reads a `first_seen_at` field directly off each candidate row (name
-provisional, pending that PR's actual contract) and renders `unavailable`
-when it's absent -- which is every row today, since the field doesn't
-exist yet. This is deliberately inert rather than deliberately
-approximate: no guess is better than a wrong one here, and this column
-requires zero changes on the display side once the producer ships the
-real field -- it already reads it.
+This column now reads the producer's real, documented contract
+([short-squeeze-scanner#2](https://github.com/OwenTanzer/short-squeeze-scanner/pull/2),
+`docs/archive-contract.md`'s "Display contract v1: canonical first
+appearance"). Each candidate carries:
+
+| Field | Meaning |
+| --- | --- |
+| `first_seen_at` | UTC write-attempt timestamp for the successful pointer write that first introduced this ticker for its acquisition day; `null` if unknown |
+| `first_seen_run_id` | The run that first published the ticker in its shortlist; `null` if unknown. Not currently rendered by this page. |
+| `is_new` | `true` throughout the run that first introduces the ticker; `false` for a known existing candidate, including a reappearance; `null` if unknown/legacy |
+
+`formatSqueezeFirstSeen` (shared.js) renders `first_seen_at` in New York
+time whenever it's known, and shows the New badge if and only if
+`is_new === true`. A `null` `is_new` (unknown/legacy history, e.g. the
+same-day migration case the contract describes) renders `unavailable`
+rather than guessing either way. This is a pure function of each row's
+own data, so it's automatically stable across any number of polls of an
+unchanged run -- there is no client-side state left to go stale.
 
 ## Poll cadence
 

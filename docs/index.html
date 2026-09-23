@@ -562,6 +562,15 @@
   #squeeze-table td a:hover { text-decoration: underline; }
   .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
   .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
+  .squeeze-new-badge {
+    background: #167a3f;
+    color: #fff;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
 
   /* ── automated (bot) panel ───────────────────────────────────────────── */
   #bots-header {
@@ -961,7 +970,7 @@
         <th>Factor score</th>
         <th>Options score</th>
         <th>Combined score</th>
-        <th></th>
+        <th>First seen today</th>
       </tr>
     </thead>
     <tbody id="squeeze-tbody"></tbody>
@@ -2020,25 +2029,21 @@ function renderSqueezePanel() {
     const factor = row.scores.factor != null ? row.scores.factor.toFixed(3) : '—';
     const options = row.scores.options != null ? row.scores.options.toFixed(3) : 'unavailable';
     const price = row.price != null ? `$${row.price.toFixed(2)}` : '—';
-    // PR #105 review, finding 3: no client-side heuristic (localStorage,
-    // calendar-day tracking) substitutes for a canonical "first seen"
-    // fact -- it can't be established across viewers, and the prior
-    // implementation's badge disappeared on the very next poll of an
-    // unchanged run because it was recomputed as state instead of read
-    // from data. The producer is adding first-seen metadata to
-    // short-squeeze-scanner's published schema in a separate PR (OA-191);
-    // this column reads that field directly once it exists (name TBD by
-    // that PR's contract) and shows "unavailable" until then -- stable
-    // across any number of polls of the same run, since it's now a pure
-    // function of the row's own data, not tracked state.
-    const firstSeen = row.first_seen_at ? 'New' : 'unavailable';
+    // PR #105 review round 2: renders the producer's real first-seen
+    // contract (short-squeeze-scanner#2) -- is_new alone decides the New
+    // label; first_seen_at (NY time) is shown either way when known, null
+    // renders "unavailable." formatSqueezeFirstSeen is a pure function of
+    // the row's own data, not tracked state, so it stays stable across
+    // any number of polls of the same run.
+    const firstSeen = formatSqueezeFirstSeen(row);
+    const firstSeenHtml = (firstSeen.isNew ? '<span class="squeeze-new-badge">New</span> ' : '') + escapeHtml(firstSeen.text);
     return `<tr>
       <td><a href="https://www.tradingview.com/symbols/${encodeURIComponent(row.ticker)}/" target="_blank" rel="noopener">${escapeHtml(row.ticker)}</a></td>
       <td>${price}</td>
       <td>${factor}</td>
       <td>${options}</td>
       <td>${combined}</td>
-      <td class="squeeze-first-seen">${firstSeen}</td>
+      <td class="squeeze-first-seen">${firstSeenHtml}</td>
     </tr>`;
   }).join('');
 }

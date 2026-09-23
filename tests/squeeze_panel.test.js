@@ -15,7 +15,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure } = require('../docs/shared.js');
+const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen } = require('../docs/shared.js');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'docs', 'index.html'), 'utf8');
 const START = '// ── short-squeeze scanner panel (OA-191)';
@@ -52,7 +52,7 @@ const scope = {
   escapeHtml: (s) => String(s).replace(/[&<>"']/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   )),
-  formatSqueezeScanStatus, describeSqueezeAcquisitionFailure,
+  formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
 };
 
 const names = Object.keys(scope);
@@ -125,33 +125,47 @@ const candidate = (ticker, combined, overrides = {}) => ({
   assert.match(els['squeeze-tbody'].innerHTML, /CCC/);
 }
 
-// ── PR #105 finding 3: the first-seen column reads "unavailable" -- no
-// client-side guess replaces the not-yet-existent producer field, and this
-// is stable across any number of polls of the identical run (it's a pure
-// read of row data now, not tracked state) ─────────────────────────────────
+// ── PR #105 review round 2: is_new alone decides the New label; an
+// incumbent (is_new=false) and a legacy/unknown row (nulls) must render
+// distinctly, and this is stable across any number of polls of the
+// identical run (formatSqueezeFirstSeen is a pure read of row data, not
+// tracked state) ─────────────────────────────────────────────────────────
 {
   latestResponse = jsonResponse({
     status: 'complete', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [candidate('DDD', 0.8)],
+    candidates: [
+      candidate('DDD', 0.8, { first_seen_at: null, is_new: null }), // legacy/unknown metadata
+    ],
   });
   attemptResponse = notFound;
   await panel.fetchSqueezeLatest();
   const firstRender = els['squeeze-tbody'].innerHTML;
   assert.match(firstRender, /squeeze-first-seen">unavailable/);
+  assert.doesNotMatch(firstRender, /squeeze-new-badge/, 'legacy/unknown metadata must not render as New');
 
   // A second poll of the exact same run must render byte-identical output.
   await panel.fetchSqueezeLatest();
   assert.equal(els['squeeze-tbody'].innerHTML, firstRender, 'polling the same run again must not change the rendered table');
 }
 
-// -- once the producer publishes a first_seen_at field, it's honored --------
+// -- mixed incumbent/newcomer fixture: the exact case the review reproduced
+// against the round-1 renderer (both rendered bare "New" with no time) -----
 {
   latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [candidate('EEE', 0.8, { first_seen_at: '2026-09-23T14:00:00Z' })],
+    status: 'complete', started_at: '2026-09-23T17:00:00Z', finished_at: '2026-09-23T17:00:00Z',
+    candidates: [
+      candidate('INCUMBENT', 0.8, { first_seen_at: '2026-09-23T13:01:00Z', is_new: false }), // 9:01am ET
+      candidate('NEWCOMER', 0.7, { first_seen_at: '2026-09-23T16:01:00Z', is_new: true }), // 12:01pm ET
+    ],
   });
   await panel.fetchSqueezeLatest();
-  assert.match(els['squeeze-tbody'].innerHTML, /squeeze-first-seen">New/);
+  const out = els['squeeze-tbody'].innerHTML;
+  const incumbentCell = out.slice(out.indexOf('INCUMBENT'), out.indexOf('NEWCOMER'));
+  const newcomerCell = out.slice(out.indexOf('NEWCOMER'));
+  assert.doesNotMatch(incumbentCell, /squeeze-new-badge/, 'is_new=false must not show the New badge');
+  assert.match(incumbentCell, /9:01/, 'the incumbent still shows its actual first-seen time');
+  assert.match(newcomerCell, /squeeze-new-badge/, 'is_new=true shows the New badge');
+  assert.match(newcomerCell, /12:01/, 'the newcomer also shows its first-seen time, not just a bare "New"');
 }
 
 // ── a fetch error keeps the last-rendered table instead of blanking it ──────
