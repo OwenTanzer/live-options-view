@@ -1,246 +1,86 @@
-// Exercises the Squeeze tab's fetch/render logic from docs/index.html (OA-191).
-//
-// Same rationale as tests/bots_panel.test.js: the panel's code lives in
-// index.html's inline script, extracted by its section markers and evaluated
-// against a minimal DOM/fetch shim, so this runs the shipped source rather
-// than a copy that can drift. If this file starts failing with "could not
-// locate", that's why.
-//
-// Rewritten for PR #105 review: findings 1/2 added the latest-attempt.json
-// fetch and acquisition-time freshness; finding 3 removed the
-// localStorage-based New-badge tracking outright; finding 4 is why every
-// fixture below runs through an injected `squeezeNow` instead of the
-// system clock -- these fixed-date fixtures must assert the same way no
-// matter what day the suite actually runs on.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen } = require('../docs/shared.js');
-
-const html = fs.readFileSync(path.join(__dirname, '..', 'docs', 'index.html'), 'utf8');
-const START = '// ── short-squeeze scanner panel (OA-191)';
-const END = '// ── tab switching';
-const from = html.indexOf(START);
-const to = html.indexOf(END, from);
-assert.ok(from !== -1 && to !== -1, 'could not locate the squeeze-panel section in docs/index.html');
-const source = html.slice(from, to);
-
-// ── DOM + collaborator shim ───────────────────────────────────────────────────
-const els = {};
-function el(id) {
-  if (!els[id]) els[id] = { id, textContent: '', innerHTML: '', dataset: {}, classList: { toggle() {} } };
-  return els[id];
-}
-
-// Fixed "now" for every fixture below (PR #105 finding 4) -- overridden per
-// test via `nowOverride` rather than ever falling through to Date.now().
-let nowOverride = Date.parse('2026-09-23T14:05:00Z');
-
-// fetch responses keyed by which pointer file the URL is for; set per test.
-let latestResponse = null; // { ok, status, json } or an Error, for latest.json
-let attemptResponse = null; // same shape, for latest-attempt.json
-
-const scope = {
-  document: { getElementById: el },
-  fetch: async (url) => {
-    const isAttempt = url.includes('latest-attempt.json');
-    const response = isAttempt ? attemptResponse : latestResponse;
-    if (response instanceof Error) throw response;
-    return response;
+const shared = require('../docs/shared.js');
+const html = fs.readFileSync(path.join(__dirname, '../docs/index.html'), 'utf8');
+const start = html.indexOf('// ── short-squeeze scanner panel (OA-191)');
+const end = html.indexOf('// ── tab switching', start);
+assert.ok(start >= 0 && end > start);
+const elements = {};
+const el = id => elements[id] ||= { textContent: '', innerHTML: '', dataset: {}, classList: { toggle() {} } };
+const calendar = require('../docs/squeeze-calendar.json');
+let responses = {}, calls = [];
+const response = value => ({ ok: true, status: 200, json: async () => value });
+const scope = { ...shared, document: { getElementById: el }, R2: '/r2-proxy',
+  escapeHtml: s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
+  fetch: async (url, options) => {
+    calls.push([url, options]);
+    const key = url.split('?')[0].split('/').at(-1);
+    const value = responses[key];
+    if (value instanceof Error) throw value;
+    return typeof value === 'function' ? value() : value;
   },
-  R2: 'https://example-r2.test',
-  escapeHtml: (s) => String(s).replace(/[&<>"']/g, c => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  )),
-  formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
 };
-
-const names = Object.keys(scope);
-// The extracted source defines its own `squeezeNow()` (reading the real
-// Date.now()); redeclaring it below shadows that shipped definition with
-// one reading a test-controlled variable instead -- the whole point of
-// finding 4's fix being an injectable clock in the first place.
-const factory = new Function(...names, `${source}
-  let __nowOverride = ${nowOverride};
-  function squeezeNow() { return __nowOverride; }
-  return { fetchSqueezeLatest, renderSqueezePanel,
-    get squeezePointer(){return squeezePointer}, set squeezePointer(v){squeezePointer=v},
-    get squeezeAttemptPointer(){return squeezeAttemptPointer}, set squeezeAttemptPointer(v){squeezeAttemptPointer=v},
-    get squeezeError(){return squeezeError}, set squeezeError(v){squeezeError=v},
-    set now(v){__nowOverride=v} };`);
-const panel = factory(...names.map(n => scope[n]));
-
-function jsonResponse(body, status = 200) {
-  return { ok: status >= 200 && status < 300, status, json: async () => body };
-}
-const notFound = jsonResponse({}, 404);
-
-const candidate = (ticker, combined, overrides = {}) => ({
-  ticker, company: `${ticker} Inc`, price: 10.0,
-  scores: { factor: 0.6, options: 0.5, combined, momentum: 5.0 },
-  ...overrides,
-});
-
+const panel = new Function(...Object.keys(scope), html.slice(start, end) + `
+  let clock = Date.parse('2026-09-23T13:05:00Z');
+  function squeezeNow() { return clock; }
+  return { fetchSqueezeLatest, set now(v) { clock = Date.parse(v); },
+    get pointer() { return squeezePointer; } };
+`)(...Object.values(scope));
+const row = {ticker:'AAA',company:'Example',price:10,scores:{factor:.6,options:.5,combined:.56},
+  first_seen_at:'2026-09-23T13:00:56Z',is_new:true};
+const morning = {run_id:'morning',status:'complete',sampling_mode:'scheduled',scheduled_for:'2026-09-23T13:00:00Z',
+  started_at:'2026-09-23T13:00:03Z',finished_at:'2026-09-23T13:00:13Z',session_date:'2026-09-23',candidates:[row]};
+const finished = {run_id:'morning',status:'finished',acquisition_status:'complete',scheduled_for:morning.scheduled_for};
+const reset = () => { responses = {'latest.json':response(morning),'latest-attempt.json':response(morning),
+  'latest-schedule.json':response(finished),'squeeze-calendar.json':response(calendar)}; };
 (async () => {
-
-// ── a populated, successful scan renders rows and status, clears errors ────
-{
-  panel.squeezeError = 'stale error from a previous tick';
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T13:58:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [candidate('AAA', 0.7), candidate('BBB', 0.5)],
-  });
-  attemptResponse = notFound; // no separate failed attempt on record
-  await panel.fetchSqueezeLatest();
-
-  assert.equal(panel.squeezeError, null, 'a successful fetch clears the prior error');
-  const out = els['squeeze-tbody'].innerHTML;
-  assert.match(out, /AAA/);
-  assert.match(out, /BBB/);
-  assert.match(out, /0\.700/);
-  assert.match(els['squeeze-status'].textContent, /Scan/);
-  assert.equal(els['squeeze-status'].dataset.state, 'live');
-  assert.equal(els['squeeze-warning'].textContent, '', 'no attempt-failure warning when the latest attempt is just "not found"');
-}
-
-// ── PR #105 finding 1: a newer failed attempt surfaces a warning banner
-// alongside (not instead of) the last successful table ──────────────────────
-{
-  attemptResponse = jsonResponse({ status: 'partial', started_at: '2026-09-23T17:00:00Z' });
-  await panel.fetchSqueezeLatest();
-  assert.match(els['squeeze-warning'].textContent, /did not complete: partial/);
-  // The last successful table is still shown, not blanked by the warning.
-  assert.match(els['squeeze-tbody'].innerHTML, /AAA/);
-}
-
-// -- once the attempt pointer catches up to a real success, the warning clears
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T17:00:00Z', finished_at: '2026-09-23T17:02:00Z',
-    candidates: [candidate('CCC', 0.9)],
-  });
-  attemptResponse = jsonResponse({ status: 'complete', started_at: '2026-09-23T17:00:00Z' });
-  await panel.fetchSqueezeLatest();
-  assert.equal(els['squeeze-warning'].textContent, '');
-  assert.match(els['squeeze-tbody'].innerHTML, /CCC/);
-}
-
-// ── PR #105 review round 2: is_new alone decides the New label; an
-// incumbent (is_new=false) and a legacy/unknown row (nulls) must render
-// distinctly, and this is stable across any number of polls of the
-// identical run (formatSqueezeFirstSeen is a pure read of row data, not
-// tracked state) ─────────────────────────────────────────────────────────
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [
-      candidate('DDD', 0.8, { first_seen_at: null, is_new: null }), // legacy/unknown metadata
-    ],
-  });
-  attemptResponse = notFound;
-  await panel.fetchSqueezeLatest();
-  const firstRender = els['squeeze-tbody'].innerHTML;
-  assert.match(firstRender, /squeeze-first-seen">unavailable/);
-  assert.doesNotMatch(firstRender, /squeeze-new-badge/, 'legacy/unknown metadata must not render as New');
-
-  // A second poll of the exact same run must render byte-identical output.
-  await panel.fetchSqueezeLatest();
-  assert.equal(els['squeeze-tbody'].innerHTML, firstRender, 'polling the same run again must not change the rendered table');
-}
-
-// -- mixed incumbent/newcomer fixture: the exact case the review reproduced
-// against the round-1 renderer (both rendered bare "New" with no time) -----
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T17:00:00Z', finished_at: '2026-09-23T17:00:00Z',
-    candidates: [
-      candidate('INCUMBENT', 0.8, { first_seen_at: '2026-09-23T13:01:00Z', is_new: false }), // 9:01am ET
-      candidate('NEWCOMER', 0.7, { first_seen_at: '2026-09-23T16:01:00Z', is_new: true }), // 12:01pm ET
-    ],
-  });
-  await panel.fetchSqueezeLatest();
-  const out = els['squeeze-tbody'].innerHTML;
-  const incumbentCell = out.slice(out.indexOf('INCUMBENT'), out.indexOf('NEWCOMER'));
-  const newcomerCell = out.slice(out.indexOf('NEWCOMER'));
-  assert.doesNotMatch(incumbentCell, /squeeze-new-badge/, 'is_new=false must not show the New badge');
-  assert.match(incumbentCell, /9:01/, 'the incumbent still shows its actual first-seen time');
-  assert.match(newcomerCell, /squeeze-new-badge/, 'is_new=true shows the New badge');
-  assert.match(newcomerCell, /12:01/, 'the newcomer also shows its first-seen time, not just a bare "New"');
-}
-
-// ── a fetch error keeps the last-rendered table instead of blanking it ──────
-{
-  const beforeError = els['squeeze-tbody'].innerHTML;
-  latestResponse = new Error('network down');
-  await panel.fetchSqueezeLatest();
-  assert.equal(els['squeeze-tbody'].innerHTML, beforeError, 'the last good table survives a fetch failure');
-  assert.match(els['squeeze-status'].textContent, /scanner unavailable — network down/);
-  assert.equal(els['squeeze-status'].dataset.state, 'stale');
-}
-
-// ── recovery after an error re-populates normally ────────────────────────────
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T18:00:00Z', finished_at: '2026-09-23T18:00:00Z',
-    candidates: [candidate('FFF', 0.9)],
-  });
-  attemptResponse = notFound;
-  await panel.fetchSqueezeLatest();
-  assert.equal(panel.squeezeError, null);
-  assert.match(els['squeeze-tbody'].innerHTML, /FFF/);
-}
-
-// ── neither pointer has ever been published: not an error state ─────────────
-{
-  latestResponse = notFound;
-  attemptResponse = notFound;
-  await panel.fetchSqueezeLatest();
-  assert.equal(panel.squeezeError, null, 'no run published yet is not a fetch error');
-  assert.equal(els['squeeze-status'].textContent, 'No scan published yet');
-  assert.equal(els['squeeze-tbody'].innerHTML, '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>');
-}
-
-// ── a genuinely empty scan renders the explicit empty state, not a blank table
-{
-  latestResponse = jsonResponse({ status: 'empty', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z', candidates: [] });
-  await panel.fetchSqueezeLatest();
-  assert.match(els['squeeze-tbody'].innerHTML, /No eligible candidates/);
-  assert.match(els['squeeze-status'].textContent, /no eligible candidates/);
-}
-
-// ── PR #105 finding 4: assertions must survive the clock moving forward ────
-// (this is the regression: the previous version asserted against a fixed
-// fixture date compared to the real, unfrozen Date.now())
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [],
-  });
-  attemptResponse = notFound;
-  panel.now = Date.parse('2026-09-23T14:05:00Z'); // 5 minutes later: still fresh
-  await panel.fetchSqueezeLatest();
-  assert.equal(els['squeeze-status'].dataset.state, 'live');
-
-  panel.now = Date.parse('2026-09-24T09:00:00Z'); // next day: must read stale/prior-day
-  await panel.fetchSqueezeLatest();
-  assert.equal(els['squeeze-status'].dataset.state, 'stale');
-  panel.now = nowOverride; // restore for any later reader of this file
-}
-
-// ── a hostile ticker must not execute (defense in depth; finviz screener
-// output isn't attacker-controlled, but this must not regress silently) ──────
-{
-  latestResponse = jsonResponse({
-    status: 'complete', started_at: '2026-09-23T14:00:00Z', finished_at: '2026-09-23T14:00:00Z',
-    candidates: [candidate('<img src=x onerror=alert(1)>', 0.5)],
-  });
-  attemptResponse = notFound;
-  await panel.fetchSqueezeLatest();
-  const out = els['squeeze-tbody'].innerHTML;
-  assert.equal(out.includes('<img src=x'), false, 'a hostile ticker must be escaped, not injected');
-  assert.match(out, /&lt;img src=x onerror=alert\(1\)&gt;/);
-}
-
-console.log('PASS squeeze scanner panel fetch, render, attempt-failure warning, and clock-independent freshness');
-
-})();
+  reset(); await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state,'live');
+  assert.match(el('squeeze-tbody').innerHTML,/AAA/);
+  assert.match(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  assert.equal(el('squeeze-warning').textContent,'');
+  assert.ok(calls.filter(([u]) => !u.startsWith('/squeeze-calendar')).every(([u])=>u.includes('/v1/scheduled/')));
+  assert.ok(calls.every(([,o])=>o.cache==='no-store'));
+  panel.now='2026-09-23T16:12:00Z';
+  for (const status of ['missed','interrupted','claimed']) {
+    responses['latest-schedule.json']=response({status,scheduled_for:'2026-09-23T16:00:00Z'});
+    await panel.fetchSqueezeLatest();
+    assert.equal(el('squeeze-status').dataset.state,'stale');
+    assert.match(el('squeeze-warning').textContent,status==='claimed'?/awaiting publication/:new RegExp(status));
+    assert.match(el('squeeze-tbody').innerHTML,/AAA/);
+  }
+  responses['latest-schedule.json']=response({status:'finished',acquisition_status:'partial',scheduled_for:'2026-09-23T16:00:00Z'});
+  responses['latest-attempt.json']=response({status:'partial',started_at:'2026-09-23T16:00:02Z'});
+  await panel.fetchSqueezeLatest();assert.match(el('squeeze-warning').textContent,/partial/);
+  const noon={...morning,run_id:'noon',scheduled_for:'2026-09-23T16:00:00Z',started_at:'2026-09-23T16:00:03Z',finished_at:'2026-09-23T16:00:13Z',candidates:[{...row,is_new:false}]};
+  responses['latest.json']=response(noon);responses['latest-attempt.json']=response(noon);
+  responses['latest-schedule.json']=response({...finished,run_id:'noon',scheduled_for:noon.scheduled_for});
+  await panel.fetchSqueezeLatest();assert.equal(el('squeeze-status').dataset.state,'live');
+  assert.doesNotMatch(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  assert.equal(el('squeeze-warning').textContent,'');
+  const previous=panel.pointer, previousHtml=el('squeeze-tbody').innerHTML;
+  responses['latest.json']=response({...noon,run_id:'should-not-apply'});
+  responses['latest-schedule.json']={ok:true,status:200,json:async()=>{throw new Error('bad JSON');}};
+  await panel.fetchSqueezeLatest();assert.equal(panel.pointer,previous);assert.equal(el('squeeze-tbody').innerHTML,previousHtml);
+  assert.match(el('squeeze-status').textContent,/unavailable/);
+  reset();panel.now='2026-09-23T13:05:00Z';
+  responses['latest.json']=response({...morning,candidates:[{...row,scores:{combined:'bad'}}]});
+  await panel.fetchSqueezeLatest();assert.equal(panel.pointer,previous);
+  reset();responses['latest-schedule.json']={ok:false,status:404};await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state,'stale');
+  reset();responses['latest.json']=response({...morning,status:'empty',candidates:[]});
+  responses['latest-schedule.json']=response({...finished,acquisition_status:'empty'});
+  await panel.fetchSqueezeLatest();assert.equal(el('squeeze-status').dataset.state,'live');
+  assert.match(el('squeeze-tbody').innerHTML,/No eligible candidates/);
+  reset();responses['latest.json']=response({...morning,candidates:[{...row,ticker:'<img src=x onerror=alert(1)>'}]});
+  await panel.fetchSqueezeLatest();assert.doesNotMatch(el('squeeze-tbody').innerHTML,/<img/);
+  reset();let release;
+  responses['latest.json']=()=>new Promise(resolve=>{release=resolve;});
+  const oldPoll=panel.fetchSqueezeLatest();reset();await panel.fetchSqueezeLatest();
+  release(response({...morning,run_id:'old-poll'}));await oldPoll;assert.equal(panel.pointer.run_id,'morning');
+  panel.now='2026-09-24T12:00:00Z';await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state,'stale');
+  assert.doesNotMatch(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  console.log('PASS scheduled panel: atomic fetches, concurrency, statuses, rows, escaping and prior-session badges');
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -240,10 +240,9 @@ function formatMomentum(underlyingMarket, nowMs = Date.now()) {
 // pointer (OwenTanzer/short-squeeze-scanner's squeeze_scanner/storage.py
 // `upload()`). Same producer/display split as formatVwapRvol/formatMomentum
 // above: this page never computes a score, only formats what was published.
-const SQUEEZE_SCAN_STALE_AFTER_MS = 6 * 60 * 60 * 1000; // no scheduled runs exist
-// yet (OA-191 step 3 is unimplemented) -- manual runs are irregular, so
-// "stale" here means "old enough a reader shouldn't assume this reflects
-// current prices," not a violated SLA against a real schedule.
+// Legacy manual formatter retained for compatibility and acquisition-time labels.
+// The live panel uses formatSqueezeScheduleStatus for freshness decisions.
+const SQUEEZE_SCAN_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 // PR #105 review, finding 2: freshness must be judged against ACQUISITION
 // time (when the scan actually ran), not `published_at` (when the pointer
@@ -277,6 +276,63 @@ function formatSqueezeScanStatus(pointer, nowMs = Date.now()) {
   const ageMs = Number.isFinite(acquiredMs) ? nowMs - acquiredMs : null;
   const stale = priorDay || ageMs == null || ageMs > SQUEEZE_SCAN_STALE_AFTER_MS;
   return { text: `Scan ${label} ET${stale ? ' (stale)' : ''}`, state: stale ? 'stale' : 'live' };
+}
+
+// Calendar slots are exported from the producer's XNYS calendar and activation
+// configuration. An expired/unavailable calendar never implies a fresh scan.
+function formatSqueezeScheduleStatus(pointer, attempt, schedule, calendar, nowMs = Date.now()) {
+  const label = formatSqueezeScanStatus(pointer, nowMs).text.replace(' (stale)', '');
+  const result = (warning, state = 'stale', suffix = '') => ({ text: label + suffix, state, warning });
+  const validFrom = Date.parse(calendar?.valid_from || '');
+  const validUntil = Date.parse(calendar?.valid_until || '');
+  if (calendar?.schema_version !== 1 || calendar?.calendar !== 'XNYS' ||
+      calendar?.timezone !== 'America/New_York' || !Array.isArray(calendar?.slots) ||
+      !Number.isFinite(validFrom) || !Number.isFinite(validUntil) ||
+      nowMs < validFrom || nowMs >= validUntil) {
+    return result('Schedule calendar unavailable or outside its coverage. Freshness is unconfirmed.');
+  }
+  const slots = calendar.slots.map(value => Date.parse(value));
+  if (slots.some((value, i) => !Number.isFinite(value) || value < validFrom ||
+      value >= validUntil || (i && value <= slots[i - 1]))) {
+    return result('Schedule calendar is invalid. Freshness is unconfirmed.');
+  }
+  const due = slots.filter(value => value <= nowMs).at(-1);
+  if (due == null) return result('Waiting for the first scheduled scan.', 'fallback');
+  const slotLabel = new Date(due).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
+  }) + ' ET';
+  const matching = Date.parse(schedule?.scheduled_for || '') === due;
+  if (matching && ['missed', 'interrupted'].includes(schedule.status)) {
+    return result(`Scheduled scan ${slotLabel}: ${schedule.status}. Showing the last successful result, if available.`);
+  }
+  if (matching && schedule.status === 'claimed') {
+    return result(nowMs - due <= 40 * 60_000
+      ? `Scheduled scan ${slotLabel} is acquiring or awaiting publication. Previous results remain below.`
+      : `Scheduled scan ${slotLabel} has no confirmed completion. Previous results remain below.`);
+  }
+  const failure = describeSqueezeAcquisitionFailure(pointer, attempt);
+  if (failure) return result(failure);
+  if (matching && schedule.status === 'finished' && !['complete', 'empty'].includes(schedule.acquisition_status)) {
+    return result(`Scheduled scan ${slotLabel} did not complete: ${schedule.acquisition_status || 'unknown'}. Showing the last successful result, if available.`);
+  }
+  const started = Date.parse(pointer?.started_at || '');
+  const finished = Date.parse(pointer?.finished_at || '');
+  const current = pointer?.sampling_mode === 'scheduled' && Date.parse(pointer?.scheduled_for || '') === due &&
+    ['complete', 'empty'].includes(pointer?.status) && Number.isFinite(started) && Number.isFinite(finished) &&
+    started >= due && started <= due + 10 * 60_000 && finished >= started && finished <= nowMs &&
+    matching && schedule.status === 'finished' && schedule.run_id === pointer.run_id &&
+    schedule.acquisition_status === pointer.status;
+  if (current) {
+    const nyDay = ms => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(ms));
+    const priorSession = nyDay(due) !== nyDay(nowMs);
+    return result(null, priorSession ? 'stale' : 'live', priorSession ? ' — previous session' : ' — latest scheduled scan');
+  }
+  if (matching && schedule.status === 'finished') {
+    return result(`Scheduled scan ${slotLabel} finished, but its published result is not yet confirmed. Showing the last successful result, if available.`);
+  }
+  return result(nowMs - due <= 10 * 60_000
+    ? `Scheduled refresh due ${slotLabel}; waiting for the scan.`
+    : `No confirmed schedule status for ${slotLabel}. Results may be stale.`);
 }
 
 // PR #105 review, finding 1: `latest.json` only ever advances on a
@@ -862,7 +918,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
-    fmtSteoDelta, findRevision, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
+    fmtSteoDelta, findRevision, formatSqueezeScheduleStatus, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };

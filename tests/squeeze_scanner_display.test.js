@@ -149,3 +149,34 @@ const { formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueez
 }
 
 console.log('PASS squeeze scanner scan-status, acquisition-failure, and first-seen formatting');
+
+// Scheduled cadence replaces elapsed six-hour freshness in the live panel.
+{
+  const {formatSqueezeScheduleStatus: format} = require('../docs/shared.js');
+  const calendar = require('../docs/squeeze-calendar.json');
+  const make = slot => ({run_id:slot,status:'complete',sampling_mode:'scheduled',scheduled_for:slot,
+    started_at:new Date(Date.parse(slot)+3000).toISOString(),finished_at:new Date(Date.parse(slot)+13000).toISOString()});
+  const record = p => ({run_id:p.run_id,status:'finished',acquisition_status:p.status,scheduled_for:p.scheduled_for});
+  const morning=make('2026-09-23T13:00:00Z');
+  const show=(p,now,s=record(p),cal=calendar)=>format(p,null,s,cal,Date.parse(now));
+  assert.equal(show(morning,'2026-09-23T15:59:00Z').state,'live');
+  assert.match(show(morning,'2026-09-23T16:05:00Z').warning,/refresh due/);
+  assert.match(show(morning,'2026-09-23T16:11:00Z').warning,/No confirmed/);
+  assert.equal(show(make('2026-09-23T16:00:00Z'),'2026-09-23T23:00:00Z').state,'live');
+  const friday=make('2026-09-25T16:00:00Z');
+  assert.equal(show(friday,'2026-09-26T18:00:00Z').warning,null);
+  assert.match(show(friday,'2026-09-26T18:00:00Z').text,/previous session/);
+  const holidayEve=make('2026-11-25T17:00:00Z');
+  assert.equal(show(holidayEve,'2026-11-26T18:00:00Z').warning,null); // Thanksgiving
+  assert.equal(show(make('2026-11-27T17:00:00Z'),'2026-11-27T18:30:00Z').state,'live'); // half day
+  assert.ok(calendar.slots.includes('2026-11-02T14:00:00.000000+00:00')); // EST
+  assert.ok(calendar.slots.includes('2027-03-15T13:00:00.000000+00:00')); // EDT
+  assert.match(show(morning,'2028-01-02T13:00:00Z').warning,/coverage/);
+  assert.match(show(morning,'2026-09-23T14:00:00Z',record(morning),null).warning,/calendar/);
+  assert.equal(show({...morning,finished_at:'2026-09-24T13:00:00Z'},'2026-09-23T14:00:00Z').state,'stale');
+  assert.equal(show({...morning,sampling_mode:'manual'},'2026-09-23T14:00:00Z').state,'stale');
+  const pending={status:'claimed',scheduled_for:morning.scheduled_for};
+  assert.match(show(morning,'2026-09-23T13:41:00Z',pending).warning,/no confirmed completion/);
+  assert.match(show(morning,'2026-09-23T14:00:00Z',{...record(morning),run_id:'different'}).warning,/not yet confirmed/);
+  console.log('PASS schedule-aware freshness: holidays, half days, DST, outages, metadata skew and expiry');
+}

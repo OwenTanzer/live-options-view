@@ -959,7 +959,7 @@
     Experimental short-squeeze scanner (<a href="https://linear.app/objecta/issue/OA-191" target="_blank" rel="noopener">OA-191</a>),
     an independently maintained producer (<a href="https://github.com/OwenTanzer/short-squeeze-scanner" target="_blank" rel="noopener">source</a>) --
     this page only displays what it publishes. Scores are experimental screening
-    measures, not calibrated squeeze probabilities. Historical outcomes and research
+    measures, not calibrated squeeze probabilities. Updates at 9 a.m. and noon New York time on exchange session days; 20-candidate pilot. Historical outcomes and research
     comparisons are archived separately and not shown here.
   </div>
   <table id="squeeze-table">
@@ -970,7 +970,7 @@
         <th>Factor score</th>
         <th>Options score</th>
         <th>Combined score</th>
-        <th>First seen today</th>
+        <th>First seen (ET)</th>
       </tr>
     </thead>
     <tbody id="squeeze-tbody"></tbody>
@@ -983,7 +983,7 @@
   Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
 </div>
 
-<script src="shared.js"></script>
+<script src="shared.js?v=__BUILD_ID__"></script>
 <script>
 // ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being
@@ -1955,10 +1955,10 @@ async function fetchSteoCalibration() {
 // comparison-eligible (options-valid) rows, sorted by combined rank
 // ascending -- storage.py does that filtering/sorting/truncation before
 // publishing, not this page.
-const SQUEEZE_POLL_MS = 60_000; // no scheduled runs exist yet (OA-191 step 3 is
-// unimplemented); manual runs are irregular, so this is "notice a new run
-// reasonably soon and keep the displayed age accurate," not matched to a
-// real cadence -- same reasoning as fetchSteoCalibration's poll above.
+const SQUEEZE_POLL_MS = 60_000; // Poll published state; never trigger acquisition.
+let squeezeSchedulePointer = null;
+let squeezeCalendar = null;
+let squeezeFetchVersion = 0;
 let squeezePointer = null; // parsed latest.json (last SUCCESSFUL run only)
 let squeezeAttemptPointer = null; // parsed latest-attempt.json (every attempt, success or not)
 let squeezeError = null;
@@ -1973,21 +1973,35 @@ let squeezeError = null;
 function squeezeNow() { return Date.now(); }
 
 async function fetchSqueezeLatest() {
+  const version = ++squeezeFetchVersion;
   try {
-    const base = `${R2}/squeeze-scanner/v1/manual`;
+    const base = `${R2}/squeeze-scanner/v1/scheduled`;
     const cacheBust = squeezeNow();
-    const [successResp, attemptResp] = await Promise.all([
-      fetch(`${base}/latest.json?_=${cacheBust}`, { cache: 'no-store' }),
-      fetch(`${base}/latest-attempt.json?_=${cacheBust}`, { cache: 'no-store' }),
-    ]);
-    // A 404 on either path just means "nothing has ever been published
-    // there" -- not a fetch error. Any other non-OK status is.
-    if (!successResp.ok && successResp.status !== 404) throw new Error(`HTTP ${successResp.status} (latest.json)`);
-    if (!attemptResp.ok && attemptResp.status !== 404) throw new Error(`HTTP ${attemptResp.status} (latest-attempt.json)`);
-    squeezePointer = successResp.status === 404 ? null : await successResp.json();
-    squeezeAttemptPointer = attemptResp.status === 404 ? null : await attemptResp.json();
+    const urls = ['latest.json', 'latest-attempt.json', 'latest-schedule.json']
+      .map(name => `${base}/${name}?_=${cacheBust}`);
+    urls.push(`/squeeze-calendar.json?_=${cacheBust}`);
+    const values = await Promise.all(urls.map(async url => {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const value = await response.json();
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid scanner response');
+      return value;
+    }));
+    const published = values[0];
+    if (published && (!['complete', 'empty'].includes(published.status) ||
+        !Array.isArray(published.candidates) || published.candidates.length > 10 ||
+        published.candidates.some(row => !row || typeof row.ticker !== 'string' || !row.scores ||
+          ['combined', 'factor', 'options'].some(key => row.scores[key] != null && !Number.isFinite(row.scores[key]))))) {
+      throw new Error('Invalid published shortlist');
+    }
+    if (version !== squeezeFetchVersion) return;
+    // Apply the complete poll together; JSON/network failures retain the last
+    // consistent set, and an older poll cannot replace a newer one.
+    [squeezePointer, squeezeAttemptPointer, squeezeSchedulePointer, squeezeCalendar] = values;
     squeezeError = null;
   } catch (e) {
+    if (version !== squeezeFetchVersion) return;
     squeezeError = e.message || 'fetch failed';
   }
   renderSqueezePanel();
@@ -2007,7 +2021,7 @@ function renderSqueezePanel() {
     return;
   }
 
-  const status = formatSqueezeScanStatus(squeezePointer, squeezeNow());
+  const status = formatSqueezeScheduleStatus(squeezePointer, squeezeAttemptPointer, squeezeSchedulePointer, squeezeCalendar, squeezeNow());
   statusEl.textContent = status.text;
   statusEl.dataset.state = status.state;
 
@@ -2015,13 +2029,13 @@ function renderSqueezePanel() {
   // run, so a failed/partial attempt newer than the last success is
   // otherwise invisible -- the old successful table would keep looking
   // like nothing had gone wrong since.
-  const failureNotice = describeSqueezeAcquisitionFailure(squeezePointer, squeezeAttemptPointer);
+  const failureNotice = status.warning;
   warningEl.textContent = failureNotice || '';
   warningEl.classList.toggle('hidden', !failureNotice);
 
   const rows = (squeezePointer && squeezePointer.candidates) || [];
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>';
+    tbody.innerHTML = squeezePointer ? '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>' : '<tr><td colspan="6" class="squeeze-empty">No scan published yet.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(row => {
@@ -2036,7 +2050,8 @@ function renderSqueezePanel() {
     // the row's own data, not tracked state, so it stays stable across
     // any number of polls of the same run.
     const firstSeen = formatSqueezeFirstSeen(row);
-    const firstSeenHtml = (firstSeen.isNew ? '<span class="squeeze-new-badge">New</span> ' : '') + escapeHtml(firstSeen.text);
+    const currentDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(squeezeNow()));
+    const firstSeenHtml = (firstSeen.isNew && squeezePointer.session_date === currentDay ? '<span class="squeeze-new-badge">New</span> ' : '') + escapeHtml(firstSeen.text);
     return `<tr>
       <td><a href="https://www.tradingview.com/symbols/${encodeURIComponent(row.ticker)}/" target="_blank" rel="noopener">${escapeHtml(row.ticker)}</a></td>
       <td>${price}</td>
