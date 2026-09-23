@@ -234,6 +234,95 @@ function formatMomentum(underlyingMarket, nowMs = Date.now()) {
   return { text, state: um.freshness === 'live' ? 'live' : 'stale' };
 }
 
+// -- short-squeeze scanner panel formatting (OA-191) -------------------------
+// Pure formatting/tracking for docs/index.html's squeeze panel, which
+// displays the independently-maintained scanner's published `latest.json`
+// pointer (OwenTanzer/short-squeeze-scanner's squeeze_scanner/storage.py
+// `upload()`). Same producer/display split as formatVwapRvol/formatMomentum
+// above: this page never computes a score, only formats what was published.
+const SQUEEZE_SCAN_STALE_AFTER_MS = 6 * 60 * 60 * 1000; // no scheduled runs exist
+// yet (OA-191 step 3 is unimplemented) -- manual runs are irregular, so
+// "stale" here means "old enough a reader shouldn't assume this reflects
+// current prices," not a violated SLA against a real schedule.
+
+// PR #105 review, finding 2: freshness must be judged against ACQUISITION
+// time (when the scan actually ran), not `published_at` (when the pointer
+// file happened to be written to R2) -- those can differ by a day if an
+// upload is delayed, and `published_at` alone would render a September 22
+// scan uploaded September 23 as fresh ("live"). `finished_at` (falling back
+// to `started_at`) is the acquisition-time field; `published_at` is never
+// used for the age/staleness judgment here anymore.
+function formatSqueezeScanStatus(pointer, nowMs = Date.now()) {
+  if (!pointer) return { text: 'No scan published yet', state: 'fallback' };
+  const acquiredMs = Date.parse(pointer.finished_at || pointer.started_at || '');
+  const dateText = Number.isFinite(acquiredMs)
+    ? new Date(acquiredMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+    : 'unknown date';
+  const timeText = Number.isFinite(acquiredMs)
+    ? new Date(acquiredMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  // A prior-day scan is explicitly stale regardless of raw age in ms -- a
+  // 9pm run is under SQUEEZE_SCAN_STALE_AFTER_MS old at 11pm the same
+  // night, but is still yesterday's data once a new session has started.
+  const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(nowMs));
+  const scanDateKey = Number.isFinite(acquiredMs)
+    ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(acquiredMs))
+    : null;
+  const priorDay = scanDateKey != null && scanDateKey !== todayKey;
+  const label = priorDay ? `${dateText}, ${timeText}` : timeText;
+
+  if (pointer.status === 'empty') {
+    return { text: `Scan complete ${label} ET — no eligible candidates`, state: 'stale' };
+  }
+  const ageMs = Number.isFinite(acquiredMs) ? nowMs - acquiredMs : null;
+  const stale = priorDay || ageMs == null || ageMs > SQUEEZE_SCAN_STALE_AFTER_MS;
+  return { text: `Scan ${label} ET${stale ? ' (stale)' : ''}`, state: stale ? 'stale' : 'live' };
+}
+
+// PR #105 review, finding 1: `latest.json` only ever advances on a
+// successful (complete/empty) run -- storage.py's `upload()` always
+// advances `latest-attempt.json` regardless of outcome. Without checking
+// the attempt pointer too, a failed or partial noon scan is invisible: the
+// morning's successful result keeps showing as if nothing had gone wrong
+// since. `successPointer`/`attemptPointer` are the parsed latest.json /
+// latest-attempt.json bodies (either may be null if nothing was ever
+// published to that path yet).
+function describeSqueezeAcquisitionFailure(successPointer, attemptPointer) {
+  if (!attemptPointer) return null;
+  if (attemptPointer.status === 'complete' || attemptPointer.status === 'empty') return null; // the attempt succeeded
+  const attemptIsNewer = !successPointer ||
+    Date.parse(attemptPointer.started_at || '') > Date.parse(successPointer.started_at || '');
+  if (!attemptIsNewer) return null; // the failure is older than the successful result already shown
+  const startedMs = Date.parse(attemptPointer.started_at || '');
+  const time = Number.isFinite(startedMs)
+    ? new Date(startedMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  return successPointer
+    ? `Most recent scan (started ${time} ET) did not complete: ${attemptPointer.status}. Showing the last successful result below.`
+    : `No successful scan yet. Most recent attempt (started ${time} ET): ${attemptPointer.status}.`;
+}
+
+// PR #105 review round 2: renders the "First seen today" column against
+// the real producer contract (short-squeeze-scanner#2's
+// docs/archive-contract.md, "Display contract v1: canonical first
+// appearance") -- `first_seen_at` (UTC write-attempt timestamp, null if
+// unknown) and `is_new` (true only for the run that first introduces the
+// ticker; false for a known existing candidate, including a reappearance;
+// null if unknown/legacy). The round-1 placeholder
+// (`row.first_seen_at ? 'New' : 'unavailable'`) treated ANY non-null
+// first_seen_at as New and never rendered the time itself -- both an
+// incumbent (is_new=false) and a genuine newcomer (is_new=true) rendered
+// identically as bare "New" text. `is_new` alone decides the New label;
+// first_seen_at (New York time) is shown either way when known.
+function formatSqueezeFirstSeen(row) {
+  if (row.first_seen_at == null || row.is_new == null) return { text: 'unavailable', isNew: false };
+  const seenMs = Date.parse(row.first_seen_at);
+  const time = Number.isFinite(seenMs)
+    ? new Date(seenMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })
+    : 'unknown time';
+  return { text: time, isNew: row.is_new === true };
+}
+
 // EIA STEO crude calibration panel formatting (docs/index.html's
 // fetchSteoCalibration). Pure, DOM-free -- same rationale as
 // formatVwapRvol/formatMomentum above: testable directly, no fixture DOM
@@ -773,7 +862,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
-    fmtSteoDelta, findRevision,
+    fmtSteoDelta, findRevision, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
     parseRetryAfter, normalizePaperOrder, normalizeShareOrder,
     isTradeableShareSymbol, computeAtmWindow,
   };

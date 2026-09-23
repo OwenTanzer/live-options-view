@@ -524,7 +524,53 @@
     cursor: pointer;
   }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
-  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden { display: none; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden { display: none; }
+
+  /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
+  #squeeze-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #squeeze-title { font-weight: 600; color: var(--bright); }
+  #squeeze-status { color: var(--dim); font-size: 0.76rem; }
+  #squeeze-status[data-state="stale"], #squeeze-status[data-state="fallback"] { opacity: 0.72; }
+  #squeeze-warning {
+    background: #2d1f0a;
+    border: 1px solid #d49a00;
+    color: #ffcc66;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    margin-bottom: 0.7rem;
+  }
+  #squeeze-warning.hidden { display: none; }
+  #squeeze-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
+  #squeeze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  #squeeze-table th {
+    text-align: right;
+    color: var(--dim);
+    font-weight: 500;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  #squeeze-table th:first-child, #squeeze-table td:first-child { text-align: left; }
+  #squeeze-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  #squeeze-table td a { color: #58a6ff; text-decoration: none; }
+  #squeeze-table td a:hover { text-decoration: underline; }
+  .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
+  .squeeze-new-badge {
+    background: #167a3f;
+    color: #fff;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
 
   /* ── automated (bot) panel ───────────────────────────────────────────── */
   #bots-header {
@@ -745,6 +791,7 @@
   <button id="tab-live" class="tab-btn active">Live</button>
   <button id="tab-history" class="tab-btn">Historical</button>
   <button id="tab-bots" class="tab-btn">Automated</button>
+  <button id="tab-squeeze" class="tab-btn">Squeeze</button>
 </div>
 
 <div id="live-panel">
@@ -900,6 +947,36 @@
   <div id="bots-grid"></div>
 
 </div> <!-- /bots-panel -->
+
+<div id="squeeze-panel" class="hidden">
+
+  <div id="squeeze-header">
+    <span id="squeeze-title">Ranked Candidates</span>
+    <span id="squeeze-status" data-state="fallback">—</span>
+  </div>
+  <div id="squeeze-warning" class="hidden"></div>
+  <div id="squeeze-hint">
+    Experimental short-squeeze scanner (<a href="https://linear.app/objecta/issue/OA-191" target="_blank" rel="noopener">OA-191</a>),
+    an independently maintained producer (<a href="https://github.com/OwenTanzer/short-squeeze-scanner" target="_blank" rel="noopener">source</a>) --
+    this page only displays what it publishes. Scores are experimental screening
+    measures, not calibrated squeeze probabilities. Historical outcomes and research
+    comparisons are archived separately and not shown here.
+  </div>
+  <table id="squeeze-table">
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Price at scan</th>
+        <th>Factor score</th>
+        <th>Options score</th>
+        <th>Combined score</th>
+        <th>First seen today</th>
+      </tr>
+    </thead>
+    <tbody id="squeeze-tbody"></tbody>
+  </table>
+
+</div> <!-- /squeeze-panel -->
 
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
@@ -1868,6 +1945,109 @@ async function fetchSteoCalibration() {
   }
 }
 
+// ── short-squeeze scanner panel (OA-191) ────────────────────────────────────
+// Renders the independently-maintained scanner's published `latest.json`
+// pointer (OwenTanzer/short-squeeze-scanner's squeeze_scanner/storage.py
+// `upload()`). This page never computes or re-derives a score -- it only
+// formats what the scanner already published, the same producer/display
+// boundary formatVwapRvol/formatMomentum draw for the collector's own
+// signals (shared.js). `pointer.candidates` is already the top 10
+// comparison-eligible (options-valid) rows, sorted by combined rank
+// ascending -- storage.py does that filtering/sorting/truncation before
+// publishing, not this page.
+const SQUEEZE_POLL_MS = 60_000; // no scheduled runs exist yet (OA-191 step 3 is
+// unimplemented); manual runs are irregular, so this is "notice a new run
+// reasonably soon and keep the displayed age accurate," not matched to a
+// real cadence -- same reasoning as fetchSteoCalibration's poll above.
+let squeezePointer = null; // parsed latest.json (last SUCCESSFUL run only)
+let squeezeAttemptPointer = null; // parsed latest-attempt.json (every attempt, success or not)
+let squeezeError = null;
+
+// Injectable clock (PR #105 review, finding 4): renderSqueezePanel calling
+// Date.now() directly made tests/squeeze_panel.test.js's fixed-date
+// fixtures assert fresh/stale against whatever day the suite happened to
+// run on, rather than the fixture's own intended "now." Same pattern this
+// file's LiveQuotePoller/TickerStateStore already use for nowFn, just as a
+// free variable instead of a constructor option since this panel has no
+// class of its own.
+function squeezeNow() { return Date.now(); }
+
+async function fetchSqueezeLatest() {
+  try {
+    const base = `${R2}/squeeze-scanner/v1/manual`;
+    const cacheBust = squeezeNow();
+    const [successResp, attemptResp] = await Promise.all([
+      fetch(`${base}/latest.json?_=${cacheBust}`, { cache: 'no-store' }),
+      fetch(`${base}/latest-attempt.json?_=${cacheBust}`, { cache: 'no-store' }),
+    ]);
+    // A 404 on either path just means "nothing has ever been published
+    // there" -- not a fetch error. Any other non-OK status is.
+    if (!successResp.ok && successResp.status !== 404) throw new Error(`HTTP ${successResp.status} (latest.json)`);
+    if (!attemptResp.ok && attemptResp.status !== 404) throw new Error(`HTTP ${attemptResp.status} (latest-attempt.json)`);
+    squeezePointer = successResp.status === 404 ? null : await successResp.json();
+    squeezeAttemptPointer = attemptResp.status === 404 ? null : await attemptResp.json();
+    squeezeError = null;
+  } catch (e) {
+    squeezeError = e.message || 'fetch failed';
+  }
+  renderSqueezePanel();
+}
+
+function renderSqueezePanel() {
+  const statusEl = document.getElementById('squeeze-status');
+  const warningEl = document.getElementById('squeeze-warning');
+  const tbody = document.getElementById('squeeze-tbody');
+
+  if (squeezeError) {
+    // Keep the last-rendered table rather than blanking it on a transient
+    // fetch error -- the same "don't paint over good data" rule
+    // renderBots' roster-error handling follows.
+    statusEl.textContent = `scanner unavailable — ${squeezeError} · showing last known`;
+    statusEl.dataset.state = 'stale';
+    return;
+  }
+
+  const status = formatSqueezeScanStatus(squeezePointer, squeezeNow());
+  statusEl.textContent = status.text;
+  statusEl.dataset.state = status.state;
+
+  // PR #105 review, finding 1: latest.json only advances on a successful
+  // run, so a failed/partial attempt newer than the last success is
+  // otherwise invisible -- the old successful table would keep looking
+  // like nothing had gone wrong since.
+  const failureNotice = describeSqueezeAcquisitionFailure(squeezePointer, squeezeAttemptPointer);
+  warningEl.textContent = failureNotice || '';
+  warningEl.classList.toggle('hidden', !failureNotice);
+
+  const rows = (squeezePointer && squeezePointer.candidates) || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(row => {
+    const combined = row.scores.combined != null ? row.scores.combined.toFixed(3) : '—';
+    const factor = row.scores.factor != null ? row.scores.factor.toFixed(3) : '—';
+    const options = row.scores.options != null ? row.scores.options.toFixed(3) : 'unavailable';
+    const price = row.price != null ? `$${row.price.toFixed(2)}` : '—';
+    // PR #105 review round 2: renders the producer's real first-seen
+    // contract (short-squeeze-scanner#2) -- is_new alone decides the New
+    // label; first_seen_at (NY time) is shown either way when known, null
+    // renders "unavailable." formatSqueezeFirstSeen is a pure function of
+    // the row's own data, not tracked state, so it stays stable across
+    // any number of polls of the same run.
+    const firstSeen = formatSqueezeFirstSeen(row);
+    const firstSeenHtml = (firstSeen.isNew ? '<span class="squeeze-new-badge">New</span> ' : '') + escapeHtml(firstSeen.text);
+    return `<tr>
+      <td><a href="https://www.tradingview.com/symbols/${encodeURIComponent(row.ticker)}/" target="_blank" rel="noopener">${escapeHtml(row.ticker)}</a></td>
+      <td>${price}</td>
+      <td>${factor}</td>
+      <td>${options}</td>
+      <td>${combined}</td>
+      <td class="squeeze-first-seen">${firstSeenHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
 // ── tab switching ────────────────────────────────────────────────────────────
 let historyLoaded = false;
 
@@ -1876,6 +2056,7 @@ const TABS = {
   live:    ['live-panel',    'tab-live'],
   history: ['history-panel', 'tab-history'],
   bots:    ['bots-panel',    'tab-bots'],
+  squeeze: ['squeeze-panel', 'tab-squeeze'],
 };
 
 function showTab(tab) {
@@ -2765,6 +2946,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   document.getElementById('tab-live').onclick    = () => showTab('live');
   document.getElementById('tab-history').onclick = () => showTab('history');
   document.getElementById('tab-bots').onclick    = () => showTab('bots');
+  document.getElementById('tab-squeeze').onclick = () => showTab('squeeze');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
 
   setStatus('', 'Loading calibration data…');
@@ -2800,6 +2982,11 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   // "pick up a change reasonably soon," not matched to its real cadence.
   fetchSteoCalibration();
   setInterval(fetchSteoCalibration, 60_000);
+
+  // Short-squeeze scanner panel (OA-191) -- an independent producer, polled
+  // the same "notice it eventually" way as eia_steo.json above.
+  fetchSqueezeLatest();
+  setInterval(fetchSqueezeLatest, SQUEEZE_POLL_MS);
 
   // Calibration data has no periodic retry of its own — safety net in case the
   // visibility handler above never fires (e.g. the tab was never backgrounded,
