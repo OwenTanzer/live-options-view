@@ -185,7 +185,7 @@ async function loadBotIndex(env) {
 
 // Conditional writes protect against lost membership when separate Workers
 // register bots concurrently. An absent index is explicitly NOT migration-ready.
-export async function updateBotIndex(env, additions, { ready = false } = {}) {
+export async function updateBotIndex(env, additions, { ready = false, sleeper = sleep } = {}) {
   const names = additions.map(n => n.toLowerCase());
   if (names.some(n => !BOT_USERNAME_RE.test(n))) throw new Error('Invalid bot membership');
   for (let attempt = 0; attempt < MAX_KV_WRITE_ATTEMPTS; attempt++) {
@@ -193,11 +193,21 @@ export async function updateBotIndex(env, additions, { ready = false } = {}) {
     const members = [...new Set([...(current?.value.members || []), ...names])].sort();
     const next = validateBotIndex({ schema_version: 1, ready: ready || current?.value.ready || false, members });
     if (current && JSON.stringify(current.value) === JSON.stringify(next)) return next;
-    const stored = await env.PAPER_TRADES.put(BOT_INDEX_KEY, JSON.stringify(next), {
-      onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' },
-      httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
-    });
-    if (stored) return next;
+    try {
+      const stored = await env.PAPER_TRADES.put(BOT_INDEX_KEY, JSON.stringify(next), {
+        onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' },
+        httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
+      });
+      if (stored) return next;
+    } catch (error) {
+      const rateLimited = Number(error?.status) === 429 ||
+        [429, 10058].includes(Number(error?.code)) ||
+        /\b(?:429|10058|TooManyRequests)\b/i.test(`${error?.name} ${error?.message}`);
+      if (!rateLimited || attempt === MAX_KV_WRITE_ATTEMPTS - 1) throw error;
+    }
+    // Both a conditional conflict and R2's same-object write throttle require
+    // a fresh read/merge. Wait beyond the one-second write window first.
+    if (attempt < MAX_KV_WRITE_ATTEMPTS - 1) await sleeper(1100);
   }
   throw new Error('Bot membership update conflicted; retry');
 }

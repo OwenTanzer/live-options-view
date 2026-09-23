@@ -64,7 +64,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     await assert.rejects(settleAllBots(env));
     await assert.rejects(updateBotIndex({ PAPER_TRADES: {
       get: async () => null, put: async () => null,
-    } }, ['bot_a']), /conflicted/);
+    } }, ['bot_a'], { sleeper: async () => {} }), /conflicted/);
   }
 
   // Full pagination before publish; include orphaned bots, exclude humans, and
@@ -192,6 +192,77 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     env.USERS.put = async (_key, value) => { raw = value; };
     await repairLegacyBotMarker(env, 'repair_bot');
     assert.equal(JSON.parse(raw).username, 'repair_bot');
+  }
+
+  // R2's shared-object throttle applies across different bot usernames.
+  // Exercise the real registration/reconciliation routes with both conditional
+  // writes and a one-second object write limit (including production delays).
+  {
+    const bucket = indexBucket([], false), put = bucket.put.bind(bucket);
+    let lastWrite = -Infinity, throttles = 0;
+    bucket.put = async (...args) => {
+      if (Date.now() - lastWrite < 1000) {
+        throttles++; throw new Error('put: Too many requests. (10058)');
+      }
+      const result = await put(...args);
+      if (result) lastWrite = Date.now();
+      return result;
+    };
+    const store = new Map();
+    const env = { PAPER_TRADES: bucket, BOT_REGISTRATION_KEY: 'operator',
+      USERS: {
+        get: async key => store.get(key) ?? null,
+        put: async (key,value) => store.set(key,value),
+        list: async ({ prefix }) => ({ list_complete: true,
+          keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }),
+      }, SESSIONS: { put: async () => {} } };
+    const register = username => worker.fetch(new Request('https://example.test/api/register', {
+      method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
+      body: JSON.stringify({ username, password: 'fixture-password' }),
+    }), env);
+    const responses = await Promise.all([register('parallel_a'), register('parallel_b')]);
+    assert.deepEqual(responses.map(r => r.status), [201, 201]);
+    assert.ok(throttles > 0, 'actually exercised the same-object throttle');
+    assert.deepEqual((await (await bucket.get(BOT_INDEX_KEY)).json()).members, ['parallel_a', 'parallel_b']);
+    store.set('user:legacy_bot', JSON.stringify({ username: 'legacy_bot', is_bot: true, trades: [] }));
+    const migration = new Request('https://example.test/api/bot-index/reconcile', {
+      method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
+    });
+    const raced = await Promise.all([register('parallel_c'), handleBotIndexReconcile(migration, env)]);
+    assert.deepEqual(raced.map(r => r.status), [201, 200]);
+    const index = await (await bucket.get(BOT_INDEX_KEY)).json();
+    assert.equal(index.ready, true);
+    assert.deepEqual(index.members, ['legacy_bot', 'parallel_a', 'parallel_b', 'parallel_c']);
+  }
+
+  // Recognize binding error representations, preserve other writers after a
+  // wait, bound retries, and propagate non-rate storage failures immediately.
+  for (const error of [new Error('put: Rate limit exceeded. (10058)'),
+    Object.assign(new Error('limited'), { code: 10058 }),
+    Object.assign(new Error('limited'), { status: 429 }),
+    Object.assign(new Error('limited'), { name: 'TooManyRequests' }),
+    new Error('429 Too Many Requests')]) {
+    const bucket = indexBucket(), put = bucket.put.bind(bucket);
+    let attempts = 0; const waits = [];
+    bucket.put = async (...args) => { if (++attempts === 1) throw error; return put(...args); };
+    await updateBotIndex({ PAPER_TRADES: bucket }, ['wanted_bot'], { sleeper: async ms => {
+      waits.push(ms); bucket.reset(['other_bot']);
+    } });
+    assert.deepEqual(waits, [1100]);
+    assert.deepEqual((await (await bucket.get(BOT_INDEX_KEY)).json()).members, ['other_bot', 'wanted_bot']);
+  }
+  {
+    const bucket = indexBucket(); let attempts = 0; const waits = [];
+    bucket.put = async () => { attempts++; throw new Error('put: TooManyRequests (10058)'); };
+    await assert.rejects(updateBotIndex({ PAPER_TRADES: bucket }, ['wanted_bot'], {
+      sleeper: async ms => waits.push(ms),
+    }), /10058/);
+    assert.equal(attempts, 5); assert.deepEqual(waits, [1100,1100,1100,1100]);
+    assert.deepEqual((await (await bucket.get(BOT_INDEX_KEY)).json()).members, []);
+    bucket.put = async () => { throw new Error('put: AccessDenied (10003)'); };
+    await assert.rejects(updateBotIndex({ PAPER_TRADES: bucket }, ['wanted_bot'], {
+      sleeper: async () => assert.fail('must not retry non-rate failure'),
+    }), /10003/);
   }
 
   // The rollout override is explicit, paginated and bounded. It is never an

@@ -533,7 +533,11 @@ the existing `PAPER_TRADES` R2 binding, then fetch current KV account records.
 The object contains only public bot identifiers, a schema version, and a migration
 readiness flag. It contains no balances, credentials, sessions, or trade history.
 Conditional object writes merge membership against the last-read entity tag;
-conflicting writers retry up to five times. Registration, authenticated bot login,
+conflicting or rate-limited writers make at most five attempts, waiting 1.1 seconds
+between attempts and re-reading/merging current membership each time. R2 binding
+error 10058 / TooManyRequests and HTTP 429 are recognized; other failures remain
+visible. Exhaustion fails the caller and remains repairable on its next login or
+metadata sync. Registration, authenticated bot login,
 and operator metadata sync repair both the legacy marker and the R2 membership.
 Matching legacy markers and unchanged account metadata are not rewritten during
 startup. Necessary marker repairs retry only rate-limit errors, at most three
