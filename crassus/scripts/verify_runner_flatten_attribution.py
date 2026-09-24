@@ -111,6 +111,7 @@ LONG_CALL = {
     "strike": 400.0, "type": "call", "exp": "2024-01-01",
     "instrument_type": "option", "multiplier": 100, "ts": "2024-01-01T10:00:00Z",
 }
+SHORT_CALL = {**LONG_CALL, "side": "sell"}
 
 
 def make_runner(
@@ -233,6 +234,34 @@ def scenario_flatten_runs_without_a_snapshot() -> None:
         )
 
 
+def scenario_short_cover_without_snapshot_records_diagnostic_gap() -> None:
+    print("\n2b. Flatten buy-to-cover without a snapshot records the missing diagnostic input in both intent and ledger")
+    account = FakeAccount(alias="Short", username="crassus_short", strategy_id="momentum_qqq")
+    state = AccountState(username=account.username, balance_cash=50000.0, trades=[SHORT_CALL])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        runner, executor = make_runner(account, state=state, ledger_dir=Path(tmp))
+        import crassus.clock as clock_module
+
+        original_now_et = clock_module.now_et
+        clock_module.now_et = lambda: datetime(2024, 1, 1, 15, 50, tzinfo=ET)
+        try:
+            runner._run_account(account, None, "open")
+        finally:
+            clock_module.now_et = original_now_et
+
+        submitted = executor.submit_calls[0] if executor.submit_calls else {}
+        recorded = last_ledger_record(Path(tmp))
+        check("short is still covered despite missing snapshot",
+              len(executor.submit_calls) == 1 and submitted.get("side") == "buy"
+              and recorded.get("outcome_class") == Outcome.FILLED)
+        check("intent records no_snapshot without a guessed valuation",
+              submitted.get("decision", {}).get("metadata", {}).get("bs_gate_status") == "no_snapshot"
+              and "bs_theoretical_price" not in submitted.get("decision", {}).get("metadata", {}))
+        check("ledger preserves the same no_snapshot status",
+              recorded.get("decision", {}).get("metadata", {}).get("bs_gate_status") == "no_snapshot")
+
+
 def scenario_no_snapshot_no_flatten_still_errors() -> None:
     print("\n3. A snapshot-service outage with nothing for flatten to do still blocks ordinary strategy evaluation (which does need the snapshot)")
     account = FakeAccount(alias="Newton", username="crassus_newton", strategy_id="momentum_qqq")
@@ -307,7 +336,7 @@ def scenario_phelps_pass_through_attribution() -> None:
 
     for action, rows in [
         ("buy", [{"OptionSymbol": "QQQ240102C00400000", "Strike": 400.0,
-                  "Type": "call", "Bid": 1.0, "Ask": 1.1}]),
+                  "Type": "call", "Bid": 1.0, "Ask": 1.1, "IV": 0.2}]),
         ("no_trade", []),
     ]:
         snapshot = MarketSnapshot.from_payload(
@@ -340,12 +369,17 @@ def scenario_phelps_pass_through_attribution() -> None:
                 check("Phelps buy: execution intent also carries wrapper revision",
                       submitted.get("strategy_id") == strategy.strategy_id
                       and submitted.get("strategy_version") == strategy.strategy_version)
+                check("Phelps buy: shared runner annotates non-Newton option entry",
+                      metadata.get("bs_gate_status") == "ok"
+                      and metadata.get("bs_quote_timestamp") == "2024-01-01T15:00:00"
+                      and submitted.get("decision", {}).get("metadata", {}).get("bs_gate_status") == "ok")
 
 
 def main() -> int:
     for scenario in (
         scenario_flatten_close_attributed_to_eod_flatten,
         scenario_flatten_runs_without_a_snapshot,
+        scenario_short_cover_without_snapshot_records_diagnostic_gap,
         scenario_no_snapshot_no_flatten_still_errors,
         scenario_account_strategy_id_survives_crash_recovery,
         scenario_phelps_pass_through_attribution,

@@ -75,6 +75,9 @@ looked yet (RVOL still building its baseline, or a missing snapshot field)
 retains a held position rather than closing it, same "absence of evidence
 isn't evidence against" treatment as `stale_source_reason` above -- not the
 same as a gate that has looked and genuinely disagrees, which does close.
+
+The shared runner adds Black-Scholes comparison metadata to option-buy
+decisions across strategies. This module makes no pricing-based decision.
 """
 
 from __future__ import annotations
@@ -101,6 +104,7 @@ STRATEGY_VERSION = "1.0.0"
 
 DEFAULT_BULLISH_THRESHOLD = 0.003  # +0.30% trailing return
 DEFAULT_BEARISH_THRESHOLD = -0.003  # -0.30% trailing return
+
 
 # The board is republished roughly once a minute (market.py); a snapshot
 # whose own timestamp is older than this by the runner's clock means the
