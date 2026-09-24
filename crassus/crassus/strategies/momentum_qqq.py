@@ -77,7 +77,7 @@ isn't evidence against" treatment as `stale_source_reason` above -- not the
 same as a gate that has looked and genuinely disagrees, which does close.
 
 A third optional param, `bs_edge_diagnostics_enabled` (bool, default
-`False`), attaches Black-Scholes diagnostics to a candidate open's
+`True`), attaches Black-Scholes diagnostics to a candidate open's
 metadata -- it never vetoes a trade. Before buying, the candidate ATM row's
 own live IV (from the feed's `Greeks` event, see `market.py`) is run through
 `crassus/crassus/black_scholes.py` to get a theoretical fair value, and
@@ -125,7 +125,7 @@ from ..momentum import (
 from ..strategy import Decision, StrategyContext, register
 
 STRATEGY_ID = "momentum_qqq"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.1.0"
 
 DEFAULT_BULLISH_THRESHOLD = 0.003  # +0.30% trailing return
 DEFAULT_BEARISH_THRESHOLD = -0.003  # -0.30% trailing return
@@ -393,29 +393,38 @@ def _decide_core(
             **meta_base,
         )
 
-    if params.get("bs_edge_diagnostics_enabled", False):
+    if params.get("bs_edge_diagnostics_enabled", True):
         # Diagnostic only -- see this module's docstring for why this never
         # returns no_trade: the inputs available to it (the ~60s board's
         # underlying_price/IV vs. a freshly fetched execution quote, and this
         # module's wall-clock time-to-expiry vs. the feed's own near-expiry
         # convention) aren't yet trustworthy enough to gate a real fill on.
-        max_edge_pct = params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT)
-        risk_free_rate = params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE)
-        quote_mid = (quote.bid + quote.ask) / 2.0
-        expiration = datetime.strptime(ctx.snapshot.expiration, "%Y-%m-%d").date()
-        edge_gate = evaluate_edge_gate(
-            row, ctx.snapshot.underlying_price, ctx.now_et, expiration, quote_mid,
-            max_edge_pct=max_edge_pct, risk_free_rate=risk_free_rate,
-        )
-        meta_base = dict(
-            meta_base,
-            bs_gate_status=edge_gate.status,
-            bs_theoretical_price=edge_gate.theoretical_price,
-            bs_quoted_price=edge_gate.quoted_price,
-            bs_edge_pct=edge_gate.edge_pct,
-            bs_edge_ok=edge_gate.edge_ok,
-            bs_iv=edge_gate.iv,
-        )
+        try:
+            max_edge_pct = params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT)
+            risk_free_rate = params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE)
+            quote_mid = (quote.bid + quote.ask) / 2.0
+            expiration = datetime.strptime(ctx.snapshot.expiration, "%Y-%m-%d").date()
+            edge_gate = evaluate_edge_gate(
+                row, ctx.snapshot.underlying_price, ctx.now_et, expiration, quote_mid,
+                max_edge_pct=max_edge_pct, risk_free_rate=risk_free_rate,
+            )
+            meta_base = dict(
+                meta_base,
+                bs_gate_status=edge_gate.status,
+                bs_theoretical_price=edge_gate.theoretical_price,
+                bs_quoted_price=edge_gate.quoted_price,
+                bs_edge_pct=edge_gate.edge_pct,
+                bs_edge_ok=edge_gate.edge_ok,
+                bs_iv=edge_gate.iv,
+            )
+        except Exception as exc:
+            # Optional measurement must never turn an otherwise executable
+            # quote into a strategy error. Keep the failure visible in the
+            # decision ledger without storing arbitrary exception details.
+            meta_base = dict(
+                meta_base, bs_gate_status="error",
+                bs_diagnostic_error_type=type(exc).__name__,
+            )
 
     return Decision(
         action="buy",
