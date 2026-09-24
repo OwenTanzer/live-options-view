@@ -67,10 +67,14 @@ def annotate_buy_decision(decision: Any, snapshot: Any, quote: Any, now_et: date
     the proposed action. The caller must pass the quote already observed by
     the strategy, never fetch a second quote on the audit path.
     """
-    if decision.action != "buy" or not decision.symbol or snapshot is None:
+    if decision.action != "buy" or not decision.symbol:
         return
     params = params or {}
     if params.get("bs_edge_diagnostics_enabled", True) is False:
+        return
+    if snapshot is None:
+        if _OCC_SUFFIX.search(decision.symbol):
+            decision.metadata = {**(decision.metadata or {}), "bs_gate_status": "no_snapshot"}
         return
     metadata = dict(decision.metadata or {})
     try:
