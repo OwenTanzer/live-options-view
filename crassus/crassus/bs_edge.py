@@ -1,4 +1,4 @@
-"""Black-Scholes theoretical-edge diagnostic for QQQ options strategies.
+"""Black-Scholes snapshot-IV comparison for option-buy audit records.
 
 Same shape as `vwap_rvol.py` on purpose: pure evaluation of already-observed
 inputs against a threshold, no accumulation, no network. Where
@@ -14,8 +14,8 @@ row), so this isn't recomputing IV from nothing: it takes the row's own
 underlying price and time-to-expiry, and reports how far the live bid/ask a
 strategy is considering has drifted from what that IV implies.
 
-IMPORTANT -- this is diagnostic only; `momentum_qqq.py` (Newton) attaches it
-to a decision's metadata via `bs_edge_diagnostics_enabled` and never gates a
+IMPORTANT -- this is diagnostic only; the shared runner attaches it to every
+option-buy decision's metadata by default and never gates a
 trade on it, for two reasons review surfaced that this module cannot resolve
 on its own:
 
@@ -37,7 +37,7 @@ on its own:
 Resolving either requires a feed contract this repo doesn't have yet
 (timestamped Greeks, or the provider's own valuation convention) -- until
 then, `edge_pct`/`edge_ok` are worth logging and inspecting, not worth
-standing between momentum and a fill.
+standing between an option purchase and a fill.
 
 Like `evaluate_gate`, this never fabricates a verdict from data it hasn't
 looked at: a missing row IV, a missing quote, or a T that's already
@@ -54,6 +54,56 @@ from typing import Any
 from .black_scholes import MIN_T_YEARS, theoretical_price, time_to_expiry_years
 
 DEFAULT_RISK_FREE_RATE = 0.05
+DEFAULT_MAX_EDGE_PCT = 0.15
+
+
+def annotate_buy_decision(decision: Any, snapshot: Any, quote: Any, now_et: datetime,
+                          params: dict[str, Any] | None = None) -> None:
+    """Attach a best-effort comparison to the option quote used for a buy.
+
+    Missing inputs are recorded as statuses; no diagnostic failure can affect
+    the proposed action. The caller must pass the quote already observed by
+    the strategy, never fetch a second quote on the audit path.
+    """
+    if decision.action != "buy" or not decision.symbol or snapshot is None:
+        return
+    params = params or {}
+    if params.get("bs_edge_diagnostics_enabled", True) is False:
+        return
+    metadata = dict(decision.metadata or {})
+    try:
+        row = snapshot.by_symbol(decision.symbol)
+        if row is None or row.get("Type") not in ("call", "put"):
+            return
+        metadata.update(
+            bs_snapshot_timestamp=snapshot.timestamp,
+            bs_snapshot_underlying_price=snapshot.underlying_price,
+            bs_quote_timestamp=getattr(quote, "quote_ts", None),
+            bs_quote_server_timestamp=getattr(quote, "server_ts", None),
+            bs_quote_age_seconds=getattr(quote, "age_seconds", None),
+        )
+        if quote is None or quote.bid is None or quote.ask is None:
+            metadata["bs_gate_status"] = "no_quote"
+        else:
+            expiration = datetime.strptime(snapshot.expiration, "%Y-%m-%d").date()
+            result = evaluate_edge_gate(
+                row, snapshot.underlying_price, now_et, expiration,
+                (quote.bid + quote.ask) / 2.0,
+                max_edge_pct=params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT),
+                risk_free_rate=params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE),
+            )
+            metadata.update(
+                bs_gate_status=result.status,
+                bs_theoretical_price=result.theoretical_price,
+                bs_quoted_price=result.quoted_price,
+                bs_edge_pct=result.edge_pct,
+                bs_edge_ok=result.edge_ok,
+                bs_iv=result.iv,
+                bs_time_to_expiry_years=result.time_to_expiry_years,
+            )
+    except Exception as exc:
+        metadata.update(bs_gate_status="error", bs_diagnostic_error_type=type(exc).__name__)
+    decision.metadata = metadata
 
 
 @dataclass(frozen=True)
@@ -87,8 +137,8 @@ def evaluate_edge_gate(
 
     `max_edge_pct` disables nothing when `None` would be passed -- unlike
     `vwap_rvol.evaluate_gate`'s `rvol_floor`/`require_vwap_agreement`, this
-    gate has no "off" reading of its own; the caller decides whether to call
-    it at all (see `momentum_qqq.py`'s guard before invoking it).
+    gate has no "off" reading of its own; the runner decides whether to call
+    it based on account parameters.
     """
     iv = row.get("IV")
     option_type = row.get("Type")

@@ -76,32 +76,8 @@ retains a held position rather than closing it, same "absence of evidence
 isn't evidence against" treatment as `stale_source_reason` above -- not the
 same as a gate that has looked and genuinely disagrees, which does close.
 
-A third optional param, `bs_edge_diagnostics_enabled` (bool, default
-`True`), attaches Black-Scholes diagnostics to a candidate open's
-metadata -- it never vetoes a trade. Before buying, the candidate ATM row's
-own live IV (from the feed's `Greeks` event, see `market.py`) is run through
-`crassus/crassus/black_scholes.py` to get a theoretical fair value, and
-`crassus/crassus/bs_edge.py`'s `evaluate_edge_gate` records how far the live
-quote sits from it as `bs_edge_pct` (bounded against `bs_max_edge_pct`,
-default 0.15, only for the `bs_edge_ok` metadata flag -- not as a decision).
-
-This was originally a hard veto (an earlier revision returned `no_trade`
-when the edge exceeded the band), but review caught two independent reasons
-that veto could fire on a perfectly good trade: (1) the row's `underlying_price`
-and `IV` come from the ~60s durable board (`market.py`) while the quote being
-priced is a fresh, separately-fetched execution quote (`EXECUTION_QUOTE_MAX_AGE_S`,
-~15s) -- collector.py records no observation timestamp on Greeks, so there's
-no way to confirm the two are simultaneous, and a several-second underlying
-move alone can blow through a 15% band; (2) dxFeed's own IV calculation
-freezes time-to-expiry at a fixed 30 minutes near the close
-(https://dxfeed.com/new-implied-volatility-and-greeks-calculation-update/),
-while this gate reprices using an actual wall-clock countdown -- so even
-perfectly simultaneous, internally consistent provider data can disagree
-with this module's own math near expiry. Fixing either properly needs a
-feed contract this repo doesn't have yet (timestamped Greeks, or the
-provider's own theoretical price/valuation convention), so until then this
-stays a diagnostic annotation an operator can inspect after the fact, not
-something that stands between momentum and a fill.
+The shared runner adds Black-Scholes comparison metadata to option-buy
+decisions across strategies. This module makes no pricing-based decision.
 """
 
 from __future__ import annotations
@@ -110,7 +86,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-from ..bs_edge import DEFAULT_RISK_FREE_RATE, evaluate_edge_gate
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
 from ..vwap_rvol import evaluate_gate
@@ -125,12 +100,11 @@ from ..momentum import (
 from ..strategy import Decision, StrategyContext, register
 
 STRATEGY_ID = "momentum_qqq"
-STRATEGY_VERSION = "1.1.0"
+STRATEGY_VERSION = "1.0.0"
 
 DEFAULT_BULLISH_THRESHOLD = 0.003  # +0.30% trailing return
 DEFAULT_BEARISH_THRESHOLD = -0.003  # -0.30% trailing return
 
-DEFAULT_MAX_EDGE_PCT = 0.15  # 15% away from Black-Scholes theoretical value
 
 # The board is republished roughly once a minute (market.py); a snapshot
 # whose own timestamp is older than this by the runner's clock means the
@@ -392,39 +366,6 @@ def _decide_core(
             age_seconds=quote.age_seconds,
             **meta_base,
         )
-
-    if params.get("bs_edge_diagnostics_enabled", True):
-        # Diagnostic only -- see this module's docstring for why this never
-        # returns no_trade: the inputs available to it (the ~60s board's
-        # underlying_price/IV vs. a freshly fetched execution quote, and this
-        # module's wall-clock time-to-expiry vs. the feed's own near-expiry
-        # convention) aren't yet trustworthy enough to gate a real fill on.
-        try:
-            max_edge_pct = params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT)
-            risk_free_rate = params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE)
-            quote_mid = (quote.bid + quote.ask) / 2.0
-            expiration = datetime.strptime(ctx.snapshot.expiration, "%Y-%m-%d").date()
-            edge_gate = evaluate_edge_gate(
-                row, ctx.snapshot.underlying_price, ctx.now_et, expiration, quote_mid,
-                max_edge_pct=max_edge_pct, risk_free_rate=risk_free_rate,
-            )
-            meta_base = dict(
-                meta_base,
-                bs_gate_status=edge_gate.status,
-                bs_theoretical_price=edge_gate.theoretical_price,
-                bs_quoted_price=edge_gate.quoted_price,
-                bs_edge_pct=edge_gate.edge_pct,
-                bs_edge_ok=edge_gate.edge_ok,
-                bs_iv=edge_gate.iv,
-            )
-        except Exception as exc:
-            # Optional measurement must never turn an otherwise executable
-            # quote into a strategy error. Keep the failure visible in the
-            # decision ledger without storing arbitrary exception details.
-            meta_base = dict(
-                meta_base, bs_gate_status="error",
-                bs_diagnostic_error_type=type(exc).__name__,
-            )
 
     return Decision(
         action="buy",

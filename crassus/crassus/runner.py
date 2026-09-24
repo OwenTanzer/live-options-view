@@ -26,6 +26,7 @@ from typing import Any
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
 from .archive import from_environment as archive_from_environment
+from .bs_edge import annotate_buy_decision
 from .client import (
     AccountLiquidated,
     AccountSession,
@@ -426,13 +427,20 @@ class Runner:
         book = Book(state.trades)
         state_before = {**state.summary(), **book.summary()}
 
+        observed_quotes: dict[str, Any] = {}
+
+        def quotes_for_decision(symbols: list[str]) -> dict[str, Any]:
+            result = self.quotes.quotes(symbols)
+            observed_quotes.update(result)
+            return result
+
         ctx = StrategyContext(
             snapshot=snapshot,
             account_state=state.summary(),
             book=book,
             now_et=clock.now_et(),
             session_phase=phase,
-            quotes=self.quotes.quotes,
+            quotes=quotes_for_decision,
             params=account.params,
         )
 
@@ -474,6 +482,11 @@ class Runner:
                 account_state_before=state_before,
             )
             return
+
+        # Annotate the proposal before it enters either the durable intent
+        # or the ledger. The strategy's own quote is reused without I/O.
+        annotate_buy_decision(decision, snapshot, observed_quotes.get(decision.symbol),
+                              ctx.now_et, account.params)
 
         # From here on a Decision exists and may not have come from the
         # account's own strategy (see maybe_flatten) -- attribute the record

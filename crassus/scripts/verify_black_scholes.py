@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the Black-Scholes tool's math and its use as Newton's diagnostic.
+"""Prove the Black-Scholes math and shared buy annotation.
 
 Hermetic like verify_vwap_rvol.py, which this mirrors in style: no network
 access, no real snapshot fetch. `black_scholes.py`'s pricing/Greeks/IV-solver
@@ -8,9 +8,8 @@ consistency properties (put-call parity, IV round-trip, including a
 European put whose price sits below its undiscounted intrinsic value);
 `bs_edge.py`'s `evaluate_edge_gate` is exercised with hand-built snapshot
 rows, including the reviewer-identified asynchronous-input and provider
-time-convention reproductions; `momentum_qqq._decide_core()` is exercised
-directly with a hand-built `MomentumSignal` plus `bs_edge_diagnostics_enabled`
-in `params` -- no tracker, no collector, no I/O.
+time-convention reproductions; `momentum_qqq._decide_core()` supplies a candidate option buy for
+the shared annotation helper, with `bs_edge_diagnostics_enabled` in `params` -- no tracker, no collector, no I/O.
 
     python scripts/verify_black_scholes.py
 """
@@ -32,12 +31,12 @@ from crassus.black_scholes import (  # noqa: E402
     theoretical_price,
     time_to_expiry_years,
 )
-from crassus.bs_edge import evaluate_edge_gate  # noqa: E402
+from crassus.bs_edge import annotate_buy_decision, evaluate_edge_gate  # noqa: E402
 from crassus.client import Book  # noqa: E402
 from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.momentum import MomentumSignal  # noqa: E402
 from crassus.strategies import momentum_qqq as mq  # noqa: E402
-from crassus.strategy import StrategyContext  # noqa: E402
+from crassus.strategy import Decision, StrategyContext  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 
@@ -298,7 +297,7 @@ def scenario_edge_gate_provider_time_convention_mismatch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# momentum_qqq._decide_core() with bs_edge_diagnostics_enabled
+# Runner-style annotation of option buys (Newton supplies one test decision)
 # ---------------------------------------------------------------------------
 
 
@@ -344,16 +343,29 @@ def fair_call_row() -> tuple[dict, float]:
     return row, fair
 
 
+def buy_with_diagnostic(ctx: StrategyContext, signal: MomentumSignal):
+    observed = {}
+
+    def capture(symbols):
+        quotes = ctx.quotes(symbols)
+        observed.update(quotes)
+        return quotes
+
+    decision = mq._decide_core(replace(ctx, quotes=capture), signal)
+    annotate_buy_decision(decision, ctx.snapshot, observed.get(decision.symbol), ctx.now_et, ctx.params)
+    return decision
+
+
 def scenario_diagnostics_on_by_default_with_opt_out() -> None:
     print("\n17. _decide_core(): diagnostics run by default and an explicit false disables them")
     row, fair = fair_call_row()
     blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}
     symbol = blown_out_row["OptionSymbol"]
     ctx = make_ctx(rows=[blown_out_row], quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])})
-    decision = mq._decide_core(ctx, bullish_signal())
+    decision = buy_with_diagnostic(ctx, bullish_signal())
     check("still buys with default diagnostics", decision.action == "buy", decision.to_dict())
     check("default records the discrepancy", decision.metadata.get("bs_edge_ok") is False, decision.metadata)
-    disabled = mq._decide_core(replace(ctx, params={"bs_edge_diagnostics_enabled": False}), bullish_signal())
+    disabled = buy_with_diagnostic(replace(ctx, params={"bs_edge_diagnostics_enabled": False}), bullish_signal())
     check("explicit false preserves the buy", disabled.action == "buy", disabled.to_dict())
     check("explicit false omits diagnostic metadata", "bs_gate_status" not in disabled.metadata, disabled.metadata)
 
@@ -366,7 +378,7 @@ def scenario_diagnostics_record_fairly_priced_quote() -> None:
         rows=[row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, row["Bid"], row["Ask"])},
     )
-    decision = mq._decide_core(ctx, bullish_signal())
+    decision = buy_with_diagnostic(ctx, bullish_signal())
     check("buys -- quote is fairly priced", decision.action == "buy", decision.to_dict())
     check("audit metadata records the bs gate status", decision.metadata.get("bs_gate_status") == "ok", decision.metadata)
     check("audit metadata records edge_ok=True", decision.metadata.get("bs_edge_ok") is True, decision.metadata)
@@ -381,7 +393,7 @@ def scenario_diagnostics_never_veto_an_implausibly_mispriced_quote() -> None:
         rows=[blown_out_row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])},
     )
-    decision = mq._decide_core(ctx, bullish_signal())
+    decision = buy_with_diagnostic(ctx, bullish_signal())
     check("still buys -- diagnostics are informational, not a veto", decision.action == "buy", decision.to_dict())
     check("audit metadata records edge_ok=False for the mispriced quote", decision.metadata.get("bs_edge_ok") is False,
           decision.metadata)
@@ -396,7 +408,7 @@ def scenario_diagnostics_never_veto_when_row_has_no_iv() -> None:
         rows=[no_iv_row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, no_iv_row["Bid"], no_iv_row["Ask"])},
     )
-    decision = mq._decide_core(ctx, bullish_signal())
+    decision = buy_with_diagnostic(ctx, bullish_signal())
     check("still buys -- missing IV is recorded, not a veto", decision.action == "buy", decision.to_dict())
     check("audit metadata records bs_gate_status=no_iv", decision.metadata.get("bs_gate_status") == "no_iv",
           decision.metadata)
@@ -416,7 +428,7 @@ def scenario_diagnostics_never_block_a_close() -> None:
         lookback_minutes=60.0, current_price=396.0, anchor_price=400.0, return_pct=-0.01,
         sample_count=10, anchor_age_minutes=60.0, status="ok",
     )
-    decision = mq._decide_core(ctx, bearish)
+    decision = buy_with_diagnostic(ctx, bearish)
     check("action is sell -- diagnostics don't touch the closing leg", decision.action == "sell", decision.to_dict())
     check("closes the actual held call", decision.symbol == symbol)
 
@@ -442,8 +454,8 @@ def scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs() -> Non
                      params={"bs_edge_diagnostics_enabled": True}),
             now_et=now,
         )
-        enabled = mq._decide_core(enabled_ctx, bullish_signal())
-        disabled = mq._decide_core(
+        enabled = buy_with_diagnostic(enabled_ctx, bullish_signal())
+        disabled = buy_with_diagnostic(
             replace(enabled_ctx, params={"bs_edge_diagnostics_enabled": False}),
             bullish_signal(),
         )
@@ -461,10 +473,30 @@ def scenario_diagnostic_failure_does_not_block_buy() -> None:
     row["IV"] = "invalid"
     symbol = row["OptionSymbol"]
     ctx = make_ctx(rows=[row], quote_map={symbol: fresh_quote(symbol, row["Bid"], row["Ask"])})
-    decision = mq._decide_core(ctx, bullish_signal())
+    decision = buy_with_diagnostic(ctx, bullish_signal())
     check("still buys when diagnostic raises", decision.action == "buy", decision.to_dict())
     check("records diagnostic failure", decision.metadata.get("bs_gate_status") == "error", decision.metadata)
     check("records error type without raw input", decision.metadata.get("bs_diagnostic_error_type") == "TypeError")
+
+
+def scenario_shared_annotation_selects_contract_not_strategy() -> None:
+    print("\n24. Shared diagnostic follows the bought straddle leg, including when its metadata uses leg-specific quote keys")
+    call, fair = fair_call_row()
+    put = {**call, "OptionSymbol": "QQQ260610P00400000", "Type": "put"}
+    snapshot = make_snapshot([call, put])
+    decision = Decision(action="buy", symbol=put["OptionSymbol"], quantity=1,
+                        reason="Completing straddle", strategy_id="looking_glass_straddle",
+                        strategy_version="1", metadata={"put_bid": 1.0, "put_ask": 1.1})
+    quote = fresh_quote(put["OptionSymbol"], fair - 0.01, fair + 0.01)
+    annotate_buy_decision(decision, snapshot, quote, NOW)
+    check("put IV was selected by symbol", decision.metadata.get("bs_gate_status") == "ok"
+          and decision.metadata.get("bs_iv") == put["IV"])
+    check("uses observed put quote rather than leg metadata", approx(decision.metadata["bs_quoted_price"], fair, 1e-3))
+    check("keeps straddle's own metadata", decision.metadata.get("put_bid") == 1.0)
+    sell = Decision(action="sell", symbol=put["OptionSymbol"], quantity=1,
+                    reason="Exit", strategy_id="looking_glass_straddle", strategy_version="1")
+    annotate_buy_decision(sell, snapshot, quote, NOW)
+    check("sell remains unannotated", sell.metadata is None)
 
 
 def main() -> int:
@@ -496,6 +528,7 @@ def main() -> int:
         scenario_diagnostics_never_block_a_close,
         scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs,
         scenario_diagnostic_failure_does_not_block_buy,
+        scenario_shared_annotation_selects_contract_not_strategy,
     ):
         scenario()
 

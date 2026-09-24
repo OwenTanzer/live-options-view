@@ -307,7 +307,7 @@ def scenario_phelps_pass_through_attribution() -> None:
 
     for action, rows in [
         ("buy", [{"OptionSymbol": "QQQ240102C00400000", "Strike": 400.0,
-                  "Type": "call", "Bid": 1.0, "Ask": 1.1}]),
+                  "Type": "call", "Bid": 1.0, "Ask": 1.1, "IV": 0.2}]),
         ("no_trade", []),
     ]:
         snapshot = MarketSnapshot.from_payload(
@@ -340,6 +340,10 @@ def scenario_phelps_pass_through_attribution() -> None:
                 check("Phelps buy: execution intent also carries wrapper revision",
                       submitted.get("strategy_id") == strategy.strategy_id
                       and submitted.get("strategy_version") == strategy.strategy_version)
+                check("Phelps buy: shared runner annotates non-Newton option entry",
+                      metadata.get("bs_gate_status") == "ok"
+                      and metadata.get("bs_quote_timestamp") == "2024-01-01T15:00:00"
+                      and submitted.get("decision", {}).get("metadata", {}).get("bs_gate_status") == "ok")
 
 
 def main() -> int:
