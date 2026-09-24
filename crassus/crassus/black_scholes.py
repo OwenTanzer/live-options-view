@@ -12,15 +12,13 @@ It exists as a standalone tool two different callers can reach for:
    Greeks (`collector.py`'s `"Greeks"` event -- `volatility`/`delta`/`gamma`/
    `theta`/`vega`, already carried through to snapshot rows as `IV`/`Delta`/
    `Gamma`/`Theta`/`Vega`) aren't available or aren't trusted.
-2. Through `bs_edge.py`, which wraps `theoretical_price` into an optional
-   sanity gate `strategies/momentum_qqq.py` (Newton) can require before
-   opening a position -- see that module's docstring.
+2. Through `bs_edge.py`, which wraps `theoretical_price` into optional
+   diagnostic metadata for `strategies/momentum_qqq.py` (Newton). It cannot
+   veto an open -- see that module's input-timing limitations.
 
-European-exercise closed-form only (no early-exercise adjustment): these are
-short-dated, cash-settled-in-spirit QQQ single-name options this repo never
-holds through a dividend record date, so the American-vs-European premium
-this ignores is negligible relative to the bid/ask spreads already being
-traded through.
+European-exercise closed-form only: this calculation does not model QQQ's
+American exercise, dividends, or the provider's valuation conventions.
+Treat it as a mathematical reference, not an independent executable quote.
 
 `d1`/`d2` and the Greeks formulas below are the textbook closed forms (see
 the Wikipedia article linked above, or Hull's *Options, Futures, and Other
