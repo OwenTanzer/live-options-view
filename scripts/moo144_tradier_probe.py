@@ -143,15 +143,33 @@ def select_symbols(
     clock = client.get("/markets/clock").get("clock") or {}
     preopen = session_open is not None and now_et < session_open
     if preopen:
-        # Explicit daily-collector opt-in; the one-shot probe stays open-only.
-        if (run_date != now_et.date().isoformat()
-                or session_open.date() != now_et.date()
-                or clock.get("date") != run_date
-                or clock.get("state") != "premarket"
-                or clock.get("next_change") != session_open.strftime("%H:%M")
-                or not 0 < (session_open - now_et).total_seconds() <= 60
-                or duration_seconds != 0):
-            raise RuntimeError("Invalid daily collector pre-open selection window")
+        # Tradier's calendar ends premarket at 09:24, before the 09:30
+        # exchange open. The daily collector selects at 09:29, when the
+        # provider can be closed with its next transition explicitly open.
+        # This remains an opt-in, final-minute window; the probe is open-only.
+        checks = {
+            "run_date": run_date == now_et.date().isoformat(),
+            "session_date": session_open.date() == now_et.date(),
+            "clock_date": clock.get("date") == run_date,
+            "clock_state": clock.get("state") in {"premarket", "closed"},
+            "next_state": clock.get("next_state") == "open",
+            "next_change": clock.get("next_change") == session_open.strftime("%H:%M"),
+            "final_minute": 0 < (session_open - now_et).total_seconds() <= 60,
+            "daily_collector": duration_seconds == 0,
+        }
+        failed = [name for name, passed in checks.items() if not passed]
+        if failed:
+            # Only selection/clock fields: no credentials or full API payload.
+            diagnostic = {
+                "failed_checks": failed,
+                "run_date": run_date,
+                "now_et": now_et.isoformat(),
+                "session_open": session_open.isoformat(),
+                "clock": {key: clock.get(key) for key in
+                          ("date", "state", "next_state", "next_change")},
+            }
+            raise RuntimeError("Invalid daily collector pre-open selection window: "
+                               + json.dumps(diagnostic, sort_keys=True))
         trade_date = run_date
     else:
         trade_date = validate_run_window(run_date, clock, duration_seconds, now_et)
