@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
@@ -330,7 +330,9 @@ class PreopenSelectionTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 9, 3, 9, 29, 0, tzinfo=ET)
         self.open = self.now.replace(minute=30)
-        self.clock = {"date": "2026-09-03", "state": "premarket", "next_change": "09:30"}
+        # Calendar-derived gap: premarket ends 09:24; exchange opens 09:30.
+        self.clock = {"date": "2026-09-03", "state": "closed",
+                      "next_state": "open", "next_change": "09:30"}
         self.quote = {"symbol": "QQQ", "last": 400, "bid": 599.9, "ask": 600.1,
                       "bid_date": self.now.timestamp() * 1000, "ask_date": self.now.timestamp() * 1000}
         self.client = FakeTradier()
@@ -347,21 +349,67 @@ class PreopenSelectionTests(unittest.TestCase):
         return probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now,
                                     session_open=self.open, **kwargs)
 
-    def test_fresh_premarket_midpoint_not_previous_close_selects_universe(self):
+    def test_fresh_gap_midpoint_not_previous_close_selects_universe(self):
         _, universe = self.select()
         self.assertEqual(universe["spot"], 600)
         self.assertEqual(universe["spot_source"], "premarket_bid_ask_midpoint")
         self.assertEqual(universe["selected_at"], self.now.isoformat())
 
     def test_one_shot_still_rejects_premarket_without_explicit_collector_window(self):
-        with self.assertRaisesRegex(RuntimeError, "not open"):
-            probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now)
+        with patch.dict(self.clock, {"state": "premarket"}):
+            with self.assertRaisesRegex(RuntimeError, "not open"):
+                probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now)
 
     def test_wrong_date_state_or_open_boundary_rejected(self):
-        for field, value in [("date", "2026-09-02"), ("state", "closed"), ("next_change", "09:00")]:
+        for field, value in [("date", "2026-09-02"), ("state", "postmarket"), ("next_change", "09:00"),
+                             ("next_state", "premarket"), ("next_state", None)]:
             with self.subTest(field=field), patch.dict(self.clock, {field: value}):
                 with self.assertRaisesRegex(RuntimeError, "pre-open selection"):
                     self.select()
+
+    def test_premarket_with_explicit_open_transition_also_accepted(self):
+        with patch.dict(self.clock, {"state": "premarket"}):
+            _, universe = self.select()
+        self.assertEqual(universe["spot"], 600)
+
+    def test_provider_premarket_end_is_not_the_exchange_open(self):
+        with patch.dict(self.clock, {"state": "premarket", "next_state": "closed",
+                                     "next_change": "09:24"}):
+            with self.assertRaisesRegex(RuntimeError, "next_change"):
+                self.select()
+
+    def test_failure_diagnostic_identifies_guard_without_full_payload(self):
+        with patch.dict(self.clock, {"next_state": "premarket", "private": "do-not-log"}):
+            with self.assertRaises(RuntimeError) as caught:
+                self.select()
+        diagnostic = json.loads(str(caught.exception).split(": ", 1)[1])
+        self.assertEqual(diagnostic["failed_checks"], ["next_state"])
+        self.assertEqual(diagnostic["clock"]["state"], "closed")
+        self.assertNotIn("do-not-log", str(caught.exception))
+
+    def test_closed_clock_without_collector_opt_in_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "not open"):
+            probe.select_symbols(self.client, 2, 0, "2026-09-03", self.now)
+
+    def test_wrong_run_date_session_date_or_duration_rejected(self):
+        cases = [
+            ("2026-09-02", self.open, 0),
+            ("2026-09-03", self.open.replace(day=4), 0),
+            ("2026-09-03", self.open, 30),
+        ]
+        for run_date, session_open, duration in cases:
+            with self.subTest(run_date=run_date, session_open=session_open, duration=duration):
+                with self.assertRaisesRegex(RuntimeError, "pre-open selection"):
+                    probe.select_symbols(self.client, 2, duration, run_date, self.now,
+                                         session_open=session_open)
+
+    def test_closed_clock_at_or_after_open_is_rejected(self):
+        for seconds in (0, 1):
+            with self.subTest(seconds=seconds):
+                with self.assertRaisesRegex(RuntimeError, "not open"):
+                    probe.select_symbols(self.client, 2, 0, "2026-09-03",
+                                         self.open + timedelta(seconds=seconds),
+                                         session_open=self.open)
 
     def test_stale_missing_future_or_crossed_reference_rejected(self):
         for values in [dict(bid_date=1), dict(ask_date=None), dict(ask_date=self.now.timestamp()*1000+600000), dict(bid=601)]:

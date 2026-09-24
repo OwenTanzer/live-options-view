@@ -1675,7 +1675,7 @@ class PreopenReadinessTests(unittest.TestCase):
                 def get(path, **kwargs):
                     if path == "/markets/clock":
                         self.assertEqual(current[0], self.open - timedelta(seconds=60))
-                        return {"clock": {"date": "2026-09-08", "state": "premarket", "next_change": "09:30"}}
+                        return {"clock": {"date": "2026-09-08", "state": "closed", "next_state": "open", "next_change": "09:30"}}
                     if path == "/markets/quotes":
                         return {"quotes": {"quote": {"bid": 599.9, "ask": 600.1, "last": 400,
                             "bid_date": current[0].timestamp()*1000, "ask_date": current[0].timestamp()*1000}}}
@@ -1742,7 +1742,7 @@ class MultiTradier:
     """REST + stream fake for several underlyings that records every
     market-data session created and every stream subscription opened.
 
-    ``now`` (the test clock) switches the clock/quote endpoints to premarket
+    ``now`` (the test clock) switches the clock/quote endpoints to the pre-open gap
     before 09:30. ``chain_hooks`` run inside a symbol's chain request, so a
     test can block, synchronise or fail one underlying's preparation. Stream
     lines may be callables, run in order (e.g. to move the clock to the open).
@@ -1773,7 +1773,7 @@ class MultiTradier:
         self.calls.append((path, params))
         if path == "/markets/clock":
             if self.premarket():
-                return {"clock": {"date": self.trade_date, "state": "premarket", "next_change": "09:30"}}
+                return {"clock": {"date": self.trade_date, "state": "closed", "next_state": "open", "next_change": "09:30"}}
             return {"clock": {"date": self.trade_date, "state": "open", "next_change": "16:00"}}
         if path == "/markets/quotes":
             symbol = params["symbols"]
