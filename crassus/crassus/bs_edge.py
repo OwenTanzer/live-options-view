@@ -49,12 +49,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import re
 from typing import Any
 
 from .black_scholes import MIN_T_YEARS, theoretical_price, time_to_expiry_years
 
 DEFAULT_RISK_FREE_RATE = 0.05
 DEFAULT_MAX_EDGE_PCT = 0.15
+_OCC_SUFFIX = re.compile(r"\d{6}[CP]\d{8}$")
 
 
 def annotate_buy_decision(decision: Any, snapshot: Any, quote: Any, now_et: datetime,
@@ -73,7 +75,12 @@ def annotate_buy_decision(decision: Any, snapshot: Any, quote: Any, now_et: date
     metadata = dict(decision.metadata or {})
     try:
         row = snapshot.by_symbol(decision.symbol)
-        if row is None or row.get("Type") not in ("call", "put"):
+        if row is None:
+            if _OCC_SUFFIX.search(decision.symbol):
+                metadata["bs_gate_status"] = "no_snapshot_row"
+                decision.metadata = metadata
+            return
+        if row.get("Type") not in ("call", "put"):
             return
         metadata.update(
             bs_snapshot_timestamp=snapshot.timestamp,

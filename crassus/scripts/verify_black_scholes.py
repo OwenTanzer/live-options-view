@@ -497,6 +497,11 @@ def scenario_shared_annotation_selects_contract_not_strategy() -> None:
                     reason="Exit", strategy_id="looking_glass_straddle", strategy_version="1")
     annotate_buy_decision(sell, snapshot, quote, NOW)
     check("sell remains unannotated", sell.metadata is None)
+    missing = Decision(action="buy", symbol="QQQ260610P00401000", quantity=1,
+                       reason="Another option", strategy_id="other", strategy_version="1")
+    annotate_buy_decision(missing, snapshot, None, NOW)
+    check("option outside snapshot records why comparison is absent",
+          missing.metadata.get("bs_gate_status") == "no_snapshot_row")
 
 
 def main() -> int:
