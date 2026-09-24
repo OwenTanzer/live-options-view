@@ -18,7 +18,8 @@ in `params` -- no tracker, no collector, no I/O.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, date
+from dataclasses import replace
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -417,6 +418,37 @@ def scenario_diagnostics_never_block_a_close() -> None:
     check("closes the actual held call", decision.symbol == symbol)
 
 
+def scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs() -> None:
+    print("\n22. _decide_core(): known false discrepancies remain metadata, not execution vetoes")
+    row, _fair = fair_call_row()
+    symbol = row["OptionSymbol"]
+    scenarios = (
+        ("spot moved", NOW + timedelta(seconds=45), 400.50, 0.20, None),
+        ("IV moved", NOW + timedelta(seconds=45), 400.0, 0.25, None),
+        ("provider's 30m clock", NOW.replace(hour=15, minute=40), 400.0, 0.20,
+         30.0 / (365.0 * 24.0 * 60.0)),
+    )
+    for name, now, current_spot, current_iv, provider_t in scenarios:
+        T = provider_t if provider_t is not None else time_to_expiry_years(now, EXPIRATION)
+        mid = theoretical_price("call", current_spot, 400.0, T, 0.05, current_iv)
+        stamp = now.isoformat()
+        quote = Quote(symbol=symbol, bid=mid - 0.01, ask=mid + 0.01,
+                      quote_ts=stamp, server_ts=stamp)
+        enabled_ctx = replace(
+            make_ctx(rows=[row], quote_map={symbol: quote},
+                     params={"bs_edge_diagnostics_enabled": True}),
+            now_et=now,
+        )
+        enabled = mq._decide_core(enabled_ctx, bullish_signal())
+        disabled = mq._decide_core(replace(enabled_ctx, params={}), bullish_signal())
+        check(f"{name}: Newton opens with diagnostics enabled", enabled.action == "buy", enabled.to_dict())
+        check(f"{name}: false discrepancy recorded", enabled.metadata.get("bs_edge_ok") is False,
+              enabled.metadata.get("bs_edge_pct"))
+        check(f"{name}: execution decision matches diagnostics disabled",
+              (enabled.action, enabled.symbol, enabled.quantity, enabled.reason) ==
+              (disabled.action, disabled.symbol, disabled.quantity, disabled.reason))
+
+
 def main() -> int:
     for scenario in (
         scenario_textbook_call_price,
@@ -444,6 +476,7 @@ def main() -> int:
         scenario_diagnostics_never_veto_an_implausibly_mispriced_quote,
         scenario_diagnostics_never_veto_when_row_has_no_iv,
         scenario_diagnostics_never_block_a_close,
+        scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs,
     ):
         scenario()
 
