@@ -344,15 +344,18 @@ def fair_call_row() -> tuple[dict, float]:
     return row, fair
 
 
-def scenario_diagnostics_off_by_default_no_behavior_change() -> None:
-    print("\n17. _decide_core(): omitting bs_edge_diagnostics_enabled is identical to no diagnostics (regression guard)")
+def scenario_diagnostics_on_by_default_with_opt_out() -> None:
+    print("\n17. _decide_core(): diagnostics run by default and an explicit false disables them")
     row, fair = fair_call_row()
     blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}
     symbol = blown_out_row["OptionSymbol"]
     ctx = make_ctx(rows=[blown_out_row], quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])})
     decision = mq._decide_core(ctx, bullish_signal())
-    check("still buys -- diagnostics never evaluated when the param is absent", decision.action == "buy", decision.to_dict())
-    check("no bs_* metadata recorded when disabled", "bs_gate_status" not in decision.metadata, decision.metadata)
+    check("still buys with default diagnostics", decision.action == "buy", decision.to_dict())
+    check("default records the discrepancy", decision.metadata.get("bs_edge_ok") is False, decision.metadata)
+    disabled = mq._decide_core(replace(ctx, params={"bs_edge_diagnostics_enabled": False}), bullish_signal())
+    check("explicit false preserves the buy", disabled.action == "buy", disabled.to_dict())
+    check("explicit false omits diagnostic metadata", "bs_gate_status" not in disabled.metadata, disabled.metadata)
 
 
 def scenario_diagnostics_record_fairly_priced_quote() -> None:
@@ -440,13 +443,28 @@ def scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs() -> Non
             now_et=now,
         )
         enabled = mq._decide_core(enabled_ctx, bullish_signal())
-        disabled = mq._decide_core(replace(enabled_ctx, params={}), bullish_signal())
+        disabled = mq._decide_core(
+            replace(enabled_ctx, params={"bs_edge_diagnostics_enabled": False}),
+            bullish_signal(),
+        )
         check(f"{name}: Newton opens with diagnostics enabled", enabled.action == "buy", enabled.to_dict())
         check(f"{name}: false discrepancy recorded", enabled.metadata.get("bs_edge_ok") is False,
               enabled.metadata.get("bs_edge_pct"))
         check(f"{name}: execution decision matches diagnostics disabled",
               (enabled.action, enabled.symbol, enabled.quantity, enabled.reason) ==
               (disabled.action, disabled.symbol, disabled.quantity, disabled.reason))
+
+
+def scenario_diagnostic_failure_does_not_block_buy() -> None:
+    print("\n23. _decide_core(): malformed diagnostic input records an error and still buys")
+    row, _fair = fair_call_row()
+    row["IV"] = "invalid"
+    symbol = row["OptionSymbol"]
+    ctx = make_ctx(rows=[row], quote_map={symbol: fresh_quote(symbol, row["Bid"], row["Ask"])})
+    decision = mq._decide_core(ctx, bullish_signal())
+    check("still buys when diagnostic raises", decision.action == "buy", decision.to_dict())
+    check("records diagnostic failure", decision.metadata.get("bs_gate_status") == "error", decision.metadata)
+    check("records error type without raw input", decision.metadata.get("bs_diagnostic_error_type") == "TypeError")
 
 
 def main() -> int:
@@ -471,12 +489,13 @@ def main() -> int:
         scenario_edge_gate_async_moving_spot_reproduction,
         scenario_edge_gate_async_changing_iv_reproduction,
         scenario_edge_gate_provider_time_convention_mismatch,
-        scenario_diagnostics_off_by_default_no_behavior_change,
+        scenario_diagnostics_on_by_default_with_opt_out,
         scenario_diagnostics_record_fairly_priced_quote,
         scenario_diagnostics_never_veto_an_implausibly_mispriced_quote,
         scenario_diagnostics_never_veto_when_row_has_no_iv,
         scenario_diagnostics_never_block_a_close,
         scenario_diagnostics_preserve_newton_opens_with_asynchronous_inputs,
+        scenario_diagnostic_failure_does_not_block_buy,
     ):
         scenario()
 
