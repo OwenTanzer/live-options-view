@@ -76,19 +76,32 @@ retains a held position rather than closing it, same "absence of evidence
 isn't evidence against" treatment as `stale_source_reason` above -- not the
 same as a gate that has looked and genuinely disagrees, which does close.
 
-A third optional param, `bs_edge_confirmation_required` (bool, default
-`False`), gates the *opening* leg only: before buying, the candidate ATM
-row's own live IV (from the feed's `Greeks` event, see `market.py`) is run
-through `crassus/crassus/black_scholes.py` to get a theoretical fair value,
-and `crassus/crassus/bs_edge.py`'s `evaluate_edge_gate` checks the live
-quote hasn't decoupled from it by more than `bs_max_edge_pct` (default
-0.15, i.e. 15%). This is a quote-sanity check, not a second momentum
-opinion -- it exists to catch a corrupted or stale-IV feed read before it
-turns into a real fill, not to second-guess a trade the momentum/VWAP/RVOL
-signals already support. Unlike the VWAP/RVOL gate, it is never consulted
-on the closing leg: standing down from closing a held position because a
-quote looks off is exactly backwards for risk management, so a close always
-proceeds regardless of this gate's reading.
+A third optional param, `bs_edge_diagnostics_enabled` (bool, default
+`False`), attaches Black-Scholes diagnostics to a candidate open's
+metadata -- it never vetoes a trade. Before buying, the candidate ATM row's
+own live IV (from the feed's `Greeks` event, see `market.py`) is run through
+`crassus/crassus/black_scholes.py` to get a theoretical fair value, and
+`crassus/crassus/bs_edge.py`'s `evaluate_edge_gate` records how far the live
+quote sits from it as `bs_edge_pct` (bounded against `bs_max_edge_pct`,
+default 0.15, only for the `bs_edge_ok` metadata flag -- not as a decision).
+
+This was originally a hard veto (an earlier revision returned `no_trade`
+when the edge exceeded the band), but review caught two independent reasons
+that veto could fire on a perfectly good trade: (1) the row's `underlying_price`
+and `IV` come from the ~60s durable board (`market.py`) while the quote being
+priced is a fresh, separately-fetched execution quote (`EXECUTION_QUOTE_MAX_AGE_S`,
+~15s) -- collector.py records no observation timestamp on Greeks, so there's
+no way to confirm the two are simultaneous, and a several-second underlying
+move alone can blow through a 15% band; (2) dxFeed's own IV calculation
+freezes time-to-expiry at a fixed 30 minutes near the close
+(https://dxfeed.com/new-implied-volatility-and-greeks-calculation-update/),
+while this gate reprices using an actual wall-clock countdown -- so even
+perfectly simultaneous, internally consistent provider data can disagree
+with this module's own math near expiry. Fixing either properly needs a
+feed contract this repo doesn't have yet (timestamped Greeks, or the
+provider's own theoretical price/valuation convention), so until then this
+stays a diagnostic annotation an operator can inspect after the fact, not
+something that stands between momentum and a fill.
 """
 
 from __future__ import annotations
@@ -380,7 +393,12 @@ def _decide_core(
             **meta_base,
         )
 
-    if params.get("bs_edge_confirmation_required", False):
+    if params.get("bs_edge_diagnostics_enabled", False):
+        # Diagnostic only -- see this module's docstring for why this never
+        # returns no_trade: the inputs available to it (the ~60s board's
+        # underlying_price/IV vs. a freshly fetched execution quote, and this
+        # module's wall-clock time-to-expiry vs. the feed's own near-expiry
+        # convention) aren't yet trustworthy enough to gate a real fill on.
         max_edge_pct = params.get("bs_max_edge_pct", DEFAULT_MAX_EDGE_PCT)
         risk_free_rate = params.get("bs_risk_free_rate", DEFAULT_RISK_FREE_RATE)
         quote_mid = (quote.bid + quote.ask) / 2.0
@@ -389,38 +407,15 @@ def _decide_core(
             row, ctx.snapshot.underlying_price, ctx.now_et, expiration, quote_mid,
             max_edge_pct=max_edge_pct, risk_free_rate=risk_free_rate,
         )
-        edge_meta = dict(
+        meta_base = dict(
             meta_base,
             bs_gate_status=edge_gate.status,
             bs_theoretical_price=edge_gate.theoretical_price,
             bs_quoted_price=edge_gate.quoted_price,
             bs_edge_pct=edge_gate.edge_pct,
+            bs_edge_ok=edge_gate.edge_ok,
             bs_iv=edge_gate.iv,
         )
-        if edge_gate.status != "ok":
-            # No trustworthy row IV yet, or T has already collapsed to the
-            # expiry floor -- an absence of a usable theoretical read, not a
-            # gate that looked and found the quote implausible. This only
-            # ever guards an *open*, so there's no held position to retain;
-            # standing down on missing data is the whole effect.
-            return no(
-                f"Black-Scholes edge confirmation unavailable "
-                f"(status={edge_gate.status}); standing down rather than "
-                f"opening on an unconfirmed quote.",
-                symbol=symbol,
-                **edge_meta,
-            )
-        if not edge_gate.edge_ok:
-            return no(
-                f"Quote for {symbol} (mid={quote_mid:.2f}) is "
-                f"{edge_gate.edge_pct:+.1%} away from Black-Scholes "
-                f"theoretical value ({edge_gate.theoretical_price:.2f} at "
-                f"IV={edge_gate.iv}), outside the {max_edge_pct:.0%} band; "
-                f"standing down rather than trading a possibly-broken quote.",
-                symbol=symbol,
-                **edge_meta,
-            )
-        meta_base = edge_meta
 
     return Decision(
         action="buy",

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Prove the Black-Scholes tool's math and its use as Newton's optional gate.
+"""Prove the Black-Scholes tool's math and its use as Newton's diagnostic.
 
 Hermetic like verify_vwap_rvol.py, which this mirrors in style: no network
 access, no real snapshot fetch. `black_scholes.py`'s pricing/Greeks/IV-solver
 functions are checked against a textbook reference case and internal
-consistency properties (put-call parity, IV round-trip); `bs_edge.py`'s
-`evaluate_edge_gate` is exercised with hand-built snapshot rows;
-`momentum_qqq._decide_core()` is exercised directly with a hand-built
-`MomentumSignal` plus `bs_edge_confirmation_required` in `params` -- no
-tracker, no collector, no I/O.
+consistency properties (put-call parity, IV round-trip, including a
+European put whose price sits below its undiscounted intrinsic value);
+`bs_edge.py`'s `evaluate_edge_gate` is exercised with hand-built snapshot
+rows, including the reviewer-identified asynchronous-input and provider
+time-convention reproductions; `momentum_qqq._decide_core()` is exercised
+directly with a hand-built `MomentumSignal` plus `bs_edge_diagnostics_enabled`
+in `params` -- no tracker, no collector, no I/O.
 
     python scripts/verify_black_scholes.py
 """
@@ -26,7 +28,6 @@ from crassus.black_scholes import (  # noqa: E402
     MIN_T_YEARS,
     greeks,
     implied_volatility,
-    intrinsic_value,
     theoretical_price,
     time_to_expiry_years,
 )
@@ -136,10 +137,25 @@ def scenario_iv_round_trip() -> None:
 
 
 def scenario_iv_below_intrinsic_returns_none() -> None:
-    print("\n8. implied_volatility(): a price below intrinsic value returns None, doesn't crash")
-    # deep ITM call, intrinsic = 20; quoting it at 10 is not a valid option price
+    print("\n8. implied_volatility(): a price below any sigma's minimum returns None, doesn't crash")
+    # deep ITM call, well below even the (near-)undiscounted intrinsic floor
     solved = implied_volatility("call", 10.0, 420.0, 400.0, 0.01, 0.05)
     check("returns None", solved is None)
+
+
+def scenario_iv_put_round_trips_below_undiscounted_intrinsic() -> None:
+    print("\n8b. implied_volatility(): a European put priced below undiscounted intrinsic still round-trips")
+    # Reviewer's reproduction: at r=5%, this put's theoretical price (6.8036)
+    # sits below undiscounted intrinsic (K-S=10) but above the correct
+    # discounted-intrinsic floor (K*e^-rT - S ~= 5.122) -- an earlier
+    # version's undiscounted pre-check rejected this as "invalid," when it's
+    # exactly the price theoretical_price() itself produces.
+    S, K, T, r, true_sigma = 90.0, 100.0, 1.0, 0.05, 0.10
+    price = theoretical_price("put", S, K, T, r, true_sigma)
+    check("price sits below undiscounted intrinsic (K-S=10)", price < (K - S), price)
+    solved = implied_volatility("put", price, S, K, T, r)
+    check("round-trips to sigma=0.10 instead of returning None",
+          solved is not None and approx(solved, true_sigma, tol=1e-4), f"solved={solved}")
 
 
 def scenario_iv_zero_time_returns_none() -> None:
@@ -227,8 +243,61 @@ def scenario_edge_gate_outside_band() -> None:
     check("edge_ok False -- outside the band", gate.edge_ok is False, gate.edge_pct)
 
 
+def scenario_edge_gate_async_moving_spot_reproduction() -> None:
+    print("\n16b. evaluate_edge_gate(): reviewer repro -- a moving spot alone produces a large false edge")
+    # PR fixture: 2026-06-10 14:00 ET, call S=K=400, board IV=.20. 45s later
+    # the underlying has moved to 400.50 with IV unchanged; a genuinely valid
+    # quote at that price (.774804936) reads as +60.4% "edge" purely because
+    # evaluate_edge_gate is still comparing against the stale board S=400.
+    quote_time = NOW.replace(second=45)
+    T = time_to_expiry_years(quote_time, EXPIRATION)
+    valid_quote_after_move = theoretical_price("call", 400.50, 400.0, T, 0.05, 0.20)
+    check("reproduces the reviewer's quoted midpoint", approx(valid_quote_after_move, 0.774804936, tol=1e-6),
+          valid_quote_after_move)
+    gate = evaluate_edge_gate({**CALL_ROW, "IV": 0.20}, 400.0, quote_time, EXPIRATION,
+                               valid_quote_after_move, max_edge_pct=0.15)
+    check("status ok (data looked usable)", gate.status == "ok", gate.status)
+    check("edge_ok False despite the quote being genuinely valid -- stale board S, not a broken quote",
+          gate.edge_ok is False, gate.edge_pct)
+    check("edge magnitude matches the reviewer's reproduction (~+60.4%)", approx(gate.edge_pct, 0.604, tol=0.01),
+          gate.edge_pct)
+
+
+def scenario_edge_gate_async_changing_iv_reproduction() -> None:
+    print("\n16c. evaluate_edge_gate(): reviewer repro -- IV changing between board and quote produces a false edge")
+    quote_time = NOW.replace(second=45)  # same 45s-later fixture as the moving-spot repro
+    T = time_to_expiry_years(quote_time, EXPIRATION)
+    valid_quote_new_iv = theoretical_price("call", 400.0, 400.0, T, 0.05, 0.25)
+    check("reproduces the reviewer's quoted midpoint", approx(valid_quote_new_iv, 0.603180761, tol=1e-6),
+          valid_quote_new_iv)
+    gate = evaluate_edge_gate({**CALL_ROW, "IV": 0.20}, 400.0, quote_time, EXPIRATION,
+                               valid_quote_new_iv, max_edge_pct=0.15)
+    check("status ok (data looked usable)", gate.status == "ok", gate.status)
+    check("edge_ok False despite the quote being genuinely valid -- stale board IV, not a broken quote",
+          gate.edge_ok is False, gate.edge_pct)
+    check("edge magnitude matches the reviewer's reproduction (~+24.9%)", approx(gate.edge_pct, 0.249, tol=0.01),
+          gate.edge_pct)
+
+
+def scenario_edge_gate_provider_time_convention_mismatch() -> None:
+    print("\n16d. evaluate_edge_gate(): reviewer repro -- dxFeed's frozen 30-minute near-expiry IV convention "
+          "disagrees with this module's wall-clock countdown even for simultaneous, self-consistent data")
+    near_close = datetime(2026, 6, 10, 15, 40, 0, tzinfo=ET)  # 20 minutes to a 16:00 close
+    provider_convention_t = 30.0 / (365.0 * 24.0 * 60.0)  # dxFeed freezes T at 30m near expiry
+    provider_price = theoretical_price("call", 400.0, 400.0, provider_convention_t, 0.05, 0.20)
+    check("reproduces the reviewer's provider-convention price", approx(provider_price, 0.241690709, tol=1e-6),
+          provider_price)
+    gate = evaluate_edge_gate({**CALL_ROW, "IV": 0.20}, 400.0, near_close, EXPIRATION,
+                               provider_price, max_edge_pct=0.15)
+    check("status ok (data looked usable)", gate.status == "ok", gate.status)
+    check("edge_ok False despite simultaneous, self-consistent provider data -- a convention mismatch, not a broken quote",
+          gate.edge_ok is False, gate.edge_pct)
+    check("edge magnitude matches the reviewer's reproduction (~+22.5%)", approx(gate.edge_pct, 0.225, tol=0.01),
+          gate.edge_pct)
+
+
 # ---------------------------------------------------------------------------
-# momentum_qqq._decide_core() with bs_edge_confirmation_required
+# momentum_qqq._decide_core() with bs_edge_diagnostics_enabled
 # ---------------------------------------------------------------------------
 
 
@@ -274,67 +343,69 @@ def fair_call_row() -> tuple[dict, float]:
     return row, fair
 
 
-def scenario_gate_off_by_default_no_behavior_change() -> None:
-    print("\n17. _decide_core(): omitting bs_edge_confirmation_required is identical to no gate (regression guard)")
+def scenario_diagnostics_off_by_default_no_behavior_change() -> None:
+    print("\n17. _decide_core(): omitting bs_edge_diagnostics_enabled is identical to no diagnostics (regression guard)")
     row, fair = fair_call_row()
-    blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}  # would fail the gate if enabled
+    blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}
     symbol = blown_out_row["OptionSymbol"]
     ctx = make_ctx(rows=[blown_out_row], quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])})
     decision = mq._decide_core(ctx, bullish_signal())
-    check("still buys -- gate never evaluated when the param is absent", decision.action == "buy", decision.to_dict())
+    check("still buys -- diagnostics never evaluated when the param is absent", decision.action == "buy", decision.to_dict())
+    check("no bs_* metadata recorded when disabled", "bs_gate_status" not in decision.metadata, decision.metadata)
 
 
-def scenario_gate_allows_fairly_priced_quote() -> None:
-    print("\n18. _decide_core(): bs_edge_confirmation_required allows a buy priced at theoretical value")
+def scenario_diagnostics_record_fairly_priced_quote() -> None:
+    print("\n18. _decide_core(): bs_edge_diagnostics_enabled records edge_ok=True for a fairly priced quote, still buys")
     row, _fair = fair_call_row()
     symbol = row["OptionSymbol"]
     ctx = make_ctx(
-        rows=[row], params={"bs_edge_confirmation_required": True},
+        rows=[row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, row["Bid"], row["Ask"])},
     )
     decision = mq._decide_core(ctx, bullish_signal())
     check("buys -- quote is fairly priced", decision.action == "buy", decision.to_dict())
     check("audit metadata records the bs gate status", decision.metadata.get("bs_gate_status") == "ok", decision.metadata)
+    check("audit metadata records edge_ok=True", decision.metadata.get("bs_edge_ok") is True, decision.metadata)
 
 
-def scenario_gate_vetoes_mispriced_quote() -> None:
-    print("\n19. _decide_core(): bs_edge_confirmation_required vetoes an implausibly mispriced quote")
+def scenario_diagnostics_never_veto_an_implausibly_mispriced_quote() -> None:
+    print("\n19. _decide_core(): bs_edge_diagnostics_enabled never vetoes, even an implausibly mispriced quote")
     row, fair = fair_call_row()
     blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}
     symbol = blown_out_row["OptionSymbol"]
     ctx = make_ctx(
-        rows=[blown_out_row], params={"bs_edge_confirmation_required": True},
+        rows=[blown_out_row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])},
     )
     decision = mq._decide_core(ctx, bullish_signal())
-    check("no_trade -- quote is 5x theoretical value", not decision.is_trade, decision.to_dict())
-    check("reason cites Black-Scholes", "black-scholes" in decision.reason.lower(), decision.reason)
+    check("still buys -- diagnostics are informational, not a veto", decision.action == "buy", decision.to_dict())
+    check("audit metadata records edge_ok=False for the mispriced quote", decision.metadata.get("bs_edge_ok") is False,
+          decision.metadata)
 
 
-def scenario_gate_declines_when_row_has_no_iv() -> None:
-    print("\n20. _decide_core(): bs_edge_confirmation_required declines when the row carries no IV")
+def scenario_diagnostics_never_veto_when_row_has_no_iv() -> None:
+    print("\n20. _decide_core(): bs_edge_diagnostics_enabled never vetoes when the row carries no IV")
     row, _fair = fair_call_row()
     no_iv_row = {**row, "IV": None}
     symbol = no_iv_row["OptionSymbol"]
     ctx = make_ctx(
-        rows=[no_iv_row], params={"bs_edge_confirmation_required": True},
+        rows=[no_iv_row], params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, no_iv_row["Bid"], no_iv_row["Ask"])},
     )
     decision = mq._decide_core(ctx, bullish_signal())
-    check("no_trade -- no IV to confirm against", not decision.is_trade, decision.to_dict())
-    check("reason cites unavailable confirmation", "unavailable" in decision.reason.lower(), decision.reason)
+    check("still buys -- missing IV is recorded, not a veto", decision.action == "buy", decision.to_dict())
+    check("audit metadata records bs_gate_status=no_iv", decision.metadata.get("bs_gate_status") == "no_iv",
+          decision.metadata)
 
 
-def scenario_gate_never_blocks_a_close() -> None:
-    print("\n21. _decide_core(): bs_edge_confirmation_required never vetoes closing a held position")
+def scenario_diagnostics_never_block_a_close() -> None:
+    print("\n21. _decide_core(): bs_edge_diagnostics_enabled never applies to (or blocks) closing a held position")
     row, fair = fair_call_row()
-    # Quote is wildly mispriced by BS standards, but this is the *held*
-    # symbol on a reversed (bearish) signal -- the gate only guards opens.
     blown_out_row = {**row, "Bid": round(fair * 5, 4), "Ask": round(fair * 5 + 0.01, 4)}
     symbol = blown_out_row["OptionSymbol"]
     trades = [{"sym": symbol, "side": "buy", "qty": 1, "price": fair}]
     ctx = make_ctx(
-        rows=[blown_out_row], trades=trades, params={"bs_edge_confirmation_required": True},
+        rows=[blown_out_row], trades=trades, params={"bs_edge_diagnostics_enabled": True},
         quote_map={symbol: fresh_quote(symbol, blown_out_row["Bid"], blown_out_row["Ask"])},
     )
     bearish = MomentumSignal(
@@ -342,7 +413,7 @@ def scenario_gate_never_blocks_a_close() -> None:
         sample_count=10, anchor_age_minutes=60.0, status="ok",
     )
     decision = mq._decide_core(ctx, bearish)
-    check("action is sell -- gate does not block closing a held position", decision.action == "sell", decision.to_dict())
+    check("action is sell -- diagnostics don't touch the closing leg", decision.action == "sell", decision.to_dict())
     check("closes the actual held call", decision.symbol == symbol)
 
 
@@ -356,6 +427,7 @@ def main() -> int:
         scenario_greeks_undefined_at_expiry_raises,
         scenario_iv_round_trip,
         scenario_iv_below_intrinsic_returns_none,
+        scenario_iv_put_round_trips_below_undiscounted_intrinsic,
         scenario_iv_zero_time_returns_none,
         scenario_time_to_expiry_ordinary_day,
         scenario_time_to_expiry_early_close_shortens_countdown,
@@ -364,11 +436,14 @@ def main() -> int:
         scenario_edge_gate_expired,
         scenario_edge_gate_within_band,
         scenario_edge_gate_outside_band,
-        scenario_gate_off_by_default_no_behavior_change,
-        scenario_gate_allows_fairly_priced_quote,
-        scenario_gate_vetoes_mispriced_quote,
-        scenario_gate_declines_when_row_has_no_iv,
-        scenario_gate_never_blocks_a_close,
+        scenario_edge_gate_async_moving_spot_reproduction,
+        scenario_edge_gate_async_changing_iv_reproduction,
+        scenario_edge_gate_provider_time_convention_mismatch,
+        scenario_diagnostics_off_by_default_no_behavior_change,
+        scenario_diagnostics_record_fairly_priced_quote,
+        scenario_diagnostics_never_veto_an_implausibly_mispriced_quote,
+        scenario_diagnostics_never_veto_when_row_has_no_iv,
+        scenario_diagnostics_never_block_a_close,
     ):
         scenario()
 

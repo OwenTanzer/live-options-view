@@ -151,15 +151,23 @@ def implied_volatility(
     ITM/OTM strikes, which is exactly the regime 0DTE strikes drift into as
     expiry approaches. Returns `None` rather than raising when no sigma in
     (1e-4, 5.0) reproduces `market_price` within tolerance (e.g. a price
-    below intrinsic value, or above the K/S-bounded max) -- a broken quote
-    should read as "no usable IV," not crash the caller.
+    below the minimum any sigma in range can produce, or above the maximum)
+    -- a broken quote should read as "no usable IV," not crash the caller.
+
+    The lower bound on a valid price is `theoretical_price` evaluated at
+    `lo`, not the undiscounted intrinsic value: at a positive risk-free
+    rate a European option's own minimum (as sigma -> 0) is the *discounted*
+    intrinsic value (`max(S - K*e^-rT, 0)` for a call, `max(K*e^-rT - S, 0)`
+    for a put), which sits below undiscounted intrinsic for a put. An
+    earlier version pre-checked against undiscounted intrinsic and rejected
+    valid European put prices in exactly that gap -- see
+    `verify_black_scholes.py`'s `scenario_iv_put_below_undiscounted_intrinsic`.
+    The `price_lo`/`price_hi` bracket below is already expressed in terms of
+    `theoretical_price` itself, so it's the correct bound on its own; no
+    separate intrinsic-value pre-check is needed.
     """
     if T <= 0.0 or market_price <= 0.0:
         return None
-
-    intrinsic = intrinsic_value(option_type, S, K)
-    if market_price < intrinsic - tolerance:
-        return None  # below intrinsic value -- not a valid option price
 
     lo, hi = 1e-4, 5.0
     price_lo = theoretical_price(option_type, S, K, T, r, lo) - market_price
