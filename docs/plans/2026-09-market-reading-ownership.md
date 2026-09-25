@@ -93,10 +93,19 @@ ran. Caveats that matter for replay and for work item 3:
 - The ledger's `market_snapshot_url_or_hash` is
   `{latest.json URL}#sha256:{payload hash}` (`market.py`
   `MarketSnapshot.provenance`). The URL is mutable, and `MarketSnapshot`
-  does not keep the payload's `snapshot_key`, so a ledger record can be
-  joined to its archived CSV only by timestamp. The payload stamps
-  `timestamp` in UTC. The CSV key encodes the same instant in ET with
-  microseconds.
+  does not keep the payload's `snapshot_key`, so today there is no exact
+  link from a ledger record to its archived CSV. The payload hash cannot
+  validate a CSV either, because it hashes the full JSON payload, not the
+  chain rows. Timestamps are not an exact join key: `take_snapshot` reads
+  the clock twice (`ts_et = datetime.now(ET)`, then
+  `ts_utc = datetime.now(timezone.utc)`). The CSV key is built from
+  `ts_et`, while the payload `timestamp` (and so the ledger's
+  `market_snapshot_timestamp`) is `ts_utc`. The two are microseconds apart,
+  so converting the ledger timestamp to ET does not reproduce the CSV key.
+  Historical matching by nearest timestamp is therefore approximate and
+  unverified, and can be ambiguous when snapshots are close together (e.g.
+  after a rapid restart). A deterministic link needs `snapshot_key`
+  propagated into provenance ("(b) mechanism" below).
 
 ### F3 -- the OI-skew session tracker is not safe for more than one account
 
@@ -247,8 +256,10 @@ here. They remain (c) unless a later review nominates one.
 overwritten. The smallest change that provides one is carrying the
 payload's `snapshot_key` (the archived CSV key) into `MarketSnapshot` and
 the ledger's snapshot provenance. This is an audit-only change: no
-strategy sees a different input. Until then, decisions join to the archive
-by timestamp only (F2).
+strategy sees a different input. Until then, there is no exact join:
+decisions can only be matched to the archive by nearest timestamp, which is
+approximate, unverified, and can be ambiguous (F2). Records written before
+that change stay approximate.
 
 ## Implications for work items 3 and 4
 
