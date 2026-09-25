@@ -55,6 +55,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import gzip
 import hashlib
@@ -67,6 +68,7 @@ import sys
 import tempfile
 import threading
 import time
+import zlib
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -443,7 +445,7 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
     started = now_ms()
     chains: dict[str, dict[str, Any]] = {}
     truncated = False
-    with gzip.open(out_path, "wt", encoding="utf-8") as out, ThreadPoolExecutor(max_workers=workers) as pool:
+    with published(out_path) as tmp, gzip.open(tmp, "wt", encoding="utf-8") as out,             ThreadPoolExecutor(max_workers=workers) as pool:
         for start in range(0, len(universe), block_size):
             if STOP or (deadline and datetime.now(ET) >= deadline):
                 truncated = True
@@ -491,6 +493,7 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
 UPLOAD_JOURNAL = "uploads.json"
 SUMMARY = "summary.json"
 INTERRUPTIONS = "interruptions.jsonl"
+RECOVERY_ERRORS = "recovery_errors.jsonl"
 
 
 def _content_type(name: str) -> str:
@@ -583,17 +586,45 @@ class DayArchive:
 
     def write_json(self, name: str, payload: Any) -> Path:
         path = self.path(name)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        with published(path) as tmp:
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+                           encoding="utf-8")
         return path
 
     def append_manifest(self, entry: dict[str, Any]) -> None:
+        # Appends are line-sized; a crash mid-append leaves at most one
+        # partial trailing line, which _read_manifest skips and records.
         with self.path("sweeps/manifest.jsonl").open("a", encoding="utf-8") as out:
             out.write(json.dumps(entry, sort_keys=True) + "\n")
+            out.flush()
+            os.fsync(out.fileno())
 
-    def manifest(self) -> list[dict[str, Any]]:
-        return _read_manifest(self.dir)
+    def manifest(self, damaged: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        return _read_manifest(self.dir, damaged)
+
+    def record_recovery_failure(self, error: str) -> None:
+        entry = {"at": datetime.now(timezone.utc).isoformat(), "error": error}
+        with self.path(RECOVERY_ERRORS).open("a", encoding="utf-8") as out:
+            out.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+@contextlib.contextmanager
+def published(path: Path) -> Iterator[Path]:
+    """Write to a sibling ``.tmp``, fsync, then atomically rename into place.
+
+    The published name only ever holds complete content. A crash mid-write
+    leaves at most the ``.tmp`` file, which readers and the upload journal
+    ignore and the next write replaces.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        yield tmp
+        with open(tmp, "rb+") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _sha256_file(path: Path) -> str:
@@ -604,12 +635,33 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def iter_rows(day_dir: Path) -> Iterator[dict[str, Any]]:
-    for path in sorted((day_dir / "sweeps").glob("sweep_*.jsonl.gz")):
+# Truncated gzip raises EOFError, corrupt gzip OSError/zlib.error, and a
+# partial final line a JSON ValueError.
+READ_ERRORS = (EOFError, OSError, zlib.error, ValueError)
+
+
+def _read_jsonl_gz(path: Path, day_dir: Path,
+                   damaged: list[dict[str, Any]] | None) -> Iterator[dict[str, Any]]:
+    """Yield records; on a damaged file keep what was readable and record it."""
+    count = 0
+    try:
         with gzip.open(path, "rt", encoding="utf-8") as src:
             for line in src:
                 if line.strip():
-                    yield json.loads(line)
+                    record = json.loads(line)
+                    count += 1
+                    yield record
+    except READ_ERRORS as exc:
+        entry = {"file": path.relative_to(day_dir).as_posix(), "error": f"{type(exc).__name__}: {exc}"[:300],
+                 "records_salvaged": count}
+        log("oa203_damaged_artifact", **entry)
+        if damaged is not None:
+            damaged.append(entry)
+
+
+def iter_rows(day_dir: Path, damaged: list[dict[str, Any]] | None = None) -> Iterator[dict[str, Any]]:
+    for path in sorted((day_dir / "sweeps").glob("sweep_*.jsonl.gz")):
+        yield from _read_jsonl_gz(path, day_dir, damaged)
 
 
 # --------------------------------------------------------------------------
@@ -617,12 +669,13 @@ def iter_rows(day_dir: Path) -> Iterator[dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 def _contract_paths(day_dir: Path, start_ms: int | None, end_ms: int | None,
-                    buckets: int = 64) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+                    buckets: int = 64, damaged: list[dict[str, Any]] | None = None
+                    ) -> Iterator[tuple[str, list[dict[str, Any]]]]:
     """Group archived rows by contract with bounded memory (hash-partitioned temp files)."""
     with tempfile.TemporaryDirectory(prefix="oa203-build-") as tmp:
         handles = [open(Path(tmp) / f"b{i:02d}.jsonl", "w", encoding="utf-8") for i in range(buckets)]
         try:
-            for row in iter_rows(day_dir):
+            for row in iter_rows(day_dir, damaged):
                 if not row.get("symbol"):
                     continue
                 if (start_ms and row["t"] < start_ms) or (end_ms and row["t"] >= end_ms):
@@ -651,25 +704,22 @@ def chain_ok_sweeps(manifest: list[dict[str, Any]]) -> Counter:
     return ok
 
 
-def load_backfill(day_dir: Path) -> dict[str, dict[str, Any]]:
+def load_backfill(day_dir: Path, damaged: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
     path = day_dir / "backfill_timesales.jsonl.gz"
     if not path.exists():
         return {}
-    out = {}
-    with gzip.open(path, "rt", encoding="utf-8") as src:
-        for line in src:
-            if line.strip():
-                record = json.loads(line)
-                out[record["symbol"]] = record
-    return out
+    return {record["symbol"]: record for record in _read_jsonl_gz(path, day_dir, damaged)
+            if isinstance(record, dict) and record.get("symbol")}
 
 
 def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | None = None,
-                        end_ms: int | None = None) -> list[dict[str, Any]]:
-    ok = chain_ok_sweeps(_read_manifest(day_dir))
-    backfill = load_backfill(day_dir)
+                        end_ms: int | None = None,
+                        damaged: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Rank every archived contract; damaged inputs are salvaged and recorded in ``damaged``."""
+    ok = chain_ok_sweeps(_read_manifest(day_dir, damaged))
+    backfill = load_backfill(day_dir, damaged)
     rows = []
-    for symbol, path_rows in _contract_paths(day_dir, start_ms, end_ms):
+    for symbol, path_rows in _contract_paths(day_dir, start_ms, end_ms, damaged=damaged):
         last = path_rows[-1]
         info = ContractInfo(
             symbol=symbol, underlying=last["underlying"], option_type=last["type"],
@@ -691,11 +741,22 @@ def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | Non
     return rank(rows)
 
 
-def _read_manifest(day_dir: Path) -> list[dict[str, Any]]:
+def _read_manifest(day_dir: Path, damaged: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     path = day_dir / "sweeps" / "manifest.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    entries = []
+    for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            entries.append(json.loads(line))
+        except ValueError as exc:  # e.g. a partial line from a crash mid-append
+            entry = {"file": "sweeps/manifest.jsonl", "line": number, "error": str(exc)[:200]}
+            log("oa203_damaged_artifact", **entry)
+            if damaged is not None:
+                damaged.append(entry)
+    return entries
 
 
 def _cell(value: Any) -> Any:
@@ -712,13 +773,13 @@ def write_outputs(day_dir: Path, rows: list[dict[str, Any]], top: int = 200) -> 
         for key in row:
             if key not in columns:
                 columns.append(key)
-    with gzip.open(day_dir / "contracts.csv.gz", "wt", encoding="utf-8", newline="") as out:
+    with published(day_dir / "contracts.csv.gz") as tmp,             gzip.open(tmp, "wt", encoding="utf-8", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow({k: _cell(row.get(k)) for k in columns})
     board = [r for r in rows if (r.get("rank") or 10**9) <= top or (r.get("clean_rank") or 10**9) <= top]
-    with open(day_dir / "leaderboard.csv", "w", encoding="utf-8", newline="") as out:
+    with published(day_dir / "leaderboard.csv") as tmp,             open(tmp, "w", encoding="utf-8", newline="") as out:
         writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for row in board:
@@ -749,7 +810,7 @@ def run_backfill(client: Tradier, day: date, day_dir: Path, rows: list[dict[str,
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         records = list(pool.map(fetch, targets))
-    with gzip.open(day_dir / "backfill_timesales.jsonl.gz", "wt", encoding="utf-8") as out:
+    with published(day_dir / "backfill_timesales.jsonl.gz") as tmp,             gzip.open(tmp, "wt", encoding="utf-8") as out:
         for record in records:
             out.write(json.dumps(record, separators=(",", ":")) + "\n")
     return {"requested": len(targets), "errors": sum(1 for r in records if r.get("error"))}
@@ -773,7 +834,8 @@ def expected_sweep_s(universe_size: int, cfg: "Config") -> float:
 def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], open_ms: int,
                    close_ms: int, pending_uploads: list[str], backfill: dict[str, Any] | None,
                    rate_stats: dict[str, int], expected_sweep_ms: float,
-                   interruptions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   interruptions: list[dict[str, Any]] | None = None,
+                   damaged: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Label a session complete or partial; every check stands on its own.
 
     Temporal coverage (start, gaps, end) uses the larger of the observed
@@ -822,6 +884,8 @@ def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], ope
             reasons.append("stopped_before_close")
     if interruptions:
         reasons.append(f"interrupted:{len(interruptions)}")
+    if damaged:
+        reasons.append(f"damaged_artifacts:{len(damaged)}")
     if pending_uploads:
         reasons.append(f"uploads_pending:{len(pending_uploads)}")
     if backfill is None:
@@ -867,7 +931,8 @@ def _sleep_until(when: datetime) -> None:
 def build_universe_for(day: date, client: Tradier, cfg: Config, archive: DayArchive) -> dict[str, Any]:
     report_date = previous_session(day)
     body = fetch_occ_volume(report_date)
-    (archive.path(f"occ_volume_{report_date.isoformat()}.csv.gz")).write_bytes(gzip.compress(body))
+    with published(archive.path(f"occ_volume_{report_date.isoformat()}.csv.gz")) as tmp:
+        tmp.write_bytes(gzip.compress(body))
     ranked = rank_underlyings(parse_occ_volume(body, report_date))
     universe = select_universe(client, ranked, day, cfg.universe_size, cfg.workers)
     universe.update({
@@ -888,11 +953,14 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
     Safe to re-run: a crash or stop anywhere before ``summary.json`` is
     written leaves the day unfinalized, and the next ``run`` finalizes it.
     """
-    rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms)
+    damaged: list[dict[str, Any]] = []
+    rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged)
     backfill = None
     if backfill_enabled and rows:
+        # Rewrites backfill_timesales.jsonl.gz atomically, replacing any damaged copy.
         backfill = run_backfill(client, archive.day, archive.dir, rows, cfg.backfill_top, cfg.workers)
-        rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms)
+        damaged = []
+        rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged)
     outputs = write_outputs(archive.dir, rows)
     # Everything except the summary itself must be verified in R2 before the
     # summary can call the session complete.
@@ -907,7 +975,7 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
         "session_open_ms": open_ms, "session_close_ms": close_ms,
         "assessment": assess_session(universe, manifest, bounds_open, bounds_close, pending, backfill,
                                      dict(client.stats), expected_sweep_s(selected_count, cfg) * 1000,
-                                     archive.interruptions()),
+                                     archive.interruptions(), damaged),
         "measurement": MEASUREMENT_NOTE,
         "universe": {k: universe.get(k) for k in ("target", "selected_count", "shortfall",
                                                   "skip_counts", "occ_report_date")},
@@ -916,6 +984,8 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
         "clean_ranked_contracts": sum(1 for r in rows if r.get("clean_rank")),
         "backfill": backfill,
         "interruptions": archive.interruptions(),
+        "damaged_artifacts": damaged,
+        "unfinalized_earlier_days": unfinalized_days(archive.dir.parent, archive.day),
         "request_stats": dict(client.stats),
         "outputs": outputs,
         "return_policy": cfg.policy.as_dict(),
@@ -934,36 +1004,69 @@ def _session_ms(bounds: tuple[datetime, datetime] | None) -> tuple[int | None, i
     return int(bounds[0].timestamp() * 1000), int(bounds[1].timestamp() * 1000)
 
 
+def unfinalized_days(spool: Path, before: date) -> list[str]:
+    """Earlier spooled sessions with a universe but no final summary."""
+    if not spool.exists():
+        return []
+    out = []
+    for day_dir in sorted(p for p in spool.iterdir() if p.is_dir() and _is_date(p.name)):
+        if date.fromisoformat(day_dir.name) >= before or not (day_dir / "universe.json").exists():
+            continue
+        summary = day_dir / SUMMARY
+        try:
+            final = summary.exists() and json.loads(summary.read_text(encoding="utf-8")).get("final")
+        except ValueError:
+            final = False
+        if not final:
+            out.append(day_dir.name)
+    return out
+
+
 def recover_days(cfg: Config, client: Tradier, today: date, now: datetime,
                  bounds_for: Callable[[date], tuple[datetime, datetime] | None],
-                 uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> list[str]:
+                 uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> dict[str, list[str]]:
     """Finalize unfinished sessions whose close has passed; re-upload pending artifacts.
 
     Covers a stop or crash during collection or during end-of-day
     finalization: the next scheduled ``run`` (or a same-day restart after
-    the close) picks the day up from the local spool.
+    the close) picks the day up from the local spool. Each day is isolated:
+    a failure is logged, appended to that day's ``recovery_errors.jsonl``,
+    and leaves the day unfinalized (so the next run retries it and later
+    summaries list it under ``unfinalized_earlier_days``) without stopping
+    other days or the current session.
     """
-    recovered: list[str] = []
+    result: dict[str, list[str]] = {"recovered": [], "failed": []}
     if not cfg.spool_dir.exists():
-        return recovered
+        return result
     for day_dir in sorted(p for p in cfg.spool_dir.iterdir() if p.is_dir() and _is_date(p.name)):
         day = date.fromisoformat(day_dir.name)
         if day > today or not (day_dir / "universe.json").exists():
             continue
-        bounds = bounds_for(day)
-        if bounds is not None and now < bounds[1]:
-            continue  # that session is still open; run_day collects it
-        archive = DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload, uploader)
-        if archive.finalized():
-            remaining = archive.reconcile()
-            if remaining:
-                log("oa203_uploads_still_pending", date=day.isoformat(), pending=remaining)
-            continue
-        log("oa203_recovering_session", date=day.isoformat())
-        universe = json.loads((day_dir / "universe.json").read_text(encoding="utf-8"))
-        finalize(archive, client, cfg, universe, *_session_ms(bounds))
-        recovered.append(day.isoformat())
-    return recovered
+        archive = None
+        try:
+            bounds = bounds_for(day)
+            if bounds is not None and now < bounds[1]:
+                continue  # that session is still open; run_day collects it
+            archive = DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload, uploader)
+            if archive.finalized():
+                remaining = archive.reconcile()
+                if remaining:
+                    log("oa203_uploads_still_pending", date=day.isoformat(), pending=remaining)
+                continue
+            log("oa203_recovering_session", date=day.isoformat())
+            universe = json.loads((day_dir / "universe.json").read_text(encoding="utf-8"))
+            finalize(archive, client, cfg, universe, *_session_ms(bounds))
+            result["recovered"].append(day.isoformat())
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"[:500]
+            log("oa203_recovery_failed", date=day.isoformat(), error=error)
+            result["failed"].append(day.isoformat())
+            try:
+                (archive or DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload, uploader)
+                 ).record_recovery_failure(error)
+            except Exception as record_exc:  # never let bookkeeping block today
+                log("oa203_recovery_failure_unrecorded", date=day.isoformat(), error=str(record_exc)[:300])
+    return result
 
 
 def run_day(cfg: Config, *, client: Tradier | None = None,
@@ -974,7 +1077,12 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
             uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> int:
     client = client or Tradier(load_token(), cfg.max_rpm, cfg.reserve)
     day = now().date()
-    recover_days(cfg, client, day, now(), bounds_for, uploader)
+    try:
+        recovery = recover_days(cfg, client, day, now(), bounds_for, uploader)
+        if recovery["failed"]:
+            log("oa203_recovery_pending", failed=recovery["failed"])
+    except Exception as exc:  # e.g. an unreadable spool directory
+        log("oa203_recovery_skipped", error=f"{type(exc).__name__}: {exc}"[:300])
     bounds = bounds_for(day)
     if bounds is None:
         log("oa203_no_session", date=day.isoformat())

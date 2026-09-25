@@ -158,6 +158,22 @@ of these holds:
   restart re-derives what is owed instead of forgetting it. Unresolved
   uploads keep the session `partial`. `summary.json` is the one file that
   cannot vouch for its own upload; the next run's reconcile retries it.
+- **Partial writes:** every artifact (raw sweeps, backfill, contracts,
+  leaderboard, OCC file, JSON) is written to a sibling `.tmp`, fsynced and
+  atomically renamed, so a published name only ever holds complete content.
+  A crash leaves at most a `.tmp`, which readers and the upload journal
+  ignore. The manifest is appended one fsynced line at a time.
+- **Damaged inputs:** if a truncated or corrupt artifact is still found (for
+  example written before this change, or disk damage), readers keep the
+  records before the damage and record the file under `damaged_artifacts`,
+  which keeps the session partial (`damaged_artifacts:N`). A damaged
+  backfill is replaced by the recovery's fresh backfill.
+- **Isolated recovery:** each earlier day is recovered in its own error
+  boundary. A failure is logged, appended to that day's
+  `recovery_errors.jsonl` and leaves the day unfinalized, so it is retried
+  on every run and listed under `unfinalized_earlier_days` in later
+  summaries. It never stops other days or the current session's
+  collection.
 - **Stops and crashes:** SIGTERM/SIGINT during collection writes only a
   local interruption record (bounded; no network work in the grace period)
   and exits 0. Every `run` first finalizes any session in the spool whose

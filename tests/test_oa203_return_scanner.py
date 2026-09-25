@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -483,12 +484,150 @@ class StopAndRecover(unittest.TestCase):
             monday = lambda: scanner.datetime(2026, 9, 28, 8, 45, tzinfo=scanner.ET)
             recovered = scanner.recover_days(cfg, FakeClient(), date(2026, 9, 28), monday(),
                                              lambda d: SESSION if d == DAY else None, healthy)
-            self.assertEqual(recovered, ["2026-09-25"])
+            self.assertEqual(recovered, {"recovered": ["2026-09-25"], "failed": []})
             self.assertTrue(archive.finalized())
             self.assertIn("oa203/scanner/2026-09-25/universe.json", healthy.uploaded)
             # A later run finds it finalized and does not rebuild it.
             self.assertEqual(scanner.recover_days(cfg, FakeClient(), date(2026, 9, 28), monday(),
-                                                  lambda d: SESSION, healthy), [])
+                                                  lambda d: SESSION, healthy),
+                             {"recovered": [], "failed": []})
+
+
+
+def session_for(day):
+    return (scanner.datetime(day.year, day.month, day.day, 9, 30, tzinfo=scanner.ET),
+            scanner.datetime(day.year, day.month, day.day, 16, 0, tzinfo=scanner.ET))
+
+
+def truncate(path):
+    """Simulate a crash mid-write: keep only the first half of the bytes."""
+    data = path.read_bytes()
+    path.write_bytes(data[: len(data) // 2])
+
+
+class InterruptedWrites(unittest.TestCase):
+    """Review regressions: partially written artifacts must not stop recovery or today."""
+
+    MONDAY = date(2026, 9, 28)
+
+    def setUp(self):
+        scanner.STOP = False
+        self.addCleanup(setattr, scanner, "STOP", False)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cfg = scanner.Config(spool_dir=Path(self.tmp.name), upload=True, workers=1, backfill_top=2)
+        self.uploader = RecordingUploader()
+        self.selected = [{"underlying": "AAA", "expiration": "2026-09-28"}]
+
+    def friday_with_sweeps(self, sweeps=3):
+        archive = scanner.DayArchive(self.cfg.spool_dir, DAY, self.cfg.r2_prefix, True, self.uploader)
+        archive.write_json("universe.json", {"shortfall": 0, "selected": self.selected, "selected_count": 1})
+        client = FakeClient(chains={"AAA": chain_for("AAA", [1.0, 2.0, 3.0, 2.5])})
+        for sweep in range(1, sweeps + 1):
+            client.sweep = sweep
+            name = f"sweeps/sweep_{sweep:04d}.jsonl.gz"
+            in_session = T0 + sweep * 5 * MIN  # T0 is 09:30 ET on DAY
+            with mock.patch.object(scanner, "now_ms", return_value=in_session):
+                archive.append_manifest(scanner.run_sweep(client, self.selected, sweep,
+                                                          archive.path(name), 50, 1))
+        return archive
+
+    def run_monday(self, stop_after=1, hour=10):
+        client = FakeClient(chains={"AAA": chain_for("AAA", [1.0, 1.1, 1.2, 1.3])})
+        client.sweep = 1
+        at = lambda: scanner.datetime(2026, 9, 28, hour, 0, tzinfo=scanner.ET)
+        rc = scanner.run_day(self.cfg, client=client, now=at, bounds_for=session_for,
+                             sleep_until=lambda when: None, sweep_fn=fake_sweep(stop_after=stop_after),
+                             uploader=self.uploader)
+        scanner.STOP = False
+        return rc, scanner.DayArchive(self.cfg.spool_dir, self.MONDAY, self.cfg.r2_prefix, True, self.uploader)
+
+    def monday_universe(self):
+        monday = scanner.DayArchive(self.cfg.spool_dir, self.MONDAY, self.cfg.r2_prefix, True, self.uploader)
+        monday.write_json("universe.json", {"shortfall": 0, "selected": self.selected, "selected_count": 1})
+
+    def test_truncated_raw_sweep_and_manifest_line_are_salvaged_and_today_runs(self):
+        friday = self.friday_with_sweeps()
+        truncate(friday.path("sweeps/sweep_0002.jsonl.gz"))
+        with friday.path("sweeps/manifest.jsonl").open("a", encoding="utf-8") as out:
+            out.write('{"sweep": 4, "chains": {"AAA"')  # crash mid-append
+        with self.assertRaises(EOFError):
+            with gzip.open(friday.path("sweeps/sweep_0002.jsonl.gz"), "rt") as src:
+                src.read()
+        self.monday_universe()
+
+        rc, monday = self.run_monday()
+        self.assertEqual(rc, 0)
+        self.assertTrue(friday.finalized())
+        summary = json.loads(friday.path("summary.json").read_text())
+        self.assertIn("damaged_artifacts:2", summary["assessment"]["reasons"])
+        files = {d["file"] for d in summary["damaged_artifacts"]}
+        self.assertEqual(summary["contracts"], 2)  # rows from the intact sweeps survive
+        self.assertEqual(files, {"sweeps/sweep_0002.jsonl.gz", "sweeps/manifest.jsonl"})
+        self.assertTrue(friday.path("leaderboard.csv").exists())
+        self.assertEqual(len(monday.manifest()), 1)  # today's collection still ran
+
+    def test_truncated_backfill_is_replaced_during_recovery(self):
+        friday = self.friday_with_sweeps()
+        friday.path("backfill_timesales.jsonl.gz").write_bytes(
+            gzip.compress(b'{"symbol": "AAA260928C00100000", "bars": []}\n' * 50))
+        truncate(friday.path("backfill_timesales.jsonl.gz"))
+        self.monday_universe()
+
+        rc, monday = self.run_monday()
+        self.assertEqual(rc, 0)
+        summary = json.loads(friday.path("summary.json").read_text())
+        self.assertEqual(summary["backfill"], {"requested": 2, "errors": 0})
+        self.assertEqual(summary["damaged_artifacts"], [])
+        with gzip.open(friday.path("backfill_timesales.jsonl.gz"), "rt") as src:
+            self.assertTrue(all(json.loads(line)["bars"] for line in src))
+        self.assertEqual(len(monday.manifest()), 1)
+
+    def test_failed_recovery_is_isolated_and_stays_visibly_pending(self):
+        friday = self.friday_with_sweeps()
+        friday.path("universe.json").write_text('{"selected": [', encoding="utf-8")  # unreadable
+        self.monday_universe()
+
+        rc, monday = self.run_monday()
+        self.assertEqual(rc, 0)
+        self.assertFalse(friday.finalized())
+        errors = friday.path("recovery_errors.jsonl").read_text().splitlines()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("JSONDecodeError", json.loads(errors[0])["error"])
+        self.assertEqual(len(monday.manifest()), 1)
+
+        # Monday's own finalization reports the earlier day as still unfinalized,
+        # and the failure keeps being retried rather than dropped.
+        rc, monday = self.run_monday(hour=17)
+        summary = json.loads(monday.path("summary.json").read_text())
+        self.assertEqual(summary["unfinalized_earlier_days"], ["2026-09-25"])
+        self.assertEqual(len(friday.path("recovery_errors.jsonl").read_text().splitlines()), 2)
+
+    def test_crash_mid_sweep_publishes_nothing(self):
+        class Crash(BaseException):
+            pass
+
+        class CrashingClient(FakeClient):
+            def chain(self, symbol, expiration):
+                raise Crash()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "sweep_0001.jsonl.gz"
+            with self.assertRaises(Crash):
+                scanner.run_sweep(CrashingClient(), self.selected, 1, out, 50, 1)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_published_files_are_complete_or_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "x.jsonl.gz"
+            target.write_bytes(gzip.compress(b"old\n"))
+            with self.assertRaises(RuntimeError):
+                with scanner.published(target) as partial, gzip.open(partial, "wt") as out:
+                    out.write("new, half written")
+                    raise RuntimeError("crash")
+            with gzip.open(target, "rt") as src:
+                self.assertEqual(src.read(), "old\n")  # previous complete version kept
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["x.jsonl.gz"])
 
 
 if __name__ == "__main__":
