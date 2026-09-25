@@ -6,6 +6,14 @@ Goal of this first build: observe where the largest intraday option returns
 actually happen and keep the evidence. It records and ranks. It does not
 trade or predict.
 
+**Measurement limit.** This is a *sampled*-return leaderboard. Quote
+returns come from ~5-minute chain samples, and the after-close trade-bar
+backfill only enriches contracts that already rank in those samples. A
+brief spike in a contract that never ranks is not discovered, so the
+backfill does not repair universe-wide missing intraday extremes. Treat the
+results that way until broader coverage has been measured. Every
+`summary.json` carries this note.
+
 Code: `scripts/oa203_returns.py` (return definitions, pure) and
 `scripts/oa203_return_scanner.py` (universe, sampling, archive, build,
 backfill, readout). Tests: `tests/test_oa203_return_scanner.py`.
@@ -111,7 +119,9 @@ Thresholds are versioned (`oa203-returns-v1`) and written into every summary.
   with `rank`, `rank_in_type`, `clean_rank`, `clean_rank_in_type`
 - `leaderboard.csv`: rows in the top 200 overall or top 200 clean
 - `backfill_timesales.jsonl.gz`: raw trade bars for the top contracts
-- `summary.json`: `complete`/`partial` with reasons, counts, request stats
+- `summary.json`: `final`, `complete`/`partial` with reasons, coverage, pending uploads,
+  interruptions, counts, request stats
+- `uploads.json` (local only): verified-upload journal; `interruptions.jsonl`
 
 `build`, `inspect` and `readout` run the same code offline on a downloaded
 day directory. `inspect --symbol` prints a contract's timestamped path and
@@ -119,11 +129,43 @@ the exact return calculation (DoD 2).
 
 ## Failed or incomplete collection (DoD 3)
 
-A session is `partial`, with reasons, if any of: universe shortfall, no
-in-session sweeps, chain success rate < 98%, a gap between sweeps longer
-than twice the typical sweep plus a minute, stopping early before the close,
-upload failures, backfill not run or with errors, or any 429 responses.
-Same-day restarts reload `universe.json` and continue the sweep numbering.
+Each check stands on its own. A session is `partial`, with reasons, if any
+of these holds:
+
+- universe shortfall;
+- no in-session sweeps, or no complete (untruncated) sweep;
+- chain success rate below 98% of attempted fetches;
+- universe coverage below 98%. This counts selected underlyings with at
+  least one successful in-session fetch, so never-attempted chains count
+  as missing;
+- the first sweep started more than 2 minutes after the open;
+- a gap between sweep starts, or from the last sweep to the close, longer
+  than twice the larger of the median complete sweep and the request-budget
+  floor (~5.1 min for 500 chains at 100/min), plus a minute. This applies
+  even when every sweep was truncated;
+- a recorded interruption;
+- any artifact not verified in R2;
+- backfill not run or with errors;
+- any 429 responses.
+
+### Recovery
+
+- **Uploads:** `uploads.json` records the SHA-256 of each artifact once
+  `upload_file_verified` confirms it in R2. Any local artifact whose current
+  content is not recorded (raw sweeps, manifest, universe, OCC file,
+  outputs, interruption log) is pending. Every process reconciles pending
+  artifacts on start and again at finalization, so an outage followed by a
+  restart re-derives what is owed instead of forgetting it. Unresolved
+  uploads keep the session `partial`. `summary.json` is the one file that
+  cannot vouch for its own upload; the next run's reconcile retries it.
+- **Stops and crashes:** SIGTERM/SIGINT during collection writes only a
+  local interruption record (bounded; no network work in the grace period)
+  and exits 0. Every `run` first finalizes any session in the spool whose
+  close has passed without a final `summary.json`, including today's after
+  the close. That covers stops near the close and crashes during
+  end-of-day finalization. The next scheduled run recovers the day before
+  it starts the new one. A same-day restart before the close resumes
+  collection with the persisted universe.
 
 ## Deployment (not done; needs approval)
 

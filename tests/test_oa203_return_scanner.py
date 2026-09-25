@@ -309,25 +309,186 @@ class EndToEnd(unittest.TestCase):
             self.assertIn("| AAA |", text)
 
 
+UNIVERSE_500 = {"shortfall": 0, "selected": [{"underlying": f"S{i}"} for i in range(500)]}
+EXPECTED_MS = 306_000  # 500 chains + 10 quote batches at 100/min
+
+
 class Assessment(unittest.TestCase):
-    def entry(self, start_min, end_min, ok=500, total=500):
+    def entry(self, start_min, end_min, ok=500, total=500, truncated=False):
         chains = {f"S{i}": {"status": "ok" if i < ok else "error"} for i in range(total)}
         return {"started_ms": T0 + start_min * MIN, "ended_ms": T0 + end_min * MIN,
-                "truncated": False, "status_counts": {"ok": ok, "error": total - ok}, "chains": chains}
+                "truncated": truncated, "status_counts": {"ok": ok, "error": total - ok},
+                "chains": chains}
+
+    def assess(self, manifest, universe=UNIVERSE_500, pending=(), backfill=None, interruptions=None):
+        return scanner.assess_session(universe, manifest, T0, T0 + 390 * MIN, list(pending),
+                                      backfill, {}, EXPECTED_MS, interruptions)
 
     def test_complete_session(self):
         manifest = [self.entry(i * 5, i * 5 + 5) for i in range(78)]
-        out = scanner.assess_session({"shortfall": 0}, manifest, T0, T0 + 390 * MIN, [],
-                                     {"errors": 0}, {})
+        out = self.assess(manifest, backfill={"errors": 0})
         self.assertEqual(out["status"], "complete", out["reasons"])
+        self.assertEqual(out["universe_coverage"], 1.0)
 
     def test_gap_and_late_stop_are_partial(self):
         manifest = [self.entry(0, 5), self.entry(5, 10), self.entry(60, 65)]
-        out = scanner.assess_session({"shortfall": 3}, manifest, T0, T0 + 390 * MIN, [], None, {})
+        out = self.assess(manifest, universe={**UNIVERSE_500, "shortfall": 3})
         self.assertEqual(out["status"], "partial")
         joined = " ".join(out["reasons"])
         for reason in ("universe_shortfall:3", "sweep_gaps", "stopped_before_close", "backfill_not_run"):
             self.assertIn(reason, joined)
+
+    def test_late_start_truncated_only_session_is_partial(self):
+        # Review regression: one truncated sweep near the close with a single
+        # successful chain used to report complete with no reasons.
+        manifest = [self.entry(385, 390, ok=1, total=1, truncated=True)]
+        out = self.assess(manifest, backfill={"errors": 0})
+        self.assertEqual(out["status"], "partial")
+        joined = " ".join(out["reasons"])
+        for reason in ("no_complete_sweep", "late_start", "universe_coverage:0.0020"):
+            self.assertIn(reason, joined)
+        self.assertIsNone(out["typical_sweep_s"])
+
+    def test_truncated_only_on_time_start_still_checks_coverage(self):
+        manifest = [self.entry(0, 2, ok=100, total=100, truncated=True)]
+        out = self.assess(manifest, backfill={"errors": 0})
+        joined = " ".join(out["reasons"])
+        for reason in ("no_complete_sweep", "universe_coverage:0.2000", "stopped_before_close"):
+            self.assertIn(reason, joined)
+        self.assertNotIn("late_start", joined)
+
+    def test_pending_uploads_and_interruptions_are_partial(self):
+        manifest = [self.entry(i * 5, i * 5 + 5) for i in range(78)]
+        out = self.assess(manifest, pending=["sweeps/sweep_0001.jsonl.gz"], backfill={"errors": 0},
+                          interruptions=[{"reason": "signal"}])
+        self.assertIn("uploads_pending:1", out["reasons"])
+        self.assertIn("interrupted:1", out["reasons"])
+
+
+class RecordingUploader:
+    """Stands in for R2: verifies nothing remotely, but records what it got."""
+
+    def __init__(self, fail=()):
+        self.fail = set(fail)
+        self.uploaded = {}
+
+    def __call__(self, path, key, content_type):
+        name = key.split("/", 3)[-1]
+        if name in self.fail or "*" in self.fail:
+            raise RuntimeError("R2 unavailable")
+        body = path.read_bytes()
+        digest = scanner.hashlib.sha256(body).hexdigest()
+        self.uploaded[key] = digest
+        return {"key": key, "bytes": len(body), "sha256": digest}
+
+
+DAY = date(2026, 9, 25)
+SESSION = (scanner.datetime(2026, 9, 25, 9, 30, tzinfo=scanner.ET),
+           scanner.datetime(2026, 9, 25, 16, 0, tzinfo=scanner.ET))
+
+
+class UploadRecovery(unittest.TestCase):
+    def test_outage_restart_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outage = RecordingUploader(fail={"sweeps/sweep_0001.jsonl.gz", "universe.json"})
+            first = scanner.DayArchive(root, DAY, "oa203/scanner", upload=True, uploader=outage)
+            first.write_json("universe.json", {"selected": []})
+            first.path("sweeps/sweep_0001.jsonl.gz").write_bytes(gzip.compress(b"{}\n"))
+            first.append_manifest({"sweep": 1})
+            self.assertFalse(first.push("universe.json"))
+            self.assertFalse(first.push("sweeps/sweep_0001.jsonl.gz"))
+            self.assertTrue(first.push("sweeps/manifest.jsonl"))
+
+            # A new process over the same spool still knows what is owed.
+            down = scanner.DayArchive(root, DAY, "oa203/scanner", upload=True,
+                                      uploader=RecordingUploader(fail={"*"}))
+            self.assertEqual(down.reconcile(), ["sweeps/sweep_0001.jsonl.gz", "universe.json"])
+
+            healthy = RecordingUploader()
+            restarted = scanner.DayArchive(root, DAY, "oa203/scanner", upload=True, uploader=healthy)
+            self.assertEqual(restarted.reconcile(), [])
+            self.assertIn("oa203/scanner/2026-09-25/sweeps/sweep_0001.jsonl.gz", healthy.uploaded)
+            self.assertIn("oa203/scanner/2026-09-25/universe.json", healthy.uploaded)
+            self.assertNotIn("oa203/scanner/2026-09-25/sweeps/manifest.jsonl", healthy.uploaded)
+
+            # Content that changes after upload is owed again.
+            restarted.append_manifest({"sweep": 2})
+            self.assertEqual(restarted.pending_uploads(), ["sweeps/manifest.jsonl"])
+
+
+def fake_sweep(stop_after=None):
+    calls = {"n": 0}
+
+    def sweep_fn(client, selected, sweep, out_path, block_size, workers, deadline=None):
+        calls["n"] += 1
+        entry = scanner.run_sweep(client, selected, sweep, out_path, block_size, workers)
+        if stop_after is not None and calls["n"] >= stop_after:
+            scanner.STOP = True
+        return entry
+    return sweep_fn
+
+
+class StopAndRecover(unittest.TestCase):
+    def setUp(self):
+        scanner.STOP = False
+        self.addCleanup(setattr, scanner, "STOP", False)
+
+    def test_stop_during_collection_then_restart_after_close_finalizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = scanner.Config(spool_dir=Path(tmp), upload=True, workers=1, backfill_top=1)
+            uploader = RecordingUploader()
+            archive = scanner.DayArchive(cfg.spool_dir, DAY, cfg.r2_prefix, True, uploader)
+            selected = [{"underlying": "AAA", "expiration": "2026-09-28"}]
+            archive.write_json("universe.json", {"shortfall": 0, "selected": selected,
+                                                 "selected_count": 1})
+            client = FakeClient(chains={"AAA": chain_for("AAA", [1.0, 2.0, 3.0])})
+            client.sweep = 1
+
+            during = lambda: scanner.datetime(2026, 9, 25, 10, 0, tzinfo=scanner.ET)
+            rc = scanner.run_day(cfg, client=client, now=during, bounds_for=lambda d: SESSION,
+                                 sleep_until=lambda when: None, sweep_fn=fake_sweep(stop_after=2),
+                                 uploader=uploader)
+            self.assertEqual(rc, 0)
+            self.assertFalse(archive.finalized())
+            self.assertFalse(archive.path("summary.json").exists())
+            self.assertEqual(len(archive.interruptions()), 1)
+            self.assertEqual(len(archive.manifest()), 2)
+
+            # Restart after the close: the scheduled command now finalizes the day.
+            scanner.STOP = False
+            after = lambda: scanner.datetime(2026, 9, 25, 16, 30, tzinfo=scanner.ET)
+            rc = scanner.run_day(cfg, client=client, now=after, bounds_for=lambda d: SESSION,
+                                 sleep_until=lambda when: None, uploader=uploader)
+            self.assertEqual(rc, 0)
+            self.assertTrue(archive.finalized())
+            summary = json.loads(archive.path("summary.json").read_text())
+            self.assertEqual(summary["assessment"]["status"], "partial")
+            self.assertIn("interrupted:1", summary["assessment"]["reasons"])
+            self.assertEqual(summary["assessment"]["pending_uploads"], [])
+            self.assertTrue(archive.path("leaderboard.csv").exists())
+            self.assertIn("oa203/scanner/2026-09-25/interruptions.jsonl", uploader.uploaded)
+            self.assertIn("oa203/scanner/2026-09-25/summary.json", uploader.uploaded)
+
+    def test_next_morning_run_recovers_unfinished_day_and_pending_uploads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = scanner.Config(spool_dir=Path(tmp), upload=True, workers=1, backfill_top=1)
+            broken = RecordingUploader(fail={"*"})
+            archive = scanner.DayArchive(cfg.spool_dir, DAY, cfg.r2_prefix, True, broken)
+            archive.write_json("universe.json", {"shortfall": 0, "selected": [], "selected_count": 0})
+            archive.append_manifest({"sweep": 1, "started_ms": T0, "ended_ms": T0 + MIN,
+                                     "truncated": False, "status_counts": {}, "chains": {}})
+            # Crash during finalization: no summary was written.
+            healthy = RecordingUploader()
+            monday = lambda: scanner.datetime(2026, 9, 28, 8, 45, tzinfo=scanner.ET)
+            recovered = scanner.recover_days(cfg, FakeClient(), date(2026, 9, 28), monday(),
+                                             lambda d: SESSION if d == DAY else None, healthy)
+            self.assertEqual(recovered, ["2026-09-25"])
+            self.assertTrue(archive.finalized())
+            self.assertIn("oa203/scanner/2026-09-25/universe.json", healthy.uploaded)
+            # A later run finds it finalized and does not rebuild it.
+            self.assertEqual(scanner.recover_days(cfg, FakeClient(), date(2026, 9, 28), monday(),
+                                                  lambda d: SESSION, healthy), [])
 
 
 if __name__ == "__main__":

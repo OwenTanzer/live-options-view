@@ -29,8 +29,18 @@ One process per NYSE session (Railway cron, before the open):
    summary that labels the session ``complete`` or ``partial`` with reasons.
 
 Everything lands in a local per-date spool and is uploaded to R2 under
-``oa203/scanner/<date>/``. ``build``/``inspect``/``readout`` run the same
+``oa203/scanner/<date>/``. ``uploads.json`` records each artifact's hash
+once verified in R2, so anything not yet uploaded survives a restart and
+is retried. A stop writes only a local interruption record. Every ``run``
+first finalizes any earlier session whose close has passed without a final
+summary, so a stop or crash during collection or finalization is recovered
+by the next scheduled run. ``build``/``inspect``/``readout`` run the same
 code offline against a downloaded day directory.
+
+Measurement limit: this is a *sampled*-return leaderboard. Quote returns
+come from ~5-minute samples, and the trade-bar backfill only enriches
+contracts that already rank in those samples. A brief spike in a contract
+that never ranks is not discovered.
 
 Usage::
 
@@ -478,17 +488,95 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
 # Archive layout and storage
 # --------------------------------------------------------------------------
 
-class DayArchive:
-    """Local per-date directory, mirrored to R2 under ``<prefix>/<date>/``."""
+UPLOAD_JOURNAL = "uploads.json"
+SUMMARY = "summary.json"
+INTERRUPTIONS = "interruptions.jsonl"
 
-    def __init__(self, root: Path, day: date, prefix: str, upload: bool) -> None:
+
+def _content_type(name: str) -> str:
+    if name.endswith(".gz"):
+        return "application/gzip"
+    return "text/csv" if name.endswith(".csv") else "application/json"
+
+
+def _r2_uploader() -> Callable[[Path, str, str], dict[str, Any]]:
+    from moo144_tradier_probe import r2_client, upload_file_verified
+    client, bucket = r2_client()
+    return lambda path, key, content_type: upload_file_verified(client, bucket, path, key, content_type)
+
+
+class DayArchive:
+    """Local per-date directory, mirrored to R2 under ``<prefix>/<date>/``.
+
+    Upload state is durable: ``uploads.json`` records the SHA-256 of each
+    artifact as last verified in R2. Anything on disk whose current content
+    is not recorded there is pending, whichever process wrote it, so a
+    restart after an upload outage re-derives what is still owed instead of
+    forgetting it.
+    """
+
+    def __init__(self, root: Path, day: date, prefix: str, upload: bool,
+                 uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> None:
         self.day = day
         self.dir = root / day.isoformat()
         (self.dir / "sweeps").mkdir(parents=True, exist_ok=True)
         self.prefix = f"{prefix}/{day.isoformat()}"
         self.upload = upload
-        self._r2: tuple[Any, str] | None = None
-        self.upload_failures: list[dict[str, str]] = []
+        self._uploader = uploader
+
+    def artifacts(self) -> list[str]:
+        return sorted(p.relative_to(self.dir).as_posix() for p in self.dir.rglob("*")
+                      if p.is_file() and not p.name.endswith(".tmp") and p.name != UPLOAD_JOURNAL)
+
+    def _journal(self) -> dict[str, Any]:
+        path = self.path(UPLOAD_JOURNAL)
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def pending_uploads(self) -> list[str]:
+        """Artifacts whose current content has not been verified in R2."""
+        if not self.upload:
+            return []
+        journal = self._journal()
+        return [name for name in self.artifacts()
+                if (journal.get(name) or {}).get("sha256") != _sha256_file(self.path(name))]
+
+    def push(self, name: str) -> bool:
+        if not self.upload:
+            return True
+        try:
+            if self._uploader is None:
+                self._uploader = _r2_uploader()
+            result = self._uploader(self.path(name), f"{self.prefix}/{name}", _content_type(name))
+        except Exception as exc:
+            log("oa203_upload_failed", name=name, error=str(exc)[:300])
+            return False
+        journal = self._journal()
+        journal[name] = {"sha256": result["sha256"], "bytes": result["bytes"], "key": result["key"],
+                         "verified_at": datetime.now(timezone.utc).isoformat()}
+        self.write_json(UPLOAD_JOURNAL, journal)
+        return True
+
+    def reconcile(self) -> list[str]:
+        """Upload every pending artifact; return the ones still pending."""
+        for name in self.pending_uploads():
+            self.push(name)
+        return self.pending_uploads()
+
+    def record_interruption(self, **fields: Any) -> None:
+        """Local-only, bounded shutdown checkpoint; uploaded by the next reconcile."""
+        entry = {"at": datetime.now(timezone.utc).isoformat(), **fields}
+        with self.path(INTERRUPTIONS).open("a", encoding="utf-8") as out:
+            out.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def interruptions(self) -> list[dict[str, Any]]:
+        path = self.path(INTERRUPTIONS)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def finalized(self) -> bool:
+        path = self.path(SUMMARY)
+        return path.exists() and bool(json.loads(path.read_text(encoding="utf-8")).get("final"))
 
     def path(self, name: str) -> Path:
         return self.dir / name
@@ -507,28 +595,13 @@ class DayArchive:
     def manifest(self) -> list[dict[str, Any]]:
         return _read_manifest(self.dir)
 
-    def push(self, name: str) -> None:
-        if not self.upload:
-            return
-        try:
-            if self._r2 is None:
-                from moo144_tradier_probe import r2_client
-                self._r2 = r2_client()
-            from moo144_tradier_probe import upload_file_verified
-            client, bucket = self._r2
-            gz = name.endswith(".gz")
-            upload_file_verified(client, bucket, self.path(name), f"{self.prefix}/{name}",
-                                 "application/gzip" if gz else
-                                 "text/csv" if name.endswith(".csv") else "application/json")
-            self.upload_failures = [f for f in self.upload_failures if f["name"] != name]
-        except Exception as exc:
-            log("oa203_upload_failed", name=name, error=str(exc)[:300])
-            self.upload_failures = [f for f in self.upload_failures if f["name"] != name]
-            self.upload_failures.append({"name": name, "error": str(exc)[:300]})
 
-    def retry_uploads(self) -> None:
-        for failure in list(self.upload_failures):
-            self.push(failure["name"])
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def iter_rows(day_dir: Path) -> Iterator[dict[str, Any]]:
@@ -686,34 +759,71 @@ def run_backfill(client: Tradier, day: date, day_dir: Path, rows: list[dict[str,
 # Completeness
 # --------------------------------------------------------------------------
 
+START_GRACE_MS = 120_000   # first sweep must start within this of the open
+MIN_UNIVERSE_COVERAGE = 0.98
+MIN_CHAIN_SUCCESS = 0.98
+
+
+def expected_sweep_s(universe_size: int, cfg: "Config") -> float:
+    """Request-budget floor for one sweep: chains plus one quote batch per block."""
+    blocks = -(-universe_size // max(1, cfg.block_size))
+    return (universe_size + blocks) / max(1, cfg.max_rpm) * 60.0
+
+
 def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], open_ms: int,
-                   close_ms: int, upload_failures: list[dict[str, str]],
-                   backfill: dict[str, Any] | None, rate_stats: dict[str, int]) -> dict[str, Any]:
+                   close_ms: int, pending_uploads: list[str], backfill: dict[str, Any] | None,
+                   rate_stats: dict[str, int], expected_sweep_ms: float,
+                   interruptions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Label a session complete or partial; every check stands on its own.
+
+    Temporal coverage (start, gaps, end) uses the larger of the observed
+    median complete sweep and the request-budget floor, so it still applies
+    when every sweep was truncated. Universe coverage counts selected
+    underlyings with at least one successful in-session fetch, so chains
+    that were never attempted count as missing rather than disappearing
+    from a success-rate denominator.
+    """
     reasons: list[str] = []
     if universe.get("shortfall"):
         reasons.append(f"universe_shortfall:{universe['shortfall']}")
     in_session = [m for m in manifest if m["ended_ms"] > open_ms and m["started_ms"] < close_ms]
     if not in_session:
         reasons.append("no_sweeps_in_session")
+    complete_sweeps = [m for m in in_session if not m.get("truncated")]
+    if in_session and not complete_sweeps:
+        reasons.append("no_complete_sweep")
+
     chain_total = sum(len(m["chains"]) for m in in_session)
     chain_ok = sum(m["status_counts"].get("ok", 0) for m in in_session)
     ok_rate = chain_ok / chain_total if chain_total else 0.0
-    if chain_total and ok_rate < 0.98:
+    if chain_total and ok_rate < MIN_CHAIN_SUCCESS:
         reasons.append(f"chain_success_rate:{ok_rate:.4f}")
-    durations = [m["ended_ms"] - m["started_ms"] for m in in_session if not m.get("truncated")]
+
+    selected = {u["underlying"] for u in universe.get("selected") or []}
+    covered = {name for m in in_session for name, status in m["chains"].items()
+               if status.get("status") == "ok"}
+    coverage = len(covered & selected) / len(selected) if selected else 0.0
+    if coverage < MIN_UNIVERSE_COVERAGE:
+        reasons.append(f"universe_coverage:{coverage:.4f}")
+
+    durations = [m["ended_ms"] - m["started_ms"] for m in complete_sweeps]
     typical = statistics.median(durations) if durations else None
-    gaps = []
-    if in_session and typical:
+    max_gap = 2 * max(typical or 0, expected_sweep_ms) + 60_000
+    gaps: list[int] = []
+    if in_session:
         starts = sorted(m["started_ms"] for m in in_session)
-        edges = [open_ms] + starts
-        gaps = [(b - a) for a, b in zip(edges, edges[1:]) if (b - a) > 2 * typical + 60_000]
+        late = starts[0] - open_ms
+        if late > START_GRACE_MS:
+            reasons.append(f"late_start:{late // 1000}s")
+        gaps = [b - a for a, b in zip(starts, starts[1:]) if b - a > max_gap]
         if gaps:
             reasons.append(f"sweep_gaps:{len(gaps)}")
-        last_end = max(m["ended_ms"] for m in in_session)
-        if close_ms - last_end > 2 * typical + 60_000:
+        if close_ms - max(m["ended_ms"] for m in in_session) > max_gap:
             reasons.append("stopped_before_close")
-    if upload_failures:
-        reasons.append(f"upload_failures:{len(upload_failures)}")
+    if interruptions:
+        reasons.append(f"interrupted:{len(interruptions)}")
+    if pending_uploads:
+        reasons.append(f"uploads_pending:{len(pending_uploads)}")
     if backfill is None:
         reasons.append("backfill_not_run")
     elif backfill.get("errors"):
@@ -724,16 +834,27 @@ def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], ope
         "status": "partial" if reasons else "complete",
         "reasons": reasons,
         "sweeps_in_session": len(in_session),
+        "complete_sweeps": len(complete_sweeps),
         "chain_fetches": chain_total,
         "chain_success_rate": round(ok_rate, 6),
+        "universe_coverage": round(coverage, 6),
         "typical_sweep_s": round(typical / 1000, 1) if typical else None,
+        "max_gap_s": round(max_gap / 1000, 1),
         "gaps_ms": gaps,
+        "pending_uploads": pending_uploads,
     }
 
 
 # --------------------------------------------------------------------------
 # Daily run
 # --------------------------------------------------------------------------
+
+MEASUREMENT_NOTE = (
+    "Sampled-return leaderboard: quote returns come from ~5-minute chain samples. "
+    "The trade-bar backfill only enriches contracts that already rank in those "
+    "samples; a brief spike in a contract that never ranks is not discovered."
+)
+
 
 def _sleep_until(when: datetime) -> None:
     while not STOP:
@@ -762,61 +883,115 @@ def build_universe_for(day: date, client: Tradier, cfg: Config, archive: DayArch
 
 def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[str, Any],
              open_ms: int | None, close_ms: int | None, backfill_enabled: bool = True) -> dict[str, Any]:
+    """Build outputs, backfill, reconcile uploads and write the final summary.
+
+    Safe to re-run: a crash or stop anywhere before ``summary.json`` is
+    written leaves the day unfinalized, and the next ``run`` finalizes it.
+    """
     rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms)
     backfill = None
     if backfill_enabled and rows:
         backfill = run_backfill(client, archive.day, archive.dir, rows, cfg.backfill_top, cfg.workers)
         rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms)
     outputs = write_outputs(archive.dir, rows)
-    for name in ("backfill_timesales.jsonl.gz", "contracts.csv.gz", "leaderboard.csv",
-                 "sweeps/manifest.jsonl"):
-        if archive.path(name).exists():
-            archive.push(name)
-    archive.retry_uploads()
+    # Everything except the summary itself must be verified in R2 before the
+    # summary can call the session complete.
+    pending = [name for name in archive.reconcile() if name != SUMMARY]
     manifest = archive.manifest()
     bounds_open = open_ms or min((m["started_ms"] for m in manifest), default=0)
     bounds_close = close_ms or max((m["ended_ms"] for m in manifest), default=0)
+    selected_count = len(universe.get("selected") or [])
     summary = {
+        "final": True,
         "trade_date": archive.day.isoformat(),
         "session_open_ms": open_ms, "session_close_ms": close_ms,
-        "assessment": assess_session(universe, manifest, bounds_open, bounds_close,
-                                     archive.upload_failures, backfill, dict(client.stats)),
+        "assessment": assess_session(universe, manifest, bounds_open, bounds_close, pending, backfill,
+                                     dict(client.stats), expected_sweep_s(selected_count, cfg) * 1000,
+                                     archive.interruptions()),
+        "measurement": MEASUREMENT_NOTE,
         "universe": {k: universe.get(k) for k in ("target", "selected_count", "shortfall",
                                                   "skip_counts", "occ_report_date")},
         "contracts": len(rows),
         "ranked_contracts": sum(1 for r in rows if r.get("rank")),
         "clean_ranked_contracts": sum(1 for r in rows if r.get("clean_rank")),
         "backfill": backfill,
+        "interruptions": archive.interruptions(),
         "request_stats": dict(client.stats),
         "outputs": outputs,
         "return_policy": cfg.policy.as_dict(),
         "finalized_at": datetime.now(timezone.utc).isoformat(),
     }
-    archive.write_json("summary.json", summary)
-    archive.push("summary.json")
-    log("oa203_session_finalized", **summary["assessment"], contracts=summary["contracts"])
+    archive.write_json(SUMMARY, summary)
+    archive.push(SUMMARY)  # if this fails, the next run's reconcile retries it
+    log("oa203_session_finalized", date=archive.day.isoformat(), **summary["assessment"],
+        contracts=summary["contracts"])
     return summary
 
 
-def run_day(cfg: Config) -> int:
-    day = datetime.now(ET).date()
-    bounds = nyse_session_bounds(day)
+def _session_ms(bounds: tuple[datetime, datetime] | None) -> tuple[int | None, int | None]:
+    if bounds is None:
+        return None, None
+    return int(bounds[0].timestamp() * 1000), int(bounds[1].timestamp() * 1000)
+
+
+def recover_days(cfg: Config, client: Tradier, today: date, now: datetime,
+                 bounds_for: Callable[[date], tuple[datetime, datetime] | None],
+                 uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> list[str]:
+    """Finalize unfinished sessions whose close has passed; re-upload pending artifacts.
+
+    Covers a stop or crash during collection or during end-of-day
+    finalization: the next scheduled ``run`` (or a same-day restart after
+    the close) picks the day up from the local spool.
+    """
+    recovered: list[str] = []
+    if not cfg.spool_dir.exists():
+        return recovered
+    for day_dir in sorted(p for p in cfg.spool_dir.iterdir() if p.is_dir() and _is_date(p.name)):
+        day = date.fromisoformat(day_dir.name)
+        if day > today or not (day_dir / "universe.json").exists():
+            continue
+        bounds = bounds_for(day)
+        if bounds is not None and now < bounds[1]:
+            continue  # that session is still open; run_day collects it
+        archive = DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload, uploader)
+        if archive.finalized():
+            remaining = archive.reconcile()
+            if remaining:
+                log("oa203_uploads_still_pending", date=day.isoformat(), pending=remaining)
+            continue
+        log("oa203_recovering_session", date=day.isoformat())
+        universe = json.loads((day_dir / "universe.json").read_text(encoding="utf-8"))
+        finalize(archive, client, cfg, universe, *_session_ms(bounds))
+        recovered.append(day.isoformat())
+    return recovered
+
+
+def run_day(cfg: Config, *, client: Tradier | None = None,
+            now: Callable[[], datetime] = lambda: datetime.now(ET),
+            bounds_for: Callable[[date], tuple[datetime, datetime] | None] = nyse_session_bounds,
+            sleep_until: Callable[[datetime], None] = _sleep_until,
+            sweep_fn: Callable[..., dict[str, Any]] = run_sweep,
+            uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> int:
+    client = client or Tradier(load_token(), cfg.max_rpm, cfg.reserve)
+    day = now().date()
+    recover_days(cfg, client, day, now(), bounds_for, uploader)
+    bounds = bounds_for(day)
     if bounds is None:
         log("oa203_no_session", date=day.isoformat())
         return 0
     open_at, close_at = bounds
-    if datetime.now(ET) >= close_at:
+    if now() >= close_at:
         log("oa203_session_already_closed", date=day.isoformat())
         return 0
-    client = Tradier(load_token(), cfg.max_rpm, cfg.reserve)
-    archive = DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload)
+    archive = DayArchive(cfg.spool_dir, day, cfg.r2_prefix, cfg.upload, uploader)
+    archive.reconcile()  # artifacts an earlier process today could not upload
 
     universe_path = archive.path("universe.json")
     if universe_path.exists():  # same-day restart keeps the persisted selection
         universe = json.loads(universe_path.read_text(encoding="utf-8"))
         log("oa203_universe_reloaded", selected=universe["selected_count"])
     else:
-        _sleep_until(open_at - timedelta(minutes=cfg.universe_lead_min))
+        sleep_until(open_at - timedelta(minutes=cfg.universe_lead_min))
         universe = build_universe_for(day, client, cfg, archive)
         archive.write_json("universe.json", universe)
         archive.push("universe.json")
@@ -824,24 +999,27 @@ def run_day(cfg: Config) -> int:
         log("oa203_universe_selected", selected=universe["selected_count"],
             shortfall=universe["shortfall"], skips=universe["skip_counts"])
 
-    _sleep_until(open_at)
+    sleep_until(open_at)
     sweep = max((m["sweep"] for m in archive.manifest()), default=0)
-    while not STOP and datetime.now(ET) < close_at:
+    while not STOP and now() < close_at:
         sweep += 1
         name = f"sweeps/sweep_{sweep:04d}.jsonl.gz"
-        entry = run_sweep(client, universe["selected"], sweep, archive.path(name),
-                          cfg.block_size, cfg.workers, deadline=close_at)
+        entry = sweep_fn(client, universe["selected"], sweep, archive.path(name),
+                         cfg.block_size, cfg.workers, deadline=close_at)
         archive.append_manifest(entry)
         archive.push(name)
+        archive.push("sweeps/manifest.jsonl")
         log("oa203_sweep", sweep=sweep, rows=entry["rows"], status=entry["status_counts"],
             seconds=round((entry["ended_ms"] - entry["started_ms"]) / 1000, 1),
             truncated=entry["truncated"], requests=client.stats["requests"])
     if STOP:
-        log("oa203_stopped_before_close", sweep=sweep)
-        archive.push("sweeps/manifest.jsonl")
+        # Bounded: local writes only. The next run reconciles uploads and,
+        # once the close has passed, finalizes the day with this recorded.
+        archive.record_interruption(reason="signal", last_sweep=sweep,
+                                    before_close=now() < close_at)
+        log("oa203_stopped", sweep=sweep, date=day.isoformat())
         return 0
-    finalize(archive, client, cfg, universe,
-             int(open_at.timestamp() * 1000), int(close_at.timestamp() * 1000))
+    finalize(archive, client, cfg, universe, *_session_ms(bounds))
     return 0
 
 
