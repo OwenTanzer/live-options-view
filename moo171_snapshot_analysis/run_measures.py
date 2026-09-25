@@ -3,6 +3,8 @@ cached panel produced by run_audit.py."""
 
 from __future__ import annotations
 
+import json
+import math
 import sys
 from pathlib import Path
 
@@ -12,6 +14,33 @@ from measures import compute_concentration_and_activity
 from outcomes import assert_non_overlapping, build_outcome_dataset, generate_anchors
 
 OUT_DIR = Path(__file__).parent / "out"
+RECONCILIATION_REL_TOL = 1e-9  # same tolerance run_audit.py records
+
+
+def check_reconciliation(measures: pd.DataFrame, manifest_path: Path) -> list[str]:
+    """Compares the measures just written against the hand-reconciled C and
+    A values recorded in the source manifest by run_audit.py. Returns a
+    list of disagreements (empty = every recorded value matches)."""
+    recon = json.loads(manifest_path.read_text()).get("representative_reconciliation", {})
+    problems = []
+    for column in ("C", "A"):
+        rec = recon.get(column)
+        if not rec or "manual_result" not in rec:
+            problems.append(f"{column}: no hand reconciliation recorded in {manifest_path.name}")
+            continue
+        hit = measures[
+            (measures["date"] == rec["date"]) & (measures["snapshot_key"] == rec["snapshot_key"])
+            & (measures["Strike"] == rec["strike"])
+        ]
+        if len(hit) != 1:
+            problems.append(f"{column}: {len(hit)} measures rows for the reconciled key")
+            continue
+        value = float(hit.iloc[0][column])
+        if not math.isclose(value, rec["manual_result"], rel_tol=RECONCILIATION_REL_TOL):
+            problems.append(f"{column}: measures.parquet {value!r} != hand reconciliation {rec['manual_result']!r}")
+        else:
+            print(f"Reconciliation {column}: measures.parquet {value!r} == hand {rec['manual_result']!r}")
+    return problems
 
 
 def main() -> int:
@@ -26,6 +55,12 @@ def main() -> int:
     measures.to_parquet(OUT_DIR / "measures.parquet", index=False)
     print(f"Computed measures for {len(measures)} (snapshot, strike) pairs.")
     print(measures[["C", "A", "distance", "side"]].describe())
+
+    problems = check_reconciliation(measures, OUT_DIR / "source_manifest.json")
+    if problems:
+        print("\nFAILED reconciliation against written measures:\n  " + "\n  ".join(problems),
+              file=sys.stderr)
+        return 1
 
     anchors, excluded = generate_anchors(spot_series)
     assert_non_overlapping(anchors)  # generated-data check, not just a unit test

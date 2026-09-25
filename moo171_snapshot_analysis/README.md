@@ -41,8 +41,11 @@ pip install -r requirements.txt
 # needs R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME
 # in env, e.g. via `railway run` linked to a service that has them (moo144-tradier-probe
 # or live-options-view in the live-market-monitor project)
-python run_audit.py      # steps 1: inventory + coverage audit -> out/audit_report.json,
+python run_audit.py      # step 1, REPRODUCTION mode (default): verify against the frozen
+                          # out/source_manifest.json, then inventory + coverage audit ->
+                          # out/audit_report.json, out/reproduction_check.json,
                           # out/option_rows.parquet, out/spot_series.parquet (gitignored, regenerable)
+python run_audit.py --new-run   # only when deliberately starting a new run: writes a NEW manifest
 python run_measures.py   # steps 2-3 construction -> out/measures.parquet (gitignored),
                           # out/anchors.parquet, out/outcome_dataset.parquet
 python run_report.py     # step 3 analysis -> out/MOO171_report.md, out/plots/, out/*.csv
@@ -54,6 +57,25 @@ trivially regenerable from the immutable R2 archive) along with `r2_cache/`
 the report, plots, small aggregated CSVs/parquets, `audit_report.json`, and
 `source_manifest.json` (the frozen object keys/etags/config/code-revision
 used by the run that produced the committed evidence) -- is committed.
+
+### Reproduction vs. new run
+
+`run_audit.py` with no flags treats the committed `out/source_manifest.json`
+as the frozen run. Before anything under `out/` is replaced, it checks that
+the config constants and every `*.py` file's sha256 match the frozen values,
+that the listed snapshot keys equal the frozen key set exactly, and that
+every snapshot's bytes (cached or fetched) hash to the frozen sha256. The hash
+check happens in `r2_source` before the bytes are parsed. On any mismatch it
+exits 1 and leaves every `out/` file, including the manifest, untouched. On
+success it keeps the manifest byte-for-byte and records the verification in
+`out/reproduction_check.json`. Only `--new-run` writes a new manifest.
+
+Both modes hand-reconcile one representative C and one representative A value
+from raw rows (for A: each contract's consecutive cumulative `Volume`
+observations, timestamps, elapsed interval, derived dV, flags, and
+Gamma/spot). They then assert agreement with
+`measures.compute_concentration_and_activity`. `run_measures.py` repeats that
+check against the `measures.parquet` it writes, and any disagreement exits 1.
 
 ## Tests
 

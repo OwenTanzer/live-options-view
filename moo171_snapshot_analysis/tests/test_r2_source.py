@@ -66,3 +66,51 @@ def test_verified_manifest_reports_none_sha256_for_a_key_never_actually_read():
 
         manifest = source.verified_manifest("20260910")
         assert manifest[0]["sha256"] is None
+
+
+def test_expected_sha256_accepts_unchanged_cached_bytes():
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_dir = Path(tmp)
+        body = b"Strike,Gamma\n700.0,0.02\n"
+        key = "intraday/20260910/snapshot_093000000000.csv"
+        _seed_cache(cache_dir, "20260910", [(key, body)])
+        source = SnapshotSource(
+            cache_dir=cache_dir, s3=None, expected_sha256={key: hashlib.sha256(body).hexdigest()},
+        )
+        assert source.snapshot_csv_rows(key) == [{"Strike": "700.0", "Gamma": "0.02"}]
+
+
+def test_expected_sha256_rejects_modified_cached_bytes_before_parsing():
+    """The review's repro: a cached CSV whose Gamma changed 0.02 -> 9.99
+    under the same key/listing (listing ETag unchanged) must fail, not be
+    parsed and re-hashed."""
+    import pytest
+
+    from r2_source import ManifestMismatch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_dir = Path(tmp)
+        original = b"Strike,Gamma\n700.0,0.02\n"
+        key = "intraday/20260910/snapshot_093000000000.csv"
+        _seed_cache(cache_dir, "20260910", [(key, original)])
+        (cache_dir / key).write_bytes(b"Strike,Gamma\n700.0,9.99\n")  # listing marker untouched
+        source = SnapshotSource(
+            cache_dir=cache_dir, s3=None, expected_sha256={key: hashlib.sha256(original).hexdigest()},
+        )
+        with pytest.raises(ManifestMismatch, match="does not match frozen manifest"):
+            source.snapshot_csv_rows(key)
+        assert key not in source._read_sha256
+
+
+def test_expected_sha256_rejects_a_key_outside_the_frozen_manifest():
+    import pytest
+
+    from r2_source import ManifestMismatch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_dir = Path(tmp)
+        key = "intraday/20260910/snapshot_093000000000.csv"
+        _seed_cache(cache_dir, "20260910", [(key, b"a\n1\n")])
+        source = SnapshotSource(cache_dir=cache_dir, s3=None, expected_sha256={})
+        with pytest.raises(ManifestMismatch, match="not in the frozen manifest"):
+            source.snapshot_csv_rows(key)

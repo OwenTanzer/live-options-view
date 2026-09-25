@@ -264,12 +264,14 @@ not a contradiction to resolve away: a standardized partial coefficient (the
 fitted change in `toward` per one-SD change in that specific predictor,
 holding the baseline terms fixed) and a separate model's R^2 gain (how much
 additional outcome variance that predictor plus the baseline jointly
-explain, relative to the baseline alone) answer different questions. A
-predictor can contribute more in-sample variance than another while having
-a smaller per-SD marginal effect on `toward` -- for instance through its
-correlation structure with the baseline terms already in the model, or
-through nonlinearity in its relationship to the outcome that R^2 picks up
-but a single linear coefficient does not. Neither number by itself
+explain, relative to the baseline alone) answer different questions, even
+though both come from the same linear fitted model. The SD-scaled
+coefficient scales the predictor's coefficient by its TOTAL standard
+deviation, while the R^2 gain depends on the predictor's RESIDUAL variance
+after controlling for the baseline terms (roughly coefficient^2 times that
+residual variance). A predictor whose variation overlaps less with the
+baseline terms keeps more residual variance, so it can add more R^2 than
+another predictor while having a smaller per-SD coefficient. Neither number by itself
 establishes whether gamma-weighting by OI (C) or activity (A) adds
 information beyond gamma alone, or the reverse; a nested comparison against
 a baseline-plus-gamma model would speak to that more directly and is not

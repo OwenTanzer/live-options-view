@@ -22,6 +22,12 @@ R2_BUCKET = os.environ.get("R2_BUCKET_NAME", "qqq-options-chain-data")
 DEFAULT_CACHE_DIR = Path(os.environ.get("MOO171_CACHE_DIR", "./r2_cache"))
 
 
+class ManifestMismatch(RuntimeError):
+    """Input bytes/keys (or source/config identity) differ from a frozen
+    source manifest. Raised before the offending bytes are parsed, so a
+    reproduction run never silently analyzes modified input."""
+
+
 def make_s3():
     import boto3
 
@@ -42,7 +48,10 @@ class SnapshotSource:
     repeatedly without re-authenticating every time.
     """
 
-    def __init__(self, bucket: str = R2_BUCKET, cache_dir: Path | str = DEFAULT_CACHE_DIR, s3: Any = None):
+    def __init__(
+        self, bucket: str = R2_BUCKET, cache_dir: Path | str = DEFAULT_CACHE_DIR, s3: Any = None,
+        expected_sha256: dict[str, str] | None = None,
+    ):
         self.bucket = bucket
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -53,6 +62,11 @@ class SnapshotSource:
         # metadata, so it verifies the bytes that were actually parsed
         # rather than trusting a reported ETag/size alone.
         self._read_sha256: dict[str, str] = {}
+        # Frozen-manifest mode: when set, every snapshot read must be one of
+        # these keys AND hash to exactly this value, or _get_bytes raises
+        # ManifestMismatch before the bytes reach a parser. None = new-run
+        # mode (hashes are only recorded, not checked).
+        self.expected_sha256 = expected_sha256
 
     @property
     def s3(self):
@@ -67,21 +81,37 @@ class SnapshotSource:
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / key
 
+    def _record_and_check(self, key: str, body: bytes) -> bytes:
+        digest = hashlib.sha256(body).hexdigest()
+        if self.expected_sha256 is not None:
+            expected = self.expected_sha256.get(key)
+            if expected is None:
+                raise ManifestMismatch(f"{key}: not in the frozen manifest")
+            if digest != expected:
+                raise ManifestMismatch(
+                    f"{key}: sha256 {digest} does not match frozen manifest {expected}"
+                )
+        self._read_sha256[key] = digest
+        return body
+
     def _get_bytes(self, key: str) -> bytes | None:
         cache_path = self._cache_path(key)
         if cache_path.exists():
-            body = cache_path.read_bytes()
-            self._read_sha256[key] = hashlib.sha256(body).hexdigest()
-            return body
+            return self._record_and_check(key, cache_path.read_bytes())
         if self.s3 is None:
+            if self.expected_sha256 is not None and key in self.expected_sha256:
+                raise ManifestMismatch(f"{key}: in the frozen manifest but not readable (no cache, no R2 creds)")
             return None
         try:
             body = self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()
         except self.s3.exceptions.NoSuchKey:
+            if self.expected_sha256 is not None and key in self.expected_sha256:
+                raise ManifestMismatch(f"{key}: in the frozen manifest but missing from R2")
             return None
+        # Check before caching, so mismatched bytes never land in the cache.
+        self._record_and_check(key, body)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_bytes(body)
-        self._read_sha256[key] = hashlib.sha256(body).hexdigest()
         return body
 
     def list_all_objects(self, prefix: str) -> list[dict[str, Any]]:
