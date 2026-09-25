@@ -134,7 +134,7 @@ class SnapshotSource:
                     "etag": obj.get("ETag", "").strip('"'),
                 })
         cache_marker.parent.mkdir(parents=True, exist_ok=True)
-        cache_marker.write_text(json.dumps(objects))
+        cache_marker.write_text(json.dumps(objects), newline="\n")
         return objects
 
     def snapshot_objects(self, yyyymmdd: str) -> list[dict[str, Any]]:

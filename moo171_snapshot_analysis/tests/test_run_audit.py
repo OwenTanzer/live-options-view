@@ -190,8 +190,13 @@ def test_new_run_then_verify_with_unchanged_bytes_retains_manifest(tmp_path):
     assert all(e["sha256"] for e in frozen["objects"][DATE])
     assert frozen["representative_reconciliation"]["A"]["agrees"] is True
 
+    # Evidence is LF on every platform, so its hash matches a fresh checkout.
+    assert b"\r" not in frozen_bytes
+    assert b"\r" not in (tmp_path / "out" / "audit_report.json").read_bytes()
+
     assert _run(tmp_path) == 0
     assert manifest_path.read_bytes() == frozen_bytes  # retained, not rewritten
+    assert b"\r" not in (tmp_path / "out" / "reproduction_check.json").read_bytes()
     check = json.loads((tmp_path / "out" / "reproduction_check.json").read_text())
     assert check["objects_verified"] == len(SNAPSHOTS)
     assert check["frozen_manifest_sha256"] == hashlib.sha256(frozen_bytes).hexdigest()

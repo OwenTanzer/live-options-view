@@ -96,10 +96,25 @@ def _git_dirty() -> bool | None:
 def _source_file_sha256() -> dict[str, str]:
     """sha256 of every *.py file in this directory as actually read at run
     time -- a content fingerprint of the executed code, independent of
-    whether it has been committed."""
+    whether it has been committed.
+
+    Source identity is defined over the canonical LF bytes that git stores
+    and that .gitattributes forces into every checkout. A CRLF source file
+    (e.g. a checkout made before that policy, or an editor re-saving with
+    CRLF) would record/verify a platform-dependent hash that a fresh
+    checkout cannot reproduce, so it is refused rather than hashed."""
     hashes = {}
+    crlf = []
     for path in sorted(MODULE_DIR.glob("*.py")):
-        hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        body = path.read_bytes()
+        if b"\r" in body:
+            crlf.append(path.name)
+        hashes[path.name] = hashlib.sha256(body).hexdigest()
+    if crlf:
+        raise ManifestMismatch(
+            f"source files with CR line endings (not the canonical LF checkout): {crlf}; "
+            "re-checkout with the module's .gitattributes (eol=lf) before running"
+        )
     return hashes
 
 
@@ -384,11 +399,11 @@ def main(argv: list[str] | None = None, *, source: SnapshotSource | None = None,
     dates = dates or sorted(REPORTED_SNAPSHOT_COUNTS)
     manifest_path = out_dir / "source_manifest.json"
     config = current_config()
-    source_hashes = _source_file_sha256()
     frozen = expected = frozen_bytes = None
 
     # Every check in this block runs BEFORE anything under out_dir is written.
     try:
+        source_hashes = _source_file_sha256()
         if args.new_run:
             source = source or SnapshotSource()
         else:
@@ -461,7 +476,7 @@ def main(argv: list[str] | None = None, *, source: SnapshotSource | None = None,
     for flag, count in flag_counts.items():
         print(f"  {flag}: {count}")
 
-    with open(out_dir / "audit_report.json", "w") as f:
+    with open(out_dir / "audit_report.json", "w", newline="\n") as f:
         json.dump(report, f, indent=2, default=str)
 
     if frozen is not None:
@@ -480,7 +495,7 @@ def main(argv: list[str] | None = None, *, source: SnapshotSource | None = None,
             ],
             "reconciliation_agrees": {name: rec.get("agrees") for name, rec in reconciliation.items()},
         }
-        with open(out_dir / "reproduction_check.json", "w") as f:
+        with open(out_dir / "reproduction_check.json", "w", newline="\n") as f:
             json.dump(check, f, indent=2, default=str)
         print(f"\nVerified against frozen manifest; retained {manifest_path} unchanged. Wrote "
               f"audit_report.json, reproduction_check.json, option_rows.parquet, spot_series.parquet")
@@ -504,7 +519,9 @@ def main(argv: list[str] | None = None, *, source: SnapshotSource | None = None,
         "representative_reconciliation": reconciliation,
         "multiplier_evidence": _multiplier_evidence(audits),
     }
-    with open(manifest_path, "w") as f:
+    # newline="\n": evidence is LF on every platform (see .gitattributes),
+    # so its sha256 matches the committed blob on any fresh checkout.
+    with open(manifest_path, "w", newline="\n") as f:
         json.dump(manifest, f, indent=2, default=str)
 
     print(f"\nNew run: wrote {manifest_path}, audit_report.json, option_rows.parquet, spot_series.parquet")

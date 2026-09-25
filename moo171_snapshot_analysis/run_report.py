@@ -330,25 +330,25 @@ def main() -> int:
 
     for measure in ["C", "A"]:
         summary = matched_summary(prepared, measure)
-        summary.to_csv(OUT_DIR / f"matched_summary_{measure}.csv", index=False)
+        summary.to_csv(OUT_DIR / f"matched_summary_{measure}.csv", index=False, lineterminator="\n")
         plot_matched_summary(summary, measure, PLOTS_DIR / f"matched_summary_{measure}.png")
         print(f"\nMatched summary for {measure} (first 10 rows):\n{summary.head(10)}")
 
     comparison = compare_predictors(prepared)
-    comparison.to_csv(OUT_DIR / "predictor_comparison.csv", index=False)
+    comparison.to_csv(OUT_DIR / "predictor_comparison.csv", index=False, lineterminator="\n")
     print(f"\n=== Predictor comparison (clustered by anchor, n={len(prepared)}) ===\n{comparison}")
 
     day_by_day_tables = {}
     loo_tables = {}
     for predictor, label in [("log_C", "log(C)"), ("log_A", "log(A)"), ("log_gamma_alone", "log(gamma alone)")]:
         dbd = day_by_day(prepared, predictor)
-        dbd.to_csv(OUT_DIR / f"day_by_day_{predictor}.csv", index=False)
+        dbd.to_csv(OUT_DIR / f"day_by_day_{predictor}.csv", index=False, lineterminator="\n")
         plot_day_by_day(dbd, label, PLOTS_DIR / f"day_by_day_{predictor}.png")
         print(f"\n=== Day-by-day coefficient on {predictor} ===\n{dbd}")
         day_by_day_tables[predictor] = dbd
 
         loo = leave_one_day_out(prepared, predictor)
-        loo.to_csv(OUT_DIR / f"leave_one_day_out_{predictor}.csv", index=False)
+        loo.to_csv(OUT_DIR / f"leave_one_day_out_{predictor}.csv", index=False, lineterminator="\n")
         print(f"\n=== Leave-one-day-out coefficient on {predictor} ===\n{loo}")
         loo_tables[predictor] = loo
 
@@ -362,7 +362,7 @@ def main() -> int:
         report_lines.append(f"\n## {label} tables\n\n### Day-by-day\n{day_by_day_tables[predictor].to_markdown(index=False)}\n")
         report_lines.append(f"\n### Leave-one-day-out\n{loo_tables[predictor].to_markdown(index=False)}\n")
 
-    with open(OUT_DIR / "MOO171_report.md", "w", encoding="utf-8") as f:
+    with open(OUT_DIR / "MOO171_report.md", "w", encoding="utf-8", newline="\n") as f:
         f.write("".join(report_lines))
     print(f"\nWrote {OUT_DIR / 'MOO171_report.md'} and plots to {PLOTS_DIR}")
     return 0
