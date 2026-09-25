@@ -45,27 +45,38 @@ class FakeStorage:
         self.pins: dict[int, dict] = {}
         self._next_id = 1
 
-    def create_pin(self, *, headline_id, symbol, window_start, price_before):
+    def create_pin(self, *, headline_id, symbol, window_start, price_before, shadow=False):
         pin_id = self._next_id
         self._next_id += 1
         self.pins[pin_id] = {
             "id": pin_id, "headline_id": headline_id, "symbol": symbol,
             "window_start": window_start, "price_before": price_before,
             "window_end": None, "price_after": None, "pct_move": None,
-            "volume_ratio": None, "confirmed": 0,
+            "volume_ratio": None, "confirmed": 0, "shadow": int(shadow), "classification": None,
         }
         return pin_id
 
-    def resolve_pin(self, pin_id, *, price_after, pct_move, volume_ratio, confirmed, window_end=None):
+    def resolve_pin(self, pin_id, *, price_after, pct_move, volume_ratio, confirmed, window_end=None,
+                     classification=None):
         row = self.pins[pin_id]
         row.update(window_end=time.time() if window_end is None else window_end, price_after=price_after,
-                    pct_move=pct_move, volume_ratio=volume_ratio, confirmed=int(confirmed))
+                    pct_move=pct_move, volume_ratio=volume_ratio, confirmed=int(confirmed),
+                    classification=classification)
 
     def mark_pin_incomplete(self, pin_id, reason):
-        self.pins[pin_id].update(window_end=time.time(), incomplete_reason=reason)
+        self.pins[pin_id].update(window_end=time.time(), incomplete_reason=reason, classification="insufficient_evidence")
 
     def open_pins(self):
         return [row for row in self.pins.values() if row["window_end"] is None]
+
+    def record_price_observations(self, *, event_type, event_id, symbol, samples):
+        pass
+
+    def candidate_headlines_for_match(self, symbol, center_ts, window_secs):
+        return []
+
+    def set_pin_control(self, pin_id, control_pct_move):
+        self.pins[pin_id]["control_pct_move"] = control_pct_move
 
 
 async def scenario_before_price_is_ingest_time_anchored() -> None:
