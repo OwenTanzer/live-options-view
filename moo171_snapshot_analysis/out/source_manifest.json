@@ -1,17 +1,17 @@
 {
-  "generated_at_utc": "2026-09-19T01:47:20.874134+00:00",
-  "git_base_revision": "9f17bf1b68530c2cb6fdc4d215f1becb93f6fe84",
-  "git_dirty": true,
+  "generated_at_utc": "2026-09-25T03:33:07.176020+00:00",
+  "git_base_revision": "9790f8a2ae6c02a5b648d8f3028d77bad7db70ae",
+  "git_dirty": false,
   "source_file_sha256": {
     "baselines.py": "e4f5232816c2732a51bcd26dcdc66f62c9bce8e216827474b29dc2a266e3203f",
     "measures.py": "ab331189a7d45ccf05e4380342ddeb0a25d8abb6430e1733769ac8d4d9a53411",
     "outcomes.py": "88a84b942682624ee40600557cc9f930a5473e13f2849cfebc4f2392d1053bfc",
     "panel.py": "c1ec4939450d0d35af8a9f64c495e1006db39a08ee5a2a8ddb106e74b0eb453a",
-    "r2_source.py": "e19df27ceea0ec5eb251ca2376bd909f4309f8338006824db7ae5009ba0eeaea",
+    "r2_source.py": "bf72a8b13ea33cb357f5876fbdb98c6addc58d8582b589b02923ae940ed1a824",
     "regression.py": "4639d9637d23f444ef2c5c6ec1b66360cd0b4d6b4660645c4653027d34763b8d",
-    "run_audit.py": "ec93019e33cae51046383bb4d59114c4cd1d9a62db67658f17a85424df4d2cd6",
-    "run_measures.py": "b02ddef51df33f196a1a8c0ac2d89c7e59474699426a35a4480ae3fa91302fbf",
-    "run_report.py": "8e4d30f1506509612764b583437b4fe3f9999137e9504d7e1a3af86abeed17fe"
+    "run_audit.py": "36b23944a21577f1278c22103b7ad232e41889fd09ce7a2654467c8dae478fb2",
+    "run_measures.py": "0c913430c2bb268e4ff01b47c9ff83099f24ef2c8661f87fe8bf42370ddba07c",
+    "run_report.py": "1525253f10a7159d83ce70d05b510c90619947ed809bd838a5c8d9ee80296d85"
   },
   "config": {
     "MAX_INTERVAL_SECONDS": 90.0,
@@ -17960,31 +17960,87 @@
     ]
   },
   "representative_reconciliation": {
-    "date": "20260910",
-    "snapshot_key": "intraday/20260910/snapshot_093013202722.csv",
-    "strike": 675.0,
-    "UnderlyingPrice": 708.09,
-    "contract_multiplier_used": 100,
-    "n_valid_contracts_at_strike": 2,
-    "contributing_rows": [
-      {
-        "OptionSymbol": "QQQ260910C00675000",
-        "Type": "call",
-        "OpenInterest": 5.0,
-        "Gamma": 0.0002175173785484,
-        "contribution_before_spot_squared": 0.1087586892742
-      },
-      {
-        "OptionSymbol": "QQQ260910P00675000",
-        "Type": "put",
-        "OpenInterest": 461.0,
-        "Gamma": 0.0011893451713096,
-        "contribution_before_spot_squared": 54.82881239737256
-      }
-    ],
-    "formula": "C[k,t] = UnderlyingPrice^2 * sum_over_valid_contracts(multiplier * OpenInterest * Gamma)",
-    "manual_result": 27545228.32223051,
-    "note": "Computed directly from the raw source rows here, independently of measures.compute_concentration_and_activity -- run_measures.py's output for this exact (date, snapshot_key, Strike) should equal this value exactly."
+    "C": {
+      "date": "20260910",
+      "snapshot_key": "intraday/20260910/snapshot_093013202722.csv",
+      "strike": 675.0,
+      "UnderlyingPrice": 708.09,
+      "contract_multiplier_used": 100,
+      "n_valid_contracts_at_strike": 2,
+      "contributing_rows": [
+        {
+          "OptionSymbol": "QQQ260910C00675000",
+          "Type": "call",
+          "OpenInterest": 5.0,
+          "Gamma": 0.0002175173785484,
+          "contribution_before_spot_squared": 0.1087586892742
+        },
+        {
+          "OptionSymbol": "QQQ260910P00675000",
+          "Type": "put",
+          "OpenInterest": 461.0,
+          "Gamma": 0.0011893451713096,
+          "contribution_before_spot_squared": 54.82881239737256
+        }
+      ],
+      "formula": "C[k,t] = UnderlyingPrice^2 * sum_over_valid_contracts(multiplier * OpenInterest * Gamma)",
+      "manual_result": 27545228.32223051,
+      "measure_output": 27545228.32223051,
+      "abs_diff": 0.0,
+      "rel_tol": 1e-09,
+      "agrees": true
+    },
+    "A": {
+      "date": "20260910",
+      "snapshot_key": "intraday/20260910/snapshot_093013202722.csv",
+      "strike": 675.0,
+      "UnderlyingPrice": 708.09,
+      "contract_multiplier_used": 100,
+      "max_interval_seconds": 90.0,
+      "n_contracts_at_strike": 2,
+      "n_included_contracts": 2,
+      "contract_rows": [
+        {
+          "OptionSymbol": "QQQ260910C00675000",
+          "Type": "call",
+          "prior_snapshot_key": "intraday/20260910/snapshot_092911310559.csv",
+          "prior_ts_et": "2026-09-10 09:29:11.310559-04:00",
+          "prior_cumulative_volume": 0.0,
+          "current_ts_et": "2026-09-10 09:30:13.202722-04:00",
+          "current_cumulative_volume": 0.0,
+          "elapsed_seconds": 61.892163,
+          "dV_derived_here": 0.0,
+          "dV_from_panel": 0.0,
+          "dv_flag": "ok",
+          "Gamma": 0.0002175173785484,
+          "included": true,
+          "contribution_before_spot_squared": 0.0
+        },
+        {
+          "OptionSymbol": "QQQ260910P00675000",
+          "Type": "put",
+          "prior_snapshot_key": "intraday/20260910/snapshot_092911310559.csv",
+          "prior_ts_et": "2026-09-10 09:29:11.310559-04:00",
+          "prior_cumulative_volume": 0.0,
+          "current_ts_et": "2026-09-10 09:30:13.202722-04:00",
+          "current_cumulative_volume": 121.0,
+          "elapsed_seconds": 61.892163,
+          "dV_derived_here": 121.0,
+          "dV_from_panel": 121.0,
+          "dv_flag": "ok",
+          "Gamma": 0.0011893451713096,
+          "included": true,
+          "contribution_before_spot_squared": 14.39107657284616
+        }
+      ],
+      "contribution_sum_before_spot_squared": 14.39107657284616,
+      "formula": "A[k,t] = UnderlyingPrice^2 * sum_over_contracts_with_ok_dV_and_valid_Gamma(multiplier * dV * Gamma)",
+      "manual_result": 7215562.722577321,
+      "measure_output": 7215562.722577321,
+      "abs_diff": 0.0,
+      "rel_tol": 1e-09,
+      "agrees": true
+    }
   },
   "multiplier_evidence": {
     "claim": "QQQ 0DTE equity-ETF options carry the standard OCC 100-share-per-contract deliverable. This is an external fact about the contract, not something the archive's own fields encode; the archive can only provide evidence AGAINST the presence of an adjusted (non-standard-multiplier) contract, which is what run_audit.py's multiplier-evidence check does by confirming every retained OptionSymbol matches the plain unadjusted root+YYMMDD+C/P+strike*1000 pattern with zero symbol_mismatch_rows -- an adjusted contract is conventionally flagged with a differently-shaped symbol that would fail this check.",
