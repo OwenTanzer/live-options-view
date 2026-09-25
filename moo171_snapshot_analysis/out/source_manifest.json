@@ -1,17 +1,17 @@
 {
-  "generated_at_utc": "2026-09-25T03:33:07.176020+00:00",
-  "git_base_revision": "9790f8a2ae6c02a5b648d8f3028d77bad7db70ae",
+  "generated_at_utc": "2026-09-25T04:02:08.912219+00:00",
+  "git_base_revision": "e3cd75d93b0b64bfc1491c8db26e6abf8f2f8b68",
   "git_dirty": false,
   "source_file_sha256": {
     "baselines.py": "e4f5232816c2732a51bcd26dcdc66f62c9bce8e216827474b29dc2a266e3203f",
     "measures.py": "ab331189a7d45ccf05e4380342ddeb0a25d8abb6430e1733769ac8d4d9a53411",
     "outcomes.py": "88a84b942682624ee40600557cc9f930a5473e13f2849cfebc4f2392d1053bfc",
     "panel.py": "c1ec4939450d0d35af8a9f64c495e1006db39a08ee5a2a8ddb106e74b0eb453a",
-    "r2_source.py": "bf72a8b13ea33cb357f5876fbdb98c6addc58d8582b589b02923ae940ed1a824",
+    "r2_source.py": "c05772ddffa5695cf340aeb995b29395df7072551275312b949ea46319af5b4c",
     "regression.py": "4639d9637d23f444ef2c5c6ec1b66360cd0b4d6b4660645c4653027d34763b8d",
-    "run_audit.py": "36b23944a21577f1278c22103b7ad232e41889fd09ce7a2654467c8dae478fb2",
-    "run_measures.py": "0c913430c2bb268e4ff01b47c9ff83099f24ef2c8661f87fe8bf42370ddba07c",
-    "run_report.py": "1525253f10a7159d83ce70d05b510c90619947ed809bd838a5c8d9ee80296d85"
+    "run_audit.py": "a8a1a9d9001495c440224ff7c4ffc18b85dee1b5435bffd294f397094e51ef7f",
+    "run_measures.py": "fc5ca5bbea5c2a265669499ab6555053ad5adf44fc31aff016706f4468b84f14",
+    "run_report.py": "13252690f40fc867c3d0cafc1a0a688ffb3f6bd28e230ffa2917c9abd5949cef"
   },
   "config": {
     "MAX_INTERVAL_SECONDS": 90.0,
