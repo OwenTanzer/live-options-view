@@ -38,8 +38,18 @@ source, a timestamp, and a freshness contract.
 - **Formula/parameters**: VWAP is spot-price-at-snapshot x
   volume-delta-since-last-snapshot, accumulated intra-session
   (`docs/plans/2026-07-vwap-rvol.md`). RVOL is current session volume
-  against a 20-trading-day rolling baseline in 5-minute time-of-day
-  buckets, minimum 5 days of samples.
+  against the mean of the available historical readings for the same
+  5-minute time-of-day bucket. The baseline window is **calendar** days,
+  not trading sessions: at end-of-session `collector.py`
+  `finalize_rvol_baseline` passes `lookback_days` (`RVOL_LOOKBACK_DAYS`,
+  default 20) to `market_signals.py` `prune_baseline_samples`, which keeps
+  only samples dated in `[today - timedelta(days=lookback_days), today)`.
+  Weekends, holidays, and any session where that bucket had no reading
+  (e.g. a collector outage or a mid-session crash before finalize) simply
+  contribute no sample, so a full window typically holds ~14 trading
+  sessions or fewer, and the mean is over however many samples exist.
+  `compute_rvol` returns `insufficient_history` below 5 available samples
+  (`RVOL_MIN_DAYS_REQUIRED`) -- a count of samples, not of trading days.
 - **Timestamps**: `spot_ts`, `vwap_ts`, `session_volume_ts`, and
   `vwap_session_started_at` are all tracked independently
   (`crassus/crassus/market.py:107-118`); `accumulate_vwap` rejects any tick
@@ -220,11 +230,19 @@ Every strategy decision (trade or no-trade) an active account reaches is
 written to a durable, append-only, but private JSONL ledger with 19
 mandatory fields per `crassus_golden_goose_guidance.v1`
 (`crassus/crassus/audit.py`), incrementally backed up to R2
-(`crassus/crassus/archive.py`). This satisfies option (b) from issue #107
--- "shared context on every relevant decision in the private Crassus
-ledger" -- for every reading that reaches a decision at all, but never
-option (a), a collector/research time series independent of bot activity.
-Only VWAP, RVOL, and reference momentum currently have that.
+(`crassus/crassus/archive.py`). What lands in that ledger, beyond the
+mandatory fields, is whatever metadata the deciding strategy itself
+attaches: `runner.py` does not attach PCR, max-pain, OI-skew, or trading
+momentum to other strategies' decisions. The only shared annotation the
+runner adds is `bs_edge.py`'s `annotate_buy_decision`, and only on option
+buys. So the per-strategy readings recorded there are durable **bot-local
+metadata** -- option (c) from issue #107 -- not option (b), "shared
+context on every relevant decision in the private Crassus ledger", which
+no reading currently has (the buy-only Black-Scholes annotation is the
+closest, and it covers only one decision type). None of those
+strategy-private readings has option (a), a collector/research time
+series independent of bot activity, either; only VWAP, RVOL, and
+reference momentum do. Which readings need (b) is left to work item 2.
 
 ## Ownership table (acceptance criterion 1)
 
