@@ -1,0 +1,19 @@
+{
+  "verified_at_utc": "2026-09-25T04:03:34.564243+00:00",
+  "frozen_manifest_sha256": "3342fe32ff7220db7b1d9eaad08150e0a8e75a37348f3c2e367b84cb32d3902f",
+  "frozen_manifest_generated_at_utc": "2026-09-25T04:02:08.912219+00:00",
+  "git_base_revision": "33fe2aadabdaac5a263d8e1a5c8fb0c5ac7a01ac",
+  "git_dirty": false,
+  "objects_verified": 2986,
+  "checks_passed": [
+    "config identity",
+    "source_file_sha256 identity",
+    "snapshot key set",
+    "per-object content sha256 (before parse)",
+    "every frozen object read"
+  ],
+  "reconciliation_agrees": {
+    "C": true,
+    "A": true
+  }
+}

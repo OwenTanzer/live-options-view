@@ -1,0 +1,15 @@
+# MOO-171 line-ending policy: every text file in this module is LF in the
+# repository AND in every checkout, regardless of core.autocrlf. The frozen
+# source manifest hashes source files and evidence as raw bytes, so a
+# platform-dependent checkout (CRLF on Windows) would change those identities
+# without any semantic change. Raw R2 snapshot CSVs live in the gitignored
+# r2_cache/ and are hashed as exact bytes, never normalized.
+*.py      text eol=lf
+*.md      text eol=lf
+*.json    text eol=lf
+*.csv     text eol=lf
+*.txt     text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.parquet binary
+*.png     binary
