@@ -1,8 +1,8 @@
 {
-  "verified_at_utc": "2026-09-25T03:34:43.788903+00:00",
-  "frozen_manifest_sha256": "e5ede344eea2002a356dfd22f7b18ef55f29560c9c608bd9f96a9d482e796068",
-  "frozen_manifest_generated_at_utc": "2026-09-25T03:33:07.176020+00:00",
-  "git_base_revision": "d39867d68b94ae07a7aa348dd4dff4b33f8bfc1d",
+  "verified_at_utc": "2026-09-25T04:03:34.564243+00:00",
+  "frozen_manifest_sha256": "3342fe32ff7220db7b1d9eaad08150e0a8e75a37348f3c2e367b84cb32d3902f",
+  "frozen_manifest_generated_at_utc": "2026-09-25T04:02:08.912219+00:00",
+  "git_base_revision": "33fe2aadabdaac5a263d8e1a5c8fb0c5ac7a01ac",
   "git_dirty": false,
   "objects_verified": 2986,
   "checks_passed": [
