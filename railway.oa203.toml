@@ -1,0 +1,8 @@
+# Dedicated Big Banana service config. Schedule is managed on the service.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "sh -c 'if [ \"$OA203_READINESS\" = \"1\" ]; then exec python -u scripts/oa203_readiness.py; else exec python -u scripts/oa203_return_scanner.py run; fi'"
+restartPolicyType = "NEVER"
