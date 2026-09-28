@@ -446,6 +446,8 @@ class RecordingUploader:
     def __init__(self, fail=()):
         self.fail = set(fail)
         self.uploaded = {}
+        self.bodies = {}
+        self.calls = []
 
     def __call__(self, path, key, content_type):
         name = key.split("/", 3)[-1]
@@ -454,6 +456,8 @@ class RecordingUploader:
         body = path.read_bytes()
         digest = scanner.hashlib.sha256(body).hexdigest()
         self.uploaded[key] = digest
+        self.bodies[key] = body
+        self.calls.append(key)
         return {"key": key, "bytes": len(body), "sha256": digest}
 
 
@@ -478,7 +482,8 @@ class UploadRecovery(unittest.TestCase):
             # A new process over the same spool still knows what is owed.
             down = scanner.DayArchive(root, DAY, "oa203/scanner", upload=True,
                                       uploader=RecordingUploader(fail={"*"}))
-            self.assertEqual(down.reconcile(), ["sweeps/sweep_0001.jsonl.gz", "universe.json"])
+            self.assertEqual(down.reconcile(), ["sweeps/sweep_0001.jsonl.gz", "universe.json",
+                                                 scanner.UPLOAD_JOURNAL])
 
             healthy = RecordingUploader()
             restarted = scanner.DayArchive(root, DAY, "oa203/scanner", upload=True, uploader=healthy)
@@ -490,6 +495,108 @@ class UploadRecovery(unittest.TestCase):
             # Content that changes after upload is owed again.
             restarted.append_manifest({"sweep": 2})
             self.assertEqual(restarted.pending_uploads(), ["sweeps/manifest.jsonl"])
+
+    def test_journal_upload_failure_recovers_without_recursive_uploads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploader = RecordingUploader(fail={scanner.UPLOAD_JOURNAL})
+            archive = scanner.DayArchive(Path(tmp), DAY, "oa203/scanner", True, uploader)
+            archive.write_json("universe.json", {"selected": []})
+            self.assertEqual(archive.reconcile(), [scanner.UPLOAD_JOURNAL])
+            healthy = RecordingUploader()
+            restarted = scanner.DayArchive(Path(tmp), DAY, "oa203/scanner", True, healthy)
+            self.assertEqual(restarted.reconcile(), [])
+            self.assertEqual(healthy.calls, [f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"])
+            journal = json.loads(healthy.bodies[healthy.calls[0]])
+            self.assertEqual(set(journal), {"universe.json"})
+            self.assertEqual(journal["universe.json"]["sha256"],
+                             scanner._sha256_file(archive.path("universe.json")))
+            self.assertEqual(journal["universe.json"]["bytes"], archive.path("universe.json").stat().st_size)
+            self.assertEqual(restarted.reconcile(), [])
+            self.assertEqual(len(healthy.calls), 1)
+            self.assertNotIn(scanner.UPLOAD_RECEIPT, restarted.artifacts())
+
+    def test_changed_artifact_republishes_journal_last(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploader = RecordingUploader()
+            archive = scanner.DayArchive(Path(tmp), DAY, "oa203/scanner", True, uploader)
+            archive.write_json("universe.json", {"version": 1})
+            self.assertEqual(archive.reconcile(), [])
+            archive.write_json("universe.json", {"version": 2})
+            self.assertEqual(archive.reconcile(), [])
+            self.assertEqual(uploader.calls[-2:], [f"{archive.prefix}/universe.json",
+                                                   f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"])
+            journal = json.loads(uploader.bodies[uploader.calls[-1]])
+            self.assertEqual(journal["universe.json"]["sha256"],
+                             scanner.hashlib.sha256(uploader.bodies[uploader.calls[-2]]).hexdigest())
+
+    def test_failed_summary_upload_is_not_claimed_by_remote_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploader = RecordingUploader(fail={scanner.SUMMARY})
+            archive = scanner.DayArchive(Path(tmp), DAY, "oa203/scanner", True, uploader)
+            archive.write_json("universe.json", {"selected": []})
+            archive.write_json(scanner.SUMMARY, {"final": True})
+            self.assertEqual(archive.reconcile(), [scanner.SUMMARY])
+            journal_key = f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"
+            self.assertNotIn(scanner.SUMMARY, json.loads(uploader.bodies[journal_key]))
+            uploader.fail.clear()
+            self.assertEqual(archive.reconcile(), [])
+            self.assertEqual(json.loads(uploader.bodies[journal_key])[scanner.SUMMARY]["sha256"],
+                             uploader.uploaded[f"{archive.prefix}/{scanner.SUMMARY}"])
+
+    def test_normal_recovery_publishes_legacy_finalized_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = scanner.Config(spool_dir=Path(tmp), upload=True)
+            uploader = RecordingUploader()
+            archive = scanner.DayArchive(cfg.spool_dir, DAY, cfg.r2_prefix, True, uploader)
+            archive.write_json("universe.json", {"selected": []})
+            archive.write_json(scanner.SUMMARY, {"final": True})
+            archive.push("universe.json")
+            archive.push(scanner.SUMMARY)
+            before = archive.path(scanner.SUMMARY).read_bytes()
+            uploader.calls.clear()
+            scanner.recover_days(cfg, FakeClient(), date(2026, 9, 28),
+                                 scanner.datetime(2026, 9, 28, 8, 45, tzinfo=scanner.ET),
+                                 lambda day: SESSION, uploader)
+            self.assertEqual(uploader.calls, [f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"])
+            self.assertEqual(archive.path(scanner.SUMMARY).read_bytes(), before)
+            self.assertEqual(archive.pending_uploads(), [])
+
+    def test_local_only_mode_does_not_publish_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploader = RecordingUploader()
+            archive = scanner.DayArchive(Path(tmp), DAY, "oa203/scanner", False, uploader)
+            archive.write_json("universe.json", {"selected": []})
+            self.assertEqual(archive.reconcile(), [])
+            self.assertEqual(uploader.calls, [])
+
+    def test_final_journal_failure_stays_pending_after_summary_upload(self):
+        class FailFinalJournal(RecordingUploader):
+            journal_attempts = 0
+
+            def __call__(self, path, key, content_type):
+                if path.name == scanner.UPLOAD_JOURNAL:
+                    self.journal_attempts += 1
+                    if self.journal_attempts == 2:
+                        raise RuntimeError("final journal upload interrupted")
+                return super().__call__(path, key, content_type)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = scanner.Config(spool_dir=Path(tmp), upload=True)
+            uploader = FailFinalJournal()
+            archive = scanner.DayArchive(cfg.spool_dir, DAY, cfg.r2_prefix, True, uploader)
+            universe = {"selected": [], "selected_count": 0}
+            archive.write_json("universe.json", universe)
+            with mock.patch.object(scanner, "log") as log:
+                scanner.finalize(archive, FakeClient(), cfg, universe, T0, T0 + MIN)
+            self.assertTrue(archive.finalized())
+            self.assertEqual(archive.pending_uploads(), [scanner.UPLOAD_JOURNAL])
+            finalized = [c.kwargs for c in log.call_args_list if c.args[0] == "oa203_session_finalized"]
+            self.assertEqual(finalized[0]["pending_uploads"], [scanner.UPLOAD_JOURNAL])
+            restarted = scanner.DayArchive(cfg.spool_dir, DAY, cfg.r2_prefix, True, uploader)
+            self.assertEqual(restarted.reconcile(), [])
+            journal = json.loads(uploader.bodies[f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"])
+            self.assertEqual(journal[scanner.SUMMARY]["sha256"],
+                             uploader.uploaded[f"{archive.prefix}/{scanner.SUMMARY}"])
 
 
 def fake_sweep(stop_after=None):
@@ -544,6 +651,12 @@ class StopAndRecover(unittest.TestCase):
             self.assertTrue(archive.path("leaderboard.csv").exists())
             self.assertIn("oa203/scanner/2026-09-25/interruptions.jsonl", uploader.uploaded)
             self.assertIn("oa203/scanner/2026-09-25/summary.json", uploader.uploaded)
+            journal_key = f"{archive.prefix}/{scanner.UPLOAD_JOURNAL}"
+            journal = json.loads(uploader.bodies[journal_key])
+            self.assertEqual(uploader.calls[-1], journal_key)
+            self.assertEqual(journal[scanner.SUMMARY]["sha256"],
+                             scanner.hashlib.sha256(uploader.bodies[f"{archive.prefix}/summary.json"]).hexdigest())
+            self.assertEqual(archive.pending_uploads(), [])
 
     def test_next_morning_run_recovers_unfinished_day_and_pending_uploads(self):
         with tempfile.TemporaryDirectory() as tmp:

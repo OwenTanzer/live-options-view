@@ -565,6 +565,7 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
 # --------------------------------------------------------------------------
 
 UPLOAD_JOURNAL = "uploads.json"
+UPLOAD_RECEIPT = ".uploads-receipt.json"
 SUMMARY = "summary.json"
 INTERRUPTIONS = "interruptions.jsonl"
 RECOVERY_ERRORS = "recovery_errors.jsonl"
@@ -589,7 +590,9 @@ class DayArchive:
     artifact as last verified in R2. Anything on disk whose current content
     is not recorded there is pending, whichever process wrote it, so a
     restart after an upload outage re-derives what is still owed instead of
-    forgetting it.
+    forgetting it. The journal is also uploaded as the remote source-hash
+    manifest, after the artifacts it describes. Its own upload receipt is
+    local-only so the journal never recursively hashes itself.
     """
 
     def __init__(self, root: Path, day: date, prefix: str, upload: bool,
@@ -603,7 +606,8 @@ class DayArchive:
 
     def artifacts(self) -> list[str]:
         return sorted(p.relative_to(self.dir).as_posix() for p in self.dir.rglob("*")
-                      if p.is_file() and not p.name.endswith(".tmp") and p.name != UPLOAD_JOURNAL)
+                      if p.is_file() and not p.name.endswith(".tmp")
+                      and p.name not in {UPLOAD_JOURNAL, UPLOAD_RECEIPT})
 
     def _journal(self) -> dict[str, Any]:
         path = self.path(UPLOAD_JOURNAL)
@@ -614,8 +618,18 @@ class DayArchive:
         if not self.upload:
             return []
         journal = self._journal()
-        return [name for name in self.artifacts()
-                if (journal.get(name) or {}).get("sha256") != _sha256_file(self.path(name))]
+        pending = [name for name in self.artifacts()
+                   if (journal.get(name) or {}).get("sha256") != _sha256_file(self.path(name))]
+        if self.path(UPLOAD_JOURNAL).exists():
+            try:
+                receipt = json.loads(self.path(UPLOAD_RECEIPT).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                receipt = {}
+            if (not isinstance(receipt, dict)
+                    or receipt.get("sha256") != _sha256_file(self.path(UPLOAD_JOURNAL))
+                    or receipt.get("key") != f"{self.prefix}/{UPLOAD_JOURNAL}"):
+                pending.append(UPLOAD_JOURNAL)
+        return pending
 
     def push(self, name: str) -> bool:
         if not self.upload:
@@ -627,16 +641,25 @@ class DayArchive:
         except Exception as exc:
             log("oa203_upload_failed", name=name, error=str(exc)[:300])
             return False
+        receipt = {"sha256": result["sha256"], "bytes": result["bytes"], "key": result["key"],
+                   "verified_at": datetime.now(timezone.utc).isoformat()}
+        if name == UPLOAD_JOURNAL:
+            self.write_json(UPLOAD_RECEIPT, receipt)
+            return True
         journal = self._journal()
-        journal[name] = {"sha256": result["sha256"], "bytes": result["bytes"], "key": result["key"],
-                         "verified_at": datetime.now(timezone.utc).isoformat()}
+        journal[name] = receipt
         self.write_json(UPLOAD_JOURNAL, journal)
         return True
 
     def reconcile(self) -> list[str]:
-        """Upload every pending artifact; return the ones still pending."""
+        """Upload pending artifacts, then their hash journal; report failures."""
         for name in self.pending_uploads():
-            self.push(name)
+            if name != UPLOAD_JOURNAL:
+                self.push(name)
+        # Artifact uploads change the journal. Re-evaluate it after all of
+        # them, including when the first upload created a previously absent journal.
+        if UPLOAD_JOURNAL in self.pending_uploads():
+            self.push(UPLOAD_JOURNAL)
         return self.pending_uploads()
 
     def record_interruption(self, **fields: Any) -> None:
@@ -1067,7 +1090,13 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
     }
     archive.write_json(SUMMARY, summary)
     archive.push(SUMMARY)  # if this fails, the next run's reconcile retries it
-    log("oa203_session_finalized", date=archive.day.isoformat(), **summary["assessment"],
+    if archive.upload and archive.path(UPLOAD_JOURNAL).exists():
+        archive.push(UPLOAD_JOURNAL)  # includes summary.json; retry via normal recovery
+    remaining = archive.pending_uploads()
+    if remaining:
+        log("oa203_uploads_still_pending", date=archive.day.isoformat(), pending=remaining)
+    log("oa203_session_finalized", date=archive.day.isoformat(),
+        **{**summary["assessment"], "pending_uploads": remaining},
         contracts=summary["contracts"])
     return summary
 

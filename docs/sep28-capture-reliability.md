@@ -80,5 +80,27 @@ After a full session:
 4. Confirm sampling dispatched no new requests after close. Late in-flight
    responses remain possible and must remain excluded from ranking.
 
-The uploads.json remote-evidence limitation from the audit remains a separate
-archive-provenance item; this package does not close that Todoist audit gate.
+## Automatic source-hash manifest upload
+
+With R2 uploads enabled, Banana now publishes `uploads.json` automatically
+under the session prefix (`oa203/scanner/<date>/uploads.json`). It maps each
+successfully uploaded artifact to its source SHA-256, byte count, and R2 key.
+Finalization uploads `summary.json` first, then the updated journal containing
+its hash. Normal reconciliation also uploads the journal after pending data.
+No separate operator command or new configuration is required.
+
+The journal does not include itself. A local-only `.uploads-receipt.json`
+tracks which journal content was published, avoiding recursive hash changes.
+A failed journal upload remains pending and is retried by the next scheduled
+run's recovery, including for already-finalized sessions. Retained historical
+sessions without a receipt automatically publish their existing journal;
+their summaries and raw data are not rewritten merely to add this evidence.
+
+To verify a session independently, download its journal and the referenced
+objects, then compare each object's SHA-256 and bytes with the journal. This
+is source-hash evidence, not proof of market-data completeness or an automatic
+remote-content audit: the uploader's existing remote check is byte length.
+An incomplete journal or a pending/failed final upload must not be interpreted
+as a fully published session. Check that `summary.json` is present and matches,
+and reconcile the expected artifacts with the summary and sweep manifest.
+The September 28 audit remains open until that independent comparison passes.
