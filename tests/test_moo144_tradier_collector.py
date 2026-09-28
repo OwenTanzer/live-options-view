@@ -894,8 +894,9 @@ class CaptureSessionTests(unittest.TestCase):
             # post-line stop-check can safely see the session has closed.
             return datetime(2026, 9, 8, 15, 0, tzinfo=ET) if close_holder["n"] <= 3 else close
 
+        stats = collector.BoundedStats()
         result = collector.capture_session(
-            client, ["QQQ"], MemorySpool(), collector.BoundedStats(), close,
+            client, ["QQQ"], MemorySpool(), stats, close,
             max_consecutive_reconnects=5,
             monotonic=lambda: close_holder["n"] * 1.0,
             sleeper=lambda _s: None,
@@ -906,6 +907,8 @@ class CaptureSessionTests(unittest.TestCase):
         resumes = [e for e in gap_events if e["reason"] == "stream_reconnect_resumed"]
         self.assertEqual(len(disconnects), 1)
         self.assertEqual(len(resumes), 1)
+        self.assertEqual(stats.counts["gap"], 2)
+        self.assertEqual(sum(stats.counts.values()), len(events))
         self.assertGreater(result.gap_seconds, 0.0)
 
     def test_gap_excludes_the_preceding_healthy_connection_duration(self):
@@ -1907,7 +1910,7 @@ class StreamRouterTests(unittest.TestCase):
         trade = {"type": "timesale", "symbol": "IBIT-C60", "seq": 1, "date": 1000}
         router.write(router.observe(trade))
         router.write(router.observe({"type": "quote", "symbol": "QQQ-C600", "biddate": 900}))
-        router.write({"type": "gap", "reason": "stream_disconnect"})
+        router.write(router.observe({"type": "gap", "reason": "stream_disconnect"}))
         router.write(router.observe({"type": "heartbeat"}))
         router.observe_malformed()
         router.write({"type": "malformed", "provider_payload": "{"})
@@ -1921,6 +1924,7 @@ class StreamRouterTests(unittest.TestCase):
                          ["timesale", "gap", "heartbeat", "malformed"])
         self.assertEqual(dict(ibit.stats.timesale_by_symbol), {"IBIT-C60": 1})
         self.assertFalse(qqq.stats.timesale_by_symbol)
+        self.assertEqual((qqq.stats.counts["gap"], ibit.stats.counts["gap"]), (1, 1))
         self.assertEqual(qqq.stats.quote_timestamps, {"QQQ-C600": 900})
         self.assertEqual((qqq.stats.malformed, ibit.stats.malformed), (1, 1))
         self.assertEqual(dict(qqq.stats.excluded_timesales), {"missing_or_invalid_provider_time": 1})

@@ -20,7 +20,7 @@ One process per NYSE session (Railway cron, before the open):
    paced against a local cap *and* Tradier's token-wide ``X-Ratelimit-*``
    headers, so other services sharing the token keep headroom. With the
    120/minute market-data limit a 500-chain sweep takes about five minutes;
-   moves shorter than that are only seen by the after-close backfill.
+   shorter moves can be missed; backfill covers only selected winners.
    Every sampled contract row is archived (gzip JSONL per sweep), with a
    per-chain status for every sweep, so failures are explicit.
 3. **After close.** Build the strike-level leaderboard from the archive
@@ -235,6 +235,10 @@ class RateLimited(RuntimeError):
     pass
 
 
+class SamplingDeadline(RuntimeError):
+    pass
+
+
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -250,6 +254,15 @@ class Tradier:
         self.session = session or requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
         self.max_rpm, self.reserve = max_rpm, reserve
+        if not 0 <= reserve < 120 or not 1 <= max_rpm <= 120 - reserve:
+            raise ValueError("max_rpm must be between 1 and 120 minus reserve")
+        self.token = token
+        self.effective_rpm = max_rpm
+        self.next_request_at = 0.0
+        self.budget_expiry = 0.0
+        self.available = None
+        self.inflight = 0
+        self.deadline = None
         self.clock, self.sleep = clock, sleep
         self.lock = threading.Lock()
         self.sent: deque[float] = deque()
@@ -257,27 +270,54 @@ class Tradier:
         self.stats: Counter[str] = Counter()
 
     def _acquire(self) -> None:
-        with self.lock:
-            while True:
+        while True:
+            with self.lock:
                 now = self.clock()
+                if self.deadline is not None and now >= self.deadline:
+                    raise SamplingDeadline("session closed before request dispatch")
                 while self.sent and now - self.sent[0] >= 60:
                     self.sent.popleft()
-                wait = max(self.blocked_until - now,
+                wait = max(self.blocked_until - now, self.next_request_at - now,
                            (self.sent[0] + 60 - now) if len(self.sent) >= self.max_rpm else 0)
+                if self.available is not None and now < self.budget_expiry and self.available <= self.reserve:
+                    wait = max(wait, self.budget_expiry + 0.25 - now)
                 if wait <= 0:
                     self.sent.append(now)
+                    self.next_request_at = now + 60 / self.effective_rpm
+                    if self.available is not None:
+                        self.available -= 1
+                    self.inflight += 1
                     return
                 self.stats["rate_waits"] += 1
-                self.sleep(min(wait, 61))
+                sleep_seconds = min(wait, 61, max(0, self.deadline - now) if self.deadline is not None else 61)
+                self.stats["rate_wait_seconds"] += sleep_seconds
+            # Header observers and other workers must be able to take the lock.
+            self.sleep(sleep_seconds)
 
     def _observe(self, headers: Any) -> None:
+        with self.lock:
+            self.inflight -= 1
         try:
             available = int(headers.get("X-Ratelimit-Available"))
             expiry = int(headers.get("X-Ratelimit-Expiry")) / 1000.0
         except (TypeError, ValueError):
             return
-        if available <= self.reserve:
-            with self.lock:
+        with self.lock:
+            try:
+                allowed = int(headers.get("X-Ratelimit-Allowed"))
+                self.effective_rpm = min(self.max_rpm, max(1, allowed - self.reserve))
+                if self.sent:
+                    self.next_request_at = max(self.next_request_at, self.sent[-1] + 60 / self.effective_rpm)
+            except (TypeError, ValueError):
+                pass
+            # Concurrent responses can arrive out of order. Never replenish the
+            # same window from an older, higher remaining-budget observation.
+            if expiry > self.budget_expiry:
+                self.budget_expiry, self.available = expiry, available - self.inflight
+            elif expiry == self.budget_expiry:
+                self.available = min(self.available if self.available is not None else available,
+                                     available - self.inflight)
+            if expiry >= self.budget_expiry and self.available <= self.reserve:
                 self.blocked_until = max(self.blocked_until, expiry + 0.25)
 
     def request(self, method: str, path: str, *, params: dict | None = None,
@@ -286,24 +326,52 @@ class Tradier:
         for attempt in range(attempts):
             self._acquire()
             self.stats["requests"] += 1
+            started = self.clock()
             try:
                 response = self.session.request(method, f"{API}{path}", params=params,
                                                 data=data, timeout=60)
             except requests.RequestException as exc:
+                from capture_diagnostics import exception_details
+                with self.lock:
+                    self.inflight -= 1
+                    elapsed = max(0, self.clock() - started)
+                    self.stats["request_seconds"] += elapsed
+                    self.stats["max_request_seconds"] = max(self.stats["max_request_seconds"], elapsed)
                 self.stats["transport_errors"] += 1
                 last_exc = exc
+                log("oa203_request_retry", path=path, attempt=attempt + 1,
+                    delay_seconds=2 ** attempt, elapsed_seconds=elapsed,
+                    error=exception_details(exc, (self.token,)))
                 self.sleep(2 ** attempt)
                 continue
+            elapsed = max(0, self.clock() - started)
+            with self.lock:
+                self.stats["request_seconds"] += elapsed
+                self.stats["max_request_seconds"] = max(self.stats["max_request_seconds"], elapsed)
             self._observe(response.headers)
             if response.status_code == 429:
                 self.stats["rate_limited"] += 1
+                from email.utils import parsedate_to_datetime
+                retry = response.headers.get("Retry-After")
+                try:
+                    retry_until = self.clock() + max(0, float(retry))
+                except (TypeError, ValueError):
+                    try:
+                        retry_until = parsedate_to_datetime(retry).timestamp()
+                    except (TypeError, ValueError, AttributeError):
+                        retry_until = self.clock() + 60
                 with self.lock:
-                    self.blocked_until = max(self.blocked_until, self.clock() + 60)
+                    self.blocked_until = max(self.blocked_until, retry_until, self.budget_expiry + 0.25)
+                log("oa203_request_retry", path=path, status=429, attempt=attempt + 1,
+                    delay_seconds=max(0, self.blocked_until - self.clock()),
+                    available=self.available, budget_expiry=self.budget_expiry, elapsed_seconds=elapsed)
                 last_exc = RateLimited(f"429 on {path}")
                 continue
             if response.status_code >= 500:
                 self.stats["server_errors"] += 1
                 last_exc = RuntimeError(f"HTTP {response.status_code} on {path}")
+                log("oa203_request_retry", path=path, status=response.status_code,
+                    attempt=attempt + 1, delay_seconds=2 ** attempt, elapsed_seconds=elapsed)
                 self.sleep(2 ** attempt)
                 continue
             response.raise_for_status()
@@ -443,6 +511,9 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
               block_size: int, workers: int, deadline: datetime | None = None) -> dict[str, Any]:
     """Sample every chain once; write rows to ``out_path``; return the manifest entry."""
     started = now_ms()
+    from capture_diagnostics import exception_details
+    def safe_error(exc):
+        return json.dumps(exception_details(exc, (getattr(client, "token", ""),)))
     chains: dict[str, dict[str, Any]] = {}
     truncated = False
     with published(out_path) as tmp, gzip.open(tmp, "wt", encoding="utf-8") as out,             ThreadPoolExecutor(max_workers=workers) as pool:
@@ -456,14 +527,16 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
                 quotes = client.quotes(symbols)
                 quote_error = None
             except Exception as exc:
-                quotes, quote_error = {}, str(exc)[:300]
+                quotes, quote_error = {}, safe_error(exc)
 
             def fetch(u: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]] | None, int, str | None]:
+                if STOP or (deadline and datetime.now(ET) >= deadline):
+                    return u, None, now_ms(), "session closed or stop requested before chain"
                 try:
                     contracts = client.chain(u["underlying"], u["expiration"])
                     return u, contracts, now_ms(), None
                 except Exception as exc:
-                    return u, None, now_ms(), str(exc)[:300]
+                    return u, None, now_ms(), safe_error(exc)
 
             for u, contracts, fetched, error in pool.map(fetch, block):
                 name = u["underlying"]
@@ -481,6 +554,7 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
                     status["spot_missing"] = quote_error or "not returned"
                 chains[name] = status
     counts = Counter(s["status"] for s in chains.values())
+    truncated = truncated or bool(deadline and datetime.now(ET) >= deadline)
     return {"sweep": sweep, "file": out_path.name, "started_ms": started, "ended_ms": now_ms(),
             "truncated": truncated, "status_counts": dict(counts),
             "rows": sum(s.get("rows", 0) for s in chains.values()), "chains": chains}
@@ -1109,17 +1183,36 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
 
     sleep_until(open_at)
     sweep = max((m["sweep"] for m in archive.manifest()), default=0)
+    previous_start = None
     while not STOP and now() < close_at:
         sweep += 1
         name = f"sweeps/sweep_{sweep:04d}.jsonl.gz"
-        entry = sweep_fn(client, universe["selected"], sweep, archive.path(name),
-                         cfg.block_size, cfg.workers, deadline=close_at)
+        before_stats = dict(client.stats)
+        if isinstance(client, Tradier):
+            client.deadline = close_at.timestamp()
+        try:
+            entry = sweep_fn(client, universe["selected"], sweep, archive.path(name),
+                             cfg.block_size, cfg.workers, deadline=close_at)
+        finally:
+            if isinstance(client, Tradier):
+                client.deadline = None
+        entry["start_interval_seconds"] = ((entry["started_ms"] - previous_start) / 1000
+                                            if previous_start is not None else None)
+        previous_start = entry["started_ms"]
+        entry["request_stats_delta"] = {k: v - before_stats.get(k, 0) for k, v in client.stats.items()
+                                         if k != "max_request_seconds"}
+        upload_started = time.monotonic()
         archive.append_manifest(entry)
         archive.push(name)
         archive.push("sweeps/manifest.jsonl")
         log("oa203_sweep", sweep=sweep, rows=entry["rows"], status=entry["status_counts"],
             seconds=round((entry["ended_ms"] - entry["started_ms"]) / 1000, 1),
-            truncated=entry["truncated"], requests=client.stats["requests"])
+            truncated=entry["truncated"], requests=client.stats["requests"],
+            start_interval_seconds=entry["start_interval_seconds"],
+            upload_seconds=round(time.monotonic() - upload_started, 3),
+            request_stats_delta=entry["request_stats_delta"],
+            max_request_seconds=client.stats.get("max_request_seconds", 0),
+            effective_rpm=getattr(client, "effective_rpm", cfg.max_rpm))
     if STOP:
         # Bounded: local writes only. The next run reconciles uploads and,
         # once the close has passed, finalizes the day with this recorded.
