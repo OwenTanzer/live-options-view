@@ -121,7 +121,10 @@ Thresholds are versioned (`oa203-returns-v1`) and written into every summary.
 - `backfill_timesales.jsonl.gz`: raw trade bars for the top contracts
 - `summary.json`: `final`, `complete`/`partial` with reasons, coverage, pending uploads,
   interruptions, counts, request stats
-- `uploads.json` (local only): verified-upload journal; `interruptions.jsonl`
+- `uploads.json`: automatically uploaded source-hash/byte-count journal;
+  `interruptions.jsonl`
+- `.uploads-receipt.json` (local only): records the published journal digest,
+  without adding a self-referential entry to the journal
 
 `build`, `inspect` and `readout` run the same code offline on a downloaded
 day directory. `inspect --symbol` prints a contract's timestamped path and
@@ -158,6 +161,13 @@ of these holds:
   restart re-derives what is owed instead of forgetting it. Unresolved
   uploads keep the session `partial`. `summary.json` is the one file that
   cannot vouch for its own upload; the next run's reconcile retries it.
+  The journal is uploaded last, including the summary's hash after successful
+  summary upload. A failed journal publication remains pending across restart.
+  Previously finalized sessions with retained local journals publish them on
+  normal recovery without rebuilding historical outputs. Finalization logs
+  report actual pending uploads after the summary and journal attempts.
+  Independent audits compare downloaded objects with these source hashes;
+  the existing uploader's remote verification checks byte length, not hashes.
 - **Partial writes:** every artifact (raw sweeps, backfill, contracts,
   leaderboard, OCC file, JSON) is written to a sibling `.tmp`, fsynced and
   atomically renamed, so a published name only ever holds complete content.
