@@ -299,6 +299,21 @@ class BoundedStats:
         if event_type != "timesale":
             return event
 
+        provider_ms = parse_epoch_ms(event.get("date"))
+        if receipt and provider_ms is not None:
+            try:
+                lag = datetime.fromisoformat(receipt.replace("Z", "+00:00")).timestamp() * 1000 - provider_ms
+                self.delivery_lag_latest_ms = round(lag, 3)
+                self.delivery_lag_max_ms = max(getattr(self, "delivery_lag_max_ms", lag), lag)
+                self.delivery_lag_over_5s = getattr(self, "delivery_lag_over_5s", 0) + int(lag > 5000)
+                if lag > 5000 and time.monotonic() - getattr(self, "delivery_lag_warning_at", -60) >= 60:
+                    self.delivery_lag_warning_at = time.monotonic()
+                    print(json.dumps({"event": "stream_delivery_lag", "symbol": symbol,
+                                      "receipt_timestamp": receipt, "provider_timestamp_ms": provider_ms,
+                                      "lag_ms": round(lag, 3)}), flush=True)
+            except (ValueError, TypeError, OverflowError):
+                pass
+
         self.timesale_by_symbol[symbol] += 1
         for field in EXPECTED_TIMESALE_FIELDS:
             self.field_total[field] += 1
@@ -365,6 +380,11 @@ class BoundedStats:
 
     def summary(self) -> dict[str, Any]:
         return {
+            "trade_delivery_lag_ms": {
+                "latest": getattr(self, "delivery_lag_latest_ms", None),
+                "max": getattr(self, "delivery_lag_max_ms", None),
+                "over_5000ms_count": getattr(self, "delivery_lag_over_5s", 0),
+            },
             "event_counts": dict(self.counts),
             "timesale_counts_by_symbol": dict(self.timesale_by_symbol),
             "timesale_field_population": {
@@ -746,6 +766,7 @@ class Uploader:
         self.artifacts: list[dict[str, Any]] = []
         self.failures = 0
         self.overloaded = False
+        self.peak_spool_bytes = 0
         self._stop = False
         self._thread: threading.Thread | None = None
 
@@ -851,6 +872,7 @@ class SegmentSpool:
 
     def write(self, event: dict[str, Any]) -> None:
         total_outstanding = self.uploader.spool_bytes() + self._current_size()
+        self.uploader.peak_spool_bytes = max(self.uploader.peak_spool_bytes, total_outstanding)
         if total_outstanding > self.uploader.max_spool_bytes:
             self.uploader.overloaded = True
             raise SpoolExhausted(
@@ -1106,6 +1128,8 @@ def write_health(
         "malformed_payloads": stats.malformed,
         "duplicate_count": stats.duplicate_count,
         "spool_backlog_bytes": uploader.spool_bytes(),
+        "peak_spool_bytes": uploader.peak_spool_bytes,
+        "trade_delivery_lag_ms": stats.summary()["trade_delivery_lag_ms"],
         "spool_overloaded": uploader.overloaded,
         "upload_failures": uploader.failures,
     }
@@ -1355,18 +1379,23 @@ def capture_session(
     # healthy connection that later drops must not have its entire lifetime
     # counted as outage.
     last_good_at = monotonic()
+    last_receipt = None
+    last_trade_provider_ms = None
 
     def stop_requested() -> bool:
         return STOP or lease_lost.is_set()
 
     while not stop_requested() and now_et() < session_close:
+        phase = "create_session"
         try:
             session_id = client.create_market_session()
             payload = stream_payload(symbols, session_id)
+            phase = "connect"
             with client.session.get(
                 STREAM, params=payload, stream=True, timeout=(15, 10)
             ) as response:
                 response.raise_for_status()
+                phase = "read"
                 connected_at = now_et() if session_open is not None else None
                 if result.stream_connected_at is None:
                     result.stream_connected_at = connected_at
@@ -1385,17 +1414,20 @@ def capture_session(
                     if gap_open:
                         outage_seconds = monotonic() - gap_started_at
                         result.gap_seconds += outage_seconds
-                        spool.write({
+                        resumed = {
                             "type": "gap",
                             "reason": "stream_reconnect_resumed",
                             "receipt_timestamp": utc_now(),
                             "reconnect": result.reconnects,
                             "outage_seconds": round(outage_seconds, 3),
-                        })
+                        }
+                        spool.write(stats.observe(resumed))
+                        print(json.dumps({"event": "stream_reconnect_resumed", **resumed}), flush=True)
                         gap_open = False
                         gap_started_at = None
                         consecutive_failures = 0
                     receipt = utc_now()
+                    last_receipt = receipt
                     try:
                         event = json.loads(line)
                         if not isinstance(event, dict):
@@ -1413,6 +1445,8 @@ def capture_session(
                         continue
                     event["collector_receipt_timestamp"] = receipt
                     event["provider"] = "tradier"
+                    if event.get("type") == "timesale":
+                        last_trade_provider_ms = parse_epoch_ms(event.get("date"))
                     if session_open is not None:
                         valid = (event.get("type") == "heartbeat" or (
                             event.get("type") in {"quote", "timesale"}
@@ -1455,18 +1489,29 @@ def capture_session(
             result.stop_reason = "spool_exhausted"
             return result
         except (requests.RequestException, OSError) as exc:
+            from capture_diagnostics import exception_details
+            diagnostics = exception_details(exc, (os.getenv("TRADIER_TOKEN", ""), locals().get("session_id", "")))
+            print(json.dumps({"event": "stream_failure", "phase": phase,
+                              "at": utc_now(), "error": diagnostics,
+                              "retryable": is_retryable(exc),
+                              "silence_seconds": round(monotonic() - last_good_at, 3),
+                              "last_receipt_timestamp": last_receipt,
+                              "last_trade_provider_timestamp_ms": last_trade_provider_ms,
+                              "attempt": consecutive_failures + 1}), flush=True)
             if not is_retryable(exc):
                 raise
             if not gap_open:
                 gap_open = True
                 gap_started_at = last_good_at
                 consecutive_failures = 1
-                spool.write({
+                spool.write(stats.observe({
                     "type": "gap",
                     "reason": "stream_disconnect",
                     "receipt_timestamp": utc_now(),
                     "error_type": type(exc).__name__,
-                })
+                    "error": diagnostics,
+                    "phase": phase,
+                }))
             else:
                 consecutive_failures += 1
             result.reconnects += 1
@@ -1480,6 +1525,8 @@ def capture_session(
                 )
                 raise budget_exceeded from exc
             delay = min(2 ** (consecutive_failures - 1), 15)
+            print(json.dumps({"event": "stream_retry_scheduled", "attempt": consecutive_failures,
+                              "delay_seconds": delay, "reconnects": result.reconnects}), flush=True)
             remaining = delay
             while remaining > 0 and not stop_requested():
                 interval = min(0.5, remaining)
@@ -1909,6 +1956,7 @@ def main(
             "reconnects": capture_result.reconnects,
             "gap_seconds": round(capture_result.gap_seconds, 3),
             "spool_cap_bytes": lane.spool_cap_bytes,
+            "peak_spool_bytes": uploader.peak_spool_bytes,
             "spool_overloaded": uploader.overloaded,
             "upload_failures": uploader.failures,
             "attempt_event_counts": attempt_event_counts,

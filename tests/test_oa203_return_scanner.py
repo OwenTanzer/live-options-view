@@ -228,6 +228,80 @@ class FakeSession:
 
 
 class RateLimiter(unittest.TestCase):
+    def test_concurrent_workers_share_one_dispatch_schedule(self):
+        from concurrent.futures import ThreadPoolExecutor
+        client, clock, _ = self.make([])
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(lambda _: client._acquire(), range(20)))
+        sent = list(client.sent)
+        self.assertEqual(len(sent), 20)
+        self.assertTrue(all(b - a >= 0.6 - 1e-8 for a, b in zip(sent, sent[1:])))
+
+    def test_available_budget_is_spent_before_reset(self):
+        client, clock, _ = self.make([])
+        client.budget_expiry, client.available = 1030, 11
+        client._acquire()
+        self.assertEqual(client.available, 10)
+        client._acquire()
+        self.assertGreaterEqual(clock["t"], 1030)
+
+    def test_smooth_pacing_and_sleep_without_lock(self):
+        client, clock, slept = self.make([FakeResponse(200)] * 4)
+        original_sleep = client.sleep
+        def sleep(seconds):
+            self.assertTrue(client.lock.acquire(blocking=False))
+            client.lock.release()
+            original_sleep(seconds)
+        client.sleep = sleep
+        starts = []
+        for _ in range(4):
+            client.expirations("SPY")
+            starts.append(clock["t"])
+        for a, b in zip(starts, starts[1:]):
+            self.assertAlmostEqual(b - a, 0.6)
+
+    def test_out_of_order_headers_do_not_replenish_budget(self):
+        client, clock, _ = self.make([])
+        client.inflight = 3
+        client._observe(FakeResponse(200, available=12, expiry=1030).headers)
+        self.assertEqual(client.available, 10)
+        client._observe(FakeResponse(200, available=50, expiry=1030).headers)
+        self.assertEqual(client.available, 10)
+        client._observe(FakeResponse(200, available=100, expiry=1020).headers)
+        self.assertEqual(client.budget_expiry, 1030)
+        self.assertEqual(client.available, 10)
+
+    def test_provider_lower_limit_adjusts_pacing(self):
+        response = FakeResponse(200, available=55, expiry=1060)
+        response.headers["X-Ratelimit-Allowed"] = "60"
+        client, clock, _ = self.make([response, FakeResponse(200)])
+        client.expirations("SPY")
+        client.expirations("SPY")
+        self.assertEqual(client.effective_rpm, 50)
+        self.assertAlmostEqual(clock["t"], 1001.2)
+
+    def test_retry_after_numeric_and_http_date(self):
+        from email.utils import formatdate
+        for retry in ("90", formatdate(1090, usegmt=True)):
+            response = FakeResponse(429)
+            response.headers["Retry-After"] = retry
+            client, clock, _ = self.make([response, FakeResponse(200)])
+            client.expirations("SPY")
+            self.assertGreaterEqual(clock["t"], 1090)
+
+    def test_deadline_stops_rate_wait_before_dispatch(self):
+        client, clock, _ = self.make([FakeResponse(200)] * 2)
+        client.deadline = 1000.3
+        client.expirations("SPY")
+        with self.assertRaises(scanner.SamplingDeadline):
+            client.expirations("SPY")
+        self.assertEqual(client.stats["requests"], 1)
+        self.assertAlmostEqual(clock["t"], 1000.3)
+
+    def test_unsafe_configuration_rejected(self):
+        with self.assertRaises(ValueError):
+            scanner.Tradier("test", max_rpm=120, reserve=10)
+
     def make(self, responses, max_rpm=100):
         clock = {"t": 1000.0}
         slept = []
