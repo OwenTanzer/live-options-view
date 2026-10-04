@@ -79,6 +79,27 @@ class RedditRateLimited(RedditFetchError):
         self.retry_after_s = retry_after_s
 
 
+def _retry_after(headers: Any) -> float:
+    """Use a valid provider delay, otherwise retain the conservative fallback."""
+    raw = None
+    try:
+        raw = headers.get("Retry-After", headers.get("retry-after"))
+        value = float(raw)
+        if math.isfinite(value) and value >= 0:
+            return value
+    except (AttributeError, TypeError, ValueError):
+        if isinstance(raw, str):
+            try:
+                until = parsedate_to_datetime(raw)
+                if until.tzinfo is not None:
+                    delay = (until - datetime.now(timezone.utc)).total_seconds()
+                    if math.isfinite(delay) and delay >= 0:
+                        return delay
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return _DEFAULT_RATE_LIMIT_COOLDOWN_S
+
+
 @dataclass(frozen=True)
 class SentimentSnapshot:
     """One aggregation pass over whatever matched at fetch time."""
@@ -173,13 +194,7 @@ def _fetch_listing_json(
             raise RedditFetchError(f"source_unavailable: r/{subreddit}: request failed ({type(exc).__name__})") from exc
 
         if response.status_code == 429:
-            retry_after_header = response.headers.get("Retry-After")
-            try:
-                retry_after_s = float(retry_after_header) if retry_after_header is not None else None
-            except ValueError:
-                retry_after_s = None
-            if retry_after_s is None or not math.isfinite(retry_after_s) or retry_after_s < 0:
-                retry_after_s = _DEFAULT_RATE_LIMIT_COOLDOWN_S
+            retry_after_s = _retry_after(response.headers)
             raise RedditRateLimited(
                 f"r/{subreddit}: rate limited (429), cooling down {retry_after_s:.0f}s",
                 retry_after_s=retry_after_s,
@@ -282,7 +297,7 @@ def _fetch_listing_browser(
                 raise RedditSourceDenied(f"source_denied: r/{subreddit}: browser HTTP {status}")
             if status == 429:
                 raise RedditRateLimited("source_rate_limited: browser HTTP 429",
-                                        retry_after_s=_DEFAULT_RATE_LIMIT_COOLDOWN_S)
+                                        retry_after_s=_retry_after(response.all_headers()))
             if isinstance(status, int) and status >= 400:
                 raise RedditFetchError(f"source_unavailable: browser HTTP {status}")
             headers = response.all_headers() if response is not None else {}
@@ -441,6 +456,7 @@ class RedditSentimentReader:
         self._failure_until = 0.0
         self._read_lock = threading.Lock()
         self._phase_callback: Callable[[str], None] = lambda phase: None
+        self._rate_limit_callback: Callable[[float], None] = lambda until: None
         self._isolated = session_factory is _default_session_factory and browser_factory is _default_browser_factory
 
     def read(self, force: bool = False) -> SentimentSnapshot:
@@ -544,6 +560,7 @@ class RedditSentimentReader:
             return _fetch_listing_json(self._session, subreddit, limit=self.post_limit, max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
         except RedditRateLimited as rate_limited:
             self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
+            self._rate_limit_callback(self._rate_limited_until)
             raise
         except (RedditSourceDenied, RedditParseError, RedditStaleData):
             raise  # Never route denied/challenged/malformed data around to a browser.
@@ -555,6 +572,7 @@ class RedditSentimentReader:
                                               max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
             except RedditRateLimited as rate_limited:
                 self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
+                self._rate_limit_callback(self._rate_limited_until)
                 raise
             except RedditFetchError as browser_error:
                 # No relaunch within a failed acquisition. Recovery occurs when

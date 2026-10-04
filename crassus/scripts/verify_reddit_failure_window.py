@@ -200,7 +200,7 @@ main()
         with patch('crassus.reddit_acquisition.subprocess.Popen', return_value=child), patch('crassus.reddit_acquisition._stop') as stop, patch('crassus.reddit_acquisition.proc_visible', return_value=True):
             with self.assertRaises(KeyboardInterrupt):
                 _run({})
-        stop.assert_called_once_with(child)
+        stop.assert_called_once()
         child.stdout.close.assert_called_once()
 
     def test_parameterizations_do_not_share_or_relabel_snapshots(self):
@@ -243,6 +243,70 @@ main()
             unrelated.kill()
             unrelated.wait(1)
             _subreaper(previous)
+
+    def test_exited_owner_detached_descendant_cleanup(self):
+        import tempfile
+        from crassus.reddit_acquisition import _run
+        from crassus.supervisor import proc_visible, _subreaper, reap_adopted
+        if not proc_visible():
+            self.skipTest('requires Linux process-tree visibility')
+        previous = _subreaper(1)
+        unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        try:
+            for exit_code, inherited in ((0, False), (0, True), (1, False), (1, True)):
+                with self.subTest(exit_code=exit_code, inherited_stdout=inherited), tempfile.TemporaryDirectory() as tmp:
+                    pidfile = Path(tmp) / 'pid'
+                    code = ("import subprocess,sys; from pathlib import Path; "
+                            f"p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+                            f"start_new_session=True, stdout={'None' if inherited else 'subprocess.DEVNULL'}); "
+                            f"Path({str(pidfile)!r}).write_text(str(p.pid)); "
+                            "print('{\"texts\": [], \"rate_limited_until\": 0}', flush=True); "
+                            f"sys.exit({exit_code})")
+                    started = time.monotonic()
+                    if exit_code == 0 and not inherited:
+                        self.assertEqual(_run({}, timeout_s=.3, command=[sys.executable, '-c', code])['texts'], [])
+                    else:
+                        with self.assertRaises(s.RedditFetchError):
+                            _run({}, timeout_s=.3, command=[sys.executable, '-c', code])
+                    self.assertLess(time.monotonic() - started, 1.3)
+                    pid = int(pidfile.read_text())
+                    deadline = time.monotonic() + 1
+                    while Path(f'/proc/{pid}').exists() and time.monotonic() < deadline:
+                        reap_adopted(None, {unrelated.pid})
+                        time.sleep(.01)
+                    self.assertFalse(Path(f'/proc/{pid}').exists())
+                    self.assertIsNone(unrelated.poll())
+        finally:
+            unrelated.kill()
+            unrelated.wait(1)
+            _subreaper(previous)
+
+    def test_provider_deadline_survives_worker_cleanup_failure(self):
+        from crassus.reddit_acquisition import _run
+        from crassus.supervisor import proc_visible
+        if not proc_visible():
+            self.skipTest('requires POSIX acquisition worker')
+        code = '''
+import json, time
+from unittest.mock import Mock
+from crassus import sentiment as s
+from crassus.reddit_acquisition import main
+original = s.RedditSentimentReader.__init__
+def init(self, **kwargs):
+    original(self, **kwargs)
+    response = Mock(status_code=429, headers={'Retry-After': '3600'})
+    self._session_factory = lambda: Mock(get=lambda *args, **kwargs: response)
+    self._close_browser = lambda: time.sleep(60)
+s.RedditSentimentReader.__init__ = init
+main()
+'''
+        config = dict(subreddits=['stocks'], keywords=['qqq'], post_limit=1,
+                      min_interval_s=300, rate_limited_until=0)
+        started = time.monotonic()
+        with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout') as raised:
+            _run(config, timeout_s=.3, command=[sys.executable, '-c', code])
+        self.assertGreater(raised.exception.rate_limited_until, started + 3500)
+        self.assertLess(time.monotonic() - started, 1.3)
 
     def test_runner_cycle_reaches_unrelated_account_after_one_failed_budget(self):
         from types import SimpleNamespace
@@ -303,6 +367,101 @@ main()
             s._fetch_listing_browser(Mock(new_page=lambda: page), 'stocks', limit=50)
         page.wait_for_selector.assert_not_called()
         page.close.assert_called_once()
+
+    def test_browser_429_honors_retry_after_and_invalid_values(self):
+        for header, expected in [('3600', 3600), ('bogus', 60), ('nan', 60), ('-2', 60)]:
+            with self.subTest(header=header):
+                page = Mock()
+                page.goto.return_value.status = 429
+                page.goto.return_value.all_headers.return_value = {'retry-after': header}
+                with self.assertRaises(s.RedditRateLimited) as raised:
+                    s._fetch_listing_browser(Mock(new_page=lambda: page), 'stocks', limit=1)
+                self.assertEqual(raised.exception.retry_after_s, expected)
+                page.close.assert_called_once()
+
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+        future = format_datetime(datetime.now(timezone.utc) + timedelta(hours=2), usegmt=True)
+        self.assertGreater(s._retry_after({'Retry-After': future}), 7100)
+        self.assertLess(s._retry_after({'Retry-After': future}), 7201)
+        response = Mock(status_code=429, headers={'Retry-After': '3600'})
+        with self.assertRaises(s.RedditRateLimited) as raised:
+            s._fetch_listing_json(Mock(get=lambda *args, **kwargs: response), 'stocks', limit=1)
+        self.assertEqual(raised.exception.retry_after_s, 3600)
+
+    def test_browser_provider_cooldown_blocks_force_and_expires(self):
+        reader = self.reader()
+        reader.subreddits = ('stocks',)
+        now = [1000.0]
+        limited = Mock(status=429)
+        limited.all_headers.return_value = {'retry-after': '3600'}
+        page = Mock(goto=Mock(return_value=limited))
+        context = Mock(new_page=Mock(return_value=page))
+        reader._browser_factory = lambda: (Mock(), Mock(is_connected=lambda: True), context)
+        success = Mock(status_code=200, headers={})
+        success.json.return_value = {'data': {'children': [{'data': {'title': 'QQQ'}}]}}
+        reader._session_factory = lambda: Mock(get=Mock(side_effect=[Mock(status_code=503), success]))
+        reader._analyzer_factory = lambda: Mock(polarity_scores=lambda text: {'compound': .2})
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(s.RedditRateLimited):
+                reader.read()
+            now[0] = 1299
+            with self.assertRaises(s.RedditFetchError):
+                reader.read(force=True)
+            self.assertEqual(reader._rate_limited_until, 4600)
+            now[0] = 4600
+            self.assertEqual(reader.read().sample_size, 1)
+
+    def test_cleanup_runs_after_exited_worker(self):
+        from crassus.reddit_acquisition import _run
+        child = Mock(pid=12345, returncode=0)
+        child.communicate.return_value = (b'{"texts": [], "rate_limited_until": 0}\n', b'')
+        child.poll.return_value = 0
+        from types import SimpleNamespace
+        from crassus import reddit_acquisition as ra
+        with patch('crassus.reddit_acquisition.subprocess.Popen', return_value=child), \
+             patch('crassus.reddit_acquisition._stop') as stop, \
+             patch('crassus.reddit_acquisition.proc_visible', return_value=True), \
+             patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
+             patch.object(ra, '_subreaper', return_value=0):
+            self.assertEqual(_run({})['texts'], [])
+        stop.assert_called_once()
+
+    def test_provider_deadline_survives_cleanup_timeout(self):
+        from crassus import reddit_acquisition as ra
+        child = Mock(pid=12345)
+        child.communicate.side_effect = subprocess.TimeoutExpired('worker', .1,
+            output=b'{"rate_limited_until": 4600}\n{"phase": "cleanup"}\n')
+        from types import SimpleNamespace
+        with patch.object(ra.subprocess, 'Popen', return_value=child), \
+             patch.object(ra, '_stop'), patch.object(ra, 'proc_visible', return_value=True), \
+             patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
+             patch.object(ra, '_subreaper', return_value=0):
+            with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout') as raised:
+                ra._run({}, timeout_s=.1)
+        self.assertEqual(raised.exception.rate_limited_until, 4600)
+
+    def test_provider_deadline_reaches_shared_failure_window_and_recovers(self):
+        from crassus import reddit_acquisition as ra
+        reader = s.RedditSentimentReader()
+        reader._analyzer_factory = lambda: Mock(polarity_scores=lambda text: {'compound': .2})
+        failure = s.RedditFetchError('cleanup_timeout')
+        failure.rate_limited_until = 4600
+        now = [1000.0]
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]), \
+             patch.object(ra, '_run', side_effect=[failure, {'texts': ['QQQ'], 'rate_limited_until': 0, 'source_expires': 4900}]) as run:
+            with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout'):
+                reader.read()
+            now[0] = 1300
+            with self.assertRaises(s.RedditFetchError):
+                reader.read(force=True)
+            now[0] = 4599
+            with self.assertRaises(s.RedditFetchError):
+                reader.read(force=True)
+            self.assertEqual(run.call_count, 1)
+            now[0] = 4600
+            self.assertEqual(reader.read().sample_size, 1)
+            self.assertEqual(run.call_count, 2)
 
     def test_expiry_during_scoring_does_not_publish_fresh_snapshot(self):
         reader = self.reader()

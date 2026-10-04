@@ -46,15 +46,21 @@ def main():
     config = dict(subreddits=['stocks'], keywords=['qqq'], post_limit=1, rate_limited_until=0)
     results = []
     try:
-        for mode in ('success', 'hung_cleanup'):
-            injection = '' if mode == 'success' else 's.RedditSentimentReader._close_browser = lambda self: time.sleep(60)'
+        for mode in ('success', 'hung_cleanup', 'owner_crash'):
+            injection = {
+                'success': '',
+                'hung_cleanup': 's.RedditSentimentReader._close_browser = lambda self: time.sleep(60)',
+                'owner_crash': 'import os; orphan_stack = s._default_browser_factory(); os._exit(1)',
+            }[mode]
             started = time.monotonic()
             try:
                 result = _run(config, command=[sys.executable, '-c', CHILD.replace('{injection}', injection)])
                 assert mode == 'success', result
                 assert result['texts'] == ['QQQ good QQQ body'], result
             except RedditFetchError as exc:
-                assert mode == 'hung_cleanup' and 'cleanup_timeout' in str(exc), str(exc)
+                assert mode != 'success', str(exc)
+                if mode == 'hung_cleanup':
+                    assert 'cleanup_timeout' in str(exc), str(exc)
             elapsed = time.monotonic() - started
             assert elapsed < _ACQUISITION_TIMEOUT_S + CLEANUP_TIMEOUT_S + 1, elapsed
             deadline = time.monotonic() + 2
