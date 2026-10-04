@@ -32,11 +32,14 @@ def _marked_processes(token: str) -> dict[int, Process]:
         if not directory.name.isdigit():
             continue
         try:
+            raw = (directory / "stat").read_text()
+            started = int(raw[raw.rfind(")") + 2:].split()[19])
             if marker not in (directory / "environ").read_bytes().split(b"\0"):
                 continue
             raw = (directory / "stat").read_text()
             fields = raw[raw.rfind(")") + 2:].split()
-            found[int(directory.name)] = Process(int(fields[1]), int(fields[19]), int(fields[21]), fields[0])
+            if int(fields[19]) == started:
+                found[int(directory.name)] = Process(int(fields[1]), started, int(fields[21]), fields[0])
         except (OSError, ValueError, IndexError):
             continue
     return found

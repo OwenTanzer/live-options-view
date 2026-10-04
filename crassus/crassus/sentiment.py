@@ -276,6 +276,7 @@ def _fetch_listing_browser(
     limit: int,
     max_age_s: float = 300.0,
     freshness_callback: Callable[[float], None] | None = None,
+    rate_limit_callback: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Read ordinary rendered post elements after a transport/server failure.
 
@@ -296,8 +297,11 @@ def _fetch_listing_browser(
             if status in (401, 403):
                 raise RedditSourceDenied(f"source_denied: r/{subreddit}: browser HTTP {status}")
             if status == 429:
+                retry_after_s = _retry_after(response.all_headers())
+                if rate_limit_callback is not None:
+                    rate_limit_callback(time.monotonic() + retry_after_s)
                 raise RedditRateLimited("source_rate_limited: browser HTTP 429",
-                                        retry_after_s=_retry_after(response.all_headers()))
+                                        retry_after_s=retry_after_s)
             if isinstance(status, int) and status >= 400:
                 raise RedditFetchError(f"source_unavailable: browser HTTP {status}")
             headers = response.all_headers() if response is not None else {}
@@ -547,6 +551,10 @@ class RedditSentimentReader:
     def _observe_expiry(self, expiry: float) -> None:
         self._source_expires = min(self._source_expires, expiry)
 
+    def _observe_rate_limit(self, until: float) -> None:
+        self._rate_limited_until = max(self._rate_limited_until, until)
+        self._rate_limit_callback(self._rate_limited_until)
+
     def _fetch_listing(self, subreddit: str) -> list[dict[str, Any]]:
         now = time.monotonic()
         if now < self._rate_limited_until:
@@ -559,8 +567,7 @@ class RedditSentimentReader:
         try:
             return _fetch_listing_json(self._session, subreddit, limit=self.post_limit, max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
         except RedditRateLimited as rate_limited:
-            self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
-            self._rate_limit_callback(self._rate_limited_until)
+            self._observe_rate_limit(time.monotonic() + rate_limited.retry_after_s)
             raise
         except (RedditSourceDenied, RedditParseError, RedditStaleData):
             raise  # Never route denied/challenged/malformed data around to a browser.
@@ -569,10 +576,9 @@ class RedditSentimentReader:
             try:
                 context = self._get_browser_context()
                 return _fetch_listing_browser(context, subreddit, limit=self.post_limit,
-                                              max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
-            except RedditRateLimited as rate_limited:
-                self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
-                self._rate_limit_callback(self._rate_limited_until)
+                                              max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry,
+                                              rate_limit_callback=self._observe_rate_limit)
+            except RedditRateLimited:
                 raise
             except RedditFetchError as browser_error:
                 # No relaunch within a failed acquisition. Recovery occurs when

@@ -10,7 +10,7 @@ import json
 import subprocess
 import os
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus import sentiment as s
@@ -302,8 +302,44 @@ main()
 '''
         config = dict(subreddits=['stocks'], keywords=['qqq'], post_limit=1,
                       min_interval_s=300, rate_limited_until=0)
+        for cleanup in ('lambda: time.sleep(60)',
+                        "lambda: (_ for _ in ()).throw(RuntimeError('cleanup failed'))",
+                        "lambda: __import__('os')._exit(1)"):
+            with self.subTest(cleanup=cleanup):
+                started = time.monotonic()
+                with self.assertRaises(s.RedditFetchError) as raised:
+                    _run(config, timeout_s=.3, command=[sys.executable, '-c',
+                         code.replace('lambda: time.sleep(60)', cleanup)])
+                self.assertGreater(raised.exception.rate_limited_until, started + 3500)
+                self.assertLess(time.monotonic() - started, 1.3)
+
+    def test_provider_deadline_survives_browser_page_cleanup_hang(self):
+        from crassus.reddit_acquisition import _run
+        from crassus.supervisor import proc_visible
+        if not proc_visible():
+            self.skipTest('requires POSIX acquisition worker')
+        code = '''
+import time
+from unittest.mock import Mock
+from crassus import sentiment as s
+from crassus.reddit_acquisition import main
+original = s.RedditSentimentReader.__init__
+def init(self, **kwargs):
+    original(self, **kwargs)
+    self._session_factory = lambda: Mock(get=lambda *args, **kwargs: Mock(status_code=503))
+    page = Mock()
+    page.goto.return_value.status = 429
+    page.goto.return_value.all_headers.return_value = {'retry-after': '3600'}
+    page.close.side_effect = lambda: time.sleep(60)
+    context = Mock(new_page=lambda: page)
+    self._browser_factory = lambda: (Mock(), Mock(), context)
+s.RedditSentimentReader.__init__ = init
+main()
+'''
+        config = dict(subreddits=['stocks'], keywords=['qqq'], post_limit=1,
+                      min_interval_s=300, rate_limited_until=0)
         started = time.monotonic()
-        with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout') as raised:
+        with self.assertRaisesRegex(s.RedditFetchError, 'browser_timeout') as raised:
             _run(config, timeout_s=.3, command=[sys.executable, '-c', code])
         self.assertGreater(raised.exception.rate_limited_until, started + 3500)
         self.assertLess(time.monotonic() - started, 1.3)
@@ -412,6 +448,21 @@ main()
             now[0] = 4600
             self.assertEqual(reader.read().sample_size, 1)
 
+    def test_browser_cooldown_is_observed_before_page_cleanup(self):
+        page = Mock()
+        page.goto.return_value.status = 429
+        page.goto.return_value.all_headers.return_value = {'retry-after': '3600'}
+        observed = []
+        def close():
+            self.assertEqual(observed, [4600])
+            raise RuntimeError('failed cleanup')
+        page.close.side_effect = close
+        with patch.object(s.time, 'monotonic', return_value=1000):
+            with self.assertRaises(s.RedditRateLimited):
+                s._fetch_listing_browser(Mock(new_page=lambda: page), 'stocks', limit=1,
+                                         rate_limit_callback=observed.append)
+        self.assertEqual(observed, [4600])
+
     def test_cleanup_runs_after_exited_worker(self):
         from crassus.reddit_acquisition import _run
         child = Mock(pid=12345, returncode=0)
@@ -426,6 +477,23 @@ main()
              patch.object(ra, '_subreaper', return_value=0):
             self.assertEqual(_run({})['texts'], [])
         stop.assert_called_once()
+
+    def test_ownership_marker_cannot_claim_reused_pid(self):
+        from crassus import reddit_acquisition as ra
+        def stat(started):
+            fields = ['0'] * 22
+            fields[0], fields[1], fields[19], fields[21] = 'S', '1', str(started), '1'
+            return '42 (fixture) ' + ' '.join(fields)
+        for later_start, expected in ((111, {42}), (222, set())):
+            directory = MagicMock()
+            directory.name = '42'
+            files = {
+                'stat': Mock(read_text=Mock(side_effect=[stat(111), stat(later_start)])),
+                'environ': Mock(read_bytes=lambda: b'CRASSUS_ACQUISITION_ID=fixture\0'),
+            }
+            directory.__truediv__.side_effect = files.__getitem__
+            with patch.object(ra, 'Path', return_value=Mock(iterdir=lambda: [directory])):
+                self.assertEqual(set(ra._marked_processes('fixture')), expected)
 
     def test_provider_deadline_survives_cleanup_timeout(self):
         from crassus import reddit_acquisition as ra
