@@ -284,21 +284,20 @@ User-Agent as a courtesy to Reddit (a generic default is used otherwise):
 export REDDIT_USER_AGENT="crassus-reddit-sentiment/1.0 by u/yourname"
 ```
 
-Ingestion has two layers, tried per subreddit in order (see
-`crassus/sentiment.py`): a plain scrape of the public `new.json` listing,
-and -- only when that fails -- a real headless Chromium tab (Playwright)
-that loads the rendered `/new/` page instead. The second layer exists
-because Reddit has been observed serving a same-origin JS proof-of-work
-page ("Please wait for verification") in place of the JSON body, which no
-plain HTTP client can solve; a real browser engine executes that challenge
-itself, the same way it would for a human visitor. Verified in practice: on
-a network where the JSON layer returns HTTP 403 for every request, the
-browser fallback still gets through to real `<shreddit-post>` content, but
-only once the headless launch also masks `navigator.webdriver` and sets a
-realistic UA/viewport/locale (`_default_browser_factory`) -- a stock
-Playwright headless launch hits the same challenge page indefinitely, since
-the challenge appears to key off exactly that automation fingerprint rather
-than anything in the request headers.
+The public JSON path is attempted first. HTTP 401/403, 429, stale HTTP
+responses, malformed JSON and invalid post shapes fail closed. They do not
+trigger an alternate-transport attempt. Transport/server failures may use an
+ordinary headless Chromium fallback to read rendered posts; there is no
+identity masking, challenge-solving path or in-window crash relaunch.
+
+Production retrieval runs in a disposable process with a **20-second total
+acquisition deadline**, including HTTP, browser launch, navigation, extraction
+and graceful cleanup, followed by at most a **one-second child-reap wait**.
+This reuses the old 20-second navigation allowance as a whole-acquisition
+budget against the documented 300-second runner cadence. The runner and its
+supervisor are not restarted on a Reddit timeout. Linux process-tree visibility
+is required to identify detached browser children safely; unavailable process
+isolation fails closed. Injected fixture transports run in-process for testing.
 
 The browser fallback needs the Chromium binary and its Linux shared
 libraries, neither of which `pip install -r requirements.txt` provides on
@@ -326,24 +325,14 @@ the fallback raises `RedditFetchError` (declines, doesn't crash) rather
 than failing to import -- the JSON layer alone still works wherever Reddit
 isn't blocking it.
 
-A 429 from the JSON layer is treated separately from a JS-challenge/HTTP
-failure: it means Reddit itself is asking for backoff, so
-`RedditSentimentReader` starts a cooldown (from the response's
-`Retry-After` header when present, else a conservative default) shared
-across every subreddit and every future cycle until it expires, and
-declines outright rather than falling through to the browser -- retrying
-the same rate limit through a different transport would only compound it,
-unlike the JS-challenge case the fallback exists for. The browser fallback
-also recovers if the shared Chromium process itself crashes or disconnects
-mid-run (checked via `browser.is_connected()`): the dead context is torn
-down and relaunched exactly once, rather than staying cached as a
-permanently-failing fallback until the whole bot process restarts. Every
-Playwright call in `_fetch_listing_browser` -- including opening the page
-and the cleanup `finally` block, not just navigation -- is wrapped so a raw
-Playwright exception can never bypass `_fetch_listing`'s
-`except RedditFetchError` and skip that recovery; cleanup failures are
-swallowed rather than allowed to override whatever real error triggered
-them.
+The shared reader serializes reads and caches both successes and failures.
+A failure is retained for the existing `min_interval_s` (300 seconds), or
+longer when `Retry-After` requires it. Waiting/sequential accounts receive the
+same unavailable reason without another acquisition. Expiry automatically
+allows a fresh attempt, including recovery from a failed browser launch.
+`force=True` cannot bypass an active failure window. A failed refresh discards
+any old success. No account thresholds, scoring configuration, entry/exit
+logic, Phelps timing or account selection changes.
 
 The strategy declines every cycle (`no_trade`, reason cites the fetch
 error) rather than raising if a scrape fails -- consistent with the
@@ -394,27 +383,22 @@ And, non-hermetically, that the deployed image itself can launch Chromium
 docker build -t crassus-smoke .  # fails if Chromium can't launch inside it
 ```
 
-**Known gaps**, in the same spirit as the section below: it only reads
-submissions, not comments, so it can undercount chatter relative to the
-reference pipeline, which scores comments. `_reader` in
-`crassus/strategies/reddit_sentiment.py` is a module-level singleton, so
-every account configured with this strategy in one runner process already
-shares one `min_interval_s` cache and one 429 cooldown -- but there is
-still no cross-*process* coordination if this ever ran outside a single
-runner, and the `min_interval_s` default (300s) is tuned by assumption, not
-measured against Reddit's actual unauthenticated budget. The browser
-fallback shares one Chromium instance and one browser context across every
-subreddit and every poll cycle for the life of the process (launching
-fresh per subreddit or per cycle would multiply an already-expensive
-fallback for no benefit), so one account running this strategy holds one
-background Chromium process open for as long as it's configured this way
--- fine for a handful of accounts, worth revisiting if this strategy is
-ever assigned to many. The stealth measures in `_default_browser_factory`
-(masking `navigator.webdriver`, a realistic UA/viewport/locale) are the
-minimum verified to work as of this writing; Reddit is free to tighten its
-challenge in a way that defeats them without notice, same as it could
-tighten or remove the plain `new.json` endpoint this exists to fall back
-from.
+**Known limits:** only submissions are read, not comments. Sharing remains
+within one runner process and one reader configuration, not across independent
+processes. A successful fetch is not proof that posts are recent: there is no
+approved maximum post-age policy in the existing Reddit strategy. This repair
+rejects stale HTTP `Age`/`Date` evidence using the existing retrieval window
+and never refreshes an expired cached snapshot after failure; it does not
+invent a post-age cutoff or call insufficient samples a healthy signal.
+Source-access restoration and a post-age policy require separate decisions
+within OA-133 before healthy-feed acceptance. See
+[OA-133 evidence and acceptance](../docs/oa-133-reddit-ingestion.md).
+
+```bash
+.venv/bin/python scripts/verify_reddit_failure_window.py
+# Real process-tree / Chromium boundary, no external network:
+docker run --rm --network none --entrypoint python crassus-smoke scripts/verify_reddit_acquisition_browser.py
+```
 
 ## `trump_whisperer_qqq`
 

@@ -1,74 +1,28 @@
-"""Reddit sentiment observation.
+"""Reddit listing acquisition and unchanged VADER aggregation.
 
-Mirrors the ingestion-and-scoring shape of
-[nama1arpit/reddit-streaming-pipeline](https://github.com/nama1arpit/reddit-streaming-pipeline):
-recent posts are pulled from a fixed set of subreddits, VADER scores each one,
-and the aggregate (there: a per-minute Cassandra rollup fed to Grafana; here:
-an in-memory mean) is the signal a strategy reads.
-
-Deliberately not a port of that project's Kafka -> Spark -> Cassandra ->
-Grafana stack. Crassus is one lightweight Python process per account reading
-one number every few minutes; standing up a Kubernetes cluster to answer "is
-r/wallstreetbets bullish on QQQ right now" would be infrastructure in search
-of a justification. `aggregate()` below is the part of that project actually
-worth reusing -- the scoring method -- reimplemented as a plain function so it
-can be unit-tested without a broker or a database.
-
-Ingestion has two layers, tried in order per subreddit:
-
-1. `_fetch_listing_json()` -- a plain scrape of Reddit's public per-subreddit
-   JSON listing (`https://www.reddit.com/r/<name>/new.json`). Unauthenticated
-   and public -- the same page a logged-out browser gets, just requested as
-   `.json` -- so there is no app to register at reddit.com/prefs/apps and no
-   client id/secret to provision or rotate. Cheap and fast when it works.
-
-2. `_fetch_listing_browser()` -- a real headless Chromium tab (Playwright)
-   that loads the rendered `/r/<name>/new/` page and reads posts out of the
-   `<shreddit-post>` DOM elements Reddit's frontend renders them into. This
-   exists because Reddit can (and, observed in practice, does) front the
-   `.json` endpoint with a same-origin JS proof-of-work challenge ("Please
-   wait for verification") that a plain HTTP client cannot solve -- a real
-   browser engine executes that challenge script itself, transparently, the
-   same way it would for a human visitor. This is strictly slower (a browser
-   launch and a real page load per subreddit) and is only invoked when layer
-   1 fails, per subreddit, so a working `.json` endpoint on a given deployment
-   never pays the browser-launch cost.
-
-Either way the tradeoff is what an unauthenticated, non-API surface implies:
-no SLA, and Reddit is free to reshape or block either path without notice.
-Both ingestion functions return the same shape (`{"title", "selftext"}` per
-post) so `RedditSentimentReader._collect_texts` doesn't need to know which
-layer actually served a given subreddit.
-
-A 429 from the JSON layer is handled as neither of the above: it means
-Reddit itself is asking for backoff, so `RedditSentimentReader._fetch_listing`
-starts a shared cooldown (`_rate_limited_until`, from the response's
-`Retry-After` when present) across every subreddit and every future cycle
-until it expires, rather than falling through to the browser -- which hits
-the same backend and would only compound the limit, not work around it the
-way it correctly does for a JS-challenge page. See `RedditRateLimited`.
-
-The browser fallback also recovers from its own failure mode: a headless
-Chromium process that crashes or disconnects mid-run (not merely a page
-that fails to load) would otherwise stay cached as a permanently-dead
-context, failing identically every subsequent cycle until the whole bot
-process restarted. `RedditSentimentReader._get_browser_context` detects
-this via `browser.is_connected()` and allows exactly one relaunch-and-retry.
-
-vaderSentiment and playwright are imported lazily (inside functions, not at
-module scope) so importing this module -- and therefore `crassus.strategies`
--- never fails for an account not configured to use the sentiment strategy,
-and the JSON-only path never requires playwright to be installed at all.
+One reader is shared by the Reddit strategy and its Phelps wrappers. Successes
+and failures expire after the same retrieval window; scoring/thresholds remain
+per account. Production acquisition runs in a disposable, deadline-controlled
+process (reddit_acquisition.py). Injected transports support offline fixtures.
+Denial, rate limits, malformed payloads and challenge pages fail closed. Only
+transport/server failures may use the ordinary, non-masking browser fallback.
+No source availability or post-age policy is implied by a recent fetch time.
 """
 
 from __future__ import annotations
 
 import time
+import logging
+import math
+import threading
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from . import clock
 from .config import REDDIT_USER_AGENT
+from .observability import event
 
 DEFAULT_SUBREDDITS: tuple[str, ...] = ("wallstreetbets", "stocks", "options", "investing")
 DEFAULT_KEYWORDS: tuple[str, ...] = ("qqq", "nasdaq-100", "nasdaq 100", "nasdaq100")
@@ -94,41 +48,31 @@ _BROWSER_STALL_LIMIT = 3
 # one that doesn't parse as a number) -- conservative rather than immediate.
 _DEFAULT_RATE_LIMIT_COOLDOWN_S = 60.0
 
-# A default (CDP-automated) headless Chromium is trivially distinguishable
-# from a real browser -- `navigator.webdriver` is `true` and the
-# `AutomationControlled` blink feature changes other fingerprintable
-# behavior -- and Reddit's JS challenge stalls on exactly that signal rather
-# than solving and redirecting through, observed as an indefinite `<html><body
-# class="theme-beta">` shell with no `<shreddit-post>` ever appearing. Faking
-# a browser identity via the User-Agent header alone (as
-# `_default_session_factory` does for the plain HTTP path) does nothing here
-# -- the challenge JS inspects the live `navigator` object, not request
-# headers. Masking `navigator.webdriver` and a realistic UA/viewport/locale
-# is the minimum that was verified to get a real `<shreddit-post>` render.
-_BROWSER_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
-_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-_BROWSER_INIT_SCRIPT = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+# Keep the former single navigation timeout as the TOTAL acquisition budget,
+# including HTTP, launch, navigation, extraction and graceful cleanup. The
+# deployed cadence is 300 seconds; do not multiply this budget by accounts.
+_ACQUISITION_TIMEOUT_S = _BROWSER_NAV_TIMEOUT_S
+log = logging.getLogger("crassus")
 
 
 class RedditFetchError(RuntimeError):
     """A subreddit listing could not be fetched by any available method."""
 
 
-class RedditRateLimited(RedditFetchError):
-    """Reddit returned 429 for the JSON listing.
+class RedditSourceDenied(RedditFetchError):
+    """Access denial: never retry using a different transport."""
 
-    Deliberately a distinct type from a generic `RedditFetchError`: a 429
-    means Reddit itself is asking for backoff, which the browser fallback
-    cannot honor by retrying through a different transport -- it hits the
-    same backend and would only compound the rate limit rather than working
-    around it the way the fallback correctly does for a JS-challenge page.
-    Carries `retry_after_s` (from the `Retry-After` header when present and
-    numeric, else `_DEFAULT_RATE_LIMIT_COOLDOWN_S`) so the reader can start a
-    shared cooldown instead of retrying immediately.
-    """
+
+class RedditParseError(RedditFetchError):
+    """An untrusted payload must never be scored."""
+
+
+class RedditStaleData(RedditFetchError):
+    """A cached source response exceeds the existing retrieval window."""
+
+
+class RedditRateLimited(RedditFetchError):
+    """Reddit requested a shared cooldown; no alternate-transport retry."""
 
     def __init__(self, message: str, *, retry_after_s: float):
         super().__init__(message)
@@ -186,17 +130,9 @@ def _fetch_listing_json(
     *,
     limit: int,
     timeout_s: float = 10.0,
+    max_age_s: float = 300.0,
 ) -> list[dict[str, Any]]:
-    """Pull up to `limit` posts from a subreddit's public `new.json` listing.
-
-    Paginates with `after` since Reddit caps a single request at 100 items.
-    Raises RedditFetchError on any HTTP error, timeout, or malformed
-    response -- including the HTML JS-challenge page Reddit sometimes
-    substitutes for the JSON body, which fails the `response.json()` parse
-    below -- rather than letting the underlying exception escape. The
-    caller (`_fetch_listing`) treats this uniformly as "layer 1 failed, try
-    the browser" regardless of which of these it was.
-    """
+    """Pull public listings; denial/invalid payloads never trigger fallback."""
     posts: list[dict[str, Any]] = []
     after: str | None = None
     url = _LISTING_URL.format(subreddit=subreddit)
@@ -210,7 +146,7 @@ def _fetch_listing_json(
         try:
             response = session.get(url, params=params, timeout=timeout_s)
         except Exception as exc:  # requests.RequestException and friends
-            raise RedditFetchError(f"r/{subreddit}: request failed: {exc}") from exc
+            raise RedditFetchError(f"source_unavailable: r/{subreddit}: request failed ({type(exc).__name__})") from exc
 
         if response.status_code == 429:
             retry_after_header = response.headers.get("Retry-After")
@@ -218,25 +154,64 @@ def _fetch_listing_json(
                 retry_after_s = float(retry_after_header) if retry_after_header is not None else None
             except ValueError:
                 retry_after_s = None
-            if retry_after_s is None:
+            if retry_after_s is None or not math.isfinite(retry_after_s) or retry_after_s < 0:
                 retry_after_s = _DEFAULT_RATE_LIMIT_COOLDOWN_S
             raise RedditRateLimited(
                 f"r/{subreddit}: rate limited (429), cooling down {retry_after_s:.0f}s",
                 retry_after_s=retry_after_s,
             )
+        if response.status_code in (401, 403):
+            raise RedditSourceDenied(f"source_denied: r/{subreddit}: HTTP {response.status_code}")
         if response.status_code != 200:
             raise RedditFetchError(f"r/{subreddit}: HTTP {response.status_code}")
+
+        # HTTP freshness is bounded by the existing retrieval window, not a
+        # newly invented post-age/scoring policy. Never refresh a stale body
+        # just because it was downloaded again.
+        headers = getattr(response, "headers", {})
+        if isinstance(headers, dict) or hasattr(headers, "items"):
+            try:
+                age_header = headers.get("Age")
+                date_header = headers.get("Date")
+                if isinstance(age_header, str):
+                    age = float(age_header)
+                    if not math.isfinite(age) or age < 0:
+                        raise ValueError()
+                    if age >= max_age_s:
+                        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP Age exceeds retrieval window")
+                if isinstance(date_header, str):
+                    source_time = parsedate_to_datetime(date_header)
+                    if source_time.tzinfo is None:
+                        raise ValueError()
+                    if (datetime.now(timezone.utc) - source_time).total_seconds() >= max_age_s:
+                        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP Date exceeds retrieval window")
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid freshness header") from exc
 
         try:
             payload = response.json()
             children = payload["data"]["children"]
         except (ValueError, KeyError, TypeError) as exc:
-            raise RedditFetchError(f"r/{subreddit}: unexpected listing payload: {exc}") from exc
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: unexpected listing payload") from exc
 
+        if not isinstance(children, list):
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: children must be a list")
         if not children:
             break
-        posts.extend(child["data"] for child in children)
-        after = payload["data"].get("after")
+        try:
+            for child in children:
+                post = child["data"]
+                if not isinstance(post, dict) or not isinstance(post.get("title"), str):
+                    raise ValueError("post title must be text")
+                if not isinstance(post.get("selftext", ""), str):
+                    raise ValueError("post body must be text")
+                posts.append(post)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid post shape") from exc
+        next_after = payload["data"].get("after")
+        if next_after is not None and (not isinstance(next_after, str) or next_after == after):
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid pagination cursor")
+        after = next_after
         if not after:
             break
 
@@ -260,30 +235,14 @@ def _release_browser(context: Any, browser: Any, playwright: Any) -> None:
 
 
 def _default_browser_factory() -> Any:
-    """Launch one headless Chromium instance and one browser context, reused
-    across every subreddit in one read, then closed before the read returns
-    -- launching fresh per subreddit would multiply the (already-expensive,
-    only reached on JSON failure) fallback cost by the subreddit count for
-    no benefit, since nothing about the challenge or the page requires a
-    fresh profile each time.
-
-    The context (not the bare browser) is what callers get pages from -- it
-    carries the UA/viewport/locale and the `navigator.webdriver`-masking
-    init script described above `_BROWSER_LAUNCH_ARGS`, none of which a page
-    created directly from `browser.new_page()` would inherit.
-    """
+    """Ordinary headless browser; no challenge bypass or identity masking."""
     from playwright.sync_api import sync_playwright  # noqa: PLC0415 -- optional dependency
 
     playwright = sync_playwright().start()
     browser = context = None
     try:
-        browser = playwright.chromium.launch(headless=True, args=_BROWSER_LAUNCH_ARGS)
-        context = browser.new_context(
-            user_agent=_BROWSER_USER_AGENT,
-            viewport={"width": 1280, "height": 900},
-            locale="en-US",
-        )
-        context.add_init_script(_BROWSER_INIT_SCRIPT)
+        browser = playwright.chromium.launch(headless=True, timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
+        context = browser.new_context(user_agent=REDDIT_USER_AGENT or _FALLBACK_USER_AGENT)
     except BaseException:
         _release_browser(context, browser, playwright)
         raise
@@ -296,62 +255,47 @@ def _fetch_listing_browser(
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Load the rendered `/new/` page in a real browser tab and read posts
-    out of the `<shreddit-post>` custom elements Reddit's frontend renders
-    them into.
+    """Read ordinary rendered post elements after a transport/server failure.
 
-    A real Chromium engine executes Reddit's same-origin JS challenge itself
-    -- the same thing a human visitor's browser does -- which is the entire
-    reason this exists as a fallback: `_fetch_listing_json` cannot execute
-    JS and has no other way through that challenge. `post-title` and
-    `permalink` are plain attributes on the element; self-post body text
-    lives in a `[slot="text-body"]` child and is absent for link posts,
-    matching how `_fetch_listing_json` already treats a missing `selftext`
-    (empty string, not an error).
-
-    Reddit's feed lazy-loads more posts as you scroll, so this scrolls and
-    waits in rounds until either `limit` posts have been seen or
-    `_BROWSER_STALL_LIMIT` consecutive rounds produce no new post ids --
-    the latter guards against looping forever on a subreddit whose `new`
-    feed genuinely has fewer than `limit` posts.
-
-    Every Playwright call in here -- including `context.new_page()` and the
-    `finally` cleanup, not just navigation/scrolling -- is wrapped so a raw
-    Playwright exception can never escape this function. That matters beyond
-    tidiness: `_fetch_listing`'s crash-recovery path only triggers on
-    `RedditFetchError`, so a `new_page()` call that raises because the
-    browser disconnected between `_is_browser_alive()` and this call (or a
-    `page.close()` that raises because Chromium already crashed) would
-    otherwise bypass that `except RedditFetchError` entirely -- the relaunch
-    logic would simply never run for exactly the crash shapes it exists to
-    handle. Cleanup failures are swallowed rather than normalized and raised,
-    since `page.close()` failing after Chromium already crashed carries no
-    information the navigation/scroll error above it doesn't already have,
-    and letting it propagate would silently replace that original, more
-    informative error instead of just being logged as noise.
+    One failed read aborts the acquisition. The caller's disposable process
+    bounds all browser operations and teardown together, including calls
+    without Playwright timeout arguments. This function also caps scrolls.
     """
     url = _LISTING_PAGE_URL.format(subreddit=subreddit)
     try:
         page = context.new_page()
     except Exception as exc:
-        raise RedditFetchError(f"r/{subreddit}: opening a browser page failed: {exc}") from exc
+        raise RedditFetchError(f"r/{subreddit}: opening a browser page failed: {type(exc).__name__}") from exc
 
     try:
         try:
-            page.goto(url, timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
+            response = page.goto(url, timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
+            status = getattr(response, "status", None)
+            if status in (401, 403):
+                raise RedditSourceDenied(f"source_denied: r/{subreddit}: browser HTTP {status}")
+            if status == 429:
+                raise RedditRateLimited("source_rate_limited: browser HTTP 429",
+                                        retry_after_s=_DEFAULT_RATE_LIMIT_COOLDOWN_S)
+            if isinstance(status, int) and status >= 400:
+                raise RedditFetchError(f"source_unavailable: browser HTTP {status}")
             page.wait_for_selector("shreddit-post", timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
+        except RedditFetchError:
+            raise
         except Exception as exc:
-            raise RedditFetchError(f"r/{subreddit}: browser navigation failed: {exc}") from exc
+            kind = "browser_timeout" if isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError" else "browser_failure"
+            raise RedditFetchError(f"{kind}: r/{subreddit}: navigation failed") from exc
 
         posts: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         stalled_rounds = 0
 
-        while len(posts) < limit and stalled_rounds < _BROWSER_STALL_LIMIT:
+        for _ in range(_BROWSER_MAX_SCROLL_ROUNDS):
+            if len(posts) >= limit or stalled_rounds >= _BROWSER_STALL_LIMIT:
+                break
             try:
                 elements = page.query_selector_all("shreddit-post")
             except Exception as exc:
-                raise RedditFetchError(f"r/{subreddit}: reading post elements failed: {exc}") from exc
+                raise RedditFetchError(f"r/{subreddit}: reading post elements failed: {type(exc).__name__}") from exc
 
             before = len(seen_ids)
             for element in elements:
@@ -362,13 +306,17 @@ def _fetch_listing_browser(
                     if not post_id or post_id in seen_ids:
                         continue
                     seen_ids.add(post_id)
-                    title = element.get_attribute("post-title") or ""
+                    title = element.get_attribute("post-title")
+                    if not isinstance(title, str) or not title:
+                        raise RedditParseError(f"parsing_failure: r/{subreddit}: missing post-title")
                     body_element = element.query_selector('[slot="text-body"]')
                     body = body_element.inner_text() if body_element else ""
                     posts.append({"title": title, "selftext": body})
+                except RedditParseError:
+                    raise
                 except Exception as exc:
                     raise RedditFetchError(
-                        f"r/{subreddit}: reading post content failed: {exc}"
+                        f"parsing_failure: r/{subreddit}: reading post content failed: {type(exc).__name__}"
                     ) from exc
 
             if len(posts) >= limit:
@@ -380,8 +328,10 @@ def _fetch_listing_browser(
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(1000)
             except Exception as exc:
-                raise RedditFetchError(f"r/{subreddit}: scrolling feed failed: {exc}") from exc
+                raise RedditFetchError(f"r/{subreddit}: scrolling feed failed: {type(exc).__name__}") from exc
 
+        if not posts:
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: no readable post elements")
         return posts
     finally:
         try:
@@ -475,35 +425,55 @@ class RedditSentimentReader:
         self._rate_limited_until: float = 0.0
         self._cached: SentimentSnapshot | None = None
         self._cached_at: float = 0.0
+        self._failure: str | None = None
+        self._failure_until = 0.0
+        self._read_lock = threading.Lock()
+        self._phase_callback: Callable[[str], None] = lambda phase: None
+        self._isolated = session_factory is _default_session_factory and browser_factory is _default_browser_factory
 
     def read(self, force: bool = False) -> SentimentSnapshot:
-        age = time.monotonic() - self._cached_at
-        if self._cached and not force and age < self.min_interval_s:
-            return self._cached
-
-        if self._session is None:
-            self._session = self._session_factory()
-        if self._analyzer is None:
-            self._analyzer = self._analyzer_factory()
-
-        self._browser_unavailable = False  # Retry a prior launch failure on a fresh read.
-
-        # A page close alone does not bound the lifetime of the context and
-        # Node driver (including their protocol objects/caches). Own the
-        # entire Playwright stack for exactly one fresh aggregation, sharing
-        # it across subreddits but never retaining it across runner cycles.
-        # This also runs when the generator, scorer, or caller is cancelled.
-        try:
-            snapshot = aggregate(
-                self._collect_texts(),
-                self._analyzer,
-                symbol=self.symbol,
-                subreddits=self.subreddits,
-            )
-        finally:
-            self._close_browser()
-        self._cached, self._cached_at = snapshot, time.monotonic()
-        return snapshot
+        with self._read_lock:
+            now = time.monotonic()
+            # force may refresh success, but cannot bypass a failed-source cooldown.
+            if self._failure is not None and now < self._failure_until:
+                raise RedditFetchError(self._failure)
+            if self._cached is not None and not force and now - self._cached_at < self.min_interval_s:
+                return self._cached
+            self._cached = None  # Never serve a previous success after a failed refresh.
+            self._browser_unavailable = False
+            try:
+                if self._isolated:
+                    from .reddit_acquisition import acquire
+                    texts = acquire(self)
+                else:
+                    if self._session is None:
+                        self._session = self._session_factory()
+                    try:
+                        texts = list(self._collect_texts())
+                    finally:
+                        self._close_browser()
+                if self._analyzer is None:
+                    self._analyzer = self._analyzer_factory()
+                snapshot = aggregate(texts, self._analyzer, symbol=self.symbol,
+                                     subreddits=self.subreddits)
+            except Exception as exc:
+                # Store text, not the exception/traceback (which retains resources).
+                self._failure = str(exc) if isinstance(exc, RedditFetchError) else f"source_unavailable: {type(exc).__name__}"
+                self._failure_until = max(time.monotonic() + self.min_interval_s, self._rate_limited_until)
+                event(log, "reddit_acquisition_failed", reason=self._failure,
+                      duration_seconds=time.monotonic() - now,
+                      retry_in_seconds=max(0, self._failure_until - time.monotonic()))
+                raise
+            except BaseException:
+                self._failure = "source_cancelled"
+                self._failure_until = time.monotonic() + self.min_interval_s
+                raise
+            self._failure = None
+            # Age starts at acquisition start, not at completion/scoring time.
+            self._cached, self._cached_at = snapshot, now
+            event(log, "reddit_acquisition_completed", sample_size=snapshot.sample_size,
+                  duration_seconds=time.monotonic() - now)
+            return snapshot
 
     def _is_browser_alive(self) -> bool:
         if self._browser is None:
@@ -516,9 +486,8 @@ class RedditSentimentReader:
     def _close_browser(self) -> None:
         """Tear down whatever's cached (best-effort, ignoring errors from an
         already-dead process) and clear the cache so the next
-        `_get_browser_context` call relaunches from scratch. Does not touch
-        `_browser_unavailable`, which suppresses repeated launch attempts
-        within this read. The next fresh read retries even a launch failure."""
+        `_get_browser_context` call starts from scratch. The shared failure
+        window controls when another acquisition may begin."""
         resources = self._browser_context, self._browser, self._playwright
         self._playwright = None
         self._browser = None
@@ -526,16 +495,7 @@ class RedditSentimentReader:
         _release_browser(*resources)
 
     def _get_browser_context(self) -> Any:
-        """Lazily launch the shared headless browser context on first use,
-        once per fresh read, and transparently
-        relaunch it once if a previously-working browser has since
-        crashed or disconnected.
-
-        `_browser_unavailable` suppresses repeated launch failures within
-        the same read. A new uncached read clears it so a transient driver
-        failure never permanently disables the fallback. A disconnect after
-        launch still permits exactly one relaunch within the current fetch.
-        """
+        """One stack per acquisition; retry failed launches only after expiry."""
         if self._browser_unavailable:
             raise RedditFetchError(
                 "browser fallback unavailable for this read (see prior error); install with "
@@ -548,7 +508,7 @@ class RedditSentimentReader:
                 self._playwright, self._browser, self._browser_context = self._browser_factory()
             except Exception as exc:
                 self._browser_unavailable = True
-                raise RedditFetchError(f"browser fallback failed to launch: {exc}") from exc
+                raise RedditFetchError(f"browser fallback failed to launch: {type(exc).__name__}") from exc
         return self._browser_context
 
     def _fetch_listing(self, subreddit: str) -> list[dict[str, Any]]:
@@ -559,42 +519,28 @@ class RedditSentimentReader:
                 f"Reddit 429 for another {self._rate_limited_until - now:.0f}s"
             )
 
+        self._phase_callback("http")
         try:
-            return _fetch_listing_json(self._session, subreddit, limit=self.post_limit)
+            return _fetch_listing_json(self._session, subreddit, limit=self.post_limit, max_age_s=self.min_interval_s)
         except RedditRateLimited as rate_limited:
-            # A 429 is Reddit explicitly asking for backoff -- start a
-            # cooldown shared across every subreddit and every future cycle
-            # until it expires, and decline outright rather than falling
-            # through to the browser fallback, which would hit the same
-            # backend and risk compounding the limit instead of working
-            # around it (unlike the JS-challenge case the fallback exists for).
             self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
-            raise RedditFetchError(str(rate_limited)) from rate_limited
+            raise
+        except (RedditSourceDenied, RedditParseError, RedditStaleData):
+            raise  # Never route denied/challenged/malformed data around to a browser.
         except RedditFetchError as json_error:
+            self._phase_callback("browser")
             try:
                 context = self._get_browser_context()
                 return _fetch_listing_browser(context, subreddit, limit=self.post_limit)
+            except RedditRateLimited as rate_limited:
+                self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
+                raise
             except RedditFetchError as browser_error:
-                if self._is_browser_alive():
-                    raise RedditFetchError(
-                        f"r/{subreddit}: JSON listing failed ({json_error}); "
-                        f"browser fallback also failed ({browser_error})"
-                    ) from browser_error
-                # The browser process itself died mid-fetch (crash,
-                # disconnect, OOM-killed headless Chromium, etc.) rather than
-                # the page merely failing to load -- drop the dead context
-                # and allow exactly one relaunch-and-retry instead of caching
-                # a context that would fail identically every subsequent
-                # cycle until the process restarts.
-                self._close_browser()
-                try:
-                    context = self._get_browser_context()
-                    return _fetch_listing_browser(context, subreddit, limit=self.post_limit)
-                except RedditFetchError as retry_error:
-                    raise RedditFetchError(
-                        f"r/{subreddit}: JSON listing failed ({json_error}); browser "
-                        f"fallback crashed and relaunch also failed ({retry_error})"
-                    ) from retry_error
+                # No relaunch within a failed acquisition. Recovery occurs when
+                # the shared window expires, not once for each waiting account.
+                raise RedditFetchError(
+                    f"{json_error}; {browser_error}"
+                ) from browser_error
 
     def _collect_texts(self) -> Iterable[str]:
         for name in self.subreddits:

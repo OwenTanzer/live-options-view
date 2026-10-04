@@ -7,7 +7,7 @@ request, no real Playwright/Chromium process. `_fetch_listing_json` is
 exercised against a fake `requests`-shaped session; `_fetch_listing_browser`
 against fake Playwright-shaped context/page/element objects; and
 `RedditSentimentReader._fetch_listing`'s layer-selection, 429 cooldown, and
-browser-crash-recovery logic against both together via constructor-injected
+deferred-browser-recovery logic against both together via constructor-injected
 factories.
 
     python scripts/verify_reddit_ingestion.py
@@ -433,7 +433,7 @@ def scenario_browser_new_page_failure_is_normalized() -> None:
     # Simulates the browser disconnecting between the caller's
     # is_connected() check and this call -- a raw Playwright exception here,
     # if left unwrapped, would bypass _fetch_listing's `except
-    # RedditFetchError` entirely and skip crash recovery.
+    # RedditFetchError` entirely and skip deferred crash recovery.
     context = FakeContext([RuntimeError("Target page, context or browser has been closed")])
     try:
         _fetch_listing_browser(context, "wallstreetbets", limit=5)
@@ -482,7 +482,7 @@ def scenario_browser_close_failure_on_success_path_is_swallowed() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenarios: RedditSentimentReader._fetch_listing (layer selection, 429
-# cooldown, browser crash recovery)
+# cooldown, browser deferred crash recovery)
 # ---------------------------------------------------------------------------
 
 
@@ -495,8 +495,8 @@ def scenario_reader_json_success_never_touches_browser() -> None:
 
 
 def scenario_reader_falls_back_to_browser_on_json_failure() -> None:
-    print("\n17. Reader: JSON failure (non-429) falls back to the browser and launches it once")
-    session = FakeSession([FakeJsonResponse(403, None)])
+    print("\n17. Reader: JSON server failure (503) falls back to the browser and launches it once")
+    session = FakeSession([FakeJsonResponse(503, None)])
     page = FakePage(batches=[[FakeElement("t1", "Fallback post")]])
     context = FakeContext([page])
     factory = FakeBrowserFactory([(FakePlaywrightHandle(), FakeBrowser(), context)])
@@ -508,8 +508,8 @@ def scenario_reader_falls_back_to_browser_on_json_failure() -> None:
 
 def scenario_reader_reuses_browser_context_across_calls() -> None:
     print("\n18. Reader: a healthy browser context is reused, not relaunched, on the next call")
-    session_1 = FakeSession([FakeJsonResponse(403, None)])
-    session_2 = FakeSession([FakeJsonResponse(403, None)])
+    session_1 = FakeSession([FakeJsonResponse(503, None)])
+    session_2 = FakeSession([FakeJsonResponse(503, None)])
     page_1 = FakePage(batches=[[FakeElement("t1", "First")]])
     page_2 = FakePage(batches=[[FakeElement("t2", "Second")]])
     context = FakeContext([page_1, page_2])
@@ -561,8 +561,8 @@ def scenario_reader_cooldown_expires() -> None:
 
 
 def scenario_reader_recovers_from_crashed_browser() -> None:
-    print("\n22. Reader: a crashed/disconnected browser is torn down and relaunched exactly once")
-    session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
+    print("\n22. Reader: a crashed/disconnected browser recovers in a later acquisition")
+    session = FakeSession([FakeJsonResponse(503, None), FakeJsonResponse(503, None)])
     dead_browser = FakeBrowser(connected=True)
     dead_page = FakePage(goto_error=RuntimeError("target crashed"), crash_browser=dead_browser)
     dead_context = FakeContext([dead_page])
@@ -578,15 +578,21 @@ def scenario_reader_recovers_from_crashed_browser() -> None:
         (healthy_playwright, healthy_browser, healthy_context),
     ])
     reader = _reader(session, browser_factory=factory)
+    try:
+        reader._fetch_listing("wallstreetbets")
+        check("crash ends this acquisition", False)
+    except RedditFetchError:
+        check("crash ends this acquisition with no immediate relaunch", factory.call_count == 1)
+    reader._close_browser()
     posts = reader._fetch_listing("wallstreetbets")
-    check("recovered and returned posts from the relaunched browser", len(posts) == 1, len(posts))
-    check("relaunched exactly once (two total launches)", factory.call_count == 2, factory.call_count)
+    check("recovered and returned posts from the next acquisition", len(posts) == 1, len(posts))
+    check("one launch per acquisition (two across recovery)", factory.call_count == 2, factory.call_count)
     check("the dead context was closed", dead_context.closed)
     check("the dead playwright handle was stopped", dead_playwright.stopped)
 
 
 def scenario_reader_recovers_when_disconnect_happens_at_new_page() -> None:
-    print("\n23. Reader: recovers when it's new_page() (not goto()) that surfaces the crash")
+    print("\n23. Reader: new_page() failure aborts; a later acquisition can recover")
     # The narrower crash shape Owen's second review called out: unlike
     # scenario 22 (where goto() on an already-open page fails),
     # context.new_page() itself is what raises here -- the exact call that
@@ -596,7 +602,7 @@ def scenario_reader_recovers_when_disconnect_happens_at_new_page() -> None:
     # scenario_browser_new_page_failure_is_normalized above); before that
     # fix this raw exception would have bypassed `_fetch_listing`'s `except
     # RedditFetchError` entirely and the relaunch below would never run.
-    session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
+    session = FakeSession([FakeJsonResponse(503, None), FakeJsonResponse(503, None)])
     dead_browser = FakeBrowser(connected=False)  # already dead by the time new_page() is called
     dead_context = FakeContext([RuntimeError("Target page, context or browser has been closed")])
     dead_playwright = FakePlaywrightHandle()
@@ -611,14 +617,20 @@ def scenario_reader_recovers_when_disconnect_happens_at_new_page() -> None:
         (healthy_playwright, healthy_browser, healthy_context),
     ])
     reader = _reader(session, browser_factory=factory)
+    try:
+        reader._fetch_listing("wallstreetbets")
+        check("crash ends this acquisition", False)
+    except RedditFetchError:
+        check("crash ends this acquisition with no immediate relaunch", factory.call_count == 1)
+    reader._close_browser()
     posts = reader._fetch_listing("wallstreetbets")
-    check("recovered and returned posts from the relaunched browser", len(posts) == 1, len(posts))
-    check("relaunched exactly once (two total launches)", factory.call_count == 2, factory.call_count)
+    check("recovered and returned posts from the next acquisition", len(posts) == 1, len(posts))
+    check("one launch per acquisition (two across recovery)", factory.call_count == 2, factory.call_count)
 
 
 def scenario_reader_gives_up_when_relaunch_also_fails() -> None:
-    print("\n24. Reader: if the relaunch also fails, it raises rather than retrying forever")
-    session = FakeSession([FakeJsonResponse(403, None)])
+    print("\n24. Reader: a crash fails without trying the queued relaunch")
+    session = FakeSession([FakeJsonResponse(503, None)])
     dead_browser = FakeBrowser(connected=True)
     dead_page = FakePage(goto_error=RuntimeError("target crashed"), crash_browser=dead_browser)
     dead_context = FakeContext([dead_page])
@@ -629,17 +641,17 @@ def scenario_reader_gives_up_when_relaunch_also_fails() -> None:
     reader = _reader(session, browser_factory=factory)
     try:
         reader._fetch_listing("wallstreetbets")
-        check("raised after relaunch also failed", False)
+        check("raised on the first failed attempt", False)
     except RedditFetchError as exc:
-        check("raised after relaunch also failed", True)
-        check("message mentions the relaunch failure", "relaunch" in str(exc).lower(), str(exc))
-    check("exactly two launch attempts were made, not more", factory.call_count == 2, factory.call_count)
-    check("browser marked unavailable after the failed relaunch", reader._browser_unavailable)
+        check("raised on the first failed attempt", True)
+        check("message identifies browser failure", "browser" in str(exc).lower(), str(exc))
+    check("exactly one launch attempt was made", factory.call_count == 1, factory.call_count)
+    check("no second launch after a crash", factory.call_count == 1)
 
 
 def scenario_reader_healthy_browser_failure_does_not_relaunch() -> None:
     print("\n25. Reader: a live browser that simply fails to fetch (e.g. bad selector) is not treated as a crash")
-    session = FakeSession([FakeJsonResponse(403, None)])
+    session = FakeSession([FakeJsonResponse(503, None)])
     live_browser = FakeBrowser(connected=True)
     # No crash_browser wired in -- goto fails but the browser process itself
     # is still reported as connected, distinguishing "this page load failed"
@@ -679,8 +691,8 @@ def scenario_browser_post_content_failures_are_normalized() -> None:
 
 
 def scenario_reader_recovers_when_browser_crashes_during_post_content() -> None:
-    print("\n27. Reader: a disconnect during per-element DOM extraction triggers one relaunch")
-    session = FakeSession([FakeJsonResponse(403, None), FakeJsonResponse(403, None)])
+    print("\n27. Reader: a DOM disconnect aborts; a later acquisition can recover")
+    session = FakeSession([FakeJsonResponse(503, None), FakeJsonResponse(503, None)])
     dead_browser = FakeBrowser(connected=True)
     dead_element = FakeElement(
         "t1",
@@ -703,9 +715,15 @@ def scenario_reader_recovers_when_browser_crashes_during_post_content() -> None:
         (healthy_playwright, healthy_browser, healthy_context),
     ])
     reader = _reader(session, browser_factory=factory)
+    try:
+        reader._fetch_listing("wallstreetbets")
+        check("content failure ends this acquisition", False)
+    except RedditFetchError:
+        check("content failure does not relaunch", factory.call_count == 1)
+    reader._close_browser()
     posts = reader._fetch_listing("wallstreetbets")
-    check("returned posts from the relaunched browser", len(posts) == 1, len(posts))
-    check("relaunched exactly once", factory.call_count == 2, factory.call_count)
+    check("returned posts from the next acquisition", len(posts) == 1, len(posts))
+    check("one launch per acquisition", factory.call_count == 2, factory.call_count)
     check("closed the dead context", dead_context.closed)
     check("stopped the dead Playwright handle", dead_playwright.stopped)
 
