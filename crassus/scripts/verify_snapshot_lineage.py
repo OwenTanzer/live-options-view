@@ -208,6 +208,7 @@ class LedgerLineage(unittest.TestCase):
             self.executor._pending = {"execution_request_id": "old-request-" + str(extension is None),
                                       "market_snapshot_timestamp": "old-time",
                                       "market_snapshot_url_or_hash": "old-provenance"}
+            self.executor._result.execution_request_id = self.executor._pending["execution_request_id"]
             if extension is not None:
                 self.executor._pending["market_snapshot_lineage"] = extension
             self.runner._recover_pending = Runner._recover_pending.__get__(self.runner)
@@ -216,7 +217,74 @@ class LedgerLineage(unittest.TestCase):
             self.assertEqual(r["market_snapshot_lineage"], extension)
             self.assertEqual(r["market_snapshot_url_or_hash"], "old-provenance")
             self.assertEqual(r["market_snapshot_timestamp"], "old-time")
+            self.assertEqual(r["execution_request_id"], self.executor._pending["execution_request_id"])
         self.assertTrue(self.runner.ledger.paths.ledger.read_bytes().startswith(original_bytes))
+
+    def test_real_runner_crash_recovery_keeps_original_lineage_across_both_boundaries(self):
+        original = snapshot(snapshot_key=KEY)
+        advanced = snapshot(snapshot_key=KEY2)
+        for already_filled in (False, True):
+            with self.subTest(already_filled=already_filled), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                ledger_dir, state_dir = root / "logs", root / "state"
+                state = AccountState("test", 10000.0, [])
+                session = SimpleNamespace(account=self.account, _mutation_lock=threading.Lock(),
+                                          me=Mock(return_value=state), _request=Mock())
+                session._request.return_value = Mock(status_code=200, json=lambda: {"ok": True})
+
+                def restart():
+                    runner, _ = make_runner(self.account, state=state, ledger_dir=ledger_dir,
+                                             stub_recover=False)
+                    client = ExecutionClient(session, state_dir, backoff_base_s=0)
+                    runner.sessions[self.account.alias] = session
+                    runner.executors[self.account.alias] = client
+                    return runner, client
+
+                runner, client = restart()
+                # Crash after the HTTP response, before a durable ledger record.
+                with patch.object(runner.ledger, "record", side_effect=OSError("fixture disk failure")):
+                    with self.assertRaises(OSError):
+                        runner._run_account(self.account, original, "open")
+                pending = client.pending_intent()
+                self.assertIsNotNone(pending)
+                self.assertEqual(pending["market_snapshot_lineage"], original.lineage)
+                first_body = session._request.call_args.kwargs["json"].copy()
+                if already_filled:
+                    state.trades.append({"execution_request_id": pending["execution_request_id"]})
+                session._request.reset_mock()
+
+                # New runner/client instances must recover from disk, not old objects.
+                runner, client = restart()
+                with patch.object(client, "finalize", side_effect=OSError("fixture cleanup failure")):
+                    with self.assertRaises(OSError):
+                        runner._run_account(self.account, advanced, "open")
+                recovered = runner.ledger.find_by_execution_request_id(pending["execution_request_id"])
+                self.assertIsNotNone(recovered)
+                self.assertEqual(recovered["decision_id"], pending["decision_id"])
+                self.assertEqual(recovered["decision"], pending["decision"])
+                self.assertEqual(recovered["market_snapshot_lineage"], original.lineage)
+                self.assertEqual(recovered["market_snapshot_timestamp"], original.timestamp)
+                self.assertEqual(recovered["market_snapshot_url_or_hash"], original.provenance)
+                self.assertIsNotNone(client.pending_intent())
+                if already_filled:
+                    self.assertEqual(recovered["outcome_class"], Outcome.RECONCILED_AFTER_AMBIGUITY)
+                    session._request.assert_not_called()
+                else:
+                    self.assertEqual(recovered["outcome_class"], Outcome.FILLED)
+                    session._request.assert_called_once_with("POST", "/api/paper-trade", json=first_body)
+
+                # Crash after the ledger write, before cleanup: restart must neither
+                # append a second outcome nor resend the HTTP request, even on a new board.
+                ledger_bytes = {p.name: p.read_bytes() for p in ledger_dir.glob("decisions-*.jsonl")}
+                session._request.reset_mock()
+                session.me.reset_mock()
+                runner, client = restart()
+                runner._run_account(self.account, advanced, "open")
+                self.assertIsNone(client.pending_intent())
+                session._request.assert_not_called()
+                session.me.assert_not_called()
+                self.assertEqual(ledger_bytes,
+                                 {p.name: p.read_bytes() for p in ledger_dir.glob("decisions-*.jsonl")})
 
     def test_real_intent_persistence_replay_and_http_body(self):
         session = SimpleNamespace(account=self.account, _mutation_lock=threading.Lock(),

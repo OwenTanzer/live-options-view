@@ -146,7 +146,7 @@ unittest test cases and repository assertion checks, so are not summed.
 
 | Suite | Exact result |
 |---|---|
-| `verify_snapshot_lineage` | 15 tests passed |
+| `verify_snapshot_lineage` | 16 tests passed (after review extension below) |
 | `verify_invariants` | 83 checks passed, 0 failed |
 | `verify_observability` | 14 tests passed |
 | `verify_runner_flatten_attribution` | 26 checks passed, 0 failed |
@@ -214,3 +214,32 @@ The older deployment document's statement that Wait for CI is disabled on
 Crassus/QQQ is stale relative to this read-only inspection. No production
 configuration, deployment, account, live order, or historical data was changed.
 This is a draft PR only; merging/releasing it is a separate action.
+
+
+### Follow-up review
+
+Reviewed the complete diff and every production ledger write against current
+master, including intent replay, resolved-intent deduplication, liquidation,
+closed-account records and the existing v1 extra-field mechanism. Rechecked
+key formats against collector history and the shared-reading contract against
+#110. No runtime correctness or compatibility defect was found in this slice.
+This is the implementing agent's follow-up review, not an independent approval.
+
+The review did find a verification gap: the initial tests exercised durable
+intent persistence and runner recovery separately. Added a real
+Runner/ExecutionClient integration test with fake HTTP, real temporary intent
+files and real append-only ledgers. It covers both a server-confirmed fill and
+a replay, injecting failure before the first ledger write and again after the
+recovery ledger write but before intent cleanup. Fresh runner/client instances
+then prove original key/hash/decision/request identity survives the newer board,
+replay uses the identical HTTP body, and the final restart neither resends nor
+rewrites/duplicates the already committed ledger outcome. Also corrected the
+older recovery fake to return its pending request ID and assert the match.
+
+The extended lineage suite passes **16 tests**; `git diff --check` passes.
+Runtime files are unchanged by this review. On implementation head
+`1892381dd6a2e8c8ae68311712fa83bde864ffea`, both Web CI and the Crassus
+workflow passed, including Python 3.11 invariant/strategy tests and the actual
+Docker build plus Chromium memory/fatal-driver regression (run 37239819011).
+Every new PR head still requires its own passing checks. No merge or deployment
+is authorized by this review; the watch-scope concerns above remain relevant.
