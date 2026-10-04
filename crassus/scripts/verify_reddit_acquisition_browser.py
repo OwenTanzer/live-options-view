@@ -29,7 +29,7 @@ def init(self, **kwargs):
     def browser():
         stack = s._default_browser_factory()
         stack[2].route('**/*', lambda route: route.fulfill(status=200, content_type='text/html',
-            body='<shreddit-post id="fixture" post-title="QQQ good"></shreddit-post>'))
+            body='<shreddit-post id="fixture" post-title="QQQ good"><div slot="text-body">QQQ body</div></shreddit-post>'))
         return stack
     self._browser_factory = browser
 s.RedditSentimentReader.__init__ = init
@@ -52,7 +52,7 @@ def main():
             try:
                 result = _run(config, command=[sys.executable, '-c', CHILD.replace('{injection}', injection)])
                 assert mode == 'success', result
-                assert result['texts'] == ['QQQ good '], result
+                assert result['texts'] == ['QQQ good QQQ body'], result
             except RedditFetchError as exc:
                 assert mode == 'hung_cleanup' and 'cleanup_timeout' in str(exc), str(exc)
             elapsed = time.monotonic() - started

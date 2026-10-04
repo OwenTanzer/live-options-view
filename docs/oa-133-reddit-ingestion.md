@@ -154,6 +154,14 @@ There is no additional configured Crassus lint/type-check command; compile and
 `git diff --check` supplement the documented suites. Final commit CI status
 must be inspected separately from these local results.
 
+The first PR CI run passed all invariant scripts (including both previously
+skipped process-tree checks), Web CI, Docker build and the 30-cycle Chromium
+soak. Its new acquisition fixture initially failed in the success case: an
+empty synthetic `shreddit-post` had no visible dimensions, so Playwright's
+visibility wait reached the 20-second deadline. The fixture now includes a
+visible body, matching the existing DOM contract; the production selector and
+timeout are unchanged. The corrected fixture must pass on the final commit.
+
 ## Remaining decisions and acceptance gates
 
 **Code/CI acceptance:** all applicable suites and Docker checks must pass on
