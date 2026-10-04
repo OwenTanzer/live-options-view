@@ -559,6 +559,7 @@ class ExecutionClient:
             decision=intent.get("decision"),
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
+            market_snapshot_lineage=intent.get("market_snapshot_lineage"),
             account_state_before=intent.get("account_state_before"),
         )
         result.note = "Replayed a persisted in-flight intent that the server had not recorded."
@@ -581,6 +582,7 @@ class ExecutionClient:
         decision: dict[str, Any] | None = None,
         market_snapshot_timestamp: str | None = None,
         market_snapshot_url_or_hash: str | None = None,
+        market_snapshot_lineage: dict[str, Any] | None = None,
         account_state_before: dict[str, Any] | None = None,
     ) -> ExecutionResult:
         """Execute one intent, with bounded retry and mandatory reconciliation.
@@ -611,6 +613,7 @@ class ExecutionClient:
                 "decision": decision,
                 "market_snapshot_timestamp": market_snapshot_timestamp,
                 "market_snapshot_url_or_hash": market_snapshot_url_or_hash,
+                "market_snapshot_lineage": market_snapshot_lineage,
                 "account_state_before": account_state_before,
                 "created_utc": clock.iso_utc(),
             }

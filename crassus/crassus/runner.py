@@ -262,6 +262,7 @@ class Runner:
             reason=recovered.note,
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
+            market_snapshot_lineage=intent.get("market_snapshot_lineage"),
             account_state_before=intent.get("account_state_before"),
             execution_request_id=recovered.execution_request_id,
             http_status=recovered.http_status,
@@ -368,11 +369,14 @@ class Runner:
         self.retired.add(account.alias)
         log.warning("%s retired: %s", account.alias, reason)
 
-    def _retire_closed(self, account: Any, state: Any) -> None:
+    def _retire_closed(self, account: Any, state: Any, snapshot: Any = None) -> None:
         self.ledger.record(
             decision_id=self.ledger.new_decision_id(), account_alias=account.alias,
             strategy_id=account.strategy_id, strategy_version="n/a",
             outcome_class=Outcome.NO_TRADE, account_closed=True,
+            market_snapshot_timestamp=snapshot.timestamp if snapshot else None,
+            market_snapshot_url_or_hash=snapshot.provenance if snapshot else None,
+            market_snapshot_lineage=snapshot.lineage if snapshot else None,
             account_state_before=state.summary(),
             reason=f"Account closed: {state.closure_reason}; trading permanently stopped.",
         )
@@ -394,6 +398,7 @@ class Runner:
             strategy_version=getattr(strategy, "strategy_version", "unknown"),
             market_snapshot_timestamp=snapshot.timestamp if snapshot else None,
             market_snapshot_url_or_hash=snapshot.provenance if snapshot else None,
+            market_snapshot_lineage=snapshot.lineage if snapshot else None,
         )
 
         # Reconcile first: the server's view of cash and trades is the only
@@ -421,7 +426,7 @@ class Runner:
             return
 
         if getattr(state, "account_closed", False):
-            self._retire_closed(account, state)
+            self._retire_closed(account, state, snapshot)
             return
 
         book = Book(state.trades)
@@ -540,6 +545,7 @@ class Runner:
                 decision=decision.to_dict(),
                 market_snapshot_timestamp=base["market_snapshot_timestamp"],
                 market_snapshot_url_or_hash=base["market_snapshot_url_or_hash"],
+                market_snapshot_lineage=base["market_snapshot_lineage"],
                 account_state_before=state_before,
             )
         except AccountLiquidated as exc:
