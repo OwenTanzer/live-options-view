@@ -13,6 +13,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 from typing import Any
 
 from .sentiment import RedditFetchError, RedditSentimentReader, _ACQUISITION_TIMEOUT_S
@@ -104,6 +105,7 @@ def acquire(reader: RedditSentimentReader) -> list[str]:
     result = _run(dict(subreddits=reader.subreddits, keywords=reader.keywords,
                        post_limit=reader.post_limit, min_interval_s=reader.min_interval_s,
                        rate_limited_until=reader._rate_limited_until))
+    reader._source_expires = min(reader._source_expires, result.get("source_expires", float("inf")))
     reader._rate_limited_until = result.get("rate_limited_until", 0.0)
     if "error" in result:
         raise RedditFetchError(result["error"])
@@ -120,6 +122,7 @@ def main() -> None:
                                    post_limit=config["post_limit"],
                                    min_interval_s=config.get("min_interval_s", 300.0))
     reader._rate_limited_until = config["rate_limited_until"]
+    reader._source_expires = time.monotonic() + reader.min_interval_s
     reader._phase_callback = lambda phase: print(json.dumps({"phase": phase}), flush=True)
     result: dict[str, Any] = {}
     try:
@@ -132,6 +135,7 @@ def main() -> None:
         reader._close_browser()
         if reader._session is not None:
             reader._session.close()
+    result["source_expires"] = reader._source_expires
     result["rate_limited_until"] = reader._rate_limited_until
     print(json.dumps(result), flush=True)
 

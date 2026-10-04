@@ -279,5 +279,43 @@ main()
         self.assertLess(completed['duration_seconds'], 300)
         self.assertEqual(reader._collect_texts.call_count, 1)
 
+    def test_source_response_age_reduces_cache_lifetime(self):
+        reader = self.reader()
+        reader.subreddits = ('stocks',)
+        response = Mock(status_code=200, headers={'Age': '290'})
+        response.json.return_value = {'data': {'children': []}}
+        session = Mock(get=Mock(return_value=response))
+        reader._session_factory = lambda: session
+        now = [1000.0]
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]):
+            first = reader.read()
+            now[0] = 1009
+            self.assertIs(reader.read(), first)
+            now[0] = 1010
+            self.assertIsNot(reader.read(), first)
+        self.assertEqual(session.get.call_count, 2)
+
+    def test_browser_response_staleness_is_terminal(self):
+        page = Mock()
+        page.goto.return_value.status = 200
+        page.goto.return_value.all_headers.return_value = {'age': '301'}
+        with self.assertRaisesRegex(s.RedditFetchError, 'stale_data'):
+            s._fetch_listing_browser(Mock(new_page=lambda: page), 'stocks', limit=50)
+        page.wait_for_selector.assert_not_called()
+        page.close.assert_called_once()
+
+    def test_expiry_during_scoring_does_not_publish_fresh_snapshot(self):
+        reader = self.reader()
+        now = [1000.0]
+        reader._collect_texts = Mock(return_value=['QQQ'])
+        def score(text):
+            now[0] += 301
+            return {'compound': .2}
+        reader._analyzer_factory = lambda: Mock(polarity_scores=score)
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(s.RedditFetchError, 'stale_data'):
+                reader.read()
+        self.assertIsNone(reader._cached)
+
 if __name__ == '__main__':
     unittest.main()

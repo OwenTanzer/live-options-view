@@ -87,6 +87,9 @@ Neither frozen page nor raw historical records were modified.
   scheduled caller performs it. `force` cannot circumvent a failed window.
 * Discard expired success before refreshing. No stale-success fallback. HTTP
   freshness evidence (`Age` / `Date`) older than the retrieval window is rejected.
+  Remaining HTTP lifetime is carried through both transports into cache expiry;
+  downloading a 290-second-old response does not grant another 300 seconds.
+  Expiry during acquisition/scoring is also rejected.
 * Treat 401/403 denial, 429 backoff, malformed/challenge payloads and stale
   responses as terminal. No browser fallback for those outcomes. Remove the
   prior webdriver masking / impersonated browser identity. Ordinary fallback

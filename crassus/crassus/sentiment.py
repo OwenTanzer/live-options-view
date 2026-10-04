@@ -124,6 +124,29 @@ def _matches_keywords(text: str, keywords: tuple[str, ...]) -> bool:
     return any(k in lowered for k in keywords)
 
 
+def _http_expiry(headers: Any, subreddit: str, max_age_s: float) -> float:
+    """Carry source-response age into the cache; downloading is not renewal."""
+    age = 0.0
+    if isinstance(headers, dict) or hasattr(headers, "items"):
+        try:
+            age_header = headers.get("Age", headers.get("age"))
+            date_header = headers.get("Date", headers.get("date"))
+            if isinstance(age_header, str):
+                age = float(age_header)
+                if not math.isfinite(age) or age < 0:
+                    raise ValueError()
+            if isinstance(date_header, str):
+                source_time = parsedate_to_datetime(date_header)
+                if source_time.tzinfo is None:
+                    raise ValueError()
+                age = max(age, (datetime.now(timezone.utc) - source_time).total_seconds())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid freshness header") from exc
+    if age >= max_age_s and age > 0:
+        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP age exceeds retrieval window")
+    return time.monotonic() + max(0, max_age_s - age)
+
+
 def _fetch_listing_json(
     session: Any,
     subreddit: str,
@@ -131,6 +154,7 @@ def _fetch_listing_json(
     limit: int,
     timeout_s: float = 10.0,
     max_age_s: float = 300.0,
+    freshness_callback: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Pull public listings; denial/invalid payloads never trigger fallback."""
     posts: list[dict[str, Any]] = []
@@ -165,28 +189,9 @@ def _fetch_listing_json(
         if response.status_code != 200:
             raise RedditFetchError(f"r/{subreddit}: HTTP {response.status_code}")
 
-        # HTTP freshness is bounded by the existing retrieval window, not a
-        # newly invented post-age/scoring policy. Never refresh a stale body
-        # just because it was downloaded again.
-        headers = getattr(response, "headers", {})
-        if isinstance(headers, dict) or hasattr(headers, "items"):
-            try:
-                age_header = headers.get("Age")
-                date_header = headers.get("Date")
-                if isinstance(age_header, str):
-                    age = float(age_header)
-                    if not math.isfinite(age) or age < 0:
-                        raise ValueError()
-                    if age >= max_age_s:
-                        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP Age exceeds retrieval window")
-                if isinstance(date_header, str):
-                    source_time = parsedate_to_datetime(date_header)
-                    if source_time.tzinfo is None:
-                        raise ValueError()
-                    if (datetime.now(timezone.utc) - source_time).total_seconds() >= max_age_s:
-                        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP Date exceeds retrieval window")
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid freshness header") from exc
+        expiry = _http_expiry(getattr(response, "headers", {}), subreddit, max_age_s)
+        if freshness_callback is not None:
+            freshness_callback(expiry)
 
         try:
             payload = response.json()
@@ -254,6 +259,8 @@ def _fetch_listing_browser(
     subreddit: str,
     *,
     limit: int,
+    max_age_s: float = 300.0,
+    freshness_callback: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Read ordinary rendered post elements after a transport/server failure.
 
@@ -278,6 +285,10 @@ def _fetch_listing_browser(
                                         retry_after_s=_DEFAULT_RATE_LIMIT_COOLDOWN_S)
             if isinstance(status, int) and status >= 400:
                 raise RedditFetchError(f"source_unavailable: browser HTTP {status}")
+            headers = response.all_headers() if response is not None else {}
+            expiry = _http_expiry(headers, subreddit, max_age_s)
+            if freshness_callback is not None:
+                freshness_callback(expiry)
             page.wait_for_selector("shreddit-post", timeout=_BROWSER_NAV_TIMEOUT_S * 1000)
         except RedditFetchError:
             raise
@@ -425,6 +436,7 @@ class RedditSentimentReader:
         self._rate_limited_until: float = 0.0
         self._cached: SentimentSnapshot | None = None
         self._cached_at: float = 0.0
+        self._source_expires = float("inf")
         self._failure: str | None = None
         self._failure_until = 0.0
         self._read_lock = threading.Lock()
@@ -437,10 +449,11 @@ class RedditSentimentReader:
             # force may refresh success, but cannot bypass a failed-source cooldown.
             if self._failure is not None and now < self._failure_until:
                 raise RedditFetchError(self._failure)
-            if self._cached is not None and not force and now - self._cached_at < self.min_interval_s:
+            if self._cached is not None and not force and now - self._cached_at < self.min_interval_s and now < self._source_expires:
                 return self._cached
             self._cached = None  # Never serve a previous success after a failed refresh.
             self._browser_unavailable = False
+            self._source_expires = now + self.min_interval_s
             try:
                 if self._isolated:
                     from .reddit_acquisition import acquire
@@ -454,8 +467,12 @@ class RedditSentimentReader:
                         self._close_browser()
                 if self._analyzer is None:
                     self._analyzer = self._analyzer_factory()
+                if self.min_interval_s > 0 and time.monotonic() >= self._source_expires:
+                    raise RedditStaleData("stale_data: response expired during acquisition")
                 snapshot = aggregate(texts, self._analyzer, symbol=self.symbol,
                                      subreddits=self.subreddits)
+                if self.min_interval_s > 0 and time.monotonic() >= self._source_expires:
+                    raise RedditStaleData("stale_data: response expired during scoring")
             except Exception as exc:
                 # Store text, not the exception/traceback (which retains resources).
                 self._failure = str(exc) if isinstance(exc, RedditFetchError) else f"source_unavailable: {type(exc).__name__}"
@@ -511,6 +528,9 @@ class RedditSentimentReader:
                 raise RedditFetchError(f"browser fallback failed to launch: {type(exc).__name__}") from exc
         return self._browser_context
 
+    def _observe_expiry(self, expiry: float) -> None:
+        self._source_expires = min(self._source_expires, expiry)
+
     def _fetch_listing(self, subreddit: str) -> list[dict[str, Any]]:
         now = time.monotonic()
         if now < self._rate_limited_until:
@@ -521,7 +541,7 @@ class RedditSentimentReader:
 
         self._phase_callback("http")
         try:
-            return _fetch_listing_json(self._session, subreddit, limit=self.post_limit, max_age_s=self.min_interval_s)
+            return _fetch_listing_json(self._session, subreddit, limit=self.post_limit, max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
         except RedditRateLimited as rate_limited:
             self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
             raise
@@ -531,7 +551,8 @@ class RedditSentimentReader:
             self._phase_callback("browser")
             try:
                 context = self._get_browser_context()
-                return _fetch_listing_browser(context, subreddit, limit=self.post_limit)
+                return _fetch_listing_browser(context, subreddit, limit=self.post_limit,
+                                              max_age_s=self.min_interval_s, freshness_callback=self._observe_expiry)
             except RedditRateLimited as rate_limited:
                 self._rate_limited_until = time.monotonic() + rate_limited.retry_after_s
                 raise
