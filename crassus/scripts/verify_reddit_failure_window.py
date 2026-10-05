@@ -93,7 +93,7 @@ class FailureWindow(unittest.TestCase):
     def test_stale_or_malformed_source_cannot_use_browser(self):
         for payload, headers, kind in [
             ({'data': {'children': []}}, {'Age': '301'}, 'stale_data'),
-            ({'data': {'children': []}}, {'Date': 'Mon, 01 Jan 2001 00:00:00 GMT'}, 'stale_data'),
+            ({'data': {'children': []}}, {'Date': 'Mon, 01 Jan 2001 00:00:00 GMT'}, 'freshness_unverifiable'),
             ({'data': {'children': []}}, {'Age': 'nan'}, 'parsing_failure'),
             ({'data': {'children': {}}}, {}, 'parsing_failure'),
             ({'data': {'children': [{'data': {'title': 123}}]}}, {}, 'parsing_failure'),
@@ -474,7 +474,7 @@ main()
              patch('crassus.reddit_acquisition._stop') as stop, \
              patch('crassus.reddit_acquisition.proc_visible', return_value=True), \
              patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
-             patch.object(ra, '_subreaper', return_value=0):
+             patch.object(ra, '_subreaper', return_value=0, create=True):
             self.assertEqual(_run({})['texts'], [])
         stop.assert_called_once()
 
@@ -504,7 +504,7 @@ main()
         with patch.object(ra.subprocess, 'Popen', return_value=child), \
              patch.object(ra, '_stop'), patch.object(ra, 'proc_visible', return_value=True), \
              patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
-             patch.object(ra, '_subreaper', return_value=0):
+             patch.object(ra, '_subreaper', return_value=0, create=True):
             with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout') as raised:
                 ra._run({}, timeout_s=.1)
         self.assertEqual(raised.exception.rate_limited_until, 4600)
@@ -543,6 +543,190 @@ main()
             with self.assertRaisesRegex(s.RedditFetchError, 'stale_data'):
                 reader.read()
         self.assertIsNone(reader._cached)
+
+    def test_cleanup_failure_keeps_observed_primary_diagnosis(self):
+        from types import SimpleNamespace
+        from crassus import reddit_acquisition as ra
+        for output, returncode in [(b'{"error":"source_denied: HTTP 403"}\n', 0),
+                                   (b'{"error":"source_denied: HTTP 403"}\n{"phase":"cleanup"}\n', 1)]:
+            child = Mock(pid=12345, returncode=returncode)
+            child.communicate.return_value = (output, b'')
+            with patch.object(ra.subprocess, 'Popen', return_value=child), \
+                 patch.object(ra, '_stop', side_effect=s.RedditFetchError('cleanup_timeout: fixture')), \
+                 patch.object(ra, 'proc_visible', return_value=True), \
+                 patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
+                 patch.object(ra, '_subreaper', return_value=0, create=True):
+                with self.assertRaises(s.RedditFetchError) as raised:
+                    ra._run({})
+            self.assertTrue(str(raised.exception).startswith('source_denied: HTTP 403'), str(raised.exception))
+            self.assertIn('cleanup_timeout', str(raised.exception))
+
+    def test_cleanup_failure_keeps_cancellation(self):
+        from types import SimpleNamespace
+        from crassus import reddit_acquisition as ra
+        child = Mock(pid=12345)
+        child.communicate.side_effect = KeyboardInterrupt
+        with patch.object(ra.subprocess, 'Popen', return_value=child), \
+             patch.object(ra, '_stop', side_effect=s.RedditFetchError('cleanup_timeout: fixture')), \
+             patch.object(ra, 'proc_visible', return_value=True), \
+             patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                ra._run({})
+        self.assertIn('cleanup_timeout', raised.exception.__notes__[0])
+
+    def test_cleanup_deadline_does_not_silently_drop_owned_descendants(self):
+        from types import SimpleNamespace
+        from crassus import reddit_acquisition as ra
+        from crassus.supervisor import Process
+        child = Mock(pid=12345)
+        with patch.object(ra, '_marked_processes', return_value={42: Process(1, 111, 0, 'Z')}), \
+             patch.object(ra, '_signal_process'), patch.object(ra.signal, 'SIGSTOP', 19, create=True), \
+             patch.object(ra.signal, 'SIGKILL', 9, create=True), \
+             patch.object(ra.time, 'monotonic', side_effect=[0, 2, 2]):
+            with self.assertRaisesRegex(s.RedditFetchError, 'cleanup_timeout'):
+                ra._stop(child, 'fixture')
+
+    def test_concurrent_acquisitions_do_not_change_subreaper_state(self):
+        from types import SimpleNamespace
+        from crassus import reddit_acquisition as ra
+        state = [0]
+        def subreaper(value=None):
+            previous = state[0]
+            if value is not None:
+                state[0] = value
+            return previous
+        entered = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+        children = []
+        for i in range(2):
+            child = Mock(pid=12345 + i, returncode=0)
+            def communicate(*args, i=i, **kwargs):
+                entered[i].set()
+                self.assertTrue(release[i].wait(2))
+                return (b'{"texts": []}\n', b'')
+            child.communicate.side_effect = communicate
+            children.append(child)
+        with patch.object(ra.subprocess, 'Popen', side_effect=children), patch.object(ra, '_stop'), \
+             patch.object(ra, 'proc_visible', return_value=True), \
+             patch.object(ra, 'os', SimpleNamespace(name='posix', environ={})), \
+             patch.object(ra, '_subreaper', side_effect=subreaper, create=True):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(ra._run, {})
+                self.assertTrue(entered[0].wait(2))
+                second = pool.submit(ra._run, {})
+                self.assertTrue(entered[1].wait(2))
+                release[0].set()
+                first.result(2)
+                release[1].set()
+                second.result(2)
+        self.assertEqual(state[0], 0)
+
+    def test_date_clock_disagreement_is_explicit_and_fails_closed(self):
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+        fixed = datetime(2026, 10, 5, tzinfo=timezone.utc)
+        for delta in (-600, 600):
+            headers = {'Age': '0', 'Date': format_datetime(fixed + timedelta(seconds=delta), usegmt=True)}
+            with patch.object(s, 'datetime', Mock(now=lambda tz: fixed)):
+                with self.assertRaisesRegex(s.RedditStaleData, 'freshness_unverifiable'):
+                    s._http_expiry(headers, 'stocks', 300)
+
+    def test_long_valid_provider_delay_is_retained_and_recovers(self):
+        reader = self.reader()
+        reader.subreddits = ('stocks',)
+        response = Mock(status_code=429, headers={'Retry-After': '604800'})
+        success = Mock(status_code=200, headers={})
+        success.json.return_value = {'data': {'children': []}}
+        session = Mock(get=Mock(side_effect=[response, success]))
+        reader._session_factory = lambda: session
+        reader._analyzer_factory = Mock
+        now = [1000.0]
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(s.RedditRateLimited):
+                reader.read()
+            now[0] = 1000 + 604800 - 1
+            with self.assertRaises(s.RedditFetchError):
+                reader.read(force=True)
+            self.assertEqual(session.get.call_count, 1)
+            now[0] += 1
+            self.assertEqual(reader.read().sample_size, 0)
+            self.assertEqual(session.get.call_count, 2)
+
+    def test_missing_browser_title_is_unavailable_not_neutral(self):
+        reader = self.reader()
+        reader._analyzer_factory = Mock()
+        reader.subreddits = ('stocks',)
+        reader._session_factory = lambda: Mock(get=lambda *args, **kwargs: Mock(status_code=503))
+        page = Mock()
+        page.goto.return_value.status = 200
+        page.goto.return_value.all_headers.return_value = {}
+        element = Mock(get_attribute=lambda name: 'fixture' if name == 'id' else None)
+        page.query_selector_all.return_value = [element]
+        reader._browser_factory = lambda: (Mock(), Mock(), Mock(new_page=lambda: page))
+        with self.assertRaisesRegex(s.RedditFetchError, 'missing post-title'):
+            reader.read()
+        self.assertIsNone(reader._cached)
+        reader._analyzer_factory.assert_not_called()
+
+    def test_default_reader_uses_process_acquisition(self):
+        from crassus import reddit_acquisition as ra
+        reader = s.RedditSentimentReader(analyzer_factory=Mock)
+        with patch.object(ra, 'acquire', return_value=[]) as acquire:
+            self.assertEqual(reader.read().sample_size, 0)
+        acquire.assert_called_once_with(reader)
+
+    def test_retained_reap_does_not_claim_reused_or_unrelated_process(self):
+        from crassus import reddit_acquisition as ra
+        from crassus.supervisor import Process
+        from types import SimpleNamespace
+        fields = ['0'] * 22
+        fields[0], fields[19] = 'Z', '222'
+        identity = Process(1, 111, 0, 'Z')
+        with patch.dict(ra._PENDING_REAPS, {42: identity}, clear=True), \
+             patch.object(ra, 'Path', return_value=Mock(read_text=lambda: '42 (fixture) ' + ' '.join(fields))), \
+             patch.object(ra, 'os', SimpleNamespace(waitpid=Mock(), WNOHANG=1)) as proc, \
+             patch.object(ra, '_signal_process') as signal_process:
+            ra._reap_pending()
+            self.assertFalse(ra._PENDING_REAPS)
+            proc.waitpid.assert_not_called()
+            signal_process.assert_not_called()
+
+    def test_retained_owned_zombie_is_reaped_on_later_call(self):
+        from crassus import reddit_acquisition as ra
+        from crassus.supervisor import Process
+        from types import SimpleNamespace
+        fields = ['0'] * 22
+        fields[0], fields[19] = 'Z', '111'
+        with patch.dict(ra._PENDING_REAPS, {42: Process(1, 111, 0, 'Z')}, clear=True), \
+             patch.object(ra, 'Path', return_value=Mock(read_text=lambda: '42 (fixture) ' + ' '.join(fields))), \
+             patch.object(ra, 'os', SimpleNamespace(waitpid=Mock(return_value=(42, 0)), WNOHANG=1)) as proc:
+            ra._reap_pending()
+            self.assertFalse(ra._PENDING_REAPS)
+            proc.waitpid.assert_called_once_with(42, 1)
+
+    def test_observed_denial_survives_hung_worker_cleanup(self):
+        from crassus.reddit_acquisition import _run
+        from crassus.supervisor import proc_visible
+        if not proc_visible():
+            self.skipTest('requires POSIX acquisition worker')
+        code = '''
+import time
+from unittest.mock import Mock
+from crassus import sentiment as s
+from crassus.reddit_acquisition import main
+original = s.RedditSentimentReader.__init__
+def init(self, **kwargs):
+    original(self, **kwargs)
+    self._session_factory = lambda: Mock(get=lambda *args, **kwargs: Mock(status_code=403))
+    self._close_browser = lambda: time.sleep(60)
+s.RedditSentimentReader.__init__ = init
+main()
+'''
+        config = dict(subreddits=['stocks'], keywords=['qqq'], post_limit=1, rate_limited_until=0)
+        with self.assertRaises(s.RedditFetchError) as raised:
+            _run(config, timeout_s=.3, command=[sys.executable, '-c', code])
+        self.assertTrue(str(raised.exception).startswith('source_denied'), str(raised.exception))
+        self.assertIn('cleanup_timeout', str(raised.exception))
 
 if __name__ == '__main__':
     unittest.main()

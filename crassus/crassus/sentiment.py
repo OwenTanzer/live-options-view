@@ -148,6 +148,7 @@ def _matches_keywords(text: str, keywords: tuple[str, ...]) -> bool:
 def _http_expiry(headers: Any, subreddit: str, max_age_s: float) -> float:
     """Carry source-response age into the cache; downloading is not renewal."""
     age = 0.0
+    date_age = 0.0
     if isinstance(headers, dict) or hasattr(headers, "items"):
         try:
             age_header = headers.get("Age", headers.get("age"))
@@ -160,11 +161,16 @@ def _http_expiry(headers: Any, subreddit: str, max_age_s: float) -> float:
                 source_time = parsedate_to_datetime(date_header)
                 if source_time.tzinfo is None:
                     raise ValueError()
-                age = max(age, (datetime.now(timezone.utc) - source_time).total_seconds())
+                date_age = (datetime.now(timezone.utc) - source_time).total_seconds()
         except (TypeError, ValueError, OverflowError) as exc:
             raise RedditParseError(f"parsing_failure: r/{subreddit}: invalid freshness header") from exc
     if age >= max_age_s and age > 0:
-        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP age exceeds retrieval window")
+        raise RedditStaleData(f"stale_data: r/{subreddit}: HTTP Age exceeds retrieval window")
+    if abs(date_age) >= max_age_s and abs(date_age) > 0:
+        # Date alone cannot distinguish an old origin response from a bad
+        # origin/local clock. Keep failure safe and diagnose that ambiguity.
+        raise RedditStaleData(f"freshness_unverifiable: r/{subreddit}: HTTP Date/local clock disagreement; source age or clock skew")
+    age = max(age, date_age)
     return time.monotonic() + max(0, max_age_s - age)
 
 
@@ -461,6 +467,9 @@ class RedditSentimentReader:
         self._read_lock = threading.Lock()
         self._phase_callback: Callable[[str], None] = lambda phase: None
         self._rate_limit_callback: Callable[[float], None] = lambda until: None
+        # Callable transport injection is an offline fixture seam, not the
+        # production process path. Injected factories cannot cross JSON IPC.
+        # Real-browser ownership/soak fixtures explicitly run in _run workers.
         self._isolated = session_factory is _default_session_factory and browser_factory is _default_browser_factory
 
     def read(self, force: bool = False) -> SentimentSnapshot:
