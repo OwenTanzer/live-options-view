@@ -31,6 +31,9 @@ jobs:
       - name: Run reddit_sentiment_qqq ingestion suite
         working-directory: crassus
         run: python scripts/verify_reddit_ingestion.py
+      - name: Run Reddit failure-window and bounded acquisition regressions
+        working-directory: crassus
+        run: python scripts/verify_reddit_failure_window.py
       - name: Run trump_whisperer_qqq strategy suite
         working-directory: crassus
         run: python scripts/verify_trump_whisperer.py
@@ -102,6 +105,9 @@ jobs:
       - name: Run real Chromium memory and fatal-driver regression
         timeout-minutes: 10
         run: docker run --name crassus-reliability-soak --network none --entrypoint python crassus-ci-smoke scripts/soak_reliability.py --cycles 30 --output /tmp/reliability-soak.json
+      - name: Verify real Chromium Reddit acquisition deadline and cleanup
+        timeout-minutes: 2
+        run: docker run --rm --network none --entrypoint python crassus-ci-smoke scripts/verify_reddit_acquisition_browser.py
       - name: Extract measured soak evidence
         if: always()
         run: docker cp crassus-reliability-soak:/tmp/reliability-soak.json reliability-soak.json

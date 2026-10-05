@@ -172,7 +172,7 @@ Path({pidfile!r}).write_text(str(browser.pid))
         self.assertEqual(result, 75)
         self.assertTrue(any(r.get("reason") == "supervisor_failure" for r in records))
 
-    def test_transient_launch_failure_recovers_on_next_read(self):
+    def test_transient_launch_failure_recovers_after_failure_window(self):
         resources = lambda: (Mock(), Mock(), Mock())
         factory = Mock(side_effect=[resources(), RuntimeError("transient"), resources()])
         reader = RedditSentimentReader(browser_factory=factory, session_factory=Mock, analyzer_factory=Mock)
@@ -183,7 +183,8 @@ Path({pidfile!r}).write_text(str(browser.pid))
         reader.read(force=True)
         with self.assertRaises(RuntimeError):
             reader.read(force=True)
-        reader.read(force=True)
+        with patch("crassus.sentiment.time.monotonic", return_value=reader._failure_until):
+            reader.read(force=True)
         self.assertEqual(factory.call_count, 3)
 
     def test_memory_sample_reports_current_process(self):

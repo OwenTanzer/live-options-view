@@ -20,7 +20,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus import sentiment
 from crassus.observability import configure_logging
-from crassus.supervisor import memory_snapshot, proc_visible, process_tree, reap_adopted, supervise
+from crassus.supervisor import memory_snapshot, proc_visible, process_tree, reap_adopted, supervise, _subreaper
 
 MIB = 1024 * 1024
 HTML = '<html><body>' + ''.join(
@@ -98,6 +98,38 @@ def soak(cycles: int) -> dict:
                 residual_descendants=0, samples=active, resting_rss_bytes=resting)
 
 
+def soak_acquisition(cycles: int) -> dict:
+    """Exercise the production process owner on every network-disabled cycle."""
+    from crassus.reddit_acquisition import _run, CLEANUP_TIMEOUT_S
+    from verify_reddit_acquisition_browser import CHILD
+    config = dict(subreddits=list(sentiment.DEFAULT_SUBREDDITS), keywords=list(sentiment.DEFAULT_KEYWORDS),
+                  post_limit=sentiment.DEFAULT_POST_LIMIT, rate_limited_until=0)
+    previous = _subreaper(1)  # Explicit fixture reaper; _run never changes it.
+    baseline = set(process_tree(os.getpid()))
+    resting, elapsed = [], []
+    try:
+        for cycle in range(cycles):
+            started = time.monotonic()
+            result = _run(config, command=[sys.executable, '-c', CHILD.replace('{injection}', '')])
+            assert len(result['texts']) == 200, result
+            duration = time.monotonic() - started
+            assert duration < sentiment._ACQUISITION_TIMEOUT_S + CLEANUP_TIMEOUT_S + 1, duration
+            reap_adopted(None, baseline)
+            assert not set(process_tree(os.getpid())) - baseline, 'residual acquisition descendants'
+            elapsed.append(duration)
+            resting.append(memory_snapshot(os.getpid())['worker_rss_bytes'])
+            print(json.dumps({'acquisition_cycle': cycle + 1, 'sample_size': 200,
+                              'elapsed_seconds': round(duration, 3), 'residual_descendants': 0}), flush=True)
+    finally:
+        _subreaper(previous)
+    window = max(3, (len(resting) - 5) // 3)
+    growth = statistics.median(resting[-window:]) - statistics.median(resting[5:5 + window])
+    assert growth <= 64 * MIB, growth
+    return dict(cycles=cycles, posts=cycles * 200, residual_descendants=0,
+                max_elapsed_seconds=max(elapsed), resting_rss_growth_bytes=growth,
+                subreddits=4, post_limit=50)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cycles', type=int, default=30)
@@ -124,6 +156,7 @@ def main():
         assert evidence.read_text() == "driver SIGKILL injected\n", 'driver injection did not run'
     assert memory_snapshot(os.getpid())['descendant_count'] == 0, 'orphaned browser after failure'
     report = soak(args.cycles)  # New processes advance actual successful reads after the injected failure.
+    report['production_acquisition_soak'] = soak_acquisition(args.cycles)
     report['fatal_driver_failure_exit'] = result
     report['historical_heap_leak_reproduced'] = False
     if args.output:
