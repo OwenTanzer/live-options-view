@@ -64,12 +64,22 @@ health-check host may be allowed on `/healthz` alone.
 | Headers / request body | 16 KiB each; header/body deadlines five seconds. |
 | HTTP deadline / response | 25 seconds / 768 KiB including duplicated MCP content. |
 | Tool result | 256 KiB before text/structured duplication. |
-| Pilot quota | 120 MCP requests/minute and 500 authenticated requests/UTC day; 429 includes Retry-After. |
+| Pilot quota | 120 authenticated MCP requests/minute and 500 authenticated requests/UTC day; separate 120 failed-authentication attempts/minute; 429 includes Retry-After. |
 | Retained references | 64 and 16 MiB of serialized data, fifteen-minute TTL; count/byte eviction and periodic pruning. |
 | Upstream artifacts | Fixed public origin, four MiB raw / 24 MiB expanded; 64 MiB and twelve artifact reads per query, fifteen-second source deadline. |
 | JSONL parsing | At most 100,000 physical lines, 10,000 retained manifest records; 256 KiB per manifest line. Quote lines at most 16 KiB; retain at most 50 matching quote rows per sweep, six sweeps per page. Unrelated quote rows are discarded during incremental parsing. |
 | CSV parsing | At most 10,000 physical records, 128 columns and 4,096 characters/cell. |
 | Logging | Strict event/status/duration/port fields only; at most 60 entries/minute plus a suppressed-count summary. No headers, tokens, claims, URLs, bodies, producer payloads or exception text. |
+
+The failed-authentication counter is separate from the owner allowance and is
+charged only for authentication/authorization denials (401/403). Further failed
+attempts receive 429 with Retry-After. Verification still runs before classifying
+a request; exhausting this counter cannot preempt a valid owner token. This is
+a rejection-response limit, not a global cap on signature-verification work.
+The four active slots, socket/header/deadline limits, bounded key lookup and
+redacted logging remain shared resource protections; this is not a guarantee
+of availability under network or concurrent-request flooding. Authentication
+infrastructure failures (503) do not consume either allowance.
 
 Quotas and references are process-local and reset on restart. They are **not a
 durable spending cutoff**. Serialized retention is a bound on serialized data,

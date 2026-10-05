@@ -185,3 +185,25 @@ test('injected fixture evidence is explicitly synthetic and never claims a publi
   assert.ok(value.sources.every(s => s.link === null)); assert.ok(Date.now() - Date.parse(value.retrieval_time) < 5000);
   assert.equal(value.freshness.status, 'stale');
 });
+
+test('failed-authentication flood cannot consume the owner allowance in the same minute', async () => {
+  let now = Date.parse('2026-10-05T12:00:00Z');
+  await listener(async server => {
+    const ownerToken = keys.token(), foreignToken = keys.token({ sub: 'auth0|another-owner' });
+    const attempts = [{}, { token: 'not-a-valid-token' }, { token: foreignToken }];
+    for (let i = 0; i < 125; i++) {
+      const r = await request(server, ping, attempts[i % attempts.length]);
+      assert.equal(r.status, i < 120 ? (i % 3 === 2 ? 403 : 401) : 429);
+      if (i >= 120) assert.equal(r.headers['retry-after'], '60');
+    }
+    // A fresh valid owner token must pass even after the failed-attempt cap.
+    assert.equal((await request(server, ping, { token: ownerToken })).status, 200);
+    for (let i = 1; i < HTTP_LIMITS.perMinute; i++) {
+      assert.equal((await request(server, ping, { token: ownerToken })).status, 200);
+    }
+    assert.equal((await request(server, ping, { token: ownerToken })).status, 429);
+    now += 60000;
+    assert.equal((await request(server, ping)).status, 401);
+    assert.equal((await request(server, ping, { token: ownerToken })).status, 200);
+  }, { now: () => now });
+});

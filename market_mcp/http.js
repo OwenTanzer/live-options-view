@@ -5,7 +5,7 @@ const { Source, LIMITS } = require('./source');
 const { Consumer } = require('./consumer');
 const { Protocol, VERSION } = require('./server');
 const { AuthError, SCOPE, AUTH_LIMITS } = require('./auth');
-const HTTP_LIMITS = Object.freeze({ active: 4, sockets: 32, bodyMs: 5000, requestMs: 25000, drainMs: 25000, responseBytes: 768 * 1024, perMinute: 120, perDay: 500 });
+const HTTP_LIMITS = Object.freeze({ active: 4, sockets: 32, bodyMs: 5000, requestMs: 25000, drainMs: 25000, responseBytes: 768 * 1024, perMinute: 120, failedAuthPerMinute: 120, perDay: 500 });
 function accepts(value, type) {
   if (typeof value !== 'string') return false;
   return value.split(',').some(part => {
@@ -20,7 +20,7 @@ function accepts(value, type) {
 }
 function createHttpServer(consumer, { policy = null, auth = null, logger = () => {}, bodyMs = HTTP_LIMITS.bodyMs, drainMs = HTTP_LIMITS.drainMs, now = () => Date.now() } = {}) {
   if (!!policy !== !!auth) throw new Error('Production policy and authenticator must be supplied together.');
-  let active = 0, draining = false, stopping, minute = -1, minuteCount = 0, day = -1, dayCount = 0;
+  let active = 0, draining = false, stopping, minute = -1, minuteCount = 0, failedMinute = -1, failedCount = 0, day = -1, dayCount = 0;
   const server = http.createServer({ maxHeaderSize: LIMITS.input_bytes, connectionsCheckingInterval: 1000 }, async (req, res) => {
     const started = Date.now();
     res.on('finish', () => logger({ event: 'request', status: res.statusCode, duration_ms: Date.now() - started }));
@@ -50,10 +50,6 @@ function createHttpServer(consumer, { policy = null, auth = null, logger = () =>
       res.setHeader('Access-Control-Allow-Methods', 'POST');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,Accept,MCP-Protocol-Version'); reply(204); return;
     }
-    if (policy) {
-      const window = Math.floor(now() / 60000); if (window !== minute) { minute = window; minuteCount = 0; }
-      if (++minuteCount > HTTP_LIMITS.perMinute) { res.setHeader('Retry-After', String(60 - Math.floor(now() / 1000) % 60)); reply(429, { error: 'Pilot MCP request rate exceeded.' }); return; }
-    }
     if (active >= HTTP_LIMITS.active) { res.setHeader('Retry-After', '1'); reply(429, { error: 'At most four concurrent requests.' }); return; }
     active++; let timer, deadline;
     try {
@@ -61,9 +57,24 @@ function createHttpServer(consumer, { policy = null, auth = null, logger = () =>
       if (auth) try { await auth.authenticate(req.headers.authorization); }
       catch (e) {
         const failure = e instanceof AuthError ? e : new AuthError(503, 'authorization_unavailable');
+        // Classify only after verification: a shared pre-auth cutoff would
+        // let strangers prevent a valid owner token from ever being checked.
+        if (failure.status === 401 || failure.status === 403) {
+          const window = Math.floor(now() / 60000);
+          if (window !== failedMinute) { failedMinute = window; failedCount = 0; }
+          if (failedCount >= HTTP_LIMITS.failedAuthPerMinute) {
+            res.setHeader('Retry-After', String(60 - Math.floor(now() / 1000) % 60));
+            reply(429, { error: 'Failed authentication request rate exceeded.' }); return;
+          }
+          failedCount++;
+        }
         if (failure.status === 401 || failure.status === 403) res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${policy.metadataUrl}", scope="${SCOPE}"${failure.code === 'missing_token' ? '' : `, error="${failure.code === 'insufficient_scope' ? 'insufficient_scope' : 'invalid_token'}"`}`);
         if (failure.status === 503) res.setHeader('Retry-After', '30');
         reply(failure.status, { error: failure.code }); return;
+      }
+      if (policy) {
+        const window = Math.floor(now() / 60000); if (window !== minute) { minute = window; minuteCount = 0; }
+        if (++minuteCount > HTTP_LIMITS.perMinute) { res.setHeader('Retry-After', String(60 - Math.floor(now() / 1000) % 60)); reply(429, { error: 'Pilot MCP request rate exceeded.' }); return; }
       }
       if (policy) {
         const window = Math.floor(now() / 86400000); if (window !== day) { day = window; dayCount = 0; }

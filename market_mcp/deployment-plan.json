@@ -16,7 +16,7 @@
     "dockerfile": "market_mcp/Dockerfile",
     "runtime": "Node 22, non-root node user",
     "reason": "Image deployment does not inspect the root Python Dockerfile or railway.toml and has no repository autodeploy source.",
-    "local_verified_manifest_digest": "sha256:0a83254f8562252c8f570e56c9b449f65873f3caa07e058f59bfc6d120766b46",
+    "local_verified_manifest_digest": "sha256:4c69686b5455e44e7e882c6b52c6713090bbfffcffc4182183da78fcbe2323a3",
     "publication_status": "not_published"
   },
   "service_configuration": {
@@ -61,13 +61,14 @@
   "pilot_controls": {
     "additional_recurring_budget_usd_per_month": 10,
     "active_mcp_requests": 4,
-    "mcp_requests_per_minute": 120,
     "authenticated_mcp_requests_per_utc_day": 500,
     "retained_references": 64,
     "retained_serialized_bytes": 16777216,
     "references_ttl_seconds": 900,
     "workspace_spending_cutoff": "must not change",
-    "cost_qualification": "Limits require platform acceptance/readback. Request quotas reset on restart and are not a durable spending cutoff; monitor this new service alone and stop its pilot before exceeding the approved budget."
+    "cost_qualification": "Limits require platform acceptance/readback. Request quotas reset on restart and are not a durable spending cutoff; monitor this new service alone and stop its pilot before exceeding the approved budget.",
+    "authenticated_mcp_requests_per_minute": 120,
+    "failed_authentication_attempts_per_minute": 120
   },
   "release_gates": [
     "Reconcile/rebase onto the final approved PR119 head after the separate merge-readiness review; preserve its accepted fixes.",
@@ -79,9 +80,9 @@
   ],
   "current_status_document": "ROLLOUT.md",
   "completed_checks": [
-    "Linux Node22 non-root image build and 68-test suite passed; see ROLLOUT.md.",
+    "Linux Node22 non-root rebuilt quota-repair image and 69-test suite passed; see ROLLOUT.md.",
     "Railway accepted/read back 0.2 CPU and 500000000 memory bytes on the empty new service.",
-    "Follow-up draft publication authorized in current task; no merge authority.",
+    "Follow-up publication and merge authorized only after current collaborator approval and branch protections pass.",
     "PR119 merged640b8e508dd4b400ff544f4c73cbbcd16b33ae85 after formal approval; Big Banana autodeploy enabled:false readback verified."
   ]
 }

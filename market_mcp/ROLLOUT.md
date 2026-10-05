@@ -148,3 +148,39 @@ p95 66 ms, CPU 607 ms. No live registry/deployment assertion.
 A separate AI reviewer inspected the final provenance/eviction repairs and
 independently ran both new regressions, 2/2 passing, with no blocking findings.
 That technical review does not replace GitHub's required collaborator approval.
+
+
+## PR120 requested-change repair: authentication quota isolation
+
+Jayden's Changes requested review on e8d5345 identified a shared pre-authentication
+minute counter that let strangers exhaust the owner's allowance. A fixed-clock
+regression reproduced 429 instead of 200 for a valid owner immediately after
+125 missing/malformed/wrong-owner requests.
+
+The repaired transport charges the owner's 120/minute allowance only after
+successful authentication. A separate bounded counter admits 120 authentication
+denials (401/403) per minute, then returns 429 with Retry-After for further
+denials. Authentication infrastructure failures (503) charge neither counter.
+Verification continues before classification; this is quota isolation, not a
+cap on verification computation or immunity to concurrent/network flooding.
+The shared four active slots and 32 sockets remain unchanged.
+
+The regression now passes, verifies all 120 owner requests still succeed after
+the rejected flood, enforces the next owner's 429, and checks minute reset.
+The existing daily quota/reset and concurrency tests also pass. An independent
+reviewer inspected the repair and reran those three focused tests: 3/3 passed,
+no blocking findings. Jayden's formal Changes requested remains until re-review.
+
+Validation: 69/69 host tests and 69/69 tests against the rebuilt non-root
+Node22.23.3 image; actual-entrypoint fixture health200, missing-token401,
+wrong-owner403, initialize/list/query/detail and SIGTERM exit0; seven authenticated
+fixture queries; synthetic load64 queries plus detail, peak4 active, p95 64ms,
+RSS92,303,360 bytes, CPU610ms. These are local fixture measurements, not live
+Chej or Railway acceptance. Evidence on verified Linux Box owen-MPL1P as owen:
+../repair-quota-host-tests.txt and ../repair-quota-image/.
+
+Local image ID: 6185f9abd3c073c455c6ca2e27834b8d517a14f7d2a486c4f13e2bf76b28c8fb.
+Local manifest digest (supersedes preceding revision):
+sha256:4c69686b5455e44e7e882c6b52c6713090bbfffcffc4182183da78fcbe2323a3.
+Not registry-published or deployed. No credentials, access grants, Railway
+settings, or original MOOPERLIGHT prepared files were changed by this repair.
