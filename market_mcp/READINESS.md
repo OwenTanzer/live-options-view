@@ -67,14 +67,19 @@ Actual Railway production config was read without variable values:
 | `crassus-runner` | master | `/crassus/**`; excludes these additions |
 | `moo169-tradier-collector` | master | Explicit launcher/probe/collector/dependency paths; excludes these additions |
 | `moo144-tradier-probe` | moo-144-probe-recovery | Different branch |
-| `oa203-banana-scanner-AWsT` | master | **No watchPatterns supplied: future master merges can redeploy this scanner** |
+| `oa203-banana-scanner-AWsT` | master | No watchPatterns supplied; current autodeploy enabled/paused state was not verified |
 
 Project `live-market-monitor`: `c27d4273-6b16-4921-bd61-0c4f27a8c8ae`;
 production: `9008da9e-6888-4a58-a33b-e3eef5cc01f5`.
 OA-203 service: `2037a86b-16a2-4c64-a10f-458b2a2d1f47`.
 Publishing this feature branch/draft PR is outside these production source
-branches. **Merge is blocked pending a separate review/authorization of OA-203
-deployment isolation.** No watch paths or branch protections were changed.
+branches. Parent history records Owen explicitly paused Big Banana autodeploy
+(`Sentinel_34143474dda481919f7fcbd06bfd6feb`). Source branch and missing watch
+patterns alone do not establish that autodeploy is currently enabled or that a
+merge would trigger a scanner deployment. **Merge/deployment isolation remains
+an unresolved configuration check:** verify the current enabled/paused state
+and applicable behavior before proceeding. Preserve Owen's pause; never reenable
+autodeploy as part of this task. No watch paths or branch protections were changed.
 
 ## Proposed remote connection and remaining prerequisites
 
@@ -112,8 +117,9 @@ boundary means a runtime usage budget must be authorized before provisioning.
 Before deployment:
 
 1. Obtain the repository's required approval/checks for the exact revision;
-   resolve the OA-203 merge/deployment watch-scope blocker without bypassing
-   branch protection or changing trading services as part of this task.
+   verify OA-203's current autodeploy enabled/paused state and deployment
+   isolation without bypassing branch protection or changing trading services.
+   Preserve Owen's existing autodeploy pause; do not reenable it.
 2. Confirm the proposed dedicated service/project and approve a runtime budget.
 3. Choose and approve the TLS/auth/client-access route at action time. Implement
    and independently test only the corresponding production listener/gateway
