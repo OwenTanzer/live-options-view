@@ -44,7 +44,7 @@ from .config import (
     load_accounts,
 )
 from .flatten import maybe_flatten
-from .market import QuoteRateLimited, QuoteReader, SnapshotReader
+from .market import QuoteRateLimited, QuoteReader, SnapshotReader, intent_lineage, unavailable_lineage
 from .observability import configure_logging, event, rejection_reason
 from .supervisor import HEARTBEAT_FD, report_cycle, supervise
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
@@ -195,6 +195,7 @@ class Runner:
                     strategy_version="n/a",
                     outcome_class=Outcome.TRANSPORT_ERROR,
                     reason=f"Startup session failure: {exc}",
+                    market_snapshot_lineage=unavailable_lineage("not_observed"),
                 )
                 continue
 
@@ -262,7 +263,7 @@ class Runner:
             reason=recovered.note,
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
-            market_snapshot_lineage=intent.get("market_snapshot_lineage"),
+            market_snapshot_lineage=intent_lineage(intent.get("market_snapshot_lineage")),
             account_state_before=intent.get("account_state_before"),
             execution_request_id=recovered.execution_request_id,
             http_status=recovered.http_status,
@@ -376,7 +377,7 @@ class Runner:
             outcome_class=Outcome.NO_TRADE, account_closed=True,
             market_snapshot_timestamp=snapshot.timestamp if snapshot else None,
             market_snapshot_url_or_hash=snapshot.provenance if snapshot else None,
-            market_snapshot_lineage=snapshot.lineage if snapshot else None,
+            market_snapshot_lineage=snapshot.lineage if snapshot else unavailable_lineage("not_observed"),
             account_state_before=state.summary(),
             reason=f"Account closed: {state.closure_reason}; trading permanently stopped.",
         )
@@ -398,7 +399,7 @@ class Runner:
             strategy_version=getattr(strategy, "strategy_version", "unknown"),
             market_snapshot_timestamp=snapshot.timestamp if snapshot else None,
             market_snapshot_url_or_hash=snapshot.provenance if snapshot else None,
-            market_snapshot_lineage=snapshot.lineage if snapshot else None,
+            market_snapshot_lineage=snapshot.lineage if snapshot else unavailable_lineage("unavailable"),
         )
 
         # Reconcile first: the server's view of cash and trades is the only

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus.audit import MANDATORY_FIELDS, Outcome
 from crassus.client import AccountLiquidated, AccountState, ExecutionClient, TransportError
-from crassus.market import MarketSnapshot, QuoteRateLimited, SnapshotReader
+from crassus.market import MarketSnapshot, QuoteRateLimited, SnapshotReader, unavailable_lineage
 from crassus.runner import Runner
 from verify_runner_flatten_attribution import FakeAccount, LONG_CALL, make_runner
 
@@ -61,6 +61,10 @@ class SnapshotIdentity(unittest.TestCase):
         direct = MarketSnapshot(s.url, s.fetched_at, s.timestamp, s.snapshot_time,
                                 s.expiration, s.underlying_price, s.rows, s.sha256)
         self.assertEqual(direct.lineage, s.lineage)
+        keyed = replace(direct, snapshot_key=KEY)
+        self.assertEqual(keyed.lineage, snapshot(snapshot_key=KEY).lineage)
+        malformed = replace(direct, snapshot_key="malformed")
+        self.assertEqual(malformed.lineage, unavailable_lineage("invalid"))
 
     def test_legacy_coarse_keys_do_not_claim_immutable_identity(self):
         for time_part in ("1200", "120000"):
@@ -183,14 +187,24 @@ class LedgerLineage(unittest.TestCase):
         self.runner.sessions[self.account.alias].me = lambda: closed
         self.runner._run_account(self.account, snapshot(snapshot_key=KEY), "open")
         self.assert_lineage(self.records()[-1])
-        self.runner._retire_closed(self.account, closed)
-        self.assertIsNone(self.records()[-1]["market_snapshot_lineage"])
+        self.runner.sessions[self.account.alias].ensure_session = Mock(return_value=closed)
+        self.runner.startup()
+        self.assertEqual(self.records()[-1]["market_snapshot_lineage"],
+                         unavailable_lineage("not_observed"))
+        self.assertIsNone(self.records()[-1]["market_snapshot_url_or_hash"])
+
+    def test_startup_session_failure_has_no_observation(self):
+        self.runner.sessions[self.account.alias].ensure_session = Mock(
+            side_effect=TransportError("fixture"))
+        self.runner.startup()
+        self.assertEqual(self.records()[-1]["market_snapshot_lineage"],
+                         unavailable_lineage("not_observed"))
 
     def test_snapshot_outage_never_borrows_cached_identity(self):
         self.runner._run_account(self.account, None, "open")
         r = self.records()[-1]
         self.assertEqual(r["outcome_class"], Outcome.RUNNER_ERROR)
-        self.assertIsNone(r["market_snapshot_lineage"])
+        self.assertEqual(r["market_snapshot_lineage"], unavailable_lineage("unavailable"))
         self.assertIsNone(r["market_snapshot_url_or_hash"])
 
     def test_flatten_preserves_snapshot_identity(self):
@@ -204,8 +218,11 @@ class LedgerLineage(unittest.TestCase):
     def test_recovery_preserves_original_identity_and_never_rewrites_old_ledger(self):
         self.runner._run_account(self.account, snapshot(snapshot_key=KEY), "closed")
         original_bytes = self.runner.ledger.paths.ledger.read_bytes()
-        for extension in (snapshot(snapshot_key=KEY).lineage, None):
-            self.executor._pending = {"execution_request_id": "old-request-" + str(extension is None),
+        for index, extension in enumerate((snapshot(snapshot_key=KEY).lineage, None, "malformed",
+                                           {"status": "valid"},
+                                           {"schema_version": "market_snapshot_lineage.v1",
+                                            "snapshot_key": None, "status": []})):
+            self.executor._pending = {"execution_request_id": f"old-request-{index}",
                                       "market_snapshot_timestamp": "old-time",
                                       "market_snapshot_url_or_hash": "old-provenance"}
             self.executor._result.execution_request_id = self.executor._pending["execution_request_id"]
@@ -214,7 +231,9 @@ class LedgerLineage(unittest.TestCase):
             self.runner._recover_pending = Runner._recover_pending.__get__(self.runner)
             self.runner._run_account(self.account, snapshot(snapshot_key=KEY2), "open")
             r = self.records()[-1]
-            self.assertEqual(r["market_snapshot_lineage"], extension)
+            expected = extension if isinstance(extension, dict) and extension.get("status") == "valid" and "schema_version" in extension else unavailable_lineage(
+                "unknown" if extension is None else "invalid")
+            self.assertEqual(r["market_snapshot_lineage"], expected)
             self.assertEqual(r["market_snapshot_url_or_hash"], "old-provenance")
             self.assertEqual(r["market_snapshot_timestamp"], "old-time")
             self.assertEqual(r["execution_request_id"], self.executor._pending["execution_request_id"])
@@ -296,7 +315,8 @@ class LedgerLineage(unittest.TestCase):
             client.submit(symbol=ROW["OptionSymbol"], side="buy", quantity=1,
                           execution_request_id="fixed-id", market_snapshot_lineage=extension)
             intent = client.pending_intent()
-            self.assertEqual(intent["market_snapshot_lineage"], extension)
+            expected = extension if extension is not None else unavailable_lineage("unknown")
+            self.assertEqual(intent["market_snapshot_lineage"], expected)
             expected_body = {"execution_request_id": "fixed-id", "sym": ROW["OptionSymbol"],
                              "side": "buy", "qty": 1}
             session._request.assert_called_once_with("POST", "/api/paper-trade", json=expected_body)
@@ -305,7 +325,8 @@ class LedgerLineage(unittest.TestCase):
                 client._persist_intent(intent)
             session._request.reset_mock()
             client.recover_pending()
-            self.assertEqual(client.pending_intent()["market_snapshot_lineage"], extension)
+            self.assertEqual(client.pending_intent()["market_snapshot_lineage"],
+                             extension if extension is not None else unavailable_lineage("unknown"))
             session._request.assert_called_once_with("POST", "/api/paper-trade", json=expected_body)
             client.finalize("fixed-id")
 

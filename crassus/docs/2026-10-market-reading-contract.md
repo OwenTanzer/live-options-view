@@ -1,8 +1,8 @@
 # Shared market readings and snapshot lineage v1
 
 Issue #107, work item 3 and the bounded Crassus provenance part of item 4.
-Authority: [inventory](2026-09-market-reading-inventory.md) and
-[ownership decisions](2026-09-market-reading-ownership.md), merged as #108/#110.
+Authority: [inventory](../../docs/plans/2026-09-market-reading-inventory.md) and
+[ownership decisions](../../docs/plans/2026-09-market-reading-ownership.md), merged as #108/#110.
 This defines the future shared-reading envelope; this PR implements only the
 snapshot-lineage extension below. No shared-reading publisher is added.
 
@@ -75,7 +75,7 @@ separate clock read. Never derive either timestamp from the other, or fabricate
 ## Implemented optional audit extension
 
 The 19 mandatory fields and `crassus_audit.v1` stay unchanged. New runner
-records may additionally contain:
+records contain an optional v1 extension with an object value:
 
 ```json
 {
@@ -99,8 +99,11 @@ namespace context; a bare key must not be joined across unrelated sources.
 | Historical minute/second key `intraday/YYYYMMDD/snapshot_HHMM.csv` or `snapshot_HHMMSS.csv` | Exact supplied string | `legacy_key`; potentially overwritten, no immutable-identity guarantee |
 | Key absent (legacy payload or old direct constructor) | null | `absent`; rows remain usable |
 | Explicit null, nonstring, empty, wrong namespace/format, impossible date/time, path traversal, URL/query/fragment | null | `invalid`; no coercion, trimming, network lookup, or strategy veto |
-| No snapshot available | n/a | Extension null (or absent on startup with no observation) |
-| Pre-extension ledger or pending intent | n/a | Missing/null extension means lineage unknown; no timestamp inference |
+| Startup record before any board read | null | `not_observed`; no market observation was attempted |
+| Cycle with a failed board read | null | `unavailable`; no snapshot was available for this cycle |
+| Pre-extension pending intent with missing/null extension | null | `unknown` on a newly written recovery record; no timestamp inference |
+| Malformed non-object intent extension | null | `invalid` on a newly written recovery record; original intent is not rewritten unless replayed |
+| Pre-extension ledger record | n/a | Its absent/null extension remains unchanged; consumers must treat historical lineage as unknown |
 
 Invalid raw key values are not copied into the ledger. The existing payload
 hash still identifies the exact fetched JSON. All original strategy-visible
@@ -111,7 +114,7 @@ strategy/quote/reconciliation errors, liquidation, mandatory flatten, and
 closed-account records when a snapshot is available. Pending execution intents
 persist it before submission and recovery uses the **original intent's**
 lineage, never the latest board. The HTTP execution request is unchanged.
-Startup records without a snapshot do not invent an identity. Existing error
+Startup records without a snapshot use `not_observed` and do not invent an identity. Existing error
 boundaries, retries and decisions are unchanged; this adds no new error ledger
 paths. Old ledgers are never edited, and unknown historical lineage stays
 unknown. Timestamp-nearest historical matching remains approximate/unverified.
@@ -146,7 +149,7 @@ unittest test cases and repository assertion checks, so are not summed.
 
 | Suite | Exact result |
 |---|---|
-| `verify_snapshot_lineage` | 16 tests passed (after review extension below) |
+| `verify_snapshot_lineage` | 17 tests passed after Jayden's review remediation below |
 | `verify_invariants` | 83 checks passed, 0 failed |
 | `verify_observability` | 14 tests passed |
 | `verify_runner_flatten_attribution` | 26 checks passed, 0 failed |
@@ -204,7 +207,7 @@ workflow inspection on October 4 found:
 |---|---|
 | Crassus runner | Matches live `/crassus/**`; source master, root `crassus`, Wait for CI enabled. Crassus tests and Docker CI run on this PR. |
 | QQQ collector | No match: live paths are `/collector.py`, `/market_signals.py`, `/crude_calibration.py`, `/requirements.txt`, `/Dockerfile`, `/railway.toml`; Wait for CI enabled. |
-| Cloudflare Worker | **Would deploy on master merge**: `deploy.yml` includes `docs/**`, even for plan Markdown. Web CI also matches. No Worker runtime code changes. |
+| Cloudflare Worker | The plan now lives under `crassus/docs/`, outside `deploy.yml`'s `docs/**` path. The final PR diff has no Worker, web asset, or deploy-workflow path, so a master merge does not trigger that workflow. |
 | Big Banana (`oa203-banana-scanner-AWsT`) | **Potential unrelated rebuild/deploy**: live source master, no `watchPatterns` reported, Wait for CI false. Treat merge as deployment-sensitive; this PR does not repair configuration. |
 | MOO-169 collector | Watch paths only Tradier launcher/collector/probe, root requirements/Dockerfile; no match. |
 | MOO-144 probe | Source branch `moo-144-probe-recovery`, not this branch/master. |
@@ -236,10 +239,31 @@ replay uses the identical HTTP body, and the final restart neither resends nor
 rewrites/duplicates the already committed ledger outcome. Also corrected the
 older recovery fake to return its pending request ID and assert the match.
 
-The extended lineage suite passes **16 tests**; `git diff --check` passes.
+The earlier extended lineage suite passed **16 tests**; `git diff --check` passed.
 Runtime files are unchanged by this review. On implementation head
 `1892381dd6a2e8c8ae68311712fa83bde864ffea`, both Web CI and the Crassus
 workflow passed, including Python 3.11 invariant/strategy tests and the actual
 Docker build plus Chromium memory/fatal-driver regression (run 37239819011).
 Every new PR head still requires its own passing checks. No merge or deployment
-is authorized by this review; the watch-scope concerns above remain relevant.
+is authorized by this review; the Big Banana watch-scope concern remains relevant.
+
+### Jayden review remediation (2026-10-05)
+
+Jayden independently reviewed head `6313301` and requested two changes. The
+contract moved from `docs/plans/` to `crassus/docs/`. Because it was added on
+this PR, the final diff contains no `docs/**` path; `deploy.yml` is unchanged,
+so Worker code, config and web-asset changes still trigger the normal deploy.
+
+New ledger records always contain a lineage object. A startup record before a
+board read is `not_observed`; a cycle without a snapshot is `unavailable`;
+recovery of a pre-extension intent is `unknown`; a malformed intent extension
+is `invalid`. An observed payload with no key remains `absent`, and an observed
+payload with a malformed key remains `invalid`. Old ledger lines are not
+rewritten or retrospectively attributed. Direct `MarketSnapshot` construction
+now derives the key status when a key is supplied.
+
+The focused suite passes **17 tests** on Windows with only the existing POSIX
+directory-fsync helper stubbed. Adjacent invariant, runner-attribution,
+observability and archive suites pass (83, 26, 14 and 17 respectively) under
+the same stub; the 18-case base/candidate behavior projections and HTTP bodies
+are byte-identical. Linux CI on the final head remains the release gate.

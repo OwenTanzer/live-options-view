@@ -33,6 +33,7 @@ from .durability import durable_mkdir, sync_directory
 from . import clock
 from .audit import Outcome
 from .config import BASE_URL, BOT_REGISTRATION_KEY
+from .market import intent_lineage
 
 
 class CrassusError(Exception):
@@ -559,7 +560,7 @@ class ExecutionClient:
             decision=intent.get("decision"),
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
-            market_snapshot_lineage=intent.get("market_snapshot_lineage"),
+            market_snapshot_lineage=intent_lineage(intent.get("market_snapshot_lineage")),
             account_state_before=intent.get("account_state_before"),
         )
         result.note = "Replayed a persisted in-flight intent that the server had not recorded."
@@ -613,7 +614,7 @@ class ExecutionClient:
                 "decision": decision,
                 "market_snapshot_timestamp": market_snapshot_timestamp,
                 "market_snapshot_url_or_hash": market_snapshot_url_or_hash,
-                "market_snapshot_lineage": market_snapshot_lineage,
+                "market_snapshot_lineage": intent_lineage(market_snapshot_lineage),
                 "account_state_before": account_state_before,
                 "created_utc": clock.iso_utc(),
             }

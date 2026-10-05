@@ -208,6 +208,16 @@ class MarketSnapshot:
     snapshot_key: str | None = None
     snapshot_key_status: str = "absent"
 
+    def __post_init__(self) -> None:
+        # Direct construction must not publish a key with the default
+        # "absent" status. from_payload has already classified null vs absent.
+        if self.snapshot_key is not None:
+            key, status = _snapshot_key({"snapshot_key": self.snapshot_key})
+            object.__setattr__(self, "snapshot_key", key)
+            object.__setattr__(self, "snapshot_key_status", status)
+        elif self.snapshot_key_status not in {"absent", "invalid"}:
+            raise ValueError("A missing snapshot key cannot have a present-key status")
+
     @classmethod
     def from_payload(cls, url: str, payload: dict[str, Any], raw: bytes) -> "MarketSnapshot":
         snapshot_key, key_status = _snapshot_key(payload)
@@ -255,6 +265,29 @@ class MarketSnapshot:
 
     def by_symbol(self, symbol: str) -> dict[str, Any] | None:
         return next((r for r in self.rows if r.get("OptionSymbol") == symbol), None)
+
+
+def unavailable_lineage(status: str) -> dict[str, Any]:
+    """Describe missing observation evidence without inventing a snapshot key."""
+    if status not in {"not_observed", "unavailable", "unknown", "invalid"}:
+        raise ValueError(f"Unknown missing-lineage status: {status}")
+    return {"schema_version": "market_snapshot_lineage.v1", "snapshot_key": None,
+            "status": status}
+
+
+def intent_lineage(value: Any) -> dict[str, Any]:
+    """Old intents have no extension; preserve that uncertainty on recovery."""
+    if isinstance(value, dict):
+        key, status = value.get("snapshot_key"), value.get("status")
+        if value.get("schema_version") == "market_snapshot_lineage.v1" and isinstance(status, str) and (
+            (status in {"valid", "legacy_key"} and isinstance(key, str)
+             and _snapshot_key({"snapshot_key": key}) == (key, status))
+            or (status in {"absent", "invalid", "not_observed", "unavailable", "unknown"}
+                and key is None)
+        ):
+            return value
+        return unavailable_lineage("invalid")
+    return unavailable_lineage("unknown" if value is None else "invalid")
 
 
 class SnapshotReader:
