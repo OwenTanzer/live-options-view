@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');const os=require('node:os');const path=require('node:path');const {EventEmitter}=require('node:events');const {PassThrough}=require('node:stream');const {gzipSync}=require('node:zlib');
-const {Consumer,csv}=require('./consumer');const {Source,DataError,LIMITS,ORIGIN,permitted,publicRead}=require('./source');const {Protocol,serve,tools}=require('./server');
+const {Consumer,csv,jsonl}=require('./consumer');const {Source,DataError,LIMITS,ORIGIN,permitted,publicRead}=require('./source');const {Protocol,serve,tools}=require('./server');
 const {fixtures,writeFixtures,SESSION,NOW,RUN,ARCHIVE,CONTRACT,PUT}=require('./fixtures');
 const PREFIX=`oa203/scanner/${SESSION}/`;const LATEST='squeeze-scanner/v1/scheduled/latest.json';
 function setup({files=fixtures(),now=()=>NOW,calendar,fail={}}={}){
@@ -9,6 +9,18 @@ function setup({files=fixtures(),now=()=>NOW,calendar,fail={}}={}){
   return {consumer:new Consumer(source,{now,...(calendar===undefined?{}:{scheduleCalendar:calendar})}),files,calls};
 }
 function edit(files,key,fn){const value=JSON.parse(files[key]);fn(value);files[key]=JSON.stringify(value);}
+
+test('artifact parsers bound cells, physical lines and selected records before building large arrays',()=>{
+  const excessive=e=>e.code==='excessive_response';
+  assert.throws(()=>jsonl('\n'.repeat(LIMITS.jsonl_lines+1)),excessive);
+  assert.throws(()=>jsonl(JSON.stringify({padding:'x'.repeat(LIMITS.quote_line_bytes)}),{maxLineBytes:LIMITS.quote_line_bytes}),excessive);
+  assert.throws(()=>jsonl('{"symbol":"selected"}\n'.repeat(LIMITS.rows+1),{maxRows:LIMITS.rows}),excessive);
+  assert.equal(jsonl('{"symbol":"other"}\r\n'.repeat(1000)+'{"symbol":"selected"}',{predicate:r=>r.symbol==='selected',maxRows:1}).length,1);
+  assert.throws(()=>jsonl('null'),e=>e.code==='incompatible_schema');
+  assert.throws(()=>csv('column\n'+'x'.repeat(LIMITS.csv_cell_chars+1)),excessive);
+  assert.throws(()=>csv(Array.from({length:LIMITS.csv_columns+1},(_,i)=>'c'+i).join(',')),excessive);
+  assert.throws(()=>csv('column\n'+'value\n'.repeat(LIMITS.csv_rows+1)),excessive);
+});
 test('discovery distinguishes selected session, missing publication and unsupported capabilities',async()=>{
   const {consumer,files}=setup();let out=await consumer.call('discover_sources');assert.equal(out.capabilities[2].availability,'explicit_session_required');assert.ok(out.unsupported.includes('shared_PCR'));
   delete files['intraday/latest.json'];out=await consumer.call('discover_sources',{session:SESSION});assert.equal(out.status,'partial');assert.equal(out.capabilities[0].availability,'missing_publication');assert.equal(out.capabilities[2].availability,'available');
@@ -96,3 +108,38 @@ test('detail rejects incompatible selected quote row as partial evidence',async(
 test('squeeze detail retains missed-slot stale warning',async()=>{const {consumer,files}=setup();edit(files,'squeeze-scanner/v1/scheduled/latest-schedule.json',p=>p.status='missed');const first=await consumer.call('squeeze_results');const out=await consumer.call('result_detail',{reference:first.rows[0].detail_reference});assert.equal(out.freshness.status,'stale');assert.ok(out.warnings.some(w=>w.includes('missed')));});
 test('MCP accepts standard request metadata and rejects malformed initialization',async()=>{const {consumer}=setup();const bad=new Protocol(consumer);assert.equal((await bad.handle({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',clientInfo:'hi',capabilities:[]}})).error.code,-32602);const p=new Protocol(consumer);await p.handle({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',clientInfo:{name:'test',version:'1'},capabilities:{}}});await p.handle({jsonrpc:'2.0',method:'notifications/initialized'});assert.ok((await p.handle({jsonrpc:'2.0',id:2,method:'tools/list',params:{_meta:{}}})).result);assert.ok((await p.handle({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'discover_sources',arguments:{},_meta:{progressToken:3}}})).result);});
 test('return session calendar boundaries never masquerade as acquisition/publication times',async()=>{const {consumer}=setup();const out=await consumer.call('return_rankings',{session:SESSION});assert.equal(out.producer_times.acquisition_start,null);assert.equal(out.producer_times.acquisition_end,null);assert.equal(out.producer_times.publication,null);assert.equal(out.session_window.open_ms,1790947800000);assert.match(out.session_window.meaning,/not acquisition/);});
+
+test('detail labels retained and newly fetched provenance without mutating the originating evidence', async () => {
+  for (const [name,args] of [['market_context',{limit:1}],['squeeze_results',{limit:1}],['return_rankings',{session:SESSION,limit:1}]]) {
+    const {consumer}=setup(); const first=await consumer.call(name,args);
+    const original=JSON.parse(JSON.stringify(first.sources));
+    const reference=first.rows[0].detail_reference;
+    for(let i=0;i<2;i++) {
+      const detail=await consumer.call('result_detail',{reference,limit:1});
+      assert.equal(detail.status,'available');
+      const retained=detail.sources.filter(e=>e.retained);
+      assert.deepEqual(retained.map(({retained,...e})=>e),original);
+      assert.ok(detail.sources.every(e=>typeof e.retained==='boolean'));
+      const fetched=detail.sources.filter(e=>e.retained===false);
+      assert.equal(fetched.length>0,name!=='market_context');
+      assert.deepEqual(first.sources,original);
+      assert.deepEqual(consumer.references.get(reference).value.evidence,original);
+    }
+  }
+  const {consumer,files}=setup(); const first=await consumer.call('squeeze_results',{limit:1});
+  edit(files,ARCHIVE+'/results.json',p=>p[0].scores.combined=99);
+  const failed=await consumer.call('result_detail',{reference:first.rows[0].detail_reference});
+  assert.equal(failed.status,'failed');
+  assert.ok(failed.sources.some(e=>e.retained===true));
+  assert.ok(failed.sources.some(e=>e.retained===false));
+});
+
+test('early reference eviction tells the client to repeat the originating query', async () => {
+  const {consumer}=setup(); const first=await consumer.call('market_context',{limit:1});
+  for(let i=0;i<LIMITS.references;i++) consumer.reference({i});
+  const result=await consumer.call('result_detail',{reference:first.rows[0].detail_reference});
+  assert.equal(result.errors[0].code,'invalid_reference');
+  assert.match(result.errors[0].message,/evicted.*repeat the originating query/);
+  const description=tools.find(t=>t.name==='result_detail').description;
+  assert.match(description,/up to 15 minutes/); assert.match(description,/64-reference\/16 MiB/);
+});

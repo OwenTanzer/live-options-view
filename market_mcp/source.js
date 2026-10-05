@@ -1,6 +1,6 @@
 'use strict';
 
-// This module is the entire I/O boundary. No credential/environment lookup,
+// This module is the market-artifact I/O boundary. No credential/environment lookup,
 // Worker API, directory listing, provider request, or client-selected URL.
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -11,7 +11,9 @@ const { createHash } = require('node:crypto');
 const ORIGIN = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
 const LIMITS = Object.freeze({ artifact_bytes: 4 * 1024 * 1024, expanded_artifact_bytes: 24 * 1024 * 1024, query_bytes: 64 * 1024 * 1024,
   output_bytes: 256 * 1024, requests: 12, timeout_ms: 15000, rows: 50, path_sweeps: 6,
-  input_bytes: 16384, references: 64, reference_ttl_ms: 15 * 60 * 1000 });
+  input_bytes: 16384, references: 64, reference_bytes: 16 * 1024 * 1024, reference_ttl_ms: 15 * 60 * 1000,
+  jsonl_lines: 100000, jsonl_rows: 10000, jsonl_line_bytes: 256 * 1024, quote_line_bytes: 16384,
+  csv_rows: 10000, csv_columns: 128, csv_cell_chars: 4096 });
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const KEY = new RegExp('^(?:intraday/latest\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)))$');
 
@@ -53,7 +55,7 @@ class Source {
   constructor({ directory = null, publicAccess = false, read = null } = {}) {
     if (!directory && !publicAccess && !read) throw new Error('Choose an explicit fixture directory or --public.');
     this.directory = directory && path.resolve(directory);
-    this.mode = directory ? 'local_artifacts' : 'public_anonymous';
+    this.mode = directory ? 'local_artifacts' : read ? 'injected_test_artifacts' : 'public_anonymous';
     this.reader = read; // injectable only from code for hermetic tests
   }
   query() {
@@ -87,7 +89,7 @@ class Source {
       } else raw = await publicRead(key, cap, remainingMs);
       if (raw.length > cap) throw new DataError('excessive_response', 'Artifact or query byte limit exceeded.', key);
       bytes += raw.length;
-      const entry = { locator: key, link: this.directory ? null : ORIGIN + '/' + key,
+      const entry = { locator: key, link: this.mode === 'public_anonymous' ? ORIGIN + '/' + key : null,
         retrieval_time: new Date().toISOString(), bytes: raw.length, retrieved_sha256: hash(raw),
         checksum_verification: 'not_verified_against_producer' };
       evidence.push(entry);

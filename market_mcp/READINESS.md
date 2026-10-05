@@ -1,4 +1,9 @@
-# #118 readiness record — October 5, 2026
+# #118 readiness record - October 5, 2026
+
+This is the historical first-slice record published in PR #119, now merged.
+Current production follow-up status is [ROLLOUT.md](ROLLOUT.md): Linux image
+checks pass and an empty isolated service exists. OAuth/access, immutable image
+publication, live client acceptance and deployment remain pending.
 
 ## Verified scope and base
 

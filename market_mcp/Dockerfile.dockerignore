@@ -1,0 +1,15 @@
+**
+!market_mcp/
+market_mcp/**
+!market_mcp/Dockerfile
+!market_mcp/Dockerfile.dockerignore
+!market_mcp/auth.js
+!market_mcp/production.js
+!market_mcp/source.js
+!market_mcp/consumer.js
+!market_mcp/server.js
+!market_mcp/http.js
+!docs/
+docs/**
+!docs/shared.js
+!docs/squeeze-calendar.json

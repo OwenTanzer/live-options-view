@@ -1,5 +1,7 @@
 # Options View market MCP (first slice of #118)
 
+Production follow-up status and Linux image evidence: [ROLLOUT.md](ROLLOUT.md).
+
 Five read-only tools expose existing producer artifacts. Node 22+; no package
 install, provider token, R2 credentials, scanner invocation or trading imports.
 The module remains in this repository because it consumes the existing calendar,
@@ -11,7 +13,7 @@ from the Worker, collector and Crassus deployments.
 From the repository root:
 
 ```sh
-node --test market_mcp/consumer.test.js market_mcp/http.test.js
+node --test market_mcp/*.test.js
 node market_mcp/smoke.js --out fixture-smoke.json
 node market_mcp/smoke.js --public --session 2026-10-02 --out public-smoke.json
 ```
@@ -54,9 +56,11 @@ The three HTTP integration tests exercise initialization, discovery, query and
 detail over an actual loopback socket.
 
 This is a tested local transport, **not a deployed endpoint or verified Chej
-connection**. The executable binds only loopback and rejects other Host/Origin
-values. Production bind/allowed-origin/TLS/authentication and client access must
-be implemented/reviewed for the specifically approved hosting route. See
+connection**. `http.js` binds only loopback and rejects other Host/Origin
+values. The production followup adds `production.js`, bounded HTTP and
+authentication, a dedicated Node image recipe and a review-only deployment plan.
+Its Linux image checks pass; live client/grant gates remain pending. See
+[production followup and exact approval prerequisites](PRODUCTION.md) and
 [readiness and deployment prerequisites](READINESS.md). The protocol follows the
 [MCP stdio and Streamable HTTP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 
@@ -78,7 +82,13 @@ is available while its freshness is stale and a newer failed/partial attempt is
 visible. Exchange closures and calendar expiry follow the existing display
 contract; no inferred weekday scheduler is added.
 
-Snapshot detail retains the queried payload even after `latest.json` advances;
+Detail source entries carry `retained: true` for evidence saved by the originating
+query and `retained: false` for evidence fetched for this detail request. Each
+source retains its original retrieval_time; envelope retrieval_time is response
+assembly time, not a new market observation or network fetch. Repeating detail
+does not relabel or mutate originating-query evidence.
+
+Snapshot detail retains the queried row/readings even after `latest.json` advances;
 its full-JSON digest does not verify its archived CSV. Squeeze detail validates
 the manifest digest against the queried pointer and the two **read** members
 against that manifest; it does not claim full-archive verification. First-seen
@@ -110,7 +120,8 @@ Raw trade-bar drilldown and the full `contracts.csv.gz` universe are deferred.
 | Detail quote page | At most 6 sweeps; reduce limit if byte cap is reached |
 | Serialized result | 256 KiB, before text/structured duplication |
 | Input frame/body | 16 KiB |
-| Retained references | 64, fifteen-minute expiry, oldest evicted |
+| Retained references | 64 / 16 MiB serialized, fifteen-minute expiry, oldest evicted |
+| Artifact parsing | Incremental JSONL; physical line/record/cell bounds in [PRODUCTION.md](PRODUCTION.md) |
 | Stdio queued / HTTP active requests | 16 / 4 |
 | HTTP body acquisition | 5 seconds |
 
@@ -128,8 +139,8 @@ originating query. No zero substitution or automatic alternate-session search.
 
 ## Producer boundaries
 
-#107 owns shared-reading publication. #116 was open/unmerged at this slice's base;
-no unpublished implementation is imported. Shared PCR/max-pain/reference OI skew,
+#107 owns shared-reading publication. Merged #116 preserves Crassus lineage;
+it does not publish additional readings for this consumer. Shared PCR/max-pain/reference OI skew,
 historical VWAP/RVOL, account trading momentum and buy-only Black-Scholes are
 explicitly unsupported. OI lag/zero-versus-missing, approximate VWAP, missing
 Greeks/quote observation times and historical/sampled coverage travel with results.
