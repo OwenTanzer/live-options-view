@@ -1,0 +1,24 @@
+name: Market MCP consumer
+
+on:
+  pull_request:
+    paths: ["market_mcp/**", "docs/shared.js", "docs/squeeze-calendar.json", ".github/workflows/market-mcp-ci.yml"]
+  push:
+    branches: [master]
+    paths: ["market_mcp/**", "docs/shared.js", "docs/squeeze-calendar.json", ".github/workflows/market-mcp-ci.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test market_mcp/consumer.test.js market_mcp/http.test.js
+      - run: node tests/squeeze_scanner_display.test.js
+      - run: node market_mcp/smoke.js --out market-mcp-fixture-smoke.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-mcp-fixture-smoke
+          path: market-mcp-fixture-smoke.json
