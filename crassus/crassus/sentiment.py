@@ -505,10 +505,17 @@ class RedditSentimentReader:
             except Exception as exc:
                 # Store text, not the exception/traceback (which retains resources).
                 self._failure = str(exc) if isinstance(exc, RedditFetchError) else f"source_unavailable: {type(exc).__name__}"
-                self._failure_until = max(time.monotonic() + self.min_interval_s, self._rate_limited_until)
+                failed_at = time.monotonic()
+                self._failure_until = max(failed_at + self.min_interval_s, self._rate_limited_until)
+                provider_wait = max(0, self._rate_limited_until - failed_at)
+                # One event per acquisition, not per waiting account. Name a
+                # provider-imposed delay beyond the ordinary shared window.
+                provider_detail = ({"provider_cooldown_seconds": round(provider_wait)}
+                                   if provider_wait > self.min_interval_s else {})
                 event(log, "reddit_acquisition_failed", reason=self._failure,
-                      duration_seconds=time.monotonic() - now,
-                      retry_in_seconds=max(0, self._failure_until - time.monotonic()))
+                      duration_seconds=failed_at - now,
+                      retry_in_seconds=max(0, self._failure_until - failed_at),
+                      **provider_detail)
                 raise
             except BaseException:
                 self._failure = "source_cancelled"

@@ -123,7 +123,10 @@ def _stop(child: subprocess.Popen, token: str) -> None:
                 if waited:
                     remaining.remove(pid)
             except ChildProcessError:
-                if not Path(f"/proc/{pid}").exists():
+                # The permanent outer supervisor may own an adopted zombie.
+                # Its matching PID/start time is already dead; the supervisor
+                # will reap it on its own polling cadence.
+                if current.state == "Z" or not Path(f"/proc/{pid}").exists():
                     remaining.remove(pid)
         if remaining:
             time.sleep(.01)
