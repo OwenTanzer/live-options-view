@@ -7,6 +7,7 @@ and an intentional cleanup hang exercise the actual production process owner.
 from pathlib import Path
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from crassus.reddit_acquisition import _run, CLEANUP_TIMEOUT_S
 from crassus.sentiment import RedditFetchError, _ACQUISITION_TIMEOUT_S
 from crassus import sentiment as s
-from crassus.supervisor import _subreaper, proc_visible, process_tree, reap_adopted
+from crassus.supervisor import _subreaper, proc_visible, process_tree, reap_adopted, _stop_group
 
 CHILD = '''
 from unittest.mock import Mock
@@ -53,6 +54,54 @@ s.RedditSentimentReader.__init__ = init
 {injection}
 main()
 '''
+
+
+def nested_caller(config, baseline, *, hang_cleanup):
+    """Match supervisor(1) -> caller(0) -> worker/browser adoption topology."""
+    code = '''
+import json, sys
+from scripts.verify_reddit_acquisition_browser import CHILD
+from crassus.reddit_acquisition import _run
+from crassus.sentiment import RedditFetchError
+from crassus.supervisor import _subreaper
+before = _subreaper()
+try:
+    result = _run({config}, timeout_s={timeout},
+        command=[sys.executable, '-c', CHILD.replace('{injection}', {fixture_injection})])
+except RedditFetchError as exc:
+    result = {'error': str(exc)}
+result.update(caller_subreaper_before=before, caller_subreaper_after=_subreaper())
+print(json.dumps(result), flush=True)
+'''
+    injection = 's.RedditSentimentReader._close_browser = lambda self: time.sleep(60)' if hang_cleanup else ''
+    code = code.replace('{config}', repr(config)).replace('{timeout}', '5' if hang_cleanup else '20')
+    code = code.replace('{fixture_injection}', repr(injection))
+    child = subprocess.Popen([sys.executable, '-c', code],
+        cwd=Path(__file__).resolve().parent.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True)
+    deadline = time.monotonic() + (9 if hang_cleanup else 24)
+    try:
+        while True:
+            try:
+                output, errors = child.communicate(timeout=1)  # Existing supervisor poll cadence.
+                break
+            except subprocess.TimeoutExpired:
+                reap_adopted(child.pid, baseline)
+                assert time.monotonic() < deadline, 'nested acquisition exceeded bound'
+        reap_adopted(child.pid, baseline)
+        assert child.returncode == 0, errors.decode()
+        result = json.loads(output.splitlines()[-1])
+        assert result['caller_subreaper_before'] == result['caller_subreaper_after'] == 0, result
+        if hang_cleanup:
+            assert 'cleanup_timeout' in result.get('error', ''), result
+        else:
+            assert result['texts'] == ['QQQ good QQQ body'], result
+        return result
+    finally:
+        if child.poll() is None:
+            _stop_group(child, .1, baseline)
+        child.stdout.close()
+        child.stderr.close()
 
 
 def main():
@@ -98,6 +147,18 @@ def main():
                 time.sleep(.02)
             assert not remaining, remaining
             results.append(dict(mode=mode, elapsed_seconds=round(elapsed, 3), residual_descendants=0))
+        for hang_cleanup in (False, True):
+            started = time.monotonic()
+            result = nested_caller(config, baseline, hang_cleanup=hang_cleanup)
+            deadline = time.monotonic() + 2
+            while set(process_tree(os.getpid())) - baseline and time.monotonic() < deadline:
+                reap_adopted(None, baseline)
+                time.sleep(.02)
+            assert not set(process_tree(os.getpid())) - baseline, 'nested caller residual descendants'
+            results.append(dict(mode='nested_hung_cleanup' if hang_cleanup else 'nested_success',
+                                elapsed_seconds=round(time.monotonic() - started, 3),
+                                caller_subreaper=0, supervisor_poll_seconds=1,
+                                residual_descendants=0, error=result.get('error')))
     finally:
         _subreaper(previous)
     print(json.dumps(results))
