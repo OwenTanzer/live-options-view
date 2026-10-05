@@ -15,10 +15,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node --test market_mcp/consumer.test.js market_mcp/http.test.js
+      - run: node --test market_mcp/*.test.js
       - run: node tests/squeeze_scanner_display.test.js
       - run: node market_mcp/smoke.js --out market-mcp-fixture-smoke.json
+      - run: node market_mcp/production-smoke.js --out market-mcp-production-smoke.json
+      - run: node --max-old-space-size=256 market_mcp/load.js --out market-mcp-production-load.json
+      - run: docker build -f market_mcp/Dockerfile -t market-mcp-check .
+      - name: Verify built image as non-root with offline authenticated fixtures
+        run: bash market_mcp/verify-image.sh market-mcp-check
       - uses: actions/upload-artifact@v4
         with:
           name: market-mcp-fixture-smoke
-          path: market-mcp-fixture-smoke.json
+          path: |
+            market-mcp-fixture-smoke.json
+            market-mcp-production-smoke.json
+            market-mcp-production-load.json
+            market-mcp-image-evidence/

@@ -33,6 +33,7 @@ function csv(text) {
   if(!text.trim())return Object.assign([],{columns:[]});
   const records = []; let row = [], cell = '', quoted = false;
   for (let i = 0; i < text.length; i++) {
+    check(cell.length <= LIMITS.csv_cell_chars && row.length < LIMITS.csv_columns && records.length <= LIMITS.csv_rows, 'CSV parsing limit exceeded.', 'excessive_response');
     const c = text[i];
     if (c === '"') { if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted; }
     else if (!quoted && (c === ',' || c === '\n')) {
@@ -40,6 +41,7 @@ function csv(text) {
       if (c === '\n') { records.push(row); row = []; }
     } else cell += c;
   }
+  check(cell.length <= LIMITS.csv_cell_chars && row.length < LIMITS.csv_columns && records.length <= LIMITS.csv_rows, 'CSV parsing limit exceeded.', 'excessive_response');
   check(!quoted, 'Unclosed CSV quote.');
   if (cell || row.length) records.push([...row, cell.replace(/\r$/, '')]);
   const headers = records.shift() || [];
@@ -49,9 +51,23 @@ function csv(text) {
     return Object.fromEntries(headers.map((h, i) => [h, r[i] === '' ? null : r[i]]));
   }),{columns:headers});
 }
-function jsonl(text) { return text.split(/\r?\n/).filter(s => s.trim()).map(s => {
-  try { return JSON.parse(s); } catch { throw new DataError('incompatible_schema', 'Malformed JSONL artifact.'); }
-}); }
+function jsonl(text, { predicate = () => true, maxRows = LIMITS.jsonl_rows, maxLineBytes = LIMITS.jsonl_line_bytes } = {}) {
+  // Never allocate an array for every line of an expanded gzip. Parse and discard
+  // unrelated quotes one at a time; even blank physical lines consume the bound.
+  const rows = []; let start = 0, lines = 0;
+  while (start < text.length) {
+    check(++lines <= LIMITS.jsonl_lines, 'JSONL physical-line limit exceeded.', 'excessive_response');
+    const next = text.indexOf('\n', start), end = next < 0 ? text.length : next;
+    check(end - start <= maxLineBytes, 'JSONL line exceeds the parsing limit.', 'excessive_response');
+    const line = text.slice(start, end); start = end + 1;
+    check(Buffer.byteLength(line) <= maxLineBytes, 'JSONL line exceeds the parsing limit.', 'excessive_response');
+    if (!line.trim()) continue;
+    let row; try { row = JSON.parse(line); } catch { throw new DataError('incompatible_schema', 'Malformed JSONL artifact.'); }
+    check(object(row), 'JSONL records must be objects.');
+    if (predicate(row)) { check(rows.length < maxRows, 'JSONL selected-record limit exceeded.', 'excessive_response'); rows.push(row); }
+  }
+  return rows;
+}
 function snapshot(p) {
   check(object(p) && typeof p.timestamp === 'string' && dates(p.date) && Array.isArray(p.rows), 'Unsupported snapshot contract.');
   check(p.schema_version === undefined || p.schema_version === 1, 'Unsupported snapshot schema version.');
@@ -81,11 +97,15 @@ const warnings = {
 };
 
 class Consumer {
-  constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); }
+  constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); this.retainedBytes = 0; }
+  dropReference(id) { const entry = this.references.get(id); if (entry) this.retainedBytes -= entry.bytes; this.references.delete(id); }
+  pruneReferences() { for (const [id, entry] of this.references) if (entry.expires < this.now()) this.dropReference(id); }
+  clearReferences() { this.references.clear(); this.retainedBytes = 0; }
   reference(value) {
-    for (const [key, entry] of this.references) if (entry.expires < this.now()) this.references.delete(key);
-    while (this.references.size >= LIMITS.references) this.references.delete(this.references.keys().next().value);
-    const id = randomUUID(); this.references.set(id, { value, expires: this.now() + LIMITS.reference_ttl_ms }); return id;
+    this.pruneReferences(); const bytes = Buffer.byteLength(JSON.stringify(value));
+    check(bytes <= LIMITS.reference_bytes, 'Retained detail exceeds the byte limit; narrow the query.', 'excessive_response');
+    while (this.references.size >= LIMITS.references || this.retainedBytes + bytes > LIMITS.reference_bytes) this.dropReference(this.references.keys().next().value);
+    const id = randomUUID(); this.references.set(id, { value, bytes, expires: this.now() + LIMITS.reference_ttl_ms }); this.retainedBytes += bytes; return id;
   }
   envelope(dataset, requested, q) { return { schema: 'options-view-mcp.v1', dataset, requested_filters: requested, actual: null,
     source_mode: this.source.mode, retrieval_time: new Date(this.now()).toISOString(), producer_times: { observation: null, acquisition_start: null, acquisition_end: null, publication: null },
@@ -144,7 +164,7 @@ class Consumer {
     if (!object(m)) out.warnings.push('underlying_market is absent; derived readings are unavailable.');
     const rows = p.rows.filter(r => (!a.expiry || r.Expiration === a.expiry) && (!a.type || r.Type === a.type) && (a.strike === undefined || r.Strike === a.strike) && (!a.contract || r.OptionSymbol === a.contract));
     const paged = slice(rows,limit,offset); out.pagination = paged.pagination;
-    out.rows = paged.rows.map(row => ({...row, detail_reference:this.reference({dataset:'qqq_snapshot',p,row,actual:out.actual,evidence:[...q.evidence]})}));
+    out.rows = paged.rows.map(row => ({...row, detail_reference:this.reference({dataset:'qqq_snapshot',p:{timestamp:p.timestamp,underlying_market:p.underlying_market??null},row,actual:out.actual,evidence:[...q.evidence]})}));
     out.coverage = {source_rows:p.rows.length, matched_rows:rows.length, expiration:p.expiration ?? null};
     const incomplete = !object(m) || m.spot == null || m.vwap == null || m.vwap_partial_session || m.rvol?.status !== 'ok' || m.momentum?.status !== 'ok';
     if(incomplete && object(m)) out.warnings.push(`Partial readings: VWAP ${m.vwap==null?'missing':m.vwap_partial_session?'partial_session':'available'}; RVOL ${m.rvol?.status??'missing'}; reference momentum ${m.momentum?.status??'missing'}.`);
@@ -250,7 +270,7 @@ class Consumer {
       const key=v.prefix+`sweeps/sweep_${String(m.sweep).padStart(4,'0')}.jsonl.gz`;
       if(m.chains[v.row.underlying].status!=='ok'||m.truncated){out.status='partial';out.warnings.push(`Sweep ${m.sweep}: chain ${m.chains[v.row.underlying].status??'unknown'}${m.truncated?'; truncated':''}.`);}
       try {
-        const rows=jsonl(await q.get(key)).filter(r=>r.symbol===v.row.symbol);
+        const rows=jsonl(await q.get(key), { predicate:r=>r.symbol===v.row.symbol, maxRows:LIMITS.rows, maxLineBytes:LIMITS.quote_line_bytes });
         check(rows.every(r=>r.underlying===v.row.underlying&&r.sweep===m.sweep&&Number.isSafeInteger(r.t)&&
           r.t>=summary.session_open_ms&&r.t<summary.session_close_ms&&['call','put'].includes(r.type)&&
           [r.bid,r.ask].every(n=>n===null||(typeof n==='number'&&Number.isFinite(n)&&n>=0))), 'Selected contract quote rows violate the sweep/session contract.');

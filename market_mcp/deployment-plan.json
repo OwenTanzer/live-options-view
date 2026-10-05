@@ -1,0 +1,86 @@
+{
+  "mode": "provisioned_empty_service_access_and_deployment_pending",
+  "baseline_pr": "https://github.com/OwenTanzer/live-options-view/pull/119",
+  "baseline_sha": "6dbb2bdee174ddfbf4408a1d90e0e8f55a85bf16",
+  "target": {
+    "project_id": "ea9f4549-e34f-47cd-a09e-573b24d696a8",
+    "environment_id": "2dcc91a4-fafc-408f-bef8-e5ce24b2ec6a",
+    "new_service_name": "market-mcp-read-only",
+    "new_service_id": "7222ee91-be95-4aea-843b-2ff1258e21da",
+    "existing_discord_service_must_not_change": "5aa162c3-d2e7-468a-8fd0-a36e441285b2"
+  },
+  "image": {
+    "source": "public immutable OCI image, exact registry and tested digest to approve before publication",
+    "uri": null,
+    "build_context": "repository root",
+    "dockerfile": "market_mcp/Dockerfile",
+    "runtime": "Node 22, non-root node user",
+    "reason": "Image deployment does not inspect the root Python Dockerfile or railway.toml and has no repository autodeploy source.",
+    "local_verified_manifest_digest": "sha256:496683a45e448a02da9d216a36d065a3151787f5c8591b9b40663c1e3bb97a26",
+    "publication_status": "not_published"
+  },
+  "service_configuration": {
+    "startCommand": "node --max-old-space-size=256 market_mcp/production.js",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 60,
+    "sleepApplication": false,
+    "cronSchedule": null,
+    "regions": {
+      "us-west2": {
+        "numReplicas": 1
+      }
+    },
+    "limits": {
+      "memoryGB": 0.5,
+      "vCPUs": 0.2
+    },
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3,
+    "overlapSeconds": 0,
+    "drainingSeconds": 30
+  },
+  "environment_variables": {
+    "PORT": "Railway-provided integer, do not hardcode a second listener",
+    "MCP_RESOURCE_URL": "https://market-mcp-read-only-production.up.railway.app/mcp",
+    "MCP_ALLOWED_HOSTS": "market-mcp-read-only-production.up.railway.app",
+    "MCP_HEALTH_HOSTS": "market-mcp-read-only-production.up.railway.app,healthcheck.railway.app",
+    "MCP_ALLOWED_ORIGINS": "empty explicitly denies browser origins; otherwise exact approved HTTPS client origins separated by commas",
+    "MCP_AUTH_OWNER_SUB": "<verified-Owen-subject-from-approved-login>",
+    "MCP_AUTH_CLIENT_IDS": "<approved-dedicated-market-public-client-ID>"
+  },
+  "authorization": {
+    "issuer": "https://dev-oraxxi11mrzuff2h.us.auth0.com/",
+    "jwks": "https://dev-oraxxi11mrzuff2h.us.auth0.com/.well-known/jwks.json",
+    "audience": "exact same approved MCP_RESOURCE_URL",
+    "read_scope": "market:read",
+    "client_flow": "authorization code with S256 PKCE, exact Chej redirect URI; no machine-to-machine grant",
+    "max_access_token_lifetime_seconds": 3600,
+    "separate_action_time_approval_required": true,
+    "no_discord_tokens_secrets_or_grants": true
+  },
+  "pilot_controls": {
+    "additional_recurring_budget_usd_per_month": 10,
+    "active_mcp_requests": 4,
+    "mcp_requests_per_minute": 120,
+    "authenticated_mcp_requests_per_utc_day": 500,
+    "retained_references": 64,
+    "retained_serialized_bytes": 16777216,
+    "references_ttl_seconds": 900,
+    "workspace_spending_cutoff": "must not change",
+    "cost_qualification": "Limits require platform acceptance/readback. Request quotas reset on restart and are not a durable spending cutoff; monitor this new service alone and stop its pilot before exceeding the approved budget."
+  },
+  "release_gates": [
+    "Reconcile/rebase onto the final approved PR119 head after the separate merge-readiness review; preserve its accepted fixes.",
+    "Independent review and all local tests pass for the final patch.",
+    "Verify requested CPU/memory limits and one always-on replica are accepted by Railway before spending.",
+    "Approve the exact new market domain/resource, owner subject, dedicated client ID, redirect URI, scope and client origins.",
+    "Verify actual Chej OAuth resource/audience mapping and S256 flow; local issuer fixtures do not establish a live grant.",
+    "Verify merge/deployment isolation and preserve Big Banana's paused autodeploy; branch/watch settings alone do not establish enabled state."
+  ],
+  "current_status_document": "ROLLOUT.md",
+  "completed_checks": [
+    "Linux Node22 non-root image build and 66-test suite passed; see ROLLOUT.md.",
+    "Railway accepted/read back 0.2 CPU and 500000000 memory bytes on the empty new service.",
+    "Follow-up draft publication authorized in current task; no merge authority."
+  ]
+}

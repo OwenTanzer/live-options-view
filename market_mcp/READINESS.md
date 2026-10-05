@@ -1,4 +1,11 @@
-# #118 readiness record — October 5, 2026
+# #118 readiness record - October 5, 2026
+
+This is the historical first-slice record published in PR #119. A subsequent
+local production followup is documented in [PRODUCTION.md](PRODUCTION.md),
+including the parent thread's US$10/month isolated pilot budget and pending
+Linux image, exact live client/grant and publication gates. No service or grant
+was created by that followup. Historical deployment prerequisites below should
+be read together with its current plan.
 
 ## Verified scope and base
 

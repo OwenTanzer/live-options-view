@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');const os=require('node:os');const path=require('node:path');const {EventEmitter}=require('node:events');const {PassThrough}=require('node:stream');const {gzipSync}=require('node:zlib');
-const {Consumer,csv}=require('./consumer');const {Source,DataError,LIMITS,ORIGIN,permitted,publicRead}=require('./source');const {Protocol,serve,tools}=require('./server');
+const {Consumer,csv,jsonl}=require('./consumer');const {Source,DataError,LIMITS,ORIGIN,permitted,publicRead}=require('./source');const {Protocol,serve,tools}=require('./server');
 const {fixtures,writeFixtures,SESSION,NOW,RUN,ARCHIVE,CONTRACT,PUT}=require('./fixtures');
 const PREFIX=`oa203/scanner/${SESSION}/`;const LATEST='squeeze-scanner/v1/scheduled/latest.json';
 function setup({files=fixtures(),now=()=>NOW,calendar,fail={}}={}){
@@ -9,6 +9,18 @@ function setup({files=fixtures(),now=()=>NOW,calendar,fail={}}={}){
   return {consumer:new Consumer(source,{now,...(calendar===undefined?{}:{scheduleCalendar:calendar})}),files,calls};
 }
 function edit(files,key,fn){const value=JSON.parse(files[key]);fn(value);files[key]=JSON.stringify(value);}
+
+test('artifact parsers bound cells, physical lines and selected records before building large arrays',()=>{
+  const excessive=e=>e.code==='excessive_response';
+  assert.throws(()=>jsonl('\n'.repeat(LIMITS.jsonl_lines+1)),excessive);
+  assert.throws(()=>jsonl(JSON.stringify({padding:'x'.repeat(LIMITS.quote_line_bytes)}),{maxLineBytes:LIMITS.quote_line_bytes}),excessive);
+  assert.throws(()=>jsonl('{"symbol":"selected"}\n'.repeat(LIMITS.rows+1),{maxRows:LIMITS.rows}),excessive);
+  assert.equal(jsonl('{"symbol":"other"}\r\n'.repeat(1000)+'{"symbol":"selected"}',{predicate:r=>r.symbol==='selected',maxRows:1}).length,1);
+  assert.throws(()=>jsonl('null'),e=>e.code==='incompatible_schema');
+  assert.throws(()=>csv('column\n'+'x'.repeat(LIMITS.csv_cell_chars+1)),excessive);
+  assert.throws(()=>csv(Array.from({length:LIMITS.csv_columns+1},(_,i)=>'c'+i).join(',')),excessive);
+  assert.throws(()=>csv('column\n'+'value\n'.repeat(LIMITS.csv_rows+1)),excessive);
+});
 test('discovery distinguishes selected session, missing publication and unsupported capabilities',async()=>{
   const {consumer,files}=setup();let out=await consumer.call('discover_sources');assert.equal(out.capabilities[2].availability,'explicit_session_required');assert.ok(out.unsupported.includes('shared_PCR'));
   delete files['intraday/latest.json'];out=await consumer.call('discover_sources',{session:SESSION});assert.equal(out.status,'partial');assert.equal(out.capabilities[0].availability,'missing_publication');assert.equal(out.capabilities[2].availability,'available');
