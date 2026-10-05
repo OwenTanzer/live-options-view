@@ -14,7 +14,7 @@ const tools = [
   ['market_context','Read latest QQQ context and a bounded chain page; field timestamps and unknown Greeks/quote times remain explicit.',schema({...paging,expiry:date,type,strike:{type:'number',exclusiveMinimum:0,maximum:100000},contract:str('^[A-Z0-9.]{1,10}\\d{6}[CP]\\d{8}$')})],
   ['squeeze_results','Read producer-ranked scheduled shortlist alongside latest attempt, schedule and exchange-calendar freshness.',schema(paging)],
   ['return_rankings','Read one explicit session published leaderboard (top 200 all OR clean subset), preserving producer ranks and CSV values.',schema({...paging,session:date,underlying:str('^[A-Z][A-Z0-9.-]{0,9}$'),type,view:{type:'string',enum:['all','clean'],default:'all'}},['session'])],
-  ['result_detail','Follow a server-issued reference within 15 minutes. Snapshot uses retained JSON; squeeze reads three exact run members; return path pages at most six sweeps, with change detection and byte limits.',schema({...paging,reference:str('^[0-9a-f-]{36}$')},['reference'])],
+  ['result_detail','Follow a server-issued reference for up to 15 minutes; the 64-reference/16 MiB cache may evict it sooner. Repeat the originating query after expiry, eviction or restart. Snapshot uses retained JSON; squeeze reads three exact run members; return path pages at most six sweeps, with change detection and byte limits.',schema({...paging,reference:str('^[0-9a-f-]{36}$')},['reference'])],
 ].map(([name,description,inputSchema])=>({name,description,inputSchema,annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}}));
 
 class Protocol {

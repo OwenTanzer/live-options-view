@@ -78,8 +78,8 @@ only the queried row and readings. SIGTERM/SIGINT reject new work, drain existin
 requests for up to 25 seconds, close sockets and clear references. Configure at
 least 30 seconds of platform draining. Restart loses references; clients repeat
 the originating query. One always-on replica and zero deployment overlap avoid
-cross-process references. Service sleep after ten idle minutes would invalidate
-the promised fifteen-minute detail window.
+cross-process references. Service sleep after ten idle minutes would lose all retained references before their maximum fifteen-minute lifetime.
+Count/byte eviction can also remove references sooner.
 
 Incremental JSONL parsing repairs an independently reproduced heap exhaustion:
 a 24 MiB expanded gzip full of blank lines now returns partial detail with

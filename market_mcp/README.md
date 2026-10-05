@@ -57,9 +57,9 @@ detail over an actual loopback socket.
 
 This is a tested local transport, **not a deployed endpoint or verified Chej
 connection**. `http.js` binds only loopback and rejects other Host/Origin
-values. The unpublished local followup adds `production.js`, bounded HTTP and
+values. The production followup adds `production.js`, bounded HTTP and
 authentication, a dedicated Node image recipe and a review-only deployment plan.
-Its Linux build and live client/grant gates remain pending. See
+Its Linux image checks pass; live client/grant gates remain pending. See
 [production followup and exact approval prerequisites](PRODUCTION.md) and
 [readiness and deployment prerequisites](READINESS.md). The protocol follows the
 [MCP stdio and Streamable HTTP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
@@ -81,6 +81,12 @@ pagination. Availability and freshness are separate: a last successful squeeze
 is available while its freshness is stale and a newer failed/partial attempt is
 visible. Exchange closures and calendar expiry follow the existing display
 contract; no inferred weekday scheduler is added.
+
+Detail source entries carry `retained: true` for evidence saved by the originating
+query and `retained: false` for evidence fetched for this detail request. Each
+source retains its original retrieval_time; envelope retrieval_time is response
+assembly time, not a new market observation or network fetch. Repeating detail
+does not relabel or mutate originating-query evidence.
 
 Snapshot detail retains the queried row/readings even after `latest.json` advances;
 its full-JSON digest does not verify its archived CSV. Squeeze detail validates
@@ -133,8 +139,8 @@ originating query. No zero substitution or automatic alternate-session search.
 
 ## Producer boundaries
 
-#107 owns shared-reading publication. #116 was open/unmerged at this slice's base;
-no unpublished implementation is imported. Shared PCR/max-pain/reference OI skew,
+#107 owns shared-reading publication. Merged #116 preserves Crassus lineage;
+it does not publish additional readings for this consumer. Shared PCR/max-pain/reference OI skew,
 historical VWAP/RVOL, account trading momentum and buy-only Black-Scholes are
 explicitly unsupported. OI lag/zero-versus-missing, approximate VWAP, missing
 Greeks/quote observation times and historical/sampled coverage travel with results.

@@ -91,7 +91,7 @@ const units = {
   options_returns: { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms, t, bid_ms, ask_ms': 'UTC epoch milliseconds', '*_abs_change_per_contract': 'USD/contract', rank: 'producer ordinal rank' },
 };
 const warnings = {
-  qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; #116 is unmerged.'],
+  qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.'],
   scheduled_squeeze: ['Scores are experimental screens, not squeeze probabilities.', 'first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.', 'Provider source times can be absent; acquisition and publication times are distinct.'],
   options_returns: ['Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.', 'Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.', 'Coverage is the published leaderboard subset (top 200 all OR clean); absent filtered rows do not prove no sampled contracts exist.', 'Session artifacts may be rebuilt in place; detail detects summary/leaderboard changes and asks for a new query.'],
 };
@@ -121,6 +121,7 @@ class Consumer {
       else if (name === 'result_detail') out = await this.detail(a, q, out);
       else throw new DataError('invalid_filter', 'Unknown tool.');
     } catch (e) { out.errors.push(errorRecord(e)); out.status = e.code === 'missing_artifact' ? 'missing' : 'failed'; }
+    if (name === 'result_detail') out.sources = out.sources.map(e => ({...e, retained:e.retained === true}));
     if (Buffer.byteLength(JSON.stringify(out)) > LIMITS.output_bytes) {
       out = this.envelope(out.dataset, a, {evidence: []}); out.status = 'failed';
       out.errors.push(errorRecord(new DataError('excessive_response', 'Output limit exceeded; narrow filters or reduce limit.')));
@@ -226,8 +227,8 @@ class Consumer {
   async detail(a,q,out) {
     args(a,['reference','offset','limit'],['reference']); const {limit,offset}=page(a);
     check(typeof a.reference==='string' && new RegExp('^'+UUID+'$').test(a.reference),'Invalid detail reference.','invalid_reference');
-    const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired or is not from this server; repeat the query.','invalid_reference');
-    const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence);out.status='available';
+    const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired, was evicted by the count/byte limit, or is not from this server; repeat the originating query.','invalid_reference');
+    const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
     if(v.dataset==='qqq_snapshot') {
       out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=v.p.underlying_market ?? null;
       out.coverage={scope:'one cached row from the exact queried payload'};out.warnings.push('Detail uses retained queried JSON. The archived CSV has not been read or verified.');return out;

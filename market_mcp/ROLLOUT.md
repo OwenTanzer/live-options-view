@@ -11,15 +11,15 @@ The evidence ZIP was not used as source.
 
 ## Source and reconciliation
 
-PR #119 remains draft at `6dbb2bdee174ddfbf4408a1d90e0e8f55a85bf16`.
-Its latest Chej review is COMMENT, not a formal approving human review.
-Master is `f5c16f83b8ed10cfffbdcd428b7ef92491378c02`, including merged #116
+PR #119 was approved by KingEnderdragon and merged as
+`640b8e508dd4b400ff544f4c73cbbcd16b33ae85`, preserving reviewed head `6dbb2bdee174ddfbf4408a1d90e0e8f55a85bf16`.
+The formal approval was on that exact head; no branch protection was bypassed.
+Before #119 merged, master was `f5c16f83b8ed10cfffbdcd428b7ef92491378c02`, including merged #116
 and #117. Their changes are confined to Crassus code, docs and workflow; no MCP
 runtime, shared.js, or squeeze-calendar change overlaps this follow-up.
-This follow-up is stacked on #119 to keep the production diff separately
-reviewable. Owen retains manual merge control; protections are not bypassed.
-Reconcile onto the actual accepted master after #119 merges and rerun checks
-before a production release.
+This follow-up was originally stacked on #119 and is now retargeted to master.
+Owen subsequently authorized merging after independent review and all branch
+protections pass. A separate formal approving review of #120 remains required.
 
 ## Demonstrated repair and checks
 
@@ -91,8 +91,8 @@ Project `ea9f4549-e34f-47cd-a09e-573b24d696a8`, production environment
   three retries were submitted; default-valued fields are omitted from readback.
 - The existing Discord service `5aa162c3-d2e7-468a-8fd0-a36e441285b2` was untouched.
   Big Banana was inspected read-only; latest deployment remains September 28.
-  The connector does not expose its autodeploy pause toggle, so the pause is
-  preserved by no mutation but not independently certified from that response.
+  A later read-only Railway agent serviceAutoDeployTool check explicitly
+  returned enabled:false, confirming the autodeploy pause before #119 merged.
 
 The budget remains $10/month additional, no plan upgrade or workspace cutoff.
 Current Railway pricing is $10/GB-month RAM, $20/vCPU-month CPU and $0.05/GB
@@ -108,8 +108,12 @@ is https://dev-oraxxi11mrzuff2h.us.auth0.com/. Use a separate dedicated public
 client, authorization code plus S256 PKCE, maximum 3600-second access tokens,
 and exact owner subject and client allowlists. Browser origins stay empty.
 
-The actual Chej callback URI, resource-to-Auth0-audience mapping, dedicated client
-ID and verified owner subject are still unverified. Present those exact values
+The existing setup page records ChatGPT callback
+https://chatgpt.com/connector_platform_oauth_redirect and owner subject
+auth0|6ac12294d1f5dacb7466a76f. These are proposed bindings for a NEW dedicated
+market client, not permission to reuse a Discord client or grant. Reverify at
+configuration time. The new client ID and live resource-to-audience mapping
+remain unverified. Present those exact values
 and owner restriction for action-time approval before registration/access
 configuration. Do not infer them from the Discord client or test fixtures.
 
@@ -120,3 +124,27 @@ Chej's actual client. Observe resource usage and verify service-scoped rollback.
 Rollback is stopping the new service/disconnecting its market client; do not
 alter producers, Discord, Big Banana, or revoke grants without authorization.
 No live Chej connection is claimed.
+
+## Final review follow-up
+
+Jayden's two nonblocking #119 notes are repaired here. Tool description and
+invalid-reference errors explicitly describe early count/byte eviction. Detail
+sources label retained versus newly fetched evidence with an explicit boolean;
+stored originating evidence and its retrieval timestamps are not mutated.
+Envelope retrieval_time is response assembly time. Regression checks cover all
+three datasets, repeated details, failed archive validation and early eviction.
+The revised suite contains 68 tests. Independent review of the initial published
+head found no additional blocking code defect and independently passed all 66
+original tests both on host and inside the exact Node22 image. Final repair
+review and rebuilt-image checks are recorded in the PR before merge.
+
+Final repair verification: rebuilt image ID
+`72de093360b2e93681ccc43e89164584a0e37870e1a887cec095683c6b44d99d`,
+local OCI manifest digest
+`sha256:0a83254f8562252c8f570e56c9b449f65873f3caa07e058f59bfc6d120766b46`.
+All 68 tests passed in this non-root Node22 image, plus actual entrypoint,
+seven-query authenticated smoke, shutdown and load. Peak RSS 92,725,248 bytes,
+p95 66 ms, CPU 607 ms. No live registry/deployment assertion.
+A separate AI reviewer inspected the final provenance/eviction repairs and
+independently ran both new regressions, 2/2 passing, with no blocking findings.
+That technical review does not replace GitHub's required collaborator approval.

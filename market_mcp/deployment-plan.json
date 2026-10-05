@@ -16,7 +16,7 @@
     "dockerfile": "market_mcp/Dockerfile",
     "runtime": "Node 22, non-root node user",
     "reason": "Image deployment does not inspect the root Python Dockerfile or railway.toml and has no repository autodeploy source.",
-    "local_verified_manifest_digest": "sha256:496683a45e448a02da9d216a36d065a3151787f5c8591b9b40663c1e3bb97a26",
+    "local_verified_manifest_digest": "sha256:0a83254f8562252c8f570e56c9b449f65873f3caa07e058f59bfc6d120766b46",
     "publication_status": "not_published"
   },
   "service_configuration": {
@@ -79,8 +79,9 @@
   ],
   "current_status_document": "ROLLOUT.md",
   "completed_checks": [
-    "Linux Node22 non-root image build and 66-test suite passed; see ROLLOUT.md.",
+    "Linux Node22 non-root image build and 68-test suite passed; see ROLLOUT.md.",
     "Railway accepted/read back 0.2 CPU and 500000000 memory bytes on the empty new service.",
-    "Follow-up draft publication authorized in current task; no merge authority."
+    "Follow-up draft publication authorized in current task; no merge authority.",
+    "PR119 merged640b8e508dd4b400ff544f4c73cbbcd16b33ae85 after formal approval; Big Banana autodeploy enabled:false readback verified."
   ]
 }
