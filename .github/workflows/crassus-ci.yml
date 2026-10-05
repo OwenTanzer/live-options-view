@@ -70,6 +70,9 @@ jobs:
       - name: Run runner/flatten attribution and crash-recovery suite
         working-directory: crassus
         run: python scripts/verify_runner_flatten_attribution.py
+      - name: Run snapshot lineage and recovery suite
+        working-directory: crassus
+        run: python scripts/verify_snapshot_lineage.py
       - name: Run operational logging and cycle-completion suite
         working-directory: crassus
         run: python scripts/verify_observability.py

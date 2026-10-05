@@ -1,0 +1,269 @@
+# Shared market readings and snapshot lineage v1
+
+Issue #107, work item 3 and the bounded Crassus provenance part of item 4.
+Authority: [inventory](../../docs/plans/2026-09-market-reading-inventory.md) and
+[ownership decisions](../../docs/plans/2026-09-market-reading-ownership.md), merged as #108/#110.
+This defines the future shared-reading envelope; this PR implements only the
+snapshot-lineage extension below. No shared-reading publisher is added.
+
+## Shared-reading record contract
+
+`market_reading.v1` is one reading for one input snapshot and one explicitly
+identified calculation. Fields below are required in that future envelope;
+unknown values are null with a reason, never guessed. Times are ISO 8601 with
+an explicit UTC offset. Consumers tolerate additive fields; a semantic change
+to an existing field requires a new schema version.
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | `market_reading.v1` |
+| `reading_id`, `symbol` | Named measurement (e.g. `reference_oi_skew`) and underlying |
+| `observed_at` | Relevant source observation time, null when not available; never substitute ingestion/publication time |
+| `input_observed_at` | Per-input time map (spot, volume, Greeks, quote, anchor as applicable), preserving asynchronous inputs and explicit nulls |
+| `calculated_at` | Time the calculation was made; replay time for a retrospective calculation |
+| `published_at` | Time this reading was successfully published, null when unpublished or unknown |
+| `publication` | `{status, reason}`: `published`, `archived_unpublished`, or `unknown`; concerns the input board's publication to latest.json, not merely CSV existence |
+| `source` | Producer/feed identifiers and source namespace (archive bucket/public origin), excluding credentials |
+| `input` | `{snapshot_key, snapshot_key_status, snapshot_timestamp, payload_url, payload_sha256}`; explicit nulls for unavailable data |
+| `calculation` | `{version, parameters}`; version identifies formula/conventions, parameters contain actual values used, including effective collector configuration |
+| `interpretation` | `{kind, account_alias}`; kind `reference` or `account_configured`; account null for a reference reading |
+| `values`, `units` | Matching named value/unit maps; unavailable numeric values null, not zero/NaN/infinity |
+| `status` | `{code, reason}`; retain the reading's existing status vocabulary (e.g. `no_data`, `insufficient_history`, `warming_up`, `stale_anchor`, `ok`); undefined PCR explicitly `undefined` with reason `zero_call_oi` |
+| `freshness` | `{status, evaluated_at, parameters}`; `live`, `stale`, or `unknown`, using that reading's existing freshness definition; no universal age threshold introduced |
+| `coverage` | `{partial, reason, details}`; partial true/false/null, with existing sample counts, band/strike coverage, partial-session flag and start time as applicable |
+| `caveats` | Named limitations, including `oi_zero_or_missing_indistinguishable` and `oi_prior_day_settled` for OI-derived values |
+
+The input identity is scoped by source namespace plus the exact supplied key.
+`valid` means structurally valid current collector key, not verified object
+existence or content integrity. A future archive reader must report failed
+retrieval/checksum verification separately; it must not fall back to nearest
+time. `payload_sha256` means SHA-256 of the complete fetched JSON bytes, with
+whitespace/ordering included. It is neither a canonicalized-JSON hash, a row
+hash, nor a CSV checksum. A CSV checksum, if later measured, needs its own
+explicitly named field. CSVs cannot reconstruct the full underlying_market
+block or the original payload bytes. This PR does not solve that history gap.
+
+### Preserve the accepted measurements
+
+| Reading | Parameters/conventions and units retained |
+|---|---|
+| VWAP | Existing snapshot-weighted approximation; USD/share, volume in shares; preserve spot/vwap/volume timestamps and partial-session coverage |
+| RVOL | 5-minute buckets, default 20 calendar-day lookback and minimum 5 samples; record effective settings and days actually used; dimensionless multiple |
+| Reference momentum | 60-minute lookback, 10-minute maximum anchor overshoot; percent return (0.05 means 0.05%, not 5%); 0.05% neutral band is display-only |
+| Trading momentum | Account-configured lookback/thresholds and runner history; bot-local, never replaced by collector reference momentum |
+| PCR | Existing `compute_pcr` over board rows; put/call OI totals in contracts, nonzero-OI row count, dimensionless ratio; zero call OI undefined; trailing z-score/baseline remain bot-local |
+| Max pain | Existing `_compute_max_pain`, all board candidate strikes, lower strike wins ties; USD strike and count of strikes with OI on both sides; account coverage/pin thresholds remain bot-local |
+| Reference OI skew | Explicitly labeled **2% reference band**, OI totals in contracts, dimensionless imbalance, band strike count; independent of account session trackers; account bands/drift rules stay bot-local |
+| Snapshot IV / Black-Scholes | Existing option-buy-only annotation reuses observed execution quote; no standing series until Greeks timestamps and provider valuation/time-to-expiry conventions are adequate |
+
+Open interest (OI) zeros currently conflate missing feed observations with real
+zeros. No coverage count resolves that ambiguity; preserve the caveat even when
+the numerical calculation succeeds. OI is lagged, not proof of new intraday
+positioning. Black-Scholes must preserve the asynchronous snapshot IV, spot and
+execution quote limitation and dxFeed's near-close fixed 30-minute convention;
+this contract creates no new quote selection or measurement policy.
+
+An archived CSV can exist without publication (zero bid coverage or publication
+failure). Archive presence alone cannot establish a strategy saw that board.
+A fetched payload is evidence of publication of that particular key; otherwise
+publication is unknown unless producer evidence establishes the outcome.
+The collector's payload `timestamp` is a snapshot construction clock, **not**
+a feed observation time or confirmed publication time. The archive key uses a
+separate clock read. Never derive either timestamp from the other, or fabricate
+`published_at` from a fetch time. `fetched_at` is only consumer retrieval time.
+
+## Implemented optional audit extension
+
+The 19 mandatory fields and `crassus_audit.v1` stay unchanged. New runner
+records contain an optional v1 extension with an object value:
+
+```json
+{
+  "market_snapshot_lineage": {
+    "schema_version": "market_snapshot_lineage.v1",
+    "snapshot_key": "intraday/20261002/snapshot_120000123456.csv",
+    "status": "valid"
+  }
+}
+```
+
+`MarketSnapshot.snapshot_key` retains the supplied locator and `.lineage`
+provides the extension. Existing `market_snapshot_timestamp` and
+`market_snapshot_url_or_hash` retain their meanings. The latter remains
+`{fetched URL}#sha256:{exact fetched JSON bytes hash}`. The source URL provides
+namespace context; a bare key must not be joined across unrelated sources.
+
+| Input condition | `snapshot_key` | Status / behavior |
+|---|---|---|
+| Current `intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv`, valid date/time | Exact supplied string | `valid`; deterministic producer-declared archive locator, no readback claim |
+| Historical minute/second key `intraday/YYYYMMDD/snapshot_HHMM.csv` or `snapshot_HHMMSS.csv` | Exact supplied string | `legacy_key`; potentially overwritten, no immutable-identity guarantee |
+| Key absent (legacy payload or old direct constructor) | null | `absent`; rows remain usable |
+| Explicit null, nonstring, empty, wrong namespace/format, impossible date/time, path traversal, URL/query/fragment | null | `invalid`; no coercion, trimming, network lookup, or strategy veto |
+| Startup record before any board read | null | `not_observed`; no market observation was attempted |
+| Cycle with a failed board read | null | `unavailable`; no snapshot was available for this cycle |
+| Pre-extension pending intent with missing/null extension | null | `unknown` on a newly written recovery record; no timestamp inference |
+| Malformed non-object intent extension | null | `invalid` on a newly written recovery record; original intent is not rewritten unless replayed |
+| Pre-extension ledger record | n/a | Its absent/null extension remains unchanged; consumers must treat historical lineage as unknown |
+
+Invalid raw key values are not copied into the ledger. The existing payload
+hash still identifies the exact fetched JSON. All original strategy-visible
+row values and underlying readings are unchanged.
+
+The runner carries this extension through normal trade/no-trade, dry-run,
+strategy/quote/reconciliation errors, liquidation, mandatory flatten, and
+closed-account records when a snapshot is available. Pending execution intents
+persist it before submission and recovery uses the **original intent's**
+lineage, never the latest board. The HTTP execution request is unchanged.
+Startup records without a snapshot use `not_observed` and do not invent an identity. Existing error
+boundaries, retries and decisions are unchanged; this adds no new error ledger
+paths. Old ledgers are never edited, and unknown historical lineage stays
+unknown. Timestamp-nearest historical matching remains approximate/unverified.
+
+## Remaining #107 work
+
+1. Durable per-snapshot VWAP/RVOL/underlying_market history; the key alone does
+   not recover those readings after latest.json advances.
+2. Collector PCR, max-pain and labeled 2% reference-skew publication/history,
+   with collector/Crassus formula parity fixtures and this envelope.
+3. Wire future shared histories to exact snapshot keys and prove no-trade and
+   inactive-bot visibility, missing/stale/partial semantics, and replay coverage.
+4. Separately review symbol parsing, freshness and quote-check plumbing (item 5)
+   without changing strategy behavior.
+
+#107 remains open. OI-skew multi-account behavior, #69 lifecycle, Phelps/Reddit,
+policy changes, production configuration, orders, deployment and historical
+rewrites are outside this PR. Black-Scholes remains buy-only.
+
+## Verification and deployment review (2026-10-04)
+
+Base: `fbbc3456da8025b6b1021f3d7282b2d6cae570e3` on freshly fetched master.
+No open PR was returned by the repository-scoped open-PR search before work
+or at the final overlap check. No AGENTS.md, CLAUDE.md, or .agents/skills files
+exist in this base's tracked tree. Read Crassus README/RELIABILITY, deployment
+contract, collector source, ledger/client/runner paths and merged #108/#110 docs.
+
+Local Linux / Python **3.12.14**, dependencies installed from
+`crassus/requirements.txt`. Each command below is
+`python scripts/<suite>.py`, run from `crassus/`. All exited 0; the counts mix
+unittest test cases and repository assertion checks, so are not summed.
+
+| Suite | Exact result |
+|---|---|
+| `verify_snapshot_lineage` | 17 tests passed after Jayden's review remediation below |
+| `verify_invariants` | 83 checks passed, 0 failed |
+| `verify_observability` | 14 tests passed |
+| `verify_runner_flatten_attribution` | 26 checks passed, 0 failed |
+| `verify_archive` | 17 tests passed |
+| `verify_reliability` | 15 tests run: 14 passed, 1 skipped |
+| `verify_black_scholes` | 80 checks passed, 0 failed |
+| `verify_vwap_rvol` | 56 checks passed, 0 failed |
+| `verify_momentum_qqq` | 67 checks passed, 0 failed |
+| `verify_momentum_puts_only` | 42 checks passed, 0 failed |
+| `verify_put_call_ratio` | 74 checks passed, 0 failed |
+| `verify_max_pain` | 45 checks passed, 0 failed |
+| `verify_oi_skew` | 57 checks passed, 0 failed |
+| `verify_flatten` | 44 checks passed, 0 failed |
+| `verify_canopus_down_day` | 32 checks passed, 0 failed |
+| `verify_exchange_calendar` | 9 checks passed, 0 failed |
+| `verify_looking_glass_straddle` | 33 checks passed, 0 failed |
+| `verify_looking_glass_straddle_runner_integration` | 24/24 checks passed |
+| `verify_phelps` | 104 checks passed, 0 failed |
+| `verify_reddit_sentiment` | 47 checks passed, 0 failed |
+| `verify_reddit_ingestion` | 73 checks passed, 0 failed |
+| `verify_trump_whisperer` | 59 checks passed, 0 failed |
+| `verify_trump_ingestion` | 23 checks passed, 0 failed |
+
+The reliability skip is `test_detached_browser_is_reaped_after_worker_exit`:
+this sandbox's `/proc` exposes a different PID namespace. Docker is unavailable
+locally, so the existing Docker build/browser soak gate was not run locally.
+CI's Python 3.11 and production-image checks remain release requirements;
+local tests do not certify a running deployment. The new lineage suite is
+added to Crassus CI without changing any deployment trigger.
+
+An additional cross-revision check ran the **same committed fixture driver**
+against an untouched base worktree and the candidate:
+
+```sh
+python scripts/fixtures/snapshot_lineage_behavior.py /path/to/base/crassus > base.json
+python scripts/fixtures/snapshot_lineage_behavior.py /path/to/candidate/crassus > candidate.json
+cmp base.json candidate.json
+```
+
+`cmp` exited **0**: 18 cases (buy, sell, no-trade, closed-market, dry-run,
+flatten, each with absent/valid/malformed key metadata) have byte-identical
+strategy decisions, account-state projections, strategy-visible rows/price,
+and actual HTTP submission bodies through a fake session. Fixture account
+observation times/request IDs are fixed; newly added audit fields are excluded
+from the behavior projection by design. Both output files have SHA-256
+`5cda9f3c714be3460275a867bfd80c68776be4f086613fec8c922dcd97f1188c`.
+`git diff --check` also passed. No production requests/orders were used.
+
+### Watch-scope impact
+
+Read-only Railway inspection of `live-market-monitor` production and repository
+workflow inspection on October 4 found:
+
+| Service / workflow | Effect of this PR upon a future master merge |
+|---|---|
+| Crassus runner | Matches live `/crassus/**`; source master, root `crassus`, Wait for CI enabled. Crassus tests and Docker CI run on this PR. |
+| QQQ collector | No match: live paths are `/collector.py`, `/market_signals.py`, `/crude_calibration.py`, `/requirements.txt`, `/Dockerfile`, `/railway.toml`; Wait for CI enabled. |
+| Cloudflare Worker | The plan now lives under `crassus/docs/`, outside `deploy.yml`'s `docs/**` path. The final PR diff has no Worker, web asset, or deploy-workflow path, so a master merge does not trigger that workflow. |
+| Big Banana (`oa203-banana-scanner-AWsT`) | **Potential unrelated rebuild/deploy**: live source master, no `watchPatterns` reported, Wait for CI false. Treat merge as deployment-sensitive; this PR does not repair configuration. |
+| MOO-169 collector | Watch paths only Tradier launcher/collector/probe, root requirements/Dockerfile; no match. |
+| MOO-144 probe | Source branch `moo-144-probe-recovery`, not this branch/master. |
+| R2 paper-trades recovery | Image-backed service, not this repository branch. |
+
+The older deployment document's statement that Wait for CI is disabled on
+Crassus/QQQ is stale relative to this read-only inspection. No production
+configuration, deployment, account, live order, or historical data was changed.
+This is a draft PR only; merging/releasing it is a separate action.
+
+
+### Follow-up review
+
+Reviewed the complete diff and every production ledger write against current
+master, including intent replay, resolved-intent deduplication, liquidation,
+closed-account records and the existing v1 extra-field mechanism. Rechecked
+key formats against collector history and the shared-reading contract against
+#110. No runtime correctness or compatibility defect was found in this slice.
+This is the implementing agent's follow-up review, not an independent approval.
+
+The review did find a verification gap: the initial tests exercised durable
+intent persistence and runner recovery separately. Added a real
+Runner/ExecutionClient integration test with fake HTTP, real temporary intent
+files and real append-only ledgers. It covers both a server-confirmed fill and
+a replay, injecting failure before the first ledger write and again after the
+recovery ledger write but before intent cleanup. Fresh runner/client instances
+then prove original key/hash/decision/request identity survives the newer board,
+replay uses the identical HTTP body, and the final restart neither resends nor
+rewrites/duplicates the already committed ledger outcome. Also corrected the
+older recovery fake to return its pending request ID and assert the match.
+
+The earlier extended lineage suite passed **16 tests**; `git diff --check` passed.
+Runtime files are unchanged by this review. On implementation head
+`1892381dd6a2e8c8ae68311712fa83bde864ffea`, both Web CI and the Crassus
+workflow passed, including Python 3.11 invariant/strategy tests and the actual
+Docker build plus Chromium memory/fatal-driver regression (run 37239819011).
+Every new PR head still requires its own passing checks. No merge or deployment
+is authorized by this review; the Big Banana watch-scope concern remains relevant.
+
+### Jayden review remediation (2026-10-05)
+
+Jayden independently reviewed head `6313301` and requested two changes. The
+contract moved from `docs/plans/` to `crassus/docs/`. Because it was added on
+this PR, the final diff contains no `docs/**` path; `deploy.yml` is unchanged,
+so Worker code, config and web-asset changes still trigger the normal deploy.
+
+New ledger records always contain a lineage object. A startup record before a
+board read is `not_observed`; a cycle without a snapshot is `unavailable`;
+recovery of a pre-extension intent is `unknown`; a malformed intent extension
+is `invalid`. An observed payload with no key remains `absent`, and an observed
+payload with a malformed key remains `invalid`. Old ledger lines are not
+rewritten or retrospectively attributed. Direct `MarketSnapshot` construction
+now derives the key status when a key is supplied.
+
+The focused suite passes **17 tests** on Windows with only the existing POSIX
+directory-fsync helper stubbed. Adjacent invariant, runner-attribution,
+observability and archive suites pass (83, 26, 14 and 17 respectively) under
+the same stub; the 18-case base/candidate behavior projections and HTTP bodies
+are byte-identical. Linux CI on the final head remains the release gate.

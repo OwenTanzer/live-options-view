@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
@@ -167,6 +168,30 @@ class UnderlyingMarket:
         )
 
 
+def _snapshot_key(payload: dict[str, Any]) -> tuple[str | None, str]:
+    """Validate only the supplied archive locator; never infer one from time.
+
+    A valid locator is a producer assertion, not a CSV digest or readback.
+    Older minute/second-granular keys are retained but cannot promise immutability.
+    Malformed metadata must not prevent strategies reading the same board.
+    """
+    if "snapshot_key" not in payload:
+        return None, "absent"
+    key = payload["snapshot_key"]
+    if not isinstance(key, str):
+        return None, "invalid"
+    match = re.fullmatch(r"intraday/([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
+    if match is None:
+        return None, "invalid"
+    date_part, time_part = match.groups()
+    formats = {4: "%Y%m%d%H%M", 6: "%Y%m%d%H%M%S", 12: "%Y%m%d%H%M%S%f"}
+    try:
+        datetime.strptime(date_part + time_part, formats[len(time_part)])
+    except ValueError:
+        return None, "invalid"
+    return key, "valid" if len(time_part) == 12 else "legacy_key"
+
+
 @dataclass(frozen=True)
 class MarketSnapshot:
     """One immutable read of the durable option board."""
@@ -180,9 +205,22 @@ class MarketSnapshot:
     rows: list[dict[str, Any]]
     sha256: str
     underlying_market: UnderlyingMarket | None = None
+    snapshot_key: str | None = None
+    snapshot_key_status: str = "absent"
+
+    def __post_init__(self) -> None:
+        # Direct construction must not publish a key with the default
+        # "absent" status. from_payload has already classified null vs absent.
+        if self.snapshot_key is not None:
+            key, status = _snapshot_key({"snapshot_key": self.snapshot_key})
+            object.__setattr__(self, "snapshot_key", key)
+            object.__setattr__(self, "snapshot_key_status", status)
+        elif self.snapshot_key_status not in {"absent", "invalid"}:
+            raise ValueError("A missing snapshot key cannot have a present-key status")
 
     @classmethod
     def from_payload(cls, url: str, payload: dict[str, Any], raw: bytes) -> "MarketSnapshot":
+        snapshot_key, key_status = _snapshot_key(payload)
         return cls(
             url=url,
             fetched_at=clock.iso_utc(),
@@ -192,13 +230,24 @@ class MarketSnapshot:
             underlying_price=float(payload["underlying_price"]),
             rows=payload.get("rows", []),
             sha256=hashlib.sha256(raw).hexdigest(),
+            snapshot_key=snapshot_key,
+            snapshot_key_status=key_status,
             underlying_market=UnderlyingMarket.from_payload(payload.get("underlying_market")),
         )
 
     @property
     def provenance(self) -> str:
-        """What goes in the audit record's market_snapshot_url_or_hash field."""
+        """URL plus SHA-256 of exact fetched JSON bytes, NOT archived CSV bytes."""
         return f"{self.url}#sha256:{self.sha256}"
+
+    @property
+    def lineage(self) -> dict[str, Any]:
+        """Optional v1-ledger extension; source/hash remain in existing fields."""
+        return {
+            "schema_version": "market_snapshot_lineage.v1",
+            "snapshot_key": self.snapshot_key,
+            "status": self.snapshot_key_status,
+        }
 
     def quoted(self, option_type: str | None = None) -> list[dict[str, Any]]:
         """Rows carrying a two-sided quote, optionally filtered to call/put."""
@@ -216,6 +265,29 @@ class MarketSnapshot:
 
     def by_symbol(self, symbol: str) -> dict[str, Any] | None:
         return next((r for r in self.rows if r.get("OptionSymbol") == symbol), None)
+
+
+def unavailable_lineage(status: str) -> dict[str, Any]:
+    """Describe missing observation evidence without inventing a snapshot key."""
+    if status not in {"not_observed", "unavailable", "unknown", "invalid"}:
+        raise ValueError(f"Unknown missing-lineage status: {status}")
+    return {"schema_version": "market_snapshot_lineage.v1", "snapshot_key": None,
+            "status": status}
+
+
+def intent_lineage(value: Any) -> dict[str, Any]:
+    """Old intents have no extension; preserve that uncertainty on recovery."""
+    if isinstance(value, dict):
+        key, status = value.get("snapshot_key"), value.get("status")
+        if value.get("schema_version") == "market_snapshot_lineage.v1" and isinstance(status, str) and (
+            (status in {"valid", "legacy_key"} and isinstance(key, str)
+             and _snapshot_key({"snapshot_key": key}) == (key, status))
+            or (status in {"absent", "invalid", "not_observed", "unavailable", "unknown"}
+                and key is None)
+        ):
+            return value
+        return unavailable_lineage("invalid")
+    return unavailable_lineage("unknown" if value is None else "invalid")
 
 
 class SnapshotReader:
