@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-collector.py -- QQQ live chain snapshot service.
+collector.py -- QQQ (and SPY) live chain snapshot service.
 
-Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
-DXLink websocket, and uploads snapshots to R2 every minute.
+Authenticates with tastytrade, subscribes to the QQQ and SPY 0DTE option chains
+via one DXLink websocket, and uploads snapshots to R2 every minute. Each
+underlying keeps its own VWAP/RVOL/momentum state and archive (#121); QQQ keeps
+every pre-SPY key unchanged.
 
 The nearest end-of-week expiration is subscribed through the same feed and
 archived at hourly regular-session slots for historical analysis.  It does not
@@ -11,7 +13,9 @@ replace or alter the tactical 0DTE stream.
 
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
-  intraday/latest.json                   -- live feed for the web viewer
+  intraday/latest.json                   -- live QQQ feed for the web viewer
+  intraday/spy/latest.json               -- live SPY feed (same contract, "symbol": "SPY")
+  intraday/spy/YYYYMMDD/...              -- SPY archive, mirroring the QQQ intraday/YYYYMMDD/ layout
   intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
   raw/weekly/YYYYMMDD/qqq_chain_*.csv    -- nearest-weekly snapshots (~hourly RTH)
@@ -35,6 +39,7 @@ Environment variables (set in Railway dashboard):
   EIA_API_KEY            optional -- enables the macro/eia_steo.json feed (see
                           crude_calibration.py); free signup at eia.gov/opendata.
                           Feature is silently skipped (logged once) if unset.
+  COLLECT_SPY            optional -- "0" disables SPY chain collection (default on)
 """
 
 import io
@@ -83,6 +88,11 @@ log = logging.getLogger("collector")
 ET              = pytz.timezone("America/New_York")
 TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
+# Underlyings with their own 0DTE chain, snapshot, indicators and archive
+# (#121). Only TICKER (QQQ) gets the nearest-weekly archive; SPY is 0DTE only,
+# to bound subscriptions and writes.
+CHAIN_UNDERLYINGS = ("QQQ", "SPY")
+COLLECT_SPY     = os.environ.get("COLLECT_SPY", "1") != "0"
 STRIKE_WINDOW   = 33
 SNAPSHOT_SECS   = 60
 WEEKLY_SNAPSHOT_SECS = 60 * 60
@@ -560,10 +570,19 @@ def _dxlink_symbol(occ_symbol: str) -> str:
     return f".{underlying}{date_part}{side}{_strike_str(strike)}"
 
 
-def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
+def _build_symbol(strike: float, exp_date: str, option_type: str, ticker: str = TICKER) -> str:
     yy, mm, dd = exp_date[2:4], exp_date[5:7], exp_date[8:10]
     side = "C" if option_type.lower() == "call" else "P"
-    return f".{TICKER}{yy}{mm}{dd}{side}{_strike_str(strike)}"
+    return f".{ticker}{yy}{mm}{dd}{side}{_strike_str(strike)}"
+
+
+def _occ_root(occ_symbol: str) -> str:
+    """Underlying root of an OCC symbol: 'SPY   261006C00600000' -> 'SPY'."""
+    occ = occ_symbol.replace(" ", "")
+    i = 0
+    while i < len(occ) and not occ[i].isdigit():
+        i += 1
+    return occ[:i]
 
 
 def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = None) -> date:
@@ -585,27 +604,33 @@ def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = Non
     )
 
 
-def _parse_expiration_strikes(expiration: dict) -> list[dict]:
+def _parse_expiration_strikes(expiration: dict, ticker: str = TICKER) -> list[dict]:
     exp_date = expiration["expiration-date"]
     strikes = []
+    foreign = 0
     for s in expiration.get("strikes", []):
         strike = float(s.get("strike-price", 0))
         c = s.get("call", {})
         p = s.get("put",  {})
         if isinstance(c, str):
             call_occ = c.replace(" ", "")
-            call_sym = _dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")
+            call_sym = _dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call", ticker)
         else:
             call_occ = c.get("symbol", "")
             call_sym = (c.get("streamer-symbol") or
-                        (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")))
+                        (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call", ticker)))
         if isinstance(p, str):
             put_occ = p.replace(" ", "")
-            put_sym = _dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")
+            put_sym = _dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put", ticker)
         else:
             put_occ  = p.get("symbol", "")
             put_sym  = (p.get("streamer-symbol") or
-                        (_dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")))
+                        (_dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put", ticker)))
+        # A contract from another underlying must never enter this chain (#121):
+        # it would be labeled, quoted and archived as `ticker`.
+        if any(occ and _occ_root(occ) != ticker for occ in (call_occ, put_occ)):
+            foreign += 1
+            continue
         strikes.append({
             "strike":   strike,
             "call_sym": call_sym,
@@ -613,13 +638,19 @@ def _parse_expiration_strikes(expiration: dict) -> list[dict]:
             "call_occ": call_occ,
             "put_occ":  put_occ,
         })
+    if foreign:
+        log.warning(f"{ticker} chain {exp_date}: dropped {foreign} strikes with another underlying's contracts")
     return strikes
 
 
-def load_chain(access_token: str, today: date) -> tuple[list[dict], str, list[dict], str]:
-    """Load the current expiration and the pipeline-compatible EoW expiration."""
+def load_chain(access_token: str, today: date, ticker: str = TICKER,
+               include_weekly: bool = True) -> tuple[list[dict], str, list[dict], str]:
+    """Load the current expiration and the pipeline-compatible EoW expiration.
+
+    `include_weekly=False` (SPY) returns only the current expiration.
+    """
     resp = requests.get(
-        f"{TASTY_BASE}/option-chains/{TICKER}/nested",
+        f"{TASTY_BASE}/option-chains/{ticker}/nested",
         headers=_bearer_headers(access_token),
         timeout=30,
     )
@@ -642,9 +673,11 @@ def load_chain(access_token: str, today: date) -> tuple[list[dict], str, list[di
         raise RuntimeError(f"no upcoming expiration found in chain for {today_str}")
 
     exp_date = target["expiration-date"]
-    log.info(f"chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
+    log.info(f"{ticker} chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
 
-    strikes = _parse_expiration_strikes(target)
+    strikes = _parse_expiration_strikes(target, ticker)
+    if not include_weekly:
+        return strikes, exp_date, [], ""
 
     try:
         weekly_exp_date = nearest_weekly_expiration(today).isoformat()
@@ -1412,13 +1445,13 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
             log.info(f"prices -- yfinance filled: {', '.join(filled)}")
         qqq_yf = yf_data.get("QQQ")
         if qqq_yf is not None:
-            _last_spot[0] = qqq_yf
+            QQQ_SESSION.last_spot[0] = qqq_yf
             # Same reasoning as quote_ts above: yfinance has no trustworthy
-            # provider event timestamp, so _last_spot[1] must not carry over
+            # provider event timestamp, so last_spot[1] must not carry over
             # whatever (older, DXLink-sourced) timestamp was there before --
             # take_snapshot's freshness check needs spot_ts=None here to
             # correctly report this fallback as not "live".
-            _last_spot[1] = None
+            QQQ_SESSION.last_spot[1] = None
 
     for lbl, d in prices.items():
         if d["price"] is not None:
@@ -1757,69 +1790,95 @@ def _fmt_oi(v: int) -> str:
     return f"{v//1000}K"
 
 
-_prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
-_last_spot: list = [None, None]   # [price|None, observed_at_iso|None] — yfinance/CSV fallback for underlying price
 _last_prices: dict[str, dict] = {}  # label -> {price, quote_ts}; timestamp never refreshed by fallback
-_first_snapshot_written: bool = False  # guard so first.csv is only written once per session
-
-_vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
-_rvol_baseline: dict = {}         # loaded once per session from RVOL_BASELINE_KEY; {"buckets": {...}, ...}
-_rvol_today: dict[str, int] = {}  # bucket_label -> latest session cum_volume seen in that bucket this session
-
-# Rolling window of recent spot observations for the display-only momentum
-# reading (see market_signals.py's compute_time_series_momentum). Unlike
-# _vwap_state, this needs no restart-recovery persistence: it's a bounded
-# real-time window, not a session-cumulative sum, so it self-heals within
-# ~MOMENTUM_LOOKBACK_MINUTES of any restart on its own.
-_momentum_history: list = []  # list[ms.SpotPoint]
 
 
-def restore_state(s3, today: date) -> None:
-    """Seed _prev_vol, _last_spot, and _last_prices from the most recent R2 snapshot.
+class UnderlyingSession:
+    """All per-underlying collection state (#121), so SPY and QQQ can never
+    share a volume delta, VWAP sum, RVOL bucket, momentum window or archive key.
+
+    QQQ (TICKER) keeps every pre-SPY R2 key; other underlyings publish under
+    intraday/<symbol>/ and baselines/<symbol>_rvol_buckets.json, so no
+    existing QQQ consumer of intraday/latest.json or intraday/YYYYMMDD/ can
+    ever read SPY data.
+    """
+
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+        self.archive_root = "intraday" if symbol == TICKER else f"intraday/{symbol.lower()}"
+        self.latest_key = f"{self.archive_root}/latest.json"
+        self.rvol_baseline_key = (RVOL_BASELINE_KEY if symbol == TICKER
+                                  else f"baselines/{symbol.lower()}_rvol_buckets.json")
+        self.prev_vol: dict[str, int] = {}     # persists across calls to compute per-minute delta
+        self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
+        self.first_snapshot_written = False     # guard so first.csv is only written once per session
+        self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
+        self.rvol_baseline: dict = {}           # loaded once per session from rvol_baseline_key
+        self.rvol_today: dict[str, int] = {}    # bucket_label -> latest session cum_volume in that bucket
+        # Rolling window of recent spot observations for the display-only
+        # momentum reading (see market_signals.py's compute_time_series_momentum).
+        # Unlike vwap_state, this needs no restart-recovery persistence: it's a
+        # bounded real-time window that self-heals within
+        # ~MOMENTUM_LOOKBACK_MINUTES of any restart.
+        self.momentum_history: list = []        # list[ms.SpotPoint]
+
+    def day_prefix(self, date_str: str) -> str:
+        return f"{self.archive_root}/{date_str}/"
+
+
+QQQ_SESSION = UnderlyingSession(TICKER)
+UNDERLYING_SESSIONS: dict[str, UnderlyingSession] = {
+    sym: (QQQ_SESSION if sym == TICKER else UnderlyingSession(sym)) for sym in CHAIN_UNDERLYINGS
+}
+
+
+def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> None:
+    """Seed one underlying's prev_vol/last_spot (and, for QQQ only, the shared
+    _last_prices strip) from its most recent R2 snapshot.
 
     Called at session start so a redeploy doesn't blank VolDelta for one beat
     or lose price context.
     """
+    us = us or QQQ_SESSION
     date_str = today.strftime("%Y%m%d")
     try:
-        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=f"intraday/{date_str}/")
+        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=us.day_prefix(date_str))
         csvs = sorted(
             [o for o in resp.get("Contents", []) if o["Key"].endswith(".csv")],
             key=lambda o: o["Key"],
         )
         if not csvs:
-            log.info("restore_state: no snapshots found for today, starting fresh")
+            log.info(f"restore_state: no {us.symbol} snapshots found for today, starting fresh")
             return
 
-        global _first_snapshot_written
-        _first_snapshot_written = True  # prior snapshots exist; first.csv already written
+        us.first_snapshot_written = True  # prior snapshots exist; first.csv already written
 
         latest_key = csvs[-1]["Key"]
         body = s3.get_object(Bucket=R2_BUCKET, Key=latest_key)["Body"].read().decode()
         df = pd.read_csv(io.StringIO(body))
 
-        # Restore _prev_vol from Volume column keyed by OptionSymbol
+        # Restore prev_vol from Volume column keyed by OptionSymbol
         if "OptionSymbol" in df.columns and "Volume" in df.columns:
             for _, row in df.iterrows():
                 sym = row.get("OptionSymbol")
                 vol = row.get("Volume")
-                if sym and pd.notna(vol):
+                if sym and pd.notna(vol) and _occ_root(str(sym)) == us.symbol:
                     # Convert OCC symbol back to dxFeed format used as state key
                     try:
                         dx_sym = _dxlink_symbol(str(sym))
-                        _prev_vol[dx_sym] = int(vol)
+                        us.prev_vol[dx_sym] = int(vol)
                     except Exception:
                         pass
 
-        # Restore _last_spot, paired with the timestamp encoded in the
+        # Restore last_spot, paired with the timestamp encoded in the
         # snapshot's own filename (snapshot_HHMMSSffffff.csv) -- not
         # datetime.now() at restore time, which would misrepresent how old
         # this recovered price actually is.
         if "UnderlyingPrice" in df.columns:
             spot = df["UnderlyingPrice"].dropna().iloc[-1] if not df["UnderlyingPrice"].dropna().empty else None
             if spot:
-                _last_spot[0] = float(spot)
-                _last_spot[1] = None
+                us.last_spot[0] = float(spot)
+                us.last_spot[1] = None
                 name_match = re.search(r"snapshot_(\d{6})(\d{6})\.csv$", latest_key)
                 if name_match:
                     hms, micro = name_match.groups()
@@ -1828,51 +1887,55 @@ def restore_state(s3, today: date) -> None:
                             today.year, today.month, today.day,
                             int(hms[0:2]), int(hms[2:4]), int(hms[4:6]), int(micro),
                         ))
-                        _last_spot[1] = spot_dt.astimezone(timezone.utc).isoformat()
+                        us.last_spot[1] = spot_dt.astimezone(timezone.utc).isoformat()
                     except ValueError:
                         pass
 
-        # Restore _last_prices from price columns (any col not in core option fields)
+        # Restore the shared _last_prices strip from QQQ's price columns only
+        # (any col not in core option fields).
         core_cols = {"TradeDate","Expiration","Strike","Type","OptionSymbol","DTE",
                      "OpenInterest","Volume","VolDelta","Bid","Mid","Ask","Last",
                      "IV","Delta","Gamma","Theta","Vega","UnderlyingPrice"}
-        for col in df.columns:
+        for col in (df.columns if us is QQQ_SESSION else ()):
             if col not in core_cols:
                 val = df[col].dropna().iloc[-1] if not df[col].dropna().empty else None
                 if val is not None:
                     label = col.replace("_", "/") if col in ("JPY_USD", "BTC_USD") else col
                     _last_prices[label] = {"price": float(val), "quote_ts": None}
 
-        _restore_vwap_state(s3, today, date_str)
+        _restore_vwap_state(s3, today, date_str, us)
 
         log.info(
-            f"restore_state: loaded {latest_key.split('/')[-1]} -- "
-            f"vol_keys={len(_prev_vol)}  spot={_last_spot[0]}  prices={len(_last_prices)}"
+            f"restore_state: {us.symbol} loaded {latest_key.split('/')[-1]} -- "
+            f"vol_keys={len(us.prev_vol)}  spot={us.last_spot[0]}  prices={len(_last_prices)}"
         )
     except Exception as e:
-        log.warning(f"restore_state failed (non-fatal): {e}")
+        log.warning(f"restore_state failed for {us.symbol} (non-fatal): {e}")
 
 
-def _vwap_state_key(date_str: str) -> str:
-    return f"intraday/{date_str}/vwap_state.json"
+def _vwap_state_key(date_str: str, us: "UnderlyingSession | None" = None) -> str:
+    return f"{(us or QQQ_SESSION).day_prefix(date_str)}vwap_state.json"
 
 
-def _restore_vwap_state(s3, today: date, date_str: str) -> None:
-    """Best-effort recovery of `_vwap_state`'s running sums after a mid-session
+def _restore_vwap_state(s3, today: date, date_str: str, us: "UnderlyingSession | None" = None) -> None:
+    """Best-effort recovery of `vwap_state`'s running sums after a mid-session
     restart. Written every snapshot cycle purely as a restart-recovery aid --
     nothing else reads this object. Without this, a Railway restart mid-day
     would silently reset VWAP to a fresh (lower-sample) accumulation with no
     indication in the payload that this happened.
     """
-    global _vwap_state
+    us = us or QQQ_SESSION
     try:
-        body = s3.get_object(Bucket=R2_BUCKET, Key=_vwap_state_key(date_str))["Body"].read()
+        body = s3.get_object(Bucket=R2_BUCKET, Key=_vwap_state_key(date_str, us))["Body"].read()
         data = json.loads(body)
         if data.get("session_date") != today.isoformat():
             return  # stale leftover from a prior day; a fresh accumulator is correct
+        if data.get("symbol", TICKER) != us.symbol:
+            log.warning(f"restore_vwap_state: {us.symbol} key holds {data.get('symbol')} state -- ignored")
+            return
         session_started_at = data.get("session_started_at")
         last_observed_at = data.get("last_observed_at")
-        _vwap_state = ms.VwapState(
+        us.vwap_state = ms.VwapState(
             session_date=today,
             session_started_at=datetime.fromisoformat(session_started_at) if session_started_at else None,
             last_observed_at=datetime.fromisoformat(last_observed_at) if last_observed_at else None,
@@ -1882,29 +1945,32 @@ def _restore_vwap_state(s3, today: date, date_str: str) -> None:
             vwap=data.get("vwap"),
             vwap_ts=data.get("vwap_ts"),
         )
-        log.info(f"restore_state: recovered vwap_state -- cum_vol={_vwap_state.cum_vol}  vwap={_vwap_state.vwap}")
+        log.info(f"restore_state: recovered {us.symbol} vwap_state -- cum_vol={us.vwap_state.cum_vol}  vwap={us.vwap_state.vwap}")
     except Exception as e:
         log.info(f"restore_vwap_state: nothing to recover ({e})")
 
 
-def _persist_vwap_state(s3, date_str: str) -> None:
-    """Write `_vwap_state`'s running sums so a mid-session restart can recover
+def _persist_vwap_state(s3, date_str: str, us: "UnderlyingSession | None" = None) -> None:
+    """Write `vwap_state`'s running sums so a mid-session restart can recover
     them via `_restore_vwap_state`. Best-effort -- a failure here must never
     interrupt the snapshot it's piggybacking on.
     """
+    us = us or QQQ_SESSION
+    vs = us.vwap_state
     try:
         data = {
-            "session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
-            "session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
-            "last_observed_at": _vwap_state.last_observed_at.isoformat() if _vwap_state.last_observed_at else None,
-            "cum_pv": _vwap_state.cum_pv,
-            "cum_vol": _vwap_state.cum_vol,
-            "last_dayvolume": _vwap_state.last_dayvolume,
-            "vwap": _vwap_state.vwap,
-            "vwap_ts": _vwap_state.vwap_ts,
+            "symbol": us.symbol,
+            "session_date": vs.session_date.isoformat() if vs.session_date else None,
+            "session_started_at": vs.session_started_at.isoformat() if vs.session_started_at else None,
+            "last_observed_at": vs.last_observed_at.isoformat() if vs.last_observed_at else None,
+            "cum_pv": vs.cum_pv,
+            "cum_vol": vs.cum_vol,
+            "last_dayvolume": vs.last_dayvolume,
+            "vwap": vs.vwap,
+            "vwap_ts": vs.vwap_ts,
         }
         s3.put_object(
-            Bucket=R2_BUCKET, Key=_vwap_state_key(date_str),
+            Bucket=R2_BUCKET, Key=_vwap_state_key(date_str, us),
             Body=json.dumps(data).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
@@ -1913,20 +1979,23 @@ def _persist_vwap_state(s3, date_str: str) -> None:
         log.warning(f"vwap_state.json upload failed (non-fatal): {e}")
 
 
-def load_rvol_baseline(s3) -> dict:
+def load_rvol_baseline(s3, us: "UnderlyingSession | None" = None) -> dict:
     """Best-effort load of the cross-day RVOL baseline. Missing file (first
     deploy of this feature) is not an error -- every bucket simply reports
     "insufficient_history"/"no_data" until enough sessions have run.
     """
+    us = us or QQQ_SESSION
     try:
-        body = s3.get_object(Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY)["Body"].read()
+        body = s3.get_object(Bucket=R2_BUCKET, Key=us.rvol_baseline_key)["Body"].read()
         data = json.loads(body)
-        log.info(f"load_rvol_baseline: loaded, updated_through={data.get('updated_through')}")
+        if data.get("symbol", TICKER) != us.symbol:
+            raise ValueError(f"baseline belongs to {data.get('symbol')}")
+        log.info(f"load_rvol_baseline: {us.symbol} loaded, updated_through={data.get('updated_through')}")
         return data
     except Exception as e:
-        log.info(f"load_rvol_baseline: no baseline yet ({e}) -- starting fresh")
+        log.info(f"load_rvol_baseline: no {us.symbol} baseline yet ({e}) -- starting fresh")
         return {
-            "symbol": TICKER,
+            "symbol": us.symbol,
             "bucket_minutes": RVOL_BUCKET_MINUTES,
             "lookback_days": RVOL_LOOKBACK_DAYS,
             "min_days_required": RVOL_MIN_DAYS_REQUIRED,
@@ -1935,7 +2004,7 @@ def load_rvol_baseline(s3) -> dict:
         }
 
 
-def finalize_rvol_baseline(s3, today: date) -> None:
+def finalize_rvol_baseline(s3, today: date, us: "UnderlyingSession | None" = None) -> None:
     """Fold today's completed-session bucket readings into the baseline.
 
     Called once, at end-of-session -- never mid-session -- so the baseline
@@ -1944,13 +2013,14 @@ def finalize_rvol_baseline(s3, today: date) -> None:
     corrupted into it), the same "prefer a clean miss over corrupt state"
     tradeoff `restore_state` already makes for CSV-derived state.
     """
-    if not _rvol_today:
-        log.info("finalize_rvol_baseline: no bucket readings this session, skipping")
+    us = us or QQQ_SESSION
+    if not us.rvol_today:
+        log.info(f"finalize_rvol_baseline: no {us.symbol} bucket readings this session, skipping")
         return
     try:
-        baseline = load_rvol_baseline(s3)
+        baseline = load_rvol_baseline(s3, us)
         buckets = baseline.setdefault("buckets", {})
-        for bucket, cum_volume in _rvol_today.items():
+        for bucket, cum_volume in us.rvol_today.items():
             samples = buckets.get(bucket, {}).get("samples", [])
             samples = ms.prune_baseline_samples(samples, today, baseline.get("lookback_days", RVOL_LOOKBACK_DAYS))
             samples = ms.append_session_reading(samples, today, cum_volume)
@@ -1960,21 +2030,21 @@ def finalize_rvol_baseline(s3, today: date) -> None:
         baseline["lookback_days"] = RVOL_LOOKBACK_DAYS
         baseline["min_days_required"] = RVOL_MIN_DAYS_REQUIRED
         s3.put_object(
-            Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY,
+            Bucket=R2_BUCKET, Key=us.rvol_baseline_key,
             Body=json.dumps(baseline).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
         )
-        log.info(f"finalize_rvol_baseline: wrote {len(_rvol_today)} bucket readings for {today.isoformat()}")
+        log.info(f"finalize_rvol_baseline: wrote {len(us.rvol_today)} {us.symbol} bucket readings for {today.isoformat()}")
     except Exception as e:
         log.warning(f"finalize_rvol_baseline failed (non-fatal): {e}")
 
 
-def _momentum_log_key(date_str: str) -> str:
-    return f"intraday/{date_str}/momentum_log.jsonl"
+def _momentum_log_key(date_str: str, us: "UnderlyingSession | None" = None) -> str:
+    return f"{(us or QQQ_SESSION).day_prefix(date_str)}momentum_log.jsonl"
 
 
-def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
+def _log_momentum_reading(s3, date_str: str, entry: dict, us: "UnderlyingSession | None" = None) -> None:
     """Append one momentum reading to a rolling per-day JSONL log in R2 --
     a public, queryable historical record of the display signal, independent
     of the private crassus trading bot's own decision ledger (which is a
@@ -1985,7 +2055,7 @@ def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
     interrupt the snapshot it's piggybacking on.
     """
     try:
-        key = _momentum_log_key(date_str)
+        key = _momentum_log_key(date_str, us)
         try:
             existing = s3.get_object(Bucket=R2_BUCKET, Key=key)["Body"].read().decode()
         except Exception:
@@ -2001,7 +2071,8 @@ def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
 
 
 def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_str: str | None,
-                                ts_et: datetime, ts_utc: datetime, today: date) -> dict:
+                                ts_et: datetime, ts_utc: datetime, today: date,
+                                us: "UnderlyingSession | None" = None) -> dict:
     """VWAP/RVOL for the `underlying_market` block of `intraday/latest.json`.
 
     Approximation, not tick-accurate VWAP: weights the snapshot's own spot
@@ -2013,29 +2084,29 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
     re-derive it from `qqq`, so a value that fell back to a non-DXLink source
     can't end up stamped with an unrelated DXLink timestamp.
     """
-    global _vwap_state
-
-    _vwap_state = ms.reset_if_new_session(_vwap_state, today)
+    us = us or QQQ_SESSION
+    us.vwap_state = ms.reset_if_new_session(us.vwap_state, today)
 
     raw_day_volume = qqq.get("volume")
     spot_observed_at = datetime.fromisoformat(spot_ts_str) if spot_ts_str else None
 
-    _vwap_state = ms.accumulate_vwap(
-        _vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=spot_observed_at,
+    us.vwap_state = ms.accumulate_vwap(
+        us.vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=spot_observed_at,
     )
-    _persist_vwap_state(s3, today.strftime("%Y%m%d"))
+    _persist_vwap_state(s3, today.strftime("%Y%m%d"), us)
+    vs = us.vwap_state
 
     bucket = ms.bucket_label(ts_et, RVOL_BUCKET_MINUTES)
     if raw_day_volume is not None:
-        _rvol_today[bucket] = raw_day_volume
+        us.rvol_today[bucket] = raw_day_volume
 
-    baseline_samples = _rvol_baseline.get("buckets", {}).get(bucket, {}).get("samples", [])
+    baseline_samples = us.rvol_baseline.get("buckets", {}).get(bucket, {}).get("samples", [])
     rvol = ms.compute_rvol(raw_day_volume, baseline_samples, min_days_required=RVOL_MIN_DAYS_REQUIRED)
 
     price_vs_vwap_abs = price_vs_vwap_pct = None
-    if underlying is not None and _vwap_state.vwap:
-        price_vs_vwap_abs = round(underlying - _vwap_state.vwap, 4)
-        price_vs_vwap_pct = round((underlying - _vwap_state.vwap) / _vwap_state.vwap * 100, 4)
+    if underlying is not None and vs.vwap:
+        price_vs_vwap_abs = round(underlying - vs.vwap, 4)
+        price_vs_vwap_pct = round((underlying - vs.vwap) / vs.vwap * 100, 4)
 
     freshness = ms.classify_freshness(
         inside_session_window=True,  # take_snapshot only ever runs inside the session window
@@ -2043,18 +2114,18 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
     )
 
     session_start, _ = _session_bounds(ts_et)
-    vwap_partial_session = ms.is_partial_session(_vwap_state, session_start)
+    vwap_partial_session = ms.is_partial_session(vs, session_start)
 
-    momentum = _compute_and_log_momentum(s3, underlying, spot_observed_at, ts_utc, today)
+    momentum = _compute_and_log_momentum(s3, underlying, spot_observed_at, ts_utc, today, us)
 
     return {
-        "symbol": TICKER,
+        "symbol": us.symbol,
         "spot": underlying,
         "spot_ts": spot_ts_str,
-        "vwap": _vwap_state.vwap,
-        "vwap_ts": _vwap_state.vwap_ts,
-        "vwap_session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
-        "vwap_session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
+        "vwap": vs.vwap,
+        "vwap_ts": vs.vwap_ts,
+        "vwap_session_date": vs.session_date.isoformat() if vs.session_date else None,
+        "vwap_session_started_at": vs.session_started_at.isoformat() if vs.session_started_at else None,
         "vwap_partial_session": vwap_partial_session,
         "price_vs_vwap_abs": price_vs_vwap_abs,
         "price_vs_vwap_pct": price_vs_vwap_pct,
@@ -2066,8 +2137,8 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
             "bucket_label": bucket,
             "baseline_volume": rvol.baseline_volume,
             "baseline_days_used": rvol.baseline_days_used,
-            "baseline_lookback_days": _rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
-            "baseline_updated_through": _rvol_baseline.get("updated_through"),
+            "baseline_lookback_days": us.rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
+            "baseline_updated_through": us.rvol_baseline.get("updated_through"),
         },
         "momentum": momentum,
         "source": "dxlink",
@@ -2077,26 +2148,26 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
 
 def _compute_and_log_momentum(
     s3, underlying: float | None, spot_observed_at: datetime | None, ts_utc: datetime, today: date,
+    us: "UnderlyingSession | None" = None,
 ) -> dict:
     """Display/log-only time-series momentum -- see market_signals.py's
     module docstring for why this is a separate computation from
     momentum_qqq's own live trading signal, not a shared one.
     """
-    global _momentum_history
-
+    us = us or QQQ_SESSION
     if underlying is not None and spot_observed_at is not None:
-        _momentum_history.append(ms.SpotPoint(observed_at=spot_observed_at, price=underlying))
-    _momentum_history = ms.prune_spot_history(_momentum_history, ts_utc, MOMENTUM_RETAIN_MINUTES)
+        us.momentum_history.append(ms.SpotPoint(observed_at=spot_observed_at, price=underlying))
+    us.momentum_history = ms.prune_spot_history(us.momentum_history, ts_utc, MOMENTUM_RETAIN_MINUTES)
 
     reading = ms.compute_time_series_momentum(
-        _momentum_history, ts_utc,
+        us.momentum_history, ts_utc,
         lookback_minutes=MOMENTUM_LOOKBACK_MINUTES,
         max_anchor_overshoot_minutes=MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
         neutral_band_pct=MOMENTUM_NEUTRAL_BAND_PCT,
     )
 
     log.info(
-        f"momentum: status={reading.status} return_pct={reading.return_pct} "
+        f"momentum {us.symbol}: status={reading.status} return_pct={reading.return_pct} "
         f"direction={reading.direction} sample_count={reading.sample_count}"
     )
     _log_momentum_reading(s3, today.strftime("%Y%m%d"), {
@@ -2107,7 +2178,7 @@ def _compute_and_log_momentum(
         "anchor_age_minutes": reading.anchor_age_minutes,
         "sample_count": reading.sample_count,
         "direction": reading.direction,
-    })
+    }, us)
 
     return {
         "status": reading.status,
@@ -2125,7 +2196,7 @@ def _resolve_underlying_spot(
     """Resolve the current spot price and its paired observation timestamp
     together, branch for branch, so the two always describe the same
     observation. Previously `underlying` could fall through to the
-    yfinance-backed `_last_spot` fallback while its timestamp was derived
+    yfinance-backed `last_spot` fallback while its timestamp was derived
     independently from `qqq`'s DXLink state -- pairing a feed-derived
     timestamp with a value that didn't actually come from the feed.
     `last_spot_ts` is `None` whenever `last_spot_price` came from yfinance
@@ -2145,16 +2216,18 @@ def _resolve_underlying_spot(
 
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
-                  counters: Counters, tracker: SnapshotTracker):
+                  counters: Counters, tracker: SnapshotTracker,
+                  us: "UnderlyingSession | None" = None):
+    us     = us or QQQ_SESSION
     state  = feed.get_state()
     ts_et  = datetime.now(ET)
     ts_utc = datetime.now(timezone.utc)
 
-    qqq = state.get(TICKER, {})
-    underlying, spot_ts_str = _resolve_underlying_spot(qqq, _last_spot[0], _last_spot[1])
+    quote = state.get(us.symbol, {})
+    underlying, spot_ts_str = _resolve_underlying_spot(quote, us.last_spot[0], us.last_spot[1])
     atm = round(underlying) if underlying else None
 
-    underlying_market = _compute_underlying_market(s3, qqq, underlying, spot_ts_str, ts_et, ts_utc, today)
+    underlying_market = _compute_underlying_market(s3, quote, underlying, spot_ts_str, ts_et, ts_utc, today, us)
 
     rows = []
     for s in strikes:
@@ -2171,8 +2244,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             a    = data.get("ask")
             mid  = round((b + a) / 2, 4) if b is not None and a is not None else None
             vol  = data.get("volume", 0) or 0
-            vol_delta = max(0, vol - _prev_vol.get(sym, vol))
-            _prev_vol[sym] = vol
+            vol_delta = max(0, vol - us.prev_vol.get(sym, vol))
+            us.prev_vol[sym] = vol
             price_cols = {
                 lbl.replace("/", "_"): remembered.get("price")
                 for lbl, remembered in _last_prices.items()
@@ -2201,7 +2274,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             })
 
     if not rows:
-        log.warning("snapshot empty -- state not populated yet")
+        log.warning(f"{us.symbol} snapshot empty -- state not populated yet")
         return
 
     bid_count = sum(1 for r in rows if r.get("Bid") is not None)
@@ -2212,7 +2285,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
 
     date_str = today.strftime("%Y%m%d")
     time_str = ts_et.strftime("%H%M%S%f")   # microsecond precision prevents overwrite on rapid restart
-    csv_key  = f"intraday/{date_str}/snapshot_{time_str}.csv"
+    csv_key  = f"{us.day_prefix(date_str)}snapshot_{time_str}.csv"
 
     try:
         s3.put_object(
@@ -2227,25 +2300,25 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         counters.inc_failure()
         raise
 
-    global _first_snapshot_written
-    if not _first_snapshot_written:
-        first_key = f"intraday/{date_str}/first.csv"
+    if not us.first_snapshot_written:
+        first_key = f"{us.day_prefix(date_str)}first.csv"
         try:
             s3.put_object(
                 Bucket=R2_BUCKET, Key=first_key,
                 Body=csv_buf.getvalue().encode(),
                 ContentType="text/csv",
             )
-            _first_snapshot_written = True
+            us.first_snapshot_written = True
             log.info(f"-> {first_key}  (session-open snapshot, mirrors {csv_key})")
         except Exception as e:
             log.warning(f"first.csv upload failed (non-fatal): {e}")
 
     if bid_count == 0:
-        log.warning("latest.json NOT updated -- no option data (DXLink feed down)")
+        log.warning(f"{us.latest_key} NOT updated -- no option data (DXLink feed down)")
         return
 
     payload = {
+        "symbol":           us.symbol,
         "timestamp":        ts_utc.isoformat(),
         "snapshot_time":    ts_et.strftime("%H:%M ET"),
         "date":             today.isoformat(),
@@ -2259,14 +2332,14 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
 
     try:
         s3.put_object(
-            Bucket=R2_BUCKET, Key="intraday/latest.json",
+            Bucket=R2_BUCKET, Key=us.latest_key,
             Body=json.dumps(payload, default=str).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
         )
         counters.inc_snapshot(ts_utc.isoformat())
         tracker.record()
-        log.info("-> intraday/latest.json updated")
+        log.info(f"-> {us.latest_key} updated")
     except Exception as e:
         log.error(f"latest.json upload failed: {e}")
         counters.inc_failure()
@@ -2589,11 +2662,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     log.info(f"startup classification: {classification}")
 
     today   = datetime.now(ET).date()
-    restore_state(s3, today)
-
-    global _rvol_baseline, _rvol_today
-    _rvol_baseline = load_rvol_baseline(s3)
-    _rvol_today = {}
+    restore_state(s3, today, QQQ_SESSION)
+    QQQ_SESSION.rvol_baseline = load_rvol_baseline(s3, QQQ_SESSION)
+    QQQ_SESSION.rvol_today = {}
 
     auth    = tasty_auth(token_manager)
     tier    = classify_tier(today)
@@ -2602,6 +2673,22 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     strikes, exp_date, weekly_strikes, weekly_exp_date = load_chain(
         auth["access_token"], today
     )
+
+    # Extra 0DTE chains (#121). Each is optional: a failure here disables
+    # only that underlying for this session and never touches QQQ.
+    extra_chains: list[tuple[UnderlyingSession, list[dict], str]] = []
+    for sym, us in UNDERLYING_SESSIONS.items():
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY):
+            continue
+        try:
+            us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)
+        except Exception as e:
+            log.error(f"{sym} chain load failed ({e}) -- {sym} collection disabled this session")
+            continue
+        restore_state(s3, today, us)
+        us.rvol_baseline = load_rvol_baseline(s3, us)
+        us.rvol_today = {}
+        extra_chains.append((us, us_strikes, us_exp))
 
     option_syms = []
     contracts = {}
@@ -2624,9 +2711,22 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     for s in weekly_strikes:
         option_syms.append(s["call_sym"])
         option_syms.append(s["put_sym"])
+    for us, us_strikes, us_exp in extra_chains:
+        for s in us_strikes:
+            for side in ("call", "put"):
+                option_syms.append(s[f"{side}_sym"])
+                if s[f"{side}_occ"]:
+                    contracts[s[f"{side}_occ"].replace(" ", "")] = {
+                        "streamer_symbol": s[f"{side}_sym"], "strike": s["strike"],
+                        "type": side, "exp": us_exp,
+                    }
     option_syms = list(dict.fromkeys(option_syms))
 
-    price_syms = list(PRICE_TICKERS.values())
+    # Extra underlyings need their own spot/volume stream, but are not
+    # added to PRICE_TICKERS (the price strip and its health counts).
+    price_syms = list(dict.fromkeys(
+        list(PRICE_TICKERS.values()) + [us.symbol for us, _, _ in extra_chains]
+    ))
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
     for label, sym in PRICE_TICKERS.items():
         log.info(f"  price ticker  {label:<10} -> {sym}")
@@ -2649,6 +2749,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     counters = Counters()
     tracker  = SnapshotTracker()
+    # Separate counters/trackers so extra underlyings can never mask a missed
+    # QQQ snapshot in health.json (which stays QQQ-only).
+    extra_trackers = {us.symbol: (Counters(), SnapshotTracker()) for us, _, _ in extra_chains}
 
     prices_thread = threading.Thread(
         target=prices_loop, args=(s3, feed, counters, quote_registry), daemon=True)
@@ -2704,6 +2807,13 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
             take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
         except Exception as e:
             log.error(f"snapshot error: {e}")
+        for us, us_strikes, us_exp in extra_chains:
+            us_counters, us_tracker = extra_trackers[us.symbol]
+            us_tracker.check_missed()
+            try:
+                take_snapshot(s3, feed, us_strikes, us_exp, tier, today, us_counters, us_tracker, us)
+            except Exception as e:
+                log.error(f"{us.symbol} snapshot error: {e}")
         time.sleep(SNAPSHOT_SECS)
 
     trk = tracker.get()
@@ -2724,7 +2834,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     # Fold today's RVOL bucket readings into the cross-day baseline. Done here
     # (once, at confirmed session end) rather than incrementally, so a
     # mid-session crash can never leave the baseline holding a partial day.
-    finalize_rvol_baseline(s3, today)
+    finalize_rvol_baseline(s3, today, QQQ_SESSION)
+    for us, _, _ in extra_chains:
+        finalize_rvol_baseline(s3, today, us)
 
     feed.stop()
     quote_registry.clear_session()

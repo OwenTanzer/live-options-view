@@ -26,6 +26,7 @@ on:
       - "tests/test_oa203_return_scanner.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/verify_collector_spy.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -51,6 +52,7 @@ on:
       - "tests/test_oa203_return_scanner.py"
       - "tests/stage2_verification.py"
       - "tests/verify_collector_vwap_rvol.py"
+      - "tests/verify_collector_spy.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -80,6 +82,8 @@ jobs:
         run: python -m unittest discover -s tests -p test_capture_diagnostics.py -v
       - name: Run VWAP/RVOL collector suite
         run: python tests/verify_collector_vwap_rvol.py
+      - name: Run SPY collection isolation suite
+        run: python tests/verify_collector_spy.py
       - name: Run crude calibration suite
         run: python tests/verify_crude_calibration.py
       - name: Run EIA STEO calibration suite
