@@ -15,7 +15,7 @@ const LIMITS = Object.freeze({ artifact_bytes: 4 * 1024 * 1024, expanded_artifac
   jsonl_lines: 100000, jsonl_rows: 10000, jsonl_line_bytes: 256 * 1024, quote_line_bytes: 16384,
   csv_rows: 10000, csv_columns: 128, csv_cell_chars: 4096 });
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const KEY = new RegExp('^(?:intraday/latest\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)))$');
+const KEY = new RegExp('^(?:intraday/(?:spy/)?latest\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)))$');
 
 class DataError extends Error {
   constructor(code, message, key = null) { super(message); this.code = code; this.key = key; }

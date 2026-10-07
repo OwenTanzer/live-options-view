@@ -4,7 +4,17 @@ const calendar = require('../docs/squeeze-calendar.json');
 const { formatSqueezeScheduleStatus } = require('../docs/shared.js');
 const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 
-const DATASETS = ['qqq_snapshot', 'scheduled_squeeze', 'options_returns'];
+const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns'];
+// Chain underlyings (#121). QQQ keeps its original artifact and dataset id, so
+// an omitted selector behaves exactly as before; SPY has its own tree.
+const UNDERLYINGS = Object.freeze({
+  QQQ: Object.freeze({ dataset: 'qqq_snapshot', key: 'intraday/latest.json', archive: /^intraday\/\d{8}\/snapshot_\d{6,12}\.csv$/ }),
+  SPY: Object.freeze({ dataset: 'spy_snapshot', key: 'intraday/spy/latest.json', archive: /^intraday\/spy\/\d{8}\/snapshot_\d{6,12}\.csv$/ }),
+});
+const underlyingOf = a => (object(a) && Object.hasOwn(a, 'underlying') ? a.underlying : 'QQQ');
+// Strict: Object.hasOwn would coerce ['SPY'] to 'SPY'.
+const supportedUnderlying = symbol => typeof symbol === 'string' && Object.hasOwn(UNDERLYINGS, symbol);
+const occRoot = symbol => /^[A-Z]+/.exec(symbol || '')?.[0] ?? '';
 const SYMBOL = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const CONTRACT = /^[A-Z0-9.]{1,10}\d{6}[CP]\d{8}$/;
 const dates = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
@@ -68,11 +78,17 @@ function jsonl(text, { predicate = () => true, maxRows = LIMITS.jsonl_rows, maxL
   }
   return rows;
 }
-function snapshot(p) {
+function snapshot(p, symbol = 'QQQ') {
   check(object(p) && typeof p.timestamp === 'string' && dates(p.date) && Array.isArray(p.rows), 'Unsupported snapshot contract.');
   check(p.schema_version === undefined || p.schema_version === 1, 'Unsupported snapshot schema version.');
   check(p.rows.length <= 10000 && p.rows.every(r => object(r) && CONTRACT.test(r.OptionSymbol) && ['call', 'put'].includes(r.Type) && dates(r.Expiration) && typeof r.Strike === 'number' && Number.isFinite(r.Strike)), 'Invalid snapshot rows.');
-  check(p.snapshot_key == null || /^intraday\/\d{8}\/snapshot_\d{6,12}\.csv$/.test(p.snapshot_key), 'Invalid snapshot locator.');
+  // Identity: pre-#121 QQQ payloads carry no top-level symbol and are only
+  // accepted as QQQ. Any other mismatch fails closed -- never substituted.
+  const declared = p.symbol ?? (symbol === 'QQQ' ? 'QQQ' : null);
+  check(declared === symbol, `Snapshot is labeled ${declared ?? 'without a symbol'}, not ${symbol}.`, 'symbol_mismatch');
+  check(!object(p.underlying_market) || p.underlying_market.symbol == null || p.underlying_market.symbol === symbol, `Underlying readings belong to ${p.underlying_market?.symbol}, not ${symbol}.`, 'symbol_mismatch');
+  check(p.rows.every(r => occRoot(r.OptionSymbol) === symbol), `Snapshot contains non-${symbol} contracts.`, 'symbol_mismatch');
+  check(p.snapshot_key == null || UNDERLYINGS[symbol].archive.test(p.snapshot_key), 'Invalid snapshot locator.');
 }
 function squeeze(p, isSuccess = false) {
   check(object(p) && p.schema_version === 1 && new RegExp('^' + UUID + '$').test(p.run_id) &&
@@ -86,15 +102,20 @@ function returnSummary(p, session) {
 }
 
 const units = {
+  spy_snapshot: null, // filled below from qqq_snapshot
   qqq_snapshot: { spot: 'USD/share', vwap: 'USD/share (snapshot-weighted approximation)', rvol: 'multiple', momentum_return_pct: 'percentage points', OpenInterest: 'contracts (lagged; zero and missing conflated)', Bid: 'USD/share', Ask: 'USD/share', Strike: 'USD/share' },
   scheduled_squeeze: { scores: 'experimental screening measurements, not probabilities', ranks: 'producer ordinal ranks', first_seen_at: 'publication write-attempt time' },
   options_returns: { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms, t, bid_ms, ask_ms': 'UTC epoch milliseconds', '*_abs_change_per_contract': 'USD/contract', rank: 'producer ordinal rank' },
 };
+units.spy_snapshot = units.qqq_snapshot;
 const warnings = {
   qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.'],
   scheduled_squeeze: ['Scores are experimental screens, not squeeze probabilities.', 'first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.', 'Provider source times can be absent; acquisition and publication times are distinct.'],
   options_returns: ['Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.', 'Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.', 'Coverage is the published leaderboard subset (top 200 all OR clean); absent filtered rows do not prove no sampled contracts exist.', 'Session artifacts may be rebuilt in place; detail detects summary/leaderboard changes and asks for a new query.'],
 };
+warnings.spy_snapshot = [...warnings.qqq_snapshot,
+  'SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.',
+  'SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.'];
 
 class Consumer {
   constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); this.retainedBytes = 0; }
@@ -111,7 +132,9 @@ class Consumer {
     source_mode: this.source.mode, retrieval_time: new Date(this.now()).toISOString(), producer_times: { observation: null, acquisition_start: null, acquisition_end: null, publication: null },
     status: 'missing', freshness: { status: 'unknown' }, coverage: null, units: units[dataset] || {}, warnings: [...(warnings[dataset] || [])], sources: q.evidence, pagination: null, errors: [] }; }
   async call(name, a = {}) {
-    const q = this.source.query(); const dataset = ({market_context:'qqq_snapshot', squeeze_results:'scheduled_squeeze', return_rankings:'options_returns'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
+    const q = this.source.query();
+    const marketDataset = supportedUnderlying(underlyingOf(a)) ? UNDERLYINGS[underlyingOf(a)].dataset : 'unsupported_underlying';
+    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
     let out = this.envelope(dataset, a, q);
     try {
       if (name === 'discover_sources') out = await this.discover(a, q, out);
@@ -130,34 +153,43 @@ class Consumer {
   }
   async discover(a, q, out) {
     args(a, ['session']); if (a.session !== undefined) check(dates(a.session), 'Select a real YYYY-MM-DD session (2020..2100).', 'invalid_filter');
+    // spy_snapshot is appended so existing clients' capability positions stay put.
     const probes = [['qqq_snapshot', 'intraday/latest.json'], ['scheduled_squeeze', 'squeeze-scanner/v1/scheduled/latest.json'],
-      ['options_returns', a.session ? `oa203/scanner/${a.session}/summary.json` : null]];
+      ['options_returns', a.session ? `oa203/scanner/${a.session}/summary.json` : null], ['spy_snapshot', UNDERLYINGS.SPY.key]];
+    const chainSymbol = id => id === 'qqq_snapshot' ? 'QQQ' : id === 'spy_snapshot' ? 'SPY' : null;
     out.capabilities = [];
     for (const [id, key] of probes) {
       const probe = key ? await q.optionalJson(key) : {value:null,error:null};
-      if (key && !probe.error) try { if (id === 'qqq_snapshot') snapshot(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else returnSummary(probe.value, a.session); }
+      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else returnSummary(probe.value, a.session); }
       catch (e) { probe.error = errorRecord(e, key); probe.value = null; }
-      out.capabilities.push({ dataset: id, producer_schema: id === 'qqq_snapshot' ? 'unversioned collector snapshot (master fbbc345)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : 'oa203-returns-v1',
+      const chain = chainSymbol(id);
+      out.capabilities.push({ dataset: id, ...(chain ? {underlying: chain} : {}), producer_schema: chain ? 'unversioned collector snapshot (symbol-labeled since #121)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : 'oa203-returns-v1',
         availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : key ? 'available' : 'explicit_session_required',
-        actual:probe.value ? id==='qqq_snapshot'?{snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
-        freshness: probe.value ? id === 'qqq_snapshot' ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : {status:'historical'} : {status:'unknown'},
+        actual:probe.value ? chain?{underlying:chain,snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
+        freshness: probe.value ? chain ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : {status:'historical'} : {status:'unknown'},
         source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
-        fields: id === 'qqq_snapshot' ? ['timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','selected_contract_quote_path'],
-        filters: id === 'qqq_snapshot' ? ['expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : ['session','underlying','type','view','limit','offset'],
-        cadence: id === 'qqq_snapshot' ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
-        coverage: probe.value?.coverage || probe.value?.assessment || (id === 'qqq_snapshot' ? 'latest QQQ 0DTE snapshot only' : null), historical_index: 'not_supported' });
+        fields: chain ? ['symbol','timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','selected_contract_quote_path'],
+        filters: chain ? ['underlying','expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : ['session','underlying','type','view','limit','offset'],
+        cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
+        coverage: probe.value?.coverage || probe.value?.assessment || (chain ? `latest ${chain} 0DTE snapshot only` : null), historical_index: 'not_supported' });
     }
+    out.underlyings = out.capabilities.filter(c => c.underlying).map(c => ({ symbol: c.underlying, dataset: c.dataset,
+      availability: c.availability, default: c.underlying === 'QQQ', selector: 'market_context.underlying' }));
     out.unsupported = ['shared_PCR','shared_max_pain','shared_reference_OI_skew','historical_VWAP_RVOL','account_trading_momentum','buy_only_Black_Scholes','private_accounts_positions_orders'];
     out.limits = LIMITS; out.status = out.capabilities.some(c => ['missing_publication','failed'].includes(c.availability)) ? 'partial' : 'available'; return out;
   }
   async market(a, q, out) {
-    args(a, ['expiry','type','strike','contract','limit','offset']); const {limit,offset} = page(a);
+    args(a, ['underlying','expiry','type','strike','contract','limit','offset']); const {limit,offset} = page(a);
+    const symbol = underlyingOf(a);
+    check(supportedUnderlying(symbol), `Unsupported underlying; supported: ${Object.keys(UNDERLYINGS).join(', ')}.`, 'invalid_filter');
     if (a.expiry !== undefined) check(dates(a.expiry), 'Invalid expiry.', 'invalid_filter');
     if (a.type !== undefined) check(['call','put'].includes(a.type), 'Invalid option type.', 'invalid_filter');
     if (a.contract !== undefined) check(CONTRACT.test(a.contract), 'Invalid contract.', 'invalid_filter');
+    if (a.contract !== undefined) check(occRoot(a.contract) === symbol, `Contract is not a ${symbol} option; set underlying to match it.`, 'invalid_filter');
     if (a.strike !== undefined) check(typeof a.strike === 'number' && Number.isFinite(a.strike) && a.strike > 0 && a.strike <= 100000, 'Invalid strike.', 'invalid_filter');
-    const p = await q.json('intraday/latest.json'); snapshot(p);
-    out.actual = { snapshot_timestamp:p.timestamp, snapshot_key:p.snapshot_key ?? null, session:p.date, payload_sha256:q.evidence.at(-1).retrieved_sha256 };
+    const p = await q.json(UNDERLYINGS[symbol].key); snapshot(p, symbol);
+    out.requested_underlying = symbol;
+    out.actual = { underlying:symbol, snapshot_timestamp:p.timestamp, snapshot_key:p.snapshot_key ?? null, session:p.date, payload_sha256:q.evidence.at(-1).retrieved_sha256 };
     out.producer_times.acquisition_end = p.timestamp; out.freshness = {...age(p.timestamp, this.now()),basis:'collection_timestamp'};
     const m = p.underlying_market;
     out.readings = object(m) ? {...m, field_freshness: {spot:age(m.spot_ts,this.now()),vwap:age(m.vwap_ts,this.now()), session_volume:age(m.session_volume_ts,this.now()),
@@ -165,7 +197,7 @@ class Consumer {
     if (!object(m)) out.warnings.push('underlying_market is absent; derived readings are unavailable.');
     const rows = p.rows.filter(r => (!a.expiry || r.Expiration === a.expiry) && (!a.type || r.Type === a.type) && (a.strike === undefined || r.Strike === a.strike) && (!a.contract || r.OptionSymbol === a.contract));
     const paged = slice(rows,limit,offset); out.pagination = paged.pagination;
-    out.rows = paged.rows.map(row => ({...row, detail_reference:this.reference({dataset:'qqq_snapshot',p:{timestamp:p.timestamp,underlying_market:p.underlying_market??null},row,actual:out.actual,evidence:[...q.evidence]})}));
+    out.rows = paged.rows.map(row => ({...row, detail_reference:this.reference({dataset:UNDERLYINGS[symbol].dataset,underlying:symbol,p:{timestamp:p.timestamp,underlying_market:p.underlying_market??null},row,actual:out.actual,evidence:[...q.evidence]})}));
     out.coverage = {source_rows:p.rows.length, matched_rows:rows.length, expiration:p.expiration ?? null};
     const incomplete = !object(m) || m.spot == null || m.vwap == null || m.vwap_partial_session || m.rvol?.status !== 'ok' || m.momentum?.status !== 'ok';
     if(incomplete && object(m)) out.warnings.push(`Partial readings: VWAP ${m.vwap==null?'missing':m.vwap_partial_session?'partial_session':'available'}; RVOL ${m.rvol?.status??'missing'}; reference momentum ${m.momentum?.status??'missing'}.`);
@@ -229,7 +261,8 @@ class Consumer {
     check(typeof a.reference==='string' && new RegExp('^'+UUID+'$').test(a.reference),'Invalid detail reference.','invalid_reference');
     const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired, was evicted by the count/byte limit, or is not from this server; repeat the originating query.','invalid_reference');
     const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
-    if(v.dataset==='qqq_snapshot') {
+    if(v.dataset==='qqq_snapshot'||v.dataset==='spy_snapshot') {
+      out.requested_underlying=v.underlying;
       out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=v.p.underlying_market ?? null;
       out.coverage={scope:'one cached row from the exact queried payload'};out.warnings.push('Detail uses retained queried JSON. The archived CSV has not been read or verified.');return out;
     }
@@ -290,4 +323,4 @@ class Consumer {
     return out;
   }
 }
-module.exports={Consumer, DATASETS, csv, jsonl, age, dates};
+module.exports={Consumer, DATASETS, UNDERLYINGS, csv, jsonl, age, dates};

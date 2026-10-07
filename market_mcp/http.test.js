@@ -8,7 +8,7 @@ test('Streamable HTTP initialization, discovery, context and retained detail end
   let response=await post(url,{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'http-smoke',version:'1'}}});assert.equal(response.status,200);assert.equal((await response.json()).result.protocolVersion,'2025-11-25');assert.equal(response.headers.get('mcp-session-id'),null);
   response=await post(url,{jsonrpc:'2.0',method:'notifications/initialized'});assert.equal(response.status,202);assert.equal(await response.text(),'');
   response=await post(url,{jsonrpc:'2.0',id:2,method:'tools/list'});assert.equal((await response.json()).result.tools.length,5);
-  response=await post(url,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'discover_sources',arguments:{}}});assert.equal((await response.json()).result.structuredContent.capabilities.length,3);
+  response=await post(url,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'discover_sources',arguments:{}}});assert.equal((await response.json()).result.structuredContent.capabilities.length,4);
   response=await post(url,{jsonrpc:'2.0',id:4,method:'tools/call',params:{name:'market_context',arguments:{limit:1}}});const context=(await response.json()).result.structuredContent;
   response=await post(url,{jsonrpc:'2.0',id:5,method:'tools/call',params:{name:'result_detail',arguments:{reference:context.rows[0].detail_reference}}});const detail=(await response.json()).result.structuredContent;assert.equal(detail.actual.payload_sha256,context.actual.payload_sha256);assert.equal(detail.row.Bid,1);
 }));

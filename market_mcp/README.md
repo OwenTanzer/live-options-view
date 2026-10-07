@@ -68,8 +68,8 @@ Its Linux image checks pass; live client/grant gates remain pending. See
 
 | Tool | Existing products and supported scope |
 | --- | --- |
-| `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
-| `market_context` | `intraday/latest.json`: underlying block and chain page filtered by expiry/type/strike/OCC contract. |
+| `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`, `spy_snapshot` (appended, so earlier positions are unchanged), plus an `underlyings` summary of chain coverage and availability; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
+| `market_context` | Optional `underlying` (`QQQ` default, or `SPY`; #121). QQQ reads `intraday/latest.json` (dataset `qqq_snapshot`), SPY reads `intraday/spy/latest.json` (dataset `spy_snapshot`). Returns `requested_underlying` and `actual.underlying`, the underlying block and a chain page filtered by expiry/type/strike/OCC contract. The payload's symbol, `underlying_market.symbol`, every contract root and the archive locator must match the request, or it fails as `symbol_mismatch`. Unsupported symbols, a contract for the other underlying, or a missing SPY publication return explicit errors; QQQ is never substituted. Detail references keep the originating underlying and snapshot. |
 | `squeeze_results` | Scheduled `latest.json`, `latest-attempt.json`, `latest-schedule.json`; uses the existing exported XNYS calendar and `formatSqueezeScheduleStatus`. |
 | `return_rankings` | One exact date's `summary.json` and `leaderboard.csv`, all/clean, underlying/type, pagination. The published top-200-all OR top-200-clean subset is the query universe. |
 | `result_detail` | Retained snapshot JSON row; exact squeeze run's manifest/results/normalized inputs; selected return contract from bounded sweep pages with producer calculation cells/flags. |
