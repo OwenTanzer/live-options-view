@@ -42,6 +42,13 @@
     margin-bottom: 0.6rem;
   }
   #title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
+  #underlying-select {
+    font: inherit; font-size: 0.85rem; font-weight: 700;
+    color: var(--bright); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
+  }
+  #underlying-select:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+  .chain-note { font-size: 0.72rem; color: var(--dim); }
   #price { font-size: 1.6rem; font-weight: 700; color: var(--bright); letter-spacing: -0.02em; }
   #tier-badge {
     font-size: 0.72rem; font-weight: 600;
@@ -797,11 +804,16 @@
 <div id="live-panel">
 
 <div id="header">
+  <select id="underlying-select" aria-label="Options chain underlying">
+    <option value="QQQ">QQQ</option>
+    <option value="SPY">SPY</option>
+  </select>
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
   <span id="momentum" class="momentum"></span>
+  <span id="chain-note" class="chain-note"></span>
 </div>
 
 <div id="status-bar">
@@ -983,7 +995,7 @@
   Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
 </div>
 
-<script src="shared.js?v=d542075d2478b39f"></script>
+<script src="shared.js?v=b3b75b87fb59e4e0"></script>
 <script>
 // ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being
@@ -1060,21 +1072,29 @@ async function loadRanges() {
 }
 
 // ── render heatmap (live panel) ─────────────────────────────────────────────────
-function renderHeatmap(data) {
+function renderHeatmap(data, symbol = 'QQQ') {
   const { underlying_price, tier, snapshot_time, underlying_market } = data;
   const spot = underlying_price;
+  const isQqq = symbol === 'QQQ';
 
   if (!spot) {
     setStatus('stale', snapshot_time);
+    // A non-QQQ chain without its own spot is cleared, not left showing rows
+    // it can't center -- and never filled with another underlying's price.
+    if (!isQqq) clearChain(`${symbol} spot price unavailable in the latest snapshot.`);
     return;
   }
 
   const book = computeBook();   // computed once per render, not per-cell
-  buildHeatmapRows(document.getElementById('heatmap-body'), data, ranges, {
-    getPosition: (sym) => book[sym]?.pos || 0,
+  // Paper tickets, positions and QQQ's OIranges calibration are QQQ-only:
+  // other underlyings render view-only, colored relative to their own
+  // snapshot (see relativeOiRanges in shared.js).
+  buildHeatmapRows(document.getElementById('heatmap-body'), data, isQqq ? ranges : relativeOiRanges(data.rows), {
+    getPosition: (sym) => isQqq ? (book[sym]?.pos || 0) : 0,
     getQuote: (sym) => liveQuotes.get(sym),
-    onCellClick: (e, row) => openTicket(e, row),
+    onCellClick: isQqq ? (e, row) => openTicket(e, row) : null,
   });
+  document.getElementById('chain-note').textContent = isQqq ? '' : 'view-only · OI colors relative to this snapshot';
 
   // Header
   document.getElementById('price').textContent = `$${spot?.toFixed(2) ?? '—'}`;
@@ -1096,9 +1116,6 @@ function renderHeatmap(data) {
   const moEl = document.getElementById('momentum');
   moEl.textContent = mo.text;
   moEl.dataset.state = mo.state;
-
-  updateQqqVwapRvolLine(underlying_market);
-  updateQqqMomentumLine(underlying_market);
 
   document.getElementById('no-data').classList.add('hidden');
   document.getElementById('heatmap-wrap').classList.remove('hidden');
@@ -1173,8 +1190,15 @@ async function requestExecution(info, order, executionRequestId) {
 }
 
 const liveQuotes = new LiveQuoteService();
-let lastData = null;
+let lastData = null;          // QQQ snapshot: paper trading/settlement source
 let lastDataDate = null;
+const UNDERLYING_KEY = 'chain_underlying';
+const NO_DATA_TEXT = document.getElementById('no-data')?.textContent || 'No live data yet.';
+function readSavedUnderlying() {
+  try { return localStorage.getItem(UNDERLYING_KEY) || 'QQQ'; } catch (e) { return 'QQQ'; }
+}
+const chainSelection = new ChainSelection(readSavedUnderlying());
+const chainState = {};         // symbol -> { data, error }, each validated for that symbol
 let ticketEl = null;
 const pendingExecutions = new Set();
 let positionMarks = {};
@@ -1200,7 +1224,7 @@ function visibleContractSymbols(data) {
   return rows.filter(row => strikes.has(+row.Strike) && row.OptionSymbol).map(row => row.OptionSymbol);
 }
 
-function updateQuoteInterests(data = lastData) {
+function updateQuoteInterests(data = selectedChainData()) {
   liveQuotes.setOpenPositions(openPositionSymbols());
   liveQuotes.setVisibleContracts(visibleContractSymbols(data));
 }
@@ -1242,7 +1266,7 @@ liveQuotes.subscribe(() => {
     const quote = liveQuotes.get(symbol);
     if (quote?.mid != null) positionMarks[symbol] = quote.mid;
   }
-  renderHeatmap(lastData);
+  renderSelectedChain();
   renderPaper();
 });
 
@@ -1258,17 +1282,8 @@ function ingestSnapshotQuotes(data) {
   // position that expired as of this snapshot's date doesn't count as "open"
   // and keep its now-stale quote alive for an extra cycle.
   settleExpired();
-  updateQuoteInterests(data);
-  const snapshotQuotes = (data.rows || []).map(row => ({
-    symbol: row.OptionSymbol,
-    bid: row.Bid,
-    ask: row.Ask,
-    mid: row.Mid,
-    strike: row.Strike,
-    type: row.Type,
-    exp: row.Expiration,
-  }));
-  liveQuotes.publish(snapshotQuotes, { source: 'r2-snapshot', observedAt: data.timestamp });
+  updateQuoteInterests();
+  publishSnapshotQuotes(data);
   if (session) {
     const book = computeBook(session.trades);
     for (const r of (data.rows || [])) {
@@ -1279,6 +1294,21 @@ function ingestSnapshotQuotes(data) {
       if (quote?.mid != null && book[r.OptionSymbol]?.pos) positionMarks[r.OptionSymbol] = quote.mid;
     }
   }
+}
+
+// Seeds the quote cache from a snapshot's own rows (any underlying). Quotes
+// are keyed by OCC symbol, so SPY and QQQ contracts can't collide.
+function publishSnapshotQuotes(data) {
+  const snapshotQuotes = (data.rows || []).map(row => ({
+    symbol: row.OptionSymbol,
+    bid: row.Bid,
+    ask: row.Ask,
+    mid: row.Mid,
+    strike: row.Strike,
+    type: row.Type,
+    exp: row.Expiration,
+  }));
+  liveQuotes.publish(snapshotQuotes, { source: 'r2-snapshot', observedAt: data.timestamp });
 }
 
 // Average-cost position book: sym -> {pos, avg, realized, strike, type, exp}
@@ -1342,7 +1372,7 @@ async function executeTrade(info, side, qty, orderType = 'market', limitPrice = 
   updateQuoteInterests();
   closeTicket();
   renderPaper();
-  if (lastData) renderHeatmap(lastData);  // refresh position badges
+  renderSelectedChain();  // refresh position badges
 }
 
 function announceOrderStatus(message, state = '') {
@@ -1409,7 +1439,7 @@ async function settleExpired() {
       cacheSessionDisplay();
       updateQuoteInterests();
       renderPaper();
-      if (lastData) renderHeatmap(lastData);
+      renderSelectedChain();
     }
   } catch (error) {
     // network hiccup -- retried on the next render cycle
@@ -1714,33 +1744,119 @@ function openShareTicket(e, sym) {
 }
 
 // ── data fetch cycle ──────────────────────────────────────────────────────────
-async function fetchLatest() {
+// One fetch of one underlying's latest snapshot, validated against the
+// requested symbol before anything can render it.
+async function fetchChain(symbol) {
+  const path = chainLatestPath(symbol);
+  if (!path) return { error: `${symbol} is not a supported underlying` };
   try {
-    const resp = await fetch(`${R2}/intraday/latest.json?_=${Date.now()}`);
+    const resp = await fetch(`${R2}/${path}?_=${Date.now()}`);
+    if (resp.status === 404) return { error: `No ${symbol} snapshot has been published yet.` };
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-
-    if (!data.rows || data.rows.length === 0) {
-      setStatus('stale', '—');
-      return;
-    }
-
-    lastTs = data.timestamp;
-    lastData = data;
-    ingestSnapshotQuotes(data);
-    renderHeatmap(data);
-    renderPaper();
-
-    const snapAge = Math.round((Date.now() - new Date(lastTs).getTime()) / 1000 / 60);
-    const hasBids = data.rows.some(r => r.Bid != null);
-    // Dot color carries live/stale; text is just a small timestamp note —
-    // deeper diagnosis lives in diag.html, not the main view.
-    setStatus(snapAge > 2 || !hasBids ? 'stale' : 'live', data.snapshot_time);
-
+    const check = validateChainPayload(data, symbol);
+    if (!check.ok) return { error: `${symbol} snapshot rejected: ${check.reason}.` };
+    return { data };
   } catch (e) {
-    setStatus('stale', lastData?.snapshot_time || '—');
     console.error(e);
+    return { error: `${symbol} snapshot could not be loaded.`, transient: true };
   }
+}
+
+async function fetchLatest() {
+  const token = chainSelection.token();
+  // QQQ is always refreshed: paper trading, expiry settlement marks and the
+  // QQQ price tile depend on it regardless of which chain is on screen.
+  const qqq = await fetchChain('QQQ');
+  if (qqq.data && qqq.data.rows.length) {
+    lastTs = qqq.data.timestamp;
+    lastData = qqq.data;
+    chainState.QQQ = { data: qqq.data, error: null };
+    ingestSnapshotQuotes(qqq.data);
+    updateQqqVwapRvolLine(qqq.data.underlying_market);
+    updateQqqMomentumLine(qqq.data.underlying_market);
+  } else if (!qqq.transient || !chainState.QQQ?.data) {
+    chainState.QQQ = { data: chainState.QQQ?.data ?? null, error: qqq.error || 'No QQQ rows in the latest snapshot.' };
+  }
+
+  if (token.symbol !== 'QQQ') {
+    const other = await fetchChain(token.symbol);
+    // The selection changed while this was in flight: drop the reply rather
+    // than render (or cache) it under whatever is selected now.
+    if (!chainSelection.accepts(token)) return;
+    if (other.data) {
+      chainState[token.symbol] = { data: other.data, error: null };
+      // Interests first: the quote cache only keeps wanted (visible) symbols.
+      updateQuoteInterests();
+      publishSnapshotQuotes(other.data);
+    } else if (!other.transient || !chainState[token.symbol]?.data) {
+      chainState[token.symbol] = { data: null, error: other.error };
+    }
+  }
+  if (!chainSelection.accepts(token)) return;
+  updateQuoteInterests();
+  renderSelectedChain();
+  renderPaper();
+}
+
+function selectedChainData() {
+  return chainState[chainSelection.symbol]?.data ?? null;
+}
+
+function clearChain(message) {
+  document.getElementById('heatmap-body').innerHTML = '';
+  document.getElementById('heatmap-wrap').classList.add('hidden');
+  const noData = document.getElementById('no-data');
+  noData.textContent = message;
+  noData.classList.remove('hidden');
+  for (const id of ['vwap-rvol', 'momentum', 'chain-note']) document.getElementById(id).textContent = '';
+  document.getElementById('price').textContent = '—';
+  document.getElementById('tier-badge').style.display = 'none';
+}
+
+function renderChainTitle(symbol) {
+  document.getElementById('title').textContent = `${symbol} 0DTE Live OI`;
+  document.title = `${symbol} Live OI — moopertonic`;
+  const select = document.getElementById('underlying-select');
+  if (select.value !== symbol) select.value = symbol;
+}
+
+// Renders whichever underlying is selected, from that underlying's own
+// validated snapshot only. Each symbol's stale/unavailable state is its own.
+function renderSelectedChain() {
+  const symbol = chainSelection.symbol;
+  renderChainTitle(symbol);
+  const state = chainState[symbol];
+  const data = state?.data;
+  if (!data) {
+    clearChain(state?.error || (symbol === 'QQQ' ? NO_DATA_TEXT : `Loading ${symbol}…`));
+    setStatus(state?.error ? 'stale' : '', state?.error ? 'unavailable' : 'Loading…');
+    return;
+  }
+  if (!data.rows.length) {
+    clearChain(`No ${symbol} contracts in the latest snapshot.`);
+    setStatus('stale', data.snapshot_time || '—');
+    return;
+  }
+  renderHeatmap(data, symbol);
+  if (!data.underlying_price) return;  // renderHeatmap already marked it stale
+  const snapAge = Math.round((Date.now() - new Date(data.timestamp).getTime()) / 1000 / 60);
+  const hasBids = data.rows.some(r => r.Bid != null);
+  // Dot color carries live/stale; text is just a small timestamp note —
+  // deeper diagnosis lives in diag.html, not the main view.
+  setStatus(snapAge > 2 || !hasBids || state.error ? 'stale' : 'live', data.snapshot_time);
+}
+
+function selectUnderlying(symbol) {
+  if (!chainSelection.select(symbol)) return;
+  try { localStorage.setItem(UNDERLYING_KEY, chainSelection.symbol); } catch (e) {}
+  // Clear immediately so nothing from the previous underlying stays on screen
+  // under the new heading, then fetch the new one right away.
+  clearChain(`Loading ${chainSelection.symbol}…`);
+  renderSelectedChain();
+  updateQuoteInterests();
+  fetchLatest();
+  startCountdown();
 }
 
 function setStatus(type, text) {
@@ -2916,6 +3032,8 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
   initPriceStrip();
+  renderChainTitle(chainSelection.symbol);
+  document.getElementById('underlying-select').onchange = (e) => selectUnderlying(e.target.value);
 
   // Show a cached last-known session instantly (display-only), then
   // hydrate the authoritative state from the server below.
@@ -2938,7 +3056,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
       renderAuthGate();
       updateQuoteInterests();
       renderPaper();
-      if (lastData) renderHeatmap(lastData);
+      renderSelectedChain();
     } catch (error) {
       errorEl.textContent = error.message;
     } finally {
@@ -2954,7 +3072,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
     session = null;
     try { localStorage.removeItem(SESSION_CACHE_KEY); } catch (e) {}
     renderAuthGate();
-    if (lastData) renderHeatmap(lastData);
+    renderSelectedChain();
   };
   document.getElementById('margin-call-continue').onclick = hideMarginCallScreen;
 
@@ -2972,7 +3090,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   renderAuthGate();
   updateQuoteInterests();
   if (session) renderPaper();
-  if (lastData) renderHeatmap(lastData);
+  renderSelectedChain();
 
   liveQuotePoller = new LiveQuotePoller(liveQuotes);
   liveQuotePoller.subscribeHealth(renderQuoteHealth);

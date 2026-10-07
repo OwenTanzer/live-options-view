@@ -96,3 +96,29 @@ show up in logs and in `intraday/spy/latest.json` going stale.
   `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
+
+## Website (docs/index.html)
+
+- A QQQ/SPY selector in the chain header drives the heading, page title,
+  price, tier, VWAP/RVOL/momentum line, rows and visible-contract quotes. The
+  choice is remembered per browser (`localStorage`, best-effort).
+- QQQ's `intraday/latest.json` is still fetched every cycle whatever is
+  selected. Paper trading, expiry settlement marks and the QQQ price tile use
+  only QQQ data; SPY is fetched in addition only while SPY is selected.
+- Every snapshot is validated for the requested symbol before rendering
+  (`validateChainPayload` in shared.js): its top-level symbol,
+  `underlying_market.symbol` and every contract root must match. A mismatch,
+  a missing SPY publication (404) or a failed first load is shown as an
+  explicit unavailable state, never as the other underlying's data.
+- Switching clears the chain immediately. Each request carries a selection
+  token (`ChainSelection`), so a reply that arrives after a switch is dropped
+  rather than rendered or cached.
+- The SPY chain is view-only (no paper tickets or position badges). Its OI
+  colors are relative to SPY's own snapshot, because `derived/OIranges.csv` is
+  calibrated on QQQ only. The header says so.
+- The historical date view stays QQQ-only.
+- Tests: `node tests/chain_underlying.test.js` (helpers, plus the shipped
+  fetch/render cycle under a DOM shim: QQQ→SPY→QQQ, delayed and stale replies,
+  mislabeled/mixed payloads, missing SPY, transient failures). A local browser
+  run with fixture snapshots confirmed the selector, rows, quotes and that the
+  QQQ tile keeps QQQ readings while SPY is shown.
