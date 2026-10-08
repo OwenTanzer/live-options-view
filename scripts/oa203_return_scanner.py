@@ -80,8 +80,10 @@ from zoneinfo import ZoneInfo
 import requests
 
 from oa203_returns import (
+    QUALIFIED,
     ContractInfo,
     Observation,
+    QualifiedPolicy,
     ReturnPolicy,
     contract_metrics,
     rank,
@@ -126,6 +128,7 @@ class Config:
     r2_prefix: str = "oa203/scanner"
     upload: bool = True
     policy: ReturnPolicy = field(default_factory=ReturnPolicy)
+    qualified_policy: QualifiedPolicy = field(default_factory=QualifiedPolicy)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -139,6 +142,17 @@ class Config:
             universe_lead_min=_env_int("OA203_UNIVERSE_LEAD_MIN", 30),
             spool_dir=Path(os.getenv("OA203_SPOOL_DIR", "/data/oa203")),
             r2_prefix=os.getenv("OA203_R2_PREFIX", "oa203/scanner"),
+            qualified_policy=QualifiedPolicy(
+                min_entry_premium=float(os.getenv("OA203_QUAL_MIN_PREMIUM", "0.10")),
+                max_relative_spread=float(os.getenv("OA203_QUAL_MAX_REL_SPREAD", "0.30")),
+                max_quote_age_s=float(os.getenv("OA203_QUAL_MAX_AGE_S", "1800")),
+                min_ask_size=_env_int("OA203_QUAL_MIN_ASK_SIZE", 1),
+                min_bid_size=_env_int("OA203_QUAL_MIN_BID_SIZE", 1),
+                min_entry_volume=_env_int("OA203_QUAL_MIN_ENTRY_VOLUME", 1),
+                min_samples=_env_int("OA203_QUAL_MIN_SAMPLES", 3),
+                min_coverage=float(os.getenv("OA203_QUAL_MIN_COVERAGE", "0.5")),
+                min_open_interest=(int(os.environ["OA203_QUAL_MIN_OI"])
+                                   if "OA203_QUAL_MIN_OI" in os.environ else None)),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -147,6 +161,7 @@ class Config:
             "reserve": self.reserve, "block_size": self.block_size, "workers": self.workers,
             "backfill_top": self.backfill_top, "universe_lead_min": self.universe_lead_min,
             "r2_prefix": self.r2_prefix, "return_policy": self.policy.as_dict(),
+            "qualified_policy": self.qualified_policy.as_dict(),
         }
 
 
@@ -811,7 +826,8 @@ def load_backfill(day_dir: Path, damaged: list[dict[str, Any]] | None = None) ->
 
 def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | None = None,
                         end_ms: int | None = None,
-                        damaged: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+                        damaged: list[dict[str, Any]] | None = None,
+                        qualified_policy: QualifiedPolicy = QualifiedPolicy()) -> list[dict[str, Any]]:
     """Rank every archived contract; damaged inputs are salvaged and recorded in ``damaged``."""
     ok = chain_ok_sweeps(_read_manifest(day_dir, damaged))
     backfill = load_backfill(day_dir, damaged)
@@ -826,9 +842,11 @@ def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | Non
             chain_ok_sweeps=ok.get(last["underlying"], 0),
         )
         observations = [Observation(t=r["t"], bid=r["bid"], ask=r["ask"], bid_ms=r.get("bid_ms"),
-                                    ask_ms=r.get("ask_ms"), underlying_price=r.get("spot"))
+                                    ask_ms=r.get("ask_ms"), underlying_price=r.get("spot"),
+                                    bid_size=r.get("bid_size"), ask_size=r.get("ask_size"),
+                                    volume=r.get("volume"), open_interest=r.get("oi"))
                         for r in path_rows]
-        row = contract_metrics(info, observations, policy)
+        row = contract_metrics(info, observations, policy, qualified_policy)
         record = backfill.get(symbol)
         if record is not None:
             row["backfill_status"] = "error" if record.get("error") else "ok"
@@ -881,7 +899,15 @@ def write_outputs(day_dir: Path, rows: list[dict[str, Any]], top: int = 200) -> 
         writer.writeheader()
         for row in board:
             writer.writerow({k: _cell(row.get(k)) for k in columns})
-    return {"contracts": "contracts.csv.gz", "leaderboard": "leaderboard.csv"}
+    qualified_board = sorted((r for r in rows if r.get(f"{QUALIFIED}_rank") is not None),
+                             key=lambda r: r[f"{QUALIFIED}_rank"])[:top]
+    with published(day_dir / "qualified_ask_bid_v1.csv") as tmp, open(tmp, "w", encoding="utf-8", newline="") as out:
+        writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in qualified_board:
+            writer.writerow({k: _cell(row.get(k)) for k in columns})
+    return {"contracts": "contracts.csv.gz", "leaderboard": "leaderboard.csv",
+            "qualified_ask_bid_v1": "qualified_ask_bid_v1.csv"}
 
 
 # --------------------------------------------------------------------------
@@ -1051,13 +1077,15 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
     written leaves the day unfinalized, and the next ``run`` finalizes it.
     """
     damaged: list[dict[str, Any]] = []
-    rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged)
+    rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged,
+                               cfg.qualified_policy)
     backfill = None
     if backfill_enabled and rows:
         # Rewrites backfill_timesales.jsonl.gz atomically, replacing any damaged copy.
         backfill = run_backfill(client, archive.day, archive.dir, rows, cfg.backfill_top, cfg.workers)
         damaged = []
-        rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged)
+        rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged,
+                                   cfg.qualified_policy)
     outputs = write_outputs(archive.dir, rows)
     # Everything except the summary itself must be verified in R2 before the
     # summary can call the session complete.
@@ -1079,6 +1107,10 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
         "contracts": len(rows),
         "ranked_contracts": sum(1 for r in rows if r.get("rank")),
         "clean_ranked_contracts": sum(1 for r in rows if r.get("clean_rank")),
+        "qualified_ranked_contracts": sum(1 for r in rows if r.get(f"{QUALIFIED}_rank")),
+        "qualified_status_counts": dict(Counter(r.get(f"{QUALIFIED}_status") for r in rows)),
+        "qualified_reason_counts": dict(Counter(reason for r in rows
+                                                  for reason in r.get(f"{QUALIFIED}_reasons", []))),
         "backfill": backfill,
         "interruptions": archive.interruptions(),
         "damaged_artifacts": damaged,
@@ -1086,6 +1118,7 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
         "request_stats": dict(client.stats),
         "outputs": outputs,
         "return_policy": cfg.policy.as_dict(),
+        "qualified_policy": cfg.qualified_policy.as_dict(),
         "finalized_at": datetime.now(timezone.utc).isoformat(),
     }
     archive.write_json(SUMMARY, summary)
@@ -1257,7 +1290,8 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
 # Inspection and readout
 # --------------------------------------------------------------------------
 
-def inspect_contract(day_dir: Path, symbol: str, policy: ReturnPolicy) -> dict[str, Any]:
+def inspect_contract(day_dir: Path, symbol: str, policy: ReturnPolicy,
+                     qualified_policy: QualifiedPolicy = QualifiedPolicy()) -> dict[str, Any]:
     path = [r for r in iter_rows(day_dir) if r.get("symbol") == symbol]
     path.sort(key=lambda r: r["t"])
     if not path:
@@ -1270,8 +1304,9 @@ def inspect_contract(day_dir: Path, symbol: str, policy: ReturnPolicy) -> dict[s
                         contract_size=int(rows[-1].get("contract_size") or 100),
                         volume=rows[-1].get("volume"), open_interest=rows[0].get("oi"),
                         chain_ok_sweeps=chain_ok_sweeps(_read_manifest(day_dir)).get(rows[-1]["underlying"], 0))
-    obs = [Observation(r["t"], r["bid"], r["ask"], r.get("bid_ms"), r.get("ask_ms"), r.get("spot")) for r in rows]
-    metrics = contract_metrics(info, obs, policy)
+    obs = [Observation(r["t"], r["bid"], r["ask"], r.get("bid_ms"), r.get("ask_ms"), r.get("spot"),
+                       r.get("bid_size"), r.get("ask_size"), r.get("volume"), r.get("oi")) for r in rows]
+    metrics = contract_metrics(info, obs, policy, qualified_policy)
     record = load_backfill(day_dir).get(symbol)
     if record and not record.get("error"):
         metrics.update(trade_bar_metrics(record.get("bars") or [], info.contract_size, policy))
@@ -1279,7 +1314,10 @@ def inspect_contract(day_dir: Path, symbol: str, policy: ReturnPolicy) -> dict[s
         "metrics": metrics,
         "path": [{"time_et": datetime.fromtimestamp(r["t"] / 1000, ET).strftime("%H:%M:%S"),
                   "t": r["t"], "bid": r["bid"], "ask": r["ask"], "mid": o.mid,
-                  "quote_age_s": o.quote_age_s, "spot": r.get("spot"), "volume": r.get("volume")}
+                  "bid_ms": r.get("bid_ms"), "ask_ms": r.get("ask_ms"),
+                  "bid_size": r.get("bid_size"), "ask_size": r.get("ask_size"),
+                  "quote_age_s": o.quote_age_s, "spot": r.get("spot"),
+                  "volume": r.get("volume"), "oi": r.get("oi")}
                  for r, o in zip(rows, obs)],
         "trade_bars": (record or {}).get("bars"),
     }
@@ -1411,11 +1449,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, indent=2, default=str))
         return 0
     if args.command == "build":
-        rows = build_contract_rows(args.dir, cfg.policy, *_bounds_from_summary(args.dir))
+        rows = build_contract_rows(args.dir, cfg.policy, *_bounds_from_summary(args.dir),
+                                   qualified_policy=cfg.qualified_policy)
         print(json.dumps(write_outputs(args.dir, rows)))
         return 0
     if args.command == "inspect":
-        print(json.dumps(inspect_contract(args.dir, args.symbol, cfg.policy), indent=2, default=str))
+        print(json.dumps(inspect_contract(args.dir, args.symbol, cfg.policy, cfg.qualified_policy),
+                         indent=2, default=str))
         return 0
     if args.command == "readout":
         print(readout(args.dir, args.top, clean_only=not args.all))

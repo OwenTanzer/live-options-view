@@ -118,6 +118,9 @@ Thresholds are versioned (`oa203-returns-v1`) and written into every summary.
 - `contracts.csv.gz`: every sampled contract, winners and non-winners,
   with `rank`, `rank_in_type`, `clean_rank`, `clean_rank_in_type`
 - `leaderboard.csv`: rows in the top 200 overall or top 200 clean
+- `qualified_ask_bid_v1.csv`: separate top 200 quote-qualified ask-to-later-bid
+  producer ranks over the full archived contract universe (see
+  [v1 policy](../oa203-qualified-ask-bid-v1.md)); older artifacts lack this view
 - `backfill_timesales.jsonl.gz`: raw trade bars for the top contracts
 - `summary.json`: `final`, `complete`/`partial` with reasons, coverage, pending uploads,
   interruptions, counts, request stats
