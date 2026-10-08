@@ -64,6 +64,9 @@ class FakeFeed:
     def get_health(self):
         return dict(self.health)
 
+    def get_subscription_delivery(self):
+        return {"pending_event_pairs": 0, "last_error": None}
+
 
 def assert_equal(actual, expected, label):
     if actual != expected:
@@ -411,3 +414,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+

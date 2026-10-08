@@ -64,6 +64,14 @@ class FakeFeed:
     def get_state(self):
         return {k: dict(v) for k, v in self.state.items()}
 
+    def get_health(self):
+        return {"connected": True, "authorized": True, "channel_open": True,
+                "reconnect_count": 0, "last_feed_event_time": datetime.now(timezone.utc),
+                "last_error": None, "last_close_code": None}
+
+    def get_subscription_delivery(self):
+        return {"pending_event_pairs": 0, "last_error": None}
+
 
 def assert_equal(actual, expected, label):
     if actual != expected:
@@ -144,6 +152,30 @@ def test_chain_parse_is_symbol_bound():
     assert_equal([r["strike"] for r in qqq_rows], [600.0, 671.0], "QQQ default keeps only QQQ contracts")
 
 
+def test_streamer_alias_and_occ_fields_cannot_cross_symbols():
+    expiration = {"expiration-date": EXP, "strikes": [
+        {"strike-price": "670", "call": {"symbol": "SPY   261006C00670000", "streamer-symbol": ".SPY261006C670"},
+         "put": {"symbol": "SPY   261006P00670000", "streamer-symbol": ".SPY261006P670"}},
+        {"strike-price": "671", "call": {"symbol": "SPY   261006C00671000", "streamer-symbol": ".QQQ261006C600"},
+         "put": {"symbol": "SPY   261006P00671000", "streamer-symbol": ".QQQ261006P600"}},
+        {"strike-price": "672", "call": {"symbol": "SPY   261007C00672000"},
+         "put": {"symbol": "SPY   261006P00672000"}},
+        {"strike-price": "673", "call": {"symbol": "SPY   261006P00673000"},
+         "put": {"symbol": "SPY   261006P00673000"}},
+        {"strike-price": "674", "call": {"symbol": "SPY   261006C00675000"},
+         "put": {"symbol": "SPY   261006P00674000"}},
+    ]}
+    parsed = collector._parse_expiration_strikes(expiration, "SPY")
+    assert_equal([s["strike"] for s in parsed], [670.0], "full contract identity checked")
+    s3 = FakeS3()
+    snap(s3, feed_state(spy_vol=20, qqq_vol=9999), sessions()[1], parsed)
+    rows = s3.json("intraday/spy/latest.json")["rows"]
+    assert_equal(len(rows), 2, "only validated SPY call and put enter actual snapshot")
+    assert_true(all(r["OptionSymbol"].replace(" ", "").startswith("SPY") for r in rows),
+                "QQQ streamer aliases cannot seed SPY rows")
+    assert_equal({r["Volume"] for r in rows}, {20}, "QQQ feed volume cannot be SPY-labeled")
+
+
 def test_load_chain_uses_requested_ticker_and_skips_weekly():
     seen = []
 
@@ -170,8 +202,144 @@ def test_load_chain_uses_requested_ticker_and_skips_weekly():
     assert_equal(strikes[0]["call_sym"], ".SPY261006C670", "SPY streamer symbol")
 
 
+def test_spy_missing_today_expiration_is_explicit_and_qqq_fallback_is_unchanged():
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"items": [{"expirations": [
+                {"expiration-date": "2026-10-07", "strikes": []}]}]}}
+
+    original = collector.requests.get
+    collector.requests.get = lambda *args, **kwargs: Resp()
+    try:
+        try:
+            collector.load_chain("token", TODAY, ticker="SPY", include_weekly=False)
+            raise AssertionError("SPY accepted a next-day expiration as 0DTE")
+        except RuntimeError as exc:
+            assert_true("SPY 0DTE unavailable" in str(exc), "missing-today status is explicit")
+        _, qqq_exp, _, _ = collector.load_chain("token", TODAY, ticker="QQQ", include_weekly=False)
+        assert_equal(qqq_exp, "2026-10-07", "QQQ nearest-upcoming behavior preserved")
+    finally:
+        collector.requests.get = original
+
+
+def test_spy_subscription_window_is_bounded_and_deterministic():
+    expiration = {"expiration-date": EXP, "strikes": [
+        {"strike-price": str(k), "call": {}, "put": {}} for k in range(500, 800)
+    ]}
+    strikes = collector._parse_expiration_strikes(expiration, "SPY")
+    selected = collector._select_spy_strikes(strikes, 670.5)
+    symbols = [s[f"{side}_sym"] for s in selected for side in ("call", "put")]
+    feed = collector.DXLinkFeed("unused", "unused")  # no start/network call
+    feed.set_subscriptions([], ["SPY"])
+    feed.add_option_subscriptions(symbols)
+    assert_equal(len(strikes), 300, "offline 300-strike fixture")
+    assert_equal((len(selected), selected[0]["strike"], selected[-1]["strike"]),
+                 (67, 637.0, 703.0), "67 nearest, lower strike wins final tie")
+    assert_equal((len(symbols), len(feed._subs)), (134, 540),
+                 "134 options x four events plus four SPY spot events")
+    assert_equal([r["strike"] for r in collector._select_spy_strikes(strikes[:3], 670)],
+                 [500.0, 501.0, 502.0], "small chain subscribes every available strike")
+    assert_equal(len(collector._select_spy_strikes(strikes + strikes[:5], 670)), 67,
+                 "duplicate strikes cannot expand the cap")
+    assert_equal([r["strike"] for r in collector._select_spy_strikes(strikes, 1000)],
+                 list(map(float, range(733, 800))), "far-away spot still caps at 67")
+
+
+def test_spy_startup_requires_fresh_timed_spot_and_reports_coverage():
+    now = datetime.now(timezone.utc)
+    fresh = now.isoformat()
+    old = (now - timedelta(seconds=collector.STALE_FEED_SECS + 1)).isoformat()
+    assert_equal(collector._fresh_spy_spot({"bid": 670, "ask": 670.4,
+                                            "bid_ts": fresh, "ask_ts": fresh}, now),
+                 (670.2, fresh), "fresh complete quote accepted")
+    for quote in ({"bid": 670, "ask": 670.4, "bid_ts": old, "ask_ts": fresh},
+                  {"bid": 670, "ask": 670.4, "ask_ts": fresh},
+                  {"last": 670, "last_ts": old},
+                  {"last": 670},
+                  {"last": float("nan"), "last_ts": fresh}):
+        assert_equal(collector._fresh_spy_spot(quote, now), (None, None),
+                     "stale, incomplete, untimed and nonfinite spots rejected")
+    coverage = {"min_strike": 637.0, "max_strike": 703.0,
+                "selected_strikes": 67, "selected_option_symbols": 134}
+    assert_equal(collector._spy_subscription_coverage(coverage, None)["status"],
+                 "spot_unavailable", "missing current spot is explicit")
+    assert_equal(collector._spy_subscription_coverage(coverage, 704)["status"],
+                 "out_of_range", "spot beyond fixed window is explicit")
+    assert_equal(collector._spy_subscription_coverage(coverage, 670)["status"],
+                 "within_window", "spot within fixed window")
+
+
+def test_spy_dynamic_subscriptions_survive_reconnect_without_resetting_qqq():
+    feed = collector.DXLinkFeed("unused", "unused")
+    messages = []
+    feed._send = lambda message: messages.append(message)
+    feed.set_subscriptions([".QQQ261006C600"], ["QQQ", "SPY"])
+    feed._on_message(None, json.dumps({"type": "FEED_CONFIG"}))
+    initial = len(feed._subs)
+    assert_equal(initial, 12, "QQQ option and two underlying symbols retained")
+    added = feed.add_option_subscriptions([".SPY261006C670", ".SPY261006P670"])
+    assert_equal(added, 8, "only two SPY options dynamically added")
+    assert_true(messages[-1]["reset"] is False, "SPY addition cannot reset QQQ subscriptions")
+    assert_equal(feed.add_option_subscriptions([".SPY261006C670"]), 0, "repeat add idempotent")
+    feed._subscribed = False  # reconnect requires a complete re-subscription
+    messages.clear()
+    feed._on_message(None, json.dumps({"type": "FEED_CONFIG"}))
+    assert_equal(len(feed._subs), 20, "fixed window retained for reconnect")
+    assert_true(messages[0]["reset"], "reconnect resets to complete QQQ and SPY set")
+    assert_equal(len(messages[0]["add"]), 20, "reconnect includes all subscribed events")
+    feed._send = lambda message: (_ for _ in ()).throw(OSError("offline socket"))
+    assert_equal(feed.add_option_subscriptions([".SPY261006C671"]), 4,
+                 "interrupted SPY delivery does not stop QQQ collection")
+    assert_equal(len(feed._subs), 24, "interrupted delivery retained for reconnect")
+    assert_equal(feed.get_subscription_delivery()["pending_event_pairs"], 4,
+                 "incomplete delivery is explicit")
+
+
+def test_spy_failed_middle_batch_retries_unsent_pairs_without_reset():
+    feed = collector.DXLinkFeed("unused", "unused")
+    feed.set_subscriptions([".QQQ261006C600"], ["QQQ", "SPY"])
+    sent = []
+    attempts = 0
+
+    def sometimes_fail(message):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise OSError("second batch interrupted")
+        sent.append(message)
+
+    feed._send = sometimes_fail
+    feed._subscribed = True
+    symbols = [f".SPY261006C{k}" for k in range(500, 634)]
+    assert_equal(feed.add_option_subscriptions(symbols), 536, "67-strike cap event-pair load")
+    assert_equal(feed.get_subscription_delivery()["pending_event_pairs"], 336,
+                 "failed second batch and third batch remain pending")
+    assert_equal([len(m["add"]) for m in sent], [200], "first batch sent once")
+    s3 = FakeS3()
+    collector.push_health(s3, feed, collector.Counters(), collector.SnapshotTracker(),
+                          "run", datetime.now(timezone.utc), "clean_start", TODAY,
+                          {"status": "subscription_pending", "reason": "subscription_delivery_incomplete"})
+    assert_equal(s3.json("intraday/health.json")["spy"]["subscription_delivery"]["pending_event_pairs"],
+                 336, "health exposes incomplete SPY delivery")
+    assert_equal(feed.add_option_subscriptions(symbols), 0, "duplicate request adds no pairs")
+    assert_equal([len(m["add"]) for m in sent], [200, 200, 136],
+                 "duplicate request safely retries only unsent batches")
+    assert_true(all(m["reset"] is False for m in sent), "QQQ subscriptions never reset")
+    assert_equal(feed.get_subscription_delivery(), {"pending_event_pairs": 0, "last_error": None},
+                 "fully delivered state is explicit")
+
+
 def test_spy_snapshot_is_identified_and_isolated():
     qqq, spy = sessions()
+    spy.subscription_coverage = {
+        "policy": "fixed_startup_nearest_67_strikes", "fixed_at_startup": True,
+        "reference_spot": 670.2, "reference_spot_observed_at": datetime.now(timezone.utc).isoformat(),
+        "total_chain_strikes": 1, "selected_strikes": 1, "selected_option_symbols": 2,
+        "min_strike": 670.0, "max_strike": 670.0,
+    }
     s3 = FakeS3()
     snap(s3, feed_state(), qqq, QQQ_STRIKES)
     qqq_before = (dict(qqq.prev_vol), qqq.vwap_state.cum_vol, dict(qqq.rvol_today), len(qqq.momentum_history))
@@ -182,6 +350,8 @@ def test_spy_snapshot_is_identified_and_isolated():
     assert_equal(payload["symbol"], "SPY", "SPY payload symbol")
     assert_equal(payload["underlying_market"]["symbol"], "SPY", "SPY underlying_market symbol")
     assert_equal(payload["underlying_price"], 670.2, "SPY spot from the SPY quote, not QQQ")
+    assert_equal(payload["subscription_coverage"]["status"], "out_of_range",
+                 "snapshot reports fixed-window range against current observed spot")
     assert_true(payload["snapshot_key"].startswith("intraday/spy/20261006/snapshot_"), "SPY snapshot key")
     assert_true(all(r["OptionSymbol"].startswith("SPY") for r in payload["rows"]), "only SPY contracts")
     assert_equal(s3.store["intraday/latest.json"], qqq_latest_before, "QQQ latest.json untouched by SPY")
@@ -225,6 +395,63 @@ def test_missing_spy_quote_is_reported_not_substituted():
     assert_true(um["freshness"] != "live", f"freshness not live ({um['freshness']})")
 
 
+def test_spy_price_tile_and_health_use_only_observed_spy_quote():
+    now = datetime.now(timezone.utc).isoformat()
+    state = {sym: {"bid": 100.0, "ask": 100.2, "bid_ts": now, "ask_ts": now}
+             for sym in collector.PRICE_TICKERS.values()}
+    state["SPY"] = {"bid": 670.0, "ask": 670.4, "bid_ts": now, "ask_ts": now}
+    s3 = FakeS3()
+    qqq_prices_before = dict(collector._last_prices)
+    try:
+        collector.push_prices(s3, FakeFeed(state), collector.Counters())
+        spy = s3.json("intraday/prices.json")["prices"]["SPY"]
+        assert_equal((spy["price"], spy["source"], spy["quote_ts"]),
+                     (670.2, "dxlink", now), "SPY tile carries its own observed price")
+        assert_true("SPY" not in collector._last_prices, "SPY does not enter QQQ macro CSV fallback state")
+        ctx = {"status": "collecting", "reason": None,
+               "counters": collector.Counters(), "tracker": collector.SnapshotTracker()}
+        collector.push_health(s3, FakeFeed(state), collector.Counters(), collector.SnapshotTracker(),
+                              "run", datetime.now(timezone.utc), "clean_start", TODAY, ctx)
+        health = s3.json("intraday/health.json")
+        assert_equal(health["spy"]["spot"]["status"], "live", "fresh SPY quote health")
+        assert_equal(health["spy"]["spot"]["price"], 670.2, "SPY health price")
+        assert_equal(health["symbols"]["expected_price_symbols"], len(collector.PRICE_TICKERS),
+                     "QQQ legacy health counts unchanged")
+        old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        state["SPY"]["bid_ts"] = old
+        collector.push_prices(s3, FakeFeed(state), collector.Counters())
+        assert_equal(s3.json("intraday/prices.json")["prices"]["SPY"]["quote_ts"], old,
+                     "SPY midpoint is aged by its older side")
+        collector.push_health(s3, FakeFeed(state), collector.Counters(), collector.SnapshotTracker(),
+                              "run", datetime.now(timezone.utc), "clean_start", TODAY, ctx)
+        assert_equal(s3.json("intraday/health.json")["spy"]["spot"]["status"], "stale",
+                     "one stale quote side cannot make SPY health live")
+        registry = collector.LiveQuoteRegistry()
+        registry.set_session(FakeFeed(state), {})
+        assert_equal(registry.quote_payload(["SPY"])["quotes"][0]["quote_ts"], old,
+                     "live quote endpoint uses the same SPY observation time")
+        state["SPY"]["bid_ts"] = None
+        collector.push_prices(s3, FakeFeed(state), collector.Counters())
+        assert_equal(s3.json("intraday/prices.json")["prices"]["SPY"]["price"], None,
+                     "half-untimed SPY midpoint is unavailable")
+        del state["SPY"]
+        collector.push_prices(s3, FakeFeed(state), collector.Counters())
+        assert_equal(s3.json("intraday/prices.json")["prices"]["SPY"]["price"], None,
+                     "missing SPY quote has no QQQ or yfinance substitution")
+        collector.push_health(s3, FakeFeed(state), collector.Counters(), collector.SnapshotTracker(),
+                              "run", datetime.now(timezone.utc), "clean_start", TODAY, ctx)
+        assert_equal(s3.json("intraday/health.json")["spy"]["spot"]["status"], "unavailable",
+                     "missing SPY quote health")
+        ctx.update(status="missing_today_expiration", reason="SPY 0DTE unavailable")
+        collector.push_health(s3, FakeFeed(state), collector.Counters(), collector.SnapshotTracker(),
+                              "run", datetime.now(timezone.utc), "clean_start", TODAY, ctx)
+        assert_equal(s3.json("intraday/health.json")["spy"]["collection_status"],
+                     "missing_today_expiration", "explicit SPY chain status")
+    finally:
+        collector._last_prices.clear()
+        collector._last_prices.update(qqq_prices_before)
+
+
 def test_spy_rvol_starts_with_insufficient_history_and_rejects_foreign_baseline():
     _, spy = sessions()
     qqq_baseline = {"symbol": "QQQ", "buckets": {"10:30": {"samples": [{"date": "2026-10-01", "cum_volume": 1}]}}}
@@ -255,7 +482,7 @@ def test_restore_is_per_symbol():
         spy_key: _csv([
             {"OptionSymbol": "SPY   261006C00670000", "Volume": 777, "UnderlyingPrice": 670.1, "VIX": 99.0},
             # A foreign row in a SPY archive must not seed SPY state.
-            {"OptionSymbol": "QQQ   261006C00600000", "Volume": 5, "UnderlyingPrice": 670.1, "VIX": 99.0},
+            {"OptionSymbol": "QQQ   261006C00600000", "Volume": 5, "UnderlyingPrice": 600.1, "VIX": 99.0},
         ]),
         "intraday/spy/20261006/vwap_state.json": {"symbol": "QQQ", "session_date": EXP, "cum_pv": 1.0,
                                                   "cum_vol": 1, "vwap": 600.0},
@@ -264,12 +491,50 @@ def test_restore_is_per_symbol():
     collector.restore_state(s3, TODAY, spy)
     assert_equal(spy.prev_vol, {".SPY261006C670": 777}, "SPY volume restored, foreign row ignored")
     assert_equal(spy.last_spot[0], 670.1, "SPY spot restored")
+    assert_equal(spy.last_spot[1], "2026-10-06T14:30:00+00:00", "SPY spot keeps its own archive timestamp")
     assert_equal(spy.vwap_state.vwap, None, "vwap_state tagged QQQ is not restored into SPY")
     assert_true(spy.first_snapshot_written, "SPY first.csv not rewritten after restart")
     assert_equal(collector._last_prices, prices_before, "shared price strip restored from QQQ only")
     assert_equal((qqq.prev_vol, qqq.first_snapshot_written), ({}, False), "QQQ restore state untouched")
     collector.restore_state(s3, TODAY, qqq)
     assert_equal(qqq.prev_vol, {}, "QQQ restore never reads the SPY archive")
+
+
+def test_spy_new_day_resets_session_state_and_writes_new_first_csv():
+    qqq, spy = sessions()
+    s3 = FakeS3()
+    collector.restore_state(s3, TODAY, spy)
+    snap(s3, feed_state(), spy, SPY_STRIKES)
+    day1 = spy.day_prefix(TODAY.strftime("%Y%m%d")) + "first.csv"
+    assert_true(day1 in s3.store and spy.first_snapshot_written, "first day mirror written")
+    qqq.prev_vol["qqq-only"] = 42
+    qqq.first_snapshot_written = True
+    next_day = TODAY + timedelta(days=1)
+    collector.restore_state(s3, next_day, spy)
+    assert_equal(spy.prev_vol, {}, "new SPY day does not retain old volume deltas")
+    assert_equal(spy.last_spot, [None, None], "new SPY day does not retain old spot")
+    assert_true(not spy.first_snapshot_written, "new SPY day resets first-snapshot guard")
+    assert_equal(qqq.prev_vol["qqq-only"], 42, "QQQ session untouched")
+    assert_true(qqq.first_snapshot_written, "QQQ first-snapshot guard untouched")
+    collector.take_snapshot(s3, FakeFeed(feed_state()), SPY_STRIKES, next_day.isoformat(),
+                            "0DTE_Regular", next_day, collector.Counters(),
+                            collector.SnapshotTracker(), spy)
+    day2 = spy.day_prefix(next_day.strftime("%Y%m%d")) + "first.csv"
+    assert_true(day2 in s3.store, "second day writes its own first.csv")
+    before = s3.store[day2]
+    collector.restore_state(s3, next_day, spy)
+    assert_true(spy.first_snapshot_written, "same-day recovery retains first-snapshot guard")
+    assert_equal(s3.store[day2], before, "same-day recovery does not replace first.csv")
+
+
+def test_foreign_only_archive_cannot_seed_spy_spot_or_timestamp():
+    _, spy = sessions()
+    s3 = FakeS3({"intraday/spy/20261006/snapshot_103100000000.csv": _csv([
+        {"OptionSymbol": "QQQ   261006C00600000", "Volume": 5, "UnderlyingPrice": 600.1},
+    ])})
+    collector.restore_state(s3, TODAY, spy)
+    assert_equal(spy.prev_vol, {}, "foreign-only archive has no SPY volume")
+    assert_equal(spy.last_spot, [None, None], "foreign-only archive has no SPY price or timestamp")
 
 
 def run():
@@ -282,3 +547,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
