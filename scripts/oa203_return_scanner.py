@@ -357,7 +357,8 @@ class Tradier:
                 log("oa203_request_retry", path=path, attempt=attempt + 1,
                     delay_seconds=2 ** attempt, elapsed_seconds=elapsed,
                     error=exception_details(exc, (self.token,)))
-                self.sleep(2 ** attempt)
+                if attempt + 1 < attempts:
+                    self.sleep(2 ** attempt)
                 continue
             elapsed = max(0, self.clock() - started)
             with self.lock:
@@ -387,7 +388,8 @@ class Tradier:
                 last_exc = RuntimeError(f"HTTP {response.status_code} on {path}")
                 log("oa203_request_retry", path=path, status=response.status_code,
                     attempt=attempt + 1, delay_seconds=2 ** attempt, elapsed_seconds=elapsed)
-                self.sleep(2 ** attempt)
+                if attempt + 1 < attempts:
+                    self.sleep(2 ** attempt)
                 continue
             response.raise_for_status()
             return response.json()
