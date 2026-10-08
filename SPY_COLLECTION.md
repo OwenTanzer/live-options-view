@@ -50,14 +50,15 @@ baseline, and the momentum window. Restart recovery reads only that symbol's
 archive. Rows from another root are ignored. A `vwap_state.json` or RVOL
 baseline tagged with another symbol is not loaded.
 
-The shared macro price strip (`intraday/prices.json`, `_last_prices`) stays
-restored from QQQ only. SPY is subscribed for its own spot and volume but is
-**not** added to `PRICE_TICKERS`, so the price strip and `health.json` symbol
-counts are unchanged.
+The legacy macro price map (`_last_prices`) stays restored from QQQ only.
+SPY is subscribed for its own spot and volume and gets its own entry in
+`intraday/prices.json`, but is **not** added to `PRICE_TICKERS`. The existing
+macro entries and `health.json` symbol counts are unchanged.
 
-`health.json` stays QQQ-only: SPY has its own counters and missed-snapshot
-tracker, so SPY activity can't mask a missed QQQ snapshot. SPY failures
-show up in logs and in `intraday/spy/latest.json` going stale.
+`health.json` retains its QQQ collector counters and adds a separate `spy`
+block. SPY has its own counters and missed-snapshot tracker, so SPY activity
+can't mask a missed QQQ snapshot. SPY failures show up in that block, logs,
+and in `intraday/spy/latest.json` going stale.
 
 ## Warming up and missing data
 
@@ -111,12 +112,11 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
 
 ## Verification status
 
-- Fixture/local: `python tests/verify_collector_spy.py` (13 checks: key
-  layout, symbol-bound chain parsing, SPY-only chain request with no weekly,
-  payload identity, cross-symbol volume-delta/VWAP isolation, missing SPY
-  spot, RVOL warm-up and foreign-baseline rejection, per-symbol restart
-  recovery). The existing collector suites pass unchanged against
-  `QQQ_SESSION`.
+- Fixture/local: `python tests/verify_collector_spy.py` (13 checks covering
+  layout, full OCC/streamer identity, exact SPY expiry, subscription count,
+  payload and state isolation, quote/tile/health evidence, missing data, RVOL
+  warm-up and per-symbol restart recovery). The existing collector suites
+  pass against `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
 
