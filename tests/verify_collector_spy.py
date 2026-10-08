@@ -287,6 +287,10 @@ def test_spy_dynamic_subscriptions_survive_reconnect_without_resetting_qqq():
     assert_equal(len(feed._subs), 20, "fixed window retained for reconnect")
     assert_true(messages[0]["reset"], "reconnect resets to complete QQQ and SPY set")
     assert_equal(len(messages[0]["add"]), 20, "reconnect includes all subscribed events")
+    feed._send = lambda message: (_ for _ in ()).throw(OSError("offline socket"))
+    assert_equal(feed.add_option_subscriptions([".SPY261006C671"]), 4,
+                 "interrupted SPY delivery does not stop QQQ collection")
+    assert_equal(len(feed._subs), 24, "interrupted delivery retained for reconnect")
 
 
 def test_spy_snapshot_is_identified_and_isolated():

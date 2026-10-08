@@ -769,8 +769,14 @@ class DXLinkFeed:
             self._subs.extend(additions)
             if self._subscribed:
                 for i in range(0, len(additions), 200):
-                    self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
-                                "reset": False, "add": additions[i:i + 200]})
+                    try:
+                        self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                                    "reset": False, "add": additions[i:i + 200]})
+                    except Exception as exc:
+                        # Keep the complete list for the feed's reconnect path;
+                        # a SPY delivery interruption must not stop QQQ collection.
+                        log.warning(f"SPY subscription delivery interrupted; retained for reconnect: {exc}")
+                        break
         return len(additions)
 
     def get_state(self) -> dict[str, dict]:
