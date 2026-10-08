@@ -80,10 +80,10 @@ def assert_true(value, label):
 
 
 def _reset_module_state():
-    collector._vwap_state = ms.VwapState()
-    collector._rvol_baseline = {}
-    collector._rvol_today.clear()
-    collector._momentum_history = []
+    collector.QQQ_SESSION.vwap_state = ms.VwapState()
+    collector.QQQ_SESSION.rvol_baseline = {}
+    collector.QQQ_SESSION.rvol_today.clear()
+    collector.QQQ_SESSION.momentum_history = []
 
 
 def test_vwap_accumulates_across_snapshots_and_resets_session():
@@ -129,15 +129,15 @@ def test_vwap_state_persisted_and_restored_after_restart():
         collector._compute_underlying_market(
             s3, {"volume": 1_100_000}, 402.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, today,
         )
-        accumulated_vwap = collector._vwap_state.vwap
+        accumulated_vwap = collector.QQQ_SESSION.vwap_state.vwap
         assert_true(accumulated_vwap is not None, "vwap accumulated before simulated restart")
 
         # Simulate a process restart: a fresh module-level accumulator, then
         # recover it from what was persisted to the FakeS3 store above.
-        collector._vwap_state = ms.VwapState()
+        collector.QQQ_SESSION.vwap_state = ms.VwapState()
         collector._restore_vwap_state(s3, today, today.strftime("%Y%m%d"))
-        assert_equal(collector._vwap_state.vwap, accumulated_vwap, "vwap recovered after restart")
-        assert_equal(collector._vwap_state.session_date, today, "session_date recovered after restart")
+        assert_equal(collector.QQQ_SESSION.vwap_state.vwap, accumulated_vwap, "vwap recovered after restart")
+        assert_equal(collector.QQQ_SESSION.vwap_state.session_date, today, "session_date recovered after restart")
     finally:
         _reset_module_state()
 
@@ -156,13 +156,13 @@ def test_vwap_state_not_restored_across_a_day_boundary():
             s3, {"volume": 1_100_000}, 402.0, ts_utc_2.isoformat(), ts_et, ts_utc_2, yesterday,
         )
 
-        collector._vwap_state = ms.VwapState()
+        collector.QQQ_SESSION.vwap_state = ms.VwapState()
         # Restoring for *today* using yesterday's persisted key must not
         # resurrect yesterday's accumulator -- restore_state always reads
         # from today's own date-prefixed key, so this proves the session_date
         # guard inside _restore_vwap_state, not a wrong key being read.
         collector._restore_vwap_state(s3, today, yesterday.strftime("%Y%m%d"))
-        assert_equal(collector._vwap_state.vwap, None, "a mismatched session_date is not recovered")
+        assert_equal(collector.QQQ_SESSION.vwap_state.vwap, None, "a mismatched session_date is not recovered")
     finally:
         _reset_module_state()
 
@@ -204,7 +204,7 @@ def test_finalize_rvol_baseline_appends_and_prunes():
             },
         }
         s3 = FakeS3(seed={collector.RVOL_BASELINE_KEY: seeded})
-        collector._rvol_today = {"10:30": 999999}
+        collector.QQQ_SESSION.rvol_today = {"10:30": 999999}
 
         collector.finalize_rvol_baseline(s3, today)
 
@@ -304,7 +304,7 @@ def test_accumulate_vwap_rejects_out_of_order_provider_events():
         collector._compute_underlying_market(
             s3, {"volume": 1_100_000}, 402.0, (t1 + timedelta(minutes=1)).isoformat(), ts_et, t1, today,
         )
-        vwap_after_in_order = collector._vwap_state.vwap
+        vwap_after_in_order = collector.QQQ_SESSION.vwap_state.vwap
         assert_true(vwap_after_in_order is not None, "vwap accumulated from two in-order ticks")
 
         # A late-arriving event timestamped *before* the last one folded in
@@ -312,7 +312,7 @@ def test_accumulate_vwap_rejects_out_of_order_provider_events():
         collector._compute_underlying_market(
             s3, {"volume": 5_000_000}, 999.0, t0_late_arrival.isoformat(), ts_et, t1, today,
         )
-        assert_equal(collector._vwap_state.vwap, vwap_after_in_order, "out-of-order event does not perturb the accumulator")
+        assert_equal(collector.QQQ_SESSION.vwap_state.vwap, vwap_after_in_order, "out-of-order event does not perturb the accumulator")
     finally:
         _reset_module_state()
 

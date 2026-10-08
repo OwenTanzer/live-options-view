@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-collector.py -- QQQ live chain snapshot service.
+collector.py -- QQQ (and SPY) live chain snapshot service.
 
-Authenticates with tastytrade, subscribes to the QQQ 0DTE option chain via
-DXLink websocket, and uploads snapshots to R2 every minute.
+Authenticates with tastytrade, subscribes to the QQQ and SPY 0DTE option chains
+via one DXLink websocket, and uploads snapshots to R2 every minute. Each
+underlying keeps its own VWAP/RVOL/momentum state and archive (#121); QQQ keeps
+every pre-SPY key unchanged.
 
 The nearest end-of-week expiration is subscribed through the same feed and
 archived at hourly regular-session slots for historical analysis.  It does not
@@ -11,7 +13,9 @@ replace or alter the tactical 0DTE stream.
 
 R2 output:
   intraday/YYYYMMDD/snapshot_HHMMSSffffff.csv  -- archived snapshots (microsecond key)
-  intraday/latest.json                   -- live feed for the web viewer
+  intraday/latest.json                   -- live QQQ feed for the web viewer
+  intraday/spy/latest.json               -- live SPY feed (same contract, "symbol": "SPY")
+  intraday/spy/YYYYMMDD/...              -- SPY archive, mirroring the QQQ intraday/YYYYMMDD/ layout
   intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
   intraday/health.json                   -- lifecycle telemetry (every 15s)
   raw/weekly/YYYYMMDD/qqq_chain_*.csv    -- nearest-weekly snapshots (~hourly RTH)
@@ -35,6 +39,7 @@ Environment variables (set in Railway dashboard):
   EIA_API_KEY            optional -- enables the macro/eia_steo.json feed (see
                           crude_calibration.py); free signup at eia.gov/opendata.
                           Feature is silently skipped (logged once) if unset.
+  COLLECT_SPY            optional -- "0" disables SPY chain collection (default on)
 """
 
 import io
@@ -83,7 +88,13 @@ log = logging.getLogger("collector")
 ET              = pytz.timezone("America/New_York")
 TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
+# Underlyings with their own 0DTE chain, snapshot, indicators and archive
+# (#121). Only TICKER (QQQ) gets the nearest-weekly archive; SPY is 0DTE only,
+# to bound subscriptions and writes.
+CHAIN_UNDERLYINGS = ("QQQ", "SPY")
+COLLECT_SPY     = os.environ.get("COLLECT_SPY", "1") != "0"
 STRIKE_WINDOW   = 33
+SPY_MAX_STRIKES = 67
 SNAPSHOT_SECS   = 60
 WEEKLY_SNAPSHOT_SECS = 60 * 60
 PRICES_SECS     = 10
@@ -182,7 +193,7 @@ PRICE_TICKERS: dict[str, str] = {
 }
 
 TICKER_CLASSES: dict[str, str] = {
-    "QQQ": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
+    "QQQ": "equity", "SPY": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
     "META": "equity", "GOOGL": "equity", "AMZN": "equity", "TSLA": "equity",
     "MU": "equity", "SPCX": "equity", "AAPL": "equity",
     "VIX": "index", "OVX": "index", "10Y": "yield", "JPY/USD": "futures",
@@ -560,10 +571,39 @@ def _dxlink_symbol(occ_symbol: str) -> str:
     return f".{underlying}{date_part}{side}{_strike_str(strike)}"
 
 
-def _build_symbol(strike: float, exp_date: str, option_type: str) -> str:
+def _build_symbol(strike: float, exp_date: str, option_type: str, ticker: str = TICKER) -> str:
     yy, mm, dd = exp_date[2:4], exp_date[5:7], exp_date[8:10]
     side = "C" if option_type.lower() == "call" else "P"
-    return f".{TICKER}{yy}{mm}{dd}{side}{_strike_str(strike)}"
+    return f".{ticker}{yy}{mm}{dd}{side}{_strike_str(strike)}"
+
+
+def _occ_root(occ_symbol: str) -> str:
+    """Underlying root of an OCC symbol: 'SPY   261006C00600000' -> 'SPY'."""
+    occ = occ_symbol.replace(" ", "")
+    i = 0
+    while i < len(occ) and not occ[i].isdigit():
+        i += 1
+    return occ[:i]
+
+
+def _contract_symbols(contract, strike: float, exp_date: str, side: str,
+                      ticker: str) -> tuple[str, str] | None:
+    """Accept provider symbols only when both identify this exact contract."""
+    expected_streamer = _build_symbol(strike, exp_date, side, ticker)
+    occ = contract if isinstance(contract, str) else contract.get("symbol", "")
+    occ = occ.replace(" ", "") if isinstance(occ, str) else ""
+    if occ:
+        match = re.fullmatch(r"([A-Z]+)(\d{6})([CP])(\d{8})", occ)
+        expected_date = exp_date[2:4] + exp_date[5:7] + exp_date[8:10]
+        expected_side = "C" if side == "call" else "P"
+        if (not match or match.group(1) != ticker or match.group(2) != expected_date
+                or match.group(3) != expected_side
+                or int(match.group(4)) != round(strike * 1000)):
+            return None
+    streamer = contract.get("streamer-symbol") if isinstance(contract, dict) else None
+    if streamer and streamer != expected_streamer:
+        return None
+    return occ, expected_streamer
 
 
 def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = None) -> date:
@@ -585,27 +625,19 @@ def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = Non
     )
 
 
-def _parse_expiration_strikes(expiration: dict) -> list[dict]:
+def _parse_expiration_strikes(expiration: dict, ticker: str = TICKER) -> list[dict]:
     exp_date = expiration["expiration-date"]
     strikes = []
+    foreign = 0
     for s in expiration.get("strikes", []):
         strike = float(s.get("strike-price", 0))
-        c = s.get("call", {})
-        p = s.get("put",  {})
-        if isinstance(c, str):
-            call_occ = c.replace(" ", "")
-            call_sym = _dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")
-        else:
-            call_occ = c.get("symbol", "")
-            call_sym = (c.get("streamer-symbol") or
-                        (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call")))
-        if isinstance(p, str):
-            put_occ = p.replace(" ", "")
-            put_sym = _dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")
-        else:
-            put_occ  = p.get("symbol", "")
-            put_sym  = (p.get("streamer-symbol") or
-                        (_dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put")))
+        call = _contract_symbols(s.get("call", {}), strike, exp_date, "call", ticker)
+        put = _contract_symbols(s.get("put", {}), strike, exp_date, "put", ticker)
+        if call is None or put is None:
+            foreign += 1
+            continue
+        call_occ, call_sym = call
+        put_occ, put_sym = put
         strikes.append({
             "strike":   strike,
             "call_sym": call_sym,
@@ -613,13 +645,19 @@ def _parse_expiration_strikes(expiration: dict) -> list[dict]:
             "call_occ": call_occ,
             "put_occ":  put_occ,
         })
+    if foreign:
+        log.warning(f"{ticker} chain {exp_date}: dropped {foreign} strikes with mismatched contract identity")
     return strikes
 
 
-def load_chain(access_token: str, today: date) -> tuple[list[dict], str, list[dict], str]:
-    """Load the current expiration and the pipeline-compatible EoW expiration."""
+def load_chain(access_token: str, today: date, ticker: str = TICKER,
+               include_weekly: bool = True) -> tuple[list[dict], str, list[dict], str]:
+    """Load the current expiration and the pipeline-compatible EoW expiration.
+
+    `include_weekly=False` (SPY) returns only the current expiration.
+    """
     resp = requests.get(
-        f"{TASTY_BASE}/option-chains/{TICKER}/nested",
+        f"{TASTY_BASE}/option-chains/{ticker}/nested",
         headers=_bearer_headers(access_token),
         timeout=30,
     )
@@ -634,17 +672,25 @@ def load_chain(access_token: str, today: date) -> tuple[list[dict], str, list[di
 
     ordered_expirations = sorted(expirations, key=lambda e: e.get("expiration-date", ""))
     target = None
-    for exp in ordered_expirations:
-        if exp.get("expiration-date", "") >= today_str:
-            target = exp
-            break
+    if ticker == "SPY":
+        target = next((exp for exp in ordered_expirations
+                       if exp.get("expiration-date") == today_str), None)
+        if target is None:
+            raise RuntimeError(f"SPY 0DTE unavailable: no expiration for {today_str}")
+    else:
+        for exp in ordered_expirations:
+            if exp.get("expiration-date", "") >= today_str:
+                target = exp
+                break
     if target is None:
         raise RuntimeError(f"no upcoming expiration found in chain for {today_str}")
 
     exp_date = target["expiration-date"]
-    log.info(f"chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
+    log.info(f"{ticker} chain expiration: {exp_date}  ({len(target.get('strikes', []))} strikes)")
 
-    strikes = _parse_expiration_strikes(target)
+    strikes = _parse_expiration_strikes(target, ticker)
+    if not include_weekly:
+        return strikes, exp_date, [], ""
 
     try:
         weekly_exp_date = nearest_weekly_expiration(today).isoformat()
@@ -687,6 +733,8 @@ class DXLinkFeed:
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ready = threading.Event()
         self._subs: list[dict] = []
+        self._pending_option_subs: list[dict] = []
+        self._subscription_error: Optional[str] = None
         self._subscribed          = False
         self._data_logged         = False
         # lifecycle telemetry
@@ -708,6 +756,47 @@ class DXLinkFeed:
         for sym in price_symbols:
             for event_type in ("Quote", "Trade", "TradeETH", "Summary"):
                 self._subs.append({"type": event_type, "symbol": sym})
+
+    def add_option_subscriptions(self, option_symbols: list[str]):
+        """Add the fixed SPY window after a fresh spot arrives; retain it on reconnect."""
+        with self._lock:
+            known = {(entry["type"], entry["symbol"]) for entry in self._subs}
+            additions = []
+            for sym in option_symbols:
+                for event_type in ("Quote", "Summary", "Trade", "Greeks"):
+                    key = (event_type, sym)
+                    if key not in known:
+                        additions.append({"type": event_type, "symbol": sym})
+                        known.add(key)
+            self._subs.extend(additions)
+            self._pending_option_subs.extend(additions)
+            if self._subscribed:
+                self._flush_pending_option_subscriptions_locked()
+        return len(additions)
+
+    def _flush_pending_option_subscriptions_locked(self):
+        while self._pending_option_subs:
+            batch = self._pending_option_subs[:200]
+            try:
+                self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": False, "add": batch})
+            except Exception as exc:
+                self._subscription_error = str(exc)
+                log.warning(f"SPY subscription delivery interrupted; {len(self._pending_option_subs)} "
+                            f"event/symbol pairs pending retry: {exc}")
+                return
+            del self._pending_option_subs[:len(batch)]
+        self._subscription_error = None
+
+    def retry_pending_option_subscriptions(self):
+        with self._lock:
+            if self._subscribed:
+                self._flush_pending_option_subscriptions_locked()
+
+    def get_subscription_delivery(self) -> dict:
+        with self._lock:
+            return {"pending_event_pairs": len(self._pending_option_subs),
+                    "last_error": self._subscription_error}
 
     def get_state(self) -> dict[str, dict]:
         with self._lock:
@@ -844,19 +933,23 @@ class DXLinkFeed:
             # Server acknowledged FEED_SETUP. Subscribe once only — server
             # may send multiple FEED_CONFIGs (one per batch ack), so guard
             # with a flag to avoid repeated resets.
-            if self._subscribed:
-                return
-            self._subscribed = True
-            log.info("DXLink feed configured -- sending subscriptions")
-            if self._subs:
-                batch_size = 200
-                for i in range(0, len(self._subs), batch_size):
-                    batch = self._subs[i:i + batch_size]
-                    self._send({
-                        "type": "FEED_SUBSCRIPTION", "channel": 1,
-                        "reset": i == 0, "add": batch,
-                    })
-                log.info(f"subscribed to {len(self._subs)} event/symbol pairs ({batch_size}/batch)")
+            with self._lock:
+                if self._subscribed:
+                    return
+                self._subscribed = True
+                subscriptions = list(self._subs)
+                log.info("DXLink feed configured -- sending subscriptions")
+                if subscriptions:
+                    batch_size = 200
+                    for i in range(0, len(subscriptions), batch_size):
+                        batch = subscriptions[i:i + batch_size]
+                        self._send({
+                            "type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": i == 0, "add": batch,
+                        })
+                    log.info(f"subscribed to {len(subscriptions)} event/symbol pairs ({batch_size}/batch)")
+                self._pending_option_subs.clear()
+                self._subscription_error = None
             self._ready.set()
 
         elif mtype == "FEED_DATA":
@@ -1026,12 +1119,16 @@ class LiveQuoteRegistry:
         state = feed.get_state() if feed is not None else {}
         quotes = []
         for symbol in symbols:
-            if symbol in PRICE_TICKERS:
-                raw = state.get(PRICE_TICKERS[symbol], {})
+            if symbol in PRICE_TICKERS or symbol == "SPY":
+                raw = state.get(PRICE_TICKERS.get(symbol, symbol), {})
                 bid, ask, last = raw.get("bid"), raw.get("ask"), raw.get("last")
                 mid = (bid + ask) / 2 if bid is not None and ask is not None else None
-                price = last if last is not None else mid
-                observed = [ts for ts in (raw.get("last_ts"), raw.get("bid_ts"), raw.get("ask_ts")) if ts]
+                if symbol == "SPY":
+                    price, spy_ts = _observed_spy_price(raw)
+                    observed = [spy_ts] if spy_ts else []
+                else:
+                    price = last if last is not None else mid
+                    observed = [ts for ts in (raw.get("last_ts"), raw.get("bid_ts"), raw.get("ask_ts")) if ts]
                 if price is not None and observed:
                     prev = raw.get("prev_close")
                     quotes.append({
@@ -1106,7 +1203,7 @@ def start_live_quote_server(registry: LiveQuoteRegistry):
                 self._json(400, {"error": f"Request 1-{MAX_LIVE_QUOTE_SYMBOLS} symbols"})
                 return
             health = registry.health()
-            has_tickers = any(symbol in PRICE_TICKERS for symbol in symbols)
+            has_tickers = any(symbol in PRICE_TICKERS or symbol == "SPY" for symbol in symbols)
             if health["state"] in {"offline", "connecting"} and not has_tickers:
                 self._json(
                     503,
@@ -1412,13 +1509,13 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
             log.info(f"prices -- yfinance filled: {', '.join(filled)}")
         qqq_yf = yf_data.get("QQQ")
         if qqq_yf is not None:
-            _last_spot[0] = qqq_yf
+            QQQ_SESSION.last_spot[0] = qqq_yf
             # Same reasoning as quote_ts above: yfinance has no trustworthy
-            # provider event timestamp, so _last_spot[1] must not carry over
+            # provider event timestamp, so last_spot[1] must not carry over
             # whatever (older, DXLink-sourced) timestamp was there before --
             # take_snapshot's freshness check needs spot_ts=None here to
             # correctly report this fallback as not "live".
-            _last_spot[1] = None
+            QQQ_SESSION.last_spot[1] = None
 
     for lbl, d in prices.items():
         if d["price"] is not None:
@@ -1439,6 +1536,21 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
             stale_filled.append(lbl)
     if stale_filled:
         log.warning(f"prices -- serving last-known values for: {', '.join(stale_filled)}")
+
+    # SPY is an additional read-only tile sourced solely from its own DXLink
+    # quote. Keep it outside the legacy macro strip and its yfinance/last-known
+    # fallbacks so QQQ's CSV columns and health symbol counts do not change.
+    spy = state.get("SPY", {}) if COLLECT_SPY else {}
+    spy_bid, spy_ask = spy.get("bid"), spy.get("ask")
+    spy_price, spy_ts = _observed_spy_price(spy)
+    spy_prev = spy.get("prev_close")
+    prices["SPY"] = {
+        "price": spy_price, "bid": spy_bid, "ask": spy_ask,
+        "prev_close": spy_prev,
+        "chg_pct": round((spy_price - spy_prev) / spy_prev * 100, 2) if spy_price is not None and spy_prev else None,
+        "volume": spy.get("volume"), "source": "dxlink" if spy_price is not None and spy_ts else None,
+        "quote_ts": spy_ts if spy_price is not None else None,
+    }
 
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
@@ -1674,7 +1786,8 @@ def eia_steo_loop(s3) -> None:
 # -- health.json upload (every 15s) ------------------------------------------
 
 def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
-                run_id: str, process_start: datetime, classification: str, today: date):
+                run_id: str, process_start: datetime, classification: str, today: date,
+                spy_context: Optional[dict] = None):
     fh   = feed.get_health()
     ctr  = counters.get()
     trk  = tracker.get()
@@ -1687,6 +1800,30 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
     no_data   = [label for label, sym in PRICE_TICKERS.items()
                  if state.get(sym, {}).get("last") is None and state.get(sym, {}).get("bid") is None]
     with_data = len(PRICE_TICKERS) - len(no_data)
+
+    spy_context = spy_context or {"status": "unavailable", "reason": "no_spy_session"}
+    spy_state = state.get("SPY", {}) if COLLECT_SPY else {}
+    spy_price, spy_ts = _observed_spy_price(spy_state)
+    spy_age = None
+    if spy_ts:
+        try:
+            spy_age = (now - datetime.fromisoformat(spy_ts)).total_seconds()
+        except ValueError:
+            pass
+    spy_spot_status = ("unavailable" if spy_price is None or spy_age is None else
+                       "live" if 0 <= spy_age <= STALE_FEED_SECS else "stale")
+    spy_counters = spy_context.get("counters")
+    spy_tracker = spy_context.get("tracker")
+    spy_health = {
+        "collection_status": spy_context.get("status"),
+        "reason": spy_context.get("reason"),
+        "spot": {"price": spy_price, "observed_at": spy_ts, "status": spy_spot_status},
+        "subscription_coverage": _spy_subscription_coverage(
+            spy_context.get("subscription_coverage"), _fresh_spy_spot(spy_state, now)[0]),
+        "subscription_delivery": feed.get_subscription_delivery(),
+        "last_snapshot_upload_time": spy_counters.get()["last_snapshot_time"] if spy_counters else None,
+        "cadence": spy_tracker.get() if spy_tracker else None,
+    }
 
     payload = json.dumps({
         "run_id":             run_id,
@@ -1723,6 +1860,7 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
             "price_symbols_with_data": with_data,
             "no_data_symbols":         no_data,
         },
+        "spy": spy_health,
     }, default=str)
 
     try:
@@ -1738,10 +1876,11 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
 
 
 def health_loop(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
-                run_id: str, process_start: datetime, classification: str, today: date):
+                run_id: str, process_start: datetime, classification: str, today: date,
+                spy_context: Optional[dict] = None):
     while not past_stop():
         try:
-            push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+            push_health(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context)
         except Exception as e:
             log.error(f"health loop error: {e}")
         time.sleep(HEALTH_SECS)
@@ -1757,69 +1896,112 @@ def _fmt_oi(v: int) -> str:
     return f"{v//1000}K"
 
 
-_prev_vol: dict[str, int] = {}    # persists across calls to compute per-minute delta
-_last_spot: list = [None, None]   # [price|None, observed_at_iso|None] — yfinance/CSV fallback for underlying price
 _last_prices: dict[str, dict] = {}  # label -> {price, quote_ts}; timestamp never refreshed by fallback
-_first_snapshot_written: bool = False  # guard so first.csv is only written once per session
-
-_vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
-_rvol_baseline: dict = {}         # loaded once per session from RVOL_BASELINE_KEY; {"buckets": {...}, ...}
-_rvol_today: dict[str, int] = {}  # bucket_label -> latest session cum_volume seen in that bucket this session
-
-# Rolling window of recent spot observations for the display-only momentum
-# reading (see market_signals.py's compute_time_series_momentum). Unlike
-# _vwap_state, this needs no restart-recovery persistence: it's a bounded
-# real-time window, not a session-cumulative sum, so it self-heals within
-# ~MOMENTUM_LOOKBACK_MINUTES of any restart on its own.
-_momentum_history: list = []  # list[ms.SpotPoint]
 
 
-def restore_state(s3, today: date) -> None:
-    """Seed _prev_vol, _last_spot, and _last_prices from the most recent R2 snapshot.
+class UnderlyingSession:
+    """All per-underlying collection state (#121), so SPY and QQQ can never
+    share a volume delta, VWAP sum, RVOL bucket, momentum window or archive key.
+
+    QQQ (TICKER) keeps every pre-SPY R2 key; other underlyings publish under
+    intraday/<symbol>/ and baselines/<symbol>_rvol_buckets.json, so no
+    existing QQQ consumer of intraday/latest.json or intraday/YYYYMMDD/ can
+    ever read SPY data.
+    """
+
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+        self.archive_root = "intraday" if symbol == TICKER else f"intraday/{symbol.lower()}"
+        self.latest_key = f"{self.archive_root}/latest.json"
+        self.rvol_baseline_key = (RVOL_BASELINE_KEY if symbol == TICKER
+                                  else f"baselines/{symbol.lower()}_rvol_buckets.json")
+        self.prev_vol: dict[str, int] = {}     # persists across calls to compute per-minute delta
+        self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
+        self.subscription_coverage: dict | None = None  # SPY's fixed startup strike window
+        self.first_snapshot_written = False     # guard so first.csv is only written once per session
+        self.session_date: date | None = None
+        self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
+        self.rvol_baseline: dict = {}           # loaded once per session from rvol_baseline_key
+        self.rvol_today: dict[str, int] = {}    # bucket_label -> latest session cum_volume in that bucket
+        # Rolling window of recent spot observations for the display-only
+        # momentum reading (see market_signals.py's compute_time_series_momentum).
+        # Unlike vwap_state, this needs no restart-recovery persistence: it's a
+        # bounded real-time window that self-heals within
+        # ~MOMENTUM_LOOKBACK_MINUTES of any restart.
+        self.momentum_history: list = []        # list[ms.SpotPoint]
+
+    def day_prefix(self, date_str: str) -> str:
+        return f"{self.archive_root}/{date_str}/"
+
+
+QQQ_SESSION = UnderlyingSession(TICKER)
+UNDERLYING_SESSIONS: dict[str, UnderlyingSession] = {
+    sym: (QQQ_SESSION if sym == TICKER else UnderlyingSession(sym)) for sym in CHAIN_UNDERLYINGS
+}
+
+
+def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> None:
+    """Seed one underlying's prev_vol/last_spot (and, for QQQ only, the shared
+    _last_prices strip) from its most recent R2 snapshot.
 
     Called at session start so a redeploy doesn't blank VolDelta for one beat
     or lose price context.
     """
+    us = us or QQQ_SESSION
+    if us.symbol == "SPY" and us.session_date != today:
+        # This object survives across collection days in the same process.
+        # Start a new SPY archive with fresh per-day state before recovery.
+        us.prev_vol = {}
+        us.last_spot = [None, None]
+        us.first_snapshot_written = False
+        us.vwap_state = ms.VwapState()
+        us.rvol_today = {}
+        us.momentum_history = []
+        us.subscription_coverage = None
+        us.session_date = today
     date_str = today.strftime("%Y%m%d")
     try:
-        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=f"intraday/{date_str}/")
+        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=us.day_prefix(date_str))
         csvs = sorted(
             [o for o in resp.get("Contents", []) if o["Key"].endswith(".csv")],
             key=lambda o: o["Key"],
         )
         if not csvs:
-            log.info("restore_state: no snapshots found for today, starting fresh")
+            log.info(f"restore_state: no {us.symbol} snapshots found for today, starting fresh")
             return
 
-        global _first_snapshot_written
-        _first_snapshot_written = True  # prior snapshots exist; first.csv already written
+        us.first_snapshot_written = True  # prior snapshots exist; first.csv already written
 
         latest_key = csvs[-1]["Key"]
         body = s3.get_object(Bucket=R2_BUCKET, Key=latest_key)["Body"].read().decode()
         df = pd.read_csv(io.StringIO(body))
 
-        # Restore _prev_vol from Volume column keyed by OptionSymbol
-        if "OptionSymbol" in df.columns and "Volume" in df.columns:
-            for _, row in df.iterrows():
+        # Restore prev_vol from Volume column keyed by OptionSymbol
+        own_rows = df[df["OptionSymbol"].map(
+            lambda sym: isinstance(sym, str) and _occ_root(sym) == us.symbol
+        )] if "OptionSymbol" in df.columns else df.iloc[0:0]
+        if "Volume" in own_rows.columns:
+            for _, row in own_rows.iterrows():
                 sym = row.get("OptionSymbol")
                 vol = row.get("Volume")
                 if sym and pd.notna(vol):
                     # Convert OCC symbol back to dxFeed format used as state key
                     try:
                         dx_sym = _dxlink_symbol(str(sym))
-                        _prev_vol[dx_sym] = int(vol)
+                        us.prev_vol[dx_sym] = int(vol)
                     except Exception:
                         pass
 
-        # Restore _last_spot, paired with the timestamp encoded in the
+        # Restore last_spot, paired with the timestamp encoded in the
         # snapshot's own filename (snapshot_HHMMSSffffff.csv) -- not
         # datetime.now() at restore time, which would misrepresent how old
         # this recovered price actually is.
-        if "UnderlyingPrice" in df.columns:
-            spot = df["UnderlyingPrice"].dropna().iloc[-1] if not df["UnderlyingPrice"].dropna().empty else None
+        if "UnderlyingPrice" in own_rows.columns:
+            prices = own_rows["UnderlyingPrice"].dropna()
+            spot = prices.iloc[-1] if not prices.empty else None
             if spot:
-                _last_spot[0] = float(spot)
-                _last_spot[1] = None
+                us.last_spot[0] = float(spot)
+                us.last_spot[1] = None
                 name_match = re.search(r"snapshot_(\d{6})(\d{6})\.csv$", latest_key)
                 if name_match:
                     hms, micro = name_match.groups()
@@ -1828,51 +2010,55 @@ def restore_state(s3, today: date) -> None:
                             today.year, today.month, today.day,
                             int(hms[0:2]), int(hms[2:4]), int(hms[4:6]), int(micro),
                         ))
-                        _last_spot[1] = spot_dt.astimezone(timezone.utc).isoformat()
+                        us.last_spot[1] = spot_dt.astimezone(timezone.utc).isoformat()
                     except ValueError:
                         pass
 
-        # Restore _last_prices from price columns (any col not in core option fields)
+        # Restore the shared _last_prices strip from QQQ's price columns only
+        # (any col not in core option fields).
         core_cols = {"TradeDate","Expiration","Strike","Type","OptionSymbol","DTE",
                      "OpenInterest","Volume","VolDelta","Bid","Mid","Ask","Last",
                      "IV","Delta","Gamma","Theta","Vega","UnderlyingPrice"}
-        for col in df.columns:
+        for col in (df.columns if us is QQQ_SESSION else ()):
             if col not in core_cols:
                 val = df[col].dropna().iloc[-1] if not df[col].dropna().empty else None
                 if val is not None:
                     label = col.replace("_", "/") if col in ("JPY_USD", "BTC_USD") else col
                     _last_prices[label] = {"price": float(val), "quote_ts": None}
 
-        _restore_vwap_state(s3, today, date_str)
+        _restore_vwap_state(s3, today, date_str, us)
 
         log.info(
-            f"restore_state: loaded {latest_key.split('/')[-1]} -- "
-            f"vol_keys={len(_prev_vol)}  spot={_last_spot[0]}  prices={len(_last_prices)}"
+            f"restore_state: {us.symbol} loaded {latest_key.split('/')[-1]} -- "
+            f"vol_keys={len(us.prev_vol)}  spot={us.last_spot[0]}  prices={len(_last_prices)}"
         )
     except Exception as e:
-        log.warning(f"restore_state failed (non-fatal): {e}")
+        log.warning(f"restore_state failed for {us.symbol} (non-fatal): {e}")
 
 
-def _vwap_state_key(date_str: str) -> str:
-    return f"intraday/{date_str}/vwap_state.json"
+def _vwap_state_key(date_str: str, us: "UnderlyingSession | None" = None) -> str:
+    return f"{(us or QQQ_SESSION).day_prefix(date_str)}vwap_state.json"
 
 
-def _restore_vwap_state(s3, today: date, date_str: str) -> None:
-    """Best-effort recovery of `_vwap_state`'s running sums after a mid-session
+def _restore_vwap_state(s3, today: date, date_str: str, us: "UnderlyingSession | None" = None) -> None:
+    """Best-effort recovery of `vwap_state`'s running sums after a mid-session
     restart. Written every snapshot cycle purely as a restart-recovery aid --
     nothing else reads this object. Without this, a Railway restart mid-day
     would silently reset VWAP to a fresh (lower-sample) accumulation with no
     indication in the payload that this happened.
     """
-    global _vwap_state
+    us = us or QQQ_SESSION
     try:
-        body = s3.get_object(Bucket=R2_BUCKET, Key=_vwap_state_key(date_str))["Body"].read()
+        body = s3.get_object(Bucket=R2_BUCKET, Key=_vwap_state_key(date_str, us))["Body"].read()
         data = json.loads(body)
         if data.get("session_date") != today.isoformat():
             return  # stale leftover from a prior day; a fresh accumulator is correct
+        if data.get("symbol", TICKER) != us.symbol:
+            log.warning(f"restore_vwap_state: {us.symbol} key holds {data.get('symbol')} state -- ignored")
+            return
         session_started_at = data.get("session_started_at")
         last_observed_at = data.get("last_observed_at")
-        _vwap_state = ms.VwapState(
+        us.vwap_state = ms.VwapState(
             session_date=today,
             session_started_at=datetime.fromisoformat(session_started_at) if session_started_at else None,
             last_observed_at=datetime.fromisoformat(last_observed_at) if last_observed_at else None,
@@ -1882,29 +2068,32 @@ def _restore_vwap_state(s3, today: date, date_str: str) -> None:
             vwap=data.get("vwap"),
             vwap_ts=data.get("vwap_ts"),
         )
-        log.info(f"restore_state: recovered vwap_state -- cum_vol={_vwap_state.cum_vol}  vwap={_vwap_state.vwap}")
+        log.info(f"restore_state: recovered {us.symbol} vwap_state -- cum_vol={us.vwap_state.cum_vol}  vwap={us.vwap_state.vwap}")
     except Exception as e:
         log.info(f"restore_vwap_state: nothing to recover ({e})")
 
 
-def _persist_vwap_state(s3, date_str: str) -> None:
-    """Write `_vwap_state`'s running sums so a mid-session restart can recover
+def _persist_vwap_state(s3, date_str: str, us: "UnderlyingSession | None" = None) -> None:
+    """Write `vwap_state`'s running sums so a mid-session restart can recover
     them via `_restore_vwap_state`. Best-effort -- a failure here must never
     interrupt the snapshot it's piggybacking on.
     """
+    us = us or QQQ_SESSION
+    vs = us.vwap_state
     try:
         data = {
-            "session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
-            "session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
-            "last_observed_at": _vwap_state.last_observed_at.isoformat() if _vwap_state.last_observed_at else None,
-            "cum_pv": _vwap_state.cum_pv,
-            "cum_vol": _vwap_state.cum_vol,
-            "last_dayvolume": _vwap_state.last_dayvolume,
-            "vwap": _vwap_state.vwap,
-            "vwap_ts": _vwap_state.vwap_ts,
+            "symbol": us.symbol,
+            "session_date": vs.session_date.isoformat() if vs.session_date else None,
+            "session_started_at": vs.session_started_at.isoformat() if vs.session_started_at else None,
+            "last_observed_at": vs.last_observed_at.isoformat() if vs.last_observed_at else None,
+            "cum_pv": vs.cum_pv,
+            "cum_vol": vs.cum_vol,
+            "last_dayvolume": vs.last_dayvolume,
+            "vwap": vs.vwap,
+            "vwap_ts": vs.vwap_ts,
         }
         s3.put_object(
-            Bucket=R2_BUCKET, Key=_vwap_state_key(date_str),
+            Bucket=R2_BUCKET, Key=_vwap_state_key(date_str, us),
             Body=json.dumps(data).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
@@ -1913,20 +2102,23 @@ def _persist_vwap_state(s3, date_str: str) -> None:
         log.warning(f"vwap_state.json upload failed (non-fatal): {e}")
 
 
-def load_rvol_baseline(s3) -> dict:
+def load_rvol_baseline(s3, us: "UnderlyingSession | None" = None) -> dict:
     """Best-effort load of the cross-day RVOL baseline. Missing file (first
     deploy of this feature) is not an error -- every bucket simply reports
     "insufficient_history"/"no_data" until enough sessions have run.
     """
+    us = us or QQQ_SESSION
     try:
-        body = s3.get_object(Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY)["Body"].read()
+        body = s3.get_object(Bucket=R2_BUCKET, Key=us.rvol_baseline_key)["Body"].read()
         data = json.loads(body)
-        log.info(f"load_rvol_baseline: loaded, updated_through={data.get('updated_through')}")
+        if data.get("symbol", TICKER) != us.symbol:
+            raise ValueError(f"baseline belongs to {data.get('symbol')}")
+        log.info(f"load_rvol_baseline: {us.symbol} loaded, updated_through={data.get('updated_through')}")
         return data
     except Exception as e:
-        log.info(f"load_rvol_baseline: no baseline yet ({e}) -- starting fresh")
+        log.info(f"load_rvol_baseline: no {us.symbol} baseline yet ({e}) -- starting fresh")
         return {
-            "symbol": TICKER,
+            "symbol": us.symbol,
             "bucket_minutes": RVOL_BUCKET_MINUTES,
             "lookback_days": RVOL_LOOKBACK_DAYS,
             "min_days_required": RVOL_MIN_DAYS_REQUIRED,
@@ -1935,7 +2127,7 @@ def load_rvol_baseline(s3) -> dict:
         }
 
 
-def finalize_rvol_baseline(s3, today: date) -> None:
+def finalize_rvol_baseline(s3, today: date, us: "UnderlyingSession | None" = None) -> None:
     """Fold today's completed-session bucket readings into the baseline.
 
     Called once, at end-of-session -- never mid-session -- so the baseline
@@ -1944,13 +2136,14 @@ def finalize_rvol_baseline(s3, today: date) -> None:
     corrupted into it), the same "prefer a clean miss over corrupt state"
     tradeoff `restore_state` already makes for CSV-derived state.
     """
-    if not _rvol_today:
-        log.info("finalize_rvol_baseline: no bucket readings this session, skipping")
+    us = us or QQQ_SESSION
+    if not us.rvol_today:
+        log.info(f"finalize_rvol_baseline: no {us.symbol} bucket readings this session, skipping")
         return
     try:
-        baseline = load_rvol_baseline(s3)
+        baseline = load_rvol_baseline(s3, us)
         buckets = baseline.setdefault("buckets", {})
-        for bucket, cum_volume in _rvol_today.items():
+        for bucket, cum_volume in us.rvol_today.items():
             samples = buckets.get(bucket, {}).get("samples", [])
             samples = ms.prune_baseline_samples(samples, today, baseline.get("lookback_days", RVOL_LOOKBACK_DAYS))
             samples = ms.append_session_reading(samples, today, cum_volume)
@@ -1960,21 +2153,21 @@ def finalize_rvol_baseline(s3, today: date) -> None:
         baseline["lookback_days"] = RVOL_LOOKBACK_DAYS
         baseline["min_days_required"] = RVOL_MIN_DAYS_REQUIRED
         s3.put_object(
-            Bucket=R2_BUCKET, Key=RVOL_BASELINE_KEY,
+            Bucket=R2_BUCKET, Key=us.rvol_baseline_key,
             Body=json.dumps(baseline).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
         )
-        log.info(f"finalize_rvol_baseline: wrote {len(_rvol_today)} bucket readings for {today.isoformat()}")
+        log.info(f"finalize_rvol_baseline: wrote {len(us.rvol_today)} {us.symbol} bucket readings for {today.isoformat()}")
     except Exception as e:
         log.warning(f"finalize_rvol_baseline failed (non-fatal): {e}")
 
 
-def _momentum_log_key(date_str: str) -> str:
-    return f"intraday/{date_str}/momentum_log.jsonl"
+def _momentum_log_key(date_str: str, us: "UnderlyingSession | None" = None) -> str:
+    return f"{(us or QQQ_SESSION).day_prefix(date_str)}momentum_log.jsonl"
 
 
-def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
+def _log_momentum_reading(s3, date_str: str, entry: dict, us: "UnderlyingSession | None" = None) -> None:
     """Append one momentum reading to a rolling per-day JSONL log in R2 --
     a public, queryable historical record of the display signal, independent
     of the private crassus trading bot's own decision ledger (which is a
@@ -1985,7 +2178,7 @@ def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
     interrupt the snapshot it's piggybacking on.
     """
     try:
-        key = _momentum_log_key(date_str)
+        key = _momentum_log_key(date_str, us)
         try:
             existing = s3.get_object(Bucket=R2_BUCKET, Key=key)["Body"].read().decode()
         except Exception:
@@ -2001,7 +2194,8 @@ def _log_momentum_reading(s3, date_str: str, entry: dict) -> None:
 
 
 def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_str: str | None,
-                                ts_et: datetime, ts_utc: datetime, today: date) -> dict:
+                                ts_et: datetime, ts_utc: datetime, today: date,
+                                us: "UnderlyingSession | None" = None) -> dict:
     """VWAP/RVOL for the `underlying_market` block of `intraday/latest.json`.
 
     Approximation, not tick-accurate VWAP: weights the snapshot's own spot
@@ -2013,29 +2207,29 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
     re-derive it from `qqq`, so a value that fell back to a non-DXLink source
     can't end up stamped with an unrelated DXLink timestamp.
     """
-    global _vwap_state
-
-    _vwap_state = ms.reset_if_new_session(_vwap_state, today)
+    us = us or QQQ_SESSION
+    us.vwap_state = ms.reset_if_new_session(us.vwap_state, today)
 
     raw_day_volume = qqq.get("volume")
     spot_observed_at = datetime.fromisoformat(spot_ts_str) if spot_ts_str else None
 
-    _vwap_state = ms.accumulate_vwap(
-        _vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=spot_observed_at,
+    us.vwap_state = ms.accumulate_vwap(
+        us.vwap_state, price=underlying, raw_day_volume=raw_day_volume, observed_at=spot_observed_at,
     )
-    _persist_vwap_state(s3, today.strftime("%Y%m%d"))
+    _persist_vwap_state(s3, today.strftime("%Y%m%d"), us)
+    vs = us.vwap_state
 
     bucket = ms.bucket_label(ts_et, RVOL_BUCKET_MINUTES)
     if raw_day_volume is not None:
-        _rvol_today[bucket] = raw_day_volume
+        us.rvol_today[bucket] = raw_day_volume
 
-    baseline_samples = _rvol_baseline.get("buckets", {}).get(bucket, {}).get("samples", [])
+    baseline_samples = us.rvol_baseline.get("buckets", {}).get(bucket, {}).get("samples", [])
     rvol = ms.compute_rvol(raw_day_volume, baseline_samples, min_days_required=RVOL_MIN_DAYS_REQUIRED)
 
     price_vs_vwap_abs = price_vs_vwap_pct = None
-    if underlying is not None and _vwap_state.vwap:
-        price_vs_vwap_abs = round(underlying - _vwap_state.vwap, 4)
-        price_vs_vwap_pct = round((underlying - _vwap_state.vwap) / _vwap_state.vwap * 100, 4)
+    if underlying is not None and vs.vwap:
+        price_vs_vwap_abs = round(underlying - vs.vwap, 4)
+        price_vs_vwap_pct = round((underlying - vs.vwap) / vs.vwap * 100, 4)
 
     freshness = ms.classify_freshness(
         inside_session_window=True,  # take_snapshot only ever runs inside the session window
@@ -2043,18 +2237,18 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
     )
 
     session_start, _ = _session_bounds(ts_et)
-    vwap_partial_session = ms.is_partial_session(_vwap_state, session_start)
+    vwap_partial_session = ms.is_partial_session(vs, session_start)
 
-    momentum = _compute_and_log_momentum(s3, underlying, spot_observed_at, ts_utc, today)
+    momentum = _compute_and_log_momentum(s3, underlying, spot_observed_at, ts_utc, today, us)
 
     return {
-        "symbol": TICKER,
+        "symbol": us.symbol,
         "spot": underlying,
         "spot_ts": spot_ts_str,
-        "vwap": _vwap_state.vwap,
-        "vwap_ts": _vwap_state.vwap_ts,
-        "vwap_session_date": _vwap_state.session_date.isoformat() if _vwap_state.session_date else None,
-        "vwap_session_started_at": _vwap_state.session_started_at.isoformat() if _vwap_state.session_started_at else None,
+        "vwap": vs.vwap,
+        "vwap_ts": vs.vwap_ts,
+        "vwap_session_date": vs.session_date.isoformat() if vs.session_date else None,
+        "vwap_session_started_at": vs.session_started_at.isoformat() if vs.session_started_at else None,
         "vwap_partial_session": vwap_partial_session,
         "price_vs_vwap_abs": price_vs_vwap_abs,
         "price_vs_vwap_pct": price_vs_vwap_pct,
@@ -2066,8 +2260,8 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
             "bucket_label": bucket,
             "baseline_volume": rvol.baseline_volume,
             "baseline_days_used": rvol.baseline_days_used,
-            "baseline_lookback_days": _rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
-            "baseline_updated_through": _rvol_baseline.get("updated_through"),
+            "baseline_lookback_days": us.rvol_baseline.get("lookback_days", RVOL_LOOKBACK_DAYS),
+            "baseline_updated_through": us.rvol_baseline.get("updated_through"),
         },
         "momentum": momentum,
         "source": "dxlink",
@@ -2077,26 +2271,26 @@ def _compute_underlying_market(s3, qqq: dict, underlying: float | None, spot_ts_
 
 def _compute_and_log_momentum(
     s3, underlying: float | None, spot_observed_at: datetime | None, ts_utc: datetime, today: date,
+    us: "UnderlyingSession | None" = None,
 ) -> dict:
     """Display/log-only time-series momentum -- see market_signals.py's
     module docstring for why this is a separate computation from
     momentum_qqq's own live trading signal, not a shared one.
     """
-    global _momentum_history
-
+    us = us or QQQ_SESSION
     if underlying is not None and spot_observed_at is not None:
-        _momentum_history.append(ms.SpotPoint(observed_at=spot_observed_at, price=underlying))
-    _momentum_history = ms.prune_spot_history(_momentum_history, ts_utc, MOMENTUM_RETAIN_MINUTES)
+        us.momentum_history.append(ms.SpotPoint(observed_at=spot_observed_at, price=underlying))
+    us.momentum_history = ms.prune_spot_history(us.momentum_history, ts_utc, MOMENTUM_RETAIN_MINUTES)
 
     reading = ms.compute_time_series_momentum(
-        _momentum_history, ts_utc,
+        us.momentum_history, ts_utc,
         lookback_minutes=MOMENTUM_LOOKBACK_MINUTES,
         max_anchor_overshoot_minutes=MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
         neutral_band_pct=MOMENTUM_NEUTRAL_BAND_PCT,
     )
 
     log.info(
-        f"momentum: status={reading.status} return_pct={reading.return_pct} "
+        f"momentum {us.symbol}: status={reading.status} return_pct={reading.return_pct} "
         f"direction={reading.direction} sample_count={reading.sample_count}"
     )
     _log_momentum_reading(s3, today.strftime("%Y%m%d"), {
@@ -2107,7 +2301,7 @@ def _compute_and_log_momentum(
         "anchor_age_minutes": reading.anchor_age_minutes,
         "sample_count": reading.sample_count,
         "direction": reading.direction,
-    })
+    }, us)
 
     return {
         "status": reading.status,
@@ -2125,7 +2319,7 @@ def _resolve_underlying_spot(
     """Resolve the current spot price and its paired observation timestamp
     together, branch for branch, so the two always describe the same
     observation. Previously `underlying` could fall through to the
-    yfinance-backed `_last_spot` fallback while its timestamp was derived
+    yfinance-backed `last_spot` fallback while its timestamp was derived
     independently from `qqq`'s DXLink state -- pairing a feed-derived
     timestamp with a value that didn't actually come from the feed.
     `last_spot_ts` is `None` whenever `last_spot_price` came from yfinance
@@ -2143,18 +2337,78 @@ def _resolve_underlying_spot(
     return None, None
 
 
+def _observed_spy_price(quote: dict) -> tuple[float | None, str | None]:
+    """Use only a SPY price with its own complete provider observation time."""
+    bid, ask = quote.get("bid"), quote.get("ask")
+    bid_ts, ask_ts = quote.get("bid_ts"), quote.get("ask_ts")
+    if bid is not None and ask is not None and bid_ts and ask_ts:
+        try:
+            older = min((bid_ts, ask_ts), key=datetime.fromisoformat)
+            return round((bid + ask) / 2, 2), older
+        except (TypeError, ValueError):
+            pass
+    last, last_ts = quote.get("last"), quote.get("last_ts")
+    if last is not None and last_ts:
+        try:
+            datetime.fromisoformat(last_ts)
+            return last, last_ts
+        except (TypeError, ValueError):
+            pass
+    return None, None
+
+
+def _fresh_spy_spot(quote: dict, now: datetime) -> tuple[float | None, str | None]:
+    """Accept a finite, positive SPY feed price observed within the stale threshold."""
+    price, observed_at = _observed_spy_price(quote)
+    try:
+        age = (now - datetime.fromisoformat(observed_at)).total_seconds()
+        if (price is not None and not isinstance(price, bool) and
+                math.isfinite(float(price)) and float(price) > 0 and
+                0 <= age <= STALE_FEED_SECS):
+            return float(price), observed_at
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None, None
+
+
+def _select_spy_strikes(strikes: list[dict], spot: float) -> list[dict]:
+    """Choose at most 67 distinct nearest strikes; lower strike wins a tie."""
+    unique = {row["strike"]: row for row in strikes}
+    nearest = sorted(unique.values(), key=lambda row: (abs(row["strike"] - spot), row["strike"]))
+    return sorted(nearest[:SPY_MAX_STRIKES], key=lambda row: row["strike"])
+
+
+def _spy_subscription_coverage(coverage: dict | None, spot: float | None) -> dict | None:
+    if coverage is None:
+        return None
+    result = dict(coverage)
+    low, high = result["min_strike"], result["max_strike"]
+    result["current_spot"] = spot
+    result["out_of_range"] = None if spot is None else spot < low or spot > high
+    result["status"] = ("spot_unavailable" if spot is None else
+                        "out_of_range" if result["out_of_range"] else "within_window")
+    return result
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
-                  counters: Counters, tracker: SnapshotTracker):
+                  counters: Counters, tracker: SnapshotTracker,
+                  us: "UnderlyingSession | None" = None):
+    us     = us or QQQ_SESSION
     state  = feed.get_state()
     ts_et  = datetime.now(ET)
     ts_utc = datetime.now(timezone.utc)
 
-    qqq = state.get(TICKER, {})
-    underlying, spot_ts_str = _resolve_underlying_spot(qqq, _last_spot[0], _last_spot[1])
+    quote = state.get(us.symbol, {})
+    if us.symbol == "SPY":
+        underlying, spot_ts_str = _observed_spy_price(quote)
+        if underlying is None:
+            underlying, spot_ts_str = us.last_spot
+    else:
+        underlying, spot_ts_str = _resolve_underlying_spot(quote, us.last_spot[0], us.last_spot[1])
     atm = round(underlying) if underlying else None
 
-    underlying_market = _compute_underlying_market(s3, qqq, underlying, spot_ts_str, ts_et, ts_utc, today)
+    underlying_market = _compute_underlying_market(s3, quote, underlying, spot_ts_str, ts_et, ts_utc, today, us)
 
     rows = []
     for s in strikes:
@@ -2171,8 +2425,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             a    = data.get("ask")
             mid  = round((b + a) / 2, 4) if b is not None and a is not None else None
             vol  = data.get("volume", 0) or 0
-            vol_delta = max(0, vol - _prev_vol.get(sym, vol))
-            _prev_vol[sym] = vol
+            vol_delta = max(0, vol - us.prev_vol.get(sym, vol))
+            us.prev_vol[sym] = vol
             price_cols = {
                 lbl.replace("/", "_"): remembered.get("price")
                 for lbl, remembered in _last_prices.items()
@@ -2201,7 +2455,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             })
 
     if not rows:
-        log.warning("snapshot empty -- state not populated yet")
+        log.warning(f"{us.symbol} snapshot empty -- state not populated yet")
         return
 
     bid_count = sum(1 for r in rows if r.get("Bid") is not None)
@@ -2212,7 +2466,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
 
     date_str = today.strftime("%Y%m%d")
     time_str = ts_et.strftime("%H%M%S%f")   # microsecond precision prevents overwrite on rapid restart
-    csv_key  = f"intraday/{date_str}/snapshot_{time_str}.csv"
+    csv_key  = f"{us.day_prefix(date_str)}snapshot_{time_str}.csv"
 
     try:
         s3.put_object(
@@ -2227,25 +2481,25 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         counters.inc_failure()
         raise
 
-    global _first_snapshot_written
-    if not _first_snapshot_written:
-        first_key = f"intraday/{date_str}/first.csv"
+    if not us.first_snapshot_written:
+        first_key = f"{us.day_prefix(date_str)}first.csv"
         try:
             s3.put_object(
                 Bucket=R2_BUCKET, Key=first_key,
                 Body=csv_buf.getvalue().encode(),
                 ContentType="text/csv",
             )
-            _first_snapshot_written = True
+            us.first_snapshot_written = True
             log.info(f"-> {first_key}  (session-open snapshot, mirrors {csv_key})")
         except Exception as e:
             log.warning(f"first.csv upload failed (non-fatal): {e}")
 
     if bid_count == 0:
-        log.warning("latest.json NOT updated -- no option data (DXLink feed down)")
+        log.warning(f"{us.latest_key} NOT updated -- no option data (DXLink feed down)")
         return
 
     payload = {
+        "symbol":           us.symbol,
         "timestamp":        ts_utc.isoformat(),
         "snapshot_time":    ts_et.strftime("%H:%M ET"),
         "date":             today.isoformat(),
@@ -2256,17 +2510,20 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "rows":             rows,
         "underlying_market": underlying_market,
     }
+    if us.symbol == "SPY":
+        payload["subscription_coverage"] = _spy_subscription_coverage(
+            us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
 
     try:
         s3.put_object(
-            Bucket=R2_BUCKET, Key="intraday/latest.json",
+            Bucket=R2_BUCKET, Key=us.latest_key,
             Body=json.dumps(payload, default=str).encode(),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
         )
         counters.inc_snapshot(ts_utc.isoformat())
         tracker.record()
-        log.info("-> intraday/latest.json updated")
+        log.info(f"-> {us.latest_key} updated")
     except Exception as e:
         log.error(f"latest.json upload failed: {e}")
         counters.inc_failure()
@@ -2589,11 +2846,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     log.info(f"startup classification: {classification}")
 
     today   = datetime.now(ET).date()
-    restore_state(s3, today)
-
-    global _rvol_baseline, _rvol_today
-    _rvol_baseline = load_rvol_baseline(s3)
-    _rvol_today = {}
+    restore_state(s3, today, QQQ_SESSION)
+    QQQ_SESSION.rvol_baseline = load_rvol_baseline(s3, QQQ_SESSION)
+    QQQ_SESSION.rvol_today = {}
 
     auth    = tasty_auth(token_manager)
     tier    = classify_tier(today)
@@ -2602,6 +2857,33 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     strikes, exp_date, weekly_strikes, weekly_exp_date = load_chain(
         auth["access_token"], today
     )
+
+    # Extra 0DTE chains (#121). Each is optional: a failure here disables
+    # only that underlying for this session and never touches QQQ.
+    extra_chains: list[tuple[UnderlyingSession, list[dict], str]] = []
+    pending_spy: tuple[UnderlyingSession, list[dict], str] | None = None
+    spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
+                   "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
+    for sym, us in UNDERLYING_SESSIONS.items():
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY):
+            continue
+        try:
+            us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)
+        except Exception as e:
+            log.error(f"{sym} chain load failed ({e}) -- {sym} collection disabled this session")
+            if sym == "SPY":
+                spy_context.update(status="missing_today_expiration" if "SPY 0DTE unavailable" in str(e) else "chain_load_failed",
+                                   reason=str(e))
+            continue
+        restore_state(s3, today, us)
+        us.rvol_baseline = load_rvol_baseline(s3, us)
+        us.rvol_today = {}
+        if sym == "SPY":
+            us.subscription_coverage = None
+            pending_spy = (us, us_strikes, us_exp)
+            spy_context.update(status="awaiting_spot", reason="waiting_for_fresh_spy_spot")
+        else:
+            extra_chains.append((us, us_strikes, us_exp))
 
     option_syms = []
     contracts = {}
@@ -2624,9 +2906,23 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     for s in weekly_strikes:
         option_syms.append(s["call_sym"])
         option_syms.append(s["put_sym"])
+    for us, us_strikes, us_exp in extra_chains:
+        for s in us_strikes:
+            for side in ("call", "put"):
+                option_syms.append(s[f"{side}_sym"])
+                if s[f"{side}_occ"]:
+                    contracts[s[f"{side}_occ"].replace(" ", "")] = {
+                        "streamer_symbol": s[f"{side}_sym"], "strike": s["strike"],
+                        "type": side, "exp": us_exp,
+                    }
     option_syms = list(dict.fromkeys(option_syms))
 
-    price_syms = list(PRICE_TICKERS.values())
+    # Extra underlyings need their own spot/volume stream, but are not
+    # added to PRICE_TICKERS (the price strip and its health counts).
+    price_syms = list(dict.fromkeys(
+        list(PRICE_TICKERS.values()) + [us.symbol for us, _, _ in extra_chains]
+        + (["SPY"] if COLLECT_SPY else [])
+    ))
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
     for label, sym in PRICE_TICKERS.items():
         log.info(f"  price ticker  {label:<10} -> {sym}")
@@ -2645,10 +2941,67 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     else:
         log.warning("no feed data within 15s -- proceeding anyway")
 
+    if pending_spy:
+        us, us_strikes, us_exp = pending_spy
+        deadline = time.monotonic() + 15
+        spot, spot_ts = None, None
+        while time.monotonic() < deadline:
+            spot, spot_ts = _fresh_spy_spot(feed.get_state().get("SPY", {}), datetime.now(timezone.utc))
+            if spot is not None:
+                break
+            time.sleep(0.5)
+        if spot is None:
+            observed, observed_ts = _observed_spy_price(feed.get_state().get("SPY", {}))
+            spy_context.update(status="stale_startup_spot" if observed_ts else "spot_unavailable",
+                               reason="fresh_spy_spot_not_observed_within_15s")
+            log.warning("SPY options unavailable: no fresh timed startup spot within 15s")
+        else:
+            selected = _select_spy_strikes(us_strikes, spot)
+            if not selected:
+                spy_context.update(status="empty_chain", reason="no_valid_spy_strikes")
+                log.warning("SPY options unavailable: no valid strikes in today's chain")
+            else:
+                coverage = {
+                    "policy": "fixed_startup_nearest_67_strikes",
+                    "fixed_at_startup": True,
+                    "reference_spot": spot,
+                    "reference_spot_observed_at": spot_ts,
+                    "total_chain_strikes": len(us_strikes),
+                    "selected_strikes": len(selected),
+                    "selected_option_symbols": 2 * len(selected),
+                    "min_strike": selected[0]["strike"],
+                    "max_strike": selected[-1]["strike"],
+                }
+                us.subscription_coverage = coverage
+                spy_context["subscription_coverage"] = coverage
+                extra_chains.append((us, selected, us_exp))
+                for row in selected:
+                    for side in ("call", "put"):
+                        occ = row[f"{side}_occ"]
+                        if occ:
+                            contracts[occ.replace(" ", "")] = {
+                                "streamer_symbol": row[f"{side}_sym"],
+                                "strike": row["strike"], "type": side, "exp": us_exp,
+                            }
+                quote_registry.set_session(feed, contracts)
+                symbols = list(dict.fromkeys(row[f"{side}_sym"] for row in selected for side in ("call", "put")))
+                added = feed.add_option_subscriptions(symbols)
+                pending = feed.get_subscription_delivery()["pending_event_pairs"]
+                spy_context.update(status="subscription_pending" if pending else "collecting",
+                                   reason="subscription_delivery_incomplete" if pending else None)
+                log.info(f"SPY fixed startup window: {len(us_strikes)} chain strikes, "
+                         f"{len(selected)} selected strikes, {len(symbols)} option symbols, "
+                         f"{added} added event/symbol pairs; spot={spot} at {spot_ts}")
+
     _log_ticker_health(feed)
 
     counters = Counters()
     tracker  = SnapshotTracker()
+    # Separate counters/trackers so extra underlyings can never mask a missed
+    # QQQ snapshot in health.json (which stays QQQ-only).
+    extra_trackers = {us.symbol: (Counters(), SnapshotTracker()) for us, _, _ in extra_chains}
+    if "SPY" in extra_trackers:
+        spy_context["counters"], spy_context["tracker"] = extra_trackers["SPY"]
 
     prices_thread = threading.Thread(
         target=prices_loop, args=(s3, feed, counters, quote_registry), daemon=True)
@@ -2657,7 +3010,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     health_thread = threading.Thread(
         target=health_loop,
-        args=(s3, feed, counters, tracker, run_id, process_start, classification, today),
+        args=(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context),
         daemon=True,
     )
     health_thread.start()
@@ -2699,11 +3052,25 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 raise
         feed.restart_if_dead()
 
+        if spy_context.get("status") == "subscription_pending":
+            feed.retry_pending_option_subscriptions()
+            if not feed.get_subscription_delivery()["pending_event_pairs"]:
+                spy_context.update(status="collecting", reason=None)
+
         tracker.check_missed()
         try:
             take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
         except Exception as e:
             log.error(f"snapshot error: {e}")
+        for us, us_strikes, us_exp in extra_chains:
+            if us.symbol == "SPY" and spy_context.get("status") != "collecting":
+                continue
+            us_counters, us_tracker = extra_trackers[us.symbol]
+            us_tracker.check_missed()
+            try:
+                take_snapshot(s3, feed, us_strikes, us_exp, tier, today, us_counters, us_tracker, us)
+            except Exception as e:
+                log.error(f"{us.symbol} snapshot error: {e}")
         time.sleep(SNAPSHOT_SECS)
 
     trk = tracker.get()
@@ -2717,14 +3084,16 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     # Write final health.json with past_stop=True so next startup classifies as clean_start
     try:
-        push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+        push_health(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context)
     except Exception:
         pass
 
     # Fold today's RVOL bucket readings into the cross-day baseline. Done here
     # (once, at confirmed session end) rather than incrementally, so a
     # mid-session crash can never leave the baseline holding a partial day.
-    finalize_rvol_baseline(s3, today)
+    finalize_rvol_baseline(s3, today, QQQ_SESSION)
+    for us, _, _ in extra_chains:
+        finalize_rvol_baseline(s3, today, us)
 
     feed.stop()
     quote_registry.clear_session()
@@ -2773,3 +3142,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
