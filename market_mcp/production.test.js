@@ -114,7 +114,7 @@ test('local authorization-code + S256 PKCE fixture issues a token for a real aut
     let r = await call({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'pkce-fixture', version: '1' } } }); assert.equal(r.result.protocolVersion, '2025-11-25');
     await call({ jsonrpc: '2.0', method: 'notifications/initialized' }); r = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list' }); assert.equal(r.result.tools.length, 5);
     const tool = async (name, args) => (await call({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } })).result.structuredContent;
-    assert.equal((await tool('discover_sources', { session: '2026-10-02' })).capabilities.length, 3);
+    assert.equal((await tool('discover_sources', { session: '2026-10-02' })).capabilities.length, 4);
     for (const [name, args] of [['market_context', { limit: 1 }], ['squeeze_results', { limit: 1 }], ['return_rankings', { session: '2026-10-02', view: 'clean', limit: 1 }]]) { const reading = await tool(name, args); const detail = await tool('result_detail', { reference: reading.rows[0].detail_reference, limit: 1 }); assert.equal(detail.status, 'available'); assert.deepEqual(detail.actual, reading.actual); }
   } finally { await new Promise(r => issuer.close(r)); }
 }));
