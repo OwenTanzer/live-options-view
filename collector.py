@@ -192,7 +192,7 @@ PRICE_TICKERS: dict[str, str] = {
 }
 
 TICKER_CLASSES: dict[str, str] = {
-    "QQQ": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
+    "QQQ": "equity", "SPY": "equity", "USO": "equity", "SMH": "equity", "IGV": "equity",
     "META": "equity", "GOOGL": "equity", "AMZN": "equity", "TSLA": "equity",
     "MU": "equity", "SPCX": "equity", "AAPL": "equity",
     "VIX": "index", "OVX": "index", "10Y": "yield", "JPY/USD": "futures",
@@ -585,6 +585,26 @@ def _occ_root(occ_symbol: str) -> str:
     return occ[:i]
 
 
+def _contract_symbols(contract, strike: float, exp_date: str, side: str,
+                      ticker: str) -> tuple[str, str] | None:
+    """Accept provider symbols only when both identify this exact contract."""
+    expected_streamer = _build_symbol(strike, exp_date, side, ticker)
+    occ = contract if isinstance(contract, str) else contract.get("symbol", "")
+    occ = occ.replace(" ", "") if isinstance(occ, str) else ""
+    if occ:
+        match = re.fullmatch(r"([A-Z]+)(\d{6})([CP])(\d{8})", occ)
+        expected_date = exp_date[2:4] + exp_date[5:7] + exp_date[8:10]
+        expected_side = "C" if side == "call" else "P"
+        if (not match or match.group(1) != ticker or match.group(2) != expected_date
+                or match.group(3) != expected_side
+                or int(match.group(4)) != round(strike * 1000)):
+            return None
+    streamer = contract.get("streamer-symbol") if isinstance(contract, dict) else None
+    if streamer and streamer != expected_streamer:
+        return None
+    return occ, expected_streamer
+
+
 def nearest_weekly_expiration(as_of: date, valid_days: Optional[set[date]] = None) -> date:
     """Return the EoW expiration using qqq-data-pipeline's holiday behavior."""
     nominal_friday = as_of + timedelta(days=(4 - as_of.weekday()) % 7)
@@ -610,27 +630,13 @@ def _parse_expiration_strikes(expiration: dict, ticker: str = TICKER) -> list[di
     foreign = 0
     for s in expiration.get("strikes", []):
         strike = float(s.get("strike-price", 0))
-        c = s.get("call", {})
-        p = s.get("put",  {})
-        if isinstance(c, str):
-            call_occ = c.replace(" ", "")
-            call_sym = _dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call", ticker)
-        else:
-            call_occ = c.get("symbol", "")
-            call_sym = (c.get("streamer-symbol") or
-                        (_dxlink_symbol(call_occ) if call_occ else _build_symbol(strike, exp_date, "call", ticker)))
-        if isinstance(p, str):
-            put_occ = p.replace(" ", "")
-            put_sym = _dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put", ticker)
-        else:
-            put_occ  = p.get("symbol", "")
-            put_sym  = (p.get("streamer-symbol") or
-                        (_dxlink_symbol(put_occ) if put_occ else _build_symbol(strike, exp_date, "put", ticker)))
-        # A contract from another underlying must never enter this chain (#121):
-        # it would be labeled, quoted and archived as `ticker`.
-        if any(occ and _occ_root(occ) != ticker for occ in (call_occ, put_occ)):
+        call = _contract_symbols(s.get("call", {}), strike, exp_date, "call", ticker)
+        put = _contract_symbols(s.get("put", {}), strike, exp_date, "put", ticker)
+        if call is None or put is None:
             foreign += 1
             continue
+        call_occ, call_sym = call
+        put_occ, put_sym = put
         strikes.append({
             "strike":   strike,
             "call_sym": call_sym,
@@ -639,7 +645,7 @@ def _parse_expiration_strikes(expiration: dict, ticker: str = TICKER) -> list[di
             "put_occ":  put_occ,
         })
     if foreign:
-        log.warning(f"{ticker} chain {exp_date}: dropped {foreign} strikes with another underlying's contracts")
+        log.warning(f"{ticker} chain {exp_date}: dropped {foreign} strikes with mismatched contract identity")
     return strikes
 
 
@@ -665,10 +671,16 @@ def load_chain(access_token: str, today: date, ticker: str = TICKER,
 
     ordered_expirations = sorted(expirations, key=lambda e: e.get("expiration-date", ""))
     target = None
-    for exp in ordered_expirations:
-        if exp.get("expiration-date", "") >= today_str:
-            target = exp
-            break
+    if ticker == "SPY":
+        target = next((exp for exp in ordered_expirations
+                       if exp.get("expiration-date") == today_str), None)
+        if target is None:
+            raise RuntimeError(f"SPY 0DTE unavailable: no expiration for {today_str}")
+    else:
+        for exp in ordered_expirations:
+            if exp.get("expiration-date", "") >= today_str:
+                target = exp
+                break
     if target is None:
         raise RuntimeError(f"no upcoming expiration found in chain for {today_str}")
 
@@ -1059,12 +1071,16 @@ class LiveQuoteRegistry:
         state = feed.get_state() if feed is not None else {}
         quotes = []
         for symbol in symbols:
-            if symbol in PRICE_TICKERS:
-                raw = state.get(PRICE_TICKERS[symbol], {})
+            if symbol in PRICE_TICKERS or symbol == "SPY":
+                raw = state.get(PRICE_TICKERS.get(symbol, symbol), {})
                 bid, ask, last = raw.get("bid"), raw.get("ask"), raw.get("last")
                 mid = (bid + ask) / 2 if bid is not None and ask is not None else None
-                price = last if last is not None else mid
-                observed = [ts for ts in (raw.get("last_ts"), raw.get("bid_ts"), raw.get("ask_ts")) if ts]
+                if symbol == "SPY":
+                    price, spy_ts = _observed_spy_price(raw)
+                    observed = [spy_ts] if spy_ts else []
+                else:
+                    price = last if last is not None else mid
+                    observed = [ts for ts in (raw.get("last_ts"), raw.get("bid_ts"), raw.get("ask_ts")) if ts]
                 if price is not None and observed:
                     prev = raw.get("prev_close")
                     quotes.append({
@@ -1139,7 +1155,7 @@ def start_live_quote_server(registry: LiveQuoteRegistry):
                 self._json(400, {"error": f"Request 1-{MAX_LIVE_QUOTE_SYMBOLS} symbols"})
                 return
             health = registry.health()
-            has_tickers = any(symbol in PRICE_TICKERS for symbol in symbols)
+            has_tickers = any(symbol in PRICE_TICKERS or symbol == "SPY" for symbol in symbols)
             if health["state"] in {"offline", "connecting"} and not has_tickers:
                 self._json(
                     503,
@@ -1473,6 +1489,21 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
     if stale_filled:
         log.warning(f"prices -- serving last-known values for: {', '.join(stale_filled)}")
 
+    # SPY is an additional read-only tile sourced solely from its own DXLink
+    # quote. Keep it outside the legacy macro strip and its yfinance/last-known
+    # fallbacks so QQQ's CSV columns and health symbol counts do not change.
+    spy = state.get("SPY", {}) if COLLECT_SPY else {}
+    spy_bid, spy_ask = spy.get("bid"), spy.get("ask")
+    spy_price, spy_ts = _observed_spy_price(spy)
+    spy_prev = spy.get("prev_close")
+    prices["SPY"] = {
+        "price": spy_price, "bid": spy_bid, "ask": spy_ask,
+        "prev_close": spy_prev,
+        "chg_pct": round((spy_price - spy_prev) / spy_prev * 100, 2) if spy_price is not None and spy_prev else None,
+        "volume": spy.get("volume"), "source": "dxlink" if spy_price is not None and spy_ts else None,
+        "quote_ts": spy_ts if spy_price is not None else None,
+    }
+
     dead = [label for label, d in prices.items() if d["price"] is None]
     if dead:
         log.warning(f"prices.json -- no data for: {', '.join(dead)}")
@@ -1707,7 +1738,8 @@ def eia_steo_loop(s3) -> None:
 # -- health.json upload (every 15s) ------------------------------------------
 
 def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
-                run_id: str, process_start: datetime, classification: str, today: date):
+                run_id: str, process_start: datetime, classification: str, today: date,
+                spy_context: Optional[dict] = None):
     fh   = feed.get_health()
     ctr  = counters.get()
     trk  = tracker.get()
@@ -1720,6 +1752,27 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
     no_data   = [label for label, sym in PRICE_TICKERS.items()
                  if state.get(sym, {}).get("last") is None and state.get(sym, {}).get("bid") is None]
     with_data = len(PRICE_TICKERS) - len(no_data)
+
+    spy_context = spy_context or {"status": "unavailable", "reason": "no_spy_session"}
+    spy_state = state.get("SPY", {}) if spy_context.get("status") == "collecting" else {}
+    spy_price, spy_ts = _observed_spy_price(spy_state)
+    spy_age = None
+    if spy_ts:
+        try:
+            spy_age = (now - datetime.fromisoformat(spy_ts)).total_seconds()
+        except ValueError:
+            pass
+    spy_spot_status = ("unavailable" if spy_price is None or spy_age is None else
+                       "live" if 0 <= spy_age <= STALE_FEED_SECS else "stale")
+    spy_counters = spy_context.get("counters")
+    spy_tracker = spy_context.get("tracker")
+    spy_health = {
+        "collection_status": spy_context.get("status"),
+        "reason": spy_context.get("reason"),
+        "spot": {"price": spy_price, "observed_at": spy_ts, "status": spy_spot_status},
+        "last_snapshot_upload_time": spy_counters.get()["last_snapshot_time"] if spy_counters else None,
+        "cadence": spy_tracker.get() if spy_tracker else None,
+    }
 
     payload = json.dumps({
         "run_id":             run_id,
@@ -1756,6 +1809,7 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
             "price_symbols_with_data": with_data,
             "no_data_symbols":         no_data,
         },
+        "spy": spy_health,
     }, default=str)
 
     try:
@@ -1771,10 +1825,11 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
 
 
 def health_loop(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
-                run_id: str, process_start: datetime, classification: str, today: date):
+                run_id: str, process_start: datetime, classification: str, today: date,
+                spy_context: Optional[dict] = None):
     while not past_stop():
         try:
-            push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+            push_health(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context)
         except Exception as e:
             log.error(f"health loop error: {e}")
         time.sleep(HEALTH_SECS)
@@ -1858,11 +1913,14 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
         df = pd.read_csv(io.StringIO(body))
 
         # Restore prev_vol from Volume column keyed by OptionSymbol
-        if "OptionSymbol" in df.columns and "Volume" in df.columns:
-            for _, row in df.iterrows():
+        own_rows = df[df["OptionSymbol"].map(
+            lambda sym: isinstance(sym, str) and _occ_root(sym) == us.symbol
+        )] if "OptionSymbol" in df.columns else df.iloc[0:0]
+        if "Volume" in own_rows.columns:
+            for _, row in own_rows.iterrows():
                 sym = row.get("OptionSymbol")
                 vol = row.get("Volume")
-                if sym and pd.notna(vol) and _occ_root(str(sym)) == us.symbol:
+                if sym and pd.notna(vol):
                     # Convert OCC symbol back to dxFeed format used as state key
                     try:
                         dx_sym = _dxlink_symbol(str(sym))
@@ -1874,8 +1932,9 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
         # snapshot's own filename (snapshot_HHMMSSffffff.csv) -- not
         # datetime.now() at restore time, which would misrepresent how old
         # this recovered price actually is.
-        if "UnderlyingPrice" in df.columns:
-            spot = df["UnderlyingPrice"].dropna().iloc[-1] if not df["UnderlyingPrice"].dropna().empty else None
+        if "UnderlyingPrice" in own_rows.columns:
+            prices = own_rows["UnderlyingPrice"].dropna()
+            spot = prices.iloc[-1] if not prices.empty else None
             if spot:
                 us.last_spot[0] = float(spot)
                 us.last_spot[1] = None
@@ -2214,6 +2273,26 @@ def _resolve_underlying_spot(
     return None, None
 
 
+def _observed_spy_price(quote: dict) -> tuple[float | None, str | None]:
+    """Use only a SPY price with its own complete provider observation time."""
+    bid, ask = quote.get("bid"), quote.get("ask")
+    bid_ts, ask_ts = quote.get("bid_ts"), quote.get("ask_ts")
+    if bid is not None and ask is not None and bid_ts and ask_ts:
+        try:
+            older = min((bid_ts, ask_ts), key=datetime.fromisoformat)
+            return round((bid + ask) / 2, 2), older
+        except (TypeError, ValueError):
+            pass
+    last, last_ts = quote.get("last"), quote.get("last_ts")
+    if last is not None and last_ts:
+        try:
+            datetime.fromisoformat(last_ts)
+            return last, last_ts
+        except (TypeError, ValueError):
+            pass
+    return None, None
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker,
@@ -2224,7 +2303,12 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     ts_utc = datetime.now(timezone.utc)
 
     quote = state.get(us.symbol, {})
-    underlying, spot_ts_str = _resolve_underlying_spot(quote, us.last_spot[0], us.last_spot[1])
+    if us.symbol == "SPY":
+        underlying, spot_ts_str = _observed_spy_price(quote)
+        if underlying is None:
+            underlying, spot_ts_str = us.last_spot
+    else:
+        underlying, spot_ts_str = _resolve_underlying_spot(quote, us.last_spot[0], us.last_spot[1])
     atm = round(underlying) if underlying else None
 
     underlying_market = _compute_underlying_market(s3, quote, underlying, spot_ts_str, ts_et, ts_utc, today, us)
@@ -2677,6 +2761,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     # Extra 0DTE chains (#121). Each is optional: a failure here disables
     # only that underlying for this session and never touches QQQ.
     extra_chains: list[tuple[UnderlyingSession, list[dict], str]] = []
+    spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
+                   "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
         if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY):
             continue
@@ -2684,11 +2770,18 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
             us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)
         except Exception as e:
             log.error(f"{sym} chain load failed ({e}) -- {sym} collection disabled this session")
+            if sym == "SPY":
+                spy_context.update(status="missing_today_expiration" if "SPY 0DTE unavailable" in str(e) else "chain_load_failed",
+                                   reason=str(e))
             continue
         restore_state(s3, today, us)
         us.rvol_baseline = load_rvol_baseline(s3, us)
         us.rvol_today = {}
         extra_chains.append((us, us_strikes, us_exp))
+        if sym == "SPY":
+            spy_context.update(status="collecting", reason=None)
+            log.info(f"SPY subscription load: {len(us_strikes)} chain strikes, "
+                     f"{2 * len(us_strikes)} option symbols, {8 * len(us_strikes)} event subscriptions")
 
     option_syms = []
     contracts = {}
@@ -2752,6 +2845,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     # Separate counters/trackers so extra underlyings can never mask a missed
     # QQQ snapshot in health.json (which stays QQQ-only).
     extra_trackers = {us.symbol: (Counters(), SnapshotTracker()) for us, _, _ in extra_chains}
+    if "SPY" in extra_trackers:
+        spy_context["counters"], spy_context["tracker"] = extra_trackers["SPY"]
 
     prices_thread = threading.Thread(
         target=prices_loop, args=(s3, feed, counters, quote_registry), daemon=True)
@@ -2760,7 +2855,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     health_thread = threading.Thread(
         target=health_loop,
-        args=(s3, feed, counters, tracker, run_id, process_start, classification, today),
+        args=(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context),
         daemon=True,
     )
     health_thread.start()
@@ -2827,7 +2922,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     # Write final health.json with past_stop=True so next startup classifies as clean_start
     try:
-        push_health(s3, feed, counters, tracker, run_id, process_start, classification, today)
+        push_health(s3, feed, counters, tracker, run_id, process_start, classification, today, spy_context)
     except Exception:
         pass
 
@@ -2885,3 +2980,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

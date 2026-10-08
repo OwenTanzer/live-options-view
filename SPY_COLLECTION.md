@@ -67,17 +67,40 @@ show up in logs and in `intraday/spy/latest.json` going stale.
 - Momentum: `warming_up` until its lookback has samples, as for QQQ.
 - VWAP: `vwap_partial_session` is true when collection starts after the open.
 - If the SPY chain fails to load at session start, SPY is skipped for that
-  session (logged) and QQQ continues unchanged.
+  session (logged) and QQQ continues unchanged. If today's expiration is
+  absent, the error and `health.json` SPY block report
+  `missing_today_expiration`; a next-day chain is never labeled 0DTE.
+
+## SPY price tile and health
+
+`intraday/prices.json` includes a `SPY` entry derived only from SPY's DXLink
+quote. It carries the provider quote timestamp, or a null price/source when no
+SPY quote is available. It never uses QQQ, yfinance or the legacy last-known
+macro price map. The existing macro ticker list, QQQ CSV fields and legacy
+`health.json` symbol counts stay unchanged.
+
+`intraday/health.json` adds a `spy` block with collection status/reason, SPY
+spot price and observation time/status, SPY snapshot upload time and cadence.
+Spot is `live` only with a provider observation time no older than the
+collector's existing stale threshold; otherwise it is `stale` or `unavailable`.
+The website must also check the health artifact's `updated_at` before showing
+it as current. `COLLECT_SPY=0` reports `disabled`.
 
 ## Configuration and load
 
 - `COLLECT_SPY` (default on): `0` disables SPY collection without a deploy of
   new code.
 - No new credentials. The same tastytrade OAuth session and DXLink feed carry SPY.
-- Added provider load: one extra option-chain request per session; about
-  134 extra option symbols (STRIKE_WINDOW ±33 around spot, calls and puts) ×
-  4 event types, plus SPY's own 4 underlying event types, on the existing
-  websocket (subscriptions are already sent in batches of 200).
+- Added provider load: one extra option-chain request per session. **Current
+  code subscribes every returned SPY strike**, calls and puts, even though
+  `STRIKE_WINDOW=33` limits only snapshot rows when SPY spot is available.
+  With no spot, even that row filter is inactive. For `N` distinct SPY strikes,
+  the added load is `2N` option symbols and `8N+4` event subscriptions (four
+  event types per option and four for the SPY underlying). The collector logs
+  the actual session count. An offline 300-strike fixture yields 600 option
+  symbols and 2,404 event subscriptions. Batches of 200 are transport chunks,
+  **not** a subscription or provider rate cap. There is no configured SPY
+  subscription maximum yet; provider limits and live chain size are unverified.
 - Added R2 load at the existing 60 s cadence: per SPY snapshot, 4 writes
   (CSV, `vwap_state.json`, `momentum_log.jsonl`, `latest.json`) and 1 read
   (momentum log). Plus one `first.csv` per day and one RVOL baseline write at
@@ -88,7 +111,7 @@ show up in logs and in `intraday/spy/latest.json` going stale.
 
 ## Verification status
 
-- Fixture/local: `python tests/verify_collector_spy.py` (8 checks: key
+- Fixture/local: `python tests/verify_collector_spy.py` (13 checks: key
   layout, symbol-bound chain parsing, SPY-only chain request with no weekly,
   payload identity, cross-symbol volume-delta/VWAP isolation, missing SPY
   spot, RVOL warm-up and foreign-baseline rejection, per-symbol restart
@@ -96,3 +119,4 @@ show up in logs and in `intraday/spy/latest.json` going stale.
   `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
+
