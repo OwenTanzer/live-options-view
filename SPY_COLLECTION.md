@@ -137,3 +137,39 @@ not publish SPY snapshots until delivery completes; QQQ collection continues.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
 
+## Website (docs/index.html)
+
+- A QQQ/SPY selector in the chain header drives the heading, page title,
+  price, tier, VWAP/RVOL/momentum line, rows and visible-contract quotes. The
+  choice is remembered per browser (`localStorage`, best-effort).
+- QQQ's `intraday/latest.json` is still fetched every cycle whatever is
+  selected. Paper trading, expiry settlement marks and the QQQ price tile use
+  only QQQ data; SPY is fetched in addition only while SPY is selected.
+- The separate, read-only SPY price tile uses only SPY's timed DXLink quote
+  from `intraday/prices.json` or the live quote service. A missing quote is
+  unavailable, and an old observation is stale. No SPY share ticket is enabled.
+  The SPY health badge reads `health.json.spy` and rejects an old health
+  artifact; missing expiration, missing snapshots and missing spot remain
+  visible rather than borrowing QQQ health.
+- Every snapshot is validated for the requested symbol before rendering
+  (`validateChainPayload` in shared.js): its top-level symbol,
+  `underlying_market.symbol` and every contract root must match. A mismatch,
+  a missing SPY publication (404) or a failed first load is shown as an
+  explicit unavailable state, never as the other underlying's data.
+- Switching clears the chain immediately. Each request carries a selection
+  token (`ChainSelection`), so a reply that arrives after a switch is dropped
+  rather than rendered or cached. A transient fetch failure keeps a valid
+  cached snapshot visible with a stale/error state, even when its data was
+  only seconds old. Older overlapping QQQ replies cannot overwrite newer
+  chain, indicator or paper-settlement state.
+- The SPY chain is view-only (no paper tickets or position badges). Its OI
+  colors are relative to SPY's own snapshot, because `derived/OIranges.csv` is
+  calibrated on QQQ only. The header says so.
+- The historical date view stays QQQ-only.
+- Tests: `node tests/chain_underlying.test.js` (helpers, plus shipped
+  fetch/render, price and health functions under DOM shims: QQQ→SPY→QQQ,
+  delayed and stale replies, fresh-cache failures, mislabeled/mixed payloads,
+  missing SPY, and SPY tile/health unavailable and stale states). A local browser
+  run with fixture snapshots confirmed the selector, rows, quotes and that the
+  QQQ tile keeps QQQ readings while SPY is shown.
+
