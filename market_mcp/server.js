@@ -13,7 +13,7 @@ const tools = [
   ['discover_sources','Discover fixed market datasets, source availability, units, limits and unsupported producer capabilities.',schema({session:date})],
   ['market_context','Read the latest QQQ or SPY underlying context and a bounded chain page (underlying defaults to QQQ; no other symbol is substituted). Field timestamps and unknown Greeks/quote times remain explicit.',schema({...paging,underlying:{type:'string',enum:['QQQ','SPY'],default:'QQQ'},expiry:date,type,strike:{type:'number',exclusiveMinimum:0,maximum:100000},contract:str('^[A-Z0-9.]{1,10}\\d{6}[CP]\\d{8}$')})],
   ['squeeze_results','Read producer-ranked scheduled shortlist alongside latest attempt, schedule and exchange-calendar freshness.',schema(paging)],
-  ['return_rankings','Read one explicit session published leaderboard (top 200 all OR clean subset), preserving producer ranks and CSV values.',schema({...paging,session:date,underlying:str('^[A-Z][A-Z0-9.-]{0,9}$'),type,view:{type:'string',enum:['all','clean'],default:'all'}},['session'])],
+  ['return_rankings','Read one explicit session published all/clean midpoint or separately ranked qualified ask-to-later-bid shortlist, preserving producer ranks and CSV values.',schema({...paging,session:date,underlying:str('^[A-Z][A-Z0-9.-]{0,9}$'),type,view:{type:'string',enum:['all','clean','qualified_ask_bid_v1'],default:'all'}},['session'])],
   ['result_detail','Follow a server-issued reference for up to 15 minutes; the 64-reference/16 MiB cache may evict it sooner. Repeat the originating query after expiry, eviction or restart. Snapshot uses retained JSON; squeeze reads three exact run members; return path pages at most six sweeps, with change detection and byte limits.',schema({...paging,reference:str('^[0-9a-f-]{36}$')},['reference'])],
 ].map(([name,description,inputSchema])=>({name,description,inputSchema,annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}}));
 
@@ -69,3 +69,5 @@ if(require.main===module) {
   serve(new Consumer(source));
 }
 module.exports={Protocol,serve,tools,VERSION};
+
+

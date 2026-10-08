@@ -68,6 +68,32 @@ test('selected-session rankings preserve all/clean ranks and quality cells',asyn
   const {consumer}=setup();const all=await consumer.call('return_rankings',{session:SESSION,type:'call'});assert.equal(all.rows[0].rank,'1');assert.equal(all.rows[0].mid_first_to_max_flags,'tiny_entry');assert.equal(all.rows[0].mid_first_to_max_pct,'3');const clean=await consumer.call('return_rankings',{session:SESSION,view:'clean'});assert.equal(clean.rows[0].symbol,PUT);assert.equal(clean.rows[0].rank,'2');assert.equal(clean.rows[0].clean_rank,'1');assert.equal(clean.freshness.status,'historical');assert.equal(clean.producer_times.publication,null);
 });
 test('absent session never searches another date',async()=>{const {consumer,calls}=setup();const out=await consumer.call('return_rankings',{session:'2026-10-01'});assert.equal(out.status,'missing');assert.deepEqual(calls,['oa203/scanner/2026-10-01/summary.json']);});
+test('qualified view uses its own producer ranks, policy, reasons and bounded detail source',async()=>{
+  const {consumer,calls}=setup();const out=await consumer.call('return_rankings',{session:SESSION,view:'qualified_ask_bid_v1'});
+  assert.equal(out.status,'available');assert.equal(out.actual.qualified_policy.version,'oa203-qualified-ask-bid-v1');
+  assert.equal(out.rows[0].qualified_first_ask_to_later_bid_rank,'1');
+  assert.equal(out.rows[0].qualified_first_ask_to_later_bid_status,'eligible');
+  assert.equal(out.rows[0].qualified_first_ask_to_later_bid_entry_bid_size,'2');
+  assert.ok(calls.includes(PREFIX+'qualified_ask_bid_v1.csv'));assert.ok(!calls.includes(PREFIX+'leaderboard.csv'));
+  const detail=await consumer.call('result_detail',{reference:out.rows[0].detail_reference,limit:1});
+  assert.equal(detail.status,'available');assert.equal(detail.row.symbol,PUT);
+});
+test('qualified view distinguishes legacy, missing publication, and changed source',async()=>{
+  const legacy=setup();edit(legacy.files,PREFIX+'summary.json',p=>{delete p.qualified_policy;delete p.outputs.qualified_ask_bid_v1;});
+  assert.equal((await legacy.consumer.call('return_rankings',{session:SESSION,view:'qualified_ask_bid_v1'})).status,'unavailable');
+  const missing=setup();delete missing.files[PREFIX+'qualified_ask_bid_v1.csv'];
+  const out=await missing.consumer.call('return_rankings',{session:SESSION,view:'qualified_ask_bid_v1'});
+  assert.equal(out.status,'partial');assert.equal(out.errors[0].code,'missing_artifact');
+  const changed=setup();const first=await changed.consumer.call('return_rankings',{session:SESSION,view:'qualified_ask_bid_v1'});
+  changed.files[PREFIX+'qualified_ask_bid_v1.csv']+='\n';
+  assert.equal((await changed.consumer.call('result_detail',{reference:first.rows[0].detail_reference})).errors[0].code,'source_changed');
+});
+test('qualified view accepts a genuinely empty zero-contract session',async()=>{
+  const {consumer,files}=setup();edit(files,PREFIX+'summary.json',p=>p.contracts=0);
+  files[PREFIX+'qualified_ask_bid_v1.csv']='\r\n';
+  const out=await consumer.call('return_rankings',{session:SESSION,view:'qualified_ask_bid_v1'});
+  assert.equal(out.status,'empty');assert.equal(out.pagination.total,0);
+});
 test('partial and nonfinal return session retain reasons and values',async()=>{const {consumer,files}=setup();edit(files,PREFIX+'summary.json',p=>{p.final=false;p.assessment.status='partial';p.assessment.reasons=['backfill_not_run','chain_success_rate:0.9'];});const out=await consumer.call('return_rankings',{session:SESSION});assert.equal(out.status,'partial');assert.equal(out.rows.length,2);assert.ok(out.warnings.includes('backfill_not_run'));});
 test('return detail reads one contract from bounded sweep pages and retains calculation cells',async()=>{
   const {consumer,calls}=setup();const first=await consumer.call('return_rankings',{session:SESSION,limit:1});const out=await consumer.call('result_detail',{reference:first.rows[0].detail_reference,limit:2,offset:1});assert.equal(out.quote_path.length,2);assert.equal(out.quote_path[0].sweep,2);assert.ok(out.quote_path.every(r=>r.symbol===CONTRACT));assert.equal(out.row.mid_first_to_max_entry,'0.02');assert.equal(out.pagination.next_offset,3);assert.equal(calls.filter(k=>k.endsWith('.gz')).length,2);

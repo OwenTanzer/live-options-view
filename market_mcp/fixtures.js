@@ -26,11 +26,13 @@ function fixtures(){
   json('squeeze-scanner/v1/scheduled/latest-attempt.json',pointer);
   json('squeeze-scanner/v1/scheduled/latest-schedule.json',{status:'finished',scheduled_for:pointer.scheduled_for,run_id:RUN,acquisition_status:'complete',calendar:'XNYS',calendar_version:'4.13.2'});
   const prefix=`oa203/scanner/${SESSION}/`;
-  json(prefix+'summary.json',{trade_date:SESSION,final:true,session_open_ms:1790947800000,session_close_ms:1790971200000,finalized_at:'2026-10-02T20:06:03Z',assessment:{status:'complete',reasons:[],chain_success_rate:1,universe_coverage:1},return_policy:{version:'oa203-returns-v1',min_entry_premium:0.05,stale_quote_s:1800,spike_ratio:3,min_coverage:0.5},measurement:'Sampled-return leaderboard',outputs:{contracts:'contracts.csv.gz',leaderboard:'leaderboard.csv'}});
+  json(prefix+'summary.json',{trade_date:SESSION,final:true,session_open_ms:1790947800000,session_close_ms:1790971200000,finalized_at:'2026-10-02T20:06:03Z',assessment:{status:'complete',reasons:[],chain_success_rate:1,universe_coverage:1},return_policy:{version:'oa203-returns-v1',min_entry_premium:0.05,stale_quote_s:1800,spike_ratio:3,min_coverage:0.5},qualified_policy:{version:'oa203-qualified-ask-bid-v1',max_relative_spread:0.3},measurement:'Sampled-return leaderboard',outputs:{contracts:'contracts.csv.gz',leaderboard:'leaderboard.csv',qualified_ask_bid_v1:'qualified_ask_bid_v1.csv'}});
   json(prefix+'universe.json',{selection_version:'oa203-universe-v1',selected:[{underlying:'QQQ',occ_rank:1}],skipped:[]});
   files[prefix+'leaderboard.csv']='symbol,underlying,option_type,rank,rank_in_type,clean_rank,clean_rank_in_type,clean,mid_first_to_max_pct,mid_first_to_max_entry,mid_first_to_max_exit,mid_first_to_max_entry_ms,mid_first_to_max_exit_ms,mid_first_to_max_flags,contract_flags\n'+
     `${CONTRACT},QQQ,call,1,1,,,False,3,0.02,0.08,1790947800000,1790948100000,tiny_entry,low_coverage\n`+
     `${PUT},QQQ,put,2,1,1,1,True,0.90909091,1.1,2.1,1790947800000,1790948100000,,\n`;
+  files[prefix+'qualified_ask_bid_v1.csv']='symbol,underlying,option_type,rank,clean_rank,clean,qualified_first_ask_to_later_bid_rank,qualified_first_ask_to_later_bid_status,qualified_first_ask_to_later_bid_reasons,qualified_first_ask_to_later_bid_pct,qualified_first_ask_to_later_bid_entry_ms,qualified_first_ask_to_later_bid_exit_ms,qualified_first_ask_to_later_bid_entry_bid_size,qualified_first_ask_to_later_bid_exit_bid_size\n'+
+    `${PUT},QQQ,put,2,1,True,1,eligible,,0.5,1790947800000,1790948100000,2,2\n`;
   const manifests=[];
   for(let sweep=1;sweep<=8;sweep++){
     const t=1790947800000+(sweep-1)*300000;const name=`sweep_${String(sweep).padStart(4,'0')}.jsonl.gz`;
@@ -42,3 +44,5 @@ function fixtures(){
 }
 async function writeFixtures(root){for(const [key,value] of Object.entries(fixtures())){const target=path.join(root,key);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,value);}}
 module.exports={fixtures,writeFixtures,SESSION,NOW,RUN,ARCHIVE,CONTRACT,PUT,SPY_CONTRACT};
+
+

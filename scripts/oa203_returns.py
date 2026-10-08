@@ -46,9 +46,45 @@ Flags never remove a contract. They are reported beside the return, and the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Iterable, Sequence
 
 POLICY_VERSION = "oa203-returns-v1"
+QUALIFIED_VERSION = "oa203-qualified-ask-bid-v1"
+QUALIFIED = "qualified_first_ask_to_later_bid"
+
+
+@dataclass(frozen=True)
+class QualifiedPolicy:
+    """Provisional contract screen. Prices are USD/share; age is seconds."""
+
+    min_entry_premium: float = 0.10
+    max_relative_spread: float = 0.30  # (ask - bid) / midpoint, at each endpoint
+    max_quote_age_s: float = 1800.0
+    min_ask_size: int = 1
+    min_bid_size: int = 1
+    min_entry_volume: int = 1  # cumulative volume observed at entry, not day volume
+    min_samples: int = 3
+    min_coverage: float = 0.5
+    min_open_interest: int | None = None  # lagged OI; disabled by default
+
+    def __post_init__(self) -> None:
+        finite = lambda value: (type(value) in (int, float) and math.isfinite(value))
+        integer = lambda value: type(value) is int
+        if (not finite(self.min_entry_premium) or self.min_entry_premium <= 0 or
+            not finite(self.max_relative_spread) or not 0 < self.max_relative_spread < 2 or
+            not finite(self.max_quote_age_s) or self.max_quote_age_s < 0 or
+            not integer(self.min_ask_size) or self.min_ask_size < 1 or
+            not integer(self.min_bid_size) or self.min_bid_size < 1 or
+            not integer(self.min_entry_volume) or self.min_entry_volume < 0 or
+            not integer(self.min_samples) or self.min_samples < 2 or
+            not finite(self.min_coverage) or not 0 < self.min_coverage <= 1 or
+            (self.min_open_interest is not None and
+             (not integer(self.min_open_interest) or self.min_open_interest < 0))):
+            raise ValueError("invalid qualified ask-bid policy")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"version": QUALIFIED_VERSION, **self.__dict__}
 
 
 @dataclass(frozen=True)
@@ -78,6 +114,11 @@ class Observation:
     bid_ms: int | None = None
     ask_ms: int | None = None
     underlying_price: float | None = None
+    bid_size: int | None = None
+    ask_size: int | None = None
+    volume: int | None = None
+    open_interest: int | None = None
+    chain_ok_sweeps_so_far: int | None = None
 
     @property
     def crossed(self) -> bool:
@@ -243,7 +284,8 @@ def _leg_row(prefix: str, leg: Leg | None, path: Sequence[Observation], info: Co
 
 
 def contract_metrics(info: ContractInfo, path: Sequence[Observation],
-                     policy: ReturnPolicy = ReturnPolicy()) -> dict[str, Any]:
+                     policy: ReturnPolicy = ReturnPolicy(),
+                     qualified_policy: QualifiedPolicy = QualifiedPolicy()) -> dict[str, Any]:
     """All quote-path measurements for one contract, as one flat output row."""
     path = sorted(path, key=lambda o: o.t)
     valid = [o for o in path if o.two_sided]
@@ -286,6 +328,125 @@ def contract_metrics(info: ContractInfo, path: Sequence[Observation],
     row["spot_at_entry"] = spot
     row["strike_vs_spot_pct"] = round(info.strike / spot - 1.0, 6) if spot else None
     row["clean"] = not contract_flags and not row.get("mid_first_to_max_flags")
+    row.update(qualified_metrics(info, path, qualified_policy))
+    return row
+
+
+def _qualified_endpoint(obs: Observation, policy: QualifiedPolicy, side: str) -> tuple[list[str], list[str]]:
+    """Return definite exclusions and missing-evidence reasons separately."""
+    excluded, unknown = [], []
+    for name, value in (("bid", obs.bid), ("ask", obs.ask)):
+        if value is None:
+            unknown.append(f"{side}_{name}_missing")
+        elif not isinstance(value, (int, float)) or not math.isfinite(value):
+            excluded.append(f"{side}_{name}_nonfinite")
+        elif value <= 0:
+            excluded.append(f"{side}_{name}_nonpositive")
+    if not excluded and not unknown:
+        if obs.ask <= obs.bid:
+            excluded.append(f"{side}_{'crossed' if obs.ask < obs.bid else 'locked'}")
+        elif _relative_spread(obs) > policy.max_relative_spread:
+            excluded.append(f"{side}_spread")
+    for name, stamp in (("bid", obs.bid_ms), ("ask", obs.ask_ms)):
+        if stamp is None or not isinstance(stamp, int):
+            unknown.append(f"{side}_{name}_timestamp_missing")
+        elif stamp > obs.t:
+            excluded.append(f"{side}_{name}_timestamp_future")
+        elif (obs.t - stamp) / 1000 > policy.max_quote_age_s:
+            excluded.append(f"{side}_{name}_timestamp_stale")
+    size_name = "ask_size" if side == "entry" else "bid_size"
+    size = getattr(obs, size_name)
+    if size is None:
+        unknown.append(f"{side}_{size_name}_missing")
+    elif not isinstance(size, int) or size < (policy.min_ask_size if side == "entry" else policy.min_bid_size):
+        excluded.append(f"{side}_{size_name}_insufficient")
+    return excluded, unknown
+
+
+def _relative_spread(obs: Observation) -> float:
+    ratio = obs.bid / obs.ask
+    return 2 * (1 - ratio) / (1 + ratio)
+
+
+def qualified_metrics(info: ContractInfo, path: Sequence[Observation],
+                      policy: QualifiedPolicy = QualifiedPolicy()) -> dict[str, Any]:
+    """First qualifying sampled ask to highest strictly later qualified bid."""
+    prefix = QUALIFIED
+    row: dict[str, Any] = {f"{prefix}_pct": None, f"{prefix}_rank": None,
+                           f"{prefix}_policy_version": QUALIFIED_VERSION,
+                           f"{prefix}_status": "excluded", f"{prefix}_reasons": []}
+    excluded, unknown = set(), set()
+    contract_excluded, contract_unknown = set(), set()
+    if policy.min_open_interest is not None:
+        if info.open_interest is None:
+            contract_unknown.add("open_interest_missing_lagged")
+        elif info.open_interest < policy.min_open_interest:
+            contract_excluded.add("open_interest_insufficient_lagged")
+    entry_index = None
+    plausible_entry = False
+    for i, obs in enumerate(path):
+        bad, missing = _qualified_endpoint(obs, policy, "entry")
+        if obs.ask is not None and isinstance(obs.ask, (int, float)) and math.isfinite(obs.ask) and obs.ask < policy.min_entry_premium:
+            bad.append("entry_premium")
+        if obs.volume is None:
+            missing.append("entry_volume_missing")
+        elif not isinstance(obs.volume, int) or obs.volume < policy.min_entry_volume:
+            bad.append("entry_volume_insufficient")
+        # Only prefix evidence can delay entry. Completed-day counts never
+        # retroactively make an earlier sampled ask qualify.
+        if i + 1 < policy.min_samples:
+            bad.append("entry_insufficient_samples_so_far")
+        sweeps_so_far = obs.chain_ok_sweeps_so_far
+        if sweeps_so_far is None or sweeps_so_far <= 0:
+            missing.append("entry_chain_coverage_missing")
+        elif (i + 1) / sweeps_so_far < policy.min_coverage:
+            bad.append("entry_insufficient_coverage_so_far")
+        excluded.update(bad); unknown.update(missing)
+        plausible_entry |= not bad
+        if not bad and not missing:
+            entry_index = i
+            break
+    best = None
+    plausible_exit = False
+    if entry_index is not None:
+        for j in range(entry_index + 1, len(path)):
+            if path[j].t <= path[entry_index].t:
+                continue
+            bad, missing = _qualified_endpoint(path[j], policy, "exit")
+            excluded.update(bad); unknown.update(missing)
+            plausible_exit |= not bad
+            if not bad and not missing and (best is None or path[j].bid > path[best].bid):
+                best = j
+    if best is not None and not contract_excluded and not contract_unknown:
+        entry, exit_ = path[entry_index], path[best]
+        pct = exit_.bid / entry.ask - 1
+        if not math.isfinite(pct):
+            contract_excluded.add("return_nonfinite")
+        else:
+            contract_change = (exit_.bid - entry.ask) * info.contract_size
+            row.update({f"{prefix}_pct": round(pct, 6),
+                        f"{prefix}_status": "eligible", f"{prefix}_reasons": [],
+                        f"{prefix}_entry_delay_s": (entry.t - path[0].t) / 1000,
+                        f"{prefix}_entry_ms": entry.t, f"{prefix}_exit_ms": exit_.t,
+                        f"{prefix}_entry": entry.ask, f"{prefix}_exit": exit_.bid,
+                        f"{prefix}_abs_change_per_contract": (round(contract_change, 4)
+                                                                if math.isfinite(contract_change) else None),
+                        f"{prefix}_entry_observed_volume": entry.volume})
+            for side, obs in (("entry", entry), ("exit", exit_)):
+                for name in ("bid", "ask", "bid_ms", "ask_ms", "bid_size", "ask_size"):
+                    row[f"{prefix}_{side}_{name}"] = getattr(obs, name)
+                row[f"{prefix}_{side}_spread"] = round(obs.ask - obs.bid, 6)
+                row[f"{prefix}_{side}_relative_spread"] = round(_relative_spread(obs), 6)
+            return row
+    if entry_index is None:
+        excluded.add("no_qualified_entry")
+    elif best is None:
+        excluded.add("no_strictly_later_qualified_exit")
+    possible = (plausible_entry if entry_index is None else
+                plausible_exit if best is None else True)
+    row[f"{prefix}_status"] = ("unknown" if not contract_excluded and possible and
+                                (unknown or contract_unknown) else "excluded")
+    row[f"{prefix}_reasons"] = sorted(excluded | unknown | contract_excluded | contract_unknown)
     return row
 
 
@@ -366,4 +527,8 @@ def rank(rows: Iterable[dict[str, Any]], metric: str = HEADLINE) -> list[dict[st
                 counters[key + scope] = counters.get(key + scope, 0) + 1
                 r[key] = counters[key + scope]
     ranked = ordered + [r for r in rows if r.get(metric) is None]
+    qualified = sorted((r for r in rows if r.get(f"{QUALIFIED}_status") == "eligible"),
+                       key=lambda r: (-r[f"{QUALIFIED}_pct"], r["symbol"]))
+    for position, row in enumerate(qualified, 1):
+        row[f"{QUALIFIED}_rank"] = position
     return ranked
