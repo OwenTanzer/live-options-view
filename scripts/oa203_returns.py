@@ -69,13 +69,18 @@ class QualifiedPolicy:
     min_open_interest: int | None = None  # lagged OI; disabled by default
 
     def __post_init__(self) -> None:
-        if (not math.isfinite(self.min_entry_premium) or self.min_entry_premium <= 0 or
-            not math.isfinite(self.max_relative_spread) or not 0 < self.max_relative_spread < 2 or
-            not math.isfinite(self.max_quote_age_s) or self.max_quote_age_s < 0 or
-            self.min_ask_size < 1 or self.min_bid_size < 1 or self.min_entry_volume < 0 or
-            self.min_samples < 2 or not math.isfinite(self.min_coverage) or
-            not 0 < self.min_coverage <= 1 or
-            (self.min_open_interest is not None and self.min_open_interest < 0)):
+        finite = lambda value: (type(value) in (int, float) and math.isfinite(value))
+        integer = lambda value: type(value) is int
+        if (not finite(self.min_entry_premium) or self.min_entry_premium <= 0 or
+            not finite(self.max_relative_spread) or not 0 < self.max_relative_spread < 2 or
+            not finite(self.max_quote_age_s) or self.max_quote_age_s < 0 or
+            not integer(self.min_ask_size) or self.min_ask_size < 1 or
+            not integer(self.min_bid_size) or self.min_bid_size < 1 or
+            not integer(self.min_entry_volume) or self.min_entry_volume < 0 or
+            not integer(self.min_samples) or self.min_samples < 2 or
+            not finite(self.min_coverage) or not 0 < self.min_coverage <= 1 or
+            (self.min_open_interest is not None and
+             (not integer(self.min_open_interest) or self.min_open_interest < 0))):
             raise ValueError("invalid qualified ask-bid policy")
 
     def as_dict(self) -> dict[str, Any]:
@@ -113,6 +118,7 @@ class Observation:
     ask_size: int | None = None
     volume: int | None = None
     open_interest: int | None = None
+    chain_ok_sweeps_so_far: int | None = None
 
     @property
     def crossed(self) -> bool:
@@ -370,17 +376,14 @@ def qualified_metrics(info: ContractInfo, path: Sequence[Observation],
                            f"{prefix}_policy_version": QUALIFIED_VERSION,
                            f"{prefix}_status": "excluded", f"{prefix}_reasons": []}
     excluded, unknown = set(), set()
-    if len(path) < policy.min_samples:
-        excluded.add("insufficient_samples")
-    denominator = info.chain_ok_sweeps or len(path)
-    if denominator and len(path) / denominator < policy.min_coverage:
-        excluded.add("insufficient_coverage")
+    contract_excluded, contract_unknown = set(), set()
     if policy.min_open_interest is not None:
         if info.open_interest is None:
-            unknown.add("open_interest_missing_lagged")
+            contract_unknown.add("open_interest_missing_lagged")
         elif info.open_interest < policy.min_open_interest:
-            excluded.add("open_interest_insufficient_lagged")
+            contract_excluded.add("open_interest_insufficient_lagged")
     entry_index = None
+    plausible_entry = False
     for i, obs in enumerate(path):
         bad, missing = _qualified_endpoint(obs, policy, "entry")
         if obs.ask is not None and isinstance(obs.ask, (int, float)) and math.isfinite(obs.ask) and obs.ask < policy.min_entry_premium:
@@ -389,46 +392,61 @@ def qualified_metrics(info: ContractInfo, path: Sequence[Observation],
             missing.append("entry_volume_missing")
         elif not isinstance(obs.volume, int) or obs.volume < policy.min_entry_volume:
             bad.append("entry_volume_insufficient")
+        # Only prefix evidence can delay entry. Completed-day counts never
+        # retroactively make an earlier sampled ask qualify.
+        if i + 1 < policy.min_samples:
+            bad.append("entry_insufficient_samples_so_far")
+        sweeps_so_far = obs.chain_ok_sweeps_so_far
+        if sweeps_so_far is None or sweeps_so_far <= 0:
+            missing.append("entry_chain_coverage_missing")
+        elif (i + 1) / sweeps_so_far < policy.min_coverage:
+            bad.append("entry_insufficient_coverage_so_far")
         excluded.update(bad); unknown.update(missing)
-        if not bad and not missing and not excluded.intersection({"insufficient_samples", "insufficient_coverage", "open_interest_insufficient_lagged"}) and "open_interest_missing_lagged" not in unknown:
+        plausible_entry |= not bad
+        if not bad and not missing:
             entry_index = i
             break
+    best = None
+    plausible_exit = False
     if entry_index is not None:
-        best = None
         for j in range(entry_index + 1, len(path)):
             if path[j].t <= path[entry_index].t:
                 continue
             bad, missing = _qualified_endpoint(path[j], policy, "exit")
             excluded.update(bad); unknown.update(missing)
+            plausible_exit |= not bad
             if not bad and not missing and (best is None or path[j].bid > path[best].bid):
                 best = j
-        if best is not None:
-            entry, exit_ = path[entry_index], path[best]
-            pct = exit_.bid / entry.ask - 1
-            if not math.isfinite(pct):
-                excluded.add("return_nonfinite")
-            else:
-                row.update({f"{prefix}_pct": round(pct, 6),
+    if best is not None and not contract_excluded and not contract_unknown:
+        entry, exit_ = path[entry_index], path[best]
+        pct = exit_.bid / entry.ask - 1
+        if not math.isfinite(pct):
+            contract_excluded.add("return_nonfinite")
+        else:
+            contract_change = (exit_.bid - entry.ask) * info.contract_size
+            row.update({f"{prefix}_pct": round(pct, 6),
                         f"{prefix}_status": "eligible", f"{prefix}_reasons": [],
                         f"{prefix}_entry_delay_s": (entry.t - path[0].t) / 1000,
                         f"{prefix}_entry_ms": entry.t, f"{prefix}_exit_ms": exit_.t,
                         f"{prefix}_entry": entry.ask, f"{prefix}_exit": exit_.bid,
-                        f"{prefix}_abs_change_per_contract": round((exit_.bid - entry.ask) * info.contract_size, 4),
+                        f"{prefix}_abs_change_per_contract": (round(contract_change, 4)
+                                                                if math.isfinite(contract_change) else None),
                         f"{prefix}_entry_observed_volume": entry.volume})
-                for side, obs in (("entry", entry), ("exit", exit_)):
-                    for name in ("bid", "ask", "bid_ms", "ask_ms", "bid_size", "ask_size"):
-                        row[f"{prefix}_{side}_{name}"] = getattr(obs, name)
-                    row[f"{prefix}_{side}_spread"] = round(obs.ask - obs.bid, 6)
-                    row[f"{prefix}_{side}_relative_spread"] = round(_relative_spread(obs), 6)
-                return row
-        else:
-            excluded.add("no_strictly_later_qualified_exit")
-    else:
+            for side, obs in (("entry", entry), ("exit", exit_)):
+                for name in ("bid", "ask", "bid_ms", "ask_ms", "bid_size", "ask_size"):
+                    row[f"{prefix}_{side}_{name}"] = getattr(obs, name)
+                row[f"{prefix}_{side}_spread"] = round(obs.ask - obs.bid, 6)
+                row[f"{prefix}_{side}_relative_spread"] = round(_relative_spread(obs), 6)
+            return row
+    if entry_index is None:
         excluded.add("no_qualified_entry")
-    definite_contract_failure = bool(excluded.intersection(
-        {"insufficient_samples", "insufficient_coverage", "open_interest_insufficient_lagged"}))
-    row[f"{prefix}_status"] = "unknown" if unknown and not definite_contract_failure else "excluded"
-    row[f"{prefix}_reasons"] = sorted(excluded | unknown)
+    elif best is None:
+        excluded.add("no_strictly_later_qualified_exit")
+    possible = (plausible_entry if entry_index is None else
+                plausible_exit if best is None else True)
+    row[f"{prefix}_status"] = ("unknown" if not contract_excluded and possible and
+                                (unknown or contract_unknown) else "excluded")
+    row[f"{prefix}_reasons"] = sorted(excluded | unknown | contract_excluded | contract_unknown)
     return row
 
 

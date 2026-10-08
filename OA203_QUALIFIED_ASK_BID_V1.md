@@ -16,11 +16,13 @@ Defaults are configurable through `OA203_QUAL_*` variables and written into `sum
 | `MIN_ASK_SIZE` | 1 | displayed ask contracts at entry |
 | `MIN_BID_SIZE` | 1 | displayed bid contracts at exit |
 | `MIN_ENTRY_VOLUME` | 1 | cumulative contracts observed **at entry** |
-| `MIN_SAMPLES` | 3 | archived samples of this contract |
-| `MIN_COVERAGE` | 0.50 | samples divided by successful chain sweeps |
+| `MIN_SAMPLES` | 3 | archived contract samples seen **through candidate entry** |
+| `MIN_COVERAGE` | 0.50 | contract samples through entry divided by successful chain sweeps through that same sweep |
 | `MIN_OI` | disabled | optional first-sample, lagged open interest; missing is unknown when enabled |
 
 Both endpoint quotes must have finite positive bid and ask, with ask **greater than** bid. Crossed and locked endpoints fail. Both side timestamps must be known, no later than the sample time, and within the configured age. Missing quote, timestamp, size, volume, or enabled OI evidence stays `unknown` and cannot qualify; known failures are `excluded`. `qualified_first_ask_to_later_bid_reasons` records machine-readable codes. `summary.json` counts statuses and reasons across the full contract archive. The selected row includes both endpoint prices, side timestamps, sizes, absolute and relative spreads, entry observed volume, entry/exit acquisition times, and return inputs.
+
+The first qualifying entry is selected using only evidence available through that sample. Sample count and chain coverage use manifest prefixes, never completed-day totals. An absent manifest or zero successful chain sweeps leaves coverage unknown and blocks qualification; a definite failure such as zero ask size remains excluded even if timestamp evidence is also missing. Extending the future path cannot move an already qualified entry backward in time.
 
 The scanner's prior-session OCC selection is **chain selection**, not contract liquidity. `day_volume` is the last cumulative sample and `median_spread_pct` is day-wide; both remain retrospective diagnostics and are never entry gates. OI is lagged and optional. Contract sample coverage and observation-time volume are separate criteria.
 

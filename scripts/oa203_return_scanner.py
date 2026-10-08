@@ -816,6 +816,27 @@ def chain_ok_sweeps(manifest: list[dict[str, Any]]) -> Counter:
     return ok
 
 
+def chain_ok_prefixes(manifest: list[dict[str, Any]]) -> dict[tuple[str, int], int]:
+    """Successful chain sweeps known by each sweep, never a day-end denominator."""
+    counts: Counter = Counter()
+    prefixes = {}
+    expected_sweep = 1
+    complete_prefix = True
+    for entry in sorted(manifest, key=lambda m: m.get("sweep") if type(m.get("sweep")) is int else -1):
+        sweep = entry.get("sweep")
+        if not isinstance(sweep, int):
+            continue
+        if sweep != expected_sweep:
+            complete_prefix = False  # a missing/corrupt manifest line cannot certify coverage
+        expected_sweep = sweep + 1
+        for underlying, status in entry.get("chains", {}).items():
+            if status.get("status") == "ok":
+                counts[underlying] += 1
+            if complete_prefix:
+                prefixes[(underlying, sweep)] = counts[underlying]
+    return prefixes
+
+
 def load_backfill(day_dir: Path, damaged: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
     path = day_dir / "backfill_timesales.jsonl.gz"
     if not path.exists():
@@ -829,7 +850,9 @@ def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | Non
                         damaged: list[dict[str, Any]] | None = None,
                         qualified_policy: QualifiedPolicy = QualifiedPolicy()) -> list[dict[str, Any]]:
     """Rank every archived contract; damaged inputs are salvaged and recorded in ``damaged``."""
-    ok = chain_ok_sweeps(_read_manifest(day_dir, damaged))
+    manifest = _read_manifest(day_dir, damaged)
+    ok = chain_ok_sweeps(manifest)
+    prefix_ok = chain_ok_prefixes(manifest)
     backfill = load_backfill(day_dir, damaged)
     rows = []
     for symbol, path_rows in _contract_paths(day_dir, start_ms, end_ms, damaged=damaged):
@@ -844,7 +867,8 @@ def build_contract_rows(day_dir: Path, policy: ReturnPolicy, start_ms: int | Non
         observations = [Observation(t=r["t"], bid=r["bid"], ask=r["ask"], bid_ms=r.get("bid_ms"),
                                     ask_ms=r.get("ask_ms"), underlying_price=r.get("spot"),
                                     bid_size=r.get("bid_size"), ask_size=r.get("ask_size"),
-                                    volume=r.get("volume"), open_interest=r.get("oi"))
+                                    volume=r.get("volume"), open_interest=r.get("oi"),
+                                    chain_ok_sweeps_so_far=prefix_ok.get((r["underlying"], r.get("sweep"))))
                         for r in path_rows]
         row = contract_metrics(info, observations, policy, qualified_policy)
         record = backfill.get(symbol)
@@ -1299,13 +1323,16 @@ def inspect_contract(day_dir: Path, symbol: str, policy: ReturnPolicy,
     summary = json.loads((day_dir / "summary.json").read_text()) if (day_dir / "summary.json").exists() else {}
     open_ms, close_ms = summary.get("session_open_ms"), summary.get("session_close_ms")
     rows = [r for r in path if (not open_ms or r["t"] >= open_ms) and (not close_ms or r["t"] < close_ms)]
+    manifest = _read_manifest(day_dir)
+    prefix_ok = chain_ok_prefixes(manifest)
     info = ContractInfo(symbol=symbol, underlying=rows[-1]["underlying"], option_type=rows[-1]["type"],
                         strike=rows[-1]["strike"], expiration=rows[-1]["expiration"],
                         contract_size=int(rows[-1].get("contract_size") or 100),
                         volume=rows[-1].get("volume"), open_interest=rows[0].get("oi"),
-                        chain_ok_sweeps=chain_ok_sweeps(_read_manifest(day_dir)).get(rows[-1]["underlying"], 0))
+                        chain_ok_sweeps=chain_ok_sweeps(manifest).get(rows[-1]["underlying"], 0))
     obs = [Observation(r["t"], r["bid"], r["ask"], r.get("bid_ms"), r.get("ask_ms"), r.get("spot"),
-                       r.get("bid_size"), r.get("ask_size"), r.get("volume"), r.get("oi")) for r in rows]
+                       r.get("bid_size"), r.get("ask_size"), r.get("volume"), r.get("oi"),
+                       prefix_ok.get((r["underlying"], r.get("sweep")))) for r in rows]
     metrics = contract_metrics(info, obs, policy, qualified_policy)
     record = load_backfill(day_dir).get(symbol)
     if record and not record.get("error"):
