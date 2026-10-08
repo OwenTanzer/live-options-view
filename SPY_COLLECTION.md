@@ -48,7 +48,9 @@ All per-underlying state lives in `collector.UnderlyingSession`: volume deltas,
 last spot, the first-snapshot guard, VWAP accumulator, RVOL buckets and
 baseline, and the momentum window. Restart recovery reads only that symbol's
 archive. Rows from another root are ignored. A `vwap_state.json` or RVOL
-baseline tagged with another symbol is not loaded.
+baseline tagged with another symbol is not loaded. At a new trading date,
+SPY's in-process volume, spot, VWAP, momentum and first-snapshot state reset
+before today's archive is restored, so each day gets its own `first.csv`.
 
 The legacy macro price map (`_last_prices`) stays restored from QQQ only.
 SPY is subscribed for its own spot and volume and gets its own entry in
@@ -90,7 +92,10 @@ field records the fixed startup reference spot and timestamp, available and
 selected strike counts, selected strike range, and current spot status. A
 missing fresh spot reports `spot_unavailable`; a fresh spot outside the fixed
 range reports `out_of_range`. The same coverage evidence appears in a SPY
-latest snapshot when one is written.
+latest snapshot when one is written. `subscription_delivery` gives the pending
+event/symbol pair count and last delivery error. An interrupted batch reports
+`subscription_pending`, retains unsent pairs for retry or reconnect, and does
+not publish SPY snapshots until delivery completes; QQQ collection continues.
 
 ## Configuration and load
 
@@ -123,12 +128,12 @@ latest snapshot when one is written.
 
 ## Verification status
 
-- Fixture/local: `python tests/verify_collector_spy.py` (15 checks covering
+- Fixture/local: `python tests/verify_collector_spy.py` (17 checks covering
   layout, full OCC/streamer identity, exact SPY expiry, subscription count,
-  deterministic cap and reconnect, fresh spot and coverage, payload and state
-  isolation, quote/tile/health evidence, missing data, RVOL warm-up and
-  per-symbol restart recovery). The existing collector suites pass against
-  `QQQ_SESSION`.
+  deterministic cap, failed-batch retry and reconnect, fresh spot and coverage,
+  payload and state isolation, quote/tile/health evidence, missing data, RVOL
+  warm-up, per-symbol restart recovery and new-day `first.csv`). The existing
+  collector suites pass against `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
 

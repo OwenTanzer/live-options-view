@@ -69,6 +69,9 @@ class FakeFeed:
                 "reconnect_count": 0, "last_feed_event_time": datetime.now(timezone.utc),
                 "last_error": None, "last_close_code": None}
 
+    def get_subscription_delivery(self):
+        return {"pending_event_pairs": 0, "last_error": None}
+
 
 def assert_equal(actual, expected, label):
     if actual != expected:
@@ -291,6 +294,42 @@ def test_spy_dynamic_subscriptions_survive_reconnect_without_resetting_qqq():
     assert_equal(feed.add_option_subscriptions([".SPY261006C671"]), 4,
                  "interrupted SPY delivery does not stop QQQ collection")
     assert_equal(len(feed._subs), 24, "interrupted delivery retained for reconnect")
+    assert_equal(feed.get_subscription_delivery()["pending_event_pairs"], 4,
+                 "incomplete delivery is explicit")
+
+
+def test_spy_failed_middle_batch_retries_unsent_pairs_without_reset():
+    feed = collector.DXLinkFeed("unused", "unused")
+    feed.set_subscriptions([".QQQ261006C600"], ["QQQ", "SPY"])
+    sent = []
+    attempts = 0
+
+    def sometimes_fail(message):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise OSError("second batch interrupted")
+        sent.append(message)
+
+    feed._send = sometimes_fail
+    feed._subscribed = True
+    symbols = [f".SPY261006C{k}" for k in range(500, 634)]
+    assert_equal(feed.add_option_subscriptions(symbols), 536, "67-strike cap event-pair load")
+    assert_equal(feed.get_subscription_delivery()["pending_event_pairs"], 336,
+                 "failed second batch and third batch remain pending")
+    assert_equal([len(m["add"]) for m in sent], [200], "first batch sent once")
+    s3 = FakeS3()
+    collector.push_health(s3, feed, collector.Counters(), collector.SnapshotTracker(),
+                          "run", datetime.now(timezone.utc), "clean_start", TODAY,
+                          {"status": "subscription_pending", "reason": "subscription_delivery_incomplete"})
+    assert_equal(s3.json("intraday/health.json")["spy"]["subscription_delivery"]["pending_event_pairs"],
+                 336, "health exposes incomplete SPY delivery")
+    assert_equal(feed.add_option_subscriptions(symbols), 0, "duplicate request adds no pairs")
+    assert_equal([len(m["add"]) for m in sent], [200, 200, 136],
+                 "duplicate request safely retries only unsent batches")
+    assert_true(all(m["reset"] is False for m in sent), "QQQ subscriptions never reset")
+    assert_equal(feed.get_subscription_delivery(), {"pending_event_pairs": 0, "last_error": None},
+                 "fully delivered state is explicit")
 
 
 def test_spy_snapshot_is_identified_and_isolated():
@@ -459,6 +498,33 @@ def test_restore_is_per_symbol():
     assert_equal((qqq.prev_vol, qqq.first_snapshot_written), ({}, False), "QQQ restore state untouched")
     collector.restore_state(s3, TODAY, qqq)
     assert_equal(qqq.prev_vol, {}, "QQQ restore never reads the SPY archive")
+
+
+def test_spy_new_day_resets_session_state_and_writes_new_first_csv():
+    qqq, spy = sessions()
+    s3 = FakeS3()
+    collector.restore_state(s3, TODAY, spy)
+    snap(s3, feed_state(), spy, SPY_STRIKES)
+    day1 = spy.day_prefix(TODAY.strftime("%Y%m%d")) + "first.csv"
+    assert_true(day1 in s3.store and spy.first_snapshot_written, "first day mirror written")
+    qqq.prev_vol["qqq-only"] = 42
+    qqq.first_snapshot_written = True
+    next_day = TODAY + timedelta(days=1)
+    collector.restore_state(s3, next_day, spy)
+    assert_equal(spy.prev_vol, {}, "new SPY day does not retain old volume deltas")
+    assert_equal(spy.last_spot, [None, None], "new SPY day does not retain old spot")
+    assert_true(not spy.first_snapshot_written, "new SPY day resets first-snapshot guard")
+    assert_equal(qqq.prev_vol["qqq-only"], 42, "QQQ session untouched")
+    assert_true(qqq.first_snapshot_written, "QQQ first-snapshot guard untouched")
+    collector.take_snapshot(s3, FakeFeed(feed_state()), SPY_STRIKES, next_day.isoformat(),
+                            "0DTE_Regular", next_day, collector.Counters(),
+                            collector.SnapshotTracker(), spy)
+    day2 = spy.day_prefix(next_day.strftime("%Y%m%d")) + "first.csv"
+    assert_true(day2 in s3.store, "second day writes its own first.csv")
+    before = s3.store[day2]
+    collector.restore_state(s3, next_day, spy)
+    assert_true(spy.first_snapshot_written, "same-day recovery retains first-snapshot guard")
+    assert_equal(s3.store[day2], before, "same-day recovery does not replace first.csv")
 
 
 def test_foreign_only_archive_cannot_seed_spy_spot_or_timestamp():

@@ -733,6 +733,8 @@ class DXLinkFeed:
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ready = threading.Event()
         self._subs: list[dict] = []
+        self._pending_option_subs: list[dict] = []
+        self._subscription_error: Optional[str] = None
         self._subscribed          = False
         self._data_logged         = False
         # lifecycle telemetry
@@ -767,17 +769,34 @@ class DXLinkFeed:
                         additions.append({"type": event_type, "symbol": sym})
                         known.add(key)
             self._subs.extend(additions)
+            self._pending_option_subs.extend(additions)
             if self._subscribed:
-                for i in range(0, len(additions), 200):
-                    try:
-                        self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
-                                    "reset": False, "add": additions[i:i + 200]})
-                    except Exception as exc:
-                        # Keep the complete list for the feed's reconnect path;
-                        # a SPY delivery interruption must not stop QQQ collection.
-                        log.warning(f"SPY subscription delivery interrupted; retained for reconnect: {exc}")
-                        break
+                self._flush_pending_option_subscriptions_locked()
         return len(additions)
+
+    def _flush_pending_option_subscriptions_locked(self):
+        while self._pending_option_subs:
+            batch = self._pending_option_subs[:200]
+            try:
+                self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": False, "add": batch})
+            except Exception as exc:
+                self._subscription_error = str(exc)
+                log.warning(f"SPY subscription delivery interrupted; {len(self._pending_option_subs)} "
+                            f"event/symbol pairs pending retry: {exc}")
+                return
+            del self._pending_option_subs[:len(batch)]
+        self._subscription_error = None
+
+    def retry_pending_option_subscriptions(self):
+        with self._lock:
+            if self._subscribed:
+                self._flush_pending_option_subscriptions_locked()
+
+    def get_subscription_delivery(self) -> dict:
+        with self._lock:
+            return {"pending_event_pairs": len(self._pending_option_subs),
+                    "last_error": self._subscription_error}
 
     def get_state(self) -> dict[str, dict]:
         with self._lock:
@@ -929,6 +948,8 @@ class DXLinkFeed:
                             "reset": i == 0, "add": batch,
                         })
                     log.info(f"subscribed to {len(subscriptions)} event/symbol pairs ({batch_size}/batch)")
+                self._pending_option_subs.clear()
+                self._subscription_error = None
             self._ready.set()
 
         elif mtype == "FEED_DATA":
@@ -1799,6 +1820,7 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
         "spot": {"price": spy_price, "observed_at": spy_ts, "status": spy_spot_status},
         "subscription_coverage": _spy_subscription_coverage(
             spy_context.get("subscription_coverage"), _fresh_spy_spot(spy_state, now)[0]),
+        "subscription_delivery": feed.get_subscription_delivery(),
         "last_snapshot_upload_time": spy_counters.get()["last_snapshot_time"] if spy_counters else None,
         "cadence": spy_tracker.get() if spy_tracker else None,
     }
@@ -1897,6 +1919,7 @@ class UnderlyingSession:
         self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
         self.subscription_coverage: dict | None = None  # SPY's fixed startup strike window
         self.first_snapshot_written = False     # guard so first.csv is only written once per session
+        self.session_date: date | None = None
         self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
         self.rvol_baseline: dict = {}           # loaded once per session from rvol_baseline_key
         self.rvol_today: dict[str, int] = {}    # bucket_label -> latest session cum_volume in that bucket
@@ -1925,6 +1948,17 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
     or lose price context.
     """
     us = us or QQQ_SESSION
+    if us.symbol == "SPY" and us.session_date != today:
+        # This object survives across collection days in the same process.
+        # Start a new SPY archive with fresh per-day state before recovery.
+        us.prev_vol = {}
+        us.last_spot = [None, None]
+        us.first_snapshot_written = False
+        us.vwap_state = ms.VwapState()
+        us.rvol_today = {}
+        us.momentum_history = []
+        us.subscription_coverage = None
+        us.session_date = today
     date_str = today.strftime("%Y%m%d")
     try:
         resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=us.day_prefix(date_str))
@@ -2952,7 +2986,9 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 quote_registry.set_session(feed, contracts)
                 symbols = list(dict.fromkeys(row[f"{side}_sym"] for row in selected for side in ("call", "put")))
                 added = feed.add_option_subscriptions(symbols)
-                spy_context.update(status="collecting", reason=None)
+                pending = feed.get_subscription_delivery()["pending_event_pairs"]
+                spy_context.update(status="subscription_pending" if pending else "collecting",
+                                   reason="subscription_delivery_incomplete" if pending else None)
                 log.info(f"SPY fixed startup window: {len(us_strikes)} chain strikes, "
                          f"{len(selected)} selected strikes, {len(symbols)} option symbols, "
                          f"{added} added event/symbol pairs; spot={spot} at {spot_ts}")
@@ -3016,12 +3052,19 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 raise
         feed.restart_if_dead()
 
+        if spy_context.get("status") == "subscription_pending":
+            feed.retry_pending_option_subscriptions()
+            if not feed.get_subscription_delivery()["pending_event_pairs"]:
+                spy_context.update(status="collecting", reason=None)
+
         tracker.check_missed()
         try:
             take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
         except Exception as e:
             log.error(f"snapshot error: {e}")
         for us, us_strikes, us_exp in extra_chains:
+            if us.symbol == "SPY" and spy_context.get("status") != "collecting":
+                continue
             us_counters, us_tracker = extra_trackers[us.symbol]
             us_tracker.check_missed()
             try:
