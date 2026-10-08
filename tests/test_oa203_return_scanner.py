@@ -14,6 +14,7 @@ import oa203_return_scanner as scanner  # noqa: E402
 from oa203_returns import (  # noqa: E402
     ContractInfo,
     Observation,
+    QualifiedPolicy,
     ReturnPolicy,
     contract_metrics,
     first_to_max,
@@ -99,6 +100,171 @@ class QuoteBases(unittest.TestCase):
         self.assertAlmostEqual(row["strike_vs_spot_pct"], 0.05)
 
 
+class QualifiedQuotes(unittest.TestCase):
+    key = "qualified_first_ask_to_later_bid"
+
+    def q(self, i, bid=1.0, ask=1.1, **changes):
+        t = T0 + i * MIN
+        values = dict(t=t, bid=bid, ask=ask, bid_ms=t, ask_ms=t,
+                      bid_size=2, ask_size=2, volume=1,
+                      chain_ok_sweeps_so_far=i + 1)
+        values.update(changes)
+        return Observation(**values)
+
+    def row(self, path, **policy):
+        policy.setdefault("min_samples", 2)
+        return contract_metrics(info(ok_sweeps=len(path)), path,
+                                qualified_policy=QualifiedPolicy(**policy))
+
+    def test_later_entry_and_negative_return_keep_legacy_numbers(self):
+        path = [self.q(0, volume=0), self.q(1), self.q(2, bid=0.8, ask=0.9)]
+        row = self.row(path)
+        self.assertEqual(row[self.key + "_status"], "eligible")
+        self.assertLess(row[self.key + "_pct"], 0)
+        self.assertEqual(row[self.key + "_entry_delay_s"], 60)
+        self.assertEqual(row[self.key + "_entry_observed_volume"], 1)
+        self.assertEqual(row["exec_first_to_max_entry_ms"], T0)
+        self.assertTrue(row["clean"])
+
+    def test_entry_never_uses_later_volume(self):
+        path = [self.q(0, volume=0), self.q(1, volume=0), self.q(2, volume=100)]
+        row = self.row(path)
+        self.assertNotEqual(row[self.key + "_status"], "eligible")
+        self.assertIn("no_strictly_later_qualified_exit", row[self.key + "_reasons"])
+
+    def test_bad_prices_times_sizes_and_missing_evidence(self):
+        cases = [
+            ({"bid": None}, "unknown", "entry_bid_missing"),
+            ({"ask": 0}, "excluded", "entry_ask_nonpositive"),
+            ({"bid": 2}, "excluded", "entry_crossed"),
+            ({"ask": 1}, "excluded", "entry_locked"),
+            ({"bid": float("nan")}, "excluded", "entry_bid_nonfinite"),
+            ({"ask": float("inf")}, "excluded", "entry_ask_nonfinite"),
+            ({"bid_ms": None}, "unknown", "entry_bid_timestamp_missing"),
+            ({"ask_ms": T0 + 100 * MIN}, "excluded", "entry_ask_timestamp_future"),
+            ({"bid_ms": T0 - 2_000_000}, "excluded", "entry_bid_timestamp_stale"),
+            ({"ask_size": None}, "unknown", "entry_ask_size_missing"),
+            ({"ask_size": 0}, "excluded", "entry_ask_size_insufficient"),
+        ]
+        for changes, status, reason in cases:
+            with self.subTest(changes=changes):
+                row = self.row([self.q(0, **changes), self.q(1, **changes), self.q(2, **changes)])
+                self.assertEqual(row[self.key + "_status"], status)
+                self.assertIn(reason, row[self.key + "_reasons"])
+
+    def test_exit_qualifies_independently_and_must_be_strictly_later(self):
+        path = [self.q(0), self.q(0, bid=9, ask=9.1),
+                self.q(1, bid=2, bid_size=0), self.q(2, bid=0.8, ask=0.9)]
+        row = self.row(path)
+        self.assertEqual(row[self.key + "_exit_ms"], T0 + 2 * MIN)
+        self.assertEqual(row[self.key + "_exit"], 0.8)
+        self.assertLess(row[self.key + "_pct"], 0)
+
+    def test_exit_missing_zero_stale_future_and_size_evidence(self):
+        for changes, status, reason in (
+            ({"bid": None}, "unknown", "exit_bid_missing"),
+            ({"bid": 0}, "excluded", "exit_bid_nonpositive"),
+            ({"ask": 0}, "excluded", "exit_ask_nonpositive"),
+            ({"bid_ms": None}, "unknown", "exit_bid_timestamp_missing"),
+            ({"ask_ms": T0 + 100 * MIN}, "excluded", "exit_ask_timestamp_future"),
+            ({"bid_ms": T0 - 2_000_000}, "excluded", "exit_bid_timestamp_stale"),
+            ({"bid_size": None}, "unknown", "exit_bid_size_missing"),
+            ({"bid_size": 0}, "excluded", "exit_bid_size_insufficient"),
+        ):
+            with self.subTest(changes=changes):
+                row = self.row([self.q(0), self.q(1), self.q(2, **changes), self.q(3, **changes)])
+                self.assertEqual(row[self.key + "_status"], status)
+                self.assertIn(reason, row[self.key + "_reasons"])
+
+    def test_coverage_and_sample_gate(self):
+        self.assertIn("entry_insufficient_samples_so_far", self.row([self.q(0), self.q(1)], min_samples=3)[self.key + "_reasons"])
+        row = self.row([self.q(i, chain_ok_sweeps_so_far=20) for i in range(3)])
+        self.assertIn("entry_insufficient_coverage_so_far", row[self.key + "_reasons"])
+
+    def test_lagged_oi_optional_but_explicit_when_configured(self):
+        row = self.row([self.q(i) for i in range(3)], min_open_interest=10)
+        self.assertEqual(row[self.key + "_status"], "unknown")
+        self.assertIn("open_interest_missing_lagged", row[self.key + "_reasons"])
+
+    def test_issue_125_synthetic_controls_keep_legacy_classification(self):
+        # Shapes mirror issue #125; raw Sep 29/Oct 1 contract paths are not in repo.
+        for bid, ask, late_ask in ((0.04, 0.16, 2.50), (0.03, 0.15, 2.30)):
+            path = [self.q(0, bid, ask), self.q(1, bid, ask),
+                    self.q(2, 0.04, late_ask), self.q(3, 0.04, late_ask)]
+            row = self.row(path)
+            self.assertTrue(row["clean"])
+            self.assertGreater(row["mid_first_to_max_pct"], 11)
+            self.assertLess(row["exec_first_to_max_pct"], -0.7)
+            self.assertEqual(row[self.key + "_status"], "excluded")
+            self.assertIn("entry_spread", row[self.key + "_reasons"])
+        for symbol in ("GS261002P00600000", "GS261009C01160000", "GS261009C00940000"):
+            row = contract_metrics(info(symbol=symbol, ok_sweeps=3),
+                                   [self.q(0), self.q(1, bid=2), self.q(2)])
+            self.assertFalse(row["clean"])
+            self.assertIn("crossed_quotes_seen", row["contract_flags"])
+        for symbol in ("MU261002C00100000", "SPCX261002C00100000"):
+            row = contract_metrics(info(symbol=symbol, ok_sweeps=3),
+                                   [self.q(0, 1, 1.05), self.q(1, 1.1, 1.15),
+                                    self.q(2, 1.2, 1.25), self.q(3, 1.3, 1.35)])
+            self.assertTrue(row["clean"])
+            self.assertEqual(row[self.key + "_status"], "eligible")
+
+    def test_prefix_entry_does_not_use_future_sample_or_coverage(self):
+        path = [self.q(i, 1 + i * .1, 1.1 + i * .1) for i in range(4)]
+        short = contract_metrics(info(ok_sweeps=3), path[:3])
+        full = contract_metrics(info(ok_sweeps=4), path)
+        extended = contract_metrics(info(ok_sweeps=6), path + [self.q(4), self.q(5)])
+        self.assertIsNone(short[self.key + "_pct"])
+        self.assertEqual(full[self.key + "_entry_ms"], T0 + 2 * MIN)
+        self.assertEqual(full[self.key + "_entry_delay_s"], 120)
+        self.assertEqual(extended[self.key + "_entry_ms"], full[self.key + "_entry_ms"])
+
+    def test_missing_coverage_is_unknown_but_definite_bad_entry_is_excluded(self):
+        path = [self.q(i, chain_ok_sweeps_so_far=None) for i in range(4)]
+        row = contract_metrics(info(ok_sweeps=0), path)
+        self.assertEqual(row[self.key + "_status"], "unknown")
+        self.assertIn("entry_chain_coverage_missing", row[self.key + "_reasons"])
+        bad = [self.q(i, ask_size=0, bid_ms=None) for i in range(4)]
+        row = contract_metrics(info(ok_sweeps=4), bad)
+        self.assertEqual(row[self.key + "_status"], "excluded")
+        self.assertIn("entry_bid_timestamp_missing", row[self.key + "_reasons"])
+        self.assertIn("entry_ask_size_insufficient", row[self.key + "_reasons"])
+
+    def test_policy_constructor_rejects_nonfinite_and_wrong_gate_types(self):
+        for field in ("min_ask_size", "min_bid_size", "min_entry_volume", "min_samples"):
+            for value in (float("nan"), float("inf"), True, "2"):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    QualifiedPolicy(**{field: value})
+
+    def test_build_with_missing_or_zero_success_manifest_stays_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            day = Path(tmp)
+            (day / "sweeps").mkdir()
+            for i in range(4):
+                o = self.q(i)
+                row = dict(sweep=i + 1, t=o.t, underlying="X", symbol="X261002C00100000",
+                           type="call", strike=100, expiration="2026-10-02", bid=o.bid,
+                           ask=o.ask, bid_ms=o.bid_ms, ask_ms=o.ask_ms,
+                           bid_size=o.bid_size, ask_size=o.ask_size, volume=o.volume, oi=10)
+                with gzip.open(day / "sweeps" / f"sweep_{i + 1:04d}.jsonl.gz", "wt") as out:
+                    out.write(json.dumps(row) + "\n")
+            def built():
+                return scanner.build_contract_rows(day, ReturnPolicy())[0]
+            self.assertEqual(built()[self.key + "_status"], "unknown")
+            manifest = day / "sweeps" / "manifest.jsonl"
+            manifest.write_text("".join(json.dumps({"sweep": i + 1,
+                "chains": {"X": {"status": "error"}}}) + "\n" for i in range(4)))
+            self.assertEqual(built()[self.key + "_status"], "unknown")
+            manifest.write_text("".join(json.dumps({"sweep": i + 1,
+                "chains": {"X": {"status": "ok"}}}) + "\n" for i in range(4)))
+            good = built()
+            self.assertEqual(good[self.key + "_status"], "eligible")
+            self.assertEqual(good[self.key + "_entry_ms"], T0 + 2 * MIN)
+            manifest.write_text("".join(json.dumps({"sweep": i + 1,
+                "chains": {"X": {"status": "ok"}}}) + "\n" for i in (0, 2, 3)))
+            self.assertEqual(built()[self.key + "_status"], "unknown")
+
+
 class TradeBars(unittest.TestCase):
     def test_same_bar_low_and_high_are_not_paired(self):
         bars = [
@@ -131,6 +297,25 @@ class Ranking(unittest.TestCase):
         self.assertEqual(by["C"]["clean_rank_in_type"], 1)
         self.assertIsNone(by["A"]["clean_rank"])
         self.assertEqual(len(by), 4)
+
+    def test_qualified_winner_outside_legacy_shortlist(self):
+        rows = [{"symbol": f"X261002C{i:08d}", "option_type": "call", "underlying": "X",
+                 "clean": True, "mid_first_to_max_pct": 500 - i,
+                 "qualified_first_ask_to_later_bid_status": "eligible",
+                 "qualified_first_ask_to_later_bid_pct": 2 if i == 201 else -0.1,
+                 "qualified_first_ask_to_later_bid_reasons": []}
+                for i in range(1, 202)]
+        ranked = rank(rows)
+        winner = next(r for r in ranked if r["symbol"].endswith("00000201"))
+        self.assertEqual(winner["rank"], 201)
+        self.assertEqual(winner["clean_rank"], 201)
+        self.assertEqual(winner["qualified_first_ask_to_later_bid_rank"], 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            scanner.write_outputs(Path(tmp), ranked)
+            with open(Path(tmp) / "leaderboard.csv", newline="") as src:
+                self.assertNotIn(winner["symbol"], src.read())
+            with open(Path(tmp) / "qualified_ask_bid_v1.csv", newline="") as src:
+                self.assertIn(winner["symbol"], src.read())
 
 
 OCC = (
