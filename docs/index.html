@@ -1763,11 +1763,16 @@ async function fetchChain(symbol) {
   }
 }
 
+let latestQqqRequest = 0;
 async function fetchLatest() {
   const token = chainSelection.token();
   // QQQ is always refreshed: paper trading, expiry settlement marks and the
   // QQQ price tile depend on it regardless of which chain is on screen.
+  const qqqRequest = ++latestQqqRequest;
   const qqq = await fetchChain('QQQ');
+  // QQQ refreshes independently of the selected chain, but an older refresh
+  // must not replace newer paper-trading, indicator or cached chain state.
+  if (qqqRequest !== latestQqqRequest) return;
   if (qqq.data && qqq.data.rows.length) {
     lastTs = qqq.data.timestamp;
     lastData = qqq.data;
@@ -1775,7 +1780,7 @@ async function fetchLatest() {
     ingestSnapshotQuotes(qqq.data);
     updateQqqVwapRvolLine(qqq.data.underlying_market);
     updateQqqMomentumLine(qqq.data.underlying_market);
-  } else if (!qqq.transient || !chainState.QQQ?.data) {
+  } else {
     chainState.QQQ = { data: chainState.QQQ?.data ?? null, error: qqq.error || 'No QQQ rows in the latest snapshot.' };
   }
 
@@ -1789,8 +1794,11 @@ async function fetchLatest() {
       // Interests first: the quote cache only keeps wanted (visible) symbols.
       updateQuoteInterests();
       publishSnapshotQuotes(other.data);
-    } else if (!other.transient || !chainState[token.symbol]?.data) {
-      chainState[token.symbol] = { data: null, error: other.error };
+    } else {
+      chainState[token.symbol] = {
+        data: other.transient ? chainState[token.symbol]?.data ?? null : null,
+        error: other.error,
+      };
     }
   }
   if (!chainSelection.accepts(token)) return;

@@ -86,7 +86,7 @@ function harness(saved = 'QQQ') {
     style: {}, dataset: {},
     classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } },
   });
-  const calls = { heatmap: [], ingested: [], published: [], qqqLine: [] };
+  const calls = { heatmap: [], ingested: [], published: [], qqqLine: [], momentum: [], paper: 0 };
   const routes = {};          // path -> () => Promise<Response>
   const fetchFn = (url) => {
     const p = url.slice(url.indexOf('/', 8) + 1).split('?')[0];
@@ -114,9 +114,9 @@ function harness(saved = 'QQQ') {
     ingestSnapshotQuotes: (d) => calls.ingested.push(d.symbol ?? 'QQQ'),
     publishSnapshotQuotes: (d) => calls.published.push(d.symbol),
     updateQqqVwapRvolLine: (um) => calls.qqqLine.push(um?.symbol),
-    updateQqqMomentumLine: () => {},
+    updateQqqMomentumLine: (um) => calls.momentum.push(um?.symbol),
     updateQuoteInterests: () => calls.published.push('interests'),
-    renderPaper: () => {},
+    renderPaper: () => { calls.paper++; },
     renderHeatmap: (data, symbol) => {
       calls.heatmap.push({ symbol, dataSymbol: data.symbol, price: data.underlying_price });
       el('heatmap-body').innerHTML = `rows:${data.symbol}`;
@@ -178,6 +178,32 @@ const settle = () => new Promise(r => setImmediate(r));
     assert.equal(h.scope.chainState.SPY, undefined, 'late SPY reply not cached either');
   }
 
+  // QQQ -> SPY -> QQQ: an older QQQ response cannot overwrite the newer
+  // QQQ cache or feed paper settlement/indicators after the reverse switch.
+  {
+    const h = harness();
+    const slow = h.deferred();
+    h.routes['intraday/latest.json'] = slow.route;
+    const old = h.api.fetchLatest();
+    h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ', { price: 601.1 }));
+    h.routes['intraday/spy/latest.json'] = h.reply(snapshot('SPY'));
+    h.api.selectUnderlying('SPY');
+    await settle(); await settle();
+    h.api.selectUnderlying('QQQ');
+    await settle(); await settle();
+    const ingested = h.calls.ingested.length;
+    const indicators = h.calls.qqqLine.length;
+    const paper = h.calls.paper;
+    slow.resolve(snapshot('QQQ', { price: 599.1 }));
+    await old;
+    assert.equal(h.api.lastData.underlying_price, 601.1, 'late QQQ does not replace newer cache');
+    assert.equal(h.scope.chainState.QQQ.data.underlying_price, 601.1);
+    assert.equal(h.calls.ingested.length, ingested, 'late QQQ does not reach settlement');
+    assert.equal(h.calls.qqqLine.length, indicators, 'late QQQ does not replace indicator state');
+    assert.equal(h.calls.paper, paper, 'late QQQ does not render paper state');
+    assert.equal(h.calls.momentum.length, indicators);
+  }
+
   // Rapid SPY → QQQ → SPY: the first SPY request's reply is stale and dropped;
   // only the reply for the current selection renders.
   {
@@ -222,17 +248,45 @@ const settle = () => new Promise(r => setImmediate(r));
     assert.equal(h.calls.heatmap.length, 0);
   }
 
-  // A transient SPY failure keeps the last validated SPY snapshot (marked stale)
+  // A transient SPY failure keeps even a fresh validated snapshot (marked stale)
   // instead of blanking it or substituting QQQ.
   {
     const h = harness('SPY');
     h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ'));
-    h.routes['intraday/spy/latest.json'] = h.reply(snapshot('SPY', { ts: new Date(NOW - 10 * 60_000).toISOString() }));
+    h.routes['intraday/spy/latest.json'] = h.reply(snapshot('SPY'));
     await h.api.fetchLatest();
     h.routes['intraday/spy/latest.json'] = () => Promise.reject(new Error('network'));
     await h.api.fetchLatest();
     assert.deepEqual(h.calls.heatmap.at(-1), { symbol: 'SPY', dataSymbol: 'SPY', price: 670.2 });
-    assert.equal(h.el('status-dot').className, 'stale', 'old SPY data is marked stale');
+    assert.equal(h.el('status-dot').className, 'stale', 'fresh cached SPY data is stale after failure');
+    assert.match(h.scope.chainState.SPY.error, /could not be loaded/);
+  }
+
+  // Fresh QQQ cache is also marked stale on failure. Older failures cannot
+  // taint a newer success, and older successes cannot clear a newer failure.
+  {
+    const h = harness();
+    h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ'));
+    await h.api.fetchLatest();
+    const slowFailure = h.deferred();
+    h.routes['intraday/latest.json'] = slowFailure.route;
+    const old = h.api.fetchLatest();
+    h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ', { price: 601.1 }));
+    await h.api.fetchLatest();
+    slowFailure.resolve({});
+    await old;
+    assert.equal(h.scope.chainState.QQQ.data.underlying_price, 601.1);
+    assert.equal(h.scope.chainState.QQQ.error, null, 'old failure does not mark new success stale');
+    const slowSuccess = h.deferred();
+    h.routes['intraday/latest.json'] = slowSuccess.route;
+    const older = h.api.fetchLatest();
+    h.routes['intraday/latest.json'] = () => Promise.reject(new Error('network'));
+    await h.api.fetchLatest();
+    slowSuccess.resolve(snapshot('QQQ', { price: 602.1 }));
+    await older;
+    assert.equal(h.scope.chainState.QQQ.data.underlying_price, 601.1, 'cached QQQ kept');
+    assert.match(h.scope.chainState.QQQ.error, /could not be loaded/, 'newer failure remains visible');
+    assert.equal(h.el('status-dot').className, 'stale', 'fresh cached QQQ is stale after failure');
   }
 
   // A first QQQ load that fails is reported, not left on "Loading…".
