@@ -76,10 +76,11 @@ Its Linux image checks pass; live client/grant gates remain pending. See
 
 The qualified return view's provisional thresholds and evidence rules are in
 [OA203_QUALIFIED_ASK_BID_V1.md](../OA203_QUALIFIED_ASK_BID_V1.md).
-The qualified view is already on `master`; the draft SPY MCP work is stacked
-on the SPY collector branch and has not been merged or deployed. Fixture
-coverage here exercises both capabilities together. A live SPY snapshot and
-client access to a deployed SPY MCP endpoint have not been verified.
+The qualified view and SPY collector/website are now on `master`; the collector
+deployment succeeded. The draft SPY MCP work is based on `master` and has not
+been merged or deployed. Fixture coverage here exercises both capabilities
+together. A live SPY snapshot and client access to a deployed SPY MCP endpoint
+have not been verified.
 
 Every result carries dataset/envelope schema, requested filters, actual identity,
 retrieval time, source locators/links and retrieved digests, supplied producer
