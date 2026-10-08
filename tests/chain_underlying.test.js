@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const shared = require('../docs/shared.js');
-const { chainLatestPath, occRoot, validateChainPayload, ChainSelection, relativeOiRanges } = shared;
+const { chainLatestPath, occRoot, validateChainPayload, ChainSelection, relativeOiRanges, summarizeSpyHealth } = shared;
 
 const NOW = Date.now();
 function snapshot(symbol, { declare = true, price = symbol === 'SPY' ? 670.2 : 600.1, rows, ts = new Date(NOW).toISOString() } = {}) {
@@ -79,6 +79,128 @@ const to = html.indexOf(END, from);
 assert.ok(from !== -1 && to !== -1, 'could not locate the data fetch cycle in docs/index.html');
 const source = html.slice(from, to);
 
+// The price tile and SPY health badge use the shipped HTML functions, with
+// offline artifact responses and no provider/browser network dependency.
+assert.match(html, /const MAIN_TICKERS = \['QQQ', 'SPY'/);
+assert.equal(shared.isTradeableShareSymbol('SPY'), false, 'SPY tile is display-only');
+const testPriceTile = async () => {
+  const published = [];
+  const fallback = [];
+  const rendered = [];
+  let prices = { SPY: { price: 670.2, source: 'dxlink', quote_ts: new Date(NOW).toISOString() }, QQQ: { price: 600.1 } };
+  const tickerState = {
+    publishFallback: p => fallback.push(p), publish: q => published.push(...q),
+    snapshot: () => ({ SPY: published.at(-1) }),
+  };
+  const priceSource = html.slice(html.indexOf('async function fetchPrices()'), html.indexOf('// EIA STEO crude calibration', html.indexOf('async function fetchPrices()')));
+  const fetchPrices = new Function('fetch', 'R2', 'tickerState', 'updatePriceStrip', 'console', `${priceSource}\nreturn fetchPrices;`)(
+    async () => ({ ok: true, json: async () => ({ prices }) }), 'https://r2.example', tickerState,
+    state => rendered.push(state), { warn() {} },
+  );
+  await fetchPrices();
+  assert.equal(published[0].price, 670.2, 'SPY tile uses the SPY provider price');
+  assert.equal(published[0].quote_ts, prices.SPY.quote_ts, 'SPY tile keeps provider observation time');
+  assert.equal(fallback[0].SPY, undefined, 'SPY does not use macro fallback');
+  prices = { SPY: { price: null, source: null, quote_ts: null }, QQQ: { price: 600.1 } };
+  await fetchPrices();
+  assert.equal(published.length, 1, 'missing SPY price is not fabricated');
+  assert.equal(rendered.length, 2, 'tile state is refreshed even when SPY is missing');
+  for (const bad of [
+    { price: 600, source: 'dxlink', quote_ts: new Date(NOW).toISOString(), symbol: 'QQQ' },
+    { price: 670, source: 'yfinance', quote_ts: new Date(NOW).toISOString() },
+    { price: 670, source: 'dxlink', quote_ts: null },
+    { price: Infinity, source: 'dxlink', quote_ts: new Date(NOW).toISOString() },
+  ]) {
+    prices = { SPY: bad, QQQ: { price: 600.1 } };
+    await fetchPrices();
+    assert.equal(published.length, 1, 'foreign or unsupported SPY evidence is rejected');
+    assert.equal(fallback.at(-1).SPY, undefined);
+  }
+  let now = Date.parse('2026-10-07T15:00:00Z');
+  const store = new shared.TickerStateStore({ SPY: 'equity', QQQ: 'equity' }, { nowFn: () => now });
+  assert.equal(store.get('SPY'), null, 'missing SPY stays missing');
+  store.publish([{ symbol: 'QQQ', price: 600.1, source: 'dxlink', quote_ts: new Date(now).toISOString() }]);
+  assert.equal(store.get('SPY'), null, 'QQQ never supplies a missing SPY quote');
+  store.publish([{ symbol: 'SPY', price: 670.2, source: 'dxlink', quote_ts: new Date(now).toISOString() }]);
+  assert.equal(store.get('SPY').state, 'live');
+  now += 31_000;
+  assert.equal(store.get('SPY').state, 'stale', 'SPY ages from its provider observation');
+  assert.equal(store.get('SPY').price, 670.2);
+
+};
+const testSpyHealthBadge = async () => {
+  const badge = { className: '', textContent: '', title: '' };
+  let response = { updated_at: new Date().toISOString(), spy: {
+    collection_status: 'collecting', spot: { status: 'live' },
+    last_snapshot_upload_time: new Date().toISOString(),
+  } };
+  const start = html.indexOf('let latestSpyHealthRequest = 0;');
+  const end = html.indexOf('liveQuotes.subscribe(', start);
+  assert.ok(start > 0 && end > start, 'shipped SPY health badge code found');
+  const fetchSpyHealth = new Function('fetch', 'R2', 'document', 'summarizeSpyHealth',
+    `${html.slice(start, end)}\nreturn fetchSpyHealth;`)(
+      async () => ({ ok: true, json: async () => response }), 'https://r2.example',
+      { getElementById: () => badge }, summarizeSpyHealth,
+    );
+  await fetchSpyHealth();
+  assert.equal(badge.className, 'transport-health live', 'fresh SPY health renders live');
+  response = { ...response, updated_at: new Date(Date.now() - 60_000).toISOString() };
+  await fetchSpyHealth();
+  assert.equal(badge.className, 'transport-health stale', 'old SPY health renders stale');
+  response = { updated_at: new Date().toISOString(), spy: { collection_status: 'missing_today_expiration', reason: 'no SPY 0DTE' } };
+  await fetchSpyHealth();
+  assert.match(badge.textContent, /missing today expiration/, 'missing SPY 0DTE is visible');
+  const pending = [];
+  const ordered = new Function('fetch', 'R2', 'document', 'summarizeSpyHealth',
+    html.slice(start, end) + '\nreturn fetchSpyHealth;')(
+      () => new Promise((resolve, reject) => pending.push({ resolve, reject })), 'https://r2.example',
+      { getElementById: () => badge }, summarizeSpyHealth);
+  const oldRequest = ordered();
+  const newRequest = ordered();
+  pending[1].resolve({ ok: true, json: async () => ({
+    updated_at: new Date().toISOString(), spy: { collection_status: 'disabled' },
+  }) });
+  await newRequest;
+  pending[0].reject(new Error('old request failed'));
+  await oldRequest;
+  assert.equal(badge.textContent, 'SPY: disabled', 'old failure cannot replace newer health');
+  const failed = ordered();
+  pending[2].reject(new Error('network'));
+  await failed;
+  assert.equal(badge.className, 'transport-health unavailable');
+
+};
+{
+  const now = Date.now();
+  const health = { updated_at: new Date(now).toISOString(), spy: {
+    collection_status: 'collecting', spot: { status: 'live' },
+    last_snapshot_upload_time: new Date(now - 10_000).toISOString(),
+  } };
+  assert.equal(summarizeSpyHealth(health, now).state, 'live');
+  assert.equal(summarizeSpyHealth(health, now + 60_000).state, 'stale', 'old health artifact cannot stay live');
+  health.spy.spot.status = 'unavailable';
+  assert.equal(summarizeSpyHealth(health, now).state, 'unavailable');
+  health.spy.collection_status = 'missing_today_expiration';
+  assert.match(summarizeSpyHealth(health, now).text, /missing today expiration/);
+  health.spy.collection_status = 'collecting';
+  health.spy.last_snapshot_upload_time = null;
+  health.process_start_time = new Date(now - 5 * 60_000).toISOString();
+  assert.equal(summarizeSpyHealth(health, now).state, 'unavailable', 'long missing SPY snapshot is unavailable');
+  assert.equal(summarizeSpyHealth(null, now).state, 'unavailable');
+  health.spy.collection_status = 'disabled';
+  assert.equal(summarizeSpyHealth(health, now).text, 'SPY: disabled');
+  assert.equal(summarizeSpyHealth(health, now).state, 'unavailable');
+  assert.equal(summarizeSpyHealth({ updated_at: health.updated_at, last_snapshot_upload_time: health.updated_at }, now).state,
+    'unavailable', 'QQQ health cannot stand in for SPY');
+  health.spy.collection_status = 'collecting';
+  health.spy.spot.status = 'live';
+  health.spy.last_snapshot_upload_time = new Date(now - 181_000).toISOString();
+  assert.equal(summarizeSpyHealth(health, now).state, 'stale');
+  health.updated_at = new Date(now + 31_000).toISOString();
+  assert.equal(summarizeSpyHealth(health, now).state, 'stale', 'future health timestamp cannot claim live');
+
+}
+
 function harness(saved = 'QQQ') {
   const els = {};
   const el = (id) => els[id] || (els[id] = {
@@ -126,12 +248,14 @@ function harness(saved = 'QQQ') {
   };
   const names = Object.keys(scope);
   const api = new Function(...names, `let lastTs = null, lastData = null;\n${source}\nreturn { fetchLatest, selectUnderlying, renderSelectedChain,
-    get lastData(){ return lastData; } };`)(...names.map(n => scope[n]));
+    get lastData(){ return lastData; }, get lastTs(){ return lastTs; } };`)(...names.map(n => scope[n]));
   return { api, els, el, calls, routes, reply, deferred, doc, scope };
 }
 const settle = () => new Promise(r => setImmediate(r));
 
 (async () => {
+  await testPriceTile();
+  await testSpyHealthBadge();
   // QQQ → SPY → QQQ: headings, rendered data and QQQ-only side effects stay consistent.
   {
     const h = harness();
@@ -178,7 +302,7 @@ const settle = () => new Promise(r => setImmediate(r));
     assert.equal(h.scope.chainState.SPY, undefined, 'late SPY reply not cached either');
   }
 
-  // QQQ -> SPY -> QQQ: an older QQQ response cannot overwrite the newer
+  // QQQ -> SPY -> QQQ: an older QQQ response must not overwrite the newer
   // QQQ cache or feed paper settlement/indicators after the reverse switch.
   {
     const h = harness();
@@ -258,12 +382,12 @@ const settle = () => new Promise(r => setImmediate(r));
     h.routes['intraday/spy/latest.json'] = () => Promise.reject(new Error('network'));
     await h.api.fetchLatest();
     assert.deepEqual(h.calls.heatmap.at(-1), { symbol: 'SPY', dataSymbol: 'SPY', price: 670.2 });
-    assert.equal(h.el('status-dot').className, 'stale', 'fresh cached SPY data is stale after failure');
+    assert.equal(h.el('status-dot').className, 'stale', 'fresh cached SPY data is marked stale after failure');
     assert.match(h.scope.chainState.SPY.error, /could not be loaded/);
   }
 
-  // Fresh QQQ cache is also marked stale on failure. Older failures cannot
-  // taint a newer success, and older successes cannot clear a newer failure.
+  // QQQ has the same fresh-cache behavior; stale failures cannot clear a
+  // newer success, and stale successes cannot clear a newer failure.
   {
     const h = harness();
     h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ'));

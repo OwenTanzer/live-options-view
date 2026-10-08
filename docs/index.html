@@ -821,6 +821,7 @@
   <span id="status-text">Loading…</span>
   <span id="quote-health" class="transport-health idle">Options: waiting</span>
   <span id="ticker-health" class="transport-health idle">Tickers: waiting</span>
+  <span id="spy-health" class="transport-health idle">SPY: waiting</span>
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
@@ -995,7 +996,7 @@
   Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
 </div>
 
-<script src="shared.js?v=e14a27b4becfa04e"></script>
+<script src="shared.js?v=21cfe2f235a63d27"></script>
 <script>
 // ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being
@@ -1252,6 +1253,24 @@ function renderTransportHealth(elementId, label, health) {
 
 function renderQuoteHealth(health) {
   renderTransportHealth('quote-health', 'Options', health);
+}
+
+let latestSpyHealthRequest = 0;
+async function fetchSpyHealth() {
+  const request = ++latestSpyHealthRequest;
+  let summary;
+  try {
+    const response = await fetch(`${R2}/intraday/health.json?_=${Date.now()}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    summary = summarizeSpyHealth(await response.json());
+  } catch (e) {
+    summary = { state: 'unavailable', text: 'SPY: unavailable', detail: 'SPY health could not be loaded' };
+  }
+  if (request !== latestSpyHealthRequest) return;
+  const el = document.getElementById('spy-health');
+  el.className = `transport-health ${summary.state}`;
+  el.textContent = summary.text;
+  el.title = summary.detail;
 }
 
 liveQuotes.subscribe(() => {
@@ -1889,10 +1908,10 @@ function startCountdown() {
 
 // ── price strip ───────────────────────────────────────────────────────────────
 
-const MAIN_TICKERS = ['QQQ', 'VIX', 'OVX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
+const MAIN_TICKERS = ['QQQ', 'SPY', 'VIX', 'OVX', 'SMH', 'IGV', 'JPY/USD', 'KOSPI', 'USO', '10Y'];
 const SMALL_TICKERS = ['AAPL', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'BTC/USD'];
 const TICKER_CLASSES = {
-  QQQ:'equity', VIX:'index', OVX:'index', SMH:'equity', IGV:'equity', 'JPY/USD':'futures',
+  QQQ:'equity', SPY:'equity', VIX:'index', OVX:'index', SMH:'equity', IGV:'equity', 'JPY/USD':'futures',
   KOSPI:'international', USO:'equity', '10Y':'yield', AAPL:'equity', META:'equity',
   GOOGL:'equity', AMZN:'equity', TSLA:'equity', MU:'equity', SPCX:'equity',
   'BTC/USD':'crypto',
@@ -1920,7 +1939,7 @@ function buildTickerEl(sym, isSmall) {
   // see collector.py's TICKER constant) -- VIX/SMH/etc. never carry this
   // data, so only QQQ's tile gets the extra lines.
   const vwapLine = sym === 'QQQ' ? '<span class="vwap-line"></span><span class="momentum-line"></span>' : '';
-  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">fallback</span>${vwapLine}`;
+  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span><span class="market-state">${sym === 'SPY' ? 'unavailable' : 'fallback'}</span>${vwapLine}`;
   if (isTradeableShareSymbol(sym)) {
     el.classList.add('tradable');
     el.setAttribute('role', 'button');
@@ -2012,7 +2031,15 @@ async function fetchPrices() {
     const resp = await fetch(`${R2}/intraday/prices.json?_=${Date.now()}`);
     if (!resp.ok) return;
     const data = await resp.json();
-    tickerState.publishFallback(data.prices || {}, data.timestamp || new Date().toISOString());
+    const { SPY: spy, ...legacyPrices } = data.prices || {};
+    tickerState.publishFallback(legacyPrices, data.timestamp || new Date().toISOString());
+    // SPY has no yfinance or last-known substitute. Preserve its own provider
+    // observation time so a cached price ages to stale instead of looking live.
+    if (Number.isFinite(spy?.price) && spy.price > 0 && spy.quote_ts && spy.source === 'dxlink' &&
+        (spy.symbol == null || spy.symbol === 'SPY')) {
+      tickerState.publish([{ ...spy, symbol: 'SPY' }], { observedAt: spy.quote_ts });
+    }
+    updatePriceStrip(tickerState.snapshot());
   } catch (e) {
     console.warn('prices.json fetch failed:', e);
   }
@@ -3094,7 +3121,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
   await loadRanges();
 
   setStatus('', 'Fetching live snapshot…');
-  await Promise.all([fetchLatest(), fetchPrices(), refreshSessionFromServer()]);
+  await Promise.all([fetchLatest(), fetchPrices(), fetchSpyHealth(), refreshSessionFromServer()]);
   renderAuthGate();
   updateQuoteInterests();
   if (session) renderPaper();
@@ -3117,6 +3144,7 @@ function renderHistWidgets(sub, spot, tier, dateStr) {
 
   // prices.json remains a fallback and retains its existing producer cadence.
   setInterval(fetchPrices, 60_000);
+  setInterval(fetchSpyHealth, 15_000);
 
   // eia_steo.json updates server-side every few hours at most (see
   // collector.py's EIA_STEO_POLL_SECS) -- polling once a minute is just

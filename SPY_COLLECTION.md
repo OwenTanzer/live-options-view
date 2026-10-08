@@ -128,6 +128,12 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
 - QQQ's `intraday/latest.json` is still fetched every cycle whatever is
   selected. Paper trading, expiry settlement marks and the QQQ price tile use
   only QQQ data; SPY is fetched in addition only while SPY is selected.
+- The separate, read-only SPY price tile uses only SPY's timed DXLink quote
+  from `intraday/prices.json` or the live quote service. A missing quote is
+  unavailable, and an old observation is stale. No SPY share ticket is enabled.
+  The SPY health badge reads `health.json.spy` and rejects an old health
+  artifact; missing expiration, missing snapshots and missing spot remain
+  visible rather than borrowing QQQ health.
 - Every snapshot is validated for the requested symbol before rendering
   (`validateChainPayload` in shared.js): its top-level symbol,
   `underlying_market.symbol` and every contract root must match. A mismatch,
@@ -140,8 +146,9 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
   colors are relative to SPY's own snapshot, because `derived/OIranges.csv` is
   calibrated on QQQ only. The header says so.
 - The historical date view stays QQQ-only.
-- Tests: `node tests/chain_underlying.test.js` (helpers, plus the shipped
-  fetch/render cycle under a DOM shim: QQQ→SPY→QQQ, delayed and stale replies,
-  mislabeled/mixed payloads, missing SPY, transient failures). A local browser
+- Tests: `node tests/chain_underlying.test.js` (helpers, plus shipped
+  fetch/render, price and health functions under DOM shims: QQQ→SPY→QQQ,
+  delayed and stale replies, fresh-cache failures, mislabeled/mixed payloads,
+  missing SPY, and SPY tile/health unavailable and stale states). A local browser
   run with fixture snapshots confirmed the selector, rows, quotes and that the
   QQQ tile keeps QQQ readings while SPY is shown.

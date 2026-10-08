@@ -976,9 +976,38 @@ function relativeOiRanges(rows, display = DISPLAY) {
   return { '0DTE_Regular': regular };
 }
 
+function summarizeSpyHealth(payload, nowMs = Date.now()) {
+  const spy = payload?.spy;
+  if (!spy) return { state: 'unavailable', text: 'SPY: unavailable', detail: 'SPY health has not been published' };
+  const updated = Date.parse(payload.updated_at);
+  if (!Number.isFinite(updated) || nowMs - updated > 45_000 || nowMs - updated < -30_000) {
+    return { state: 'stale', text: 'SPY: stale', detail: 'SPY health update is old or untimed' };
+  }
+  if (spy.collection_status !== 'collecting') {
+    const status = spy.collection_status || 'unavailable';
+    return { state: 'unavailable', text: `SPY: ${status.replaceAll('_', ' ')}`, detail: spy.reason || status };
+  }
+  const snapshotAt = Date.parse(spy.last_snapshot_upload_time);
+  if (!Number.isFinite(snapshotAt)) {
+    const started = Date.parse(payload.process_start_time);
+    if (Number.isFinite(started) && nowMs - started > 180_000) {
+      return { state: 'unavailable', text: 'SPY: unavailable', detail: 'No SPY snapshot uploaded' };
+    }
+    return { state: 'connecting', text: 'SPY: warming up', detail: 'No SPY snapshot uploaded yet' };
+  }
+  if (nowMs - snapshotAt > 180_000 || nowMs - snapshotAt < -30_000 || spy.spot?.status === 'stale') {
+    return { state: 'stale', text: 'SPY: stale', detail: 'SPY snapshot or spot is stale' };
+  }
+  if (spy.spot?.status !== 'live') {
+    return { state: 'unavailable', text: 'SPY: unavailable', detail: 'SPY spot has no current provider observation' };
+  }
+  return { state: 'live', text: 'SPY: live', detail: 'SPY snapshot and spot are current' };
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     CHAIN_UNDERLYINGS, chainLatestPath, occRoot, validateChainPayload, ChainSelection, relativeOiRanges,
+    summarizeSpyHealth,
     LiveQuoteService, LiveQuotePoller, TickerStateStore, tickerSessionState,
     SHARE_QUOTE_MAX_AGE_MS, freshShareQuote, formatVwapRvol, formatMomentum,
     fmtSteoDelta, findRevision, formatSqueezeScheduleStatus, formatSqueezeScanStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen,
