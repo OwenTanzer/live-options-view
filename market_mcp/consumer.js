@@ -7,6 +7,7 @@ const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 const DATASETS = ['qqq_snapshot', 'scheduled_squeeze', 'options_returns'];
 const SYMBOL = /^[A-Z][A-Z0-9.-]{0,9}$/;
 const CONTRACT = /^[A-Z0-9.]{1,10}\d{6}[CP]\d{8}$/;
+const QUALIFIED_RANK = 'qualified_first_ask_to_later_bid_rank';
 const dates = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value && value >= '2020-01-01' && value <= '2100-12-31';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -88,12 +89,12 @@ function returnSummary(p, session) {
 const units = {
   qqq_snapshot: { spot: 'USD/share', vwap: 'USD/share (snapshot-weighted approximation)', rvol: 'multiple', momentum_return_pct: 'percentage points', OpenInterest: 'contracts (lagged; zero and missing conflated)', Bid: 'USD/share', Ask: 'USD/share', Strike: 'USD/share' },
   scheduled_squeeze: { scores: 'experimental screening measurements, not probabilities', ranks: 'producer ordinal ranks', first_seen_at: 'publication write-attempt time' },
-  options_returns: { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms, t, bid_ms, ask_ms': 'UTC epoch milliseconds', '*_abs_change_per_contract': 'USD/contract', rank: 'producer ordinal rank' },
+  options_returns: { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms, t, bid_ms, ask_ms': 'UTC epoch milliseconds', '*_abs_change_per_contract': 'USD/contract', '*_relative_spread': 'spread / midpoint', '*_size': 'contracts at quoted side', '*_entry_delay_s': 'seconds from first archived sample', rank: 'producer ordinal rank' },
 };
 const warnings = {
   qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.'],
   scheduled_squeeze: ['Scores are experimental screens, not squeeze probabilities.', 'first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.', 'Provider source times can be absent; acquisition and publication times are distinct.'],
-  options_returns: ['Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.', 'Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.', 'Coverage is the published leaderboard subset (top 200 all OR clean); absent filtered rows do not prove no sampled contracts exist.', 'Session artifacts may be rebuilt in place; detail detects summary/leaderboard changes and asks for a new query.'],
+  options_returns: ['Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.', 'Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.', 'Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.', 'All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.', 'Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query.'],
 };
 
 class Consumer {
@@ -142,7 +143,7 @@ class Consumer {
         actual:probe.value ? id==='qqq_snapshot'?{snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
         freshness: probe.value ? id === 'qqq_snapshot' ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : {status:'historical'} : {status:'unknown'},
         source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
-        fields: id === 'qqq_snapshot' ? ['timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','selected_contract_quote_path'],
+        fields: id === 'qqq_snapshot' ? ['timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','qualified_ask_bid_v1','selected_contract_quote_path'],
         filters: id === 'qqq_snapshot' ? ['expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : ['session','underlying','type','view','limit','offset'],
         cadence: id === 'qqq_snapshot' ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
         coverage: probe.value?.coverage || probe.value?.assessment || (id === 'qqq_snapshot' ? 'latest QQQ 0DTE snapshot only' : null), historical_index: 'not_supported' });
@@ -200,28 +201,41 @@ class Consumer {
     check(dates(a.session),'Select a real YYYY-MM-DD session (2020..2100).','invalid_filter');
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
-    check(['all','clean'].includes(a.view??'all'),'view must be all or clean.','invalid_filter');
+    check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'view must be all, clean, or qualified_ask_bid_v1.','invalid_filter');
     const prefix=`oa203/scanner/${a.session}/`; const p=await q.json(prefix+'summary.json'); returnSummary(p,a.session);
-    out.actual={session:a.session,final:p.final,return_policy:p.return_policy};
+    out.actual={session:a.session,final:p.final,return_policy:p.return_policy,qualified_policy:p.qualified_policy??null};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,finalized_at:p.finalized_at ?? null};
     out.session_window={open_ms:p.session_open_ms??null,close_ms:p.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
     out.freshness={status:'historical',meaning:'Explicit selected session; finalized_at is not a quote observation or publication time.'};
     out.summary=p; out.coverage=p.assessment; out.warnings.push(...(p.assessment.reasons||[]));
     if(!p.final) out.warnings.push('Session is not final.');
-    const rows=csv(await q.get(prefix+'leaderboard.csv'));
+    const qualified=a.view==='qualified_ask_bid_v1';
+    if(qualified && p.qualified_policy?.version!=='oa203-qualified-ask-bid-v1') {
+      out.status='unavailable';out.warnings.push('Selected legacy session has no qualified ask-to-bid policy or shortlist.');return out;
+    }
+    const board=qualified?'qualified_ask_bid_v1.csv':'leaderboard.csv';
+    let boardText;
+    try { boardText=await q.get(prefix+board); }
+    catch(e) { if(qualified && e.code==='missing_artifact') {out.status='partial';out.errors.push(errorRecord(e,prefix+board));return out;} throw e; }
+    const rows=csv(boardText);
+    if(qualified) {
+      check(p.outputs?.qualified_ask_bid_v1===board && (p.contracts===0 && rows.length===0 ||
+        rows.columns.includes(QUALIFIED_RANK) && rows.columns.includes('qualified_first_ask_to_later_bid_status') && rows.columns.includes('qualified_first_ask_to_later_bid_reasons')), 'Missing qualified shortlist columns.');
+      check(rows.every(r=>r.qualified_first_ask_to_later_bid_status==='eligible' && /^[1-9]\d*$/.test(r[QUALIFIED_RANK]??'') && Number.isSafeInteger(Number(r[QUALIFIED_RANK])) && r.qualified_first_ask_to_later_bid_pct!==null && Number.isFinite(Number(r.qualified_first_ask_to_later_bid_pct))), 'Invalid qualified shortlist or producer ranks.');
+    }
     check(p.contracts===0&&rows.length===0 || ['symbol','underlying','option_type','rank','clean_rank','clean'].every(k=>rows.columns.includes(k)), 'Missing required leaderboard columns.');
     check(rows.every(r=>CONTRACT.test(r.symbol) && SYMBOL.test(r.underlying) && ['call','put'].includes(r.option_type) &&
       ['rank','clean_rank'].every(k=>Object.hasOwn(r,k)&&(r[k]===null || (/^[1-9]\d*$/.test(r[k])&&Number.isSafeInteger(Number(r[k]))))) &&
       ['True','False'].includes(r.clean) && (r.clean_rank===null || r.clean==='True')), 'Invalid leaderboard rows or missing/malformed producer ranks.');
-    const field=a.view==='clean'?'clean_rank':'rank';
+    const field=qualified?QUALIFIED_RANK:a.view==='clean'?'clean_rank':'rank';
     const baseline=q.evidence.slice(-2).map(e=>e.retrieved_sha256);
-    await q.get(prefix+'summary.json');await q.get(prefix+'leaderboard.csv');
+    await q.get(prefix+'summary.json');await q.get(prefix+board);
     check(q.evidence.slice(-2).every((e,i)=>e.retrieved_sha256===baseline[i]),'Selected session changed during rankings read; retry this session.','source_changed');
-    out.warnings.push('Matching before/after summary/leaderboard digests detect observed rebuilds; no atomic producer session revision is available.');
+    out.warnings.push('Matching before/after summary/shortlist digests detect observed rebuilds; no atomic producer session revision is available.');
     const filtered=rows.filter(r=>r[field]!==null && (!a.underlying||r.underlying===a.underlying) && (!a.type||r.option_type===a.type));
     filtered.sort((x,y)=>Number(x[field])-Number(y[field])); // producer rank, never re-score
     const paged=slice(filtered,limit,offset); out.pagination=paged.pagination;
-    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',p,row,prefix,actual:out.actual,evidence:[...q.evidence]})}));
+    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',p,row,prefix,board,actual:out.actual,evidence:[...q.evidence]})}));
     out.status=p.assessment.status==='partial'||!p.final?'partial':filtered.length?'available':'empty';return out;
   }
   async detail(a,q,out) {
@@ -254,7 +268,7 @@ class Consumer {
     // OA-203 session files are mutable rebuild products. Detect change instead
     // of attaching a new quote path to an old ranking/reference.
     const summary=await q.json(v.prefix+'summary.json');returnSummary(summary,v.p.trade_date);
-    await q.get(v.prefix+'leaderboard.csv');
+    await q.get(v.prefix+(v.board??'leaderboard.csv'));
     check(q.evidence.at(-2).retrieved_sha256===v.evidence[0].retrieved_sha256 && q.evidence.at(-1).retrieved_sha256===v.evidence[1].retrieved_sha256,'Session was rebuilt since query; repeat return_rankings.','source_changed');
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,finalized_at:summary.finalized_at??null};out.freshness={status:'historical'};
     out.session_window={open_ms:summary.session_open_ms??null,close_ms:summary.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
@@ -280,7 +294,7 @@ class Consumer {
       }
       catch(e){out.errors.push(errorRecord(e,key));out.status='partial';}
     }
-    try {await q.get(v.prefix+'summary.json');await q.get(v.prefix+'leaderboard.csv');await q.get(v.prefix+'sweeps/manifest.jsonl');}
+    try {await q.get(v.prefix+'summary.json');await q.get(v.prefix+(v.board??'leaderboard.csv'));await q.get(v.prefix+'sweeps/manifest.jsonl');}
     catch(e){delete out.quote_path;delete out.sweeps;throw e;}
     if(!q.evidence.slice(-3).every((e,i)=>e.retrieved_sha256===baseline[i])){
       delete out.quote_path;delete out.sweeps;throw new DataError('source_changed','Session changed during detail read; repeat return_rankings.');

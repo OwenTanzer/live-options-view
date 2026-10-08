@@ -71,8 +71,11 @@ Its Linux image checks pass; live client/grant gates remain pending. See
 | `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
 | `market_context` | `intraday/latest.json`: underlying block and chain page filtered by expiry/type/strike/OCC contract. |
 | `squeeze_results` | Scheduled `latest.json`, `latest-attempt.json`, `latest-schedule.json`; uses the existing exported XNYS calendar and `formatSqueezeScheduleStatus`. |
-| `return_rankings` | One exact date's `summary.json` and `leaderboard.csv`, all/clean, underlying/type, pagination. The published top-200-all OR top-200-clean subset is the query universe. |
+| `return_rankings` | One exact date's `summary.json` and bounded shortlist: legacy `leaderboard.csv` for all/clean, or `qualified_ask_bid_v1.csv` for `view: "qualified_ask_bid_v1"`. Preserves producer ranks, policy, reasons, underlying/type filters, and pagination. Older sessions report the qualified view as unavailable. |
 | `result_detail` | Retained snapshot JSON row; exact squeeze run's manifest/results/normalized inputs; selected return contract from bounded sweep pages with producer calculation cells/flags. |
+
+The qualified return view's provisional thresholds and evidence rules are in
+[OA203_QUALIFIED_ASK_BID_V1.md](../OA203_QUALIFIED_ASK_BID_V1.md).
 
 Every result carries dataset/envelope schema, requested filters, actual identity,
 retrieval time, source locators/links and retrieved digests, supplied producer
