@@ -94,6 +94,7 @@ TICKER          = "QQQ"
 CHAIN_UNDERLYINGS = ("QQQ", "SPY")
 COLLECT_SPY     = os.environ.get("COLLECT_SPY", "1") != "0"
 STRIKE_WINDOW   = 33
+SPY_MAX_STRIKES = 67
 SNAPSHOT_SECS   = 60
 WEEKLY_SNAPSHOT_SECS = 60 * 60
 PRICES_SECS     = 10
@@ -732,6 +733,8 @@ class DXLinkFeed:
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ready = threading.Event()
         self._subs: list[dict] = []
+        self._pending_option_subs: list[dict] = []
+        self._subscription_error: Optional[str] = None
         self._subscribed          = False
         self._data_logged         = False
         # lifecycle telemetry
@@ -753,6 +756,47 @@ class DXLinkFeed:
         for sym in price_symbols:
             for event_type in ("Quote", "Trade", "TradeETH", "Summary"):
                 self._subs.append({"type": event_type, "symbol": sym})
+
+    def add_option_subscriptions(self, option_symbols: list[str]):
+        """Add the fixed SPY window after a fresh spot arrives; retain it on reconnect."""
+        with self._lock:
+            known = {(entry["type"], entry["symbol"]) for entry in self._subs}
+            additions = []
+            for sym in option_symbols:
+                for event_type in ("Quote", "Summary", "Trade", "Greeks"):
+                    key = (event_type, sym)
+                    if key not in known:
+                        additions.append({"type": event_type, "symbol": sym})
+                        known.add(key)
+            self._subs.extend(additions)
+            self._pending_option_subs.extend(additions)
+            if self._subscribed:
+                self._flush_pending_option_subscriptions_locked()
+        return len(additions)
+
+    def _flush_pending_option_subscriptions_locked(self):
+        while self._pending_option_subs:
+            batch = self._pending_option_subs[:200]
+            try:
+                self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": False, "add": batch})
+            except Exception as exc:
+                self._subscription_error = str(exc)
+                log.warning(f"SPY subscription delivery interrupted; {len(self._pending_option_subs)} "
+                            f"event/symbol pairs pending retry: {exc}")
+                return
+            del self._pending_option_subs[:len(batch)]
+        self._subscription_error = None
+
+    def retry_pending_option_subscriptions(self):
+        with self._lock:
+            if self._subscribed:
+                self._flush_pending_option_subscriptions_locked()
+
+    def get_subscription_delivery(self) -> dict:
+        with self._lock:
+            return {"pending_event_pairs": len(self._pending_option_subs),
+                    "last_error": self._subscription_error}
 
     def get_state(self) -> dict[str, dict]:
         with self._lock:
@@ -889,19 +933,23 @@ class DXLinkFeed:
             # Server acknowledged FEED_SETUP. Subscribe once only — server
             # may send multiple FEED_CONFIGs (one per batch ack), so guard
             # with a flag to avoid repeated resets.
-            if self._subscribed:
-                return
-            self._subscribed = True
-            log.info("DXLink feed configured -- sending subscriptions")
-            if self._subs:
-                batch_size = 200
-                for i in range(0, len(self._subs), batch_size):
-                    batch = self._subs[i:i + batch_size]
-                    self._send({
-                        "type": "FEED_SUBSCRIPTION", "channel": 1,
-                        "reset": i == 0, "add": batch,
-                    })
-                log.info(f"subscribed to {len(self._subs)} event/symbol pairs ({batch_size}/batch)")
+            with self._lock:
+                if self._subscribed:
+                    return
+                self._subscribed = True
+                subscriptions = list(self._subs)
+                log.info("DXLink feed configured -- sending subscriptions")
+                if subscriptions:
+                    batch_size = 200
+                    for i in range(0, len(subscriptions), batch_size):
+                        batch = subscriptions[i:i + batch_size]
+                        self._send({
+                            "type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": i == 0, "add": batch,
+                        })
+                    log.info(f"subscribed to {len(subscriptions)} event/symbol pairs ({batch_size}/batch)")
+                self._pending_option_subs.clear()
+                self._subscription_error = None
             self._ready.set()
 
         elif mtype == "FEED_DATA":
@@ -1754,7 +1802,7 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
     with_data = len(PRICE_TICKERS) - len(no_data)
 
     spy_context = spy_context or {"status": "unavailable", "reason": "no_spy_session"}
-    spy_state = state.get("SPY", {}) if spy_context.get("status") == "collecting" else {}
+    spy_state = state.get("SPY", {}) if COLLECT_SPY else {}
     spy_price, spy_ts = _observed_spy_price(spy_state)
     spy_age = None
     if spy_ts:
@@ -1770,6 +1818,9 @@ def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTrack
         "collection_status": spy_context.get("status"),
         "reason": spy_context.get("reason"),
         "spot": {"price": spy_price, "observed_at": spy_ts, "status": spy_spot_status},
+        "subscription_coverage": _spy_subscription_coverage(
+            spy_context.get("subscription_coverage"), _fresh_spy_spot(spy_state, now)[0]),
+        "subscription_delivery": feed.get_subscription_delivery(),
         "last_snapshot_upload_time": spy_counters.get()["last_snapshot_time"] if spy_counters else None,
         "cadence": spy_tracker.get() if spy_tracker else None,
     }
@@ -1866,7 +1917,9 @@ class UnderlyingSession:
                                   else f"baselines/{symbol.lower()}_rvol_buckets.json")
         self.prev_vol: dict[str, int] = {}     # persists across calls to compute per-minute delta
         self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
+        self.subscription_coverage: dict | None = None  # SPY's fixed startup strike window
         self.first_snapshot_written = False     # guard so first.csv is only written once per session
+        self.session_date: date | None = None
         self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
         self.rvol_baseline: dict = {}           # loaded once per session from rvol_baseline_key
         self.rvol_today: dict[str, int] = {}    # bucket_label -> latest session cum_volume in that bucket
@@ -1895,6 +1948,17 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
     or lose price context.
     """
     us = us or QQQ_SESSION
+    if us.symbol == "SPY" and us.session_date != today:
+        # This object survives across collection days in the same process.
+        # Start a new SPY archive with fresh per-day state before recovery.
+        us.prev_vol = {}
+        us.last_spot = [None, None]
+        us.first_snapshot_written = False
+        us.vwap_state = ms.VwapState()
+        us.rvol_today = {}
+        us.momentum_history = []
+        us.subscription_coverage = None
+        us.session_date = today
     date_str = today.strftime("%Y%m%d")
     try:
         resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=us.day_prefix(date_str))
@@ -2293,6 +2357,39 @@ def _observed_spy_price(quote: dict) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _fresh_spy_spot(quote: dict, now: datetime) -> tuple[float | None, str | None]:
+    """Accept a finite, positive SPY feed price observed within the stale threshold."""
+    price, observed_at = _observed_spy_price(quote)
+    try:
+        age = (now - datetime.fromisoformat(observed_at)).total_seconds()
+        if (price is not None and not isinstance(price, bool) and
+                math.isfinite(float(price)) and float(price) > 0 and
+                0 <= age <= STALE_FEED_SECS):
+            return float(price), observed_at
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None, None
+
+
+def _select_spy_strikes(strikes: list[dict], spot: float) -> list[dict]:
+    """Choose at most 67 distinct nearest strikes; lower strike wins a tie."""
+    unique = {row["strike"]: row for row in strikes}
+    nearest = sorted(unique.values(), key=lambda row: (abs(row["strike"] - spot), row["strike"]))
+    return sorted(nearest[:SPY_MAX_STRIKES], key=lambda row: row["strike"])
+
+
+def _spy_subscription_coverage(coverage: dict | None, spot: float | None) -> dict | None:
+    if coverage is None:
+        return None
+    result = dict(coverage)
+    low, high = result["min_strike"], result["max_strike"]
+    result["current_spot"] = spot
+    result["out_of_range"] = None if spot is None else spot < low or spot > high
+    result["status"] = ("spot_unavailable" if spot is None else
+                        "out_of_range" if result["out_of_range"] else "within_window")
+    return result
+
+
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker,
@@ -2413,6 +2510,9 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "rows":             rows,
         "underlying_market": underlying_market,
     }
+    if us.symbol == "SPY":
+        payload["subscription_coverage"] = _spy_subscription_coverage(
+            us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
 
     try:
         s3.put_object(
@@ -2761,6 +2861,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     # Extra 0DTE chains (#121). Each is optional: a failure here disables
     # only that underlying for this session and never touches QQQ.
     extra_chains: list[tuple[UnderlyingSession, list[dict], str]] = []
+    pending_spy: tuple[UnderlyingSession, list[dict], str] | None = None
     spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
                    "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
@@ -2777,11 +2878,12 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
         restore_state(s3, today, us)
         us.rvol_baseline = load_rvol_baseline(s3, us)
         us.rvol_today = {}
-        extra_chains.append((us, us_strikes, us_exp))
         if sym == "SPY":
-            spy_context.update(status="collecting", reason=None)
-            log.info(f"SPY subscription load: {len(us_strikes)} chain strikes, "
-                     f"{2 * len(us_strikes)} option symbols, {8 * len(us_strikes)} event subscriptions")
+            us.subscription_coverage = None
+            pending_spy = (us, us_strikes, us_exp)
+            spy_context.update(status="awaiting_spot", reason="waiting_for_fresh_spy_spot")
+        else:
+            extra_chains.append((us, us_strikes, us_exp))
 
     option_syms = []
     contracts = {}
@@ -2819,6 +2921,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     # added to PRICE_TICKERS (the price strip and its health counts).
     price_syms = list(dict.fromkeys(
         list(PRICE_TICKERS.values()) + [us.symbol for us, _, _ in extra_chains]
+        + (["SPY"] if COLLECT_SPY else [])
     ))
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
     for label, sym in PRICE_TICKERS.items():
@@ -2837,6 +2940,58 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
         log.info("option data flowing -- proceeding to snapshot")
     else:
         log.warning("no feed data within 15s -- proceeding anyway")
+
+    if pending_spy:
+        us, us_strikes, us_exp = pending_spy
+        deadline = time.monotonic() + 15
+        spot, spot_ts = None, None
+        while time.monotonic() < deadline:
+            spot, spot_ts = _fresh_spy_spot(feed.get_state().get("SPY", {}), datetime.now(timezone.utc))
+            if spot is not None:
+                break
+            time.sleep(0.5)
+        if spot is None:
+            observed, observed_ts = _observed_spy_price(feed.get_state().get("SPY", {}))
+            spy_context.update(status="stale_startup_spot" if observed_ts else "spot_unavailable",
+                               reason="fresh_spy_spot_not_observed_within_15s")
+            log.warning("SPY options unavailable: no fresh timed startup spot within 15s")
+        else:
+            selected = _select_spy_strikes(us_strikes, spot)
+            if not selected:
+                spy_context.update(status="empty_chain", reason="no_valid_spy_strikes")
+                log.warning("SPY options unavailable: no valid strikes in today's chain")
+            else:
+                coverage = {
+                    "policy": "fixed_startup_nearest_67_strikes",
+                    "fixed_at_startup": True,
+                    "reference_spot": spot,
+                    "reference_spot_observed_at": spot_ts,
+                    "total_chain_strikes": len(us_strikes),
+                    "selected_strikes": len(selected),
+                    "selected_option_symbols": 2 * len(selected),
+                    "min_strike": selected[0]["strike"],
+                    "max_strike": selected[-1]["strike"],
+                }
+                us.subscription_coverage = coverage
+                spy_context["subscription_coverage"] = coverage
+                extra_chains.append((us, selected, us_exp))
+                for row in selected:
+                    for side in ("call", "put"):
+                        occ = row[f"{side}_occ"]
+                        if occ:
+                            contracts[occ.replace(" ", "")] = {
+                                "streamer_symbol": row[f"{side}_sym"],
+                                "strike": row["strike"], "type": side, "exp": us_exp,
+                            }
+                quote_registry.set_session(feed, contracts)
+                symbols = list(dict.fromkeys(row[f"{side}_sym"] for row in selected for side in ("call", "put")))
+                added = feed.add_option_subscriptions(symbols)
+                pending = feed.get_subscription_delivery()["pending_event_pairs"]
+                spy_context.update(status="subscription_pending" if pending else "collecting",
+                                   reason="subscription_delivery_incomplete" if pending else None)
+                log.info(f"SPY fixed startup window: {len(us_strikes)} chain strikes, "
+                         f"{len(selected)} selected strikes, {len(symbols)} option symbols, "
+                         f"{added} added event/symbol pairs; spot={spot} at {spot_ts}")
 
     _log_ticker_health(feed)
 
@@ -2897,12 +3052,19 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 raise
         feed.restart_if_dead()
 
+        if spy_context.get("status") == "subscription_pending":
+            feed.retry_pending_option_subscriptions()
+            if not feed.get_subscription_delivery()["pending_event_pairs"]:
+                spy_context.update(status="collecting", reason=None)
+
         tracker.check_missed()
         try:
             take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
         except Exception as e:
             log.error(f"snapshot error: {e}")
         for us, us_strikes, us_exp in extra_chains:
+            if us.symbol == "SPY" and spy_context.get("status") != "collecting":
+                continue
             us_counters, us_tracker = extra_trackers[us.symbol]
             us_tracker.check_missed()
             try:

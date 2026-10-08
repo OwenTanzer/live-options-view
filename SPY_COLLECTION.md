@@ -48,7 +48,9 @@ All per-underlying state lives in `collector.UnderlyingSession`: volume deltas,
 last spot, the first-snapshot guard, VWAP accumulator, RVOL buckets and
 baseline, and the momentum window. Restart recovery reads only that symbol's
 archive. Rows from another root are ignored. A `vwap_state.json` or RVOL
-baseline tagged with another symbol is not loaded.
+baseline tagged with another symbol is not loaded. At a new trading date,
+SPY's in-process volume, spot, VWAP, momentum and first-snapshot state reset
+before today's archive is restored, so each day gets its own `first.csv`.
 
 The legacy macro price map (`_last_prices`) stays restored from QQQ only.
 SPY is subscribed for its own spot and volume and gets its own entry in
@@ -85,23 +87,37 @@ spot price and observation time/status, SPY snapshot upload time and cadence.
 Spot is `live` only with a provider observation time no older than the
 collector's existing stale threshold; otherwise it is `stale` or `unavailable`.
 The website must also check the health artifact's `updated_at` before showing
-it as current. `COLLECT_SPY=0` reports `disabled`.
+it as current. `COLLECT_SPY=0` reports `disabled`. The `subscription_coverage`
+field records the fixed startup reference spot and timestamp, available and
+selected strike counts, selected strike range, and current spot status. A
+missing fresh spot reports `spot_unavailable`; a fresh spot outside the fixed
+range reports `out_of_range`. The same coverage evidence appears in a SPY
+latest snapshot when one is written. `subscription_delivery` gives the pending
+event/symbol pair count and last delivery error. An interrupted batch reports
+`subscription_pending`, retains unsent pairs for retry or reconnect, and does
+not publish SPY snapshots until delivery completes; QQQ collection continues.
 
 ## Configuration and load
 
 - `COLLECT_SPY` (default on): `0` disables SPY collection without a deploy of
   new code.
 - No new credentials. The same tastytrade OAuth session and DXLink feed carry SPY.
-- Added provider load: one extra option-chain request per session. **Current
-  code subscribes every returned SPY strike**, calls and puts, even though
-  `STRIKE_WINDOW=33` limits only snapshot rows when SPY spot is available.
-  With no spot, even that row filter is inactive. For `N` distinct SPY strikes,
-  the added load is `2N` option symbols and `8N+4` event subscriptions (four
-  event types per option and four for the SPY underlying). The collector logs
-  the actual session count. An offline 300-strike fixture yields 600 option
-  symbols and 2,404 event subscriptions. Batches of 200 are transport chunks,
-  **not** a subscription or provider rate cap. There is no configured SPY
-  subscription maximum yet; provider limits and live chain size are unverified.
+- Added provider load: one extra option-chain request per session. The feed
+  first subscribes to the SPY underlying. Once it observes a fresh, timed SPY
+  spot, the collector selects up to 67 distinct nearest strikes (lower strike
+  wins a tie) and adds their calls and puts. This window is fixed for the
+  session, including reconnects. For `K = min(67, N)` distinct chain strikes,
+  the added load is at most `2K` option symbols and `8K+4` event/symbol pairs
+  (four event types per option and four for the SPY underlying): **134 symbols
+  and 540 event/symbol pairs maximum**. An offline 300-strike chain selects 67
+  strikes and reaches that bound. With no fresh spot during the bounded startup
+  wait, no SPY options are subscribed and SPY option collection reports
+  `spot_unavailable` or `stale_startup_spot`; QQQ continues. If spot later moves
+  beyond the selected range, coverage reports `out_of_range`; the collector
+  does not silently expand the subscription. `STRIKE_WINDOW=33` remains a
+  snapshot row filter and may yield no rows when spot moves far away. Batches
+  of 200 are transport chunks, **not** a provider rate cap. Provider limits
+  remain unverified.
 - Added R2 load at the existing 60 s cadence: per SPY snapshot, 4 writes
   (CSV, `vwap_state.json`, `momentum_log.jsonl`, `latest.json`) and 1 read
   (momentum log). Plus one `first.csv` per day and one RVOL baseline write at
@@ -112,11 +128,12 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
 
 ## Verification status
 
-- Fixture/local: `python tests/verify_collector_spy.py` (13 checks covering
+- Fixture/local: `python tests/verify_collector_spy.py` (17 checks covering
   layout, full OCC/streamer identity, exact SPY expiry, subscription count,
+  deterministic cap, failed-batch retry and reconnect, fresh spot and coverage,
   payload and state isolation, quote/tile/health evidence, missing data, RVOL
-  warm-up and per-symbol restart recovery). The existing collector suites
-  pass against `QQQ_SESSION`.
+  warm-up, per-symbol restart recovery and new-day `first.csv`). The existing
+  collector suites pass against `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
 
@@ -141,7 +158,10 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
   explicit unavailable state, never as the other underlying's data.
 - Switching clears the chain immediately. Each request carries a selection
   token (`ChainSelection`), so a reply that arrives after a switch is dropped
-  rather than rendered or cached.
+  rather than rendered or cached. A transient fetch failure keeps a valid
+  cached snapshot visible with a stale/error state, even when its data was
+  only seconds old. Older overlapping QQQ replies cannot overwrite newer
+  chain, indicator or paper-settlement state.
 - The SPY chain is view-only (no paper tickets or position badges). Its OI
   colors are relative to SPY's own snapshot, because `derived/OIranges.csv` is
   calibrated on QQQ only. The header says so.
@@ -152,3 +172,4 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
   missing SPY, and SPY tile/health unavailable and stale states). A local browser
   run with fixture snapshots confirmed the selector, rows, quotes and that the
   QQQ tile keeps QQQ readings while SPY is shown.
+
