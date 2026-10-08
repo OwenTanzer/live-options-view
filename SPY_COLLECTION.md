@@ -85,23 +85,34 @@ spot price and observation time/status, SPY snapshot upload time and cadence.
 Spot is `live` only with a provider observation time no older than the
 collector's existing stale threshold; otherwise it is `stale` or `unavailable`.
 The website must also check the health artifact's `updated_at` before showing
-it as current. `COLLECT_SPY=0` reports `disabled`.
+it as current. `COLLECT_SPY=0` reports `disabled`. The `subscription_coverage`
+field records the fixed startup reference spot and timestamp, available and
+selected strike counts, selected strike range, and current spot status. A
+missing fresh spot reports `spot_unavailable`; a fresh spot outside the fixed
+range reports `out_of_range`. The same coverage evidence appears in a SPY
+latest snapshot when one is written.
 
 ## Configuration and load
 
 - `COLLECT_SPY` (default on): `0` disables SPY collection without a deploy of
   new code.
 - No new credentials. The same tastytrade OAuth session and DXLink feed carry SPY.
-- Added provider load: one extra option-chain request per session. **Current
-  code subscribes every returned SPY strike**, calls and puts, even though
-  `STRIKE_WINDOW=33` limits only snapshot rows when SPY spot is available.
-  With no spot, even that row filter is inactive. For `N` distinct SPY strikes,
-  the added load is `2N` option symbols and `8N+4` event subscriptions (four
-  event types per option and four for the SPY underlying). The collector logs
-  the actual session count. An offline 300-strike fixture yields 600 option
-  symbols and 2,404 event subscriptions. Batches of 200 are transport chunks,
-  **not** a subscription or provider rate cap. There is no configured SPY
-  subscription maximum yet; provider limits and live chain size are unverified.
+- Added provider load: one extra option-chain request per session. The feed
+  first subscribes to the SPY underlying. Once it observes a fresh, timed SPY
+  spot, the collector selects up to 67 distinct nearest strikes (lower strike
+  wins a tie) and adds their calls and puts. This window is fixed for the
+  session, including reconnects. For `K = min(67, N)` distinct chain strikes,
+  the added load is at most `2K` option symbols and `8K+4` event/symbol pairs
+  (four event types per option and four for the SPY underlying): **134 symbols
+  and 540 event/symbol pairs maximum**. An offline 300-strike chain selects 67
+  strikes and reaches that bound. With no fresh spot during the bounded startup
+  wait, no SPY options are subscribed and SPY option collection reports
+  `spot_unavailable` or `stale_startup_spot`; QQQ continues. If spot later moves
+  beyond the selected range, coverage reports `out_of_range`; the collector
+  does not silently expand the subscription. `STRIKE_WINDOW=33` remains a
+  snapshot row filter and may yield no rows when spot moves far away. Batches
+  of 200 are transport chunks, **not** a provider rate cap. Provider limits
+  remain unverified.
 - Added R2 load at the existing 60 s cadence: per SPY snapshot, 4 writes
   (CSV, `vwap_state.json`, `momentum_log.jsonl`, `latest.json`) and 1 read
   (momentum log). Plus one `first.csv` per day and one RVOL baseline write at
@@ -112,11 +123,12 @@ it as current. `COLLECT_SPY=0` reports `disabled`.
 
 ## Verification status
 
-- Fixture/local: `python tests/verify_collector_spy.py` (13 checks covering
+- Fixture/local: `python tests/verify_collector_spy.py` (15 checks covering
   layout, full OCC/streamer identity, exact SPY expiry, subscription count,
-  payload and state isolation, quote/tile/health evidence, missing data, RVOL
-  warm-up and per-symbol restart recovery). The existing collector suites
-  pass against `QQQ_SESSION`.
+  deterministic cap and reconnect, fresh spot and coverage, payload and state
+  isolation, quote/tile/health evidence, missing data, RVOL warm-up and
+  per-symbol restart recovery). The existing collector suites pass against
+  `QQQ_SESSION`.
 - Deployed: **not yet observed.** Live SPY support should not be claimed until
   `intraday/spy/latest.json` is seen updating with SPY rows during a session.
 

@@ -222,21 +222,81 @@ def test_spy_missing_today_expiration_is_explicit_and_qqq_fallback_is_unchanged(
         collector.requests.get = original
 
 
-def test_spy_subscription_load_uses_full_chain_not_strike_window():
+def test_spy_subscription_window_is_bounded_and_deterministic():
     expiration = {"expiration-date": EXP, "strikes": [
         {"strike-price": str(k), "call": {}, "put": {}} for k in range(500, 800)
     ]}
     strikes = collector._parse_expiration_strikes(expiration, "SPY")
-    symbols = [s[f"{side}_sym"] for s in strikes for side in ("call", "put")]
+    selected = collector._select_spy_strikes(strikes, 670.5)
+    symbols = [s[f"{side}_sym"] for s in selected for side in ("call", "put")]
     feed = collector.DXLinkFeed("unused", "unused")  # no start/network call
-    feed.set_subscriptions(symbols, ["SPY"])
+    feed.set_subscriptions([], ["SPY"])
+    feed.add_option_subscriptions(symbols)
     assert_equal(len(strikes), 300, "offline 300-strike fixture")
-    assert_equal(len(symbols), 600, "all strikes currently subscribed, not the 67-strike output window")
-    assert_equal(len(feed._subs), 2404, "four events per option and four for SPY spot")
+    assert_equal((len(selected), selected[0]["strike"], selected[-1]["strike"]),
+                 (67, 637.0, 703.0), "67 nearest, lower strike wins final tie")
+    assert_equal((len(symbols), len(feed._subs)), (134, 540),
+                 "134 options x four events plus four SPY spot events")
+    assert_equal([r["strike"] for r in collector._select_spy_strikes(strikes[:3], 670)],
+                 [500.0, 501.0, 502.0], "small chain subscribes every available strike")
+    assert_equal(len(collector._select_spy_strikes(strikes + strikes[:5], 670)), 67,
+                 "duplicate strikes cannot expand the cap")
+    assert_equal([r["strike"] for r in collector._select_spy_strikes(strikes, 1000)],
+                 list(map(float, range(733, 800))), "far-away spot still caps at 67")
+
+
+def test_spy_startup_requires_fresh_timed_spot_and_reports_coverage():
+    now = datetime.now(timezone.utc)
+    fresh = now.isoformat()
+    old = (now - timedelta(seconds=collector.STALE_FEED_SECS + 1)).isoformat()
+    assert_equal(collector._fresh_spy_spot({"bid": 670, "ask": 670.4,
+                                            "bid_ts": fresh, "ask_ts": fresh}, now),
+                 (670.2, fresh), "fresh complete quote accepted")
+    for quote in ({"bid": 670, "ask": 670.4, "bid_ts": old, "ask_ts": fresh},
+                  {"bid": 670, "ask": 670.4, "ask_ts": fresh},
+                  {"last": 670, "last_ts": old},
+                  {"last": 670},
+                  {"last": float("nan"), "last_ts": fresh}):
+        assert_equal(collector._fresh_spy_spot(quote, now), (None, None),
+                     "stale, incomplete, untimed and nonfinite spots rejected")
+    coverage = {"min_strike": 637.0, "max_strike": 703.0,
+                "selected_strikes": 67, "selected_option_symbols": 134}
+    assert_equal(collector._spy_subscription_coverage(coverage, None)["status"],
+                 "spot_unavailable", "missing current spot is explicit")
+    assert_equal(collector._spy_subscription_coverage(coverage, 704)["status"],
+                 "out_of_range", "spot beyond fixed window is explicit")
+    assert_equal(collector._spy_subscription_coverage(coverage, 670)["status"],
+                 "within_window", "spot within fixed window")
+
+
+def test_spy_dynamic_subscriptions_survive_reconnect_without_resetting_qqq():
+    feed = collector.DXLinkFeed("unused", "unused")
+    messages = []
+    feed._send = lambda message: messages.append(message)
+    feed.set_subscriptions([".QQQ261006C600"], ["QQQ", "SPY"])
+    feed._on_message(None, json.dumps({"type": "FEED_CONFIG"}))
+    initial = len(feed._subs)
+    assert_equal(initial, 12, "QQQ option and two underlying symbols retained")
+    added = feed.add_option_subscriptions([".SPY261006C670", ".SPY261006P670"])
+    assert_equal(added, 8, "only two SPY options dynamically added")
+    assert_true(messages[-1]["reset"] is False, "SPY addition cannot reset QQQ subscriptions")
+    assert_equal(feed.add_option_subscriptions([".SPY261006C670"]), 0, "repeat add idempotent")
+    feed._subscribed = False  # reconnect requires a complete re-subscription
+    messages.clear()
+    feed._on_message(None, json.dumps({"type": "FEED_CONFIG"}))
+    assert_equal(len(feed._subs), 20, "fixed window retained for reconnect")
+    assert_true(messages[0]["reset"], "reconnect resets to complete QQQ and SPY set")
+    assert_equal(len(messages[0]["add"]), 20, "reconnect includes all subscribed events")
 
 
 def test_spy_snapshot_is_identified_and_isolated():
     qqq, spy = sessions()
+    spy.subscription_coverage = {
+        "policy": "fixed_startup_nearest_67_strikes", "fixed_at_startup": True,
+        "reference_spot": 670.2, "reference_spot_observed_at": datetime.now(timezone.utc).isoformat(),
+        "total_chain_strikes": 1, "selected_strikes": 1, "selected_option_symbols": 2,
+        "min_strike": 670.0, "max_strike": 670.0,
+    }
     s3 = FakeS3()
     snap(s3, feed_state(), qqq, QQQ_STRIKES)
     qqq_before = (dict(qqq.prev_vol), qqq.vwap_state.cum_vol, dict(qqq.rvol_today), len(qqq.momentum_history))
@@ -247,6 +307,8 @@ def test_spy_snapshot_is_identified_and_isolated():
     assert_equal(payload["symbol"], "SPY", "SPY payload symbol")
     assert_equal(payload["underlying_market"]["symbol"], "SPY", "SPY underlying_market symbol")
     assert_equal(payload["underlying_price"], 670.2, "SPY spot from the SPY quote, not QQQ")
+    assert_equal(payload["subscription_coverage"]["status"], "out_of_range",
+                 "snapshot reports fixed-window range against current observed spot")
     assert_true(payload["snapshot_key"].startswith("intraday/spy/20261006/snapshot_"), "SPY snapshot key")
     assert_true(all(r["OptionSymbol"].startswith("SPY") for r in payload["rows"]), "only SPY contracts")
     assert_equal(s3.store["intraday/latest.json"], qqq_latest_before, "QQQ latest.json untouched by SPY")
