@@ -13,7 +13,7 @@ const el = id => elements[id] ||= { textContent: '', innerHTML: '', dataset: {},
 const calendar = require('../docs/squeeze-calendar.json');
 let responses = {}, calls = [];
 const response = value => ({ ok: true, status: 200, json: async () => value });
-const scope = { ...shared, document: { getElementById: el }, R2: '/r2-proxy',
+const scope = { ...shared, document: { getElementById: el }, R2: '/r2-proxy', BROWSER_DATA: '/browser-data',
   escapeHtml: s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
   fetch: async (url, options) => {
     calls.push([url, options]);
