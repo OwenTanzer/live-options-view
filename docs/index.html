@@ -1057,7 +1057,7 @@ let timerHandle = null;
 // TIER_COLORS / fmt*/quoteHtml/flowHtml live in shared.js (also used by diag.html).
 async function loadRanges() {
   try {
-    const resp = await fetch(`${R2}/derived/OIranges.csv`, { cache: 'no-store' });
+    const resp = await fetch('/browser-data/derived/OIranges.csv', { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     ranges = parseRangesCsv(await resp.text());
     document.getElementById('cal-error').style.display = 'none';
@@ -1260,7 +1260,7 @@ async function fetchSpyHealth() {
   const request = ++latestSpyHealthRequest;
   let summary;
   try {
-    const response = await fetch(`${R2}/intraday/health.json?_=${Date.now()}`);
+    const response = await fetch(`/browser-data/intraday/health.json?_=${Date.now()}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     summary = summarizeSpyHealth(await response.json());
   } catch (e) {
@@ -1769,7 +1769,7 @@ async function fetchChain(symbol) {
   const path = chainLatestPath(symbol);
   if (!path) return { error: `${symbol} is not a supported underlying` };
   try {
-    const resp = await fetch(`${R2}/${path}?_=${Date.now()}`);
+    const resp = await fetch(`/browser-data/${path}?_=${Date.now()}`);
     if (resp.status === 404) return { error: `No ${symbol} snapshot has been published yet.` };
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -2028,7 +2028,7 @@ function updateQqqMomentumLine(underlyingMarket) {
 
 async function fetchPrices() {
   try {
-    const resp = await fetch(`${R2}/intraday/prices.json?_=${Date.now()}`);
+    const resp = await fetch(`/browser-data/intraday/prices.json?_=${Date.now()}`);
     if (!resp.ok) return;
     const data = await resp.json();
     const { SPY: spy, ...legacyPrices } = data.prices || {};
@@ -2126,7 +2126,7 @@ function squeezeNow() { return Date.now(); }
 async function fetchSqueezeLatest() {
   const version = ++squeezeFetchVersion;
   try {
-    const base = `${R2}/squeeze-scanner/v1/scheduled`;
+    const base = '/browser-data/squeeze-scanner/v1/scheduled';
     const cacheBust = squeezeNow();
     const urls = ['latest.json', 'latest-attempt.json', 'latest-schedule.json']
       .map(name => `${base}/${name}?_=${cacheBust}`);

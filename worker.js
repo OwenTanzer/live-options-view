@@ -1,4 +1,17 @@
 const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
+// Only these public artifacts are exposed to the browser through this route.
+// Never use the private bucket binding or a caller-provided destination.
+const BROWSER_DATA_PREFIX = '/browser-data/';
+const BROWSER_DATA_KEYS = new Set([
+  'intraday/latest.json',
+  'intraday/spy/latest.json',
+  'intraday/prices.json',
+  'intraday/health.json',
+  'derived/OIranges.csv',
+  'squeeze-scanner/v1/scheduled/latest.json',
+  'squeeze-scanner/v1/scheduled/latest-attempt.json',
+  'squeeze-scanner/v1/scheduled/latest-schedule.json',
+]);
 const ALLOWED_ORIGINS = ['https://options.moopertonic.net', 'http://localhost:8787'];
 const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this leaves ample headroom
 const MAX_QUOTE_AGE_MS = 15 * 1000;
@@ -26,6 +39,10 @@ const MAX_BOT_INDEX_MEMBERS = 500;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
+      return handleBrowserData(request, url);
+    }
 
     // Same-origin passthrough to the R2 bucket, fetched edge-to-edge by
     // Cloudflare rather than over the client's own network. Exists so
@@ -107,6 +124,41 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(settleAllBots(env));
   },
+}
+
+async function handleBrowserData(request, url) {
+  if (request.method !== 'GET') {
+    return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
+  }
+  const key = url.pathname.slice(BROWSER_DATA_PREFIX.length);
+  if (!BROWSER_DATA_KEYS.has(key)) return new Response('Not found', { status: 404 });
+  // Accept only the existing numeric cache-buster, never arbitrary query data.
+  if (url.search && !/^\?_=[0-9]{1,20}$/.test(url.search)) {
+    return new Response('Invalid query', { status: 400 });
+  }
+  try {
+    const upstream = await fetch(`${R2_ORIGIN}/${key}${url.search}`, {
+      method: 'GET',
+      headers: {},
+      credentials: 'omit',
+      redirect: 'manual',
+      cf: { cacheTtl: 0, cacheEverything: false },
+    });
+    // Preserve status and stream bytes without parsing. Limit response headers
+    // so upstream cookies/auth cannot affect this origin, and Location cannot
+    // make the browser follow a redirect that the Worker refused to follow.
+    const headers = new Headers();
+    for (const name of ['Content-Type', 'Content-Encoding', 'Content-Length',
+      'Cache-Control', 'ETag', 'Last-Modified', 'Retry-After']) {
+      const value = upstream.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    return new Response(upstream.body, {
+      status: upstream.status, statusText: upstream.statusText, headers,
+    });
+  } catch {
+    return new Response('Public data upstream unavailable', { status: 502 });
+  }
 }
 
 async function handleLiveQuotes(url, env) {

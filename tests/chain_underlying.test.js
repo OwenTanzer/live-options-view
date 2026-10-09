@@ -211,7 +211,10 @@ function harness(saved = 'QQQ') {
   const calls = { heatmap: [], ingested: [], published: [], qqqLine: [], momentum: [], paper: 0 };
   const routes = {};          // path -> () => Promise<Response>
   const fetchFn = (url) => {
-    const p = url.slice(url.indexOf('/', 8) + 1).split('?')[0];
+    const parsed = new URL(url, 'https://app.example');
+    assert.equal(parsed.origin, 'https://app.example', 'chain fetch stays same-origin');
+    assert.ok(parsed.pathname.startsWith('/browser-data/'), 'chain uses dedicated route');
+    const p = parsed.pathname.slice('/browser-data/'.length);
     const route = routes[p];
     if (!route) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
     return route();

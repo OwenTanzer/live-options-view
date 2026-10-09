@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: public browser data allowlist
+        run: node tests/browser_data.test.js
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: bot account closure and identity compatibility
