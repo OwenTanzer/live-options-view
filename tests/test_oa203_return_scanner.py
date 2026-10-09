@@ -412,6 +412,79 @@ class FakeSession:
         return self.responses.pop(0)
 
 
+class RetryBackoff(unittest.TestCase):
+    def check_retry(self, transport, failures, attempts=3, recover=False):
+        clock = {"t": 1000.0}
+        slept = []
+        outcomes = list(failures)
+        if recover:
+            outcomes.append(FakeResponse(200))
+        session = mock.Mock(headers={})
+
+        def request(*args, **kwargs):
+            clock["t"] += 0.25
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        def sleep(seconds):
+            slept.append(seconds)
+            clock["t"] += seconds
+
+        session.request.side_effect = request
+        client = scanner.Tradier("test", session=session,
+                                 clock=lambda: clock["t"], sleep=sleep)
+        with mock.patch.object(scanner, "log"):
+            if recover:
+                self.assertEqual(client.request("GET", "/test", attempts=attempts),
+                                 FakeResponse(200).json())
+            else:
+                expected = type(failures[-1]) if transport else RuntimeError
+                with self.assertRaises(expected) as caught:
+                    client.request("GET", "/test", attempts=attempts)
+                if transport:
+                    self.assertIs(caught.exception, failures[-1])
+                else:
+                    self.assertEqual(str(caught.exception),
+                                     f"HTTP {failures[-1].status_code} on /test")
+        calls = len(failures) + int(recover)
+        self.assertEqual(session.request.call_count, calls)
+        self.assertEqual(outcomes, [])
+        self.assertEqual(session.request.call_args_list,
+                         [mock.call("GET", f"{scanner.API}/test", params=None,
+                                    data=None, timeout=60)] * calls)
+        self.assertEqual(slept, [2 ** i for i in range(calls - 1)])
+        self.assertEqual(client.inflight, 0)
+        self.assertEqual(client.stats, Counter(
+            requests=calls, request_seconds=0.25 * calls,
+            max_request_seconds=0.25,
+            **{"transport_errors" if transport else "server_errors": len(failures)}))
+
+    def test_5xx_recovery_preserves_intermediate_backoff(self):
+        self.check_retry(False, [FakeResponse(500), FakeResponse(504)], recover=True)
+
+    def test_5xx_exhaustion_skips_final_backoff(self):
+        self.check_retry(False, [FakeResponse(500), FakeResponse(502), FakeResponse(504)])
+
+    def test_5xx_single_attempt_has_no_backoff(self):
+        self.check_retry(False, [FakeResponse(504)], attempts=1)
+
+    def test_transport_recovery_preserves_intermediate_backoff(self):
+        self.check_retry(True, [scanner.requests.Timeout("first"),
+                                scanner.requests.ConnectionError("second")], recover=True)
+
+    def test_transport_exhaustion_skips_final_backoff(self):
+        for error_type in (scanner.requests.Timeout, scanner.requests.ConnectionError):
+            with self.subTest(error_type=error_type):
+                self.check_retry(True, [error_type(str(i)) for i in range(3)])
+
+    def test_transport_single_attempt_has_no_backoff(self):
+        for error_type in (scanner.requests.Timeout, scanner.requests.ConnectionError):
+            with self.subTest(error_type=error_type):
+                self.check_retry(True, [error_type("only")], attempts=1)
+
+
 class RateLimiter(unittest.TestCase):
     def test_concurrent_workers_share_one_dispatch_schedule(self):
         from concurrent.futures import ThreadPoolExecutor
