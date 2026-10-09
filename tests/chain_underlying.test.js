@@ -93,7 +93,7 @@ const testPriceTile = async () => {
     snapshot: () => ({ SPY: published.at(-1) }),
   };
   const priceSource = html.slice(html.indexOf('async function fetchPrices()'), html.indexOf('// EIA STEO crude calibration', html.indexOf('async function fetchPrices()')));
-  const fetchPrices = new Function('fetch', 'R2', 'tickerState', 'updatePriceStrip', 'console', `${priceSource}\nreturn fetchPrices;`)(
+  const fetchPrices = new Function('fetch', 'BROWSER_DATA', 'tickerState', 'updatePriceStrip', 'console', `${priceSource}\nreturn fetchPrices;`)(
     async () => ({ ok: true, json: async () => ({ prices }) }), 'https://r2.example', tickerState,
     state => rendered.push(state), { warn() {} },
   );
@@ -137,7 +137,7 @@ const testSpyHealthBadge = async () => {
   const start = html.indexOf('let latestSpyHealthRequest = 0;');
   const end = html.indexOf('liveQuotes.subscribe(', start);
   assert.ok(start > 0 && end > start, 'shipped SPY health badge code found');
-  const fetchSpyHealth = new Function('fetch', 'R2', 'document', 'summarizeSpyHealth',
+  const fetchSpyHealth = new Function('fetch', 'BROWSER_DATA', 'document', 'summarizeSpyHealth',
     `${html.slice(start, end)}\nreturn fetchSpyHealth;`)(
       async () => ({ ok: true, json: async () => response }), 'https://r2.example',
       { getElementById: () => badge }, summarizeSpyHealth,
@@ -151,7 +151,7 @@ const testSpyHealthBadge = async () => {
   await fetchSpyHealth();
   assert.match(badge.textContent, /missing today expiration/, 'missing SPY 0DTE is visible');
   const pending = [];
-  const ordered = new Function('fetch', 'R2', 'document', 'summarizeSpyHealth',
+  const ordered = new Function('fetch', 'BROWSER_DATA', 'document', 'summarizeSpyHealth',
     html.slice(start, end) + '\nreturn fetchSpyHealth;')(
       () => new Promise((resolve, reject) => pending.push({ resolve, reject })), 'https://r2.example',
       { getElementById: () => badge }, summarizeSpyHealth);
@@ -232,6 +232,7 @@ function harness(saved = 'QQQ') {
     console: { error() {}, warn() {} },
     localStorage: { setItem() {}, getItem() { return saved; } },
     R2: 'https://r2.example',
+    BROWSER_DATA: '/browser-data',
     NO_DATA_TEXT: 'No live data yet.',
     chainSelection: new ChainSelection(saved),
     chainState: {},

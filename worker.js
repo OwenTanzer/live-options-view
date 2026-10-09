@@ -1,6 +1,7 @@
 const R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 // Only these public artifacts are exposed to the browser through this route.
 // Never use the private bucket binding or a caller-provided destination.
+const BROWSER_DATA_ORIGIN = 'https://live-options-view.otmooper12.workers.dev';
 const BROWSER_DATA_PREFIX = '/browser-data/';
 const BROWSER_DATA_KEYS = new Set([
   'intraday/latest.json',
@@ -127,6 +128,11 @@ export default {
 }
 
 async function handleBrowserData(request, url) {
+  const origin = request.headers.get('Origin');
+  if (url.origin !== BROWSER_DATA_ORIGIN ||
+      (origin !== null && origin !== BROWSER_DATA_ORIGIN)) {
+    return new Response('Forbidden', { status: 403 });
+  }
   if (request.method !== 'GET') {
     return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
   }

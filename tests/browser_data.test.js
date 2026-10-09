@@ -36,7 +36,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
       for (const query of ['', '?_=1791506273571']) {
         const res = await request('/browser-data/' + key + query, { headers: {
           Cookie: 'session=private', Authorization: 'Bearer private', 'X-Live-Quote-Key': 'private',
-          Range: 'bytes=1-2', 'If-None-Match': '"private"', Origin: 'https://other.example',
+          Range: 'bytes=1-2', 'If-None-Match': '"private"', Origin: APP,
         } });
         assert.equal(res.status, 200);
         assert.deepEqual(new Uint8Array(await res.arrayBuffer()), body);
@@ -55,6 +55,21 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
       }
     }
     const allowedCalls = calls.length;
+    for (const host of ['https://options.moopertonic.net', 'http://localhost:8787',
+      'https://preview.example', 'http://live-options-view.otmooper12.workers.dev',
+      APP + ':8443', APP + '.evil.example']) {
+      for (const origin of [undefined, APP]) {
+        const headers = origin === undefined ? {} : { Origin: origin };
+        assert.equal((await worker.fetch(new Request(host + '/browser-data/' + KEYS[0], { headers }), env)).status, 403);
+      }
+    }
+    for (const origin of ['', 'null', 'https://other.example', APP + '/', APP + ':443',
+      'http://live-options-view.otmooper12.workers.dev', APP + '.evil.example', APP + ', ' + APP]) {
+      for (const key of KEYS) {
+        assert.equal((await request('/browser-data/' + key, { headers: { Origin: origin } })).status, 403);
+      }
+    }
+    assert.equal(calls.length, allowedCalls, 'wrong host or foreign/present-empty Origin never fetches');
     for (const key of [
       '', 'intraday/other.json', 'intraday/QQQ/latest.json', 'intraday/spy/latest.json/',
       'intraday//latest.json', 'intraday/%6catest.json', 'intraday%2flatest.json',
@@ -94,14 +109,24 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
   } finally { global.fetch = originalFetch; }
   // Real shipped frontend source: every changed read uses only the new route.
   const html = fs.readFileSync(path.join(__dirname, '../docs/index.html'), 'utf8');
-  assert.ok(html.includes("fetch('/browser-data/derived/OIranges.csv'"));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/derived/OIranges.csv`'));
   for (const key of ['intraday/health.json', 'intraday/prices.json']) {
-    assert.ok(html.includes('fetch(`/browser-data/' + key + '?_=${Date.now()}`)'));
+    assert.ok(html.includes('fetch(`${BROWSER_DATA}/' + key + '?_=${Date.now()}`)'));
   }
-  assert.ok(html.includes('fetch(`/browser-data/${path}?_=${Date.now()}`)'));
-  assert.ok(html.includes("const base = '/browser-data/squeeze-scanner/v1/scheduled';"));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/${path}?_=${Date.now()}`)'));
+  assert.ok(html.includes('const base = `${BROWSER_DATA}/squeeze-scanner/v1/scheduled`;'));
   assert.ok(html.includes('fetch(`${R2}/macro/eia_steo.json'));
   assert.ok(html.includes('fetch(`${R2}/raw/qqq_chain_'));
   assert.ok(!html.includes('/r2-proxy/'));
+  const routing = html.slice(html.indexOf('const R2 ='), html.indexOf('const REFRESH'));
+  assert.ok(routing.includes('location.origin'));
+  for (const origin of [APP, 'https://options.moopertonic.net', 'http://localhost:8787',
+    'https://preview.example', 'null', APP + ':8443', APP + '.evil.example',
+    'http://live-options-view.otmooper12.workers.dev']) {
+    const base = new Function('location', routing + '; return BROWSER_DATA;')({ origin });
+    for (const key of KEYS) {
+      assert.equal(base + '/' + key, (origin === APP ? '/browser-data' : ORIGIN) + '/' + key);
+    }
+  }
   console.log('browser data: 8 keys, strict paths/queries/methods, no bindings/credentials/redirects, byte/status preservation and frontend scope passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
