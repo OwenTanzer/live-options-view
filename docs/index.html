@@ -2049,15 +2049,16 @@ async function fetchPrices() {
 }
 
 // EIA STEO crude calibration + OVX regime. Optional feed -- collector.py
-// only ever writes macro/eia_steo.json if EIA_API_KEY is configured, so a
-// 404 here just means the feature isn't enabled; the panel stays hidden
-// rather than showing an error, same as #steo-panel's default state.
+// only writes macro/eia_steo.json when EIA_API_KEY is configured. A 404
+// means the optional publication is absent, not proof of why it is absent;
+// keep the panel hidden without treating absence as a transport failure.
 // fmtSteoDelta/findRevision live in shared.js (pure, tested directly there).
 async function fetchSteoCalibration() {
   const panel = document.getElementById('steo-panel');
   try {
-    const resp = await fetch(`${R2}/macro/eia_steo.json?_=${Date.now()}`);
-    if (!resp.ok) { panel.classList.add('hidden'); return; }
+    const resp = await fetch(`${BROWSER_DATA}/macro/eia_steo.json?_=${Date.now()}`);
+    if (resp.status === 404) { panel.classList.add('hidden'); return; }
+    if (!resp.ok) throw new Error(`STEO publication returned HTTP ${resp.status}`);
     const data = await resp.json();
     const points = data.points || [];
     if (!points.length) { panel.classList.add('hidden'); return; }

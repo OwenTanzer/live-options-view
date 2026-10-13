@@ -49,6 +49,8 @@ jobs:
         run: node tests/chain_underlying.test.js
       - name: eia steo calibration display
         run: node tests/steo_calibration_display.test.js
+      - name: optional eia steo panel fetch
+        run: node tests/steo_panel.test.js
       - name: squeeze scanner panel display
         run: node tests/squeeze_scanner_display.test.js
       - name: squeeze scanner panel

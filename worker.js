@@ -9,6 +9,7 @@ const BROWSER_DATA_KEYS = new Set([
   'intraday/prices.json',
   'intraday/health.json',
   'derived/OIranges.csv',
+  'macro/eia_steo.json',
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
