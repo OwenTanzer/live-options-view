@@ -49,8 +49,11 @@ last spot, the first-snapshot guard, VWAP accumulator, RVOL buckets and
 baseline, and the momentum window. Restart recovery reads only that symbol's
 archive. Rows from another root are ignored. A `vwap_state.json` or RVOL
 baseline tagged with another symbol is not loaded. At a new trading date,
-SPY's in-process volume, spot, VWAP, momentum and first-snapshot state reset
-before today's archive is restored, so each day gets its own `first.csv`.
+each underlying's (QQQ and SPY) in-process volume, spot, VWAP, momentum and
+first-snapshot state reset before today's archive is restored, so each day gets
+its own `first.csv`. Before 2026-10-15 QQQ was excluded from this reset, so a
+long-running process wrote `intraday/YYYYMMDD/first.csv` only on the first day
+after a restart.
 
 The legacy macro price map (`_last_prices`) stays restored from QQQ only.
 SPY is subscribed for its own spot and volume and gets its own entry in

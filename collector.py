@@ -1972,9 +1972,12 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
     or lose price context.
     """
     us = us or QQQ_SESSION
-    if us.symbol == "SPY" and us.session_date != today:
+    if us.session_date != today:
         # This object survives across collection days in the same process.
-        # Start a new SPY archive with fresh per-day state before recovery.
+        # Start each underlying's new archive day with fresh per-day state
+        # before recovery. QQQ was previously excluded, so a long-lived process
+        # kept QQQ's first-snapshot guard set and wrote intraday/YYYYMMDD/first.csv
+        # only on the first day after a restart.
         us.prev_vol = {}
         us.last_spot = [None, None]
         us.first_snapshot_written = False

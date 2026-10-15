@@ -527,6 +527,36 @@ def test_spy_new_day_resets_session_state_and_writes_new_first_csv():
     assert_equal(s3.store[day2], before, "same-day recovery does not replace first.csv")
 
 
+def test_qqq_new_day_resets_session_state_and_writes_new_first_csv():
+    # One process across two days, as in production: QQQ_SESSION is never
+    # rebuilt, so the first-snapshot guard must reset at the new date.
+    qqq, spy = sessions()
+    s3 = FakeS3()
+    collector.restore_state(s3, TODAY, qqq)
+    snap(s3, feed_state(), qqq, QQQ_STRIKES)
+    day1 = qqq.day_prefix(TODAY.strftime("%Y%m%d")) + "first.csv"
+    assert_true(day1 in s3.store and qqq.first_snapshot_written, "QQQ first day mirror written")
+    spy.prev_vol["spy-only"] = 7
+    spy.first_snapshot_written = True
+    next_day = TODAY + timedelta(days=1)
+    collector.restore_state(s3, next_day, qqq)
+    assert_equal(qqq.prev_vol, {}, "new QQQ day does not retain old volume deltas")
+    assert_equal(qqq.last_spot, [None, None], "new QQQ day does not retain old spot")
+    assert_true(not qqq.first_snapshot_written, "new QQQ day resets first-snapshot guard")
+    assert_equal(spy.prev_vol["spy-only"], 7, "SPY session untouched")
+    assert_true(spy.first_snapshot_written, "SPY first-snapshot guard untouched")
+    collector.take_snapshot(s3, FakeFeed(feed_state()), QQQ_STRIKES, next_day.isoformat(),
+                            "0DTE_Regular", next_day, collector.Counters(),
+                            collector.SnapshotTracker(), qqq)
+    day2 = qqq.day_prefix(next_day.strftime("%Y%m%d")) + "first.csv"
+    assert_equal(day2, "intraday/20261007/first.csv", "QQQ keeps its legacy archive key")
+    assert_true(day2 in s3.store, "QQQ second day writes its own first.csv")
+    before = s3.store[day2]
+    collector.restore_state(s3, next_day, qqq)
+    assert_true(qqq.first_snapshot_written, "same-day QQQ recovery retains first-snapshot guard")
+    assert_equal(s3.store[day2], before, "same-day QQQ recovery does not replace first.csv")
+
+
 def test_foreign_only_archive_cannot_seed_spy_spot_or_timestamp():
     _, spy = sessions()
     s3 = FakeS3({"intraday/spy/20261006/snapshot_103100000000.csv": _csv([
