@@ -1436,11 +1436,24 @@ def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], ope
         reasons.append(f"backfill_errors:{backfill['errors']}")
     if rate_stats.get("rate_limited"):
         reasons.append(f"rate_limited_responses:{rate_stats['rate_limited']}")
+    # Status covers session-level checks (start, gaps, end, universe and chain
+    # coverage). A sweep cut short, normally the last one at the close, does
+    # not change it but is reported here so "complete" is not read as "every
+    # sweep finished".
+    truncated = [m for m in in_session if m.get("truncated")]
+    final = max(in_session, key=lambda m: m["started_ms"]) if in_session else None
+    final_sweep = None if final is None else {
+        "sweep": final.get("sweep"), "truncated": bool(final.get("truncated")),
+        "ended_ms": final["ended_ms"], "chains_recorded": len(final.get("chains") or {}),
+        "chains_selected": len(selected), "status_counts": final.get("status_counts", {})}
     return {
         "status": "partial" if reasons else "complete",
+        "status_basis": "session-level checks; see truncated_sweeps and final_sweep for per-sweep completion",
         "reasons": reasons,
         "sweeps_in_session": len(in_session),
         "complete_sweeps": len(complete_sweeps),
+        "truncated_sweeps": len(truncated),
+        "final_sweep": final_sweep,
         "chain_fetches": nearest_total + extra_recorded,
         "chain_expected": chain_total,
         "chain_success_rate": round(ok_rate, 6),

@@ -776,6 +776,24 @@ class Assessment(unittest.TestCase):
             self.assertIn(reason, joined)
         self.assertNotIn("late_start", joined)
 
+    def test_final_sweep_cut_at_close_is_reported_without_changing_session_status(self):
+        # 2026-10-12 shape: 76 complete sweeps, then sweep 77 truncated by the close.
+        manifest = [{**self.entry(i * 5, i * 5 + 5), "sweep": i + 1} for i in range(77)]
+        manifest[-1] = {**self.entry(385, 390, ok=180, total=181, truncated=True), "sweep": 77}
+        out = self.assess(manifest, backfill={"errors": 0})
+        self.assertEqual(out["status"], "complete", out["reasons"])
+        self.assertEqual((out["sweeps_in_session"], out["complete_sweeps"], out["truncated_sweeps"]), (77, 76, 1))
+        self.assertEqual(out["final_sweep"]["sweep"], 77)
+        self.assertTrue(out["final_sweep"]["truncated"])
+        self.assertEqual((out["final_sweep"]["chains_recorded"], out["final_sweep"]["chains_selected"]), (181, 500))
+        self.assertIn("session-level", out["status_basis"])
+
+    def test_untruncated_final_sweep_reports_zero_truncated(self):
+        manifest = [{**self.entry(i * 5, i * 5 + 5), "sweep": i + 1} for i in range(78)]
+        out = self.assess(manifest, backfill={"errors": 0})
+        self.assertEqual(out["truncated_sweeps"], 0)
+        self.assertFalse(out["final_sweep"]["truncated"])
+
     def test_pending_uploads_and_interruptions_are_partial(self):
         manifest = [self.entry(i * 5, i * 5 + 5) for i in range(78)]
         out = self.assess(manifest, pending=["sweeps/sweep_0001.jsonl.gz"], backfill={"errors": 0},

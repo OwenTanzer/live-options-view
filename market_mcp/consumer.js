@@ -177,6 +177,10 @@ class Consumer {
       else if (name === 'result_detail') out = await this.detail(a, q, out);
       else throw new DataError('invalid_filter', 'Unknown tool.');
     } catch (e) { out.errors.push(errorRecord(e)); out.status = e.code === 'missing_artifact' ? 'missing' : 'failed'; }
+    // An absent publication is a typed answer, not a failed call: same
+    // vocabulary as discover_sources, and not flagged isError, which clients
+    // can relabel as a generic argument error.
+    if (out.status === 'missing') out.availability = 'missing_publication';
     if (name === 'result_detail') out.sources = out.sources.map(e => ({...e, retained:e.retained === true}));
     if (Buffer.byteLength(JSON.stringify(out)) > LIMITS.output_bytes) {
       out = this.envelope(out.dataset, a, {evidence: []}); out.status = 'failed';
@@ -241,6 +245,12 @@ class Consumer {
     out.unsupported = ['shared_PCR','shared_max_pain','shared_reference_OI_skew','historical_VWAP_RVOL','account_trading_momentum','buy_only_Black_Scholes','private_accounts_positions_orders'];
     out.limits = LIMITS; out.status = out.capabilities.some(c => ['missing_publication','failed'].includes(c.availability)) ? 'partial' : 'available'; return out;
   }
+  // Field ages are measured at retrieval, so a detail call reports the same
+  // fields as market_context, aged to the detail's own retrieval time.
+  readings(m) {
+    return object(m) ? {...m, field_freshness: {spot:age(m.spot_ts,this.now()),vwap:age(m.vwap_ts,this.now()), session_volume:age(m.session_volume_ts,this.now()),
+      rvol:{...age(m.session_volume_ts,this.now()),producer_status:m.rvol?.status ?? 'missing'},momentum:{...age(m.momentum?.spot_observed_at,this.now()),producer_status:m.momentum?.status ?? 'missing'}}} : null;
+  }
   async market(a, q, out) {
     args(a, ['underlying','expiry','type','strike','contract','limit','offset']); const {limit,offset} = page(a);
     const symbol = underlyingOf(a);
@@ -255,8 +265,7 @@ class Consumer {
     out.actual = { underlying:symbol, snapshot_timestamp:p.timestamp, snapshot_key:p.snapshot_key ?? null, session:p.date, payload_sha256:q.evidence.at(-1).retrieved_sha256 };
     out.producer_times.acquisition_end = p.timestamp; out.freshness = {...age(p.timestamp, this.now()),basis:'collection_timestamp'};
     const m = p.underlying_market;
-    out.readings = object(m) ? {...m, field_freshness: {spot:age(m.spot_ts,this.now()),vwap:age(m.vwap_ts,this.now()), session_volume:age(m.session_volume_ts,this.now()),
-      rvol:{...age(m.session_volume_ts,this.now()),producer_status:m.rvol?.status ?? 'missing'},momentum:{...age(m.momentum?.spot_observed_at,this.now()),producer_status:m.momentum?.status ?? 'missing'}}} : null;
+    out.readings = this.readings(m);
     if (!object(m)) out.warnings.push('underlying_market is absent; derived readings are unavailable.');
     const rows = p.rows.filter(r => (!a.expiry || r.Expiration === a.expiry) && (!a.type || r.Type === a.type) && (a.strike === undefined || r.Strike === a.strike) && (!a.contract || r.OptionSymbol === a.contract));
     const paged = slice(rows,limit,offset); out.pagination = paged.pagination;
@@ -332,6 +341,17 @@ class Consumer {
     out.session_window={open_ms:p.session_open_ms??null,close_ms:p.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
     out.freshness={status:'historical',meaning:'Explicit selected session; finalized_at is not a quote observation or publication time.'};
     out.summary=p; out.coverage=p.assessment; out.warnings.push(...(p.assessment.reasons||[]));
+    // "complete" covers session-level checks; a sweep cut short (usually the
+    // last, at the close) is reported separately. Older summaries lack the
+    // producer fields, so derive the count from the sweep totals.
+    const cut=Number.isSafeInteger(p.assessment.truncated_sweeps)?p.assessment.truncated_sweeps:
+      Number.isSafeInteger(p.assessment.sweeps_in_session)&&Number.isSafeInteger(p.assessment.complete_sweeps)?
+        p.assessment.sweeps_in_session-p.assessment.complete_sweeps:null;
+    if(cut>0){out.coverage={...p.assessment,truncated_sweeps:cut};
+      const last=p.assessment.final_sweep;
+      out.warnings.push(`${cut} of ${p.assessment.sweeps_in_session} in-session sweeps did not finish`+
+        (last?.truncated?` (final sweep ${last.sweep}: ${last.chains_recorded} of ${last.chains_selected} chains recorded)`:'')+
+        `; coverage status "${p.assessment.status}" reflects session-level checks, not every sweep finishing.`);}
     if(!p.final) out.warnings.push('Session is not final.');
     const qualified=a.view==='qualified_ask_bid_v1';
     if(qualified && p.qualified_policy?.version!=='oa203-qualified-ask-bid-v1') {
@@ -498,7 +518,7 @@ class Consumer {
     const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
     if(v.dataset==='qqq_snapshot'||v.dataset==='spy_snapshot') {
       out.requested_underlying=v.underlying;
-      out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=v.p.underlying_market ?? null;
+      out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=this.readings(v.p.underlying_market);
       out.coverage={scope:'one cached row from the exact queried payload'};out.warnings.push('Detail uses retained queried JSON. The archived CSV has not been read or verified.');return out;
     }
     if(v.dataset==='cross_market_overview') {

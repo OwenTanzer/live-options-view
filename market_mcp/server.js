@@ -42,7 +42,7 @@ class Protocol {
       const p=message.params;
       if(!object(p)||Object.keys(p).some(k=>!['name','arguments','_meta'].includes(k))||!tools.some(t=>t.name===p.name)||(p.arguments!==undefined&&!object(p.arguments)))return error(-32602,'Unknown tool or invalid call.');
       const value=await this.consumer.call(p.name,p.arguments??{});
-      return {jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value,isError:value.status==='failed'||value.status==='missing'}};
+      return {jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value,isError:value.status==='failed'}};
     }
     return error(-32601,'Method not found.');
   }

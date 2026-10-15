@@ -167,6 +167,15 @@ Typed errors include `invalid_filter`, `invalid_reference`, `missing_artifact`,
 `source_changed`. A detail reference may expire or be evicted: repeat its bounded
 originating query. No zero substitution or automatic alternate-session search.
 
+An absent publication is an answer, not a failed call: `status: "missing"`,
+`availability: "missing_publication"` (the `discover_sources` vocabulary) and a
+`missing_artifact` error record, with MCP `isError: false`. Only `status:
+"failed"` sets `isError`. Snapshot `result_detail` returns the same `readings`
+shape as `market_context`, including `field_freshness`, aged at the detail's
+retrieval time. Return-ranking `coverage.status` covers session-level checks;
+`truncated_sweeps` and `final_sweep` report a sweep cut short (normally the
+last, at the close), with a warning.
+
 ## Producer boundaries
 
 #107 owns shared-reading publication. Merged #116 preserves Crassus lineage;

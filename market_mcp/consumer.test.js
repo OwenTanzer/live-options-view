@@ -169,3 +169,38 @@ test('early reference eviction tells the client to repeat the originating query'
   const description=tools.find(t=>t.name==='result_detail').description;
   assert.match(description,/up to 15 minutes/); assert.match(description,/64-reference\/16 MiB/);
 });
+test('missing finalized publication is a typed non-error answer with discovery vocabulary',async()=>{
+  const {consumer}=setup();const p=new Protocol(consumer);
+  await p.handle({jsonrpc:'2.0',id:0,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'t',version:'1'}}});
+  await p.handle({jsonrpc:'2.0',method:'notifications/initialized'});
+  const r=await p.handle({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'return_rankings',arguments:{session:'2026-10-01'}}});
+  const v=r.result.structuredContent;
+  assert.equal(r.result.isError,false);assert.equal(v.status,'missing');assert.equal(v.availability,'missing_publication');
+  assert.equal(v.errors[0].code,'missing_artifact');
+  const discovered=(await consumer.call('discover_sources',{session:'2026-10-01'})).capabilities.find(c=>c.dataset==='options_returns');
+  assert.equal(discovered.availability,v.availability);
+  const failed=await p.handle({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'return_rankings',arguments:{session:'not-a-date'}}});
+  assert.equal(failed.result.isError,true);assert.equal(failed.result.structuredContent.availability,undefined);
+});
+test('market detail keeps the query-derived field_freshness map, aged at detail retrieval',async()=>{
+  let now=NOW;const {consumer}=setup({now:()=>now});
+  const first=await consumer.call('market_context',{limit:1});
+  now=NOW+600000;
+  const detail=await consumer.call('result_detail',{reference:first.rows[0].detail_reference});
+  assert.deepEqual(Object.keys(detail.readings.field_freshness).sort(),Object.keys(first.readings.field_freshness).sort());
+  assert.equal(detail.readings.field_freshness.spot.status,'stale');
+  assert.equal(detail.readings.field_freshness.spot.age_seconds,first.readings.field_freshness.spot.age_seconds+600);
+  assert.equal(detail.readings.field_freshness.rvol.producer_status,first.readings.field_freshness.rvol.producer_status);
+  assert.equal(detail.readings.spot,first.readings.spot);
+});
+test('complete session with a sweep cut at the close surfaces it, old and new summaries alike',async()=>{
+  const legacy=setup();edit(legacy.files,PREFIX+'summary.json',p=>Object.assign(p.assessment,{status:'complete',reasons:[],sweeps_in_session:77,complete_sweeps:76}));
+  const old=await legacy.consumer.call('return_rankings',{session:SESSION});
+  assert.equal(old.coverage.truncated_sweeps,1);assert.ok(old.warnings.some(w=>w.startsWith('1 of 77 in-session sweeps did not finish;')));
+  const current=setup();edit(current.files,PREFIX+'summary.json',p=>Object.assign(p.assessment,{status:'complete',reasons:[],sweeps_in_session:77,complete_sweeps:76,
+    truncated_sweeps:1,final_sweep:{sweep:77,truncated:true,chains_recorded:181,chains_selected:500}}));
+  const out=await current.consumer.call('return_rankings',{session:SESSION});
+  assert.ok(out.warnings.some(w=>w.includes('final sweep 77: 181 of 500 chains recorded')));
+  const clean=setup();edit(clean.files,PREFIX+'summary.json',p=>Object.assign(p.assessment,{sweeps_in_session:78,complete_sweeps:78}));
+  assert.ok(!(await clean.consumer.call('return_rankings',{session:SESSION})).warnings.some(w=>w.includes('did not finish')));
+});
