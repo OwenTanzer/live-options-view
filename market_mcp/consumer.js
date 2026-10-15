@@ -467,8 +467,35 @@ class Consumer {
       actual:out.actual,evidence:[...q.evidence],digests:{summary:summaryEvidence.retrieved_sha256,board:boardEvidence.retrieved_sha256,
         manifest:p.member_sha256['manifest.jsonl']}})}));
     out.summary=p;out.coverage=p.assessment;
-    out.cadence={expected_seconds:pointer?.expected_cadence_s??1800,
-      observed_seconds:pointer?.observed_cadence_s??null,previous_publication:pointer?.previous_published_at??null};
+    // Status comes from elapsed publication time, never from sweep counts:
+    // degraded provider latency can stretch a fixed number of sweeps far
+    // past the expected interval.
+    const expectedCadence=Number.isFinite(pointer?.expected_cadence_s)?pointer.expected_cadence_s:1800;
+    const observed=Number.isFinite(pointer?.observed_cadence_s)?pointer.observed_cadence_s:null;
+    const lateAfter=expectedCadence*1.5, reported=object(pointer?.cadence)?pointer.cadence:null;
+    // A pinned sweep's own age says nothing about whether a newer snapshot
+    // exists; overdue is judged only from the current latest pointer.
+    let head=a.sweep===undefined?pointer:null;
+    if(a.sweep!==undefined){
+      const latest=await q.optionalJson(`oa203/scanner/${selected}/inprogress/latest.json`);
+      if(!latest.error&&object(latest.value)&&Number.isInteger(latest.value.sweep)&&Number.isFinite(Date.parse(latest.value.published_at)))head=latest.value;
+      else if(latest.error&&latest.error.code!=='missing_artifact')out.errors.push(latest.error);
+      out.newer_snapshot=head?{available:head.sweep>sweep,sweep:head.sweep,published_at:head.published_at}:
+        {available:null,sweep:null,published_at:null,reason:'latest snapshot pointer unavailable'};
+      if(head&&head.sweep>sweep)out.warnings.push(`Pinned sweep ${sweep} is not the newest snapshot; sweep ${head.sweep} was published at ${head.published_at}.`);
+    }
+    const sincePublication=head?.published_at?(this.now()-Date.parse(head.published_at))/1000:null;
+    const overdue=this.now()<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
+    out.cadence={expected_seconds:expectedCadence,observed_seconds:observed,previous_publication:pointer?.previous_published_at??null,
+      late_after_seconds:lateAfter,seconds_since_publication:Number.isFinite(sincePublication)?Math.round(sincePublication):null,
+      since_publication_of:head?{sweep:head.sweep,basis:'latest snapshot pointer'}:null,
+      status:overdue?'overdue':observed===null?'unknown':observed>lateAfter?'late':'on_time',
+      basis:reported?.basis??'publication_interval',
+      degradation:reported?{sweeps:reported.sweeps??null,max_sweep_seconds:reported.max_sweep_s??null,
+        budget_exhausted_sweeps:reported.budget_exhausted_sweeps??null,server_errors:reported.server_errors??null,
+        transport_errors:reported.transport_errors??null}:null};
+    if(out.cadence.status==='late')out.warnings.push(`This snapshot refreshed ${observed}s after the previous one, beyond the ${expectedCadence}s expectation; provider degradation may have slowed collection.`);
+    if(overdue)out.warnings.push(`No newer snapshot has been published for ${out.cadence.seconds_since_publication}s, beyond the ${expectedCadence}s expectation.`);
     out.session_window={open_ms:p.session_open_ms,close_ms:p.session_close_ms,meaning:'exchange boundaries; not acquisition timestamps'};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:new Date(p.cutoff_ms).toISOString(),
       publication:pointer?.published_at??null,built_at:pointer?.built_at??p.built_at??null};

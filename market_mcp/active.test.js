@@ -30,6 +30,29 @@ test('active all, clean, qualified and pinned detail survive pointer advance',as
   assert.equal(last.pagination.next_offset,null);
   assert.ok(!f.calls.some(k=>k.includes('sweep_0007')));
 });
+test('active cadence reports late refresh from elapsed time with producer degradation',async()=>{
+  const f=setup();const late=Date.parse(f.pointer.published_at);
+  f.consumer.now=()=>late+60000;
+  Object.assign(f.pointer,{observed_cadence_s:3459.3,cadence:{basis:'elapsed_time',sweeps:6,max_sweep_s:1001,
+    budget_exhausted_sweeps:2,server_errors:83,transport_errors:0}});
+  f.files[ACTIVE+'latest.json']=JSON.stringify(f.pointer);
+  const out=await f.consumer.call('active_rankings',{session:SESSION});
+  assert.equal(out.cadence.status,'late');assert.equal(out.cadence.basis,'elapsed_time');
+  assert.equal(out.cadence.degradation.max_sweep_seconds,1001);assert.equal(out.cadence.degradation.budget_exhausted_sweeps,2);
+  assert.ok(out.warnings.some(w=>w.includes('3459.3s')));
+});
+test('active cadence without producer report still judges elapsed time, and flags overdue pointers',async()=>{
+  const f=setup();const published=Date.parse(f.pointer.published_at);
+  delete f.pointer.cadence;f.pointer.observed_cadence_s=1836;f.files[ACTIVE+'latest.json']=JSON.stringify(f.pointer);
+  f.consumer.now=()=>published+60000;
+  const onTime=await f.consumer.call('active_rankings',{session:SESSION});
+  assert.equal(onTime.cadence.status,'on_time');assert.equal(onTime.cadence.basis,'publication_interval');
+  assert.equal(onTime.cadence.degradation,null);
+  f.consumer.now=()=>published+2701000;
+  const overdue=await f.consumer.call('active_rankings',{session:SESSION});
+  assert.equal(overdue.cadence.status,'overdue');assert.equal(overdue.cadence.seconds_since_publication,2701);
+  assert.ok(overdue.warnings.some(w=>w.includes('No newer snapshot')));
+});
 test('active pointer and immutable member mismatches fail closed',async()=>{
   for(const mutate of [f=>f.files[f.prefix+'summary.json']+='\n',f=>f.files[f.prefix+'leaderboard.csv']+='\n']){
     const f=setup();mutate(f);f.files[ACTIVE+'latest.json']=JSON.stringify(f.pointer);
@@ -194,4 +217,27 @@ test('MCP discovery, active query and pinned detail use read-only bounded schema
   const detail=await call('result_detail',{reference:ranking.rows[0].detail_reference,limit:1});
   assert.equal(detail.actual.archive,ranking.actual.archive);
   assert.equal(detail.quote_path[0].sweep,1);
+});
+// Review of 07d61d0 (P2): a pinned old sweep must not claim nothing newer exists.
+test('pinned old sweep reports its own age separately from a newer latest snapshot',async()=>{
+  const f=setup();const published=Date.parse(f.pointer.published_at);
+  f.consumer.now=()=>published+2701000;
+  const latest={...f.pointer,sweep:12,published_at:new Date(published+2600000).toISOString()};
+  f.files[ACTIVE+'latest.json']=JSON.stringify(latest);
+  const pinned=await f.consumer.call('active_rankings',{session:SESSION,sweep:6,limit:1});
+  assert.equal(pinned.actual.sweep,6);assert.equal(pinned.freshness.status,'stale');
+  assert.deepEqual(pinned.newer_snapshot,{available:true,sweep:12,published_at:latest.published_at});
+  assert.notEqual(pinned.cadence.status,'overdue');assert.equal(pinned.cadence.seconds_since_publication,101);assert.equal(pinned.cadence.since_publication_of.sweep,12);
+  assert.ok(!pinned.warnings.some(w=>w.includes('No newer snapshot')));
+  assert.ok(pinned.warnings.some(w=>w.includes('Pinned sweep 6 is not the newest snapshot; sweep 12')));
+  // Pinned to the latest sweep with nothing newer: overdue still reported.
+  f.files[ACTIVE+'latest.json']=JSON.stringify(f.pointer);
+  const current=await f.consumer.call('active_rankings',{session:SESSION,sweep:6,limit:1});
+  assert.equal(current.newer_snapshot.available,false);assert.equal(current.cadence.status,'overdue');
+  assert.ok(current.warnings.some(w=>w.includes('No newer snapshot')));
+  // Latest pointer unreadable: availability is unknown, never "none newer".
+  delete f.files[ACTIVE+'latest.json'];
+  const unknown=await f.consumer.call('active_rankings',{session:SESSION,sweep:6,limit:1});
+  assert.equal(unknown.newer_snapshot.available,null);assert.notEqual(unknown.cadence.status,'overdue');
+  assert.ok(!unknown.warnings.some(w=>w.includes('No newer snapshot')));
 });

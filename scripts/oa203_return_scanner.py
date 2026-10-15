@@ -124,7 +124,13 @@ class Config:
     max_rpm: int = 100          # own cap, below Tradier's 120/min market-data limit
     reserve: int = 10           # pause when the token-wide remaining budget drops this low
     block_size: int = 50
-    workers: int = 3
+    # Dispatch is paced by the rate limiter, not by workers. Workers only
+    # bound requests in flight: at 100/min, 3 workers become the bottleneck
+    # once mean provider latency exceeds 1.8 s (October 13: 0.7-2.7 s).
+    workers: int = 6
+    connect_timeout_s: float = 5.0
+    read_timeout_s: float = 20.0   # October 13 504s returned at ~10 s or hung ~55 s
+    sweep_budget_s: float = 600.0  # ~2x the 306 s rate-budget floor; 0 disables
     backfill_top: int = 200
     universe_lead_min: int = 30  # start selection this long before the open
     spool_dir: Path = Path("/data/oa203")
@@ -141,7 +147,10 @@ class Config:
             max_rpm=_env_int("OA203_MAX_RPM", 100),
             reserve=_env_int("OA203_RATE_RESERVE", 10),
             block_size=_env_int("OA203_BLOCK_SIZE", 50),
-            workers=_env_int("OA203_WORKERS", 3),
+            workers=_env_int("OA203_WORKERS", 6),
+            connect_timeout_s=float(os.getenv("OA203_CONNECT_TIMEOUT_S", "5")),
+            read_timeout_s=float(os.getenv("OA203_READ_TIMEOUT_S", "20")),
+            sweep_budget_s=float(os.getenv("OA203_SWEEP_BUDGET_S", "600")),
             backfill_top=_env_int("OA203_BACKFILL_TOP", 200),
             universe_lead_min=_env_int("OA203_UNIVERSE_LEAD_MIN", 30),
             spool_dir=Path(os.getenv("OA203_SPOOL_DIR", "/data/oa203")),
@@ -164,6 +173,8 @@ class Config:
         return {
             "universe_size": self.universe_size, "max_rpm": self.max_rpm,
             "reserve": self.reserve, "block_size": self.block_size, "workers": self.workers,
+            "connect_timeout_s": self.connect_timeout_s, "read_timeout_s": self.read_timeout_s,
+            "sweep_budget_s": self.sweep_budget_s,
             "backfill_top": self.backfill_top, "universe_lead_min": self.universe_lead_min,
             "r2_prefix": self.r2_prefix, "return_policy": self.policy.as_dict(),
             "spy_qqq_second_expiry": self.spy_qqq_second_expiry,
@@ -260,6 +271,10 @@ class SamplingDeadline(RuntimeError):
     pass
 
 
+class BudgetExhausted(RuntimeError):
+    """The sweep budget ended before this request could be dispatched."""
+
+
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -271,8 +286,13 @@ class Tradier:
 
     def __init__(self, token: str, max_rpm: int = 100, reserve: int = 10,
                  session: Any = None, clock: Callable[[], float] = time.time,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], None] = time.sleep,
+                 timeout: tuple[float, float] = (5.0, 20.0)) -> None:
         self.session = session or requests.Session()
+        self.timeout = timeout
+        # Set per sweep: once passed, no request is dispatched (first attempt
+        # or retry), and rate-limit/backoff waits never sleep past it.
+        self.budget_deadline: float | None = None
         self.session.headers.update({"Authorization": f"Bearer {token}", "Accept": "application/json"})
         self.max_rpm, self.reserve = max_rpm, reserve
         if not 0 <= reserve < 120 or not 1 <= max_rpm <= 120 - reserve:
@@ -296,6 +316,9 @@ class Tradier:
                 now = self.clock()
                 if self.deadline is not None and now >= self.deadline:
                     raise SamplingDeadline("session closed before request dispatch")
+                if self.budget_deadline is not None and now >= self.budget_deadline:
+                    self.stats["dispatch_skipped_budget"] += 1
+                    raise BudgetExhausted("sweep budget spent before request dispatch")
                 while self.sent and now - self.sent[0] >= 60:
                     self.sent.popleft()
                 wait = max(self.blocked_until - now, self.next_request_at - now,
@@ -310,7 +333,8 @@ class Tradier:
                     self.inflight += 1
                     return
                 self.stats["rate_waits"] += 1
-                sleep_seconds = min(wait, 61, max(0, self.deadline - now) if self.deadline is not None else 61)
+                sleep_seconds = min([wait, 61] + [max(0, limit - now) for limit in (self.deadline, self.budget_deadline)
+                                                  if limit is not None])
                 self.stats["rate_wait_seconds"] += sleep_seconds
             # Header observers and other workers must be able to take the lock.
             self.sleep(sleep_seconds)
@@ -341,16 +365,38 @@ class Tradier:
             if expiry >= self.budget_expiry and self.available <= self.reserve:
                 self.blocked_until = max(self.blocked_until, expiry + 0.25)
 
+    def _backoff(self, seconds: float) -> None:
+        # A retry backoff never sleeps past the sweep budget; the next
+        # dispatch then stops at the budget check in _acquire.
+        if self.budget_deadline is not None:
+            seconds = min(seconds, max(0, self.budget_deadline - self.clock()))
+        if seconds > 0:
+            self.sleep(seconds)
+
+    def _may_retry(self, attempt: int, attempts: int) -> bool:
+        if attempt + 1 >= attempts:
+            return False
+        if self.budget_deadline is not None and self.clock() >= self.budget_deadline:
+            self.stats["retries_skipped_budget"] += 1
+            return False
+        return True
+
     def request(self, method: str, path: str, *, params: dict | None = None,
                 data: dict | None = None, attempts: int = 3) -> Any:
         last_exc: Exception | None = None
         for attempt in range(attempts):
-            self._acquire()
+            try:
+                self._acquire()
+            except BudgetExhausted:
+                if last_exc is None:
+                    raise  # nothing was requested: the caller records skipped_budget
+                self.stats["retries_skipped_budget"] += 1
+                break
             self.stats["requests"] += 1
             started = self.clock()
             try:
                 response = self.session.request(method, f"{API}{path}", params=params,
-                                                data=data, timeout=60)
+                                                data=data, timeout=self.timeout)
             except requests.RequestException as exc:
                 from capture_diagnostics import exception_details
                 with self.lock:
@@ -363,8 +409,9 @@ class Tradier:
                 log("oa203_request_retry", path=path, attempt=attempt + 1,
                     delay_seconds=2 ** attempt, elapsed_seconds=elapsed,
                     error=exception_details(exc, (self.token,)))
-                if attempt + 1 < attempts:
-                    self.sleep(2 ** attempt)
+                if not self._may_retry(attempt, attempts):
+                    break
+                self._backoff(2 ** attempt)
                 continue
             elapsed = max(0, self.clock() - started)
             with self.lock:
@@ -388,14 +435,17 @@ class Tradier:
                     delay_seconds=max(0, self.blocked_until - self.clock()),
                     available=self.available, budget_expiry=self.budget_expiry, elapsed_seconds=elapsed)
                 last_exc = RateLimited(f"429 on {path}")
+                if not self._may_retry(attempt, attempts):
+                    break
                 continue
             if response.status_code >= 500:
                 self.stats["server_errors"] += 1
                 last_exc = RuntimeError(f"HTTP {response.status_code} on {path}")
                 log("oa203_request_retry", path=path, status=response.status_code,
                     attempt=attempt + 1, delay_seconds=2 ** attempt, elapsed_seconds=elapsed)
-                if attempt + 1 < attempts:
-                    self.sleep(2 ** attempt)
+                if not self._may_retry(attempt, attempts):
+                    break
+                self._backoff(2 ** attempt)
                 continue
             response.raise_for_status()
             return response.json()
@@ -549,22 +599,48 @@ def chain_rows(sweep: int, fetched_ms: int, underlying: str, contracts: list[dic
     return rows
 
 
+BUDGET_SKIP = "sweep budget exhausted before chain request"
+
+
 def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_path: Path,
-              block_size: int, workers: int, deadline: datetime | None = None) -> dict[str, Any]:
-    """Sample every chain once; write rows to ``out_path``; return the manifest entry."""
+              block_size: int, workers: int, deadline: datetime | None = None,
+              budget_s: float | None = None,
+              clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """Sample every chain once; write rows to ``out_path``; return the manifest entry.
+
+    With ``budget_s``, no chain request starts after the sweep has run that
+    long, and failed requests stop retrying. Chains not requested are recorded
+    as ``skipped_budget``, so a degraded provider shortens coverage visibly
+    instead of stretching the sweep. In-flight requests can overrun the budget
+    by at most one request timeout.
+    """
     started = now_ms()
+    budget_end = clock() + budget_s if budget_s else None
+    over_budget = lambda: budget_end is not None and clock() >= budget_end
     from capture_diagnostics import exception_details
     def safe_error(exc):
         return json.dumps(exception_details(exc, (getattr(client, "token", ""),)))
     chains: dict[str, dict[str, Any]] = {}
     additional_chains: dict[str, dict[str, dict[str, Any]]] = {}
-    truncated = False
+    truncated = budget_exhausted = False
+    if isinstance(client, Tradier):
+        client.budget_deadline = budget_end
     with published(out_path) as tmp, gzip.open(tmp, "wt", encoding="utf-8") as out,             ThreadPoolExecutor(max_workers=workers) as pool:
         for start in range(0, len(universe), block_size):
             if STOP or (deadline and datetime.now(ET) >= deadline):
                 truncated = True
                 break
             block = universe[start:start + block_size]
+            if over_budget():
+                budget_exhausted = True
+                for u in block:
+                    chains[u["underlying"]] = {"fetched_ms": None, "expiration": u["expiration"],
+                                               "status": "skipped_budget"}
+                    if u.get("additional_expiration"):
+                        additional_chains[u["underlying"]] = {u["additional_expiration"]: {
+                            "expiration": u["additional_expiration"], "fetched_ms": None,
+                            "status": "skipped_budget"}}
+                continue
             symbols = [u["underlying"] for u in block]
             try:
                 quotes = client.quotes(symbols)
@@ -575,16 +651,23 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
             def fetch(u: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]] | None, int, str | None]:
                 if STOP or (deadline and datetime.now(ET) >= deadline):
                     return u, None, now_ms(), "session closed or stop requested before chain"
+                if over_budget():
+                    return u, None, now_ms(), BUDGET_SKIP
                 try:
                     contracts = client.chain(u["underlying"], u["expiration"])
                     return u, contracts, now_ms(), None
+                except BudgetExhausted:
+                    return u, None, now_ms(), BUDGET_SKIP
                 except Exception as exc:
                     return u, None, now_ms(), safe_error(exc)
 
             for u, contracts, fetched, error in pool.map(fetch, block):
                 name = u["underlying"]
                 status: dict[str, Any] = {"fetched_ms": fetched, "expiration": u["expiration"]}
-                if error is not None:
+                if error == BUDGET_SKIP:
+                    budget_exhausted = True
+                    status.update(status="skipped_budget", fetched_ms=None)
+                elif error is not None:
                     status.update(status="error", error=error)
                 elif not contracts:
                     status.update(status="empty")
@@ -602,6 +685,9 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
                     if STOP or (deadline and datetime.now(ET) >= deadline):
                         extra_status["status"] = "skipped_deadline"
                         truncated = True
+                    elif over_budget():
+                        extra_status.update(status="skipped_budget", fetched_ms=None)
+                        budget_exhausted = True
                     else:
                         try:
                             extra_contracts = client.chain(name, extra)
@@ -617,13 +703,19 @@ def run_sweep(client: Tradier, universe: list[dict[str, Any]], sweep: int, out_p
                                     row["collection_role"] = "additional_expiry"
                                     out.write(json.dumps(row, separators=(",", ":")) + "\n")
                                 extra_status.update(status="ok", rows=len(extra_rows))
+                        except BudgetExhausted:
+                            extra_status.update(status="skipped_budget", fetched_ms=None)
+                            budget_exhausted = True
                         except Exception as exc:
                             extra_status.update(status="error", error=safe_error(exc))
                     additional_chains[name] = {extra: extra_status}
+    if isinstance(client, Tradier):
+        client.budget_deadline = None
     counts = Counter(s["status"] for s in chains.values())
     truncated = truncated or bool(deadline and datetime.now(ET) >= deadline)
     return {"sweep": sweep, "file": out_path.name, "started_ms": started, "ended_ms": now_ms(),
-            "truncated": truncated, "status_counts": dict(counts),
+            "truncated": truncated, "budget_s": budget_s or None, "budget_exhausted": budget_exhausted,
+            "status_counts": dict(counts),
             "rows": sum(s.get("rows", 0) for s in chains.values()) +
                     sum(s.get("rows", 0) for e in additional_chains.values() for s in e.values()),
             "chains": chains, "additional_chains": additional_chains}
@@ -1084,9 +1176,48 @@ def write_outputs(day_dir: Path, rows: list[dict[str, Any]], top: int = 200,
 
 ACTIVE_MEMBERS = ("summary.json", "leaderboard.csv", "qualified_ask_bid_v1.csv", "manifest.jsonl")
 ACTIVE_BUILD_SECONDS = 240
-ACTIVE_EVERY_SWEEPS = 6
+# Snapshots are due by elapsed time, not sweep count: six sweeps took 57.8
+# minutes on 2026-10-13 while the provider was returning 504s.
+ACTIVE_INTERVAL_S = 1800
+ACTIVE_LATE_FACTOR = 1.5  # observed cadence beyond this multiple is reported late
 ACTIVE_MAX_SNAPSHOTS_PER_DAY = 16
+ACTIVE_MAX_SWEEP = 96  # identifier bound for pointer names and the upload ledger
 ACTIVE_MAX_UPLOAD_ATTEMPTS_PER_SWEEP = 3
+
+
+def active_snapshot_due(ended_ms: int, since_ms: int, expected_sweep: float) -> bool:
+    """Due once the interval has elapsed, to the nearest sweep boundary.
+
+    Half a nominal sweep of tolerance keeps the healthy cadence at six
+    ~306 s sweeps (1,836 s) instead of slipping to seven.
+    """
+    return ended_ms - since_ms >= (ACTIVE_INTERVAL_S - expected_sweep / 2) * 1000
+
+
+def _active_cutoff_ms(archive: DayArchive) -> int:
+    path = archive.path("inprogress/latest.json")
+    try:
+        cutoff = json.loads(path.read_text(encoding="utf-8")).get("cutoff_ms")
+    except (OSError, ValueError, AttributeError):
+        return 0
+    return cutoff if type(cutoff) is int else 0
+
+
+def cadence_report(manifest: list[dict[str, Any]], previous: dict[str, Any] | None,
+                   observed_s: float | None) -> dict[str, Any]:
+    """Describe the refresh this snapshot completes, from the sweeps it covers."""
+    since = previous.get("sweep", 0) if previous else 0
+    window = [m for m in manifest if m["sweep"] > since]
+    durations = [(m["ended_ms"] - m["started_ms"]) / 1000 for m in window]
+    stats = [m.get("request_stats_delta") or {} for m in window]
+    status = ("first" if observed_s is None else
+              "late" if observed_s > ACTIVE_INTERVAL_S * ACTIVE_LATE_FACTOR else "on_time")
+    return {"basis": "elapsed_time", "interval_s": ACTIVE_INTERVAL_S,
+            "late_after_s": ACTIVE_INTERVAL_S * ACTIVE_LATE_FACTOR, "status": status,
+            "sweeps": len(window), "max_sweep_s": round(max(durations), 1) if durations else None,
+            "budget_exhausted_sweeps": sum(bool(m.get("budget_exhausted")) for m in window),
+            "server_errors": sum(s.get("server_errors", 0) for s in stats),
+            "transport_errors": sum(s.get("transport_errors", 0) for s in stats)}
 ACTIVE_MAX_MEMBER_BYTES = 4 * 1024 * 1024  # market MCP Source.LIMITS.artifact_bytes
 ACTIVE_MAX_MANIFEST_LINE_BYTES = 256 * 1024  # market MCP Source.LIMITS.jsonl_line_bytes
 
@@ -1107,7 +1238,7 @@ def reserve_active_upload_attempt(archive: DayArchive, sweep: int) -> None:
     attempts = budget["attempts"]
     if len(attempts) > ACTIVE_MAX_SNAPSHOTS_PER_DAY or any(
            not re.fullmatch(r"[1-9][0-9]{0,3}", key) or
-           int(key) > ACTIVE_EVERY_SWEEPS * ACTIVE_MAX_SNAPSHOTS_PER_DAY or type(value) is not int or
+           int(key) > ACTIVE_MAX_SWEEP or type(value) is not int or
            not 1 <= value <= ACTIVE_MAX_UPLOAD_ATTEMPTS_PER_SWEEP
            for key, value in attempts.items()):
         raise ValueError("invalid active upload attempt ledger")
@@ -1171,7 +1302,7 @@ def _build_active_snapshot(archive: DayArchive, cfg: Config, sweep: int,
     The CLI may be retried after interruption. An existing generation is reused
     only when its recorded member digests still match. No source sweep is copied.
     """
-    if not 1 <= sweep <= ACTIVE_EVERY_SWEEPS * ACTIVE_MAX_SNAPSHOTS_PER_DAY:
+    if not 1 <= sweep <= ACTIVE_MAX_SWEEP:
         raise ValueError("invalid snapshot sweep")
     manifest_damage: list[dict[str, Any]] = []
     manifest = _read_manifest(archive.dir, manifest_damage, sweep)
@@ -1279,7 +1410,8 @@ def _build_active_snapshot(archive: DayArchive, cfg: Config, sweep: int,
                "members": hashes, "built_at": published_at,
                "published_at": published_at, "previous_published_at": previous_at,
                "observed_cadence_s": observed_cadence,
-               "expected_cadence_s": ACTIVE_EVERY_SWEEPS * 300}
+               "expected_cadence_s": ACTIVE_INTERVAL_S,
+               "cadence": cadence_report(manifest, existing, observed_cadence)}
     if existing and existing.get("sweep", 0) > sweep:
         return existing  # retries may never move the pointer backwards
     if archive.upload:
@@ -1339,6 +1471,7 @@ def run_backfill(client: Tradier, day: date, day_dir: Path, rows: list[dict[str,
 START_GRACE_MS = 120_000   # first sweep must start within this of the open
 MIN_UNIVERSE_COVERAGE = 0.98
 MIN_CHAIN_SUCCESS = 0.98
+SLOW_SWEEP_FACTOR = 1.5
 
 
 def expected_sweep_s(universe_size: int, cfg: "Config") -> float:
@@ -1413,6 +1546,13 @@ def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], ope
     durations = [m["ended_ms"] - m["started_ms"] for m in complete_sweeps]
     typical = statistics.median(durations) if durations else None
     max_gap = 2 * max(typical or 0, expected_sweep_ms) + 60_000
+    # The median hides a degraded stretch, so slow and budget-cut sweeps are
+    # counted separately against the request-budget floor.
+    all_durations = [m["ended_ms"] - m["started_ms"] for m in in_session]
+    slow_sweeps = sum(d > SLOW_SWEEP_FACTOR * expected_sweep_ms for d in all_durations)
+    budget_cut = sum(bool(m.get("budget_exhausted")) for m in in_session)
+    if budget_cut:
+        reasons.append(f"sweeps_over_budget:{budget_cut}")
     gaps: list[int] = []
     if in_session:
         starts = sorted(m["started_ms"] for m in in_session)
@@ -1451,6 +1591,10 @@ def assess_session(universe: dict[str, Any], manifest: list[dict[str, Any]], ope
         "additional_chain_success_rate": (round(extra_ok / extra_expected, 6) if extra_expected else None),
         "additional_expiry_coverage": (round(extra_coverage, 6) if extra_coverage is not None else None),
         "typical_sweep_s": round(typical / 1000, 1) if typical else None,
+        "max_sweep_s": round(max(all_durations) / 1000, 1) if all_durations else None,
+        "slow_sweeps": slow_sweeps,
+        "slow_sweep_threshold_s": round(SLOW_SWEEP_FACTOR * expected_sweep_ms / 1000, 1),
+        "budget_exhausted_sweeps": budget_cut,
         "max_gap_s": round(max_gap / 1000, 1),
         "gaps_ms": gaps,
         "pending_uploads": pending_uploads,
@@ -1642,7 +1786,7 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
             sleep_until: Callable[[datetime], None] = _sleep_until,
             sweep_fn: Callable[..., dict[str, Any]] = run_sweep,
             uploader: Callable[[Path, str, str], dict[str, Any]] | None = None) -> int:
-    client = client or Tradier(load_token(), cfg.max_rpm, cfg.reserve)
+    client = client or Tradier(load_token(), cfg.max_rpm, cfg.reserve, timeout=(cfg.connect_timeout_s, cfg.read_timeout_s))
     day = now().date()
     try:
         recovery = recover_days(cfg, client, day, now(), bounds_for, uploader)
@@ -1679,6 +1823,8 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
     previous_start = None
     active_proc: subprocess.Popen | None = None
     active_started = 0.0
+    open_ms = _session_ms(bounds)[0]
+    last_snapshot_ms = 0  # launched this process; the published pointer covers restarts
     while not STOP and now() < close_at:
         sweep += 1
         name = f"sweeps/sweep_{sweep:04d}.jsonl.gz"
@@ -1687,10 +1833,11 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
             client.deadline = close_at.timestamp()
         try:
             entry = sweep_fn(client, universe["selected"], sweep, archive.path(name),
-                             cfg.block_size, cfg.workers, deadline=close_at)
+                             cfg.block_size, cfg.workers, deadline=close_at,
+                             budget_s=cfg.sweep_budget_s or None)
         finally:
             if isinstance(client, Tradier):
-                client.deadline = None
+                client.deadline = client.budget_deadline = None
         entry["start_interval_seconds"] = ((entry["started_ms"] - previous_start) / 1000
                                             if previous_start is not None else None)
         previous_start = entry["started_ms"]
@@ -1702,7 +1849,8 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
         archive.push("sweeps/manifest.jsonl")
         log("oa203_sweep", sweep=sweep, rows=entry["rows"], status=entry["status_counts"],
             seconds=round((entry["ended_ms"] - entry["started_ms"]) / 1000, 1),
-            truncated=entry["truncated"], requests=client.stats["requests"],
+            truncated=entry["truncated"], budget_exhausted=entry.get("budget_exhausted", False),
+            requests=client.stats["requests"],
             start_interval_seconds=entry["start_interval_seconds"],
             upload_seconds=round(time.monotonic() - upload_started, 3),
             request_stats_delta=entry["request_stats_delta"],
@@ -1718,9 +1866,10 @@ def run_day(cfg: Config, *, client: Tradier | None = None,
             log("oa203_active_snapshot_supervisor_killed", sweep=sweep)
             active_proc = None
         if (os.getenv("OA203_ACTIVE_SNAPSHOTS_ENABLED") == "1" and
-                sweep % ACTIVE_EVERY_SWEEPS == 0 and
-                sweep <= ACTIVE_EVERY_SWEEPS * ACTIVE_MAX_SNAPSHOTS_PER_DAY and
-                active_proc is None):
+                sweep <= ACTIVE_MAX_SWEEP and active_proc is None and
+                active_snapshot_due(entry["ended_ms"], max(open_ms, last_snapshot_ms, _active_cutoff_ms(archive)),
+                                    expected_sweep_s(len(universe["selected"]), cfg))):
+            last_snapshot_ms = entry["ended_ms"]
             command = [sys.executable, str(Path(__file__).resolve()), "snapshot-supervise",
                        "--dir", str(archive.dir), "--sweep", str(sweep),
                        "--open-ms", str(_session_ms(bounds)[0]),
@@ -1882,7 +2031,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_day(cfg)
     if args.command == "universe":
         day = args.date or datetime.now(ET).date()
-        client = Tradier(load_token(), cfg.max_rpm, cfg.reserve)
+        client = Tradier(load_token(), cfg.max_rpm, cfg.reserve, timeout=(cfg.connect_timeout_s, cfg.read_timeout_s))
         with tempfile.TemporaryDirectory() as tmp:
             archive = DayArchive(Path(tmp), day, cfg.r2_prefix, upload=False)
             cfg.universe_size = args.size or cfg.universe_size
@@ -1894,7 +2043,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smoke":
         day = datetime.now(ET).date()
         cfg.upload = False
-        client = Tradier(load_token(), cfg.max_rpm, cfg.reserve)
+        client = Tradier(load_token(), cfg.max_rpm, cfg.reserve, timeout=(cfg.connect_timeout_s, cfg.read_timeout_s))
         archive = DayArchive(args.dir, day, cfg.r2_prefix, upload=False)
         ranked = [(s.strip().upper(), {"contracts": 0, "calls": 0, "puts": 0})
                   for s in args.symbols.split(",") if s.strip()]

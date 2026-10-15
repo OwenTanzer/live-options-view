@@ -496,7 +496,7 @@ class RetryBackoff(unittest.TestCase):
         self.assertEqual(outcomes, [])
         self.assertEqual(session.request.call_args_list,
                          [mock.call("GET", f"{scanner.API}/test", params=None,
-                                    data=None, timeout=60)] * calls)
+                                    data=None, timeout=(5.0, 20.0))] * calls)
         self.assertEqual(slept, [2 ** i for i in range(calls - 1)])
         self.assertEqual(client.inflight, 0)
         self.assertEqual(client.stats, Counter(
@@ -526,6 +526,34 @@ class RetryBackoff(unittest.TestCase):
         for error_type in (scanner.requests.Timeout, scanner.requests.ConnectionError):
             with self.subTest(error_type=error_type):
                 self.check_retry(True, [error_type("only")], attempts=1)
+
+    def test_spent_sweep_budget_stops_retries(self):
+        for first in (FakeResponse(504), scanner.requests.Timeout("slow"), FakeResponse(429)):
+            with self.subTest(first=first):
+                clock = {"t": 1000.0}
+                session = mock.Mock(headers={})
+
+                def request(*args, **kwargs):
+                    clock["t"] += 20  # a request that used its whole read timeout
+                    if isinstance(first, Exception):
+                        raise first
+                    return first
+
+                session.request.side_effect = request
+                client = scanner.Tradier("test", session=session, clock=lambda: clock["t"],
+                                         sleep=lambda s: clock.__setitem__("t", clock["t"] + s))
+                client.budget_deadline = 1010.0
+                with mock.patch.object(scanner, "log"), self.assertRaises(Exception):
+                    client.request("GET", "/test")
+                self.assertEqual(session.request.call_count, 1)
+                self.assertEqual(client.stats["retries_skipped_budget"], 1)
+
+    def test_configured_timeout_reaches_session(self):
+        session = FakeSession([FakeResponse(200)])
+        session.request = mock.Mock(return_value=FakeResponse(200))
+        client = scanner.Tradier("test", session=session, timeout=(3.0, 7.5))
+        client.expirations("SPY")
+        self.assertEqual(session.request.call_args.kwargs["timeout"], (3.0, 7.5))
 
 
 class RateLimiter(unittest.TestCase):
@@ -632,6 +660,215 @@ class RateLimiter(unittest.TestCase):
         for _ in range(3):
             client.expirations("SPY")
         self.assertGreaterEqual(clock["t"], 1060.0)
+
+
+class SlowClient(FakeClient):
+    """A provider whose every chain request takes ``latency`` seconds."""
+
+    def __init__(self, names, latency):
+        super().__init__(chains={n: chain_for(n, [1.0]) for n in names})
+        self.clock = {"t": 0.0}
+        self.latency = latency
+        self.quote_calls = 0
+        self.sweep = 1
+
+    def now(self):
+        return self.clock["t"]
+
+    def quotes(self, symbols):
+        self.quote_calls += 1
+        return super().quotes(symbols)
+
+    def chain(self, symbol, expiration):
+        self.clock["t"] += self.latency
+        return super().chain(symbol, expiration)
+
+
+class SlowProviderSweep(unittest.TestCase):
+    NAMES = [f"S{i}" for i in range(10)]
+
+    def sweep(self, client, budget_s, universe=None):
+        universe = universe or [{"underlying": n, "expiration": "2026-09-28"} for n in self.NAMES]
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "sweeps").mkdir()
+            return scanner.run_sweep(client, universe, 1, Path(tmp) / "sweeps" / "sweep_0001.jsonl.gz",
+                                     block_size=4, workers=1, budget_s=budget_s, clock=client.now)
+
+    def test_unbudgeted_sweep_stretches_with_provider_latency(self):
+        client = SlowClient(self.NAMES, latency=100)
+        entry = self.sweep(client, None)
+        self.assertEqual(client.now(), 1000)  # the pre-repair behavior
+        self.assertFalse(entry["budget_exhausted"])
+        self.assertEqual(entry["status_counts"], {"ok": 10})
+
+    def test_budget_bounds_sweep_and_records_every_skipped_chain(self):
+        client = SlowClient(self.NAMES, latency=100)
+        entry = self.sweep(client, 250)
+        # No request starts after 250 s; the last in-flight one ends by 300 s.
+        self.assertLessEqual(client.now(), 250 + client.latency)
+        self.assertTrue(entry["budget_exhausted"])
+        self.assertEqual(entry["budget_s"], 250)
+        self.assertEqual(entry["status_counts"], {"ok": 3, "skipped_budget": 7})
+        self.assertEqual(set(entry["chains"]), set(self.NAMES))  # denominators keep every name
+        self.assertTrue(all(s["fetched_ms"] is None for s in entry["chains"].values()
+                            if s["status"] == "skipped_budget"))
+        self.assertEqual(client.quote_calls, 1)  # skipped blocks spend no requests
+
+    def test_budget_skips_additional_expiry_explicitly(self):
+        client = SlowClient(["SPY", "QQQ"], latency=100)
+        universe = [{"underlying": n, "expiration": "2026-09-28", "additional_expiration": "2026-10-02"}
+                    for n in ("SPY", "QQQ")]
+        entry = self.sweep(client, 150, universe)
+        extras = {n: e["2026-10-02"]["status"] for n, e in entry["additional_chains"].items()}
+        self.assertEqual(entry["chains"]["SPY"]["status"], "ok")
+        self.assertIn("skipped_budget", extras.values())
+        self.assertEqual(set(extras), {"SPY", "QQQ"})
+
+    def test_healthy_provider_is_unaffected_by_budget(self):
+        client = SlowClient(self.NAMES, latency=1)
+        entry = self.sweep(client, 600)
+        self.assertFalse(entry["budget_exhausted"])
+        self.assertEqual(entry["status_counts"], {"ok": 10})
+
+
+class ScriptedProvider:
+    """Tradier HTTP stand-in on a fake clock: each chain call runs a script step
+    (advance the clock to an absolute time, then answer), and every dispatch
+    time is recorded so tests can assert nothing starts after the budget."""
+
+    def __init__(self, steps):
+        self.clock = {"t": 0.0}
+        self.steps = {k: list(v) for k, v in steps.items()}
+        self.dispatched = []
+        self.headers = {}
+
+    def now(self):
+        return self.clock["t"]
+
+    def sleep(self, seconds):
+        self.clock["t"] += seconds
+
+    def request(self, method, url, params=None, data=None, timeout=None):
+        self.dispatched.append((self.clock["t"], url.rsplit("/", 1)[-1], (params or {}).get("symbol")))
+        if url.endswith("/markets/quotes"):
+            return ScriptedResponse(200, {"quotes": {"quote": []}})
+        at, status, headers = self.steps[params["symbol"]].pop(0)
+        self.clock["t"] = max(self.clock["t"], at)
+        body = {"options": {"option": [{"symbol": params["symbol"] + "260928C00001000", "option_type": "call",
+                                        "strike": 1.0, "bid": 1.0, "ask": 1.1, "expiration_date": "2026-09-28"}]}}
+        return ScriptedResponse(status, body, headers)
+
+
+class ScriptedResponse:
+    def __init__(self, status, body, headers=None):
+        self.status_code, self.body, self.headers = status, body, dict(headers or {})
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+    def json(self):
+        return self.body
+
+
+class BudgetAtDispatch(unittest.TestCase):
+    """Review of 07d61d0 (P1): the sweep budget holds through the real
+    Tradier limiter/backoff path, not only at the sweep's own checks."""
+
+    def sweep(self, steps, names=("S0", "S1")):
+        provider = ScriptedProvider(steps)
+        client = scanner.Tradier("tok", session=provider, clock=provider.now, sleep=provider.sleep)
+        universe = [{"underlying": n, "expiration": "2026-09-28"} for n in names]
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(scanner, "log"):
+            (Path(tmp) / "sweeps").mkdir()
+            entry = scanner.run_sweep(client, universe, 1, Path(tmp) / "sweeps" / "sweep_0001.jsonl.gz",
+                                      block_size=len(names), workers=1, budget_s=600, clock=provider.now)
+        self.assertTrue(all(t < 600 for t, _, _ in provider.dispatched), provider.dispatched)
+        self.assertLessEqual(provider.now(), 600)
+        self.assertIsNone(client.budget_deadline)
+        return entry, client, provider
+
+    def test_429_retry_after_past_budget_is_not_dispatched(self):
+        # Before: 429 at t=599 with Retry-After=120 retried at t=719.
+        entry, client, provider = self.sweep({"S0": [(599, 429, {"Retry-After": "120"})]})
+        self.assertEqual([s for _, _, s in provider.dispatched], [None, "S0"])
+        self.assertEqual(entry["chains"]["S0"]["status"], "error")  # requested once, retry cut
+        self.assertEqual(entry["chains"]["S1"]["status"], "skipped_budget")
+        self.assertIsNone(entry["chains"]["S1"]["fetched_ms"])
+        self.assertTrue(entry["budget_exhausted"])
+        self.assertEqual(client.stats["retries_skipped_budget"], 1)
+
+    def test_queued_first_request_past_budget_is_skipped(self):
+        # Before: a provider budget reset at t=720 let a queued first request dispatch then.
+        low = {"X-Ratelimit-Available": "5", "X-Ratelimit-Expiry": str(720 * 1000)}
+        entry, client, provider = self.sweep({"S0": [(590, 200, low)], "S1": [(700, 200, {})]})
+        self.assertEqual(entry["chains"]["S0"]["status"], "ok")
+        self.assertEqual(entry["chains"]["S1"]["status"], "skipped_budget")
+        self.assertEqual(entry["status_counts"], {"ok": 1, "skipped_budget": 1})
+        self.assertEqual(client.stats["dispatch_skipped_budget"], 1)
+        self.assertEqual(provider.steps["S1"], [(700, 200, {})])  # never requested
+
+    def test_5xx_backoff_past_budget_is_not_dispatched(self):
+        # Before: a 504 at t=599.5 retried at t=600.5.
+        entry, client, provider = self.sweep({"S0": [(599.5, 504, {})]}, names=("S0",))
+        self.assertEqual(entry["chains"]["S0"]["status"], "error")
+        self.assertEqual(len(provider.dispatched), 2)  # quotes + one chain attempt
+        self.assertEqual(client.stats["retries_skipped_budget"], 1)
+        self.assertEqual(provider.now(), 600)  # backoff capped at the budget
+
+    def test_retry_inside_budget_still_recovers(self):
+        entry, client, provider = self.sweep({"S0": [(100, 504, {}), (101.5, 200, {})]}, names=("S0",))
+        self.assertEqual(entry["chains"]["S0"]["status"], "ok")
+        self.assertFalse(entry["budget_exhausted"])
+
+
+class ActiveCadence(unittest.TestCase):
+    # Observed 2026-10-13 sweep durations (s): nine degraded, then healthy.
+    OCT13 = [485.9, 812.7, 669.3, 856.1, 661.0, 635.8, 942.9, 1001.0, 597.7] + [305.6] * 20
+    EXPECTED_S = 306.0
+
+    def triggers(self, durations, due):
+        t, last, fired = 0.0, 0.0, []
+        for sweep, seconds in enumerate(durations, 1):
+            t += seconds
+            if due(sweep, t, last):
+                fired.append((sweep, t))
+                last = t
+        return fired
+
+    def test_six_sweep_rule_reproduces_the_57_8_minute_gap(self):
+        fired = self.triggers(self.OCT13, lambda sweep, t, last: sweep % 6 == 0)
+        gap = fired[1][1] - fired[0][1]
+        self.assertAlmostEqual(gap / 60, 57.6, delta=0.5)
+
+    def test_elapsed_time_rule_bounds_refresh_during_degradation(self):
+        due = lambda sweep, t, last: scanner.active_snapshot_due(int(t * 1000), int(last * 1000), self.EXPECTED_S)
+        fired = self.triggers(self.OCT13, due)
+        times = [0.0] + [t for _, t in fired]
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        self.assertTrue(all(g <= scanner.ACTIVE_INTERVAL_S + max(self.OCT13) for g in gaps), gaps)
+        self.assertLess(max(gaps), 2700)  # vs 3,459 s under the six-sweep rule
+        self.assertEqual([s for s, _ in fired], [3, 6, 8, 13, 19, 25])
+
+    def test_healthy_cadence_still_fires_every_six_sweeps(self):
+        due = lambda sweep, t, last: scanner.active_snapshot_due(int(t * 1000), int(last * 1000), self.EXPECTED_S)
+        fired = self.triggers([305.6] * 30, due)
+        self.assertEqual([s for s, _ in fired], [6, 12, 18, 24, 30])
+
+    def test_cadence_report_labels_late_refresh_and_degradation(self):
+        manifest = [{"sweep": s, "started_ms": 0, "ended_ms": int(d * 1000),
+                     "budget_exhausted": d > 600,
+                     "request_stats_delta": {"server_errors": 10, "transport_errors": 1}}
+                    for s, d in enumerate([305.6, 942.9, 1001.0, 597.7], 1)]
+        self.assertEqual(scanner.cadence_report(manifest, {"sweep": 1}, 2700.0)["status"], "on_time")
+        report = scanner.cadence_report(manifest, {"sweep": 1}, 2700.1)
+        self.assertEqual(report["status"], "late")
+        self.assertEqual(report["sweeps"], 3)
+        self.assertEqual(report["max_sweep_s"], 1001.0)
+        self.assertEqual(report["budget_exhausted_sweeps"], 2)
+        self.assertEqual(report["server_errors"], 30)
+        self.assertEqual(scanner.cadence_report(manifest, None, None)["status"], "first")
+        self.assertEqual(scanner.cadence_report(manifest, {"sweep": 3}, 1836.0)["status"], "on_time")
 
 
 def chain_for(symbol, mids):
@@ -775,6 +1012,16 @@ class Assessment(unittest.TestCase):
         for reason in ("no_complete_sweep", "universe_coverage:0.2000", "stopped_before_close"):
             self.assertIn(reason, joined)
         self.assertNotIn("late_start", joined)
+
+    def test_degraded_sweeps_are_visible_despite_healthy_median(self):
+        manifest = [self.entry(i * 5, i * 5 + 5) for i in range(70)]
+        manifest[3] = {**self.entry(15, 32), "budget_exhausted": True}  # 17-minute sweep
+        out = self.assess(manifest, backfill={"errors": 0})
+        self.assertEqual(out["typical_sweep_s"], 300.0)
+        self.assertEqual(out["max_sweep_s"], 1020.0)
+        self.assertEqual(out["slow_sweeps"], 1)
+        self.assertEqual(out["budget_exhausted_sweeps"], 1)
+        self.assertIn("sweeps_over_budget:1", out["reasons"])
 
     def test_pending_uploads_and_interruptions_are_partial(self):
         manifest = [self.entry(i * 5, i * 5 + 5) for i in range(78)]
@@ -946,7 +1193,7 @@ class UploadRecovery(unittest.TestCase):
 def fake_sweep(stop_after=None):
     calls = {"n": 0}
 
-    def sweep_fn(client, selected, sweep, out_path, block_size, workers, deadline=None):
+    def sweep_fn(client, selected, sweep, out_path, block_size, workers, deadline=None, budget_s=None):
         calls["n"] += 1
         entry = scanner.run_sweep(client, selected, sweep, out_path, block_size, workers)
         if stop_after is not None and calls["n"] >= stop_after:
