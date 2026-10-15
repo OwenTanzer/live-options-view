@@ -169,3 +169,70 @@ test('early reference eviction tells the client to repeat the originating query'
   const description=tools.find(t=>t.name==='result_detail').description;
   assert.match(description,/up to 15 minutes/); assert.match(description,/64-reference\/16 MiB/);
 });
+// Oct 14 shape: a newer scheduled attempt finished partial (one insufficient_data
+// candidate), so latest.json kept the previous success while the attempt's own
+// archive holds every ranked row.
+const ATTEMPT_RUN='00000000-0000-4000-8000-000000000014';const ATTEMPT_ARCHIVE=`squeeze-scanner/v1/scheduled/runs/${ATTEMPT_RUN}`;
+function partialAttempt(files,{coverage}={}){
+  const {hash}=require('./source');
+  const results=[{ticker:'WOLF',comparison_eligible:false,options_status:'insufficient_data',exclusion_reason:'insufficient_data',ranks:{combined:null},scores:{combined:null}},
+    {ticker:'CSIQ',comparison_eligible:true,options_status:'valid',exclusion_reason:null,ranks:{combined:1},scores:{combined:0.49}},
+    {ticker:'BKYI',comparison_eligible:false,options_status:'no_options',exclusion_reason:'no_options',ranks:{combined:null},scores:{combined:null}},
+    {ticker:'BETR',comparison_eligible:true,options_status:'valid',exclusion_reason:null,ranks:{combined:2},scores:{combined:0.48}}];
+  files[ATTEMPT_ARCHIVE+'/results.json']=JSON.stringify(results);
+  files[ATTEMPT_ARCHIVE+'/inputs.json']=JSON.stringify(results.map(r=>({ticker:r.ticker,options_status:r.options_status})));
+  const cov=coverage??{candidates:4,discovered_rows:4,eligible:2,excluded_rows:0,options_status:{valid:2,no_options:1,insufficient_data:1}};
+  files[ATTEMPT_ARCHIVE+'/manifest.json']=JSON.stringify({schema_version:1,run_id:ATTEMPT_RUN,status:'partial',coverage:cov,files:Object.fromEntries(['results.json','inputs.json'].map(n=>[n,{sha256:hash(files[ATTEMPT_ARCHIVE+'/'+n])}]))});
+  files['squeeze-scanner/v1/scheduled/latest-attempt.json']=JSON.stringify({schema_version:1,status:'partial',run_id:ATTEMPT_RUN,archive:ATTEMPT_ARCHIVE,manifest_sha256:hash(files[ATTEMPT_ARCHIVE+'/manifest.json']),
+    sampling_mode:'scheduled',scheduled_for:'2026-10-05T13:00:00.000000+00:00',started_at:'2026-10-05T13:00:02Z',finished_at:'2026-10-05T13:00:13Z',published_at:'2026-10-05T13:00:56Z',scoring_version:'baseline-60-40-v1',coverage:cov});
+  edit(files,'squeeze-scanner/v1/scheduled/latest-schedule.json',p=>{p.scheduled_for='2026-10-05T13:00:00Z';p.run_id=ATTEMPT_RUN;p.acquisition_status='partial';});
+}
+test('default squeeze names the newer partial attempt beside the retained success and never labels old rows current',async()=>{
+  const {consumer,files}=setup({now:()=>Date.parse('2026-10-05T13:05:00Z')});partialAttempt(files);
+  const out=await consumer.call('squeeze_results');
+  assert.equal(out.rows_basis.run,'last_success');assert.equal(out.rows_basis.run_id,RUN);assert.equal(out.rows[0].ticker,'QQQ');
+  assert.equal(out.runs.attempt_relation,'attempt_newer');assert.equal(out.freshness.status,'stale');
+  const att=out.runs.latest_attempt;assert.equal(att.run_id,ATTEMPT_RUN);assert.equal(att.status,'partial');assert.equal(att.published_at,'2026-10-05T13:00:56Z');
+  assert.deepEqual(att.denominators.options_status,{valid:2,no_options:1,insufficient_data:1});assert.equal(att.denominators.eligible,2);assert.deepEqual(att.unresolved_coverage,['insufficient_data: 1']);
+  assert.equal(out.runs.last_success.run_id,RUN);assert.deepEqual(out.runs.last_success.unresolved_coverage,[]);
+  assert.ok(out.warnings.some(w=>w.includes('run=latest_attempt')&&w.includes(ATTEMPT_RUN)));
+});
+test('run=latest_attempt pages every verified attempt row, reconciles counts and keeps partial status',async()=>{
+  const {consumer,files}=setup({now:()=>Date.parse('2026-10-05T13:05:00Z')});partialAttempt(files);
+  const out=await consumer.call('squeeze_results',{run:'latest_attempt',limit:3});
+  assert.equal(out.status,'partial');assert.equal(out.rows_basis.run,'latest_attempt');assert.equal(out.actual.run_id,ATTEMPT_RUN);
+  assert.deepEqual(out.rows.map(r=>r.ticker),['CSIQ','BETR','BKYI']);assert.equal(out.pagination.total,4);assert.equal(out.pagination.next_offset,3);
+  assert.equal(out.reconciliation.matches,true);assert.equal(out.reconciliation.eligible_rows,2);assert.equal(out.reconciliation.rows,4);
+  assert.equal(out.producer_times.publication,'2026-10-05T13:00:56Z');
+  assert.equal(out.sources.find(e=>e.locator===ATTEMPT_ARCHIVE+'/results.json').checksum_verification,'matches_manifest_member_sha256');
+  assert.ok(out.warnings.some(w=>w.includes('is partial')));
+  const rest=await consumer.call('squeeze_results',{run:'latest_attempt',offset:3});assert.deepEqual(rest.rows.map(r=>r.ticker),['WOLF']);assert.equal(rest.pagination.truncated,false);
+  const detail=await consumer.call('result_detail',{reference:out.rows[0].detail_reference});assert.equal(detail.actual.run_id,ATTEMPT_RUN);assert.equal(detail.result.ticker,'CSIQ');
+});
+test('run=latest_attempt reports unreconciled counts and a missing archive without becoming an empty screen',async()=>{
+  const {consumer,files}=setup();partialAttempt(files,{coverage:{candidates:5,eligible:3,options_status:{valid:3,no_options:1,insufficient_data:1}}});
+  const out=await consumer.call('squeeze_results',{run:'latest_attempt'});assert.equal(out.status,'partial');assert.equal(out.reconciliation.matches,false);assert.ok(out.warnings.some(w=>w.includes('do not reconcile')));
+  delete files[ATTEMPT_ARCHIVE+'/results.json'];const gone=await consumer.call('squeeze_results',{run:'latest_attempt'});assert.equal(gone.status,'missing');assert.deepEqual(gone.rows,[]);assert.ok(gone.warnings.some(w=>w.includes('not an empty screen')));
+  edit(files,'squeeze-scanner/v1/scheduled/latest-attempt.json',p=>p.manifest_sha256='0'.repeat(64));const changed=await consumer.call('squeeze_results',{run:'latest_attempt'});assert.equal(changed.status,'failed');assert.equal(changed.errors.at(-1).code,'source_changed');
+  assert.equal((await consumer.call('squeeze_results',{run:'newest'})).errors[0].code,'invalid_filter');
+});
+test('same-run attempt reports same_run and run=latest_attempt reads the successful archive',async()=>{
+  const {consumer}=setup();const out=await consumer.call('squeeze_results');assert.equal(out.runs.attempt_relation,'same_run');assert.equal(out.rows_basis.run,'last_success');
+  const att=await consumer.call('squeeze_results',{run:'latest_attempt'});assert.equal(att.status,'available');assert.equal(att.freshness.status,'fresh');assert.deepEqual(att.rows.map(r=>r.ticker),['QQQ','ABC']);
+  assert.equal(att.reconciliation.matches,true);
+});
+// Review of e666cb22: latest_attempt freshness must never be falsely fresh.
+test('run=latest_attempt freshness is stale or unconfirmed unless the due slot is confirmed today',async()=>{
+  const ATT='squeeze-scanner/v1/scheduled/latest-attempt.json',SCHED='squeeze-scanner/v1/scheduled/latest-schedule.json';
+  const confirmed=setup({now:()=>Date.parse('2026-10-05T13:05:00Z')});partialAttempt(confirmed.files);
+  const ok=await confirmed.consumer.call('squeeze_results',{run:'latest_attempt'});assert.equal(ok.freshness.status,'fresh');assert.equal(ok.freshness.reason,null);
+  const sunday=await setup({now:()=>Date.parse('2026-10-04T14:00:00Z')}).consumer.call('squeeze_results',{run:'latest_attempt'});
+  assert.equal(sunday.freshness.status,'stale');assert.match(sunday.freshness.reason,/previous session/);
+  for(const [name,mutate] of [['finished_at removed',f=>edit(f,ATT,p=>delete p.finished_at)],['finished_at after retrieval',f=>edit(f,ATT,p=>p.finished_at='2026-10-02T16:30:00Z')],
+    ['schedule claimed',f=>edit(f,SCHED,p=>p.status='claimed')],['schedule outcome differs',f=>edit(f,SCHED,p=>p.acquisition_status='partial')],['schedule names another run',f=>edit(f,SCHED,p=>p.run_id=ATTEMPT_RUN)]]){
+    const {consumer,files}=setup();mutate(files);const out=await consumer.call('squeeze_results',{run:'latest_attempt'});
+    assert.equal(out.freshness.status,'unknown',name);assert.ok(out.freshness.reason,name);
+  }
+  const {consumer,files}=setup({now:()=>Date.parse('2026-10-05T13:05:00Z')});partialAttempt(files);edit(files,ATT,p=>p.scheduled_for='2026-10-02T16:00:00Z');
+  assert.equal((await consumer.call('squeeze_results',{run:'latest_attempt'})).freshness.status,'stale','older slot');
+});

@@ -102,6 +102,28 @@ function squeeze(p, isSuccess = false) {
   if (isSuccess) check(['complete', 'empty'].includes(p.status) && p.display_schema_version === 1 && Array.isArray(p.candidates) && p.candidates.length <= 10 &&
     p.candidates.every(r => object(r) && SYMBOL.test(r.ticker) && object(r.scores) && object(r.ranks) && Number.isInteger(r.ranks.combined)), 'Invalid squeeze shortlist.');
 }
+// Last success and latest attempt side by side. The pointer carries no
+// producer reason for a partial/failed outcome, so only the coverage counts
+// that can account for one are reported, labeled as such.
+function squeezeRun(x) {
+  if (!x) return null;
+  const c = object(x.coverage) ? x.coverage : null, os = object(c?.options_status) ? c.options_status : {};
+  const unresolved = ['complete','empty'].includes(x.status) ? [] : [
+    ...Object.entries(os).filter(([k,n]) => !['valid','illiquid_options','no_options'].includes(k) && n > 0).map(([k,n]) => `${k}: ${n}`),
+    ...(c?.excluded_rows > 0 ? [`excluded_rows: ${c.excluded_rows}`] : []),
+    ...(Number.isInteger(c?.discovered_rows) && Number.isInteger(c?.candidates) && c.discovered_rows < c.candidates ? [`discovered_rows ${c.discovered_rows} < candidates ${c.candidates}`] : [])];
+  return {run_id:x.run_id,status:x.status,sampling_mode:x.sampling_mode ?? null,scheduled_for:x.scheduled_for ?? null,started_at:x.started_at ?? null,
+    finished_at:x.finished_at ?? null,published_at:x.published_at ?? null,archive:x.archive,manifest_sha256:x.manifest_sha256 ?? null,
+    denominators:c ? {candidates:c.candidates ?? null,discovered_rows:c.discovered_rows ?? null,eligible:c.eligible ?? null,excluded_rows:c.excluded_rows ?? null,options_status:os} : null,
+    unresolved_coverage:unresolved};
+}
+function squeezeRuns(p, attempt) {
+  const a = Date.parse(attempt?.started_at || ''), s = Date.parse(p?.started_at || '');
+  const relation = !attempt ? 'no_attempt' : !p ? 'no_success' : attempt.run_id === p.run_id ? 'same_run' :
+    !Number.isFinite(a) || !Number.isFinite(s) ? 'unknown' : a > s ? 'attempt_newer' : 'attempt_older';
+  return {last_success:squeezeRun(p),latest_attempt:squeezeRun(attempt),attempt_relation:relation,
+    reason_basis:'unresolved_coverage lists published coverage counts that can account for a non-complete status; the pointer carries no producer reason field'};
+}
 function returnSummary(p, session) {
   check(object(p) && p.trade_date === session && typeof p.final === 'boolean' && object(p.assessment) &&
     ['complete', 'partial'].includes(p.assessment.status) && p.return_policy?.version === 'oa203-returns-v1', 'Unsupported selected-session return contract.');
@@ -298,7 +320,8 @@ class Consumer {
     return out;
   }
   async squeeze(a, q, out) {
-    args(a,['limit','offset']); const {limit,offset} = page(a);
+    args(a,['limit','offset','run']); const {limit,offset} = page(a);
+    check(['last_success','latest_attempt'].includes(a.run??'last_success'),'run must be last_success or latest_attempt.','invalid_filter');
     const docs = [];
     for (const suffix of ['latest','latest-attempt','latest-schedule']) {
       const doc = await q.optionalJson(`squeeze-scanner/v1/scheduled/${suffix}.json`);
@@ -312,13 +335,76 @@ class Consumer {
     const state = formatSqueezeScheduleStatus(p,attempt,schedule,this.calendar,this.now());
     out.freshness = {...age(p?.finished_at,this.now()),status:state.state === 'live' ? 'fresh' : state.warning?.includes('calendar') || state.warning?.includes('coverage') ? 'unknown' : 'stale', schedule_status:state};
     if (state.warning) out.warnings.push(state.warning);
-    if (!p) { out.status = docs[0].error && docs[0].error.code!=='missing_artifact' ? 'failed' : attempt ? ['partial','failed'].includes(attempt.status) ? attempt.status : 'missing' : docs[0].error?.code === 'missing_artifact' ? 'missing' : 'failed'; return out; }
+    out.runs = squeezeRuns(p, attempt);
+    if (a.run === 'latest_attempt') return this.squeezeAttempt(q, out, attempt, schedule, state, limit, offset);
+    out.rows_basis = p ? {run:'last_success',run_id:p.run_id,scheduled_for:p.scheduled_for ?? null} : null;
+    if (out.runs.attempt_relation === 'attempt_newer')
+      out.warnings.push(`Rows are from the last successful run ${p.run_id} (scheduled ${p.scheduled_for ?? 'unknown'}), not from the newer ${attempt.status} attempt ${attempt.run_id} (scheduled ${attempt.scheduled_for ?? 'unknown'}). Call squeeze_results with run=latest_attempt to read that attempt's rows.`);
+    if (!p) { out.status = docs[0].error && docs[0].error.code!=='missing_artifact' ? 'failed' : attempt ? ['partial','failed'].includes(attempt.status) ? attempt.status : 'missing' : docs[0].error?.code === 'missing_artifact' ? 'missing' : 'failed';
+      if (attempt?.status === 'partial') out.warnings.push(`No successful run is published; call squeeze_results with run=latest_attempt to read partial attempt ${attempt.run_id}.`);
+      return out; }
     out.actual = {run_id:p.run_id,session:p.session_date ?? null,archive:p.archive,scoring_version:p.scoring_version,manifest_sha256:p.manifest_sha256 ?? null};
     out.producer_times = {observation:null,acquisition_start:p.started_at ?? null,acquisition_end:p.finished_at ?? null,publication:p.published_at ?? null};
     out.coverage = p.coverage ?? null;
     const paged = slice(p.candidates,limit,offset); out.pagination=paged.pagination;
     out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'scheduled_squeeze',p,row,attempt,schedule,actual:out.actual,evidence:[...q.evidence]})}));
     out.status=out.errors.length ? 'partial' : p.candidates.length ? 'available' : 'empty'; return out;
+  }
+  // Reads the latest attempt's own archive (any outcome), so a newer partial
+  // run is never hidden behind the retained last success.
+  async squeezeAttempt(q, out, attempt, schedule, state, limit, offset) {
+    if (!attempt) { out.status = out.errors.some(e => e.code !== 'missing_artifact') ? 'failed' : 'missing'; out.rows_basis = null; return out; }
+    out.rows_basis = {run:'latest_attempt',run_id:attempt.run_id,scheduled_for:attempt.scheduled_for ?? null};
+    out.actual = {run_id:attempt.run_id,session:attempt.session_date ?? attempt.valuation_date ?? null,archive:attempt.archive,scoring_version:attempt.scoring_version ?? null,manifest_sha256:attempt.manifest_sha256 ?? null};
+    out.producer_times = {observation:null,acquisition_start:attempt.started_at ?? null,acquisition_end:attempt.finished_at ?? null,publication:attempt.published_at ?? null};
+    const slots = Array.isArray(this.calendar?.slots) ? this.calendar.slots.map(Date.parse).filter(Number.isFinite) : [];
+    const now = this.now(), due = slots.filter(v => v <= now).at(-1);
+    // Fresh only when the attempt is the due slot of today's session, its
+    // acquisition times are coherent, and the schedule confirms it finished
+    // with the same outcome; otherwise stale or unconfirmed, never fresh.
+    const started = Date.parse(attempt.started_at || ''), finished = Date.parse(attempt.finished_at || '');
+    const timesKnown = Number.isFinite(started) && Number.isFinite(finished) && started <= finished && finished <= now;
+    const dueSlot = due != null && Date.parse(attempt.scheduled_for || '') === due;
+    const confirmed = dueSlot && schedule?.status === 'finished' && schedule.run_id === attempt.run_id &&
+      Date.parse(schedule.scheduled_for || '') === due && schedule.acquisition_status === attempt.status;
+    const freshness = state.warning?.includes('calendar') ? ['unknown','schedule calendar unavailable'] :
+      !timesKnown ? ['unknown','attempt acquisition times missing or inconsistent'] :
+      !dueSlot ? ['stale','attempt is not the latest due scheduled slot'] :
+      exchangeDate(due) !== exchangeDate(now) ? ['stale','attempt belongs to a previous session'] :
+      !confirmed ? ['unknown',`schedule does not confirm this attempt finished (${schedule?.status ?? 'no schedule'})`] : ['fresh',null];
+    out.freshness = {...age(attempt.finished_at,now),basis:'latest_attempt',status:freshness[0],reason:freshness[1],schedule_status:state};
+    let manifest, results;
+    try {
+      manifest = await q.json(attempt.archive+'/manifest.json');
+      check(manifest.run_id===attempt.run_id && manifest.schema_version===1,'Archive manifest identity/schema mismatch.');
+      if (attempt.manifest_sha256) { check(q.evidence.at(-1).retrieved_sha256===attempt.manifest_sha256,'Manifest digest differs from the attempt pointer.','source_changed'); q.evidence.at(-1).checksum_verification='matches_attempt_pointer_manifest_sha256'; }
+      else out.warnings.push('Attempt pointer has no manifest_sha256; the manifest is unverified.');
+      results = await q.json(attempt.archive+'/results.json');
+      check(manifest.files?.['results.json']?.sha256===q.evidence.at(-1).retrieved_sha256,'Attempt results digest differs from its manifest.','source_changed');
+      q.evidence.at(-1).checksum_verification='matches_manifest_member_sha256';
+      check(Array.isArray(results) && results.every(r => object(r) && SYMBOL.test(r.ticker) && typeof r.options_status === 'string'),'Unsupported squeeze results shape.');
+    } catch (e) {
+      out.errors.push(errorRecord(e)); out.rows = [];
+      out.status = e.code === 'missing_artifact' ? attempt.status === 'failed' ? 'failed' : 'missing' : 'failed';
+      if (e.code === 'missing_artifact') out.warnings.push(`Attempt ${attempt.run_id} (${attempt.status}) has no readable results archive; that is not an empty screen.`);
+      return out;
+    }
+    out.coverage = manifest.coverage ?? attempt.coverage ?? null;
+    const rank = r => Number.isInteger(r.ranks?.combined) ? r.ranks.combined : Infinity;
+    const ordered = [...results].sort((x,y) => rank(x)-rank(y) || (x.ticker < y.ticker ? -1 : x.ticker > y.ticker ? 1 : 0));
+    const counts = {}; for (const r of results) counts[r.options_status] = (counts[r.options_status] ?? 0) + 1;
+    const eligibleRows = results.filter(r => r.comparison_eligible === true).length;
+    const reported = out.coverage?.options_status ?? null;
+    const matches = out.coverage?.candidates === results.length && out.coverage?.eligible === eligibleRows &&
+      object(reported) && Object.keys({...reported,...counts}).every(k => (reported[k] ?? 0) === (counts[k] ?? 0));
+    out.reconciliation = {rows:results.length,candidates_reported:out.coverage?.candidates ?? null,eligible_rows:eligibleRows,eligible_reported:out.coverage?.eligible ?? null,
+      options_status_rows:counts,options_status_reported:reported,matches};
+    if (!matches) out.warnings.push('Attempt result rows do not reconcile with its published coverage counts; missing rows remain missing, not "no candidates".');
+    const paged = slice(ordered,limit,offset); out.pagination = {...paged.pagination,scope:'every result row of the attempt: eligible rows by producer combined rank, then excluded rows by ticker'};
+    out.rows = paged.rows.map(row => ({...row,detail_reference:this.reference({dataset:'scheduled_squeeze',p:attempt,row,attempt,schedule,actual:out.actual,evidence:[...q.evidence]})}));
+    if (!['complete','empty'].includes(attempt.status)) out.warnings.push(`Attempt ${attempt.run_id} is ${attempt.status}; its rows are what that run recorded, not a successful scan.`);
+    out.status = attempt.status === 'failed' ? 'failed' : attempt.status === 'partial' || !matches || out.errors.length ? 'partial' : results.length ? 'available' : 'empty';
+    return out;
   }
   async returns(a,q,out) {
     args(a,['session','underlying','type','view','limit','offset'],['session']); const {limit,offset}=page(a);
