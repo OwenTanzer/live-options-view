@@ -1,0 +1,92 @@
+{
+  "days": [
+    {
+      "manifest": "moo144__tradier__2026-10-22__manifest-ee7939514b95.json",
+      "parts": 131,
+      "unique_keys": 131,
+      "declared_records": 2278269,
+      "declared_bytes": 64645889,
+      "indices_contiguous": true
+    },
+    {
+      "manifest": "moo144__tradier__2026-10-23__manifest-5c58abce22a8.json",
+      "parts": 131,
+      "unique_keys": 131,
+      "declared_records": 2036443,
+      "declared_bytes": 59396341,
+      "indices_contiguous": true
+    }
+  ],
+  "heads": 262,
+  "head_200": 262,
+  "length_matches": 262,
+  "samples": [
+    {
+      "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0065.ndjson.gz",
+      "sha256": "7cbd7812910df189f0f6f9e8a6e81f05725b845886ed44e79dba7f65d69cb598",
+      "hash_matches": true,
+      "bytes": 497123,
+      "rows": 17760,
+      "records_match": true,
+      "receipt_first": "2026-10-22T16:44:09.934+00:00",
+      "receipt_last": "2026-10-22T16:47:09.939+00:00",
+      "missing_receipts": 0
+    },
+    {
+      "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0066.ndjson.gz",
+      "sha256": "26878fd57ae7278936af582d934ba5ddfecb5398f483de0d776898fe9d083457",
+      "hash_matches": true,
+      "bytes": 533136,
+      "rows": 19571,
+      "records_match": true,
+      "receipt_first": "2026-10-22T16:47:09.942+00:00",
+      "receipt_last": "2026-10-22T16:50:09.951+00:00",
+      "missing_receipts": 0
+    },
+    {
+      "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0130.ndjson.gz",
+      "sha256": "8b5c34f52df913208409a57f98b391c31d0dfb4fbff06dd954845cf4af7bf797",
+      "hash_matches": true,
+      "bytes": 187882,
+      "rows": 7736,
+      "records_match": true,
+      "receipt_first": "2026-10-22T19:59:11.073+00:00",
+      "receipt_last": "2026-10-22T19:59:59.997+00:00",
+      "missing_receipts": 0
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0065.ndjson.gz",
+      "sha256": "aa546292eb23f0323b41b046c17c2bff0dfd2d5d7608019db90655c2bdbb880d",
+      "hash_matches": true,
+      "bytes": 345563,
+      "rows": 11858,
+      "records_match": true,
+      "receipt_first": "2026-10-23T16:44:11.443+00:00",
+      "receipt_last": "2026-10-23T16:47:11.450+00:00",
+      "missing_receipts": 0
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0066.ndjson.gz",
+      "sha256": "e01fe796d40baaaeed8b56ce78b57fb059bc623d5918539708c36b7edf0ee113",
+      "hash_matches": true,
+      "bytes": 324230,
+      "rows": 11151,
+      "records_match": true,
+      "receipt_first": "2026-10-23T16:47:11.454+00:00",
+      "receipt_last": "2026-10-23T16:50:11.456+00:00",
+      "missing_receipts": 0
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0130.ndjson.gz",
+      "sha256": "474a7eca9ba2843f8fe3b51585ff1fd9e277f7b8429c3461a86ffc23d86f36f0",
+      "hash_matches": true,
+      "bytes": 161586,
+      "rows": 5996,
+      "records_match": true,
+      "receipt_first": "2026-10-23T19:59:12.716+00:00",
+      "receipt_last": "2026-10-23T19:59:59.991+00:00",
+      "missing_receipts": 0
+    }
+  ],
+  "ceiling": "HEAD verifies object existence and length, not full byte integrity or feed completeness. Six additional parts hash/record verified; uninspected contents and original market coverage remain unverified."
+}

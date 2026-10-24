@@ -1,0 +1,104 @@
+[
+  {
+    "scenario": "primary",
+    "day": "2026-06-10",
+    "t": 1781113500,
+    "model": "state20",
+    "independent_forecast": -1.6800383120917973e-06,
+    "published_raw_forecast": -1.6800383120917981e-06,
+    "difference": 8.470329472543003e-22,
+    "training_first": "2026-05-12",
+    "training_last": "2026-06-09",
+    "coefficients_standardized": [
+      1.1178806041681054e-06,
+      -8.119063412721399e-07,
+      8.52509085522805e-07,
+      1.2328286443424556e-06
+    ]
+  },
+  {
+    "scenario": "primary",
+    "day": "2026-06-11",
+    "t": 1781198700,
+    "model": "state20",
+    "independent_forecast": -1.3759024833675511e-05,
+    "published_raw_forecast": -1.375902483367554e-05,
+    "difference": 2.879912020664621e-20,
+    "training_first": "2026-05-13",
+    "training_last": "2026-06-10",
+    "coefficients_standardized": [
+      1.243265681483532e-06,
+      -8.023309496261188e-07,
+      8.07212517921764e-07,
+      1.348289988928439e-06
+    ]
+  },
+  {
+    "scenario": "primary",
+    "day": "2026-06-11",
+    "t": 1781206200,
+    "model": "state20",
+    "independent_forecast": -2.0323830309826042e-07,
+    "published_raw_forecast": -2.0323830309826402e-07,
+    "difference": 3.5998900258307764e-21,
+    "training_first": "2026-05-13",
+    "training_last": "2026-06-10",
+    "coefficients_standardized": [
+      1.243265681483532e-06,
+      -8.023309496261188e-07,
+      8.07212517921764e-07,
+      1.348289988928439e-06
+    ]
+  },
+  {
+    "scenario": "primary",
+    "day": "2026-06-11",
+    "t": 1781198700,
+    "model": "state60",
+    "independent_forecast": -2.615838396387862e-07,
+    "published_raw_forecast": -2.6158383963873706e-07,
+    "difference": -4.912791094074942e-20,
+    "training_first": "2026-03-17",
+    "training_last": "2026-06-10",
+    "coefficients_standardized": [
+      8.618642183419956e-07,
+      -2.5573301473901566e-07,
+      3.38521958799517e-07,
+      8.218985219213691e-07
+    ]
+  },
+  {
+    "scenario": "delayed",
+    "day": "2026-06-10",
+    "t": 1781113500,
+    "model": "state20",
+    "independent_forecast": -2.042269040962931e-07,
+    "published_raw_forecast": -2.0422690409629564e-07,
+    "difference": 2.541098841762901e-21,
+    "training_first": "2026-05-12",
+    "training_last": "2026-06-09",
+    "coefficients_standardized": [
+      1.1030830973754188e-06,
+      -6.831090144206507e-07,
+      1.8151332754186915e-06,
+      3.7686938642717466e-07
+    ]
+  },
+  {
+    "scenario": "delayed",
+    "day": "2026-06-11",
+    "t": 1781198700,
+    "model": "state20",
+    "independent_forecast": -3.740590347878751e-06,
+    "published_raw_forecast": -3.7405903478787645e-06,
+    "difference": 1.3552527156068805e-20,
+    "training_first": "2026-05-13",
+    "training_last": "2026-06-10",
+    "coefficients_standardized": [
+      1.2252841680009856e-06,
+      -6.815262776516316e-07,
+      1.7516297718978977e-06,
+      4.996634779018211e-07
+    ]
+  }
+]

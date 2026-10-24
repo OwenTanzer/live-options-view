@@ -1,0 +1,10 @@
+scenario,floor,frozen_rule,different_from_clip_after_mix_count,maximum_difference_from_clip_after_mix
+primary_full,1e-14,"mean(max(f20,floor),max(f60,floor))",2,3.545695451463624e-07
+primary_full,1e-12,"mean(max(f20,floor),max(f60,floor))",2,3.545690501463624e-07
+primary_full,1e-10,"mean(max(f20,floor),max(f60,floor))",2,3.5451955014636235e-07
+primary_matched,1e-14,"mean(max(f20,floor),max(f60,floor))",2,3.545695451463624e-07
+primary_matched,1e-12,"mean(max(f20,floor),max(f60,floor))",2,3.545690501463624e-07
+primary_matched,1e-10,"mean(max(f20,floor),max(f60,floor))",2,3.5451955014636235e-07
+delayed_matched,1e-14,"mean(max(f20,floor),max(f60,floor))",2,6.140332601018729e-07
+delayed_matched,1e-12,"mean(max(f20,floor),max(f60,floor))",2,6.140327651018729e-07
+delayed_matched,1e-10,"mean(max(f20,floor),max(f60,floor))",2,6.139832651018729e-07

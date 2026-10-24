@@ -1,0 +1,8 @@
+{
+  "short_sessions": 8,
+  "affected_final_origins": {
+    "delayed": 1,
+    "primary": 1
+  },
+  "interpretation": "Under frozen bar-start convention the 13:00 bar implies a target ending 13:05 after regular equity close. Closing-auction/provider boundary semantics unresolved; historical data have no availability stamps. Published scores unchanged. Earlier short days also entered training; this inventory is not a complete calendar-aware refit."
+}

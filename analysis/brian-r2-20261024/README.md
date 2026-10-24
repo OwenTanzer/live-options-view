@@ -1,4 +1,4 @@
-> Latest checkpoint: [increment 3 final-period results](outputs/round3/checkpoint.md). The final segment is now consumed. Earlier unscored statements below describe their historical checkpoints.
+> Latest checkpoint: [final audit and handoff](outputs/round4/handoff.md). Four increments completed; final remains consumed. Earlier statements below describe historical checkpoints. Draft PR remains unmerged.
 
 # Increment 1: data access and first empirical tests
 

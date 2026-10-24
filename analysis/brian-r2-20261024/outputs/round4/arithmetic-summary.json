@@ -1,0 +1,9 @@
+{
+  "score_rows_checked": 216,
+  "all_passed": true,
+  "maximum_absolute_score_difference": 5.820766091346741e-11,
+  "independently_rebuilt_negative_forecasts": 6,
+  "scoring_method": "Python csv/math.fsum with explicit per-day groups; published scoring module not imported",
+  "fit_method": "Raw closes, independent Python feature loops, augmented least squares; no retuning",
+  "final_consumed": true
+}

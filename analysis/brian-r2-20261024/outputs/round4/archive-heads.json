@@ -1,0 +1,1574 @@
+[
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0000.ndjson.gz",
+    "status": 200,
+    "bytes": 642582,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0001.ndjson.gz",
+    "status": 200,
+    "bytes": 808128,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0002.ndjson.gz",
+    "status": 200,
+    "bytes": 678629,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0003.ndjson.gz",
+    "status": 200,
+    "bytes": 641925,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0004.ndjson.gz",
+    "status": 200,
+    "bytes": 629379,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0005.ndjson.gz",
+    "status": 200,
+    "bytes": 759618,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0006.ndjson.gz",
+    "status": 200,
+    "bytes": 741595,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0007.ndjson.gz",
+    "status": 200,
+    "bytes": 674781,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0008.ndjson.gz",
+    "status": 200,
+    "bytes": 670897,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0009.ndjson.gz",
+    "status": 200,
+    "bytes": 764761,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0010.ndjson.gz",
+    "status": 200,
+    "bytes": 740300,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0011.ndjson.gz",
+    "status": 200,
+    "bytes": 640047,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0012.ndjson.gz",
+    "status": 200,
+    "bytes": 789941,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0013.ndjson.gz",
+    "status": 200,
+    "bytes": 605897,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0014.ndjson.gz",
+    "status": 200,
+    "bytes": 600540,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0015.ndjson.gz",
+    "status": 200,
+    "bytes": 901648,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0016.ndjson.gz",
+    "status": 200,
+    "bytes": 673195,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0017.ndjson.gz",
+    "status": 200,
+    "bytes": 862732,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0018.ndjson.gz",
+    "status": 200,
+    "bytes": 764493,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0019.ndjson.gz",
+    "status": 200,
+    "bytes": 947399,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0020.ndjson.gz",
+    "status": 200,
+    "bytes": 921951,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0021.ndjson.gz",
+    "status": 200,
+    "bytes": 840150,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0022.ndjson.gz",
+    "status": 200,
+    "bytes": 680875,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0023.ndjson.gz",
+    "status": 200,
+    "bytes": 742307,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0024.ndjson.gz",
+    "status": 200,
+    "bytes": 675010,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0025.ndjson.gz",
+    "status": 200,
+    "bytes": 652951,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0026.ndjson.gz",
+    "status": 200,
+    "bytes": 729740,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0027.ndjson.gz",
+    "status": 200,
+    "bytes": 633142,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0028.ndjson.gz",
+    "status": 200,
+    "bytes": 673371,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0029.ndjson.gz",
+    "status": 200,
+    "bytes": 572384,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0030.ndjson.gz",
+    "status": 200,
+    "bytes": 720805,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0031.ndjson.gz",
+    "status": 200,
+    "bytes": 588798,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0032.ndjson.gz",
+    "status": 200,
+    "bytes": 575932,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0033.ndjson.gz",
+    "status": 200,
+    "bytes": 674630,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0034.ndjson.gz",
+    "status": 200,
+    "bytes": 733508,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0035.ndjson.gz",
+    "status": 200,
+    "bytes": 607778,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0036.ndjson.gz",
+    "status": 200,
+    "bytes": 633779,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0037.ndjson.gz",
+    "status": 200,
+    "bytes": 647407,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0038.ndjson.gz",
+    "status": 200,
+    "bytes": 683174,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0039.ndjson.gz",
+    "status": 200,
+    "bytes": 642625,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0040.ndjson.gz",
+    "status": 200,
+    "bytes": 607045,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0041.ndjson.gz",
+    "status": 200,
+    "bytes": 548900,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0042.ndjson.gz",
+    "status": 200,
+    "bytes": 559881,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0043.ndjson.gz",
+    "status": 200,
+    "bytes": 607259,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0044.ndjson.gz",
+    "status": 200,
+    "bytes": 513571,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0045.ndjson.gz",
+    "status": 200,
+    "bytes": 493921,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0046.ndjson.gz",
+    "status": 200,
+    "bytes": 474632,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0047.ndjson.gz",
+    "status": 200,
+    "bytes": 538608,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0048.ndjson.gz",
+    "status": 200,
+    "bytes": 545023,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0049.ndjson.gz",
+    "status": 200,
+    "bytes": 530465,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0050.ndjson.gz",
+    "status": 200,
+    "bytes": 633446,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0051.ndjson.gz",
+    "status": 200,
+    "bytes": 537244,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0052.ndjson.gz",
+    "status": 200,
+    "bytes": 566316,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0053.ndjson.gz",
+    "status": 200,
+    "bytes": 480459,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0054.ndjson.gz",
+    "status": 200,
+    "bytes": 388596,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0055.ndjson.gz",
+    "status": 200,
+    "bytes": 385995,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0056.ndjson.gz",
+    "status": 200,
+    "bytes": 427152,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0057.ndjson.gz",
+    "status": 200,
+    "bytes": 424011,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0058.ndjson.gz",
+    "status": 200,
+    "bytes": 392355,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0059.ndjson.gz",
+    "status": 200,
+    "bytes": 417522,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0060.ndjson.gz",
+    "status": 200,
+    "bytes": 442452,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0061.ndjson.gz",
+    "status": 200,
+    "bytes": 441723,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0062.ndjson.gz",
+    "status": 200,
+    "bytes": 411887,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0063.ndjson.gz",
+    "status": 200,
+    "bytes": 448174,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0064.ndjson.gz",
+    "status": 200,
+    "bytes": 480931,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0065.ndjson.gz",
+    "status": 200,
+    "bytes": 497123,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0066.ndjson.gz",
+    "status": 200,
+    "bytes": 533136,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0067.ndjson.gz",
+    "status": 200,
+    "bytes": 574577,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0068.ndjson.gz",
+    "status": 200,
+    "bytes": 497283,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0069.ndjson.gz",
+    "status": 200,
+    "bytes": 422210,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0070.ndjson.gz",
+    "status": 200,
+    "bytes": 437978,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0071.ndjson.gz",
+    "status": 200,
+    "bytes": 427832,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0072.ndjson.gz",
+    "status": 200,
+    "bytes": 344906,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0073.ndjson.gz",
+    "status": 200,
+    "bytes": 360469,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0074.ndjson.gz",
+    "status": 200,
+    "bytes": 331650,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0075.ndjson.gz",
+    "status": 200,
+    "bytes": 419324,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0076.ndjson.gz",
+    "status": 200,
+    "bytes": 374554,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0077.ndjson.gz",
+    "status": 200,
+    "bytes": 349016,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0078.ndjson.gz",
+    "status": 200,
+    "bytes": 340604,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0079.ndjson.gz",
+    "status": 200,
+    "bytes": 355339,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0080.ndjson.gz",
+    "status": 200,
+    "bytes": 344076,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0081.ndjson.gz",
+    "status": 200,
+    "bytes": 332023,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0082.ndjson.gz",
+    "status": 200,
+    "bytes": 353788,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0083.ndjson.gz",
+    "status": 200,
+    "bytes": 333418,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0084.ndjson.gz",
+    "status": 200,
+    "bytes": 311594,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0085.ndjson.gz",
+    "status": 200,
+    "bytes": 321667,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0086.ndjson.gz",
+    "status": 200,
+    "bytes": 332546,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0087.ndjson.gz",
+    "status": 200,
+    "bytes": 435079,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0088.ndjson.gz",
+    "status": 200,
+    "bytes": 310269,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0089.ndjson.gz",
+    "status": 200,
+    "bytes": 376815,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0090.ndjson.gz",
+    "status": 200,
+    "bytes": 419165,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0091.ndjson.gz",
+    "status": 200,
+    "bytes": 412939,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0092.ndjson.gz",
+    "status": 200,
+    "bytes": 362845,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0093.ndjson.gz",
+    "status": 200,
+    "bytes": 331116,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0094.ndjson.gz",
+    "status": 200,
+    "bytes": 328267,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0095.ndjson.gz",
+    "status": 200,
+    "bytes": 352181,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0096.ndjson.gz",
+    "status": 200,
+    "bytes": 384480,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0097.ndjson.gz",
+    "status": 200,
+    "bytes": 352680,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0098.ndjson.gz",
+    "status": 200,
+    "bytes": 312966,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0099.ndjson.gz",
+    "status": 200,
+    "bytes": 319964,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0100.ndjson.gz",
+    "status": 200,
+    "bytes": 373098,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0101.ndjson.gz",
+    "status": 200,
+    "bytes": 322089,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0102.ndjson.gz",
+    "status": 200,
+    "bytes": 313351,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0103.ndjson.gz",
+    "status": 200,
+    "bytes": 323440,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0104.ndjson.gz",
+    "status": 200,
+    "bytes": 318958,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0105.ndjson.gz",
+    "status": 200,
+    "bytes": 324480,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0106.ndjson.gz",
+    "status": 200,
+    "bytes": 289865,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0107.ndjson.gz",
+    "status": 200,
+    "bytes": 286949,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0108.ndjson.gz",
+    "status": 200,
+    "bytes": 304920,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0109.ndjson.gz",
+    "status": 200,
+    "bytes": 314312,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0110.ndjson.gz",
+    "status": 200,
+    "bytes": 384155,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0111.ndjson.gz",
+    "status": 200,
+    "bytes": 359444,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0112.ndjson.gz",
+    "status": 200,
+    "bytes": 362826,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0113.ndjson.gz",
+    "status": 200,
+    "bytes": 340441,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0114.ndjson.gz",
+    "status": 200,
+    "bytes": 351430,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0115.ndjson.gz",
+    "status": 200,
+    "bytes": 303119,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0116.ndjson.gz",
+    "status": 200,
+    "bytes": 299389,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0117.ndjson.gz",
+    "status": 200,
+    "bytes": 326992,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0118.ndjson.gz",
+    "status": 200,
+    "bytes": 296046,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0119.ndjson.gz",
+    "status": 200,
+    "bytes": 300765,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0120.ndjson.gz",
+    "status": 200,
+    "bytes": 376850,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0121.ndjson.gz",
+    "status": 200,
+    "bytes": 358351,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0122.ndjson.gz",
+    "status": 200,
+    "bytes": 315848,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0123.ndjson.gz",
+    "status": 200,
+    "bytes": 340346,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0124.ndjson.gz",
+    "status": 200,
+    "bytes": 336799,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0125.ndjson.gz",
+    "status": 200,
+    "bytes": 437753,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0126.ndjson.gz",
+    "status": 200,
+    "bytes": 375264,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0127.ndjson.gz",
+    "status": 200,
+    "bytes": 503254,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0128.ndjson.gz",
+    "status": 200,
+    "bytes": 583427,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0129.ndjson.gz",
+    "status": 200,
+    "bytes": 573795,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0130.ndjson.gz",
+    "status": 200,
+    "bytes": 187882,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0000.ndjson.gz",
+    "status": 200,
+    "bytes": 623136,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0001.ndjson.gz",
+    "status": 200,
+    "bytes": 692350,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0002.ndjson.gz",
+    "status": 200,
+    "bytes": 676481,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0003.ndjson.gz",
+    "status": 200,
+    "bytes": 693773,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0004.ndjson.gz",
+    "status": 200,
+    "bytes": 751116,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0005.ndjson.gz",
+    "status": 200,
+    "bytes": 727579,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0006.ndjson.gz",
+    "status": 200,
+    "bytes": 647132,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0007.ndjson.gz",
+    "status": 200,
+    "bytes": 650587,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0008.ndjson.gz",
+    "status": 200,
+    "bytes": 610125,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0009.ndjson.gz",
+    "status": 200,
+    "bytes": 526887,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0010.ndjson.gz",
+    "status": 200,
+    "bytes": 764020,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0011.ndjson.gz",
+    "status": 200,
+    "bytes": 586567,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0012.ndjson.gz",
+    "status": 200,
+    "bytes": 575789,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0013.ndjson.gz",
+    "status": 200,
+    "bytes": 520459,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0014.ndjson.gz",
+    "status": 200,
+    "bytes": 645089,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0015.ndjson.gz",
+    "status": 200,
+    "bytes": 693882,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0016.ndjson.gz",
+    "status": 200,
+    "bytes": 784063,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0017.ndjson.gz",
+    "status": 200,
+    "bytes": 750145,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0018.ndjson.gz",
+    "status": 200,
+    "bytes": 628287,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0019.ndjson.gz",
+    "status": 200,
+    "bytes": 760193,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0020.ndjson.gz",
+    "status": 200,
+    "bytes": 801967,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0021.ndjson.gz",
+    "status": 200,
+    "bytes": 641167,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0022.ndjson.gz",
+    "status": 200,
+    "bytes": 611888,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0023.ndjson.gz",
+    "status": 200,
+    "bytes": 780283,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0024.ndjson.gz",
+    "status": 200,
+    "bytes": 631628,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0025.ndjson.gz",
+    "status": 200,
+    "bytes": 653805,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0026.ndjson.gz",
+    "status": 200,
+    "bytes": 555562,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0027.ndjson.gz",
+    "status": 200,
+    "bytes": 647543,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0028.ndjson.gz",
+    "status": 200,
+    "bytes": 575080,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0029.ndjson.gz",
+    "status": 200,
+    "bytes": 537331,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0030.ndjson.gz",
+    "status": 200,
+    "bytes": 527520,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0031.ndjson.gz",
+    "status": 200,
+    "bytes": 595055,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0032.ndjson.gz",
+    "status": 200,
+    "bytes": 514873,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0033.ndjson.gz",
+    "status": 200,
+    "bytes": 549326,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0034.ndjson.gz",
+    "status": 200,
+    "bytes": 557378,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0035.ndjson.gz",
+    "status": 200,
+    "bytes": 569264,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0036.ndjson.gz",
+    "status": 200,
+    "bytes": 501860,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0037.ndjson.gz",
+    "status": 200,
+    "bytes": 470001,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0038.ndjson.gz",
+    "status": 200,
+    "bytes": 573575,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0039.ndjson.gz",
+    "status": 200,
+    "bytes": 512825,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0040.ndjson.gz",
+    "status": 200,
+    "bytes": 481349,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0041.ndjson.gz",
+    "status": 200,
+    "bytes": 466535,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0042.ndjson.gz",
+    "status": 200,
+    "bytes": 498234,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0043.ndjson.gz",
+    "status": 200,
+    "bytes": 446027,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0044.ndjson.gz",
+    "status": 200,
+    "bytes": 507852,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0045.ndjson.gz",
+    "status": 200,
+    "bytes": 497781,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0046.ndjson.gz",
+    "status": 200,
+    "bytes": 493821,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0047.ndjson.gz",
+    "status": 200,
+    "bytes": 462507,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0048.ndjson.gz",
+    "status": 200,
+    "bytes": 421075,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0049.ndjson.gz",
+    "status": 200,
+    "bytes": 465008,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0050.ndjson.gz",
+    "status": 200,
+    "bytes": 459359,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0051.ndjson.gz",
+    "status": 200,
+    "bytes": 447589,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0052.ndjson.gz",
+    "status": 200,
+    "bytes": 424305,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0053.ndjson.gz",
+    "status": 200,
+    "bytes": 360681,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0054.ndjson.gz",
+    "status": 200,
+    "bytes": 293724,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0055.ndjson.gz",
+    "status": 200,
+    "bytes": 362218,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0056.ndjson.gz",
+    "status": 200,
+    "bytes": 315636,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0057.ndjson.gz",
+    "status": 200,
+    "bytes": 342416,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0058.ndjson.gz",
+    "status": 200,
+    "bytes": 421831,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0059.ndjson.gz",
+    "status": 200,
+    "bytes": 383969,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0060.ndjson.gz",
+    "status": 200,
+    "bytes": 397016,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0061.ndjson.gz",
+    "status": 200,
+    "bytes": 361532,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0062.ndjson.gz",
+    "status": 200,
+    "bytes": 359076,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0063.ndjson.gz",
+    "status": 200,
+    "bytes": 364277,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0064.ndjson.gz",
+    "status": 200,
+    "bytes": 315024,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0065.ndjson.gz",
+    "status": 200,
+    "bytes": 345563,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0066.ndjson.gz",
+    "status": 200,
+    "bytes": 324230,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0067.ndjson.gz",
+    "status": 200,
+    "bytes": 401199,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0068.ndjson.gz",
+    "status": 200,
+    "bytes": 418383,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0069.ndjson.gz",
+    "status": 200,
+    "bytes": 329075,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0070.ndjson.gz",
+    "status": 200,
+    "bytes": 341429,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0071.ndjson.gz",
+    "status": 200,
+    "bytes": 309584,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0072.ndjson.gz",
+    "status": 200,
+    "bytes": 297365,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0073.ndjson.gz",
+    "status": 200,
+    "bytes": 537281,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0074.ndjson.gz",
+    "status": 200,
+    "bytes": 398969,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0075.ndjson.gz",
+    "status": 200,
+    "bytes": 476098,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0076.ndjson.gz",
+    "status": 200,
+    "bytes": 451067,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0077.ndjson.gz",
+    "status": 200,
+    "bytes": 367612,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0078.ndjson.gz",
+    "status": 200,
+    "bytes": 417648,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0079.ndjson.gz",
+    "status": 200,
+    "bytes": 398138,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0080.ndjson.gz",
+    "status": 200,
+    "bytes": 386270,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0081.ndjson.gz",
+    "status": 200,
+    "bytes": 376555,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0082.ndjson.gz",
+    "status": 200,
+    "bytes": 319107,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0083.ndjson.gz",
+    "status": 200,
+    "bytes": 333809,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0084.ndjson.gz",
+    "status": 200,
+    "bytes": 382371,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0085.ndjson.gz",
+    "status": 200,
+    "bytes": 378678,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0086.ndjson.gz",
+    "status": 200,
+    "bytes": 377755,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0087.ndjson.gz",
+    "status": 200,
+    "bytes": 342533,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0088.ndjson.gz",
+    "status": 200,
+    "bytes": 497049,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0089.ndjson.gz",
+    "status": 200,
+    "bytes": 463498,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0090.ndjson.gz",
+    "status": 200,
+    "bytes": 388861,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0091.ndjson.gz",
+    "status": 200,
+    "bytes": 356783,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0092.ndjson.gz",
+    "status": 200,
+    "bytes": 351980,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0093.ndjson.gz",
+    "status": 200,
+    "bytes": 303716,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0094.ndjson.gz",
+    "status": 200,
+    "bytes": 297289,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0095.ndjson.gz",
+    "status": 200,
+    "bytes": 290009,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0096.ndjson.gz",
+    "status": 200,
+    "bytes": 305460,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0097.ndjson.gz",
+    "status": 200,
+    "bytes": 292646,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0098.ndjson.gz",
+    "status": 200,
+    "bytes": 285468,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0099.ndjson.gz",
+    "status": 200,
+    "bytes": 280259,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0100.ndjson.gz",
+    "status": 200,
+    "bytes": 279285,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0101.ndjson.gz",
+    "status": 200,
+    "bytes": 325816,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0102.ndjson.gz",
+    "status": 200,
+    "bytes": 317578,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0103.ndjson.gz",
+    "status": 200,
+    "bytes": 396148,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0104.ndjson.gz",
+    "status": 200,
+    "bytes": 360727,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0105.ndjson.gz",
+    "status": 200,
+    "bytes": 331949,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0106.ndjson.gz",
+    "status": 200,
+    "bytes": 438576,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0107.ndjson.gz",
+    "status": 200,
+    "bytes": 323594,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0108.ndjson.gz",
+    "status": 200,
+    "bytes": 309937,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0109.ndjson.gz",
+    "status": 200,
+    "bytes": 315116,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0110.ndjson.gz",
+    "status": 200,
+    "bytes": 358558,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0111.ndjson.gz",
+    "status": 200,
+    "bytes": 337251,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0112.ndjson.gz",
+    "status": 200,
+    "bytes": 330038,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0113.ndjson.gz",
+    "status": 200,
+    "bytes": 390304,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0114.ndjson.gz",
+    "status": 200,
+    "bytes": 333740,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0115.ndjson.gz",
+    "status": 200,
+    "bytes": 345822,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0116.ndjson.gz",
+    "status": 200,
+    "bytes": 332562,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0117.ndjson.gz",
+    "status": 200,
+    "bytes": 324424,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0118.ndjson.gz",
+    "status": 200,
+    "bytes": 351927,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0119.ndjson.gz",
+    "status": 200,
+    "bytes": 371666,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0120.ndjson.gz",
+    "status": 200,
+    "bytes": 385247,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0121.ndjson.gz",
+    "status": 200,
+    "bytes": 392642,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0122.ndjson.gz",
+    "status": 200,
+    "bytes": 357313,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0123.ndjson.gz",
+    "status": 200,
+    "bytes": 378207,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0124.ndjson.gz",
+    "status": 200,
+    "bytes": 365321,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0125.ndjson.gz",
+    "status": 200,
+    "bytes": 449239,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0126.ndjson.gz",
+    "status": 200,
+    "bytes": 385443,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0127.ndjson.gz",
+    "status": 200,
+    "bytes": 480895,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0128.ndjson.gz",
+    "status": 200,
+    "bytes": 411928,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0129.ndjson.gz",
+    "status": 200,
+    "bytes": 465332,
+    "length_matches": true
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0130.ndjson.gz",
+    "status": 200,
+    "bytes": 161586,
+    "length_matches": true
+  }
+]

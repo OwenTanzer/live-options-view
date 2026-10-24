@@ -1,0 +1,101 @@
+{
+  "started_utc": "2026-10-24T21:01:29.255117+00:00",
+  "published_commit": "88c7fbd7ae12002c2013ada815a93e56ef1190e0",
+  "archive_sha256": "c3bea8a719d900691bdb7eae1a19fc9811acf2d560da55bbd9217004b4e0a9ef",
+  "artifact_hashes_verified": 106,
+  "final_status": "consumed; reproduction only, no retuning",
+  "commands": [
+    {
+      "command": "python work/round3/reproduce.py run",
+      "exit": 0
+    },
+    {
+      "command": "python work/round3/reproduce.py compare",
+      "exit": 0
+    }
+  ],
+  "completed_utc": "2026-10-24T21:13:24.200269+00:00",
+  "all_passed": true,
+  "checks": [
+    {
+      "file": "calibration.csv",
+      "exact_LF_bytes": true,
+      "sha256": "66dd8734186f0051551d2896d13d0b28bbba8c28f716d41a1197863b56f764ea"
+    },
+    {
+      "file": "clipping-audit.csv",
+      "exact_LF_bytes": true,
+      "sha256": "0326e4c974ebf4f722cc3e4bbaeec0554d55cd7e4560a142ca9083ef26f1f170"
+    },
+    {
+      "file": "daily-losses.csv",
+      "exact_LF_bytes": true,
+      "sha256": "bd155373004c78fe5f9043cd142ab1998e75d61f4b54951f98ea1759ca0aba9f"
+    },
+    {
+      "file": "episode-concentration.csv",
+      "exact_LF_bytes": true,
+      "sha256": "cdf329b88255fafc922577c49ca538b3fc12959cd0acda19ed63139dacacb065"
+    },
+    {
+      "file": "fit-ledger.csv",
+      "exact_LF_bytes": true,
+      "sha256": "67e596127432afae7c185c3fafa618e9e02164b9baa5911730748f0d2e44231b"
+    },
+    {
+      "file": "floor-events.csv",
+      "exact_LF_bytes": true,
+      "sha256": "a83095c08e792714b7d46a4b90e392651174a66d1e84cf00f3576266831d5e7f"
+    },
+    {
+      "file": "monthly.csv",
+      "exact_LF_bytes": true,
+      "sha256": "80324611ec802de96eba946b884cb6a426d59fcba224e0f54b22edb148b3f097"
+    },
+    {
+      "file": "paired-contrasts.csv",
+      "exact_LF_bytes": true,
+      "sha256": "3a8eed5b0d1614afa4e7e7ce7781815b65975b88453eb2a383f775e8b05dff7d"
+    },
+    {
+      "file": "scores.csv",
+      "exact_LF_bytes": true,
+      "sha256": "cff074071ae27feca65e752474d97a98080a1a26c096c763340862a90b53a5b9"
+    },
+    {
+      "file": "state-exposure.csv",
+      "exact_LF_bytes": true,
+      "sha256": "e21875901701d9c6c8e84b3524ddf8d49a739c782f59eac37f1ddd1bd3a83ad9"
+    },
+    {
+      "file": "support-summary.csv",
+      "exact_LF_bytes": true,
+      "sha256": "5ab8dd2a45810f6efa1e712e4146ab30f438f70930d0603323b8791408092e17"
+    },
+    {
+      "file": "timing-examples.csv",
+      "exact_LF_bytes": true,
+      "sha256": "38e8822f658c82a042dbb798112fb79af5172d3ba5da1b7a9d1e1dff0b9fd520"
+    },
+    {
+      "file": "truncation-checks.csv",
+      "exact_LF_bytes": true,
+      "sha256": "0d25aed4cfed1524abaab7b0f19caef70d13889d1f03934d28a96b310afdb544"
+    }
+  ],
+  "replay_consumption": {
+    "started_utc": "2026-10-24T21:01:34.410501+00:00",
+    "status": "FINAL CONSUMED from this run; no retuning permitted",
+    "preflight_sha256": "23b3f561dc77c3a99826885b6040dc8a0308563fd6841b921eba741cf7bb2bfa",
+    "completed_utc": "2026-10-24T21:13:18.214064+00:00",
+    "rows_by_scenario": {
+      "delayed": 10549,
+      "primary": 10717
+    },
+    "days_by_scenario": {
+      "delayed": 168,
+      "primary": 168
+    },
+    "training_max_and_prefix_checks_passed": true
+  }
+}

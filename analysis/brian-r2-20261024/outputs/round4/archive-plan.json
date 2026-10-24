@@ -1,0 +1,6 @@
+{
+  "utc": "2026-10-24T21:06:53.202184+00:00",
+  "scope": "Two previously inspected dates; HEAD all declared parts; GET indices 65,66,130 per date. No model fitting.",
+  "maximum_heads": 262,
+  "maximum_gets": 6
+}

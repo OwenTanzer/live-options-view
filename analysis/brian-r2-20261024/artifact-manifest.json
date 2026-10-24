@@ -350,6 +350,101 @@
     "sha256": "8e94816268795865982f1324c85cf88e07878a2a4e8679c26cf69c8cdac2c8c6"
   },
   {
+    "path": "outputs/round4/adjacent-sample-audit.json",
+    "bytes": 991,
+    "sha256": "51e77fc1aad31cf22ca34570af6d15a3815f387051c9b206839f5c47b678aecf"
+  },
+  {
+    "path": "outputs/round4/archive-audit.json",
+    "bytes": 3260,
+    "sha256": "4e790d1893e2e7e77468dd7e1ffada2a2cd0da1d3a9496a1af52f3e668ea7e3f"
+  },
+  {
+    "path": "outputs/round4/archive-heads.json",
+    "bytes": 39040,
+    "sha256": "391f602180917e0d5dd70d86bbd456773bc7c169edcb49941a7b270d9b00b5e3"
+  },
+  {
+    "path": "outputs/round4/archive-plan.json",
+    "bytes": 213,
+    "sha256": "1a7688216283b7b7a1b442cb51aa4447d00968f31855781956e9119a63d044b3"
+  },
+  {
+    "path": "outputs/round4/arithmetic-summary.json",
+    "bytes": 404,
+    "sha256": "743a3f90c231eb521c60cc9a0e134ec6393057e2ce0c90f050055f39cb60ec83"
+  },
+  {
+    "path": "outputs/round4/calendar-audit.json",
+    "bytes": 450,
+    "sha256": "dd8e6b3fae1f3818decf102b1851657d441f6f93271bb3eac73eabb181d49252"
+  },
+  {
+    "path": "outputs/round4/calendar-boundary-origins.csv",
+    "bytes": 206,
+    "sha256": "76bb803b0d46ab487d675d347d60e566358e51745b7e8746de9edff4d6b895ab"
+  },
+  {
+    "path": "outputs/round4/calendar-plan.json",
+    "bytes": 213,
+    "sha256": "2451ef63e929885cab406e73fb4347b0bf9304c9405cc4d052796e104d15c278"
+  },
+  {
+    "path": "outputs/round4/handoff.md",
+    "bytes": 10843,
+    "sha256": "f728e9aab4a914f76cb952826d55634288f4b127304e381a5f84c52ab42fc680"
+  },
+  {
+    "path": "outputs/round4/independent-june-fits.json",
+    "bytes": 2903,
+    "sha256": "1ff863744ecac562db819024e21bbad93de1568e9c415c84b40260468c90c443"
+  },
+  {
+    "path": "outputs/round4/independent-scores.csv",
+    "bytes": 37803,
+    "sha256": "0f2be2c9440b1d4fe534d36b3d05a62d39264e9d7e13a2386653c9a7fca38905"
+  },
+  {
+    "path": "outputs/round4/june-event-arithmetic.csv",
+    "bytes": 6200,
+    "sha256": "fce8dc915a851fb05e432d6082b1854f60744ceba8d04342c44dfcbefa9af34d"
+  },
+  {
+    "path": "outputs/round4/mixture-construction.csv",
+    "bytes": 851,
+    "sha256": "7f8899c6292fd92aee6b4c45e7e6846e3aef644958ee23f858e7d96899c984b5"
+  },
+  {
+    "path": "outputs/round4/provenance-evidence.json",
+    "bytes": 1875,
+    "sha256": "d93fc36ad3d154f46d02cc32f40af21615bec1e50f836d026d09e14877a17f31"
+  },
+  {
+    "path": "outputs/round4/provenance.md",
+    "bytes": 3842,
+    "sha256": "437961676e8f729a36dfedb91e30b1965044a248460011fb41e10066cc9b920b"
+  },
+  {
+    "path": "outputs/round4/published-replay-start.json",
+    "bytes": 324,
+    "sha256": "9d256d506ce8c609ca4547fc719212bdd09843534781bf1bb1fe6349aefee843"
+  },
+  {
+    "path": "outputs/round4/published-reproduction.json",
+    "bytes": 3199,
+    "sha256": "2f4074c3dfa25cd19e84662de3f74570c82df47882ffd2c707f5c5089451735c"
+  },
+  {
+    "path": "outputs/round4/row-day-weights.csv",
+    "bytes": 35832,
+    "sha256": "aac799bb78e05757e32be25b57864c76b40144c1e1463c78b8a1fb2949882d56"
+  },
+  {
+    "path": "outputs/round4/short-session-inventory.csv",
+    "bytes": 801,
+    "sha256": "765217cd19b9534d2df73a6c49ae29ec65903ea389cfb26141740975f3b18a6f"
+  },
+  {
     "path": "outputs/source-manifest.json",
     "bytes": 1600,
     "sha256": "c38c904eb8ed1d53c00be0133a5b1e381fa2c46af1fbc15c4a3d8001bd3a7f66"
@@ -371,8 +466,8 @@
   },
   {
     "path": "README.md",
-    "bytes": 12513,
-    "sha256": "68139377e74c1196b7591f86da561a9494f5b762ad5f0a0251f5b86d945cf7b9"
+    "bytes": 12529,
+    "sha256": "2c3575c5a24e34427e4c3bd70f8819c017af69982f946cda38a346a1c7bb7895"
   },
   {
     "path": "work/cross_asset.py",
@@ -518,6 +613,46 @@
     "path": "work/round3/verify_source_segments.py",
     "bytes": 3520,
     "sha256": "625c95b000ef1c541b4b7266efe0862bcfd7cb4daf4173ec055250ac6f5baa93"
+  },
+  {
+    "path": "work/round4/archive_audit.py",
+    "bytes": 2752,
+    "sha256": "52852b44cea281023b1ca3090b4727892af5bf7c2084b15e44844ead44bee147"
+  },
+  {
+    "path": "work/round4/calendar_audit.py",
+    "bytes": 2036,
+    "sha256": "52cdc7b4dde4ee1e831e4e0bb19f6f1985995a086f8174abaabf4fc0eaaadc1c"
+  },
+  {
+    "path": "work/round4/independent_arithmetic.py",
+    "bytes": 6918,
+    "sha256": "9e882b21b99046f339847c9a041011b2a41f060dbbed47e4e4a4ed575ffc61ae"
+  },
+  {
+    "path": "work/round4/package.py",
+    "bytes": 1495,
+    "sha256": "728733620d971dc35ef05bc270f888c83f2e4339ef3940249ca6b12cc21ea09e"
+  },
+  {
+    "path": "work/round4/pr-body.md",
+    "bytes": 2222,
+    "sha256": "3085ddf0453a3ba5e364a5c37a64372822243bd2a7c9a964c8df53ec6b61b596"
+  },
+  {
+    "path": "work/round4/provenance_evidence.py",
+    "bytes": 1310,
+    "sha256": "a69fbf06799f92ac225ea13f4c316dea686399873cb8ecda75d03e2a5c8e4a16"
+  },
+  {
+    "path": "work/round4/published_replay.py",
+    "bytes": 2123,
+    "sha256": "6979d87393a6be5513b11d56cee983d656499fad7d0b027856aa4614425a2000"
+  },
+  {
+    "path": "work/round4/sample_boundaries.py",
+    "bytes": 1475,
+    "sha256": "68e729e623fddc4946e0d0ddc403aeeeb803c25db0149d545af20cb8c7d3bada"
   },
   {
     "path": "work/test_baselines.py",

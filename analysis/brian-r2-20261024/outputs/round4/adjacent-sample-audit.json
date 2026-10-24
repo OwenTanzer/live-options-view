@@ -1,0 +1,34 @@
+[
+  {
+    "day": "2026-10-22",
+    "adjacent_indices": [
+      65,
+      66
+    ],
+    "rows": 37331,
+    "print_rows": 21397,
+    "print_duplicate_symbol_seq": 0,
+    "quote_rows": 15934,
+    "quote_both_side_timestamps": 15934,
+    "older_side_age_ms_median": 771.0,
+    "older_side_age_ms_max": 4159.0,
+    "receipt_boundary_gap_ms": 3.0,
+    "ceiling": "Repeated symbol/seq may be updates, cancellations or corrections; not dropped. Two adjacent samples cannot prove all-day continuity."
+  },
+  {
+    "day": "2026-10-23",
+    "adjacent_indices": [
+      65,
+      66
+    ],
+    "rows": 23009,
+    "print_rows": 7365,
+    "print_duplicate_symbol_seq": 0,
+    "quote_rows": 15644,
+    "quote_both_side_timestamps": 15644,
+    "older_side_age_ms_median": 755.0,
+    "older_side_age_ms_max": 7236.0,
+    "receipt_boundary_gap_ms": 4.0,
+    "ceiling": "Repeated symbol/seq may be updates, cancellations or corrections; not dropped. Two adjacent samples cannot prove all-day continuity."
+  }
+]
