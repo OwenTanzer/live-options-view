@@ -1,0 +1,10 @@
+{
+  "fresh_directory": "C:\\Users\\Owen\\Documents\\Codex\\2026-10-24\\brian-chej-dispatch-explicitly-authorized-by\\work\\reproduction",
+  "all_four_result_tables_identical": true,
+  "canonical_lf_sha256": {
+    "validation-scores.csv": "a0be155f09e022627fbf569047cfcd5bbec745afb10894b1cdc51bd96171c5c9",
+    "daily-losses.csv": "3722de373666c67049d242bb77bd6fadd152d93cfa0793ed4667fa26bfb9ba8c",
+    "cross-scores.csv": "22fa36d9a7c02111b957b356aa69c5344a2b190b3596006b41f28ddd2e53e65b",
+    "cross-daily-losses.csv": "95d64468b62db6dea6d38df2a3f1d1a1985459a6884acd18f5fef80ddc8bf4e0"
+  }
+}

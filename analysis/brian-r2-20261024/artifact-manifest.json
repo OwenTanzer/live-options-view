@@ -11,8 +11,8 @@
   },
   {
     "path": "outputs/checkpoint.md",
-    "bytes": 11736,
-    "sha256": "0ee8e801e0aaf818867078b17a180eda7cab57829a3ea1f89c4e5fdb2d278742"
+    "bytes": 12100,
+    "sha256": "866f2d4421182142d718ae74bb5bb4182e40e861786b6c5ee4a59742f37a4d6f"
   },
   {
     "path": "outputs/coverage.json",
@@ -90,6 +90,11 @@
     "sha256": "716a7592226602e435b452f6b8212e326020957982c748c4149ca4749d48eede"
   },
   {
+    "path": "outputs/reproduction.json",
+    "bytes": 592,
+    "sha256": "bb5ba9c54ec489ce451e3f1b4a905932946a4c90d46bc42865e74f93205ad5d2"
+  },
+  {
     "path": "outputs/source-manifest.json",
     "bytes": 1600,
     "sha256": "c38c904eb8ed1d53c00be0133a5b1e381fa2c46af1fbc15c4a3d8001bd3a7f66"
@@ -111,8 +116,8 @@
   },
   {
     "path": "README.md",
-    "bytes": 11736,
-    "sha256": "0ee8e801e0aaf818867078b17a180eda7cab57829a3ea1f89c4e5fdb2d278742"
+    "bytes": 12100,
+    "sha256": "866f2d4421182142d718ae74bb5bb4182e40e861786b6c5ee4a59742f37a4d6f"
   },
   {
     "path": "work/cross_asset.py",

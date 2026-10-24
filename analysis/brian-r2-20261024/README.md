@@ -68,7 +68,9 @@ python work/paired_audit.py
 python work/verify_results.py
 ```
 
-Rerunning freeze recreates the same date partition from source timestamps; retained published protocol records the original freeze. Seed is 20261024. `environment.json` records exact local runtime/package versions. No random model fitting; randomness is only in uncertainty resampling. The verifier independently recomputes target returns, matches current versus preserved QQQ hashes, checks identical cross/price validation origins, confirms no final prediction rows, and reports full-session sensitivity. Plot visually inspected. Current bytes reproduce the preserved source identity; future mutable objects may differ, so verify hashes before accepting a rerun.
+Rerunning freeze recreates the same date partition from source timestamps; retained published protocol records the original freeze. Seed is 20261024. `environment.json` records exact local runtime/package versions. No random model fitting; randomness is only in uncertainty resampling. The verifier independently recomputes target returns, matches current versus preserved QQQ hashes, checks identical cross/price validation origins, confirms no final prediction rows, and reports full-session sensitivity. Plot visually inspected. A fresh-directory run of the packaged baseline and cross-asset scripts reproduced all four score/daily-loss tables exactly after canonical LF normalization; `reproduction.json` records their hashes. Current bytes reproduce the preserved source identity; future mutable objects may differ, so verify hashes before accepting a rerun.
+
+Publication: [draft PR 144](https://github.com/OwenTanzer/live-options-view/pull/144). No merge. The Notion event and Brian's Room retain the handoff and findings.
 
 ## Next discriminating work
 
