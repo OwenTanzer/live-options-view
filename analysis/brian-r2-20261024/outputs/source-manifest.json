@@ -1,0 +1,62 @@
+[
+  {
+    "key": "history/QQQ/5/2023.json",
+    "local_source": "C:\\Users\\Owen\\Documents\\Codex\\2026-09-16\\files-mentioned-by-the-user-predictive\\work\\history__QQQ__5__2023.json",
+    "sha256": "f9ed26e4ee89205e0e35d7fab1d2df3582eff8682cd3876fc1e39967c5039c68",
+    "bytes": 773992,
+    "rows": 14594,
+    "schema": [
+      "t",
+      "o",
+      "h",
+      "l",
+      "c",
+      "v"
+    ]
+  },
+  {
+    "key": "history/QQQ/5/2024.json",
+    "local_source": "C:\\Users\\Owen\\Documents\\Codex\\2026-09-16\\files-mentioned-by-the-user-predictive\\work\\history__QQQ__5__2024.json",
+    "sha256": "25a36147445de3899af0936b4a4f3d02d467fd2adca163f6db499bb7597e0cfe",
+    "bytes": 1031749,
+    "rows": 19551,
+    "schema": [
+      "t",
+      "o",
+      "h",
+      "l",
+      "c",
+      "v"
+    ]
+  },
+  {
+    "key": "history/QQQ/5/2025.json",
+    "local_source": "C:\\Users\\Owen\\Documents\\Codex\\2026-09-16\\files-mentioned-by-the-user-predictive\\work\\history__QQQ__5__2025.json",
+    "sha256": "7e0d9f5bb4399fd51edc8f744fcfba79c8120f4570ea55743eaf8282261ec0d0",
+    "bytes": 1022576,
+    "rows": 19395,
+    "schema": [
+      "t",
+      "o",
+      "h",
+      "l",
+      "c",
+      "v"
+    ]
+  },
+  {
+    "key": "history/QQQ/5/2026.json",
+    "local_source": "C:\\Users\\Owen\\Documents\\Codex\\2026-09-16\\files-mentioned-by-the-user-predictive\\work\\history__QQQ__5__2026.json",
+    "sha256": "1ce71af44ec26e7df817a2550c9305c9bdb849c8bae771456d4b98409d28b66f",
+    "bytes": 607019,
+    "rows": 11544,
+    "schema": [
+      "t",
+      "o",
+      "h",
+      "l",
+      "c",
+      "v"
+    ]
+  }
+]

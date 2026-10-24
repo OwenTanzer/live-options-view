@@ -1,0 +1,66 @@
+[
+  {
+    "key": "history/NVDA/5/2024.json",
+    "bytes": 421331,
+    "sha256": "14c5f4a0296e58b3ea61644bd7abce5b8dc73ea697e279088bf3e0c9813ef3ba",
+    "retrieved": "2026-10-24T19:14:23.562688+00:00",
+    "last_modified": "Sun, 09 Aug 2026 15:07:38 GMT",
+    "etag": "\"c7c233019b3b3af01e0dcdfaa942a29d\""
+  },
+  {
+    "key": "history/NVDA/5/2025.json",
+    "bytes": 1055876,
+    "sha256": "3701bec69ec625db719c44edc1567c4598ab0b98668c6523560f19abf642519b",
+    "retrieved": "2026-10-24T19:14:23.398330+00:00",
+    "last_modified": "Sun, 09 Aug 2026 15:07:39 GMT",
+    "etag": "\"5e1a7b576c44305003fc7023ccb6ee43\""
+  },
+  {
+    "key": "history/NVDA/5/2026.json",
+    "bytes": 631359,
+    "sha256": "f1945639d2600b33c1337febafc2a82a4a32607895f5f7e3811b0eead3509471",
+    "retrieved": "2026-10-24T19:14:23.385609+00:00",
+    "last_modified": "Sun, 09 Aug 2026 15:07:39 GMT",
+    "etag": "\"a8a1025773917bb7238b0cb2ff142bb9\""
+  },
+  {
+    "key": "history/QQQ/5/2023.json",
+    "bytes": 773992,
+    "sha256": "f9ed26e4ee89205e0e35d7fab1d2df3582eff8682cd3876fc1e39967c5039c68",
+    "retrieved": "2026-10-24T19:14:23.569505+00:00",
+    "last_modified": "Thu, 06 Aug 2026 00:00:00 GMT",
+    "etag": "\"94ed491a4bfaaa6a4e89ed29ff19c9e5\""
+  },
+  {
+    "key": "history/QQQ/5/2024.json",
+    "bytes": 1031749,
+    "sha256": "25a36147445de3899af0936b4a4f3d02d467fd2adca163f6db499bb7597e0cfe",
+    "retrieved": "2026-10-24T19:14:24.271035+00:00",
+    "last_modified": "Thu, 06 Aug 2026 00:00:01 GMT",
+    "etag": "\"23466a33bbea358b855462e8f85ea38e\""
+  },
+  {
+    "key": "history/QQQ/5/2025.json",
+    "bytes": 1022576,
+    "sha256": "7e0d9f5bb4399fd51edc8f744fcfba79c8120f4570ea55743eaf8282261ec0d0",
+    "retrieved": "2026-10-24T19:14:24.393240+00:00",
+    "last_modified": "Thu, 06 Aug 2026 00:00:01 GMT",
+    "etag": "\"583361bd34555158893ca761e1c10d2d\""
+  },
+  {
+    "key": "history/QQQ/5/2026.json",
+    "bytes": 607019,
+    "sha256": "1ce71af44ec26e7df817a2550c9305c9bdb849c8bae771456d4b98409d28b66f",
+    "retrieved": "2026-10-24T19:14:24.274213+00:00",
+    "last_modified": "Thu, 06 Aug 2026 00:00:02 GMT",
+    "etag": "\"4fa2b9a2ca70952a11bc03e6f3f7e583\""
+  },
+  {
+    "key": "history/QQQ/options_0dte/manifest.json",
+    "bytes": 17951,
+    "sha256": "63c3c531ba7d96fe613f05bb79a792419ae0ed1e1dc5e38e6418303a03cfaf4e",
+    "retrieved": "2026-10-24T19:14:24.217356+00:00",
+    "last_modified": "Thu, 06 Aug 2026 00:14:15 GMT",
+    "etag": "\"a4a22044e4e055824fbef36a0eb36154\""
+  }
+]

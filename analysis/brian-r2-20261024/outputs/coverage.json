@@ -1,0 +1,26 @@
+{
+  "raw_rows": 65084,
+  "duplicate_timestamps": 0,
+  "days": 838,
+  "min": "2023-04-03 09:30:00-04:00",
+  "max": "2026-08-05 15:55:00-04:00",
+  "missing": {
+    "t": 0,
+    "o": 0,
+    "h": 0,
+    "l": 0,
+    "c": 0,
+    "v": 0
+  },
+  "bars_per_day": {
+    "43": 8,
+    "78": 830
+  },
+  "off_session_rows": 0,
+  "invalid_ohlc_rows": 0,
+  "schema_version": "unversioned t/o/h/l/c/v JSON; source hashes authoritative",
+  "first_available": "not present; historical object upload is not original bar availability",
+  "data_kind": "OHLCV aggregates, not prints, classified trades, quotes, depth or order flow",
+  "quote_staleness": "not measurable in OHLCV",
+  "joint_coverage": "Only QQQ OHLCV materialized; no verified joint options/flow/cross-asset panel."
+}

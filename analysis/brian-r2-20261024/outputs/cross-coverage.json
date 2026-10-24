@@ -1,0 +1,40 @@
+{
+  "QQQ": {
+    "rows": 65084,
+    "days": 838,
+    "first": "2023-04-03 09:30:00-04:00",
+    "last": "2026-08-05 15:55:00-04:00",
+    "duplicate_timestamps": 0,
+    "missing": {
+      "t": 0,
+      "o": 0,
+      "h": 0,
+      "l": 0,
+      "c": 0,
+      "v": 0
+    }
+  },
+  "NVDA": {
+    "rows": 38825,
+    "days": 500,
+    "first": "2024-08-09 09:30:00-04:00",
+    "last": "2026-08-07 15:55:00-04:00",
+    "duplicate_timestamps": 0,
+    "missing": {
+      "t": 0,
+      "o": 0,
+      "h": 0,
+      "l": 0,
+      "c": 0,
+      "v": 0
+    }
+  },
+  "actual_intersection": {
+    "timestamps": 38669,
+    "days": 498,
+    "first": "2024-08-09 09:30:00-04:00",
+    "last": "2026-08-05 15:55:00-04:00",
+    "cadence_seconds": 300,
+    "availability": "assumed equal 60s bar release delay, not original vintage proof"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "current_qqq_bytes_match_preserved_extract": true,
+  "final_prediction_rows": 0,
+  "cross_and_baseline_validation_timestamps_identical": true,
+  "target_formula_recomputed": true,
+  "validation_rows": 10682,
+  "validation_days": 168,
+  "full_session_validation_days": 166,
+  "first_origin_utc": "2025-04-03T14:36:00+00:00",
+  "first_target_start_utc": "2025-04-03T14:40:00+00:00",
+  "first_target_end_utc": "2025-04-03T14:45:00+00:00",
+  "timing_basis": "assuming stored bar timestamps are starts; provider convention remains to be independently verified",
+  "short_session_caveat": "43 rows in eight days; calendar/closing-print convention unresolved; full-session-only sensitivity supplied"
+}

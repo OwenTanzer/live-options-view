@@ -1,0 +1,29 @@
+{
+  "frozen_utc": "2026-10-24T19:15:07.417432+00:00",
+  "family": "NVDA to QQQ lead-lag",
+  "selection": "NVDA chosen from confirmed available manifest before downloading outcome tests; not optimized among assets",
+  "target": "5-minute return c[i+2]/c[i+1]. Origin timestamp[i]+6min assumes bar i closes at +5min and is released +1min; target starts +10min and matures +16min. Four-minute gap to target start; no intraday refits.",
+  "memories": [
+    20,
+    60
+  ],
+  "banks": {
+    "price": [
+      "r1",
+      "rv6",
+      "tod",
+      "r6"
+    ],
+    "nvda": [
+      "r1",
+      "rv6",
+      "tod",
+      "nvda_r1"
+    ]
+  },
+  "coefficients": 5,
+  "join": "backward as-of on assumed bar availability timestamp t+360 seconds; tolerance 0 seconds; require exact common completed bar; lagged features require consecutive session bars",
+  "evaluation": "same frozen validation, final unscored; validation already consumed by price/variance work",
+  "aggregation": "equal 20/60 mixture",
+  "search_count": "4 fitted streams and 2 mixtures; no optimized hyperparameters"
+}

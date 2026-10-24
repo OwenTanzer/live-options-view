@@ -1,0 +1,125 @@
+[
+  {
+    "key": "history/QQQ/5/manifest.json",
+    "bytes": 419,
+    "sha256": "9d58b7631fd988d9e68fb23f58fdca986a0824146992f569159cb6f040db6d86",
+    "fields": [
+      "symbol",
+      "resolution",
+      "years",
+      "updated_at"
+    ],
+    "timestamp": null,
+    "manifest": {
+      "symbol": "QQQ",
+      "resolution": "5",
+      "years": {
+        "2023": {
+          "bar_count": 14594,
+          "through": "2026-08-05"
+        },
+        "2024": {
+          "bar_count": 19551,
+          "through": "2026-08-05"
+        },
+        "2025": {
+          "bar_count": 19395,
+          "through": "2026-08-05"
+        },
+        "2026": {
+          "bar_count": 11544,
+          "through": "2026-08-05"
+        }
+      },
+      "updated_at": "2026-08-06T00:00:02.205282+00:00"
+    },
+    "retrieved": "2026-10-24T19:13:49.465445+00:00"
+  },
+  {
+    "key": "history/NVDA/5/manifest.json",
+    "bytes": 342,
+    "sha256": "50fb53f31a76c0c369cc8cc5245e9eebed73d04e5ebfc31e914df24c6f18715e",
+    "fields": [
+      "symbol",
+      "resolution",
+      "years",
+      "updated_at"
+    ],
+    "timestamp": null,
+    "manifest": {
+      "symbol": "NVDA",
+      "resolution": "5",
+      "years": {
+        "2024": {
+          "bar_count": 7730,
+          "through": "2026-08-09"
+        },
+        "2025": {
+          "bar_count": 19395,
+          "through": "2026-08-09"
+        },
+        "2026": {
+          "bar_count": 11700,
+          "through": "2026-08-09"
+        }
+      },
+      "updated_at": "2026-08-09T15:07:39.156650+00:00"
+    },
+    "retrieved": "2026-10-24T19:13:49.611729+00:00"
+  },
+  {
+    "key": "intraday/latest.json",
+    "bytes": 99603,
+    "sha256": "c5d7e5d0da907e1d3606226404bc5d81a2431e4f9515c5937485ac5e900227f9",
+    "fields": [
+      "symbol",
+      "timestamp",
+      "snapshot_time",
+      "date",
+      "expiration",
+      "tier",
+      "underlying_price",
+      "snapshot_key",
+      "rows",
+      "underlying_market"
+    ],
+    "timestamp": "2026-10-23T20:14:11.543330+00:00",
+    "manifest": null,
+    "retrieved": "2026-10-24T19:13:49.543493+00:00"
+  },
+  {
+    "key": "intraday/spy/latest.json",
+    "bytes": 98382,
+    "sha256": "5af63df63317796801ab43a84b95c613bdc9d51b0f7bdc1651e0dd44c2c87817",
+    "fields": [
+      "symbol",
+      "timestamp",
+      "snapshot_time",
+      "date",
+      "expiration",
+      "tier",
+      "underlying_price",
+      "snapshot_key",
+      "rows",
+      "underlying_market",
+      "subscription_coverage"
+    ],
+    "timestamp": "2026-10-23T20:14:13.479298+00:00",
+    "manifest": null,
+    "retrieved": "2026-10-24T19:13:49.541794+00:00"
+  },
+  {
+    "key": "intraday/prices.json",
+    "bytes": 4301,
+    "sha256": "7033991accf549382929a4348bed2e51e82897f1420323b988669cc74869629e",
+    "fields": [
+      "timestamp",
+      "snapshot_time",
+      "feed_stale",
+      "prices"
+    ],
+    "timestamp": "2026-10-23T20:14:56.606483+00:00",
+    "manifest": null,
+    "retrieved": "2026-10-24T19:13:49.917976+00:00"
+  }
+]
