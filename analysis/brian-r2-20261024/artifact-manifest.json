@@ -6,8 +6,8 @@
   },
   {
     "path": ".gitignore",
-    "bytes": 32,
-    "sha256": "6e1a5b8764327023d1777ad32e7973b7687908e6bf3ef63c61afa010d513f1c8"
+    "bytes": 66,
+    "sha256": "dc21ce3109036ec5c4a0b9fbc27e1fcbc1ab5148cfb548dbf144ebe042bf4554"
   },
   {
     "path": "outputs/checkpoint.md",
@@ -95,6 +95,131 @@
     "sha256": "bb5ba9c54ec489ce451e3f1b4a905932946a4c90d46bc42865e74f93205ad5d2"
   },
   {
+    "path": "outputs/round2/checkpoint.md",
+    "bytes": 14205,
+    "sha256": "eac7245e11da971024b7aa4019f4b523ee7fbd14e496fa66fb4c3af65046669a"
+  },
+  {
+    "path": "outputs/round2/clipping-audit.csv",
+    "bytes": 1285,
+    "sha256": "a989e4461714f4b78b43cfc0669f40648fe9d5f0ded81e85d1ca66e25f3b629f"
+  },
+  {
+    "path": "outputs/round2/diagnostics.json",
+    "bytes": 5349,
+    "sha256": "4c2c21a9b5948640c69b7e58670a0556002923f9e7f31f656d58ad68251b6bf8"
+  },
+  {
+    "path": "outputs/round2/discovery-seasonal-profile.csv",
+    "bytes": 1726,
+    "sha256": "612cf59dd7fd476aee6352d96398406ea62e46297e9a6371bdec9d0f2e249890"
+  },
+  {
+    "path": "outputs/round2/episode-concentration.csv",
+    "bytes": 3935,
+    "sha256": "3456ba32910013a370835fb68b34c88c749098d829ba8bee740f98360fbdbf64"
+  },
+  {
+    "path": "outputs/round2/factorial-contrasts.csv",
+    "bytes": 2155,
+    "sha256": "a4f7bdae6fcb2778ffba8f3748e4cb8a6bfc9cf0f27b88023be2c832d7cf8219"
+  },
+  {
+    "path": "outputs/round2/factorial-daily.csv",
+    "bytes": 936535,
+    "sha256": "2bf1b08246dc0741fd3a7c2fb54f81442bdcfa63e0bedc3a308674033bf49bb8"
+  },
+  {
+    "path": "outputs/round2/factorial-monthly.csv",
+    "bytes": 48202,
+    "sha256": "9a40ccda2ea3efdae1a44a182533f494c44c93abdc40cdc669dcec153f896dab"
+  },
+  {
+    "path": "outputs/round2/factorial-scores.csv",
+    "bytes": 9617,
+    "sha256": "413fe267d3742ec4e077c6ccd002c6fed6479d1950e07a858155f1f2d047eb7e"
+  },
+  {
+    "path": "outputs/round2/fit-ledger.csv",
+    "bytes": 71311,
+    "sha256": "a3a9c4935e2a4dc12df6ccf7a09d6ed2e43e3dde6bacba0619b70ce20620832a"
+  },
+  {
+    "path": "outputs/round2/nvda-daily.csv",
+    "bytes": 138069,
+    "sha256": "46221ff31caf146162ea615f1de2e6dd94d13006a8f83e7e2782548fecd18923"
+  },
+  {
+    "path": "outputs/round2/nvda-eligibility-audit.json",
+    "bytes": 478,
+    "sha256": "f8817f23b24f1e25cab461ed98f42f8775c2271a68777110bfdfca7523482919"
+  },
+  {
+    "path": "outputs/round2/nvda-scores.csv",
+    "bytes": 1036,
+    "sha256": "4caf6fb6f49a857c783c4cdba3fe9194c5a88a213674b13ac05d17ac05056be0"
+  },
+  {
+    "path": "outputs/round2/options-discovery-plan.json",
+    "bytes": 968,
+    "sha256": "d449268142961050c26d8297ac232a4c44382c380c443bdd272aef0f441c1ce7"
+  },
+  {
+    "path": "outputs/round2/options-discovery.json",
+    "bytes": 16416,
+    "sha256": "42ed0b76a47c13519f9f8a6edd1c580336b1580db115eb5d882e8982c6078db2"
+  },
+  {
+    "path": "outputs/round2/positive-daily.csv",
+    "bytes": 288174,
+    "sha256": "f353cf7e31f83bbb8e0c404cea37d31c4cc422351ba7519221c603ea82b1f75a"
+  },
+  {
+    "path": "outputs/round2/positive-fit-audit.csv",
+    "bytes": 183410,
+    "sha256": "876a62285de50189a75528f143f240060daeb66871623ae6d49b9644cae2a8cd"
+  },
+  {
+    "path": "outputs/round2/positive-protocol.json",
+    "bytes": 1459,
+    "sha256": "7b373b9d74f3f3a65d52e9e9f83f71ea8a5da402626a783133b6266eb3d22bd9"
+  },
+  {
+    "path": "outputs/round2/positive-scores.csv",
+    "bytes": 2450,
+    "sha256": "b2c34458c794b13f7a38982914777f36416c7349463a9560e5c60a7beab79a4d"
+  },
+  {
+    "path": "outputs/round2/protocol.json",
+    "bytes": 3018,
+    "sha256": "85a26c184e1a1ade6c24d9da8889691942821c34ca54229c2bc3f18a56580c81"
+  },
+  {
+    "path": "outputs/round2/reproduction.json",
+    "bytes": 2946,
+    "sha256": "5ee78fed742b80805baa9702305ba5159be4ecf1a2bfc65704f2e864a37cd392"
+  },
+  {
+    "path": "outputs/round2/round1-floor-audit.csv",
+    "bytes": 264,
+    "sha256": "7ae33c31ed6dad536501b5ab9ff601ad50e6dd7d8b3bd588adc16897cf376c7a"
+  },
+  {
+    "path": "outputs/round2/round3-plan.json",
+    "bytes": 5322,
+    "sha256": "f457d86511fddc6f975f7de35bcbfb700ac87b49f56c4f0bce81cb680c605e40"
+  },
+  {
+    "path": "outputs/round2/source-followup-plan.json",
+    "bytes": 474,
+    "sha256": "9680ab6041904ce174c2e8c05b9120da02d2f5a785b7f5abfe474884aa4c0351"
+  },
+  {
+    "path": "outputs/round2/source-followup.json",
+    "bytes": 5991,
+    "sha256": "0bc97bf532edf62654a6439d93190121c6321ce0ea128fdc9ff85d123771a2df"
+  },
+  {
     "path": "outputs/source-manifest.json",
     "bytes": 1600,
     "sha256": "c38c904eb8ed1d53c00be0133a5b1e381fa2c46af1fbc15c4a3d8001bd3a7f66"
@@ -116,8 +241,8 @@
   },
   {
     "path": "README.md",
-    "bytes": 12100,
-    "sha256": "866f2d4421182142d718ae74bb5bb4182e40e861786b6c5ee4a59742f37a4d6f"
+    "bytes": 12317,
+    "sha256": "7beed52075c7b38820cea9e08e907fdbc613141fe54e0a116d8547dbec9023fa"
   },
   {
     "path": "work/cross_asset.py",
@@ -148,6 +273,61 @@
     "path": "work/paired_audit.py",
     "bytes": 1776,
     "sha256": "a53f4d6fc93dabe56d86ff0815fec7f392f031c8c3ee5942e7be14b6f34d9f3e"
+  },
+  {
+    "path": "work/round2/common.py",
+    "bytes": 2395,
+    "sha256": "83bb9b25c4291a609285792f0c06aae294bf4e5f2897f31f56a81f75acd97db9"
+  },
+  {
+    "path": "work/round2/diagnostics.py",
+    "bytes": 3223,
+    "sha256": "d622f98491b2eca3c55a18f9abdd38ef31d9bcfb5100f0b7cc4ee84b8dff3352"
+  },
+  {
+    "path": "work/round2/factorial.py",
+    "bytes": 4726,
+    "sha256": "262403a3d8ef9c832eb4b58083347cc6e2f3c39b5aa16e329610983e1c3f58b7"
+  },
+  {
+    "path": "work/round2/freeze_round2.py",
+    "bytes": 3707,
+    "sha256": "1c71ecd2c8ea528a8a548b97456fbab9dc3ea44d79c586f4083e7112741600fe"
+  },
+  {
+    "path": "work/round2/freeze_round3.py",
+    "bytes": 2348,
+    "sha256": "29e76d6bbd7e73e9da34182900606c4a7c2274bb82b4c08cc457e724a9bdca68"
+  },
+  {
+    "path": "work/round2/nvda_check.py",
+    "bytes": 2654,
+    "sha256": "338a1851ec2dd748a99a0878d207836f9d28bd5be527b4190fa475f4dfe67735"
+  },
+  {
+    "path": "work/round2/options_discovery.py",
+    "bytes": 2722,
+    "sha256": "6ee597bb1e73544750aef40c166d3ff947b2537c60fec544b5c64df367be3899"
+  },
+  {
+    "path": "work/round2/package.py",
+    "bytes": 1335,
+    "sha256": "191d1e9a937c7e2d2c19373f63860c891a110e9d4c078ca5a0e4eef0e11b86c9"
+  },
+  {
+    "path": "work/round2/positive_link.py",
+    "bytes": 4064,
+    "sha256": "83d309b77b3297f52e30fbfbd21491a524cfdf9a2df63d02fd79676298d5b4c4"
+  },
+  {
+    "path": "work/round2/reproduce.py",
+    "bytes": 1880,
+    "sha256": "05130087cb0334bfc778744c6543b122484cf6287f8a96583fd979d167075d5a"
+  },
+  {
+    "path": "work/round2/source_followup.py",
+    "bytes": 2123,
+    "sha256": "7e6afb23cc87030262a386dcdd22f9ebf1825072f8332f8a190c00a919437ba4"
   },
   {
     "path": "work/test_baselines.py",

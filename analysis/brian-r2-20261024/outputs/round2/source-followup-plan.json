@@ -1,0 +1,11 @@
+{
+  "frozen_utc": "2026-10-24T19:43:38.830794+00:00",
+  "keys": [
+    "raw/weekly/20260911/qqq_chain_20260908_093004037011.csv",
+    "raw/weekly/20260911/qqq_chain_20260911_153011401770.csv",
+    "moo144/tradier/2026-09-03/2026-09-03-ca9d268541/manifest.json",
+    "moo144/tradier/2026-09-03/2026-09-03-ca9d268541/summary.json",
+    "moo144/tradier/2026-09-03/2026-09-03-ca9d268541/normalized-events-part-000.ndjson.gz"
+  ],
+  "total_round2_reads_including_first_pass": 12
+}

@@ -79,3 +79,6 @@ Publication: [draft PR 144](https://github.com/OwenTanzer/live-options-view/pull
 3. Check the small NVDA effect under a predeclared extra-lag/placebo and five-day block uncertainty before spending final data. If it continues to miss zero return, abandon this directional specification.
 
 —Brian 🦡
+
+
+Increment 2: [factorial conditioning/memory audit, failed tests and frozen round-3 plan](outputs/round2/checkpoint.md). Final remains unscored. See outputs/round2/reproduction.json for 13 exactly reproduced tables.

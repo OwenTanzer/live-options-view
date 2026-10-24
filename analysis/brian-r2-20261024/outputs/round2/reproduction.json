@@ -1,0 +1,88 @@
+{
+  "commands": [
+    {
+      "command": "python work/round2/factorial.py",
+      "exit": 0
+    },
+    {
+      "command": "python work/round2/nvda_check.py",
+      "exit": 0
+    },
+    {
+      "command": "python work/round2/positive_link.py",
+      "exit": 0
+    }
+  ],
+  "checks": [
+    {
+      "file": "clipping-audit.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "a989e4461714f4b78b43cfc0669f40648fe9d5f0ded81e85d1ca66e25f3b629f"
+    },
+    {
+      "file": "episode-concentration.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "3456ba32910013a370835fb68b34c88c749098d829ba8bee740f98360fbdbf64"
+    },
+    {
+      "file": "factorial-contrasts.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "a4f7bdae6fcb2778ffba8f3748e4cb8a6bfc9cf0f27b88023be2c832d7cf8219"
+    },
+    {
+      "file": "factorial-daily.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "2bf1b08246dc0741fd3a7c2fb54f81442bdcfa63e0bedc3a308674033bf49bb8"
+    },
+    {
+      "file": "factorial-monthly.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "9a40ccda2ea3efdae1a44a182533f494c44c93abdc40cdc669dcec153f896dab"
+    },
+    {
+      "file": "factorial-scores.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "413fe267d3742ec4e077c6ccd002c6fed6479d1950e07a858155f1f2d047eb7e"
+    },
+    {
+      "file": "fit-ledger.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "a3a9c4935e2a4dc12df6ccf7a09d6ed2e43e3dde6bacba0619b70ce20620832a"
+    },
+    {
+      "file": "nvda-daily.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "46221ff31caf146162ea615f1de2e6dd94d13006a8f83e7e2782548fecd18923"
+    },
+    {
+      "file": "nvda-scores.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "4caf6fb6f49a857c783c4cdba3fe9194c5a88a213674b13ac05d17ac05056be0"
+    },
+    {
+      "file": "positive-daily.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "f353cf7e31f83bbb8e0c404cea37d31c4cc422351ba7519221c603ea82b1f75a"
+    },
+    {
+      "file": "positive-fit-audit.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "876a62285de50189a75528f143f240060daeb66871623ae6d49b9644cae2a8cd"
+    },
+    {
+      "file": "positive-scores.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "b2c34458c794b13f7a38982914777f36416c7349463a9560e5c60a7beab79a4d"
+    },
+    {
+      "file": "round1-floor-audit.csv",
+      "exact_normalized_bytes": true,
+      "sha256": "7ae33c31ed6dad536501b5ab9ff601ad50e6dd7d8b3bd588adc16897cf376c7a"
+    }
+  ],
+  "all_passed": true,
+  "final_scored": false,
+  "python": "3.14.4 (tags/v3.14.4:23116f9, Apr  7 2026, 14:10:54) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "note": "Fresh directory replay with same frozen protocol and byte-preserved inputs. Freeze scripts deliberately not rerun; positive protocol timestamp regenerated only in private replay. Per-origin predictions and source bytes stay private."
+}

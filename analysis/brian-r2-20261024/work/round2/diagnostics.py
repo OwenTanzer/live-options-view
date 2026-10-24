@@ -1,0 +1,16 @@
+from common import *
+import hashlib,platform,sys
+p=pd.read_csv(D/'round2-positive-predictions.csv');a=pd.read_csv(D/'round2-factorial-raw.csv');q=qqq_panel();events=[]
+for model in ['state20','state60','state_season20','state_season60']:
+ row=p.loc[p[model].idxmax()];memory=int(model[-2:]);prior=sorted(q.loc[q.day<row.day,'day'].unique())[-memory:];tr=q[q.day.isin(prior)];obs=q[q.t==row.t].iloc[0]
+ events.append({'model':model,'day':row.day,'t':int(row.t),'forecast':row[model],'y2':row.y2,'forecast_to_target':row[model]/row.y2,'state_standard_scores':{c:float((obs[c]-tr[c].mean())/tr[c].std(ddof=0)) for c in ['r1sq','rv6','rv12']},'training_state_max':{c:float(tr[c].max()) for c in ['r1sq','rv6','rv12']}})
+neg=[]
+for c in a.columns[3:]:
+ for _,r in a[a[c]<0].iterrows():neg.append({'model':c,'day':r.day,'t':int(r.t),'raw_prediction':r[c],'y2':r.y2})
+sessions={}
+for symbol in ['QQQ','NVDA']:
+ x=load(symbol);delta=x.groupby('day').t.diff();sizes=x.groupby('day').size();sessions[symbol]={'scope':'discovery plus validation only','rows':len(x),'days':x.day.nunique(),'duplicate_timestamps':int(x.t.duplicated().sum()),'non300_within_day_intervals':int((delta.dropna()!=300).sum()),'session_row_counts':sizes.value_counts().to_dict(),'min_slot':int(x.slot.min()),'max_slot':int(x.slot.max()),'missing_OHLCV':x[['o','h','l','c','v']].isna().sum().to_dict()}
+source=D/'round2-sources';f=pd.DataFrame([json.loads(l) for l in next(source.glob('*part-000*')).read_text().splitlines()]);t=f[f.type=='timesale'].copy();quote=f[f.type=='quote'].copy();receipt=pd.to_datetime(t.collector_receipt_timestamp,utc=True);provider=pd.to_datetime(pd.to_numeric(t.date),unit='ms',utc=True);lag=(receipt-provider).dt.total_seconds()*1000
+flow={'schema_version_from_manifest':2,'audited_part_rows':len(f),'timesales':len(t),'quotes':len(quote),'distinct_symbols':f.symbol.nunique(),'trade_event_time_utc':[str(provider.min()),str(provider.max())],'receipt_minus_provider_ms':lag.quantile([0,.5,.95,1]).to_dict(),'negative_receipt_lags':int((lag<0).sum()),'duplicate_flags':int(t.duplicate_in_run.sum()),'duplicate_symbol_sequence':int(t.duplicated(['symbol','seq']).sum()),'cancels':int(t.cancel.sum()),'corrections':int(t.correction.sum()),'quote_age_missing':int(t.preceding_quote_age_ms.isna().sum()),'preceding_quote_age_ms':t.preceding_quote_age_ms.quantile([0,.5,.95,1]).to_dict(),'classification':'prints and top-of-book quotes; no aggressor truth or depth','quote_age_caveat':'collector uses latest/max side provider timestamp from preceding received quote; not maximum age of both bid and ask, and not first availability of full historical archive'}
+out={'positive_link_maxima':events,'linear_negative_forecasts':neg,'session_audit':sessions,'flow_part_audit':flow,'source_revision_inspected':'26332bb0eba41618f4a8b941e74ff202c66b0fe0','source_file_hashes':{n:hashlib.sha256((R/'work/round2'/n).read_bytes()).hexdigest() for n in ['collector.txt','flow-collector.txt','source-manifest.txt','r2-source.txt']},'python':sys.version,'platform':platform.platform(),'numpy':np.__version__,'pandas':pd.__version__}
+(O/'diagnostics.json').write_text(json.dumps(out,indent=2,default=str));print(json.dumps(out,indent=2,default=str))

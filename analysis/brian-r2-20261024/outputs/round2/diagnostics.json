@@ -1,0 +1,190 @@
+{
+  "positive_link_maxima": [
+    {
+      "model": "state20",
+      "day": "2025-04-07",
+      "t": 1744036500,
+      "forecast": 5.487557701457234e+18,
+      "y2": 2.0305539368632397e-08,
+      "forecast_to_target": 2.702492951226061e+26,
+      "state_standard_scores": {
+        "r1sq": 22.083629350168174,
+        "rv6": 112.10664089966143,
+        "rv12": 69.34730530066254
+      },
+      "training_state_max": {
+        "r1sq": 0.00011568658902137317,
+        "rv6": 4.7757697439155e-05,
+        "rv12": 3.344575789397967e-05
+      }
+    },
+    {
+      "model": "state60",
+      "day": "2025-04-07",
+      "t": 1744036500,
+      "forecast": 7.11228144035965e+35,
+      "y2": 2.0305539368632397e-08,
+      "forecast_to_target": 3.5026311349042835e+43,
+      "state_standard_scores": {
+        "r1sq": 31.972622463548472,
+        "rv6": 160.1111051414636,
+        "rv12": 99.09600238622215
+      },
+      "training_state_max": {
+        "r1sq": 0.00011568658902137317,
+        "rv6": 4.7757697439155e-05,
+        "rv12": 3.344575789397967e-05
+      }
+    },
+    {
+      "model": "state_season20",
+      "day": "2025-04-07",
+      "t": 1744038300,
+      "forecast": 1.2139958497439803e+19,
+      "y2": 1.2705440421148347e-05,
+      "forecast_to_target": 9.554929301964776e+23,
+      "state_standard_scores": {
+        "r1sq": 26.3375018062548,
+        "rv6": 30.15968267284098,
+        "rv12": 78.01726770159203
+      },
+      "training_state_max": {
+        "r1sq": 0.00011568658902137317,
+        "rv6": 4.7757697439155e-05,
+        "rv12": 3.344575789397967e-05
+      }
+    },
+    {
+      "model": "state_season60",
+      "day": "2025-04-07",
+      "t": 1744036500,
+      "forecast": 3.112659523731027e+35,
+      "y2": 2.0305539368632397e-08,
+      "forecast_to_target": 1.5329115209514716e+43,
+      "state_standard_scores": {
+        "r1sq": 31.972622463548472,
+        "rv6": 160.1111051414636,
+        "rv12": 99.09600238622215
+      },
+      "training_state_max": {
+        "r1sq": 0.00011568658902137317,
+        "rv6": 4.7757697439155e-05,
+        "rv12": 3.344575789397967e-05
+      }
+    }
+  ],
+  "linear_negative_forecasts": [
+    {
+      "model": "state_season20",
+      "day": "2025-05-09",
+      "t": 1746806400,
+      "raw_prediction": -2.0192799189578113e-08,
+      "y2": 3.07016322251049e-07
+    },
+    {
+      "model": "state_season60",
+      "day": "2025-07-09",
+      "t": 1752075600,
+      "raw_prediction": -4.977339590507756e-08,
+      "y2": 1.9059841113495327e-06
+    },
+    {
+      "model": "state_season60",
+      "day": "2025-07-09",
+      "t": 1752075900,
+      "raw_prediction": -5.300967442823652e-08,
+      "y2": 8.152613342880146e-09
+    },
+    {
+      "model": "state_season60",
+      "day": "2025-07-09",
+      "t": 1752076200,
+      "raw_prediction": -4.495717008725075e-08,
+      "y2": 4.5823278273604884e-07
+    }
+  ],
+  "session_audit": {
+    "QQQ": {
+      "scope": "discovery plus validation only",
+      "rows": 52015,
+      "days": 670,
+      "duplicate_timestamps": 0,
+      "non300_within_day_intervals": 0,
+      "session_row_counts": {
+        "78": 663,
+        "43": 7
+      },
+      "min_slot": 0,
+      "max_slot": 385,
+      "missing_OHLCV": {
+        "o": 0,
+        "h": 0,
+        "l": 0,
+        "c": 0,
+        "v": 0
+      }
+    },
+    "NVDA": {
+      "scope": "discovery plus validation only",
+      "rows": 25600,
+      "days": 330,
+      "duplicate_timestamps": 0,
+      "non300_within_day_intervals": 0,
+      "session_row_counts": {
+        "78": 326,
+        "43": 4
+      },
+      "min_slot": 0,
+      "max_slot": 385,
+      "missing_OHLCV": {
+        "o": 0,
+        "h": 0,
+        "l": 0,
+        "c": 0,
+        "v": 0
+      }
+    }
+  },
+  "flow_part_audit": {
+    "schema_version_from_manifest": 2,
+    "audited_part_rows": 21230,
+    "timesales": 13270,
+    "quotes": 7959,
+    "distinct_symbols": 17,
+    "trade_event_time_utc": [
+      "2026-09-03 13:41:55.423000+00:00",
+      "2026-09-03 13:44:54.835000+00:00"
+    ],
+    "receipt_minus_provider_ms": {
+      "0.0": 35.0,
+      "0.5": 89.0,
+      "0.95": 226.0,
+      "1.0": 859.0
+    },
+    "negative_receipt_lags": 0,
+    "duplicate_flags": 0,
+    "duplicate_symbol_sequence": 0,
+    "cancels": 0,
+    "corrections": 0,
+    "quote_age_missing": 25,
+    "preceding_quote_age_ms": {
+      "0.0": 9.0,
+      "0.5": 871.0,
+      "0.95": 1488.7999999999993,
+      "1.0": 2153.0
+    },
+    "classification": "prints and top-of-book quotes; no aggressor truth or depth",
+    "quote_age_caveat": "collector uses latest/max side provider timestamp from preceding received quote; not maximum age of both bid and ask, and not first availability of full historical archive"
+  },
+  "source_revision_inspected": "26332bb0eba41618f4a8b941e74ff202c66b0fe0",
+  "source_file_hashes": {
+    "collector.txt": "e2883f8edfc445d0dbe609922c2f256920ce19c947badb9146f24725028286e3",
+    "flow-collector.txt": "2f8e205ad81b6c3b3f334b0bd5c5c318aa7f5f709eea1363e00d0e2b6a6926b9",
+    "source-manifest.txt": "3342fe32ff7220db7b1d9eaad08150e0a8e75a37348f3c2e367b84cb32d3902f",
+    "r2-source.txt": "c05772ddffa5695cf340aeb995b29395df7072551275312b949ea46319af5b4c"
+  },
+  "python": "3.14.4 (tags/v3.14.4:23116f9, Apr  7 2026, 14:10:54) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "numpy": "2.4.5",
+  "pandas": "3.0.6"
+}

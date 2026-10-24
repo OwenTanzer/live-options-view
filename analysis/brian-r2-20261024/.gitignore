@@ -1,2 +1,4 @@
 work/private/
-work/__pycache__/
+**/__pycache__/
+work/round2/*.txt
+work/round2/*.b64

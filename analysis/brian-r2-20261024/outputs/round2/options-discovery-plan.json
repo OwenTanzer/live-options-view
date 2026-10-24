@@ -1,0 +1,26 @@
+{
+  "frozen_utc": "2026-10-24T19:40:34.102907+00:00",
+  "keys_first_pass": [
+    "manifest.json",
+    "intraday/20260910/snapshot_093013202722.csv",
+    "intraday/20260910/snapshot_093522322649.csv",
+    "intraday/20260911/snapshot_093038699373.csv",
+    "intraday/20260911/snapshot_093546837473.csv",
+    "intraday/20260914/snapshot_093032635738.csv",
+    "intraday/20260914/snapshot_093540623871.csv"
+  ],
+  "selection": "first three indexed sessions strictly after frozen final end; first snapshot at/after09:30 and09:35. Schema/timing audit only, not forecasts.",
+  "R2_object_budget": 12,
+  "index_provenance": {
+    "generated_at_utc": "2026-09-25T04:02:08.912219+00:00",
+    "base_revision": "e3cd75d93b0b64bfc1491c8db26e6abf8f2f8b68",
+    "index_sha256": "3342fe32ff7220db7b1d9eaad08150e0a8e75a37348f3c2e367b84cb32d3902f"
+  },
+  "indexed_sessions": {
+    "20260910": 595,
+    "20260911": 598,
+    "20260914": 598,
+    "20260915": 598,
+    "20260916": 597
+  }
+}

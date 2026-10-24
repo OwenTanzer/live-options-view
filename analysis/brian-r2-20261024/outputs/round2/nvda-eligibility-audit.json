@@ -1,0 +1,16 @@
+{
+  "validation_rows_old": 10682,
+  "validation_rows_new": 10682,
+  "timestamp_set_equal": true,
+  "predictor_truncation_invariance_pass": true,
+  "final_rows": 0,
+  "actual_current_predictions_max_difference": {
+    "price20": 9.996344030316351e-17,
+    "price60": 9.982791503160282e-17,
+    "price_equal": 9.982791503160282e-17,
+    "nvda20": 9.996344030316351e-17,
+    "nvda60": 9.966528470573e-17,
+    "nvda_equal": 9.985502008591496e-17
+  },
+  "stop_rule_triggered": true
+}

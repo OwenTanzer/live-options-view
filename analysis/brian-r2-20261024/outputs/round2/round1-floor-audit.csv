@@ -1,0 +1,9 @@
+model,rows,saved_at_floor,below_1e10
+variance_base20,10682,0,0
+variance_base60,10682,0,0
+variance_base_equal,10682,0,0
+variance_state20,10682,0,0
+variance_state60,10682,0,0
+variance_state_equal,10682,0,0
+variance_persistence,10682,0,0
+variance_trainmean,10682,0,0

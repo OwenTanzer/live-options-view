@@ -1,0 +1,88 @@
+{
+  "frozen_utc": "2026-10-24T19:36:23.284945+00:00",
+  "parent_protocol_sha256": "af97ff50a0ed93f134b327b6d6c7c8797e259539f69ea46dcc4f7ad593e97166",
+  "evaluation": "same consumed validation; final remains unscored",
+  "feature_history": "r1 squared, mean past 6 squared returns, mean past 12 squared returns; all unchanged across coefficient windows",
+  "seasonal_basis": [
+    "u=(minutes_since_0930-195)/195",
+    "u_squared"
+  ],
+  "basis_reason": "Fixed quadratic permits asymmetric opening/closing level and broad curvature with two coefficients; no forced periodic endpoints. Discovery-only normalized intraday curve retained as descriptive support, not a live feature or basis search. No alternatives optimized on validation.",
+  "memories_sessions": [
+    20,
+    60
+  ],
+  "refit": "once per session using prior-session matured labels",
+  "banks": {
+    "unconditional": [],
+    "season": [
+      "u",
+      "u2"
+    ],
+    "state": [
+      "r1sq",
+      "rv6",
+      "rv12"
+    ],
+    "state_season": [
+      "r1sq",
+      "rv6",
+      "rv12",
+      "u",
+      "u2"
+    ]
+  },
+  "parameter_counts_including_intercept": {
+    "unconditional": 1,
+    "season": 3,
+    "state": 4,
+    "state_season": 6
+  },
+  "penalty": "ridge 1, intercept unpenalized; standardization fitted independently on permitted training only",
+  "floors": [
+    1e-14,
+    1e-12,
+    1e-10
+  ],
+  "primary_floor": 1e-12,
+  "mixtures": "equal 20/60 forecasts per bank at each declared floor; no adaptive weights",
+  "scores": [
+    "MSE of squared-return proxy",
+    "QLIKE=log(f)+y2/f"
+  ],
+  "inference": "paired mean daily losses, 2000 circular five-session block bootstrap draws; not search-adjusted",
+  "episode": "report top-five contributions, best/worst days and monthly losses; keep all eligible days in primary results",
+  "positive_link": "not run in initial factorial; if needed, separately freeze new exploratory family before fitting",
+  "nvda": {
+    "fix": "Predictor uses current/past NVDA bars only, no NVDA future target mask. QQQ alone determines target observability. Require contiguous historical intervals explicitly.",
+    "banks": {
+      "price": [
+        "r1",
+        "rv6",
+        "tod",
+        "r6"
+      ],
+      "nvda_current": [
+        "r1",
+        "rv6",
+        "tod",
+        "nvda_r1"
+      ],
+      "nvda_lag5": [
+        "r1",
+        "rv6",
+        "tod",
+        "nvda_r1_lag5"
+      ]
+    },
+    "memories": [
+      20,
+      60
+    ],
+    "join": "backward as-of, exact availability match tolerance0; same rows for all banks; +60s assumed release latency",
+    "lag": "one additional 5min lag only; no lag grid or future shift",
+    "stop": "If all corrected/lagged variants still lose to zero, discontinue this specification; do not use final data for it."
+  },
+  "seed": 20261024,
+  "source_discovery_budget": "At most 12 known date/index public objects plus source code/read-only repository evidence. No auth bypass, no source mutation, no prediction from unidentified quote ages."
+}

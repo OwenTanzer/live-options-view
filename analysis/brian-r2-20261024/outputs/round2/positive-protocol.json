@@ -1,0 +1,43 @@
+{
+  "frozen_utc": "2026-10-24T19:39:33.566351+00:00",
+  "reason": "Linear additive seasonal banks produced 1/3 negative validation forecasts, making QLIKE extremely floor-sensitive. Preserve that result; examine a separate positive-link family.",
+  "family": "log-link conditional second-moment model, QLIKE training objective",
+  "banks": {
+    "unconditional": [],
+    "season": [
+      "u",
+      "u2"
+    ],
+    "state": [
+      "r1sq",
+      "rv6",
+      "rv12"
+    ],
+    "state_season": [
+      "r1sq",
+      "rv6",
+      "rv12",
+      "u",
+      "u2"
+    ]
+  },
+  "parameters": {
+    "unconditional": 1,
+    "season": 3,
+    "state": 4,
+    "state_season": 6
+  },
+  "memories": [
+    20,
+    60
+  ],
+  "objective": "mean(log(f)+y2/f) + sum(nonintercept standardized coefficients squared)/(2*n); f=exp(X beta)",
+  "comparison_limit": "Changes link AND fitting objective relative to linear ridge. Cannot attribute any difference solely to positivity or seasonality across families. Seasonal ablations within this family share objective/link.",
+  "initialization": "intercept log(training mean y2), slopes0; no warm-start or model selection",
+  "optimizer": "BFGS, analytic gradient, gtol1e-7, maxiter1000; failed fits reported, no silent replacement",
+  "no_prediction_floor": true,
+  "mixture": "fixed equal20/60 in variance space",
+  "evaluation": "consumed validation only; untouched final remains unscored",
+  "seed": 20261024,
+  "scipy": "1.18.1"
+}
