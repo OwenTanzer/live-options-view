@@ -1,1 +1,4 @@
 * -text
+# These provenance records retain exact original Windows bytes for their hash chain.
+outputs/round3/preflight.json whitespace=cr-at-eol
+outputs/round3/consumption.json whitespace=cr-at-eol

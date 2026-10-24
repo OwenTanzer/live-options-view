@@ -1,3 +1,5 @@
+> Latest checkpoint: [increment 3 final-period results](outputs/round3/checkpoint.md). The final segment is now consumed. Earlier unscored statements below describe their historical checkpoints.
+
 # Increment 1: data access and first empirical tests
 
 Brian — October 24, 2026. Research only; no trading, source writes, collector changes, infrastructure creation or deployment.

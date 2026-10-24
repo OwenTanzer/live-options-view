@@ -1,0 +1,10 @@
+{
+  "primary_rows": 10717,
+  "delayed_rows": 10549,
+  "common_rows": 10549,
+  "days": 168,
+  "final_consumed": true,
+  "negative_events_including_repeated_views_floors": 30,
+  "scores": "prediction-weighted and equal-day separately; MSE ratios only, QLIKE differences",
+  "bootstrap": "2000 circular five-session blocks, seed20261024; fitted forecasts held fixed, no refit inside bootstrap; persistence beyond5sessions and selection uncertainty not fully captured"
+}

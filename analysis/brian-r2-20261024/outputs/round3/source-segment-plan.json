@@ -1,0 +1,9 @@
+{
+  "registered_utc": "2026-10-24T20:12:06.229176+00:00",
+  "days": [
+    "2026-10-22",
+    "2026-10-23"
+  ],
+  "selection": "Read existing lease only to resolve owner identifier, then its manifest, then lexically first declared ndjson.gz artifact per day. No other event segment search or model fitting.",
+  "maximum_additional_reads": 6
+}

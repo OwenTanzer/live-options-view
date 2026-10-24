@@ -1,0 +1,7 @@
+scenario,memory,rows,outside_any_training_feature_range,max_abs_training_z
+primary_full,20,10717,183,41.85256707131126
+primary_full,60,10717,48,54.45707962736207
+primary_matched,20,10549,181,41.85256707131126
+primary_matched,60,10549,48,54.45707962736207
+delayed_matched,20,10549,181,41.54875635880258
+delayed_matched,60,10549,48,54.06468537543161

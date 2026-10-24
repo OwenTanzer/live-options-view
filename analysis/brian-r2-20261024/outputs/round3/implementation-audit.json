@@ -1,0 +1,110 @@
+{
+  "target_and_row_checks": [
+    {
+      "scenario": "primary",
+      "direct_target_max_difference": 4.092863201132779e-18,
+      "duplicate_origins": 0,
+      "nonfinite_values": 0,
+      "rows": 10717,
+      "days": 168
+    },
+    {
+      "scenario": "delayed",
+      "direct_target_max_difference": 4.092863201132779e-18,
+      "duplicate_origins": 0,
+      "nonfinite_values": 0,
+      "rows": 10549,
+      "days": 168
+    }
+  ],
+  "independent_augmented_least_squares_checks": [
+    {
+      "scenario": "primary",
+      "day": "2025-12-03",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 1.6940658945086007e-21
+    },
+    {
+      "scenario": "primary",
+      "day": "2025-12-03",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 1.2705494208814505e-21
+    },
+    {
+      "scenario": "primary",
+      "day": "2026-04-07",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 8.470329472543003e-22
+    },
+    {
+      "scenario": "primary",
+      "day": "2026-04-07",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 1.2705494208814505e-21
+    },
+    {
+      "scenario": "primary",
+      "day": "2026-08-05",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 1.6940658945086007e-21
+    },
+    {
+      "scenario": "primary",
+      "day": "2026-08-05",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 3.8116482626443515e-21
+    },
+    {
+      "scenario": "delayed",
+      "day": "2025-12-03",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 1.4823076576950256e-21
+    },
+    {
+      "scenario": "delayed",
+      "day": "2025-12-03",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 1.2705494208814505e-21
+    },
+    {
+      "scenario": "delayed",
+      "day": "2026-04-07",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 6.352747104407253e-22
+    },
+    {
+      "scenario": "delayed",
+      "day": "2026-04-07",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 1.4823076576950256e-21
+    },
+    {
+      "scenario": "delayed",
+      "day": "2026-08-05",
+      "memory": 20,
+      "augmented_least_squares_prediction_max_difference": 1.0587911840678754e-21
+    },
+    {
+      "scenario": "delayed",
+      "day": "2026-08-05",
+      "memory": 60,
+      "augmented_least_squares_prediction_max_difference": 5.293955920339377e-22
+    }
+  ],
+  "training_day_and_maturity_pass": true,
+  "frozen_code_hashes_unchanged": {
+    "model.py": true,
+    "preflight.py": true,
+    "run_final.py": true,
+    "score.py": true
+  },
+  "training_label_safety_min_seconds": 66900,
+  "prediction_truncation_checks": 1344,
+  "python": "3.14.4 (tags/v3.14.4:23116f9, Apr  7 2026, 14:10:54) [MSC v.1944 64 bit (AMD64)]",
+  "numpy": "2.4.5",
+  "pandas": "3.0.6",
+  "scipy": "1.18.1",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "no_model_tuning": true,
+  "final_consumed": true
+}

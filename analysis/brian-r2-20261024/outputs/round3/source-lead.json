@@ -1,0 +1,132 @@
+[
+  {
+    "key": "moo144/tradier/2026-10-22/health.json",
+    "status": 200,
+    "retrieved_utc": "2026-10-24T20:11:04.059688+00:00",
+    "bytes": 586,
+    "sha256": "1ff99b630dc0b1d120e2eb84b4c448442fbc2591a041cc2fea9f1d2160ff8ca2",
+    "fields": [
+      "duplicate_count",
+      "event_counts",
+      "first_receipt_timestamp",
+      "gap_seconds",
+      "last_receipt_timestamp",
+      "malformed_payloads",
+      "peak_spool_bytes",
+      "reconnects",
+      "spool_backlog_bytes",
+      "spool_overloaded",
+      "trade_delivery_lag_ms",
+      "updated_at",
+      "upload_failures"
+    ],
+    "last_modified": "Thu, 22 Oct 2026 20:00:01 GMT",
+    "selected_metadata": {
+      "first_receipt_timestamp": "2026-10-22T13:30:00.048+00:00",
+      "last_receipt_timestamp": "2026-10-22T19:59:59.997+00:00",
+      "event_counts": {
+        "excluded_timesale": 62,
+        "quote": 998104,
+        "timesale": 1280103
+      }
+    }
+  },
+  {
+    "key": "moo144/tradier/2026-10-22/universe.json",
+    "status": 200,
+    "retrieved_utc": "2026-10-24T20:11:04.834775+00:00",
+    "bytes": 3669,
+    "sha256": "0491a2bcff68e0c4500393038b1e68bb1b8113ef4dc1b1b9e3c976c924e7a5ee",
+    "fields": [
+      "symbols",
+      "universe"
+    ],
+    "last_modified": "Thu, 22 Oct 2026 13:29:01 GMT",
+    "selected_metadata": {
+      "symbols": [
+        "QQQ",
+        "QQQ261022C00710000",
+        "QQQ261022P00710000",
+        "QQQ261022C00711000",
+        "QQQ261022P00711000",
+        "QQQ261022C00712000",
+        "QQQ261022P00712000",
+        "QQQ261022C00713000",
+        "QQQ261022P00713000",
+        "QQQ261022C00714000",
+        "QQQ261022P00714000",
+        "QQQ261022C00715000",
+        "QQQ261022P00715000",
+        "QQQ261022C00716000",
+        "QQQ261022P00716000",
+        "QQQ261022C00717000",
+        "QQQ261022P00717000"
+      ]
+    }
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/health.json",
+    "status": 200,
+    "retrieved_utc": "2026-10-24T20:11:05.477877+00:00",
+    "bytes": 586,
+    "sha256": "8b04838c4488aa98ed700fc2aacaa18554f6da56af77039ee280b6e88193113a",
+    "fields": [
+      "duplicate_count",
+      "event_counts",
+      "first_receipt_timestamp",
+      "gap_seconds",
+      "last_receipt_timestamp",
+      "malformed_payloads",
+      "peak_spool_bytes",
+      "reconnects",
+      "spool_backlog_bytes",
+      "spool_overloaded",
+      "trade_delivery_lag_ms",
+      "updated_at",
+      "upload_failures"
+    ],
+    "last_modified": "Fri, 23 Oct 2026 20:00:00 GMT",
+    "selected_metadata": {
+      "first_receipt_timestamp": "2026-10-23T13:30:00.039+00:00",
+      "last_receipt_timestamp": "2026-10-23T19:59:59.991+00:00",
+      "event_counts": {
+        "excluded_timesale": 180,
+        "quote": 1013907,
+        "timesale": 1022356
+      }
+    }
+  },
+  {
+    "key": "moo144/tradier/2026-10-23/universe.json",
+    "status": 200,
+    "retrieved_utc": "2026-10-24T20:11:06.089431+00:00",
+    "bytes": 3669,
+    "sha256": "8793f3afc12168746158f4a2d4e1afa08e5f382be3cbec095ba9361c1aa36e32",
+    "fields": [
+      "symbols",
+      "universe"
+    ],
+    "last_modified": "Fri, 23 Oct 2026 13:29:01 GMT",
+    "selected_metadata": {
+      "symbols": [
+        "QQQ",
+        "QQQ261023C00699000",
+        "QQQ261023P00699000",
+        "QQQ261023C00700000",
+        "QQQ261023P00700000",
+        "QQQ261023C00701000",
+        "QQQ261023P00701000",
+        "QQQ261023C00702000",
+        "QQQ261023P00702000",
+        "QQQ261023C00703000",
+        "QQQ261023P00703000",
+        "QQQ261023C00704000",
+        "QQQ261023P00704000",
+        "QQQ261023C00705000",
+        "QQQ261023P00705000",
+        "QQQ261023C00706000",
+        "QQQ261023P00706000"
+      ]
+    }
+  }
+]

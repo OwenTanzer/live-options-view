@@ -1,0 +1,143 @@
+{
+  "all_passed": true,
+  "checks": [
+    {
+      "file": "calibration.csv",
+      "exact_LF_bytes": true,
+      "sha256": "66dd8734186f0051551d2896d13d0b28bbba8c28f716d41a1197863b56f764ea"
+    },
+    {
+      "file": "clipping-audit.csv",
+      "exact_LF_bytes": true,
+      "sha256": "0326e4c974ebf4f722cc3e4bbaeec0554d55cd7e4560a142ca9083ef26f1f170"
+    },
+    {
+      "file": "daily-losses.csv",
+      "exact_LF_bytes": true,
+      "sha256": "bd155373004c78fe5f9043cd142ab1998e75d61f4b54951f98ea1759ca0aba9f"
+    },
+    {
+      "file": "episode-concentration.csv",
+      "exact_LF_bytes": true,
+      "sha256": "cdf329b88255fafc922577c49ca538b3fc12959cd0acda19ed63139dacacb065"
+    },
+    {
+      "file": "fit-ledger.csv",
+      "exact_LF_bytes": true,
+      "sha256": "67e596127432afae7c185c3fafa618e9e02164b9baa5911730748f0d2e44231b"
+    },
+    {
+      "file": "floor-events.csv",
+      "exact_LF_bytes": true,
+      "sha256": "a83095c08e792714b7d46a4b90e392651174a66d1e84cf00f3576266831d5e7f"
+    },
+    {
+      "file": "monthly.csv",
+      "exact_LF_bytes": true,
+      "sha256": "80324611ec802de96eba946b884cb6a426d59fcba224e0f54b22edb148b3f097"
+    },
+    {
+      "file": "paired-contrasts.csv",
+      "exact_LF_bytes": true,
+      "sha256": "3a8eed5b0d1614afa4e7e7ce7781815b65975b88453eb2a383f775e8b05dff7d"
+    },
+    {
+      "file": "scores.csv",
+      "exact_LF_bytes": true,
+      "sha256": "cff074071ae27feca65e752474d97a98080a1a26c096c763340862a90b53a5b9"
+    },
+    {
+      "file": "state-exposure.csv",
+      "exact_LF_bytes": true,
+      "sha256": "e21875901701d9c6c8e84b3524ddf8d49a739c782f59eac37f1ddd1bd3a83ad9"
+    },
+    {
+      "file": "support-summary.csv",
+      "exact_LF_bytes": true,
+      "sha256": "5ab8dd2a45810f6efa1e712e4146ab30f438f70930d0603323b8791408092e17"
+    },
+    {
+      "file": "timing-examples.csv",
+      "exact_LF_bytes": true,
+      "sha256": "38e8822f658c82a042dbb798112fb79af5172d3ba5da1b7a9d1e1dff0b9fd520"
+    },
+    {
+      "file": "truncation-checks.csv",
+      "exact_LF_bytes": true,
+      "sha256": "0d25aed4cfed1524abaab7b0f19caef70d13889d1f03934d28a96b310afdb544"
+    }
+  ],
+  "method": "Fresh private directory, copied frozen protocols and byte-identical source objects; rerun preflight/run_final/score. Exact LF CSV comparisons; run timestamps intentionally differ. Final remains consumed.",
+  "replay_preflight": {
+    "run_registered_utc": "2026-10-24T20:05:31.742662+00:00",
+    "status": "registered before constructing/scoring final outcomes",
+    "protocols": {
+      "outputs/protocol.json": {
+        "sha256_exact": "af97ff50a0ed93f134b327b6d6c7c8797e259539f69ea46dcc4f7ad593e97166",
+        "sha256_LF": "9ff49da27837231039e3289499742337b23f75b48f75bb80e847538507f34115"
+      },
+      "outputs/round2/protocol.json": {
+        "sha256_exact": "72d93c1b0f90105f6f5c724bfea95515ebb14d7a0b1ca93cacea494fcc110d76",
+        "sha256_LF": "85a26c184e1a1ade6c24d9da8889691942821c34ca54229c2bc3f18a56580c81"
+      },
+      "outputs/round2/round3-plan.json": {
+        "sha256_exact": "71521eb2d22dfa12f2109505d63199dac74b649e01413cc2bbbcc6310e146a8b",
+        "sha256_LF": "f457d86511fddc6f975f7de35bcbfb700ac87b49f56c4f0bce81cb680c605e40"
+      }
+    },
+    "sources": [
+      {
+        "key": "history/QQQ/5/2023.json",
+        "bytes": 773992,
+        "sha256": "f9ed26e4ee89205e0e35d7fab1d2df3582eff8682cd3876fc1e39967c5039c68",
+        "matches_increment1": true
+      },
+      {
+        "key": "history/QQQ/5/2024.json",
+        "bytes": 1031749,
+        "sha256": "25a36147445de3899af0936b4a4f3d02d467fd2adca163f6db499bb7597e0cfe",
+        "matches_increment1": true
+      },
+      {
+        "key": "history/QQQ/5/2025.json",
+        "bytes": 1022576,
+        "sha256": "7e0d9f5bb4399fd51edc8f744fcfba79c8120f4570ea55743eaf8282261ec0d0",
+        "matches_increment1": true
+      },
+      {
+        "key": "history/QQQ/5/2026.json",
+        "bytes": 607019,
+        "sha256": "1ce71af44ec26e7df817a2550c9305c9bdb849c8bae771456d4b98409d28b66f",
+        "matches_increment1": true
+      }
+    ],
+    "source_bucket": "qqq-options-chain-data",
+    "code": {
+      "model.py": "901b2ef54873a618a04f98eec0722128a675f81d6b7ea0d56bf38891797ffcb4",
+      "preflight.py": "9fce54b552c7fe0be4d766326d9413c37352368dee6ddd7bce50101177928c1e",
+      "reproduce.py": "a65e746955317fc0c2fb883645f9842078d5590833eecc9a5632ac435947eb76",
+      "run_final.py": "09f8786ea6867dbdfe9f6594d293d94691f4822847e6fc22b5e4417fc2fd3457",
+      "score.py": "db7d096bf29a8424880dd866553498d2221ff6b85d21271fcd454a9938690932"
+    },
+    "python": "3.14.4 (tags/v3.14.4:23116f9, Apr  7 2026, 14:10:54) [MSC v.1944 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "seed": 20261024,
+    "models": "state20/state60/fixed equal; unconditional20/unconditional60/fixed equal; no tuning",
+    "timing": "Primary assumes start-labeled5min bars, close at t+300 and availabilityt+360. Delayed deployment availablet+660 and shifts/refits target; not same-target staleness isolation."
+  },
+  "replay_consumption": {
+    "started_utc": "2026-10-24T20:05:33.266793+00:00",
+    "status": "FINAL CONSUMED from this run; no retuning permitted",
+    "preflight_sha256": "8692c5df745a9a4e7b55ccd52a18b50104e3fd985b7b72ad4f877f36f0fd5923",
+    "completed_utc": "2026-10-24T20:18:22.042158+00:00",
+    "rows_by_scenario": {
+      "delayed": 10549,
+      "primary": 10717
+    },
+    "days_by_scenario": {
+      "delayed": 168,
+      "primary": 168
+    },
+    "training_max_and_prefix_checks_passed": true
+  }
+}

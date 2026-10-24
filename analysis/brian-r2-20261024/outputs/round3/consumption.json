@@ -1,0 +1,15 @@
+{
+  "started_utc": "2026-10-24T20:04:08.539610+00:00",
+  "status": "FINAL CONSUMED from this run; no retuning permitted",
+  "preflight_sha256": "1a66e269f7742f043fa40d6697fcfa968824a0f06d4521fda00f33487be9bcce",
+  "completed_utc": "2026-10-24T20:16:45.769152+00:00",
+  "rows_by_scenario": {
+    "delayed": 10549,
+    "primary": 10717
+  },
+  "days_by_scenario": {
+    "delayed": 168,
+    "primary": 168
+  },
+  "training_max_and_prefix_checks_passed": true
+}

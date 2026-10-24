@@ -1,0 +1,220 @@
+{
+  "objects": [
+    {
+      "key": "moo144/tradier/2026-10-22/lease.json",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:06.843370+00:00",
+      "bytes_transport": 166,
+      "sha256_transport": "31a0f9c94700488c2204a7a71e2c0231c2f9d4c65268470f1a4e747b924a6680",
+      "content_encoding": null,
+      "last_modified": "Thu, 22 Oct 2026 19:58:55 GMT",
+      "sha256_decoded": "31a0f9c94700488c2204a7a71e2c0231c2f9d4c65268470f1a4e747b924a6680"
+    },
+    {
+      "key": "moo144/tradier/2026-10-22/manifest-ee7939514b95.json",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:07.538469+00:00",
+      "bytes_transport": 29341,
+      "sha256_transport": "ae21c7d048c0117bd5b5a341f697a891c9f76f923b5e490d1e53eb5c4d95bbe1",
+      "content_encoding": null,
+      "last_modified": "Thu, 22 Oct 2026 20:00:09 GMT",
+      "sha256_decoded": "ae21c7d048c0117bd5b5a341f697a891c9f76f923b5e490d1e53eb5c4d95bbe1"
+    },
+    {
+      "key": "moo144/tradier/2026-10-22/ee7939514b95-part-0000.ndjson.gz",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:08.449727+00:00",
+      "bytes_transport": 642582,
+      "sha256_transport": "44c85dde2c95de9937ab95ea8a8dd7a1fcda3d81e29f23fb05d8bd4c622783da",
+      "content_encoding": "gzip",
+      "last_modified": "Thu, 22 Oct 2026 13:32:09 GMT",
+      "sha256_decoded": "c897f97ec13d884b7bd7cc9daee70cff453e2c598222d897d7366a2cf3caf897",
+      "expected_sha256": "44c85dde2c95de9937ab95ea8a8dd7a1fcda3d81e29f23fb05d8bd4c622783da",
+      "transport_hash_matches_manifest": true
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/lease.json",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:09.483732+00:00",
+      "bytes_transport": 166,
+      "sha256_transport": "062431799f7c0203fe8c32b880373480bb4a91123e1e72dd90380042f1ee6c72",
+      "content_encoding": null,
+      "last_modified": "Fri, 23 Oct 2026 19:59:30 GMT",
+      "sha256_decoded": "062431799f7c0203fe8c32b880373480bb4a91123e1e72dd90380042f1ee6c72"
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/manifest-5c58abce22a8.json",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:10.141437+00:00",
+      "bytes_transport": 29339,
+      "sha256_transport": "9455cb2012dc8b29eb326bb6cc7fd94e33437a15e0c763cee758aa4586f7dbb4",
+      "content_encoding": null,
+      "last_modified": "Fri, 23 Oct 2026 20:00:09 GMT",
+      "sha256_decoded": "9455cb2012dc8b29eb326bb6cc7fd94e33437a15e0c763cee758aa4586f7dbb4"
+    },
+    {
+      "key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0000.ndjson.gz",
+      "status": 200,
+      "retrieved_utc": "2026-10-24T20:12:10.976095+00:00",
+      "bytes_transport": 623136,
+      "sha256_transport": "3a1fc09b35d76e7282f8ba103db90e73b98d8ff9784ad24d6125db69cf745362",
+      "content_encoding": "gzip",
+      "last_modified": "Fri, 23 Oct 2026 13:32:10 GMT",
+      "sha256_decoded": "5f815fb66d8d3e9fcdce97bb2fc5956c009ce592715b473e43d1677882dfb5b6",
+      "expected_sha256": "3a1fc09b35d76e7282f8ba103db90e73b98d8ff9784ad24d6125db69cf745362",
+      "transport_hash_matches_manifest": true
+    }
+  ],
+  "audits": [
+    {
+      "day": "2026-10-22",
+      "manifest_key": "moo144/tradier/2026-10-22/manifest-ee7939514b95.json",
+      "manifest_status": "complete",
+      "partial_reasons": [],
+      "manifest_event_segments": 131,
+      "sample_key": "moo144/tradier/2026-10-22/ee7939514b95-part-0000.ndjson.gz",
+      "sample_rows": 22852,
+      "event_counts": {
+        "timesale": 18482,
+        "quote": 4308,
+        "excluded_timesale": 62
+      },
+      "symbols": [
+        "QQQ",
+        "QQQ261022C00710000",
+        "QQQ261022C00711000",
+        "QQQ261022C00712000",
+        "QQQ261022C00713000",
+        "QQQ261022C00714000",
+        "QQQ261022C00715000",
+        "QQQ261022C00716000",
+        "QQQ261022C00717000",
+        "QQQ261022P00710000",
+        "QQQ261022P00711000",
+        "QQQ261022P00712000",
+        "QQQ261022P00713000",
+        "QQQ261022P00714000",
+        "QQQ261022P00715000",
+        "QQQ261022P00716000",
+        "QQQ261022P00717000"
+      ],
+      "receipt_start": "2026-10-22T13:30:00.048+00:00",
+      "receipt_end": "2026-10-22T13:32:08.827+00:00",
+      "quote_side_timestamp_population": {
+        "biddate": 4308,
+        "askdate": 4308,
+        "collector_receipt_timestamp": 4308
+      },
+      "quote_rows": 4308,
+      "print_receipt_minus_event_ms": {
+        "0.0": 37.0,
+        "0.5": 132.0,
+        "0.95": 7003.0,
+        "1.0": 9703.0
+      },
+      "negative_print_lags": 0,
+      "print_duplicates_symbol_sequence": 0,
+      "print_cancels": 0,
+      "print_corrections": 0,
+      "health_reported_full_session": {
+        "duplicate_count": 0,
+        "event_counts": {
+          "excluded_timesale": 62,
+          "quote": 998104,
+          "timesale": 1280103
+        },
+        "first_receipt_timestamp": "2026-10-22T13:30:00.048+00:00",
+        "gap_seconds": 0.0,
+        "last_receipt_timestamp": "2026-10-22T19:59:59.997+00:00",
+        "malformed_payloads": 0,
+        "peak_spool_bytes": 951271,
+        "reconnects": 0,
+        "spool_backlog_bytes": 0,
+        "spool_overloaded": false,
+        "trade_delivery_lag_ms": {
+          "latest": 11447.0,
+          "max": 3327575.0,
+          "over_5000ms_count": 8276
+        },
+        "updated_at": "2026-10-22T20:00:00.952+00:00",
+        "upload_failures": 0
+      },
+      "ceiling": "Only one declared segment per session directly audited; manifest/health counts are not independently verified full-day completeness. No aggressor ground truth or depth."
+    },
+    {
+      "day": "2026-10-23",
+      "manifest_key": "moo144/tradier/2026-10-23/manifest-5c58abce22a8.json",
+      "manifest_status": "complete",
+      "partial_reasons": [],
+      "manifest_event_segments": 131,
+      "sample_key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0000.ndjson.gz",
+      "sample_rows": 23235,
+      "event_counts": {
+        "timesale": 18642,
+        "quote": 4413,
+        "excluded_timesale": 180
+      },
+      "symbols": [
+        "QQQ",
+        "QQQ261023C00699000",
+        "QQQ261023C00700000",
+        "QQQ261023C00701000",
+        "QQQ261023C00702000",
+        "QQQ261023C00703000",
+        "QQQ261023C00704000",
+        "QQQ261023C00705000",
+        "QQQ261023C00706000",
+        "QQQ261023P00699000",
+        "QQQ261023P00700000",
+        "QQQ261023P00701000",
+        "QQQ261023P00702000",
+        "QQQ261023P00703000",
+        "QQQ261023P00704000",
+        "QQQ261023P00705000",
+        "QQQ261023P00706000"
+      ],
+      "receipt_start": "2026-10-23T13:30:00.039+00:00",
+      "receipt_end": "2026-10-23T13:32:10.123+00:00",
+      "quote_side_timestamp_population": {
+        "biddate": 4413,
+        "askdate": 4413,
+        "collector_receipt_timestamp": 4413
+      },
+      "quote_rows": 4413,
+      "print_receipt_minus_event_ms": {
+        "0.0": 39.0,
+        "0.5": 322.0,
+        "0.95": 10137.850000000002,
+        "1.0": 13083.0
+      },
+      "negative_print_lags": 0,
+      "print_duplicates_symbol_sequence": 0,
+      "print_cancels": 0,
+      "print_corrections": 0,
+      "health_reported_full_session": {
+        "duplicate_count": 0,
+        "event_counts": {
+          "excluded_timesale": 180,
+          "quote": 1013907,
+          "timesale": 1022356
+        },
+        "first_receipt_timestamp": "2026-10-23T13:30:00.039+00:00",
+        "gap_seconds": 0.0,
+        "last_receipt_timestamp": "2026-10-23T19:59:59.991+00:00",
+        "malformed_payloads": 0,
+        "peak_spool_bytes": 804568,
+        "reconnects": 0,
+        "spool_backlog_bytes": 0,
+        "spool_overloaded": false,
+        "trade_delivery_lag_ms": {
+          "latest": 142.0,
+          "max": 1118986.0,
+          "over_5000ms_count": 8120
+        },
+        "updated_at": "2026-10-23T20:00:00.577+00:00",
+        "upload_failures": 0
+      },
+      "ceiling": "Only one declared segment per session directly audited; manifest/health counts are not independently verified full-day completeness. No aggressor ground truth or depth."
+    }
+  ]
+}

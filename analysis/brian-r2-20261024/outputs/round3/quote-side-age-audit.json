@@ -1,0 +1,48 @@
+[
+  {
+    "source_key": "moo144/tradier/2026-10-22/ee7939514b95-part-0000.ndjson.gz",
+    "quotes": 4308,
+    "invalid_side_timestamps": {
+      "bid": 0,
+      "ask": 0
+    },
+    "negative_side_age_counts": {
+      "bid": 0,
+      "ask": 0
+    },
+    "oldest_side_age_ms": {
+      "0.0": 76.0,
+      "0.5": 820.0,
+      "0.95": 1405.6499999999996,
+      "1.0": 1991.0
+    },
+    "oldest_side_over_1000ms": 1381,
+    "oldest_side_over_5000ms": 0,
+    "zero_bid": 0,
+    "crossed": 5,
+    "note": "Age at receipt, not at a later trade. A later matched research join must use preceding receipt and update age to its feature cutoff; no future quote join."
+  },
+  {
+    "source_key": "moo144/tradier/2026-10-23/5c58abce22a8-part-0000.ndjson.gz",
+    "quotes": 4413,
+    "invalid_side_timestamps": {
+      "bid": 0,
+      "ask": 0
+    },
+    "negative_side_age_counts": {
+      "bid": 0,
+      "ask": 0
+    },
+    "oldest_side_age_ms": {
+      "0.0": 79.0,
+      "0.5": 833.0,
+      "0.95": 1436.0,
+      "1.0": 2831.0
+    },
+    "oldest_side_over_1000ms": 1376,
+    "oldest_side_over_5000ms": 0,
+    "zero_bid": 0,
+    "crossed": 0,
+    "note": "Age at receipt, not at a later trade. A later matched research join must use preceding receipt and update age to its feature cutoff; no future quote join."
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "registered_utc": "2026-10-24T20:11:03.314538+00:00",
+  "keys": [
+    "moo144/tradier/2026-10-22/health.json",
+    "moo144/tradier/2026-10-22/universe.json",
+    "moo144/tradier/2026-10-23/health.json",
+    "moo144/tradier/2026-10-23/universe.json"
+  ],
+  "basis": "Existing scripts/moo144_tradier_collector.py QQQ_ARCHIVE_ROOT and Lane prefix/health/universe paths at inspected revision26332bb0eba41618f4a8b941e74ff202c66b0fe0",
+  "purpose": "read-only existence and schema probe, not collection or model fitting"
+}
