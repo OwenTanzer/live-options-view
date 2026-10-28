@@ -4,6 +4,8 @@ const path = require('node:path');
 const KEYS = [
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/prices.json',
   'intraday/health.json', 'derived/OIranges.csv',
+  'manifest.json', 'raw/qqq_chain_20261027.csv',
+  'raw/opex/qqq_chain_20240229.csv', 'prices/qqq_intraday_20261027.csv',
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
@@ -76,7 +78,12 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
       'intraday/..%2fauth/remember_token.json', '%2e%2e%2fauth/remember_token.json',
       'https://evil.example/data', '//evil.example/data', 'auth/remember_token.json',
       'system/bot-membership-v1.json', 'paper-trades/a.json', 'macro/eia_steo.json',
-      'manifest.json', 'raw/qqq_chain_2026-10-08.csv', 'derived/oiranges.csv',
+      'raw/qqq_chain_2026-10-08.csv', 'derived/oiranges.csv',
+      'raw/qqq_chain_20260229.csv', 'raw/qqq_chain_20261301.csv',
+      'raw/qqq_chain_20260431.csv', 'raw/qqq_chain_20261000.csv',
+      'raw/spy_chain_20261027.csv', 'raw/qqq_chain_20261027.csv/secret',
+      'raw/qqq_chain_20261027.csv.bak', 'prices/spy_intraday_20261027.csv',
+      'raw/opex/other/qqq_chain_20261027.csv', 'raw/%71qq_chain_20261027.csv',
     ]) {
       assert.equal((await request('/browser-data/' + key)).status, 404, key);
     }
@@ -116,7 +123,10 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
   assert.ok(html.includes('fetch(`${BROWSER_DATA}/${path}?_=${Date.now()}`)'));
   assert.ok(html.includes('const base = `${BROWSER_DATA}/squeeze-scanner/v1/scheduled`;'));
   assert.ok(html.includes('fetch(`${R2}/macro/eia_steo.json'));
-  assert.ok(html.includes('fetch(`${R2}/raw/qqq_chain_'));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/raw/qqq_chain_'));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/raw/opex/qqq_chain_'));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/manifest.json'));
+  assert.ok(html.includes('fetch(`${BROWSER_DATA}/prices/qqq_intraday_'));
   assert.ok(!html.includes('/r2-proxy/'));
   const routing = html.slice(html.indexOf('const R2 ='), html.indexOf('const REFRESH'));
   assert.ok(routing.includes('location.origin'));
@@ -128,5 +138,5 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
       assert.equal(base + '/' + key, (origin === APP ? '/browser-data' : ORIGIN) + '/' + key);
     }
   }
-  console.log('browser data: 8 keys, strict paths/queries/methods, no bindings/credentials/redirects, byte/status preservation and frontend scope passed');
+  console.log('browser data: live keys and bounded QQQ archives, strict paths/queries/methods, no bindings/credentials/redirects, byte/status preservation and frontend scope passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

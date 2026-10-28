@@ -9,10 +9,20 @@ const BROWSER_DATA_KEYS = new Set([
   'intraday/prices.json',
   'intraday/health.json',
   'derived/OIranges.csv',
+  'manifest.json',
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
 ]);
+// Only the three QQQ archive filename families consumed by Historical.
+// Validate calendar dates, not just eight arbitrary digits. No prefix proxying.
+function isPublicArchiveKey(key) {
+  const match = /^(?:raw\/(?:opex\/)?qqq_chain_|prices\/qqq_intraday_)([0-9]{4})([0-9]{2})([0-9]{2})\.csv$/.exec(key);
+  if (!match) return false;
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
 const ALLOWED_ORIGINS = ['https://options.moopertonic.net', 'http://localhost:8787'];
 const MAX_BODY_BYTES = 16 * 1024; // a trade record is a few hundred bytes; this leaves ample headroom
 const MAX_QUOTE_AGE_MS = 15 * 1000;
@@ -137,7 +147,7 @@ async function handleBrowserData(request, url) {
     return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
   }
   const key = url.pathname.slice(BROWSER_DATA_PREFIX.length);
-  if (!BROWSER_DATA_KEYS.has(key)) return new Response('Not found', { status: 404 });
+  if (!BROWSER_DATA_KEYS.has(key) && !isPublicArchiveKey(key)) return new Response('Not found', { status: 404 });
   // Accept only the existing numeric cache-buster, never arbitrary query data.
   if (url.search && !/^\?_=[0-9]{1,20}$/.test(url.search)) {
     return new Response('Invalid query', { status: 400 });

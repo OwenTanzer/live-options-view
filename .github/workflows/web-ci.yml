@@ -31,6 +31,8 @@ jobs:
           node-version: "22"
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
+      - name: historical archive loading
+        run: node tests/historical_archive.test.js
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: bot account closure and identity compatibility
@@ -53,6 +55,12 @@ jobs:
         run: node tests/squeeze_scanner_display.test.js
       - name: squeeze scanner panel
         run: node tests/squeeze_panel.test.js
+      - name: Install browser test dependencies
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Historical rendered browser workflow
+        run: node tests/historical_browser.test.js
       # Catches syntax errors in the inline <script> that the panel test would
       # otherwise only surface for the section it extracts.
       - name: parse check
