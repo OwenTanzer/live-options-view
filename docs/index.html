@@ -517,6 +517,7 @@
   /* ── tabs ────────────────────────────────────────────────────────────── */
   #tab-bar {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 0.9rem;
   }
@@ -530,6 +531,19 @@
     font-weight: 600;
     cursor: pointer;
   }
+  .analysis-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: #58a6ff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .analysis-link:hover { background: var(--panel); }
+  .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
   #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden { display: none; }
 
@@ -762,7 +776,7 @@
      control font-size to 16px, since iOS Safari auto-zooms the page on
      focusing any input/select rendered below that size. */
   @media (pointer: coarse) {
-    .tab-btn {
+    .tab-btn, .analysis-link {
       min-height: 44px;
       padding: 8px 16px;
       font-size: 0.85rem;
@@ -799,6 +813,11 @@
   <button id="tab-history" class="tab-btn">Historical</button>
   <button id="tab-bots" class="tab-btn">Automated</button>
   <button id="tab-squeeze" class="tab-btn">Squeeze</button>
+  <a id="directional-analysis-link" class="analysis-link"
+     href="https://directional-analysis-production.up.railway.app/"
+     target="_blank" rel="noopener noreferrer"
+     aria-label="Move analysis: historical research workbench; opens in a new tab"
+     title="Historical research workbench. Open your local analysis bundle there.">Move analysis ↗</a>
 </div>
 
 <div id="live-panel">
