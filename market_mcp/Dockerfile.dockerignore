@@ -13,4 +13,6 @@ market_mcp/**
 !docs/
 docs/**
 !docs/shared.js
+!docs/shared/
+!docs/shared/**
 !docs/squeeze-calendar.json
