@@ -1,0 +1,24 @@
+{
+  "revision": "39c169602cbe596e7e8f179b2c0b80557a270987",
+  "deployment": "4c9dbd28-25f8-4d15-aca3-8751f26e4ae1",
+  "status": "SUCCESS",
+  "image": "sha256:fd854a6e9032b5c9b52f203ce0c57e7e9c3403f28ddc0fb687232ca3efd78825",
+  "instance": "94f370a3-a681-43ca-9360-5a852067e530",
+  "instance_status": "CREATED",
+  "start_command": "python -u scripts/oa203_return_scanner.py run",
+  "cron": "45 12 * * 1-5",
+  "OA203_ACTIVE_SNAPSHOTS_ENABLED": "1",
+  "OA203_READINESS": "0",
+  "next_market_session": "2026-11-09",
+  "live_cadence_verified": false,
+  "storage_probe": {
+    "conditional_put_conflict": true,
+    "readback_verified": true,
+    "delete_verified": true,
+    "test_object_removed": "oa203/readiness/activation-check/17f5cb90-640b-4a98-93cc-ca2b0ab3ec9f.json"
+  },
+  "host_limits": {
+    "cpu": 8,
+    "memoryBytes": 8000000000
+  }
+}

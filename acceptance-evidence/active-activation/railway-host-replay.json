@@ -1,0 +1,23 @@
+{
+  "event": "oa203_active_host_readiness_pass",
+  "observed_at": "2026-11-08T19:54:32.922961076Z",
+  "deployment": "03dc8b25-784f-4c3d-bd1b-e6e1c81aa03f",
+  "revision": "39c169602cbe596e7e8f179b2c0b80557a270987",
+  "source_session": "2026-11-06",
+  "sweep": 77,
+  "seconds": 133.292,
+  "max_rss_kib": 755984,
+  "publication": false,
+  "limits": {
+    "cores": 1,
+    "address_bytes": 2147483648,
+    "cpu_seconds": 230,
+    "wall_seconds": 240
+  },
+  "members": {
+    "summary.json": "09f05356723cdd28250bb0f4d0f5cb14f9de90f9eecf9d57260e6aa13fea1e61",
+    "leaderboard.csv": "232f02cb81f4b9867bf7640e0d14b3453a557d73e59ddd4a1be31a36499372ff",
+    "qualified_ask_bid_v1.csv": "142ee43676faf3e4aa9a324ce6ba080ae71d20a0c43b15cf9405913c64ced334",
+    "manifest.jsonl": "8232edde5066bd85d1912c648b7b7c93064c031a871e839bd3facb5b0fd694f8"
+  }
+}
