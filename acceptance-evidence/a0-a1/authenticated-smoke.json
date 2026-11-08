@@ -1,0 +1,80 @@
+{
+  "kind": "synthetic_local_authenticated_http",
+  "protocol_version": "2025-11-25",
+  "tools": [
+    "discover_sources",
+    "market_context",
+    "squeeze_results",
+    "return_rankings",
+    "active_rankings",
+    "market_overview",
+    "result_detail"
+  ],
+  "queries": [
+    {
+      "tool": "discover_sources",
+      "status": "available",
+      "freshness": "unknown"
+    },
+    {
+      "tool": "market_overview",
+      "status": "partial",
+      "freshness": "stale"
+    },
+    {
+      "tool": "result_detail",
+      "status": "available",
+      "freshness": "stale"
+    },
+    {
+      "tool": "market_context",
+      "status": "available",
+      "freshness": "stale"
+    },
+    {
+      "tool": "result_detail",
+      "status": "available",
+      "freshness": "stale"
+    },
+    {
+      "tool": "squeeze_results",
+      "status": "available",
+      "freshness": "stale"
+    },
+    {
+      "tool": "result_detail",
+      "status": "available",
+      "freshness": "stale"
+    },
+    {
+      "tool": "return_rankings",
+      "status": "available",
+      "freshness": "historical"
+    },
+    {
+      "tool": "result_detail",
+      "status": "available",
+      "freshness": "historical"
+    },
+    {
+      "tool": "active_rankings",
+      "status": "closed_pending_final",
+      "freshness": "stale"
+    },
+    {
+      "tool": "result_detail",
+      "status": "in_progress",
+      "freshness": "historical"
+    },
+    {
+      "tool": "active_rankings",
+      "status": "failed",
+      "freshness": "unknown"
+    },
+    {
+      "tool": "active_rankings",
+      "status": "failed",
+      "freshness": "unknown"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"kind":"container_entrypoint_with_injected_test_artifacts_and_public_test_key","uid":1000,"node":"v22.23.3","health":200,"missing_token":401,"wrong_owner":403,"initialize_list_query_detail":"passed","sigterm_exit":0,"live_oauth_or_chej":false}
