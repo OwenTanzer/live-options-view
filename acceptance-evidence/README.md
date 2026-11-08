@@ -24,3 +24,9 @@ MSI through Remote Desktop Commander / UFO2, dedicated Chrome window. Served bui
 ## Scope
 
 Nova's PRs and working trees untouched. No runtime source repair was necessary. The scanner config-file binding request was rejected by Railway before change; the supported explicit Dockerfile path and existing start command were used instead. Full details and continuation ownership are in the [shared Log](https://app.notion.com/p/4123c519147b811a876bee52759dccfc).
+
+## A3 full research replay — complete
+
+On mains-powered MSI, Python 3.14.4 / NumPy 2.4.5 / pandas 3.0.6 / SciPy 1.18.1. Freshly fetched four QQQ source files matched frozen hashes. From `analysis/brian-r2-20261024`, executed `C:\Python314\python.exe work/round3/reproduce.py run` then `C:\Python314\python.exe work/round3/reproduce.py compare`. Both exited 0. Start 2026-11-08 18:41:49 UTC; end 18:58:09 UTC; launch-to-exit 983.57 seconds.
+
+Primary 10,717 rows / 168 sessions; delayed 10,549 rows / 168 sessions. Training-maturity and prefix checks passed. All 13 published CSV tables match exact bytes after canonical LF normalization: calibration, clipping-audit, daily-losses, episode-concentration, fit-ledger, floor-events, monthly, paired-contrasts, scores, state-exposure, support-summary, timing-examples, truncation-checks. `A3-reproduction.json` holds every table hash and both replay preflight/consumption records. Raw sources and per-origin predictions stay in the ignored private replay directory; published numerical originals are unchanged. The compare command only refreshed the receipt in the isolated source checkout. This is full numerical reproduction, not an endorsement of interpretation or tradability. No replay remains running.
