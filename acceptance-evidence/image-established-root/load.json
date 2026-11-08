@@ -1,0 +1,36 @@
+{
+  "kind": "synthetic_local_authenticated_http_load",
+  "node": "v22.23.3",
+  "platform": "linux",
+  "arch": "x64",
+  "fixture": {
+    "artifact_bytes": 164772,
+    "retained_readings_padding_bytes": 163840,
+    "note": "Synthetic fixture with large retained readings; not worst-case upstream artifacts or measured Railway usage."
+  },
+  "completed_queries": 64,
+  "verified_detail_queries": 1,
+  "peak_active_requests": 4,
+  "retained_references": 64,
+  "retained_serialized_bytes": 10564224,
+  "retained_budget_bytes": 16777216,
+  "elapsed_ms": 892,
+  "latency_ms": {
+    "p50": 52,
+    "p95": 63,
+    "max": 65
+  },
+  "memory_bytes": {
+    "baseline_rss": 82276352,
+    "peak_sampled_rss": 105984000,
+    "peak_process_rss": 106139648,
+    "peak_sampled_heap": 27075560,
+    "final_heap": 24403952
+  },
+  "cpu_ms": 555,
+  "limitations": [
+    "Synthetic local process/container measurement; production Railway usage may differ.",
+    "Four simultaneous fixture reads are held 30 ms; upstream latency/expanded gzip shapes are not modeled.",
+    "CPU/egress/monthly Railway charges must be measured in the isolated pilot."
+  ]
+}

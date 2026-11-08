@@ -1,0 +1,311 @@
+[
+  {
+    "tool": "discover_sources",
+    "args": {
+      "session": "2026-11-06"
+    },
+    "status": "partial",
+    "isError": false,
+    "coverage": null
+  },
+  {
+    "tool": "market_context",
+    "args": {
+      "type": "call",
+      "limit": 1
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "source_rows": 134,
+      "matched_rows": 67,
+      "expiration": "2026-11-06"
+    }
+  },
+  {
+    "tool": "result_detail",
+    "args": {
+      "reference": "cb146f75-10f3-48a9-8eed-1e7ca4225488"
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "scope": "one cached row from the exact queried payload"
+    }
+  },
+  {
+    "tool": "market_context",
+    "args": {
+      "underlying": "SPY",
+      "type": "call",
+      "limit": 1
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "source_rows": 114,
+      "matched_rows": 57,
+      "expiration": "2026-11-06"
+    }
+  },
+  {
+    "tool": "result_detail",
+    "args": {
+      "reference": "4b332eb3-e2bc-46c1-b079-d40b8b295ae2"
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "scope": "one cached row from the exact queried payload"
+    }
+  },
+  {
+    "tool": "return_rankings",
+    "args": {
+      "session": "2026-11-08",
+      "limit": 1
+    },
+    "status": "missing",
+    "availability": "missing_publication",
+    "isError": false,
+    "coverage": null
+  },
+  {
+    "tool": "squeeze_results",
+    "args": {
+      "run": "latest_attempt",
+      "limit": 3
+    },
+    "status": "failed",
+    "isError": true,
+    "runs": {
+      "last_success": {
+        "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+        "status": "complete",
+        "sampling_mode": "scheduled",
+        "scheduled_for": "2026-10-16T16:00:00.000000+00:00",
+        "started_at": "2026-10-16T16:00:03.237232+00:00",
+        "finished_at": "2026-10-16T16:00:18.410959+00:00",
+        "published_at": "2026-10-16T16:01:15.713576+00:00",
+        "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+        "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2",
+        "denominators": {
+          "candidates": 20,
+          "discovered_rows": 20,
+          "eligible": 8,
+          "excluded_rows": 0,
+          "options_status": {
+            "illiquid_options": 6,
+            "no_options": 6,
+            "valid": 8
+          }
+        },
+        "unresolved_coverage": []
+      },
+      "latest_attempt": {
+        "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+        "status": "failed",
+        "sampling_mode": "scheduled",
+        "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+        "started_at": "2026-11-06T17:00:04.208128+00:00",
+        "finished_at": "2026-11-06T17:00:04.988106+00:00",
+        "published_at": "2026-11-06T17:00:24.084502+00:00",
+        "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+        "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+        "denominators": {
+          "candidates": 0,
+          "discovered_rows": 0,
+          "eligible": 0,
+          "excluded_rows": 0,
+          "options_status": {}
+        },
+        "unresolved_coverage": []
+      },
+      "attempt_relation": "attempt_newer",
+      "reason_basis": "unresolved_coverage lists published coverage counts that can account for a non-complete status; the pointer carries no producer reason field"
+    },
+    "coverage": {
+      "candidates": 0,
+      "discovered_rows": 0,
+      "eligible": 0,
+      "excluded_rows": 0,
+      "options_status": {},
+      "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+    }
+  },
+  {
+    "tool": "squeeze_results",
+    "args": {
+      "limit": 1
+    },
+    "status": "available",
+    "isError": false,
+    "runs": {
+      "last_success": {
+        "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+        "status": "complete",
+        "sampling_mode": "scheduled",
+        "scheduled_for": "2026-10-16T16:00:00.000000+00:00",
+        "started_at": "2026-10-16T16:00:03.237232+00:00",
+        "finished_at": "2026-10-16T16:00:18.410959+00:00",
+        "published_at": "2026-10-16T16:01:15.713576+00:00",
+        "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+        "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2",
+        "denominators": {
+          "candidates": 20,
+          "discovered_rows": 20,
+          "eligible": 8,
+          "excluded_rows": 0,
+          "options_status": {
+            "illiquid_options": 6,
+            "no_options": 6,
+            "valid": 8
+          }
+        },
+        "unresolved_coverage": []
+      },
+      "latest_attempt": {
+        "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+        "status": "failed",
+        "sampling_mode": "scheduled",
+        "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+        "started_at": "2026-11-06T17:00:04.208128+00:00",
+        "finished_at": "2026-11-06T17:00:04.988106+00:00",
+        "published_at": "2026-11-06T17:00:24.084502+00:00",
+        "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+        "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+        "denominators": {
+          "candidates": 0,
+          "discovered_rows": 0,
+          "eligible": 0,
+          "excluded_rows": 0,
+          "options_status": {}
+        },
+        "unresolved_coverage": []
+      },
+      "attempt_relation": "attempt_newer",
+      "reason_basis": "unresolved_coverage lists published coverage counts that can account for a non-complete status; the pointer carries no producer reason field"
+    },
+    "coverage": {
+      "candidates": 20,
+      "discovered_rows": 20,
+      "eligible": 8,
+      "excluded_rows": 0,
+      "options_status": {
+        "illiquid_options": 6,
+        "no_options": 6,
+        "valid": 8
+      },
+      "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+    }
+  },
+  {
+    "tool": "result_detail",
+    "args": {
+      "reference": "89b25ccf-1e91-484a-8d2a-d9252fca0b98"
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "candidates": 20,
+      "discovered_rows": 20,
+      "eligible": 8,
+      "excluded_rows": 0,
+      "options_status": {
+        "illiquid_options": 6,
+        "no_options": 6,
+        "valid": 8
+      },
+      "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+    }
+  },
+  {
+    "tool": "market_overview",
+    "args": {
+      "symbols": [
+        "AAPL"
+      ],
+      "limit": 1
+    },
+    "status": "partial",
+    "isError": false,
+    "coverage": {
+      "strip_labels": 18,
+      "identified": 18,
+      "matched_rows": 1,
+      "named_gaps": 17,
+      "matching_gaps": 0,
+      "live_rows": 0,
+      "unavailable_changes": 1
+    }
+  },
+  {
+    "tool": "result_detail",
+    "args": {
+      "reference": "27a877f8-27ac-4102-8964-f1516e9791c8"
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "scope": "one retained row from the exact queried price strip"
+    }
+  },
+  {
+    "tool": "return_rankings",
+    "args": {
+      "session": "2026-11-06",
+      "view": "clean",
+      "limit": 1
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "additional_chain_expected": 0,
+      "additional_chain_statuses_recorded": 0,
+      "additional_chain_success_rate": null,
+      "additional_chain_successes": 0,
+      "additional_expiry_coverage": null,
+      "chain_expected": 38100,
+      "chain_fetches": 38100,
+      "chain_success_rate": 0.998714,
+      "complete_sweeps": 76,
+      "gaps_ms": [],
+      "max_gap_s": 672,
+      "pending_uploads": [],
+      "reasons": [],
+      "status": "complete",
+      "sweeps_in_session": 77,
+      "typical_sweep_s": 305.6,
+      "universe_coverage": 1,
+      "truncated_sweeps": 1
+    }
+  },
+  {
+    "tool": "result_detail",
+    "args": {
+      "reference": "4eec5411-059e-4864-ace6-2c5cadedb9c4",
+      "limit": 1
+    },
+    "status": "available",
+    "isError": false,
+    "coverage": {
+      "additional_chain_expected": 0,
+      "additional_chain_statuses_recorded": 0,
+      "additional_chain_success_rate": null,
+      "additional_chain_successes": 0,
+      "additional_expiry_coverage": null,
+      "chain_expected": 38100,
+      "chain_fetches": 38100,
+      "chain_success_rate": 0.998714,
+      "complete_sweeps": 76,
+      "gaps_ms": [],
+      "max_gap_s": 672,
+      "pending_uploads": [],
+      "reasons": [],
+      "status": "complete",
+      "sweeps_in_session": 77,
+      "typical_sweep_s": 305.6,
+      "universe_coverage": 1
+    }
+  }
+]

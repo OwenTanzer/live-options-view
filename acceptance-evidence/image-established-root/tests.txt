@@ -1,0 +1,490 @@
+TAP version 13
+# Subtest: artifact parsers bound cells, physical lines and selected records before building large arrays
+ok 1 - artifact parsers bound cells, physical lines and selected records before building large arrays
+  ---
+  duration_ms: 30.457938
+  type: 'test'
+  ...
+# Subtest: discovery distinguishes selected session, missing publication and unsupported capabilities
+ok 2 - discovery distinguishes selected session, missing publication and unsupported capabilities
+  ---
+  duration_ms: 17.477516
+  type: 'test'
+  ...
+# Subtest: market preserves raw zero OI, units, field times and missing momentum/Greeks times
+ok 3 - market preserves raw zero OI, units, field times and missing momentum/Greeks times
+  ---
+  duration_ms: 2.854465
+  type: 'test'
+  ...
+# Subtest: market stale collection and partial missing derived block stay distinct
+ok 4 - market stale collection and partial missing derived block stay distinct
+  ---
+  duration_ms: 1.793994
+  type: 'test'
+  ...
+# Subtest: snapshot ref retains queried JSON across latest pointer advancement
+ok 5 - snapshot ref retains queried JSON across latest pointer advancement
+  ---
+  duration_ms: 2.753117
+  type: 'test'
+  ...
+# Subtest: chain pagination is bounded, filters do not silently change expiry
+ok 6 - chain pagination is bounded, filters do not silently change expiry
+  ---
+  duration_ms: 2.927298
+  type: 'test'
+  ...
+# Subtest: squeeze preserves producer rank, first seen, score, calendar confirmation and exact source
+ok 7 - squeeze preserves producer rank, first seen, score, calendar confirmation and exact source
+  ---
+  duration_ms: 4.291375
+  type: 'test'
+  ...
+# Subtest: newer partial attempt keeps last success and its age
+ok 8 - newer partial attempt keeps last success and its age
+  ---
+  duration_ms: 2.606464
+  type: 'test'
+  ...
+# Subtest: older failed squeeze attempt does not taint a later success
+ok 9 - older failed squeeze attempt does not taint a later success
+  ---
+  duration_ms: 2.598487
+  type: 'test'
+  ...
+# Subtest: successful squeeze empty is distinct from absent publication
+ok 10 - successful squeeze empty is distinct from absent publication
+  ---
+  duration_ms: 6.108266
+  type: 'test'
+  ...
+# Subtest: failed-only squeeze has failed status with latest attempt evidence
+ok 11 - failed-only squeeze has failed status with latest attempt evidence
+  ---
+  duration_ms: 2.070414
+  type: 'test'
+  ...
+# Subtest: missing schedule is partial and preserves available shortlist
+ok 12 - missing schedule is partial and preserves available shortlist
+  ---
+  duration_ms: 2.001758
+  type: 'test'
+  ...
+# Subtest: missing calendar reports unconfirmed freshness
+ok 13 - missing calendar reports unconfirmed freshness
+  ---
+  duration_ms: 1.666576
+  type: 'test'
+  ...
+# Subtest: expired calendar reports unconfirmed freshness
+ok 14 - expired calendar reports unconfirmed freshness
+  ---
+  duration_ms: 1.767985
+  type: 'test'
+  ...
+# Subtest: weekend/holiday freshness reuses existing schedule contract
+ok 15 - weekend/holiday freshness reuses existing schedule contract
+  ---
+  duration_ms: 2.576983
+  type: 'test'
+  ...
+# Subtest: schedule claimed stays explicit
+ok 16 - schedule claimed stays explicit
+  ---
+  duration_ms: 3.204908
+  type: 'test'
+  ...
+# Subtest: schedule missed stays explicit
+ok 17 - schedule missed stays explicit
+  ---
+  duration_ms: 2.205731
+  type: 'test'
+  ...
+# Subtest: schedule interrupted stays explicit
+ok 18 - schedule interrupted stays explicit
+  ---
+  duration_ms: 2.113888
+  type: 'test'
+  ...
+# Subtest: squeeze detail keeps immutable run when latest advances and verifies only read member digests
+ok 19 - squeeze detail keeps immutable run when latest advances and verifies only read member digests
+  ---
+  duration_ms: 3.569157
+  type: 'test'
+  ...
+# Subtest: squeeze corrupt archive rejects evidence attached to old pointer
+ok 20 - squeeze corrupt archive rejects evidence attached to old pointer
+  ---
+  duration_ms: 4.229708
+  type: 'test'
+  ...
+# Subtest: selected-session rankings preserve all/clean ranks and quality cells
+ok 21 - selected-session rankings preserve all/clean ranks and quality cells
+  ---
+  duration_ms: 2.691134
+  type: 'test'
+  ...
+# Subtest: absent session never searches another date
+ok 22 - absent session never searches another date
+  ---
+  duration_ms: 1.242826
+  type: 'test'
+  ...
+# Subtest: qualified view uses its own producer ranks, policy, reasons and bounded detail source
+ok 23 - qualified view uses its own producer ranks, policy, reasons and bounded detail source
+  ---
+  duration_ms: 3.104524
+  type: 'test'
+  ...
+# Subtest: qualified view distinguishes legacy, missing publication, and changed source
+ok 24 - qualified view distinguishes legacy, missing publication, and changed source
+  ---
+  duration_ms: 3.614249
+  type: 'test'
+  ...
+# Subtest: qualified view accepts a genuinely empty zero-contract session
+ok 25 - qualified view accepts a genuinely empty zero-contract session
+  ---
+  duration_ms: 2.452094
+  type: 'test'
+  ...
+# Subtest: partial and nonfinal return session retain reasons and values
+ok 26 - partial and nonfinal return session retain reasons and values
+  ---
+  duration_ms: 1.705327
+  type: 'test'
+  ...
+# Subtest: return detail reads one contract from bounded sweep pages and retains calculation cells
+ok 27 - return detail reads one contract from bounded sweep pages and retains calculation cells
+  ---
+  duration_ms: 2.496981
+  type: 'test'
+  ...
+# Subtest: return detail rejects in-place rebuild
+ok 28 - return detail rejects in-place rebuild
+  ---
+  duration_ms: 1.771581
+  type: 'test'
+  ...
+# Subtest: missing or oversized sweep yields partial detail without dropping source failure
+ok 29 - missing or oversized sweep yields partial detail without dropping source failure
+  ---
+  duration_ms: 113.828667
+  type: 'test'
+  ...
+# Subtest: oversized artifact and output reject with actionable error
+ok 30 - oversized artifact and output reject with actionable error
+  ---
+  duration_ms: 10.983662
+  type: 'test'
+  ...
+# Subtest: source timeout and rate limit errors remain typed
+ok 31 - source timeout and rate limit errors remain typed
+  ---
+  duration_ms: 3.614537
+  type: 'test'
+  ...
+# Subtest: malformed and unsupported producer documents fail closed
+ok 32 - malformed and unsupported producer documents fail closed
+  ---
+  duration_ms: 2.654377
+  type: 'test'
+  ...
+# Subtest: unknown fields, excessive rows/offsets, dates, symbols and forged refs read nothing
+ok 33 - unknown fields, excessive rows/offsets, dates, symbols and forged refs read nothing
+  ---
+  duration_ms: 6.665675
+  type: 'test'
+  ...
+# Subtest: reference expiry and eviction are explicit
+ok 34 - reference expiry and eviction are explicit
+  ---
+  duration_ms: 2.260141
+  type: 'test'
+  ...
+# Subtest: I/O allowlist rejects arbitrary origin/key/account/trade/admin/secret/private namespaces
+ok 35 - I/O allowlist rejects arbitrary origin/key/account/trade/admin/secret/private namespaces
+  ---
+  duration_ms: 0.470228
+  type: 'test'
+  ...
+# Subtest: local artifacts reject symlink escape
+ok 36 - local artifacts reject symlink escape
+  ---
+  duration_ms: 47.347066
+  type: 'test'
+  ...
+# Subtest: public transport uses only fixed anonymous GET origin and refuses redirects/rate limits
+ok 37 - public transport uses only fixed anonymous GET origin and refuses redirects/rate limits
+  ---
+  duration_ms: 2.096984
+  type: 'test'
+  ...
+# Subtest: public transport bounds bytes and wall time
+ok 38 - public transport bounds bytes and wall time
+  ---
+  duration_ms: 10.82794
+  type: 'test'
+  ...
+# Subtest: CSV quoted/newline fields are evidence only and malformed CSV fails
+ok 39 - CSV quoted/newline fields are evidence only and malformed CSV fails
+  ---
+  duration_ms: 0.545285
+  type: 'test'
+  ...
+# Subtest: MCP initialization, schemas, read-only hints and structured/text content agree
+ok 40 - MCP initialization, schemas, read-only hints and structured/text content agree
+  ---
+  duration_ms: 2.017675
+  type: 'test'
+  ...
+# Subtest: MCP framed stdin rejects oversize and malformed lines then recovers
+ok 41 - MCP framed stdin rejects oversize and malformed lines then recovers
+  ---
+  duration_ms: 23.102956
+  type: 'test'
+  ...
+# Subtest: falsy JSON discovery and pointer payloads are incompatible, never available
+ok 42 - falsy JSON discovery and pointer payloads are incompatible, never available
+  ---
+  duration_ms: 13.029131
+  type: 'test'
+  ...
+# Subtest: actual missing RVOL producer states yield partial readings
+ok 43 - actual missing RVOL producer states yield partial readings
+  ---
+  duration_ms: 1.660953
+  type: 'test'
+  ...
+# Subtest: clean view rejects missing/malformed clean rank instead of returning dirty rows
+ok 44 - clean view rejects missing/malformed clean rank instead of returning dirty rows
+  ---
+  duration_ms: 1.475297
+  type: 'test'
+  ...
+# Subtest: empty zero-contract session remains empty
+ok 45 - empty zero-contract session remains empty
+  ---
+  duration_ms: 1.683387
+  type: 'test'
+  ...
+# Subtest: return ranking read detects summary changes between artifacts
+ok 46 - return ranking read detects summary changes between artifacts
+  ---
+  duration_ms: 1.191394
+  type: 'test'
+  ...
+# Subtest: return detail detects rebuild during sweep reads and clears mixed quote path
+ok 47 - return detail detects rebuild during sweep reads and clears mixed quote path
+  ---
+  duration_ms: 1.70027
+  type: 'test'
+  ...
+# Subtest: detail preserves nonfinal partial status and failed chain evidence
+ok 48 - detail preserves nonfinal partial status and failed chain evidence
+  ---
+  duration_ms: 1.411685
+  type: 'test'
+  ...
+# Subtest: detail rejects incompatible selected quote row as partial evidence
+ok 49 - detail rejects incompatible selected quote row as partial evidence
+  ---
+  duration_ms: 1.316821
+  type: 'test'
+  ...
+# Subtest: squeeze detail retains missed-slot stale warning
+ok 50 - squeeze detail retains missed-slot stale warning
+  ---
+  duration_ms: 3.153615
+  type: 'test'
+  ...
+# Subtest: MCP accepts standard request metadata and rejects malformed initialization
+ok 51 - MCP accepts standard request metadata and rejects malformed initialization
+  ---
+  duration_ms: 3.980907
+  type: 'test'
+  ...
+# Subtest: return session calendar boundaries never masquerade as acquisition/publication times
+ok 52 - return session calendar boundaries never masquerade as acquisition/publication times
+  ---
+  duration_ms: 1.107411
+  type: 'test'
+  ...
+# Subtest: detail labels retained and newly fetched provenance without mutating the originating evidence
+ok 53 - detail labels retained and newly fetched provenance without mutating the originating evidence
+  ---
+  duration_ms: 9.660511
+  type: 'test'
+  ...
+# Subtest: early reference eviction tells the client to repeat the originating query
+ok 54 - early reference eviction tells the client to repeat the originating query
+  ---
+  duration_ms: 2.722067
+  type: 'test'
+  ...
+# Subtest: default squeeze names the newer partial attempt beside the retained success and never labels old rows current
+ok 55 - default squeeze names the newer partial attempt beside the retained success and never labels old rows current
+  ---
+  duration_ms: 2.692291
+  type: 'test'
+  ...
+# Subtest: run=latest_attempt pages every verified attempt row, reconciles counts and keeps partial status
+ok 56 - run=latest_attempt pages every verified attempt row, reconciles counts and keeps partial status
+  ---
+  duration_ms: 6.405162
+  type: 'test'
+  ...
+# Subtest: run=latest_attempt reports unreconciled counts and a missing archive without becoming an empty screen
+ok 57 - run=latest_attempt reports unreconciled counts and a missing archive without becoming an empty screen
+  ---
+  duration_ms: 5.664471
+  type: 'test'
+  ...
+# Subtest: same-run attempt reports same_run and run=latest_attempt reads the successful archive
+ok 58 - same-run attempt reports same_run and run=latest_attempt reads the successful archive
+  ---
+  duration_ms: 3.676422
+  type: 'test'
+  ...
+# Subtest: run=latest_attempt freshness is stale or unconfirmed unless the due slot is confirmed today
+ok 59 - run=latest_attempt freshness is stale or unconfirmed unless the due slot is confirmed today
+  ---
+  duration_ms: 19.939454
+  type: 'test'
+  ...
+# Subtest: missing finalized publication is a typed non-error answer with discovery vocabulary
+ok 60 - missing finalized publication is a typed non-error answer with discovery vocabulary
+  ---
+  duration_ms: 5.924915
+  type: 'test'
+  ...
+# Subtest: market detail keeps the query-derived field_freshness map, aged at detail retrieval
+ok 61 - market detail keeps the query-derived field_freshness map, aged at detail retrieval
+  ---
+  duration_ms: 1.277763
+  type: 'test'
+  ...
+# Subtest: complete session with a sweep cut at the close surfaces it, old and new summaries alike
+ok 62 - complete session with a sweep cut at the close surfaces it, old and new summaries alike
+  ---
+  duration_ms: 3.164232
+  type: 'test'
+  ...
+# Subtest: Streamable HTTP initialization, discovery, context and retained detail end-to-end
+ok 63 - Streamable HTTP initialization, discovery, context and retained detail end-to-end
+  ---
+  duration_ms: 136.297457
+  type: 'test'
+  ...
+# Subtest: HTTP rejects remote Origin/Host, arbitrary routes, verbs, media types and versions
+ok 64 - HTTP rejects remote Origin/Host, arbitrary routes, verbs, media types and versions
+  ---
+  duration_ms: 42.9125
+  type: 'test'
+  ...
+# Subtest: HTTP bounds request bodies and returns typed tool errors as MCP results
+ok 65 - HTTP bounds request bodies and returns typed tool errors as MCP results
+  ---
+  duration_ms: 13.958498
+  type: 'test'
+  ...
+# Subtest: standard Bearer casing/spacing and media casing work without accepting false or disabled media
+ok 66 - standard Bearer casing/spacing and media casing work without accepting false or disabled media
+  ---
+  duration_ms: 63.543587
+  type: 'test'
+  ...
+# Subtest: newline-heavy gzip detail fails explicitly under the 256 MB production heap and leaves queries usable
+ok 67 - newline-heavy gzip detail fails explicitly under the 256 MB production heap and leaves queries usable
+  ---
+  duration_ms: 360.102604
+  type: 'test'
+  ...
+# Subtest: production configuration fails closed and has explicit all-interface bind, resource and allowlists
+ok 68 - production configuration fails closed and has explicit all-interface bind, resource and allowlists
+  ---
+  duration_ms: 1.350377
+  type: 'test'
+  ...
+# Subtest: signed token gate rejects absent, expired, wrong audience/owner/client/scope/issuer and machine grants
+ok 69 - signed token gate rejects absent, expired, wrong audience/owner/client/scope/issuer and machine grants
+  ---
+  duration_ms: 47.379065
+  type: 'test'
+  ...
+# Subtest: JWT rejects signature/algorithm confusion, JOSE key URLs, malformed and oversized tokens
+ok 70 - JWT rejects signature/algorithm confusion, JOSE key URLs, malformed and oversized tokens
+  ---
+  duration_ms: 51.822289
+  type: 'test'
+  ...
+# Subtest: JWKS cache is bounded, single-flight, cooldown-limited and fails closed on expiry/outage
+ok 71 - JWKS cache is bounded, single-flight, cooldown-limited and fails closed on expiry/outage
+  ---
+  duration_ms: 23.152933
+  type: 'test'
+  ...
+# Subtest: token expiring during awaited JWKS refresh is rejected at authorization completion
+ok 72 - token expiring during awaited JWKS refresh is rejected at authorization completion
+  ---
+  duration_ms: 2.181861
+  type: 'test'
+  ...
+# Subtest: health and resource discovery are minimal; exact Host/Origin and CORS protect market routes
+ok 73 - health and resource discovery are minimal; exact Host/Origin and CORS protect market routes
+  ---
+  duration_ms: 20.065855
+  type: 'test'
+  ...
+# Subtest: local authorization-code + S256 PKCE fixture issues a token for a real authenticated MCP flow
+ok 74 - local authorization-code + S256 PKCE fixture issues a token for a real authenticated MCP flow
+  ---
+  duration_ms: 94.811697
+  type: 'test'
+  ...
+# Subtest: request bounds, four active slots, body expiry and recovery hold with authentication
+ok 75 - request bounds, four active slots, body expiry and recovery hold with authentication
+  ---
+  duration_ms: 126.248079
+  type: 'test'
+  ...
+# Subtest: pilot MCP request budgets bound rate and authenticated daily work, with explicit recovery
+ok 76 - pilot MCP request budgets bound rate and authenticated daily work, with explicit recovery
+  ---
+  duration_ms: 336.05841
+  type: 'test'
+  ...
+# Subtest: graceful termination drains a request, clears ephemeral references and does not log sensitive values
+ok 77 - graceful termination drains a request, clears ephemeral references and does not log sensitive values
+  ---
+  duration_ms: 4009.596456
+  type: 'test'
+  ...
+# Subtest: retained references enforce both count and serialized byte budgets, expiration and clearing
+ok 78 - retained references enforce both count and serialized byte budgets, expiration and clearing
+  ---
+  duration_ms: 104.194616
+  type: 'test'
+  ...
+# Subtest: injected fixture evidence is explicitly synthetic and never claims a public fetch
+ok 79 - injected fixture evidence is explicitly synthetic and never claims a public fetch
+  ---
+  duration_ms: 1.696675
+  type: 'test'
+  ...
+# Subtest: failed-authentication flood cannot consume the owner allowance in the same minute
+ok 80 - failed-authentication flood cannot consume the owner allowance in the same minute
+  ---
+  duration_ms: 174.781156
+  type: 'test'
+  ...
+1..80
+# tests 80
+# suites 0
+# pass 80
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5669.999683

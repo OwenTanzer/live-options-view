@@ -1,0 +1,12 @@
+{"node":"v22.23.3","uid":1000,"startup_missing_config":1,"files":["auth.js","consumer.js","http.js","overview.js","production.js","server.js","source.js"]}
+{"kind":"container_entrypoint_with_injected_test_artifacts_and_public_test_key","uid":1000,"node":"v22.23.3","health":200,"missing_token":401,"wrong_owner":403,"initialize_list_query_detail":"passed","sigterm_exit":0,"live_oauth_or_chej":false}
+  ...
+1..80
+# tests 80
+# suites 0
+# pass 80
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5669.999683

@@ -1,0 +1,3940 @@
+{
+  "kind": "public_anonymous_local_stdio",
+  "session": "2026-11-06",
+  "tools": [
+    "discover_sources",
+    "market_context",
+    "squeeze_results",
+    "return_rankings",
+    "active_rankings",
+    "market_overview",
+    "result_detail"
+  ],
+  "transcript": [
+    {
+      "tool": "discover_sources",
+      "arguments": {
+        "session": "2026-11-06"
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "source_catalog",
+        "requested_filters": {
+          "session": "2026-11-06"
+        },
+        "actual": null,
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:44.394Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": null,
+          "publication": null
+        },
+        "status": "partial",
+        "freshness": {
+          "status": "unknown"
+        },
+        "coverage": null,
+        "units": {},
+        "warnings": [],
+        "sources": [
+          {
+            "locator": "intraday/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
+            "retrieval_time": "2026-11-08T18:53:44.956Z",
+            "bytes": 98551,
+            "retrieved_sha256": "ca96d1bb9a8707b59a35c55e759b407c985464f719a314fdb88d58426c785ce3",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest.json",
+            "retrieval_time": "2026-11-08T18:53:45.198Z",
+            "bytes": 19287,
+            "retrieved_sha256": "c5e16a5ce96247ea61387d1e9c075b897125959ffc0ff3fb3fe0058573f562dc",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:45.444Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "intraday/spy/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/spy/latest.json",
+            "retrieval_time": "2026-11-08T18:53:45.685Z",
+            "bytes": 84465,
+            "retrieved_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "intraday/prices.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/prices.json",
+            "retrieval_time": "2026-11-08T18:53:45.919Z",
+            "bytes": 4288,
+            "retrieved_sha256": "1fc65078286494e93b712a5285cda20984051ca08397fa800e9114915583ab07",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": null,
+        "errors": [],
+        "capabilities": [
+          {
+            "dataset": "qqq_snapshot",
+            "underlying": "QQQ",
+            "producer_schema": "unversioned collector snapshot (symbol-labeled since #121)",
+            "availability": "available",
+            "actual": {
+              "underlying": "QQQ",
+              "snapshot_timestamp": "2026-11-06T21:14:24.572771+00:00",
+              "snapshot_key": "intraday/20261106/snapshot_161424572750.csv",
+              "session": "2026-11-06"
+            },
+            "freshness": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.572771+00:00",
+              "age_seconds": 164360.386,
+              "stale_after_seconds": 120
+            },
+            "source_locator": "intraday/latest.json",
+            "error": null,
+            "units": {
+              "spot": "USD/share",
+              "vwap": "USD/share (snapshot-weighted approximation)",
+              "rvol": "multiple",
+              "momentum_return_pct": "percentage points",
+              "OpenInterest": "contracts (lagged; zero and missing conflated)",
+              "Bid": "USD/share",
+              "Ask": "USD/share",
+              "Strike": "USD/share"
+            },
+            "warnings": [
+              "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+              "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+              "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+              "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings."
+            ],
+            "fields": [
+              "symbol",
+              "timestamp",
+              "snapshot_key",
+              "underlying_market",
+              "rows"
+            ],
+            "filters": [
+              "underlying",
+              "expiry",
+              "type",
+              "strike",
+              "contract",
+              "limit",
+              "offset"
+            ],
+            "cadence": "collector session cycles; field timestamps govern age",
+            "coverage": "latest QQQ 0DTE snapshot only",
+            "historical_index": "not_supported"
+          },
+          {
+            "dataset": "scheduled_squeeze",
+            "producer_schema": "schema_version=1/display_schema_version=1",
+            "availability": "available",
+            "actual": {
+              "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+              "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+              "session": "2026-10-16"
+            },
+            "freshness": {
+              "status": "stale",
+              "observed_at": "2026-10-16T16:00:18.410959+00:00",
+              "age_seconds": 1997606.789,
+              "stale_after_seconds": 120,
+              "schedule_confirmation": "query squeeze_results for attempt/schedule/calendar status"
+            },
+            "source_locator": "squeeze-scanner/v1/scheduled/latest.json",
+            "error": null,
+            "units": {
+              "scores": "experimental screening measurements, not probabilities",
+              "ranks": "producer ordinal ranks",
+              "first_seen_at": "publication write-attempt time"
+            },
+            "warnings": [
+              "Scores are experimental screens, not squeeze probabilities.",
+              "first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.",
+              "Provider source times can be absent; acquisition and publication times are distinct."
+            ],
+            "fields": [
+              "candidates",
+              "coverage",
+              "latest-attempt",
+              "latest-schedule",
+              "manifest",
+              "inputs",
+              "results"
+            ],
+            "filters": [
+              "limit",
+              "offset"
+            ],
+            "cadence": "09:00 and 12:00 America/New_York exchange-session calendar",
+            "coverage": {
+              "candidates": 20,
+              "discovered_rows": 20,
+              "eligible": 8,
+              "excluded_rows": 0,
+              "options_status": {
+                "illiquid_options": 6,
+                "no_options": 6,
+                "valid": 8
+              },
+              "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+            },
+            "historical_index": "not_supported"
+          },
+          {
+            "dataset": "options_returns",
+            "producer_schema": "oa203-returns-v1",
+            "availability": "available",
+            "actual": {
+              "session": "2026-11-06",
+              "final": true
+            },
+            "freshness": {
+              "status": "historical"
+            },
+            "source_locator": "oa203/scanner/2026-11-06/summary.json",
+            "error": null,
+            "units": {
+              "*_pct": "fractional return (1 = 100%)",
+              "*_entry, *_exit": "USD/share",
+              "*_ms, t, bid_ms, ask_ms": "UTC epoch milliseconds",
+              "*_abs_change_per_contract": "USD/contract",
+              "*_relative_spread": "spread / midpoint",
+              "*_size": "contracts at quoted side",
+              "*_entry_delay_s": "seconds from first archived sample",
+              "rank": "producer ordinal rank"
+            },
+            "warnings": [
+              "Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.",
+              "Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.",
+              "Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.",
+              "All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.",
+              "Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query."
+            ],
+            "fields": [
+              "summary",
+              "universe",
+              "leaderboard",
+              "qualified_ask_bid_v1",
+              "selected_contract_quote_path"
+            ],
+            "filters": [
+              "session",
+              "underlying",
+              "type",
+              "view",
+              "limit",
+              "offset"
+            ],
+            "cadence": "selected finalized session; about five-minute samples",
+            "coverage": {
+              "additional_chain_expected": 0,
+              "additional_chain_statuses_recorded": 0,
+              "additional_chain_success_rate": null,
+              "additional_chain_successes": 0,
+              "additional_expiry_coverage": null,
+              "chain_expected": 38100,
+              "chain_fetches": 38100,
+              "chain_success_rate": 0.998714,
+              "complete_sweeps": 76,
+              "gaps_ms": [],
+              "max_gap_s": 672,
+              "pending_uploads": [],
+              "reasons": [],
+              "status": "complete",
+              "sweeps_in_session": 77,
+              "typical_sweep_s": 305.6,
+              "universe_coverage": 1
+            },
+            "historical_index": "not_supported"
+          },
+          {
+            "dataset": "spy_snapshot",
+            "underlying": "SPY",
+            "producer_schema": "unversioned collector snapshot (symbol-labeled since #121)",
+            "availability": "available",
+            "actual": {
+              "underlying": "SPY",
+              "snapshot_timestamp": "2026-11-06T21:14:26.703657+00:00",
+              "snapshot_key": "intraday/spy/20261106/snapshot_161426703634.csv",
+              "session": "2026-11-06"
+            },
+            "freshness": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:26.703657+00:00",
+              "age_seconds": 164358.983,
+              "stale_after_seconds": 120
+            },
+            "source_locator": "intraday/spy/latest.json",
+            "error": null,
+            "units": {
+              "spot": "USD/share",
+              "vwap": "USD/share (snapshot-weighted approximation)",
+              "rvol": "multiple",
+              "momentum_return_pct": "percentage points",
+              "OpenInterest": "contracts (lagged; zero and missing conflated)",
+              "Bid": "USD/share",
+              "Ask": "USD/share",
+              "Strike": "USD/share"
+            },
+            "warnings": [
+              "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+              "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+              "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+              "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.",
+              "SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.",
+              "SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production."
+            ],
+            "fields": [
+              "symbol",
+              "timestamp",
+              "snapshot_key",
+              "underlying_market",
+              "rows"
+            ],
+            "filters": [
+              "underlying",
+              "expiry",
+              "type",
+              "strike",
+              "contract",
+              "limit",
+              "offset"
+            ],
+            "cadence": "collector session cycles; field timestamps govern age",
+            "coverage": "latest SPY 0DTE snapshot only",
+            "historical_index": "not_supported"
+          },
+          {
+            "dataset": "cross_market_overview",
+            "producer_schema": "unversioned collector price strip (intraday/prices.json)",
+            "availability": "available",
+            "actual": {
+              "collector_cycle_at": "2026-11-06T21:14:49.918543+00:00",
+              "feed_stale": false
+            },
+            "freshness": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:49.918543+00:00",
+              "age_seconds": 164336.006,
+              "stale_after_seconds": 120,
+              "basis": "collector cycle time, not publication or quote observation"
+            },
+            "source_locator": "intraday/prices.json",
+            "error": null,
+            "units": {
+              "price": "row.unit (10Y normalized to percent; fut.6j and fx.jpyusd in USD per JPY)",
+              "change.absolute": "row.change.absolute_unit (USD only for USD-denominated rows)",
+              "change.percent": "percent, producer-rounded to 2 dp",
+              "change.bps": "basis points (yield rows only; no percent-of-yield)",
+              "freshness.age_seconds": "seconds since collector receipt at query time"
+            },
+            "warnings": [
+              "Source is the dashboard price strip (intraday/prices.json); coverage is the strip only. Requested assets it lacks are listed under gaps.",
+              "Rows are asynchronous values, not a simultaneous snapshot. quote_ts is collector receipt time, not provider observation time. The strip publishes during collector sessions only; off-hours values are from the last publication.",
+              "The strip has no previous-close date, adjustment basis, or resolved futures contract. Changes cannot establish same-session comparability or a futures roll.",
+              "ETF proxies (QQQ, SPY, USO) keep their own identities; a proxy is never the index or commodity.",
+              "Price moves do not establish a news cause."
+            ],
+            "fields": [
+              "label",
+              "id",
+              "asset_class",
+              "instrument_type",
+              "unit",
+              "source",
+              "source_symbol",
+              "price",
+              "price_basis",
+              "collector_received_at",
+              "observed_at",
+              "previous_close",
+              "change",
+              "freshness",
+              "gaps"
+            ],
+            "filters": [
+              "asset_class",
+              "symbols",
+              "sort",
+              "limit",
+              "offset"
+            ],
+            "asset_classes": [
+              "equity",
+              "etf",
+              "index",
+              "rates",
+              "fx",
+              "crypto",
+              "commodity"
+            ],
+            "instruments": [
+              {
+                "label": "QQQ",
+                "id": "etf.qqq",
+                "asset_class": "etf",
+                "instrument_type": "etf",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "USO",
+                "id": "etf.uso",
+                "asset_class": "etf",
+                "instrument_type": "etf",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "VIX",
+                "id": "idx.vix",
+                "asset_class": "index",
+                "instrument_type": "cash_index",
+                "unit": "index_points",
+                "source": "yfinance",
+                "available": true
+              },
+              {
+                "label": "OVX",
+                "id": "idx.ovx",
+                "asset_class": "index",
+                "instrument_type": "cash_index",
+                "unit": "index_points",
+                "source": "yfinance",
+                "available": true
+              },
+              {
+                "label": "SMH",
+                "id": "etf.smh",
+                "asset_class": "etf",
+                "instrument_type": "etf",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "IGV",
+                "id": "etf.igv",
+                "asset_class": "etf",
+                "instrument_type": "etf",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "10Y",
+                "id": "yld.us10y.cboe_tnx",
+                "asset_class": "rates",
+                "instrument_type": "yield_index",
+                "unit": "percent",
+                "source": "yfinance",
+                "available": true
+              },
+              {
+                "label": "JPY/USD",
+                "id": "fut.6j",
+                "asset_class": "fx",
+                "instrument_type": "future_contract_unresolved",
+                "unit": "USD_per_JPY",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "KOSPI",
+                "id": "idx.kospi",
+                "asset_class": "index",
+                "instrument_type": "cash_index",
+                "unit": "index_points",
+                "source": "yfinance",
+                "available": true
+              },
+              {
+                "label": "BTC/USD",
+                "id": "crypto.btcusd",
+                "asset_class": "crypto",
+                "instrument_type": "crypto_spot",
+                "unit": "USD_per_BTC",
+                "source": "yfinance",
+                "available": true
+              },
+              {
+                "label": "META",
+                "id": "META",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "GOOGL",
+                "id": "GOOGL",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "AMZN",
+                "id": "AMZN",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "TSLA",
+                "id": "TSLA",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "MU",
+                "id": "MU",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "SPCX",
+                "id": "SPCX",
+                "asset_class": "equity",
+                "instrument_type": "equity_unverified",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "AAPL",
+                "id": "AAPL",
+                "asset_class": "equity",
+                "instrument_type": "stock",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              },
+              {
+                "label": "SPY",
+                "id": "etf.spy",
+                "asset_class": "etf",
+                "instrument_type": "etf",
+                "unit": "USD",
+                "source": "dxlink",
+                "available": true
+              }
+            ],
+            "configured_labels": [
+              "QQQ",
+              "SPY",
+              "SMH",
+              "IGV",
+              "USO",
+              "VIX",
+              "OVX",
+              "KOSPI",
+              "10Y",
+              "JPY/USD",
+              "BTC/USD",
+              "META",
+              "GOOGL",
+              "AMZN",
+              "TSLA",
+              "MU",
+              "AAPL",
+              "SPCX"
+            ],
+            "source_dependent_identities": [
+              {
+                "label": "JPY/USD",
+                "source": "yfinance",
+                "id": "fx.jpyusd",
+                "instrument_type": "spot_fx"
+              },
+              {
+                "label": "JPY/USD",
+                "source": "last-known without retained origin",
+                "id": "unknown.jpyusd",
+                "instrument_type": "unknown"
+              }
+            ],
+            "gaps": [
+              {
+                "id": "idx.spx",
+                "name": "S&P 500 cash index",
+                "reason": "only the SPY ETF proxy is published",
+                "asset_class": "index"
+              },
+              {
+                "id": "idx.ndx",
+                "name": "Nasdaq-100 cash index",
+                "reason": "only the QQQ ETF proxy is published",
+                "asset_class": "index"
+              },
+              {
+                "id": "idx.dji",
+                "name": "Dow Jones Industrial Average",
+                "reason": "not in the price strip",
+                "asset_class": "index"
+              },
+              {
+                "id": "idx.rut",
+                "name": "Russell 2000",
+                "reason": "not in the price strip",
+                "asset_class": "index"
+              },
+              {
+                "id": "fut.cl",
+                "name": "WTI crude oil",
+                "reason": "only the USO ETF share price is published",
+                "asset_class": "commodity"
+              },
+              {
+                "id": "fut.bz",
+                "name": "Brent crude oil",
+                "reason": "not in the price strip",
+                "asset_class": "commodity"
+              },
+              {
+                "id": "silver",
+                "name": "Silver (USD per troy ounce)",
+                "reason": "not in the price strip",
+                "asset_class": "commodity"
+              },
+              {
+                "id": "yld.us02y",
+                "name": "US 2-year Treasury yield",
+                "reason": "no source identified",
+                "asset_class": "rates"
+              },
+              {
+                "id": "yld.us05y",
+                "name": "US 5-year Treasury yield",
+                "reason": "not in the price strip",
+                "asset_class": "rates"
+              },
+              {
+                "id": "yld.us30y",
+                "name": "US 30-year Treasury yield",
+                "reason": "not in the price strip",
+                "asset_class": "rates"
+              },
+              {
+                "id": "fx.eurusd",
+                "name": "EUR/USD",
+                "reason": "not in the price strip",
+                "asset_class": "fx"
+              },
+              {
+                "id": "fx.gbpusd",
+                "name": "GBP/USD",
+                "reason": "not in the price strip",
+                "asset_class": "fx"
+              },
+              {
+                "id": "fx.usdjpy",
+                "name": "USD/JPY spot",
+                "reason": "only CME yen futures (fut.6j) are published",
+                "asset_class": "fx"
+              },
+              {
+                "id": "fx.usdchf",
+                "name": "USD/CHF",
+                "reason": "not in the price strip",
+                "asset_class": "fx"
+              },
+              {
+                "id": "fx.usdcad",
+                "name": "USD/CAD",
+                "reason": "not in the price strip",
+                "asset_class": "fx"
+              },
+              {
+                "id": "fx.audusd",
+                "name": "AUD/USD",
+                "reason": "not in the price strip",
+                "asset_class": "fx"
+              },
+              {
+                "id": "universe.curated_stocks",
+                "name": "Curated 100-200 stock universe",
+                "reason": "follow-on; the strip carries 7 single stocks",
+                "asset_class": "equity"
+              }
+            ],
+            "cadence": "collector price loop about every 10 s during collector sessions; yfinance fills cached 60 s",
+            "coverage": {
+              "strip_labels": 18,
+              "identified": 18,
+              "unmapped": 0
+            },
+            "historical_index": "not_supported"
+          },
+          {
+            "dataset": "options_active",
+            "producer_schema": "active snapshot v1",
+            "availability": "missing_publication",
+            "source_locator": "oa203/scanner/2026-11-06/inprogress/latest.json",
+            "error": {
+              "code": "missing_artifact",
+              "message": "Public artifact returned HTTP 404; redirects are never followed.",
+              "locator": "oa203/scanner/2026-11-06/inprogress/latest.json"
+            },
+            "actual": null,
+            "fields": [
+              "summary",
+              "leaderboard",
+              "qualified_ask_bid_v1",
+              "pinned_manifest",
+              "selected_contract_quote_path"
+            ],
+            "filters": [
+              "session",
+              "sweep",
+              "underlying",
+              "type",
+              "view",
+              "limit",
+              "offset"
+            ],
+            "cadence": "every six completed sweeps, approximately 30 minutes when builds succeed",
+            "views": [
+              "all",
+              "clean",
+              "qualified_ask_bid_v1"
+            ],
+            "units": {
+              "*_pct": "fractional return (1 = 100%)",
+              "*_entry, *_exit": "USD/share",
+              "*_ms, t, bid_ms, ask_ms": "UTC epoch milliseconds",
+              "*_abs_change_per_contract": "USD/contract",
+              "*_relative_spread": "spread / midpoint",
+              "*_size": "contracts at quoted side",
+              "*_entry_delay_s": "seconds from first archived sample",
+              "rank": "producer ordinal rank"
+            },
+            "warnings": [
+              "In-progress ranks are provisional; follow one detail_reference for its exact cutoff."
+            ],
+            "historical_index": "explicit retained sweep only; no broad history listing"
+          }
+        ],
+        "underlyings": [
+          {
+            "symbol": "QQQ",
+            "dataset": "qqq_snapshot",
+            "availability": "available",
+            "default": true,
+            "selector": "market_context.underlying"
+          },
+          {
+            "symbol": "SPY",
+            "dataset": "spy_snapshot",
+            "availability": "available",
+            "default": false,
+            "selector": "market_context.underlying"
+          }
+        ],
+        "unsupported": [
+          "shared_PCR",
+          "shared_max_pain",
+          "shared_reference_OI_skew",
+          "historical_VWAP_RVOL",
+          "account_trading_momentum",
+          "buy_only_Black_Scholes",
+          "private_accounts_positions_orders"
+        ],
+        "limits": {
+          "artifact_bytes": 4194304,
+          "expanded_artifact_bytes": 25165824,
+          "query_bytes": 67108864,
+          "output_bytes": 262144,
+          "requests": 12,
+          "timeout_ms": 15000,
+          "rows": 50,
+          "path_sweeps": 6,
+          "input_bytes": 16384,
+          "references": 64,
+          "reference_bytes": 16777216,
+          "reference_ttl_ms": 900000,
+          "jsonl_lines": 100000,
+          "jsonl_rows": 10000,
+          "jsonl_line_bytes": 262144,
+          "quote_line_bytes": 16384,
+          "csv_rows": 10000,
+          "csv_columns": 192,
+          "csv_cell_chars": 4096
+        }
+      }
+    },
+    {
+      "tool": "market_context",
+      "arguments": {
+        "type": "call",
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "qqq_snapshot",
+        "requested_filters": {
+          "type": "call",
+          "limit": 1
+        },
+        "actual": {
+          "underlying": "QQQ",
+          "snapshot_timestamp": "2026-11-06T21:14:24.572771+00:00",
+          "snapshot_key": "intraday/20261106/snapshot_161424572750.csv",
+          "session": "2026-11-06",
+          "payload_sha256": "ca96d1bb9a8707b59a35c55e759b407c985464f719a314fdb88d58426c785ce3"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:46.254Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": "2026-11-06T21:14:24.572771+00:00",
+          "publication": null
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T21:14:24.572771+00:00",
+          "age_seconds": 164362.201,
+          "stale_after_seconds": 120,
+          "basis": "collection_timestamp"
+        },
+        "coverage": {
+          "source_rows": 134,
+          "matched_rows": 67,
+          "expiration": "2026-11-06"
+        },
+        "units": {
+          "spot": "USD/share",
+          "vwap": "USD/share (snapshot-weighted approximation)",
+          "rvol": "multiple",
+          "momentum_return_pct": "percentage points",
+          "OpenInterest": "contracts (lagged; zero and missing conflated)",
+          "Bid": "USD/share",
+          "Ask": "USD/share",
+          "Strike": "USD/share"
+        },
+        "warnings": [
+          "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+          "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+          "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+          "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
+            "retrieval_time": "2026-11-08T18:53:46.770Z",
+            "bytes": 98551,
+            "retrieved_sha256": "ca96d1bb9a8707b59a35c55e759b407c985464f719a314fdb88d58426c785ce3",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 67,
+          "truncated": true,
+          "next_offset": 1
+        },
+        "errors": [],
+        "requested_underlying": "QQQ",
+        "readings": {
+          "symbol": "QQQ",
+          "spot": 656.51,
+          "spot_ts": "2026-11-06T21:14:24.164153+00:00",
+          "vwap": 658.6141,
+          "vwap_ts": "2026-11-06T21:14:24.164153+00:00",
+          "vwap_session_date": "2026-11-06",
+          "vwap_session_started_at": "2026-11-06T11:01:14.162163+00:00",
+          "vwap_partial_session": false,
+          "price_vs_vwap_abs": -2.1041,
+          "price_vs_vwap_pct": -0.3195,
+          "session_volume": 70098556,
+          "session_volume_ts": "2026-11-06T21:14:24.164153+00:00",
+          "rvol": {
+            "status": "ok",
+            "multiple": 1.4511,
+            "bucket_label": "16:10",
+            "baseline_volume": 48307553.333333336,
+            "baseline_days_used": 15,
+            "baseline_lookback_days": 20,
+            "baseline_updated_through": "2026-11-05"
+          },
+          "momentum": {
+            "status": "ok",
+            "return_pct": -0.5454,
+            "lookback_minutes": 60,
+            "anchor_age_minutes": 60.22346498333333,
+            "sample_count": 572,
+            "direction": "down"
+          },
+          "source": "dxlink",
+          "freshness": "live",
+          "field_freshness": {
+            "spot": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.609,
+              "stale_after_seconds": 120
+            },
+            "vwap": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.609,
+              "stale_after_seconds": 120
+            },
+            "session_volume": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.609,
+              "stale_after_seconds": 120
+            },
+            "rvol": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.609,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            },
+            "momentum": {
+              "status": "unknown",
+              "observed_at": null,
+              "age_seconds": null,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            }
+          }
+        },
+        "rows": [
+          {
+            "TradeDate": "2026-11-06",
+            "Expiration": "2026-11-06",
+            "Strike": 624,
+            "Type": "call",
+            "OptionSymbol": "QQQ261106C00624000",
+            "DTE": 0,
+            "OpenInterest": 0,
+            "Volume": 8,
+            "VolDelta": 0,
+            "Bid": 30.84,
+            "Mid": 32.745,
+            "Ask": 34.65,
+            "Last": 30.35,
+            "IV": 1.953795178451799,
+            "Delta": 1,
+            "Gamma": 7.90222895749246e-57,
+            "Theta": -0.0001669494685287987,
+            "Vega": 1.759964801411992e-58,
+            "UnderlyingPrice": 656.51,
+            "QQQ": 656.2,
+            "USO": 148.41,
+            "VIX": 25.489999771118164,
+            "OVX": 58.290000915527344,
+            "SMH": 463.73,
+            "IGV": 98.85,
+            "10Y": 4.859000205993652,
+            "JPY_USD": 0.0063265,
+            "KOSPI": 5059.69,
+            "BTC_USD": 75784.4375,
+            "META": 610.13,
+            "GOOGL": 284.66,
+            "AMZN": 259.35,
+            "TSLA": 358.12,
+            "MU": 689.33,
+            "SPCX": 134.21,
+            "AAPL": 342.39,
+            "detail_reference": "cb146f75-10f3-48a9-8eed-1e7ca4225488"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "result_detail",
+      "arguments": {
+        "reference": "cb146f75-10f3-48a9-8eed-1e7ca4225488"
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "qqq_snapshot",
+        "requested_filters": {
+          "reference": "cb146f75-10f3-48a9-8eed-1e7ca4225488"
+        },
+        "actual": {
+          "underlying": "QQQ",
+          "snapshot_timestamp": "2026-11-06T21:14:24.572771+00:00",
+          "snapshot_key": "intraday/20261106/snapshot_161424572750.csv",
+          "session": "2026-11-06",
+          "payload_sha256": "ca96d1bb9a8707b59a35c55e759b407c985464f719a314fdb88d58426c785ce3"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:46.777Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": "2026-11-06T21:14:24.572771+00:00",
+          "publication": null
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T21:14:24.572771+00:00",
+          "age_seconds": 164362.205,
+          "stale_after_seconds": 120,
+          "basis": "collection_timestamp"
+        },
+        "coverage": {
+          "scope": "one cached row from the exact queried payload"
+        },
+        "units": {
+          "spot": "USD/share",
+          "vwap": "USD/share (snapshot-weighted approximation)",
+          "rvol": "multiple",
+          "momentum_return_pct": "percentage points",
+          "OpenInterest": "contracts (lagged; zero and missing conflated)",
+          "Bid": "USD/share",
+          "Ask": "USD/share",
+          "Strike": "USD/share"
+        },
+        "warnings": [
+          "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+          "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+          "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+          "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.",
+          "Detail uses retained queried JSON. The archived CSV has not been read or verified."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json",
+            "retrieval_time": "2026-11-08T18:53:46.770Z",
+            "bytes": 98551,
+            "retrieved_sha256": "ca96d1bb9a8707b59a35c55e759b407c985464f719a314fdb88d58426c785ce3",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          }
+        ],
+        "pagination": null,
+        "errors": [],
+        "row": {
+          "TradeDate": "2026-11-06",
+          "Expiration": "2026-11-06",
+          "Strike": 624,
+          "Type": "call",
+          "OptionSymbol": "QQQ261106C00624000",
+          "DTE": 0,
+          "OpenInterest": 0,
+          "Volume": 8,
+          "VolDelta": 0,
+          "Bid": 30.84,
+          "Mid": 32.745,
+          "Ask": 34.65,
+          "Last": 30.35,
+          "IV": 1.953795178451799,
+          "Delta": 1,
+          "Gamma": 7.90222895749246e-57,
+          "Theta": -0.0001669494685287987,
+          "Vega": 1.759964801411992e-58,
+          "UnderlyingPrice": 656.51,
+          "QQQ": 656.2,
+          "USO": 148.41,
+          "VIX": 25.489999771118164,
+          "OVX": 58.290000915527344,
+          "SMH": 463.73,
+          "IGV": 98.85,
+          "10Y": 4.859000205993652,
+          "JPY_USD": 0.0063265,
+          "KOSPI": 5059.69,
+          "BTC_USD": 75784.4375,
+          "META": 610.13,
+          "GOOGL": 284.66,
+          "AMZN": 259.35,
+          "TSLA": 358.12,
+          "MU": 689.33,
+          "SPCX": 134.21,
+          "AAPL": 342.39
+        },
+        "requested_underlying": "QQQ",
+        "readings": {
+          "symbol": "QQQ",
+          "spot": 656.51,
+          "spot_ts": "2026-11-06T21:14:24.164153+00:00",
+          "vwap": 658.6141,
+          "vwap_ts": "2026-11-06T21:14:24.164153+00:00",
+          "vwap_session_date": "2026-11-06",
+          "vwap_session_started_at": "2026-11-06T11:01:14.162163+00:00",
+          "vwap_partial_session": false,
+          "price_vs_vwap_abs": -2.1041,
+          "price_vs_vwap_pct": -0.3195,
+          "session_volume": 70098556,
+          "session_volume_ts": "2026-11-06T21:14:24.164153+00:00",
+          "rvol": {
+            "status": "ok",
+            "multiple": 1.4511,
+            "bucket_label": "16:10",
+            "baseline_volume": 48307553.333333336,
+            "baseline_days_used": 15,
+            "baseline_lookback_days": 20,
+            "baseline_updated_through": "2026-11-05"
+          },
+          "momentum": {
+            "status": "ok",
+            "return_pct": -0.5454,
+            "lookback_minutes": 60,
+            "anchor_age_minutes": 60.22346498333333,
+            "sample_count": 572,
+            "direction": "down"
+          },
+          "source": "dxlink",
+          "freshness": "live",
+          "field_freshness": {
+            "spot": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.613,
+              "stale_after_seconds": 120
+            },
+            "vwap": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.613,
+              "stale_after_seconds": 120
+            },
+            "session_volume": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.613,
+              "stale_after_seconds": 120
+            },
+            "rvol": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:24.164153+00:00",
+              "age_seconds": 164362.613,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            },
+            "momentum": {
+              "status": "unknown",
+              "observed_at": null,
+              "age_seconds": null,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "market_context",
+      "arguments": {
+        "underlying": "SPY",
+        "type": "call",
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "spy_snapshot",
+        "requested_filters": {
+          "underlying": "SPY",
+          "type": "call",
+          "limit": 1
+        },
+        "actual": {
+          "underlying": "SPY",
+          "snapshot_timestamp": "2026-11-06T21:14:26.703657+00:00",
+          "snapshot_key": "intraday/spy/20261106/snapshot_161426703634.csv",
+          "session": "2026-11-06",
+          "payload_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:46.778Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": "2026-11-06T21:14:26.703657+00:00",
+          "publication": null
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T21:14:26.703657+00:00",
+          "age_seconds": 164360.397,
+          "stale_after_seconds": 120,
+          "basis": "collection_timestamp"
+        },
+        "coverage": {
+          "source_rows": 114,
+          "matched_rows": 57,
+          "expiration": "2026-11-06"
+        },
+        "units": {
+          "spot": "USD/share",
+          "vwap": "USD/share (snapshot-weighted approximation)",
+          "rvol": "multiple",
+          "momentum_return_pct": "percentage points",
+          "OpenInterest": "contracts (lagged; zero and missing conflated)",
+          "Bid": "USD/share",
+          "Ask": "USD/share",
+          "Strike": "USD/share"
+        },
+        "warnings": [
+          "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+          "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+          "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+          "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.",
+          "SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.",
+          "SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/spy/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/spy/latest.json",
+            "retrieval_time": "2026-11-08T18:53:47.098Z",
+            "bytes": 84465,
+            "retrieved_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 57,
+          "truncated": true,
+          "next_offset": 1
+        },
+        "errors": [],
+        "requested_underlying": "SPY",
+        "readings": {
+          "symbol": "SPY",
+          "spot": 736,
+          "spot_ts": "2026-11-06T21:14:25.847155+00:00",
+          "vwap": 737.7184,
+          "vwap_ts": "2026-11-06T21:14:25.847155+00:00",
+          "vwap_session_date": "2026-11-06",
+          "vwap_session_started_at": "2026-11-06T11:01:18.845785+00:00",
+          "vwap_partial_session": false,
+          "price_vs_vwap_abs": -1.7184,
+          "price_vs_vwap_pct": -0.2329,
+          "session_volume": 56141095,
+          "session_volume_ts": "2026-11-06T21:14:25.847155+00:00",
+          "rvol": {
+            "status": "ok",
+            "multiple": 1.2318,
+            "bucket_label": "16:10",
+            "baseline_volume": 45577436.733333334,
+            "baseline_days_used": 15,
+            "baseline_lookback_days": 20,
+            "baseline_updated_through": "2026-11-05"
+          },
+          "momentum": {
+            "status": "ok",
+            "return_pct": -0.3696,
+            "lookback_minutes": 60,
+            "anchor_age_minutes": 60.21424063333333,
+            "sample_count": 571,
+            "direction": "down"
+          },
+          "source": "dxlink",
+          "freshness": "live",
+          "field_freshness": {
+            "spot": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.253,
+              "stale_after_seconds": 120
+            },
+            "vwap": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.253,
+              "stale_after_seconds": 120
+            },
+            "session_volume": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.253,
+              "stale_after_seconds": 120
+            },
+            "rvol": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.253,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            },
+            "momentum": {
+              "status": "unknown",
+              "observed_at": null,
+              "age_seconds": null,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            }
+          }
+        },
+        "rows": [
+          {
+            "TradeDate": "2026-11-06",
+            "Expiration": "2026-11-06",
+            "Strike": 705,
+            "Type": "call",
+            "OptionSymbol": "SPY261106C00705000",
+            "DTE": 0,
+            "OpenInterest": 345,
+            "Volume": 398,
+            "VolDelta": 0,
+            "Bid": 30.82,
+            "Mid": 30.99,
+            "Ask": 31.16,
+            "Last": 30.43,
+            "IV": 1.043157228829222,
+            "Delta": 1,
+            "Gamma": 2.44244722575113e-92,
+            "Theta": -0.0000647362994818934,
+            "Vega": 5.6555001679923e-94,
+            "UnderlyingPrice": 736,
+            "QQQ": 656.2,
+            "USO": 148.41,
+            "VIX": 25.489999771118164,
+            "OVX": 58.290000915527344,
+            "SMH": 463.73,
+            "IGV": 98.85,
+            "10Y": 4.859000205993652,
+            "JPY_USD": 0.0063265,
+            "KOSPI": 5059.69,
+            "BTC_USD": 75784.4375,
+            "META": 610.13,
+            "GOOGL": 284.66,
+            "AMZN": 259.35,
+            "TSLA": 358.12,
+            "MU": 689.33,
+            "SPCX": 134.21,
+            "AAPL": 342.39,
+            "detail_reference": "4b332eb3-e2bc-46c1-b079-d40b8b295ae2"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "result_detail",
+      "arguments": {
+        "reference": "4b332eb3-e2bc-46c1-b079-d40b8b295ae2"
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "spy_snapshot",
+        "requested_filters": {
+          "reference": "4b332eb3-e2bc-46c1-b079-d40b8b295ae2"
+        },
+        "actual": {
+          "underlying": "SPY",
+          "snapshot_timestamp": "2026-11-06T21:14:26.703657+00:00",
+          "snapshot_key": "intraday/spy/20261106/snapshot_161426703634.csv",
+          "session": "2026-11-06",
+          "payload_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:47.101Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": "2026-11-06T21:14:26.703657+00:00",
+          "publication": null
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T21:14:26.703657+00:00",
+          "age_seconds": 164360.398,
+          "stale_after_seconds": 120,
+          "basis": "collection_timestamp"
+        },
+        "coverage": {
+          "scope": "one cached row from the exact queried payload"
+        },
+        "units": {
+          "spot": "USD/share",
+          "vwap": "USD/share (snapshot-weighted approximation)",
+          "rvol": "multiple",
+          "momentum_return_pct": "percentage points",
+          "OpenInterest": "contracts (lagged; zero and missing conflated)",
+          "Bid": "USD/share",
+          "Ask": "USD/share",
+          "Strike": "USD/share"
+        },
+        "warnings": [
+          "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+          "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+          "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+          "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.",
+          "SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.",
+          "SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.",
+          "Detail uses retained queried JSON. The archived CSV has not been read or verified."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/spy/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/spy/latest.json",
+            "retrieval_time": "2026-11-08T18:53:47.098Z",
+            "bytes": 84465,
+            "retrieved_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          }
+        ],
+        "pagination": null,
+        "errors": [],
+        "row": {
+          "TradeDate": "2026-11-06",
+          "Expiration": "2026-11-06",
+          "Strike": 705,
+          "Type": "call",
+          "OptionSymbol": "SPY261106C00705000",
+          "DTE": 0,
+          "OpenInterest": 345,
+          "Volume": 398,
+          "VolDelta": 0,
+          "Bid": 30.82,
+          "Mid": 30.99,
+          "Ask": 31.16,
+          "Last": 30.43,
+          "IV": 1.043157228829222,
+          "Delta": 1,
+          "Gamma": 2.44244722575113e-92,
+          "Theta": -0.0000647362994818934,
+          "Vega": 5.6555001679923e-94,
+          "UnderlyingPrice": 736,
+          "QQQ": 656.2,
+          "USO": 148.41,
+          "VIX": 25.489999771118164,
+          "OVX": 58.290000915527344,
+          "SMH": 463.73,
+          "IGV": 98.85,
+          "10Y": 4.859000205993652,
+          "JPY_USD": 0.0063265,
+          "KOSPI": 5059.69,
+          "BTC_USD": 75784.4375,
+          "META": 610.13,
+          "GOOGL": 284.66,
+          "AMZN": 259.35,
+          "TSLA": 358.12,
+          "MU": 689.33,
+          "SPCX": 134.21,
+          "AAPL": 342.39
+        },
+        "requested_underlying": "SPY",
+        "readings": {
+          "symbol": "SPY",
+          "spot": 736,
+          "spot_ts": "2026-11-06T21:14:25.847155+00:00",
+          "vwap": 737.7184,
+          "vwap_ts": "2026-11-06T21:14:25.847155+00:00",
+          "vwap_session_date": "2026-11-06",
+          "vwap_session_started_at": "2026-11-06T11:01:18.845785+00:00",
+          "vwap_partial_session": false,
+          "price_vs_vwap_abs": -1.7184,
+          "price_vs_vwap_pct": -0.2329,
+          "session_volume": 56141095,
+          "session_volume_ts": "2026-11-06T21:14:25.847155+00:00",
+          "rvol": {
+            "status": "ok",
+            "multiple": 1.2318,
+            "bucket_label": "16:10",
+            "baseline_volume": 45577436.733333334,
+            "baseline_days_used": 15,
+            "baseline_lookback_days": 20,
+            "baseline_updated_through": "2026-11-05"
+          },
+          "momentum": {
+            "status": "ok",
+            "return_pct": -0.3696,
+            "lookback_minutes": 60,
+            "anchor_age_minutes": 60.21424063333333,
+            "sample_count": 571,
+            "direction": "down"
+          },
+          "source": "dxlink",
+          "freshness": "live",
+          "field_freshness": {
+            "spot": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.254,
+              "stale_after_seconds": 120
+            },
+            "vwap": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.254,
+              "stale_after_seconds": 120
+            },
+            "session_volume": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.254,
+              "stale_after_seconds": 120
+            },
+            "rvol": {
+              "status": "stale",
+              "observed_at": "2026-11-06T21:14:25.847155+00:00",
+              "age_seconds": 164361.254,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            },
+            "momentum": {
+              "status": "unknown",
+              "observed_at": null,
+              "age_seconds": null,
+              "stale_after_seconds": 120,
+              "producer_status": "ok"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "return_rankings",
+      "arguments": {
+        "session": "2026-11-08",
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "options_returns",
+        "requested_filters": {
+          "session": "2026-11-08",
+          "limit": 1
+        },
+        "actual": null,
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:47.103Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": null,
+          "publication": null
+        },
+        "status": "missing",
+        "freshness": {
+          "status": "unknown"
+        },
+        "coverage": null,
+        "units": {
+          "*_pct": "fractional return (1 = 100%)",
+          "*_entry, *_exit": "USD/share",
+          "*_ms, t, bid_ms, ask_ms": "UTC epoch milliseconds",
+          "*_abs_change_per_contract": "USD/contract",
+          "*_relative_spread": "spread / midpoint",
+          "*_size": "contracts at quoted side",
+          "*_entry_delay_s": "seconds from first archived sample",
+          "rank": "producer ordinal rank"
+        },
+        "warnings": [
+          "Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.",
+          "Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.",
+          "Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.",
+          "All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.",
+          "Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query."
+        ],
+        "sources": [],
+        "pagination": null,
+        "errors": [
+          {
+            "code": "missing_artifact",
+            "message": "Public artifact returned HTTP 404; redirects are never followed.",
+            "locator": "oa203/scanner/2026-11-08/summary.json"
+          }
+        ],
+        "availability": "missing_publication"
+      }
+    },
+    {
+      "tool": "squeeze_results",
+      "arguments": {
+        "run": "latest_attempt",
+        "limit": 3
+      },
+      "isError": true,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "scheduled_squeeze",
+        "requested_filters": {
+          "run": "latest_attempt",
+          "limit": 3
+        },
+        "actual": {
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "session": null,
+          "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "scoring_version": "baseline-60-40-v1",
+          "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:47.428Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": "2026-11-06T17:00:04.208128+00:00",
+          "acquisition_end": "2026-11-06T17:00:04.988106+00:00",
+          "publication": "2026-11-06T17:00:24.084502+00:00"
+        },
+        "status": "failed",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T17:00:04.988106+00:00",
+          "age_seconds": 179623.447,
+          "stale_after_seconds": 120,
+          "basis": "latest_attempt",
+          "reason": "attempt belongs to a previous session",
+          "schedule_status": {
+            "text": "Scan Oct 16, 12:00 PM ET",
+            "state": "stale",
+            "warning": "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below."
+          }
+        },
+        "coverage": {
+          "candidates": 0,
+          "discovered_rows": 0,
+          "eligible": 0,
+          "excluded_rows": 0,
+          "options_status": {},
+          "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+        },
+        "units": {
+          "scores": "experimental screening measurements, not probabilities",
+          "ranks": "producer ordinal ranks",
+          "first_seen_at": "publication write-attempt time"
+        },
+        "warnings": [
+          "Scores are experimental screens, not squeeze probabilities.",
+          "first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.",
+          "Provider source times can be absent; acquisition and publication times are distinct.",
+          "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below.",
+          "Attempt 9741fddb-bf2c-427c-a7cd-848f26e7d960 is failed; its rows are what that run recorded, not a successful scan."
+        ],
+        "sources": [
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest.json",
+            "retrieval_time": "2026-11-08T18:53:47.921Z",
+            "bytes": 19287,
+            "retrieved_sha256": "c5e16a5ce96247ea61387d1e9c075b897125959ffc0ff3fb3fe0058573f562dc",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "retrieval_time": "2026-11-08T18:53:48.175Z",
+            "bytes": 790,
+            "retrieved_sha256": "553fb29fa6e762d62e663933ae05e66adde743e5272cfec494281aed2582ec57",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "retrieval_time": "2026-11-08T18:53:48.430Z",
+            "bytes": 414,
+            "retrieved_sha256": "1846bd67e0423d69ba5d2d120099720bfe4d232855af2c0612a7fdfcb0fa71f0",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960/manifest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960/manifest.json",
+            "retrieval_time": "2026-11-08T18:53:48.947Z",
+            "bytes": 8646,
+            "retrieved_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+            "checksum_verification": "matches_attempt_pointer_manifest_sha256"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960/results.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960/results.json",
+            "retrieval_time": "2026-11-08T18:53:49.296Z",
+            "bytes": 3,
+            "retrieved_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+            "checksum_verification": "matches_manifest_member_sha256"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 3,
+          "total": 0,
+          "truncated": false,
+          "next_offset": null,
+          "scope": "every result row of the attempt: eligible rows by producer combined rank, then excluded rows by ticker"
+        },
+        "errors": [],
+        "attempt": {
+          "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "coverage": {
+            "candidates": 0,
+            "discovered_rows": 0,
+            "eligible": 0,
+            "excluded_rows": 0,
+            "options_status": {},
+            "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+          },
+          "finished_at": "2026-11-06T17:00:04.988106+00:00",
+          "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+          "published_at": "2026-11-06T17:00:24.084502+00:00",
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "sampling_mode": "scheduled",
+          "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+          "schema_version": 1,
+          "scoring_version": "baseline-60-40-v1",
+          "started_at": "2026-11-06T17:00:04.208128+00:00",
+          "status": "failed"
+        },
+        "schedule": {
+          "acquisition_status": "failed",
+          "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "calendar": "XNYS",
+          "calendar_version": "4.13.2",
+          "claimed_at": "2026-11-06T17:00:02.407680+00:00",
+          "finished_at": "2026-11-06T17:00:25.814412+00:00",
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+          "status": "finished"
+        },
+        "runs": {
+          "last_success": {
+            "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+            "status": "complete",
+            "sampling_mode": "scheduled",
+            "scheduled_for": "2026-10-16T16:00:00.000000+00:00",
+            "started_at": "2026-10-16T16:00:03.237232+00:00",
+            "finished_at": "2026-10-16T16:00:18.410959+00:00",
+            "published_at": "2026-10-16T16:01:15.713576+00:00",
+            "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+            "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2",
+            "denominators": {
+              "candidates": 20,
+              "discovered_rows": 20,
+              "eligible": 8,
+              "excluded_rows": 0,
+              "options_status": {
+                "illiquid_options": 6,
+                "no_options": 6,
+                "valid": 8
+              }
+            },
+            "unresolved_coverage": []
+          },
+          "latest_attempt": {
+            "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+            "status": "failed",
+            "sampling_mode": "scheduled",
+            "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+            "started_at": "2026-11-06T17:00:04.208128+00:00",
+            "finished_at": "2026-11-06T17:00:04.988106+00:00",
+            "published_at": "2026-11-06T17:00:24.084502+00:00",
+            "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+            "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+            "denominators": {
+              "candidates": 0,
+              "discovered_rows": 0,
+              "eligible": 0,
+              "excluded_rows": 0,
+              "options_status": {}
+            },
+            "unresolved_coverage": []
+          },
+          "attempt_relation": "attempt_newer",
+          "reason_basis": "unresolved_coverage lists published coverage counts that can account for a non-complete status; the pointer carries no producer reason field"
+        },
+        "rows_basis": {
+          "run": "latest_attempt",
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "scheduled_for": "2026-11-06T17:00:00.000000+00:00"
+        },
+        "reconciliation": {
+          "rows": 0,
+          "candidates_reported": 0,
+          "eligible_rows": 0,
+          "eligible_reported": 0,
+          "options_status_rows": {},
+          "options_status_reported": {},
+          "matches": true
+        },
+        "rows": []
+      }
+    },
+    {
+      "tool": "squeeze_results",
+      "arguments": {
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "scheduled_squeeze",
+        "requested_filters": {
+          "limit": 1
+        },
+        "actual": {
+          "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "session": "2026-10-16",
+          "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "scoring_version": "baseline-60-40-v1",
+          "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:49.298Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": "2026-10-16T16:00:03.237232+00:00",
+          "acquisition_end": "2026-10-16T16:00:18.410959+00:00",
+          "publication": "2026-10-16T16:01:15.713576+00:00"
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-10-16T16:00:18.410959+00:00",
+          "age_seconds": 1997611.601,
+          "stale_after_seconds": 120,
+          "schedule_status": {
+            "text": "Scan Oct 16, 12:00 PM ET",
+            "state": "stale",
+            "warning": "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below."
+          }
+        },
+        "coverage": {
+          "candidates": 20,
+          "discovered_rows": 20,
+          "eligible": 8,
+          "excluded_rows": 0,
+          "options_status": {
+            "illiquid_options": 6,
+            "no_options": 6,
+            "valid": 8
+          },
+          "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+        },
+        "units": {
+          "scores": "experimental screening measurements, not probabilities",
+          "ranks": "producer ordinal ranks",
+          "first_seen_at": "publication write-attempt time"
+        },
+        "warnings": [
+          "Scores are experimental screens, not squeeze probabilities.",
+          "first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.",
+          "Provider source times can be absent; acquisition and publication times are distinct.",
+          "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below.",
+          "Rows are from the last successful run a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3 (scheduled 2026-10-16T16:00:00.000000+00:00), not from the newer failed attempt 9741fddb-bf2c-427c-a7cd-848f26e7d960 (scheduled 2026-11-06T17:00:00.000000+00:00). Call squeeze_results with run=latest_attempt to read that attempt's rows."
+        ],
+        "sources": [
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest.json",
+            "retrieval_time": "2026-11-08T18:53:49.568Z",
+            "bytes": 19287,
+            "retrieved_sha256": "c5e16a5ce96247ea61387d1e9c075b897125959ffc0ff3fb3fe0058573f562dc",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "retrieval_time": "2026-11-08T18:53:49.772Z",
+            "bytes": 790,
+            "retrieved_sha256": "553fb29fa6e762d62e663933ae05e66adde743e5272cfec494281aed2582ec57",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "retrieval_time": "2026-11-08T18:53:50.008Z",
+            "bytes": 414,
+            "retrieved_sha256": "1846bd67e0423d69ba5d2d120099720bfe4d232855af2c0612a7fdfcb0fa71f0",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 8,
+          "truncated": true,
+          "next_offset": 1
+        },
+        "errors": [],
+        "attempt": {
+          "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "coverage": {
+            "candidates": 0,
+            "discovered_rows": 0,
+            "eligible": 0,
+            "excluded_rows": 0,
+            "options_status": {},
+            "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+          },
+          "finished_at": "2026-11-06T17:00:04.988106+00:00",
+          "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+          "published_at": "2026-11-06T17:00:24.084502+00:00",
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "sampling_mode": "scheduled",
+          "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+          "schema_version": 1,
+          "scoring_version": "baseline-60-40-v1",
+          "started_at": "2026-11-06T17:00:04.208128+00:00",
+          "status": "failed"
+        },
+        "schedule": {
+          "acquisition_status": "failed",
+          "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "calendar": "XNYS",
+          "calendar_version": "4.13.2",
+          "claimed_at": "2026-11-06T17:00:02.407680+00:00",
+          "finished_at": "2026-11-06T17:00:25.814412+00:00",
+          "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+          "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+          "status": "finished"
+        },
+        "runs": {
+          "last_success": {
+            "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+            "status": "complete",
+            "sampling_mode": "scheduled",
+            "scheduled_for": "2026-10-16T16:00:00.000000+00:00",
+            "started_at": "2026-10-16T16:00:03.237232+00:00",
+            "finished_at": "2026-10-16T16:00:18.410959+00:00",
+            "published_at": "2026-10-16T16:01:15.713576+00:00",
+            "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+            "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2",
+            "denominators": {
+              "candidates": 20,
+              "discovered_rows": 20,
+              "eligible": 8,
+              "excluded_rows": 0,
+              "options_status": {
+                "illiquid_options": 6,
+                "no_options": 6,
+                "valid": 8
+              }
+            },
+            "unresolved_coverage": []
+          },
+          "latest_attempt": {
+            "run_id": "9741fddb-bf2c-427c-a7cd-848f26e7d960",
+            "status": "failed",
+            "sampling_mode": "scheduled",
+            "scheduled_for": "2026-11-06T17:00:00.000000+00:00",
+            "started_at": "2026-11-06T17:00:04.208128+00:00",
+            "finished_at": "2026-11-06T17:00:04.988106+00:00",
+            "published_at": "2026-11-06T17:00:24.084502+00:00",
+            "archive": "squeeze-scanner/v1/scheduled/runs/9741fddb-bf2c-427c-a7cd-848f26e7d960",
+            "manifest_sha256": "9f436ed137fcf27ac836d0b07c106eee585c1ecf6c14443695b5adc51ed5ae51",
+            "denominators": {
+              "candidates": 0,
+              "discovered_rows": 0,
+              "eligible": 0,
+              "excluded_rows": 0,
+              "options_status": {}
+            },
+            "unresolved_coverage": []
+          },
+          "attempt_relation": "attempt_newer",
+          "reason_basis": "unresolved_coverage lists published coverage counts that can account for a non-complete status; the pointer carries no producer reason field"
+        },
+        "rows_basis": {
+          "run": "last_success",
+          "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "scheduled_for": "2026-10-16T16:00:00.000000+00:00"
+        },
+        "rows": [
+          {
+            "average_volume_provenance": {
+              "dollar_volume_proxy": 7065342.68,
+              "policy": "tradier-then-finviz-v1",
+              "shares_per_day": 683302,
+              "source": "tradier_quote",
+              "source_timestamp": null,
+              "spot_price": 10.34,
+              "window": null
+            },
+            "company": "Better Home & Finance Holding Co",
+            "comparison_eligible": true,
+            "components": {
+              "factor": {
+                "days_to_cover_component": 0.4655555555555556,
+                "float_size_component": 0.9706315789473684,
+                "momentum_component": 0.13199999999999998,
+                "score": 0.6521836257309941,
+                "short_float_component": 1,
+                "volume_component": 0.18
+              },
+              "options": {
+                "call_skew_component": 0,
+                "gamma_component": 0,
+                "iv_rank_component": 0.9425641025641025,
+                "score": 0.32989743589743586
+              }
+            },
+            "exclusion_reason": null,
+            "first_seen_at": "2026-10-16T13:00:54.496832+00:00",
+            "first_seen_run_id": "f43bc535-52f9-48f9-adab-7c000e5b8dee",
+            "is_new": false,
+            "liquidity": {
+              "eligible": true,
+              "metrics": {
+                "atm_call_spread_pct": 0.20289855072463758,
+                "atm_call_strike": 10,
+                "atm_iv": 1.3252,
+                "atm_put_spread_pct": 0.3157894736842105,
+                "atm_put_strike": 10,
+                "chain_contract_count": 20,
+                "has_usable_greeks": true,
+                "max_atm_spread_pct": 0.25,
+                "min_total_open_interest": 50,
+                "total_open_interest": 2582
+              },
+              "policy_version": "liquidity-v1",
+              "reason_code": "eligible"
+            },
+            "options_status": "valid",
+            "price": 10.25,
+            "price_observed_at": "2026-10-16T16:00:03.906358+00:00",
+            "price_source": "finviz",
+            "price_source_timestamp": null,
+            "ranks": {
+              "combined": 1,
+              "factor": 2,
+              "momentum": 2,
+              "options": 2
+            },
+            "scores": {
+              "combined": 0.5232691497975708,
+              "factor": 0.6521836257309941,
+              "momentum": 3.9599999999999995,
+              "options": 0.32989743589743586
+            },
+            "ticker": "BETR",
+            "detail_reference": "89b25ccf-1e91-484a-8d2a-d9252fca0b98"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "result_detail",
+      "arguments": {
+        "reference": "89b25ccf-1e91-484a-8d2a-d9252fca0b98"
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "scheduled_squeeze",
+        "requested_filters": {
+          "reference": "89b25ccf-1e91-484a-8d2a-d9252fca0b98"
+        },
+        "actual": {
+          "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "session": "2026-10-16",
+          "archive": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "scoring_version": "baseline-60-40-v1",
+          "manifest_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:50.013Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": "2026-10-16T16:00:03.237232+00:00",
+          "acquisition_end": "2026-10-16T16:00:18.410959+00:00",
+          "publication": "2026-10-16T16:01:15.713576+00:00"
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-10-16T16:00:18.410959+00:00",
+          "age_seconds": 1997611.605,
+          "stale_after_seconds": 120,
+          "schedule_status": {
+            "text": "Scan Oct 16, 12:00 PM ET",
+            "state": "stale",
+            "warning": "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below."
+          }
+        },
+        "coverage": {
+          "candidates": 20,
+          "discovered_rows": 20,
+          "eligible": 8,
+          "excluded_rows": 0,
+          "options_status": {
+            "illiquid_options": 6,
+            "no_options": 6,
+            "valid": 8
+          },
+          "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+        },
+        "units": {
+          "scores": "experimental screening measurements, not probabilities",
+          "ranks": "producer ordinal ranks",
+          "first_seen_at": "publication write-attempt time"
+        },
+        "warnings": [
+          "Scores are experimental screens, not squeeze probabilities.",
+          "first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.",
+          "Provider source times can be absent; acquisition and publication times are distinct.",
+          "Most recent scan (started 12:00 PM ET) did not complete: failed. Showing the last successful result below.",
+          "Attempt/schedule evidence is retained from the originating query; use squeeze_results to refresh it."
+        ],
+        "sources": [
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest.json",
+            "retrieval_time": "2026-11-08T18:53:49.568Z",
+            "bytes": 19287,
+            "retrieved_sha256": "c5e16a5ce96247ea61387d1e9c075b897125959ffc0ff3fb3fe0058573f562dc",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-attempt.json",
+            "retrieval_time": "2026-11-08T18:53:49.772Z",
+            "bytes": 790,
+            "retrieved_sha256": "553fb29fa6e762d62e663933ae05e66adde743e5272cfec494281aed2582ec57",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/latest-schedule.json",
+            "retrieval_time": "2026-11-08T18:53:50.008Z",
+            "bytes": 414,
+            "retrieved_sha256": "1846bd67e0423d69ba5d2d120099720bfe4d232855af2c0612a7fdfcb0fa71f0",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/manifest.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/manifest.json",
+            "retrieval_time": "2026-11-08T18:53:50.192Z",
+            "bytes": 15052,
+            "retrieved_sha256": "81fa259f67c1cc203f6f6bb32c93cc51876f17bc9f4c832a8d84bd1de8cb5cc2",
+            "checksum_verification": "matches_queried_pointer_manifest_sha256",
+            "retained": false
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/results.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/results.json",
+            "retrieval_time": "2026-11-08T18:53:50.468Z",
+            "bytes": 29424,
+            "retrieved_sha256": "6005bbc95a3abbd0e8ac3259ba00539d718bdc6408d17b70a078be09aa14810a",
+            "checksum_verification": "matches_manifest_member_sha256",
+            "retained": false
+          },
+          {
+            "locator": "squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/inputs.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/squeeze-scanner/v1/scheduled/runs/a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3/inputs.json",
+            "retrieval_time": "2026-11-08T18:53:50.699Z",
+            "bytes": 22061,
+            "retrieved_sha256": "c01afbbdc06f003cde1e8d9f1aa64473a2c7b82cec566e2660b3226af662d13d",
+            "checksum_verification": "matches_manifest_member_sha256",
+            "retained": false
+          }
+        ],
+        "pagination": null,
+        "errors": [],
+        "row": {
+          "average_volume_provenance": {
+            "dollar_volume_proxy": 7065342.68,
+            "policy": "tradier-then-finviz-v1",
+            "shares_per_day": 683302,
+            "source": "tradier_quote",
+            "source_timestamp": null,
+            "spot_price": 10.34,
+            "window": null
+          },
+          "company": "Better Home & Finance Holding Co",
+          "comparison_eligible": true,
+          "components": {
+            "factor": {
+              "days_to_cover_component": 0.4655555555555556,
+              "float_size_component": 0.9706315789473684,
+              "momentum_component": 0.13199999999999998,
+              "score": 0.6521836257309941,
+              "short_float_component": 1,
+              "volume_component": 0.18
+            },
+            "options": {
+              "call_skew_component": 0,
+              "gamma_component": 0,
+              "iv_rank_component": 0.9425641025641025,
+              "score": 0.32989743589743586
+            }
+          },
+          "exclusion_reason": null,
+          "first_seen_at": "2026-10-16T13:00:54.496832+00:00",
+          "first_seen_run_id": "f43bc535-52f9-48f9-adab-7c000e5b8dee",
+          "is_new": false,
+          "liquidity": {
+            "eligible": true,
+            "metrics": {
+              "atm_call_spread_pct": 0.20289855072463758,
+              "atm_call_strike": 10,
+              "atm_iv": 1.3252,
+              "atm_put_spread_pct": 0.3157894736842105,
+              "atm_put_strike": 10,
+              "chain_contract_count": 20,
+              "has_usable_greeks": true,
+              "max_atm_spread_pct": 0.25,
+              "min_total_open_interest": 50,
+              "total_open_interest": 2582
+            },
+            "policy_version": "liquidity-v1",
+            "reason_code": "eligible"
+          },
+          "options_status": "valid",
+          "price": 10.25,
+          "price_observed_at": "2026-10-16T16:00:03.906358+00:00",
+          "price_source": "finviz",
+          "price_source_timestamp": null,
+          "ranks": {
+            "combined": 1,
+            "factor": 2,
+            "momentum": 2,
+            "options": 2
+          },
+          "scores": {
+            "combined": 0.5232691497975708,
+            "factor": 0.6521836257309941,
+            "momentum": 3.9599999999999995,
+            "options": 0.32989743589743586
+          },
+          "ticker": "BETR"
+        },
+        "result": {
+          "average_volume_provenance": {
+            "dollar_volume_proxy": 7065342.68,
+            "policy": "tradier-then-finviz-v1",
+            "shares_per_day": 683302,
+            "source": "tradier_quote",
+            "source_timestamp": null,
+            "spot_price": 10.34,
+            "window": null
+          },
+          "company": "Better Home & Finance Holding Co",
+          "comparison_eligible": true,
+          "components": {
+            "factor": {
+              "days_to_cover_component": 0.4655555555555556,
+              "float_size_component": 0.9706315789473684,
+              "momentum_component": 0.13199999999999998,
+              "score": 0.6521836257309941,
+              "short_float_component": 1,
+              "volume_component": 0.18
+            },
+            "options": {
+              "call_skew_component": 0,
+              "gamma_component": 0,
+              "iv_rank_component": 0.9425641025641025,
+              "score": 0.32989743589743586
+            }
+          },
+          "exclusion_reason": null,
+          "liquidity": {
+            "eligible": true,
+            "metrics": {
+              "atm_call_spread_pct": 0.20289855072463758,
+              "atm_call_strike": 10,
+              "atm_iv": 1.3252,
+              "atm_put_spread_pct": 0.3157894736842105,
+              "atm_put_strike": 10,
+              "chain_contract_count": 20,
+              "has_usable_greeks": true,
+              "max_atm_spread_pct": 0.25,
+              "min_total_open_interest": 50,
+              "total_open_interest": 2582
+            },
+            "policy_version": "liquidity-v1",
+            "reason_code": "eligible"
+          },
+          "options_status": "valid",
+          "price": 10.25,
+          "price_observed_at": "2026-10-16T16:00:03.906358+00:00",
+          "price_source": "finviz",
+          "price_source_timestamp": null,
+          "ranks": {
+            "combined": 1,
+            "factor": 2,
+            "momentum": 2,
+            "options": 2
+          },
+          "scores": {
+            "combined": 0.5232691497975708,
+            "factor": 0.6521836257309941,
+            "momentum": 3.9599999999999995,
+            "options": 0.32989743589743586
+          },
+          "ticker": "BETR"
+        },
+        "inputs": {
+          "average_volume": 718660,
+          "average_volume_provenance": {
+            "dollar_volume_proxy": 7065342.68,
+            "policy": "tradier-then-finviz-v1",
+            "shares_per_day": 683302,
+            "source": "tradier_quote",
+            "source_timestamp": null,
+            "spot_price": 10.34,
+            "window": null
+          },
+          "company": "Better Home & Finance Holding Co",
+          "factor_inputs": {
+            "days_to_cover": 5.19,
+            "float_shares": 7790000,
+            "price_change_5d_pct": 3.9599999999999995,
+            "relative_volume": 1.72,
+            "short_float_pct": 47.89
+          },
+          "liquidity": {
+            "eligible": true,
+            "metrics": {
+              "atm_call_spread_pct": 0.20289855072463758,
+              "atm_call_strike": 10,
+              "atm_iv": 1.3252,
+              "atm_put_spread_pct": 0.3157894736842105,
+              "atm_put_strike": 10,
+              "chain_contract_count": 20,
+              "has_usable_greeks": true,
+              "max_atm_spread_pct": 0.25,
+              "min_total_open_interest": 50,
+              "total_open_interest": 2582
+            },
+            "policy_version": "liquidity-v1",
+            "reason_code": "eligible"
+          },
+          "options_inputs": {
+            "call_put_oi_ratio": 0.9369842460615154,
+            "gamma_notional_per_1pct_move": 0.0003686690257016664,
+            "iv_rank": 86.55384615384615,
+            "net_dealer_gamma": -24.362890000000004
+          },
+          "options_status": "valid",
+          "price": 10.25,
+          "price_observed_at": "2026-10-16T16:00:03.906358+00:00",
+          "price_source": "finviz",
+          "price_source_timestamp": null,
+          "ticker": "BETR"
+        },
+        "manifest": {
+          "config": {
+            "candidate_pacing_seconds": 0.2,
+            "columns": [
+              1,
+              2,
+              30,
+              31,
+              25,
+              64,
+              42,
+              65,
+              63
+            ],
+            "filters": {
+              "Average Volume": "Over 500K",
+              "Float Short": "Over 10%"
+            },
+            "finviz_transport": "finvizfinance 1.5.0 default retry/timeout policy; every attempt recorded",
+            "limit": 20,
+            "min_days_to_expiration": 5,
+            "order": "Short Interest Share",
+            "tradier_timeout_seconds": 10
+          },
+          "coverage": {
+            "candidates": 20,
+            "discovered_rows": 20,
+            "eligible": 8,
+            "excluded_rows": 0,
+            "options_status": {
+              "illiquid_options": 6,
+              "no_options": 6,
+              "valid": 8
+            },
+            "universe_scope": "Finviz filtered, ordered, limited response; not the whole market"
+          },
+          "files": {
+            "code/__init__.py": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "code/archive.py": {
+              "bytes": 10146,
+              "sha256": "6cc833bc70a4649b58116fdc611aeb920a2314f906ee6ccc1f5fb1da39f3e1f0"
+            },
+            "code/archive_cli.py": {
+              "bytes": 7330,
+              "sha256": "bf3567ca7506d968b5c2d3a14d5556916daedf3b5be5416191b5815aa5eb1d20"
+            },
+            "code/capture.py": {
+              "bytes": 11710,
+              "sha256": "978817c59f08a61313967922e4a40986e65637b26a311d15d45d36a3409859f4"
+            },
+            "code/finviz_client.py": {
+              "bytes": 11802,
+              "sha256": "bb8da32d6736eb7cc05deaa1e629bce67bc9e5ea29d3ee0e327e5bb842cdaa53"
+            },
+            "code/liquidity.py": {
+              "bytes": 9450,
+              "sha256": "c7976a8b845394b0068fe7ea8552ef9cf05cabd902a36e22ee295eadfbdf99bb"
+            },
+            "code/observation.py": {
+              "bytes": 414,
+              "sha256": "5b3473ccfe9bc05897576c9bdcdd16c195141f23327b77fdc7eb43172395eef4"
+            },
+            "code/price_history.py": {
+              "bytes": 16102,
+              "sha256": "15e12d09fb72d6a4fd7348313cde3655f79e635c4dbdc7674762a0dfabc84511"
+            },
+            "code/scan.py": {
+              "bytes": 12372,
+              "sha256": "4249d2a2b054993d5c28dbd5b05338c5fb403da90eadd0a461591fdff1fcab96"
+            },
+            "code/scheduler.py": {
+              "bytes": 12994,
+              "sha256": "f958720cc4188fa5eb877892deca47e4d22589dc55060d515d01bbdc33391933"
+            },
+            "code/scoring.py": {
+              "bytes": 7875,
+              "sha256": "515719810408b1aa572fa453daffa7725511e7f3ff50b04f6b7518d65048cc44"
+            },
+            "code/storage.py": {
+              "bytes": 10136,
+              "sha256": "8dd037b4cdee89f003242e09a91b4daa2e5b7e4228cb3577c93770ea1da4f4d1"
+            },
+            "code/tradier_options.py": {
+              "bytes": 21454,
+              "sha256": "b413574c7c8762b55db7db40bacf6ab6676e6f2e93cb73afb1ad9a2f0451df77"
+            },
+            "events.json": {
+              "bytes": 82711,
+              "sha256": "ddb173844675a655aaefa247eb632ac51f594a846acda2c9f972e42ee2b15869"
+            },
+            "inputs.json": {
+              "bytes": 22061,
+              "sha256": "c01afbbdc06f003cde1e8d9f1aa64473a2c7b82cec566e2660b3226af662d13d"
+            },
+            "raw/00000.body": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "raw/00001.body": {
+              "bytes": 240808,
+              "sha256": "3ffbe43514c770cba51871286c04cedd3a2827b888d4a10c6af081b83cf0f97f"
+            },
+            "raw/00002.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00003.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00004.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00005.body": {
+              "bytes": 234,
+              "sha256": "be103ef6055a484c2831b8bc0116ce640cb5cdf3a8bd13d115a340f07c7b73b4"
+            },
+            "raw/00006.body": {
+              "bytes": 500,
+              "sha256": "3e5ddabd0556c917c930d14b49cdcd99054bcb9b98c6699f7e47471c46deb6ba"
+            },
+            "raw/00007.body": {
+              "bytes": 74002,
+              "sha256": "488042890d10d3d3a94156713fd03873f42b546d38d00543b763d0bb032c7246"
+            },
+            "raw/00008.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00009.body": {
+              "bytes": 169,
+              "sha256": "99e33aa3df02079912a751340f358bc75caffaabaa69a4188e983be865b7d855"
+            },
+            "raw/00010.body": {
+              "bytes": 493,
+              "sha256": "5bdd95b75111a51442453e619cfb576558725dc19769c1c4590d9b8d7ea32823"
+            },
+            "raw/00011.body": {
+              "bytes": 19603,
+              "sha256": "97aa710f4eb32b8d2e18bdab81bb1d2164fd9d1cefc43c86fb25a8b5df98b329"
+            },
+            "raw/00012.body": {
+              "bytes": 234,
+              "sha256": "6502866997bea777f7495b16c626da3e1600ab9eef4eadabbeed9b90600c2782"
+            },
+            "raw/00013.body": {
+              "bytes": 497,
+              "sha256": "4110c640c0bd34764c42c8fe2a749d2c2edc00e550280d3226063562dcd98d59"
+            },
+            "raw/00014.body": {
+              "bytes": 30750,
+              "sha256": "5347d275dd5a6041186488caf4571a793e781b499f1b25351162655ad6da286d"
+            },
+            "raw/00015.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00016.body": {
+              "bytes": 20,
+              "sha256": "69c9405d074c608227d4acad463c72d3a1a571f425985ddad4c9d6a373bc2c87"
+            },
+            "raw/00017.body": {
+              "bytes": 143,
+              "sha256": "26488d1291b5385bdaa55677c9b9fd931112b23f63cde7fa988c5b02b4e53006"
+            },
+            "raw/00018.body": {
+              "bytes": 501,
+              "sha256": "e21072c90b0f310e8834ea745c7e7aecf190f6e7e5fa832580c889302faaddbb"
+            },
+            "raw/00019.body": {
+              "bytes": 29545,
+              "sha256": "cf9b5b9719afdca8e0db484d3a3438b4d99b8f13b0e96b03e9c92612a02329bd"
+            },
+            "raw/00020.body": {
+              "bytes": 91,
+              "sha256": "6e579bfc35b8adc274a3af3aba10cfc39a20650ce41231fffaf2ef67fdb6781a"
+            },
+            "raw/00021.body": {
+              "bytes": 484,
+              "sha256": "2da10d27c3cff0e666f434c9526eda0283fa223cf49684e4568cb61809bbfeb8"
+            },
+            "raw/00022.body": {
+              "bytes": 4964,
+              "sha256": "b00299c4c5446e25c20ee2c8ad6ce147c62e12239cc57300737045d71a59cb7a"
+            },
+            "raw/00023.body": {
+              "bytes": 91,
+              "sha256": "2ce107472574ca553daf1a521bd09befab2f0260c4d3ccedf746294ea0e83439"
+            },
+            "raw/00024.body": {
+              "bytes": 498,
+              "sha256": "11c656840f3d6ec89663e61e4436bd99dba866be96893d68abda801cafcc94a6"
+            },
+            "raw/00025.body": {
+              "bytes": 16340,
+              "sha256": "b76b200da9c45d4100d953bf158a26c11091d099f8308ca061677f25a15e00d7"
+            },
+            "raw/00026.body": {
+              "bytes": 143,
+              "sha256": "ebd2106849dc95ef4649827782ef786d6bf80b47ceb5ee043d2f66924d3e829f"
+            },
+            "raw/00027.body": {
+              "bytes": 515,
+              "sha256": "13649708bfc0aa6f4ec64f5d914fb19eced9df3620c14a0a041df322dec3613d"
+            },
+            "raw/00028.body": {
+              "bytes": 16413,
+              "sha256": "4f221fef0a7b3d23245a5d6f02cd3d91c795de20b113a77bf6cb8c3f878592f4"
+            },
+            "raw/00029.body": {
+              "bytes": 117,
+              "sha256": "030c1d0fca21cc0ed0b9453af7fc23ff1669c617ccddac96ba401800ce394151"
+            },
+            "raw/00030.body": {
+              "bytes": 479,
+              "sha256": "c79349d7a6fe75bc4e27fd10685271968e55110f41b5167729efd4a9c3079512"
+            },
+            "raw/00031.body": {
+              "bytes": 4954,
+              "sha256": "89b5f67ca81a1877bbab5434fd63a0e459595048e3d760cbe7ccb56d9fd99e2b"
+            },
+            "raw/00032.body": {
+              "bytes": 78,
+              "sha256": "f7c8b657f7e02691c18f02d7257c15b590339472b4198397819d7ed8551f0267"
+            },
+            "raw/00033.body": {
+              "bytes": 541,
+              "sha256": "0cb42ee9e750b2490f9ce72ff1f596407ce0fdab8be6d813ff2d7803b770d3d0"
+            },
+            "raw/00034.body": {
+              "bytes": 8952,
+              "sha256": "cecfebf79f35818cfa38f3972f6f992d72665e527b763402a245b72acc5348e2"
+            },
+            "raw/00035.body": {
+              "bytes": 221,
+              "sha256": "abb29696b56811e82e4d9af4ccd3bb78d7d9080ab7f14a260565a58038cec051"
+            },
+            "raw/00036.body": {
+              "bytes": 485,
+              "sha256": "b45d0a9677d49c524967128e7a4c5c893e3f5640fdb152aba0c875c7e2645909"
+            },
+            "raw/00037.body": {
+              "bytes": 40616,
+              "sha256": "a9c9b42e8fc8150cd59e9543fee24092ca5fcc9a801d7f77bd408ff49b995857"
+            },
+            "raw/00038.body": {
+              "bytes": 91,
+              "sha256": "721418de11deab08910a695390326b7917bb1be27d3eccea9b62f3ba76edfa1d"
+            },
+            "raw/00039.body": {
+              "bytes": 489,
+              "sha256": "571ca39fe5db7a79081a454010675a3f0e9e11e2ac7676277be06c756422822b"
+            },
+            "raw/00040.body": {
+              "bytes": 16409,
+              "sha256": "0054ecbb4a69e5c8802088d5a25269b75030510279ede3aa823516a06b1aa9a7"
+            },
+            "raw/00041.body": {
+              "bytes": 117,
+              "sha256": "c7cb1e89e9d23c13ea097e76653a3d1e28d84385b5dfa2bfa50714a5c6a1b0ca"
+            },
+            "raw/00042.body": {
+              "bytes": 483,
+              "sha256": "3e639d7cd05978a10b082fd4f235f25e2bcab3f0ed1c60ebbd7e135c9577f969"
+            },
+            "raw/00043.body": {
+              "bytes": 19486,
+              "sha256": "646980081a9e1728b42fa3b19dec24152866640095a58ec92cd66b06f4fdc938"
+            },
+            "raw/00044.body": {
+              "bytes": 195,
+              "sha256": "68d4a1e884d25ef99120d529906d77525c821811cce7351a72963ce76d4e729d"
+            },
+            "raw/00045.body": {
+              "bytes": 499,
+              "sha256": "8458c1776c2bbbbc5a06f094bf1a8ee477a95100723cbeb9c1645c6d9b556df6"
+            },
+            "raw/00046.body": {
+              "bytes": 59724,
+              "sha256": "64b7d0062d2f03d655d236bf24ecced8770b3f6b43df5861c344fceb4fdbe5e6"
+            },
+            "raw/00047.body": {
+              "bytes": 91,
+              "sha256": "721418de11deab08910a695390326b7917bb1be27d3eccea9b62f3ba76edfa1d"
+            },
+            "raw/00048.body": {
+              "bytes": 478,
+              "sha256": "8124092e72985eb319a389399b26579f26c9b1416c975e223ed626b8a8562303"
+            },
+            "raw/00049.body": {
+              "bytes": 18026,
+              "sha256": "5a3b13b82420f0df1c18df997cd9c4be77886ba91916a73d48306fddc16e3f5f"
+            },
+            "requests.json": {
+              "bytes": 36774,
+              "sha256": "e52cdde85a517055815c233a324266eaf2edcc7945f759829e961485c94028ee"
+            },
+            "results.json": {
+              "bytes": 29424,
+              "sha256": "6005bbc95a3abbd0e8ac3259ba00539d718bdc6408d17b70a078be09aa14810a"
+            },
+            "universe.json": {
+              "bytes": 6546,
+              "sha256": "9982e5dbb3c82291b04ab2a33630eaf3401df6a9a0a8c7c2f2eef17dd291e4d7"
+            }
+          },
+          "finished_at": "2026-10-16T16:00:18.410959+00:00",
+          "liquidity_policy": {
+            "atm_contract_selection": "per side, the valid-strike contract nearest spot (ties -> lower strike), chosen before and independently of its quote; never a farther strike",
+            "max_atm_spread_pct": 0.25,
+            "min_total_open_interest": 50,
+            "missing_quote_rule": "if no side clears max_atm_spread_pct and any listed side's nearest contract has no usable bid/ask, the outcome is insufficient_data (unverifiable), not illiquid_options",
+            "quote_freshness_note": "not evaluated -- Tradier's chain snapshot carries no per-contract quote timestamp distinct from the whole response's own fetch time",
+            "rule": "chain_contract_count>0 AND total_oi>=min_total_open_interest AND has_usable_greeks AND atm_iv is not None AND (atm_call_spread_pct OR atm_put_spread_pct) <= max_atm_spread_pct",
+            "underlying_volume_note": "never a factor in this policy -- only the options chain's own open interest, Greeks availability, and near-the-money spread",
+            "version": "liquidity-v1"
+          },
+          "provenance": {
+            "commit": "32cf3491248fa6ff409580acd8e6cae5a9880851",
+            "commit_note": "Set SCANNER_CODE_COMMIT to the built revision when running an installed wheel.",
+            "dependencies": {
+              "Pygments": "2.21.0",
+              "beautifulsoup4": "4.15.0",
+              "boto3": "1.43.104",
+              "botocore": "1.43.104",
+              "certifi": "2026.7.22",
+              "charset-normalizer": "3.5.1",
+              "exchange_calendars": "4.13.2",
+              "finvizfinance": "1.5.0",
+              "idna": "3.20",
+              "iniconfig": "2.3.0",
+              "jmespath": "1.1.0",
+              "korean_lunar_calendar": "0.4.0",
+              "lxml": "6.1.3",
+              "numpy": "2.5.3",
+              "packaging": "26.3",
+              "pandas": "3.0.6",
+              "pip": "24.0",
+              "pluggy": "1.6.0",
+              "pyluach": "2.3.0",
+              "pytest": "9.1.1",
+              "python-dateutil": "2.9.0.post0",
+              "python-dotenv": "1.2.3",
+              "requests": "2.34.2",
+              "s3transfer": "0.19.2",
+              "short-squeeze-scanner": "0.2.0",
+              "six": "1.17.0",
+              "soupsieve": "2.10",
+              "toolz": "1.1.0",
+              "typing_extensions": "4.16.0",
+              "tzdata": "2026.4",
+              "urllib3": "2.8.0",
+              "xlsxwriter": "3.2.9"
+            },
+            "dirty": false,
+            "python": "3.12.3",
+            "source_files": {
+              "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "archive.py": "6cc833bc70a4649b58116fdc611aeb920a2314f906ee6ccc1f5fb1da39f3e1f0",
+              "archive_cli.py": "bf3567ca7506d968b5c2d3a14d5556916daedf3b5be5416191b5815aa5eb1d20",
+              "capture.py": "978817c59f08a61313967922e4a40986e65637b26a311d15d45d36a3409859f4",
+              "finviz_client.py": "bb8da32d6736eb7cc05deaa1e629bce67bc9e5ea29d3ee0e327e5bb842cdaa53",
+              "liquidity.py": "c7976a8b845394b0068fe7ea8552ef9cf05cabd902a36e22ee295eadfbdf99bb",
+              "observation.py": "5b3473ccfe9bc05897576c9bdcdd16c195141f23327b77fdc7eb43172395eef4",
+              "price_history.py": "15e12d09fb72d6a4fd7348313cde3655f79e635c4dbdc7674762a0dfabc84511",
+              "scan.py": "4249d2a2b054993d5c28dbd5b05338c5fb403da90eadd0a461591fdff1fcab96",
+              "scheduler.py": "f958720cc4188fa5eb877892deca47e4d22589dc55060d515d01bbdc33391933",
+              "scoring.py": "515719810408b1aa572fa453daffa7725511e7f3ff50b04f6b7518d65048cc44",
+              "storage.py": "8dd037b4cdee89f003242e09a91b4daa2e5b7e4228cb3577c93770ea1da4f4d1",
+              "tradier_options.py": "b413574c7c8762b55db7db40bacf6ab6676e6f2e93cb73afb1ad9a2f0451df77"
+            }
+          },
+          "run_id": "a6ddacff-98b4-44e9-8ca8-d1cc046f2ab3",
+          "sampling_mode": "scheduled",
+          "scheduled_for": "2026-10-16T16:00:00.000000+00:00",
+          "schema_version": 1,
+          "scoring": {
+            "combined_weights": [
+              0.6,
+              0.4
+            ],
+            "comparison_universe": "options_status=valid only, shared by all four variants",
+            "factor_weights": [
+              0.35,
+              0.25,
+              0.15,
+              0.15,
+              0.1
+            ],
+            "gamma_proxy": "customers long calls/short puts; dealer gamma is negative customer gamma",
+            "implementation_sha256": "515719810408b1aa572fa453daffa7725511e7f3ff50b04f6b7518d65048cc44",
+            "iv_proxy": "clamp((ATM_IV - 0.20) / 1.30 * 100, 0, 100); not historical IV rank",
+            "momentum_baseline": "raw trailing five-session return in percentage points",
+            "options_weights": [
+              0.35,
+              0.25,
+              0.4
+            ],
+            "ranges": {
+              "_CALL_PUT_RATIO_RANGE": [
+                1,
+                4
+              ],
+              "_DAYS_TO_COVER_RANGE": [
+                1,
+                10
+              ],
+              "_FLOAT_SIZE_RANGE_SHARES": [
+                100000000,
+                5000000
+              ],
+              "_GAMMA_PRESSURE_RANGE": [
+                0.02,
+                0.25
+              ],
+              "_IV_RANK_RANGE": [
+                30,
+                90
+              ],
+              "_MOMENTUM_RANGE_PCT": [
+                0,
+                30
+              ],
+              "_RVOL_RANGE": [
+                1,
+                5
+              ],
+              "_SHORT_FLOAT_RANGE": [
+                5,
+                40
+              ]
+            },
+            "ranking": "descending score, then ticker ascending; ordinal ranks",
+            "version": "baseline-60-40-v1"
+          },
+          "started_at": "2026-10-16T16:00:03.237232+00:00",
+          "status": "complete",
+          "valuation_date": "2026-10-16"
+        }
+      }
+    },
+    {
+      "tool": "market_overview",
+      "arguments": {
+        "symbols": [
+          "AAPL"
+        ],
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "cross_market_overview",
+        "requested_filters": {
+          "symbols": [
+            "AAPL"
+          ],
+          "limit": 1
+        },
+        "actual": {
+          "collector_cycle_at": "2026-11-06T21:14:49.918543+00:00",
+          "snapshot_time": "16:14 ET",
+          "feed_stale": false,
+          "payload_sha256": "1fc65078286494e93b712a5285cda20984051ca08397fa800e9114915583ab07"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:50.703Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": "2026-11-06T21:14:49.918543+00:00",
+          "acquisition_end": null,
+          "publication": null
+        },
+        "status": "partial",
+        "freshness": {
+          "status": "stale",
+          "observed_at": "2026-11-06T21:14:49.918543+00:00",
+          "age_seconds": 164341,
+          "stale_after_seconds": 120,
+          "basis": "collector cycle start, before fallbacks and artifact upload; each row carries its own collector receipt age"
+        },
+        "coverage": {
+          "strip_labels": 18,
+          "identified": 18,
+          "matched_rows": 1,
+          "named_gaps": 17,
+          "matching_gaps": 0,
+          "live_rows": 0,
+          "unavailable_changes": 1
+        },
+        "units": {
+          "price": "row.unit (10Y normalized to percent; fut.6j and fx.jpyusd in USD per JPY)",
+          "change.absolute": "row.change.absolute_unit (USD only for USD-denominated rows)",
+          "change.percent": "percent, producer-rounded to 2 dp",
+          "change.bps": "basis points (yield rows only; no percent-of-yield)",
+          "freshness.age_seconds": "seconds since collector receipt at query time"
+        },
+        "warnings": [
+          "Source is the dashboard price strip (intraday/prices.json); coverage is the strip only. Requested assets it lacks are listed under gaps.",
+          "Rows are asynchronous values, not a simultaneous snapshot. quote_ts is collector receipt time, not provider observation time. The strip publishes during collector sessions only; off-hours values are from the last publication.",
+          "The strip has no previous-close date, adjustment basis, or resolved futures contract. Changes cannot establish same-session comparability or a futures roll.",
+          "ETF proxies (QQQ, SPY, USO) keep their own identities; a proxy is never the index or commodity.",
+          "Price moves do not establish a news cause."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/prices.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/prices.json",
+            "retrieval_time": "2026-11-08T18:53:50.918Z",
+            "bytes": 4288,
+            "retrieved_sha256": "1fc65078286494e93b712a5285cda20984051ca08397fa800e9114915583ab07",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 1,
+          "truncated": false,
+          "next_offset": null,
+          "sort": "strip",
+          "ranked_over": null
+        },
+        "errors": [],
+        "rows": [
+          {
+            "label": "AAPL",
+            "id": "AAPL",
+            "name": "Apple",
+            "asset_class": "equity",
+            "instrument_type": "stock",
+            "unit": "USD",
+            "source": "dxlink",
+            "origin_source": "dxlink",
+            "source_symbol": "AAPL",
+            "price": 342.39,
+            "raw_price": 342.39,
+            "price_basis": "last_trade",
+            "bid": 342,
+            "ask": 342.16,
+            "volume": 42834970,
+            "observed_at": null,
+            "collector_received_at": "2026-11-06T21:14:49.847386+00:00",
+            "previous_close": 344.17,
+            "change": {
+              "status": "partial",
+              "reasons": [
+                "observation_and_reference_session_unverified",
+                "extended_receipt_window_reference_session_unverified"
+              ],
+              "absolute": -1.78,
+              "absolute_unit": "USD",
+              "percent": -0.52,
+              "bps": null,
+              "reference_basis": "DXLink Summary prevDayClosePrice; exact reference session, timestamp and adjustment basis are not published",
+              "current_session": null,
+              "collector_receipt_window": "postmarket",
+              "reference_at": null,
+              "reference_session": null,
+              "adjustment_basis": null,
+              "derivation": {
+                "percent": "producer chg_pct (rounded to 2 dp), preserved",
+                "absolute": "consumer: price - prev_close",
+                "bps": "consumer: (price - prev_close) x 100 after normalization"
+              }
+            },
+            "freshness": {
+              "status": "stale",
+              "age_seconds": 164341.071,
+              "stale_after_seconds": 120,
+              "basis": "quote_ts = collector receipt time of the selected price input; provider observation time is unavailable",
+              "market_state": "closed",
+              "collector_receipt_window": "postmarket",
+              "live": false,
+              "live_basis": "recent DXLink collector receipt during a possible market window; provider observation freshness is unverified"
+            },
+            "artifact_cycle_at": "2026-11-06T21:14:49.918543+00:00",
+            "warnings": [
+              "Receipt occurred in an extended-hours window; the provider observation session and Summary close session are unverified. This is not labeled a regular-session change."
+            ],
+            "detail_reference": "27a877f8-27ac-4102-8964-f1516e9791c8"
+          }
+        ],
+        "gaps": [],
+        "unmatched_symbols": [],
+        "unmapped_labels": []
+      }
+    },
+    {
+      "tool": "result_detail",
+      "arguments": {
+        "reference": "27a877f8-27ac-4102-8964-f1516e9791c8"
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "cross_market_overview",
+        "requested_filters": {
+          "reference": "27a877f8-27ac-4102-8964-f1516e9791c8"
+        },
+        "actual": {
+          "collector_cycle_at": "2026-11-06T21:14:49.918543+00:00",
+          "snapshot_time": "16:14 ET",
+          "feed_stale": false,
+          "payload_sha256": "1fc65078286494e93b712a5285cda20984051ca08397fa800e9114915583ab07"
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:50.925Z",
+        "producer_times": {
+          "observation": null,
+          "collector_receipt": "2026-11-06T21:14:49.847386+00:00",
+          "acquisition_start": "2026-11-06T21:14:49.918543+00:00",
+          "acquisition_end": null,
+          "publication": null
+        },
+        "status": "available",
+        "freshness": {
+          "status": "stale",
+          "age_seconds": 164341.071,
+          "stale_after_seconds": 120,
+          "basis": "quote_ts = collector receipt time of the selected price input; provider observation time is unavailable",
+          "market_state": "closed",
+          "collector_receipt_window": "postmarket",
+          "live": false,
+          "live_basis": "recent DXLink collector receipt during a possible market window; provider observation freshness is unverified",
+          "note": "freshness as of the originating query; repeat market_overview for current age"
+        },
+        "coverage": {
+          "scope": "one retained row from the exact queried price strip"
+        },
+        "units": {
+          "price": "row.unit (10Y normalized to percent; fut.6j and fx.jpyusd in USD per JPY)",
+          "change.absolute": "row.change.absolute_unit (USD only for USD-denominated rows)",
+          "change.percent": "percent, producer-rounded to 2 dp",
+          "change.bps": "basis points (yield rows only; no percent-of-yield)",
+          "freshness.age_seconds": "seconds since collector receipt at query time"
+        },
+        "warnings": [
+          "Source is the dashboard price strip (intraday/prices.json); coverage is the strip only. Requested assets it lacks are listed under gaps.",
+          "Rows are asynchronous values, not a simultaneous snapshot. quote_ts is collector receipt time, not provider observation time. The strip publishes during collector sessions only; off-hours values are from the last publication.",
+          "The strip has no previous-close date, adjustment basis, or resolved futures contract. Changes cannot establish same-session comparability or a futures roll.",
+          "ETF proxies (QQQ, SPY, USO) keep their own identities; a proxy is never the index or commodity.",
+          "Price moves do not establish a news cause.",
+          "Detail uses the retained queried row; a newer strip publication does not change it."
+        ],
+        "sources": [
+          {
+            "locator": "intraday/prices.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/prices.json",
+            "retrieval_time": "2026-11-08T18:53:50.918Z",
+            "bytes": 4288,
+            "retrieved_sha256": "1fc65078286494e93b712a5285cda20984051ca08397fa800e9114915583ab07",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          }
+        ],
+        "pagination": null,
+        "errors": [],
+        "row": {
+          "label": "AAPL",
+          "id": "AAPL",
+          "name": "Apple",
+          "asset_class": "equity",
+          "instrument_type": "stock",
+          "unit": "USD",
+          "source": "dxlink",
+          "origin_source": "dxlink",
+          "source_symbol": "AAPL",
+          "price": 342.39,
+          "raw_price": 342.39,
+          "price_basis": "last_trade",
+          "bid": 342,
+          "ask": 342.16,
+          "volume": 42834970,
+          "observed_at": null,
+          "collector_received_at": "2026-11-06T21:14:49.847386+00:00",
+          "previous_close": 344.17,
+          "change": {
+            "status": "partial",
+            "reasons": [
+              "observation_and_reference_session_unverified",
+              "extended_receipt_window_reference_session_unverified"
+            ],
+            "absolute": -1.78,
+            "absolute_unit": "USD",
+            "percent": -0.52,
+            "bps": null,
+            "reference_basis": "DXLink Summary prevDayClosePrice; exact reference session, timestamp and adjustment basis are not published",
+            "current_session": null,
+            "collector_receipt_window": "postmarket",
+            "reference_at": null,
+            "reference_session": null,
+            "adjustment_basis": null,
+            "derivation": {
+              "percent": "producer chg_pct (rounded to 2 dp), preserved",
+              "absolute": "consumer: price - prev_close",
+              "bps": "consumer: (price - prev_close) x 100 after normalization"
+            }
+          },
+          "freshness": {
+            "status": "stale",
+            "age_seconds": 164341.071,
+            "stale_after_seconds": 120,
+            "basis": "quote_ts = collector receipt time of the selected price input; provider observation time is unavailable",
+            "market_state": "closed",
+            "collector_receipt_window": "postmarket",
+            "live": false,
+            "live_basis": "recent DXLink collector receipt during a possible market window; provider observation freshness is unverified"
+          },
+          "artifact_cycle_at": "2026-11-06T21:14:49.918543+00:00",
+          "warnings": [
+            "Receipt occurred in an extended-hours window; the provider observation session and Summary close session are unverified. This is not labeled a regular-session change."
+          ]
+        }
+      }
+    },
+    {
+      "tool": "return_rankings",
+      "arguments": {
+        "session": "2026-11-06",
+        "view": "clean",
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "options_returns",
+        "requested_filters": {
+          "session": "2026-11-06",
+          "view": "clean",
+          "limit": 1
+        },
+        "actual": {
+          "session": "2026-11-06",
+          "final": true,
+          "return_policy": {
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.05,
+            "spike_ratio": 3,
+            "stale_quote_s": 1800,
+            "version": "oa203-returns-v1"
+          },
+          "qualified_policy": {
+            "max_quote_age_s": 1800,
+            "max_relative_spread": 0.3,
+            "min_ask_size": 1,
+            "min_bid_size": 1,
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.1,
+            "min_entry_volume": 1,
+            "min_open_interest": null,
+            "min_samples": 3,
+            "version": "oa203-qualified-ask-bid-v1"
+          }
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:50.926Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": null,
+          "publication": null,
+          "finalized_at": "2026-11-06T21:07:11.837801+00:00"
+        },
+        "status": "available",
+        "freshness": {
+          "status": "historical",
+          "meaning": "Explicit selected session; finalized_at is not a quote observation or publication time."
+        },
+        "coverage": {
+          "additional_chain_expected": 0,
+          "additional_chain_statuses_recorded": 0,
+          "additional_chain_success_rate": null,
+          "additional_chain_successes": 0,
+          "additional_expiry_coverage": null,
+          "chain_expected": 38100,
+          "chain_fetches": 38100,
+          "chain_success_rate": 0.998714,
+          "complete_sweeps": 76,
+          "gaps_ms": [],
+          "max_gap_s": 672,
+          "pending_uploads": [],
+          "reasons": [],
+          "status": "complete",
+          "sweeps_in_session": 77,
+          "typical_sweep_s": 305.6,
+          "universe_coverage": 1,
+          "truncated_sweeps": 1
+        },
+        "units": {
+          "*_pct": "fractional return (1 = 100%)",
+          "*_entry, *_exit": "USD/share",
+          "*_ms, t, bid_ms, ask_ms": "UTC epoch milliseconds",
+          "*_abs_change_per_contract": "USD/contract",
+          "*_relative_spread": "spread / midpoint",
+          "*_size": "contracts at quoted side",
+          "*_entry_delay_s": "seconds from first archived sample",
+          "rank": "producer ordinal rank"
+        },
+        "warnings": [
+          "Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.",
+          "Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.",
+          "Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.",
+          "All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.",
+          "Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query.",
+          "1 of 77 in-session sweeps did not finish; coverage status \"complete\" reflects session-level checks, not every sweep finishing.",
+          "Matching before/after summary/shortlist digests detect observed rebuilds; no atomic producer session revision is available."
+        ],
+        "sources": [
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:51.205Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:51.447Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:51.739Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer"
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:52.095Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer"
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 200,
+          "truncated": true,
+          "next_offset": 1
+        },
+        "errors": [],
+        "session_window": {
+          "open_ms": 1793975400000,
+          "close_ms": 1793998800000,
+          "meaning": "exchange boundaries; not acquisition timestamps"
+        },
+        "summary": {
+          "additional_expiries": {},
+          "assessment": {
+            "additional_chain_expected": 0,
+            "additional_chain_statuses_recorded": 0,
+            "additional_chain_success_rate": null,
+            "additional_chain_successes": 0,
+            "additional_expiry_coverage": null,
+            "chain_expected": 38100,
+            "chain_fetches": 38100,
+            "chain_success_rate": 0.998714,
+            "complete_sweeps": 76,
+            "gaps_ms": [],
+            "max_gap_s": 672,
+            "pending_uploads": [],
+            "reasons": [],
+            "status": "complete",
+            "sweeps_in_session": 77,
+            "typical_sweep_s": 305.6,
+            "universe_coverage": 1
+          },
+          "backfill": {
+            "errors": 0,
+            "requested": 285
+          },
+          "clean_ranked_contracts": 31345,
+          "contracts": 57908,
+          "damaged_artifacts": [],
+          "final": true,
+          "finalized_at": "2026-11-06T21:07:11.837801+00:00",
+          "interruptions": [],
+          "measurement": "Sampled-return leaderboard: quote returns come from ~5-minute chain samples. The trade-bar backfill only enriches contracts that already rank in those samples; a brief spike in a contract that never ranks is not discovered.",
+          "outputs": {
+            "contracts": "contracts.csv.gz",
+            "leaderboard": "leaderboard.csv",
+            "qualified_ask_bid_v1": "qualified_ask_bid_v1.csv"
+          },
+          "qualified_policy": {
+            "max_quote_age_s": 1800,
+            "max_relative_spread": 0.3,
+            "min_ask_size": 1,
+            "min_bid_size": 1,
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.1,
+            "min_entry_volume": 1,
+            "min_open_interest": null,
+            "min_samples": 3,
+            "version": "oa203-qualified-ask-bid-v1"
+          },
+          "qualified_ranked_contracts": 15508,
+          "qualified_reason_counts": {
+            "entry_ask_size_insufficient": 2440,
+            "entry_ask_timestamp_stale": 21087,
+            "entry_bid_nonpositive": 26325,
+            "entry_bid_timestamp_stale": 26109,
+            "entry_insufficient_samples_so_far": 42400,
+            "entry_locked": 2,
+            "entry_premium": 14786,
+            "entry_spread": 9206,
+            "entry_volume_insufficient": 39184,
+            "exit_ask_timestamp_stale": 61,
+            "exit_bid_nonpositive": 221,
+            "exit_bid_size_insufficient": 221,
+            "exit_bid_timestamp_stale": 107,
+            "exit_spread": 401,
+            "no_qualified_entry": 41964,
+            "no_strictly_later_qualified_exit": 436
+          },
+          "qualified_status_counts": {
+            "eligible": 15508,
+            "excluded": 42400
+          },
+          "ranked_contracts": 36382,
+          "request_stats": {
+            "max_request_seconds": 2.5654993057250977,
+            "rate_wait_seconds": 63787.75462079048,
+            "rate_waits": 114488,
+            "request_seconds": 5093.226506948471,
+            "requests": 39599
+          },
+          "return_policy": {
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.05,
+            "spike_ratio": 3,
+            "stale_quote_s": 1800,
+            "version": "oa203-returns-v1"
+          },
+          "session_close_ms": 1793998800000,
+          "session_open_ms": 1793975400000,
+          "trade_date": "2026-11-06",
+          "unfinalized_earlier_days": [],
+          "universe": {
+            "occ_report_date": "2026-11-05",
+            "selected_count": 500,
+            "shortfall": 0,
+            "skip_counts": {
+              "no_listed_expirations": 1
+            },
+            "target": 500
+          }
+        },
+        "rows": [
+          {
+            "symbol": "CELH261106C00031000",
+            "underlying": "CELH",
+            "root": "CELH",
+            "option_type": "call",
+            "strike": "31.0",
+            "expiration": "2026-11-06",
+            "contract_size": "100",
+            "samples": "76",
+            "valid_samples": "76",
+            "chain_ok_sweeps": "76",
+            "crossed_samples": "0",
+            "median_spread_pct": "0.237624",
+            "day_volume": "499",
+            "open_interest": "1187",
+            "contract_flags": null,
+            "mid_first_to_max_pct": "27.7",
+            "mid_first_to_max_entry": "0.05",
+            "mid_first_to_max_exit": "1.435",
+            "mid_first_to_max_abs_change": "1.385",
+            "mid_first_to_max_abs_change_per_contract": "138.5",
+            "mid_first_to_max_entry_ms": "1793975564513",
+            "mid_first_to_max_exit_ms": "1793984169250",
+            "mid_first_to_max_entry_quote_age_s": "56.513",
+            "mid_first_to_max_exit_quote_age_s": "12.25",
+            "mid_first_to_max_entry_spread": "0.04",
+            "mid_first_to_max_flags": null,
+            "mid_open_to_close_pct": "23.3",
+            "mid_open_to_close_entry": "0.05",
+            "mid_open_to_close_exit": "1.215",
+            "mid_open_to_close_abs_change": "1.165",
+            "mid_open_to_close_abs_change_per_contract": "116.5",
+            "mid_open_to_close_entry_ms": "1793975564513",
+            "mid_open_to_close_exit_ms": "1793998625686",
+            "mid_open_to_close_entry_quote_age_s": "56.513",
+            "mid_open_to_close_exit_quote_age_s": "17.686",
+            "mid_open_to_close_entry_spread": "0.04",
+            "mid_open_to_close_flags": null,
+            "mid_trough_to_peak_pct": "46.833333",
+            "mid_trough_to_peak_entry": "0.03",
+            "mid_trough_to_peak_exit": "1.435",
+            "mid_trough_to_peak_abs_change": "1.405",
+            "mid_trough_to_peak_abs_change_per_contract": "140.5",
+            "mid_trough_to_peak_entry_ms": "1793976491640",
+            "mid_trough_to_peak_exit_ms": "1793984169250",
+            "mid_trough_to_peak_entry_quote_age_s": "56.64",
+            "mid_trough_to_peak_exit_quote_age_s": "12.25",
+            "mid_trough_to_peak_entry_spread": "0.04",
+            "mid_trough_to_peak_flags": "tiny_entry",
+            "exec_first_to_max_pct": "18.285714",
+            "exec_first_to_max_entry": "0.07",
+            "exec_first_to_max_exit": "1.35",
+            "exec_first_to_max_abs_change": "1.28",
+            "exec_first_to_max_abs_change_per_contract": "128.0",
+            "exec_first_to_max_entry_ms": "1793975564513",
+            "exec_first_to_max_exit_ms": "1793984169250",
+            "exec_first_to_max_entry_quote_age_s": "56.513",
+            "exec_first_to_max_exit_quote_age_s": "12.25",
+            "exec_first_to_max_entry_spread": "0.04",
+            "exec_first_to_max_flags": null,
+            "exec_open_to_close_pct": "10.571429",
+            "exec_open_to_close_entry": "0.07",
+            "exec_open_to_close_exit": "0.81",
+            "exec_open_to_close_abs_change": "0.74",
+            "exec_open_to_close_abs_change_per_contract": "74.0",
+            "exec_open_to_close_entry_ms": "1793975564513",
+            "exec_open_to_close_exit_ms": "1793998625686",
+            "exec_open_to_close_entry_quote_age_s": "56.513",
+            "exec_open_to_close_exit_quote_age_s": "17.686",
+            "exec_open_to_close_entry_spread": "0.04",
+            "exec_open_to_close_flags": null,
+            "exec_trough_to_peak_pct": "26.0",
+            "exec_trough_to_peak_entry": "0.05",
+            "exec_trough_to_peak_exit": "1.35",
+            "exec_trough_to_peak_abs_change": "1.3",
+            "exec_trough_to_peak_abs_change_per_contract": "130.0",
+            "exec_trough_to_peak_entry_ms": "1793976491640",
+            "exec_trough_to_peak_exit_ms": "1793984169250",
+            "exec_trough_to_peak_entry_quote_age_s": "56.64",
+            "exec_trough_to_peak_exit_quote_age_s": "12.25",
+            "exec_trough_to_peak_entry_spread": "0.04",
+            "exec_trough_to_peak_flags": null,
+            "spot_at_entry": "29.345",
+            "strike_vs_spot_pct": "0.056398",
+            "clean": "True",
+            "qualified_first_ask_to_later_bid_pct": "1.8125",
+            "qualified_first_ask_to_later_bid_rank": "209",
+            "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+            "qualified_first_ask_to_later_bid_status": "eligible",
+            "qualified_first_ask_to_later_bid_reasons": null,
+            "backfill_status": "ok",
+            "trade_bars": "79",
+            "trade_volume": "499",
+            "trade_1min_first_to_max_pct": "14.3",
+            "trade_1min_first_to_max_entry": "0.1",
+            "trade_1min_first_to_max_exit": "1.53",
+            "trade_1min_first_to_max_entry_s": "1793975400",
+            "trade_1min_first_to_max_exit_s": "1793983800",
+            "trade_1min_first_to_max_abs_change_per_contract": "143.0",
+            "trade_1min_first_to_max_flags": null,
+            "trade_1min_trough_to_peak_pct": "50.0",
+            "trade_1min_trough_to_peak_entry": "0.03",
+            "trade_1min_trough_to_peak_exit": "1.53",
+            "trade_1min_trough_to_peak_entry_s": "1793975700",
+            "trade_1min_trough_to_peak_exit_s": "1793983800",
+            "rank": "9",
+            "rank_in_type": "7",
+            "clean_rank": "1",
+            "clean_rank_in_type": "1",
+            "qualified_first_ask_to_later_bid_entry_delay_s": "3381.867",
+            "qualified_first_ask_to_later_bid_entry_ms": "1793978946380",
+            "qualified_first_ask_to_later_bid_exit_ms": "1793984169250",
+            "qualified_first_ask_to_later_bid_entry": "0.48",
+            "qualified_first_ask_to_later_bid_exit": "1.35",
+            "qualified_first_ask_to_later_bid_abs_change_per_contract": "87.0",
+            "qualified_first_ask_to_later_bid_entry_observed_volume": "120",
+            "qualified_first_ask_to_later_bid_entry_bid": "0.36",
+            "qualified_first_ask_to_later_bid_entry_ask": "0.48",
+            "qualified_first_ask_to_later_bid_entry_bid_ms": "1793978944000",
+            "qualified_first_ask_to_later_bid_entry_ask_ms": "1793978943000",
+            "qualified_first_ask_to_later_bid_entry_bid_size": "86",
+            "qualified_first_ask_to_later_bid_entry_ask_size": "16",
+            "qualified_first_ask_to_later_bid_entry_spread": "0.12",
+            "qualified_first_ask_to_later_bid_entry_relative_spread": "0.285714",
+            "qualified_first_ask_to_later_bid_exit_bid": "1.35",
+            "qualified_first_ask_to_later_bid_exit_ask": "1.52",
+            "qualified_first_ask_to_later_bid_exit_bid_ms": "1793984159000",
+            "qualified_first_ask_to_later_bid_exit_ask_ms": "1793984157000",
+            "qualified_first_ask_to_later_bid_exit_bid_size": "79",
+            "qualified_first_ask_to_later_bid_exit_ask_size": "62",
+            "qualified_first_ask_to_later_bid_exit_spread": "0.17",
+            "qualified_first_ask_to_later_bid_exit_relative_spread": "0.118467",
+            "detail_reference": "4eec5411-059e-4864-ace6-2c5cadedb9c4"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "result_detail",
+      "arguments": {
+        "reference": "4eec5411-059e-4864-ace6-2c5cadedb9c4",
+        "limit": 1
+      },
+      "isError": false,
+      "response": {
+        "schema": "options-view-mcp.v1",
+        "dataset": "options_returns",
+        "requested_filters": {
+          "reference": "4eec5411-059e-4864-ace6-2c5cadedb9c4",
+          "limit": 1
+        },
+        "actual": {
+          "session": "2026-11-06",
+          "final": true,
+          "return_policy": {
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.05,
+            "spike_ratio": 3,
+            "stale_quote_s": 1800,
+            "version": "oa203-returns-v1"
+          },
+          "qualified_policy": {
+            "max_quote_age_s": 1800,
+            "max_relative_spread": 0.3,
+            "min_ask_size": 1,
+            "min_bid_size": 1,
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.1,
+            "min_entry_volume": 1,
+            "min_open_interest": null,
+            "min_samples": 3,
+            "version": "oa203-qualified-ask-bid-v1"
+          }
+        },
+        "source_mode": "public_anonymous",
+        "retrieval_time": "2026-11-08T18:53:52.099Z",
+        "producer_times": {
+          "observation": null,
+          "acquisition_start": null,
+          "acquisition_end": null,
+          "publication": null,
+          "finalized_at": "2026-11-06T21:07:11.837801+00:00"
+        },
+        "status": "available",
+        "freshness": {
+          "status": "historical"
+        },
+        "coverage": {
+          "additional_chain_expected": 0,
+          "additional_chain_statuses_recorded": 0,
+          "additional_chain_success_rate": null,
+          "additional_chain_successes": 0,
+          "additional_expiry_coverage": null,
+          "chain_expected": 38100,
+          "chain_fetches": 38100,
+          "chain_success_rate": 0.998714,
+          "complete_sweeps": 76,
+          "gaps_ms": [],
+          "max_gap_s": 672,
+          "pending_uploads": [],
+          "reasons": [],
+          "status": "complete",
+          "sweeps_in_session": 77,
+          "typical_sweep_s": 305.6,
+          "universe_coverage": 1
+        },
+        "units": {
+          "*_pct": "fractional return (1 = 100%)",
+          "*_entry, *_exit": "USD/share",
+          "*_ms, t, bid_ms, ask_ms": "UTC epoch milliseconds",
+          "*_abs_change_per_contract": "USD/contract",
+          "*_relative_spread": "spread / midpoint",
+          "*_size": "contracts at quoted side",
+          "*_entry_delay_s": "seconds from first archived sample",
+          "rank": "producer ordinal rank"
+        },
+        "warnings": [
+          "Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.",
+          "Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.",
+          "Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.",
+          "All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.",
+          "Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query.",
+          "Quote path is bounded by sweep pagination; calculation inputs/flags in row are preserved producer CSV cells, not recomputed. Trade-bar raw detail is deferred.",
+          "Matching before/after digests detect observed session changes; the producer supplies no atomic immutable session revision or per-sweep checksums here."
+        ],
+        "sources": [
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:51.205Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:51.447Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:51.739Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:52.095Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": true
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:52.369Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:52.697Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/sweeps/manifest.jsonl",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/sweeps/manifest.jsonl",
+            "retrieval_time": "2026-11-08T18:53:53.610Z",
+            "bytes": 3645862,
+            "retrieved_sha256": "54bc30052da222060a3ac5a752f2cfbb7b5208739659fd055b96145334633f3c",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/sweeps/sweep_0001.jsonl.gz",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/sweeps/sweep_0001.jsonl.gz",
+            "retrieval_time": "2026-11-08T18:53:54.125Z",
+            "bytes": 1532631,
+            "retrieved_sha256": "4592a19e8073a63fdf9ca11f1fcc8c4fa4555c409296a1cb37ea066b45d09c64",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/summary.json",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/summary.json",
+            "retrieval_time": "2026-11-08T18:53:54.493Z",
+            "bytes": 2977,
+            "retrieved_sha256": "f8732fde0a447a0e3954eb54c093c2b264df75765ea29e408ebfa13aeddf91a5",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/leaderboard.csv",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/leaderboard.csv",
+            "retrieval_time": "2026-11-08T18:53:54.805Z",
+            "bytes": 265686,
+            "retrieved_sha256": "c20bfee48c0636c4646dadf36d3071a8d05e04d76c65a37ad1763e43a9bdbd97",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          },
+          {
+            "locator": "oa203/scanner/2026-11-06/sweeps/manifest.jsonl",
+            "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/oa203/scanner/2026-11-06/sweeps/manifest.jsonl",
+            "retrieval_time": "2026-11-08T18:53:55.586Z",
+            "bytes": 3645862,
+            "retrieved_sha256": "54bc30052da222060a3ac5a752f2cfbb7b5208739659fd055b96145334633f3c",
+            "checksum_verification": "not_verified_against_producer",
+            "retained": false
+          }
+        ],
+        "pagination": {
+          "offset": 0,
+          "limit": 1,
+          "total": 76,
+          "truncated": true,
+          "next_offset": 1,
+          "scope": "chain sweep entries; quote rows are filtered to this contract"
+        },
+        "errors": [],
+        "row": {
+          "symbol": "CELH261106C00031000",
+          "underlying": "CELH",
+          "root": "CELH",
+          "option_type": "call",
+          "strike": "31.0",
+          "expiration": "2026-11-06",
+          "contract_size": "100",
+          "samples": "76",
+          "valid_samples": "76",
+          "chain_ok_sweeps": "76",
+          "crossed_samples": "0",
+          "median_spread_pct": "0.237624",
+          "day_volume": "499",
+          "open_interest": "1187",
+          "contract_flags": null,
+          "mid_first_to_max_pct": "27.7",
+          "mid_first_to_max_entry": "0.05",
+          "mid_first_to_max_exit": "1.435",
+          "mid_first_to_max_abs_change": "1.385",
+          "mid_first_to_max_abs_change_per_contract": "138.5",
+          "mid_first_to_max_entry_ms": "1793975564513",
+          "mid_first_to_max_exit_ms": "1793984169250",
+          "mid_first_to_max_entry_quote_age_s": "56.513",
+          "mid_first_to_max_exit_quote_age_s": "12.25",
+          "mid_first_to_max_entry_spread": "0.04",
+          "mid_first_to_max_flags": null,
+          "mid_open_to_close_pct": "23.3",
+          "mid_open_to_close_entry": "0.05",
+          "mid_open_to_close_exit": "1.215",
+          "mid_open_to_close_abs_change": "1.165",
+          "mid_open_to_close_abs_change_per_contract": "116.5",
+          "mid_open_to_close_entry_ms": "1793975564513",
+          "mid_open_to_close_exit_ms": "1793998625686",
+          "mid_open_to_close_entry_quote_age_s": "56.513",
+          "mid_open_to_close_exit_quote_age_s": "17.686",
+          "mid_open_to_close_entry_spread": "0.04",
+          "mid_open_to_close_flags": null,
+          "mid_trough_to_peak_pct": "46.833333",
+          "mid_trough_to_peak_entry": "0.03",
+          "mid_trough_to_peak_exit": "1.435",
+          "mid_trough_to_peak_abs_change": "1.405",
+          "mid_trough_to_peak_abs_change_per_contract": "140.5",
+          "mid_trough_to_peak_entry_ms": "1793976491640",
+          "mid_trough_to_peak_exit_ms": "1793984169250",
+          "mid_trough_to_peak_entry_quote_age_s": "56.64",
+          "mid_trough_to_peak_exit_quote_age_s": "12.25",
+          "mid_trough_to_peak_entry_spread": "0.04",
+          "mid_trough_to_peak_flags": "tiny_entry",
+          "exec_first_to_max_pct": "18.285714",
+          "exec_first_to_max_entry": "0.07",
+          "exec_first_to_max_exit": "1.35",
+          "exec_first_to_max_abs_change": "1.28",
+          "exec_first_to_max_abs_change_per_contract": "128.0",
+          "exec_first_to_max_entry_ms": "1793975564513",
+          "exec_first_to_max_exit_ms": "1793984169250",
+          "exec_first_to_max_entry_quote_age_s": "56.513",
+          "exec_first_to_max_exit_quote_age_s": "12.25",
+          "exec_first_to_max_entry_spread": "0.04",
+          "exec_first_to_max_flags": null,
+          "exec_open_to_close_pct": "10.571429",
+          "exec_open_to_close_entry": "0.07",
+          "exec_open_to_close_exit": "0.81",
+          "exec_open_to_close_abs_change": "0.74",
+          "exec_open_to_close_abs_change_per_contract": "74.0",
+          "exec_open_to_close_entry_ms": "1793975564513",
+          "exec_open_to_close_exit_ms": "1793998625686",
+          "exec_open_to_close_entry_quote_age_s": "56.513",
+          "exec_open_to_close_exit_quote_age_s": "17.686",
+          "exec_open_to_close_entry_spread": "0.04",
+          "exec_open_to_close_flags": null,
+          "exec_trough_to_peak_pct": "26.0",
+          "exec_trough_to_peak_entry": "0.05",
+          "exec_trough_to_peak_exit": "1.35",
+          "exec_trough_to_peak_abs_change": "1.3",
+          "exec_trough_to_peak_abs_change_per_contract": "130.0",
+          "exec_trough_to_peak_entry_ms": "1793976491640",
+          "exec_trough_to_peak_exit_ms": "1793984169250",
+          "exec_trough_to_peak_entry_quote_age_s": "56.64",
+          "exec_trough_to_peak_exit_quote_age_s": "12.25",
+          "exec_trough_to_peak_entry_spread": "0.04",
+          "exec_trough_to_peak_flags": null,
+          "spot_at_entry": "29.345",
+          "strike_vs_spot_pct": "0.056398",
+          "clean": "True",
+          "qualified_first_ask_to_later_bid_pct": "1.8125",
+          "qualified_first_ask_to_later_bid_rank": "209",
+          "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+          "qualified_first_ask_to_later_bid_status": "eligible",
+          "qualified_first_ask_to_later_bid_reasons": null,
+          "backfill_status": "ok",
+          "trade_bars": "79",
+          "trade_volume": "499",
+          "trade_1min_first_to_max_pct": "14.3",
+          "trade_1min_first_to_max_entry": "0.1",
+          "trade_1min_first_to_max_exit": "1.53",
+          "trade_1min_first_to_max_entry_s": "1793975400",
+          "trade_1min_first_to_max_exit_s": "1793983800",
+          "trade_1min_first_to_max_abs_change_per_contract": "143.0",
+          "trade_1min_first_to_max_flags": null,
+          "trade_1min_trough_to_peak_pct": "50.0",
+          "trade_1min_trough_to_peak_entry": "0.03",
+          "trade_1min_trough_to_peak_exit": "1.53",
+          "trade_1min_trough_to_peak_entry_s": "1793975700",
+          "trade_1min_trough_to_peak_exit_s": "1793983800",
+          "rank": "9",
+          "rank_in_type": "7",
+          "clean_rank": "1",
+          "clean_rank_in_type": "1",
+          "qualified_first_ask_to_later_bid_entry_delay_s": "3381.867",
+          "qualified_first_ask_to_later_bid_entry_ms": "1793978946380",
+          "qualified_first_ask_to_later_bid_exit_ms": "1793984169250",
+          "qualified_first_ask_to_later_bid_entry": "0.48",
+          "qualified_first_ask_to_later_bid_exit": "1.35",
+          "qualified_first_ask_to_later_bid_abs_change_per_contract": "87.0",
+          "qualified_first_ask_to_later_bid_entry_observed_volume": "120",
+          "qualified_first_ask_to_later_bid_entry_bid": "0.36",
+          "qualified_first_ask_to_later_bid_entry_ask": "0.48",
+          "qualified_first_ask_to_later_bid_entry_bid_ms": "1793978944000",
+          "qualified_first_ask_to_later_bid_entry_ask_ms": "1793978943000",
+          "qualified_first_ask_to_later_bid_entry_bid_size": "86",
+          "qualified_first_ask_to_later_bid_entry_ask_size": "16",
+          "qualified_first_ask_to_later_bid_entry_spread": "0.12",
+          "qualified_first_ask_to_later_bid_entry_relative_spread": "0.285714",
+          "qualified_first_ask_to_later_bid_exit_bid": "1.35",
+          "qualified_first_ask_to_later_bid_exit_ask": "1.52",
+          "qualified_first_ask_to_later_bid_exit_bid_ms": "1793984159000",
+          "qualified_first_ask_to_later_bid_exit_ask_ms": "1793984157000",
+          "qualified_first_ask_to_later_bid_exit_bid_size": "79",
+          "qualified_first_ask_to_later_bid_exit_ask_size": "62",
+          "qualified_first_ask_to_later_bid_exit_spread": "0.17",
+          "qualified_first_ask_to_later_bid_exit_relative_spread": "0.118467"
+        },
+        "session_window": {
+          "open_ms": 1793975400000,
+          "close_ms": 1793998800000,
+          "meaning": "exchange boundaries; not acquisition timestamps"
+        },
+        "summary": {
+          "additional_expiries": {},
+          "assessment": {
+            "additional_chain_expected": 0,
+            "additional_chain_statuses_recorded": 0,
+            "additional_chain_success_rate": null,
+            "additional_chain_successes": 0,
+            "additional_expiry_coverage": null,
+            "chain_expected": 38100,
+            "chain_fetches": 38100,
+            "chain_success_rate": 0.998714,
+            "complete_sweeps": 76,
+            "gaps_ms": [],
+            "max_gap_s": 672,
+            "pending_uploads": [],
+            "reasons": [],
+            "status": "complete",
+            "sweeps_in_session": 77,
+            "typical_sweep_s": 305.6,
+            "universe_coverage": 1
+          },
+          "backfill": {
+            "errors": 0,
+            "requested": 285
+          },
+          "clean_ranked_contracts": 31345,
+          "contracts": 57908,
+          "damaged_artifacts": [],
+          "final": true,
+          "finalized_at": "2026-11-06T21:07:11.837801+00:00",
+          "interruptions": [],
+          "measurement": "Sampled-return leaderboard: quote returns come from ~5-minute chain samples. The trade-bar backfill only enriches contracts that already rank in those samples; a brief spike in a contract that never ranks is not discovered.",
+          "outputs": {
+            "contracts": "contracts.csv.gz",
+            "leaderboard": "leaderboard.csv",
+            "qualified_ask_bid_v1": "qualified_ask_bid_v1.csv"
+          },
+          "qualified_policy": {
+            "max_quote_age_s": 1800,
+            "max_relative_spread": 0.3,
+            "min_ask_size": 1,
+            "min_bid_size": 1,
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.1,
+            "min_entry_volume": 1,
+            "min_open_interest": null,
+            "min_samples": 3,
+            "version": "oa203-qualified-ask-bid-v1"
+          },
+          "qualified_ranked_contracts": 15508,
+          "qualified_reason_counts": {
+            "entry_ask_size_insufficient": 2440,
+            "entry_ask_timestamp_stale": 21087,
+            "entry_bid_nonpositive": 26325,
+            "entry_bid_timestamp_stale": 26109,
+            "entry_insufficient_samples_so_far": 42400,
+            "entry_locked": 2,
+            "entry_premium": 14786,
+            "entry_spread": 9206,
+            "entry_volume_insufficient": 39184,
+            "exit_ask_timestamp_stale": 61,
+            "exit_bid_nonpositive": 221,
+            "exit_bid_size_insufficient": 221,
+            "exit_bid_timestamp_stale": 107,
+            "exit_spread": 401,
+            "no_qualified_entry": 41964,
+            "no_strictly_later_qualified_exit": 436
+          },
+          "qualified_status_counts": {
+            "eligible": 15508,
+            "excluded": 42400
+          },
+          "ranked_contracts": 36382,
+          "request_stats": {
+            "max_request_seconds": 2.5654993057250977,
+            "rate_wait_seconds": 63787.75462079048,
+            "rate_waits": 114488,
+            "request_seconds": 5093.226506948471,
+            "requests": 39599
+          },
+          "return_policy": {
+            "min_coverage": 0.5,
+            "min_entry_premium": 0.05,
+            "spike_ratio": 3,
+            "stale_quote_s": 1800,
+            "version": "oa203-returns-v1"
+          },
+          "session_close_ms": 1793998800000,
+          "session_open_ms": 1793975400000,
+          "trade_date": "2026-11-06",
+          "unfinalized_earlier_days": [],
+          "universe": {
+            "occ_report_date": "2026-11-05",
+            "selected_count": 500,
+            "shortfall": 0,
+            "skip_counts": {
+              "no_listed_expirations": 1
+            },
+            "target": 500
+          }
+        },
+        "quote_path": [
+          {
+            "sweep": 1,
+            "t": 1793975564513,
+            "underlying": "CELH",
+            "spot": 29.345,
+            "spot_source": "mid",
+            "spot_ms": 1793975542000,
+            "symbol": "CELH261106C00031000",
+            "root": "CELH",
+            "type": "call",
+            "strike": 31,
+            "expiration": "2026-11-06",
+            "bid": 0.03,
+            "ask": 0.07,
+            "bid_ms": 1793975508000,
+            "ask_ms": 1793975508000,
+            "bid_size": 1,
+            "ask_size": 1,
+            "last": 0.1,
+            "trade_ms": 1793975472006,
+            "volume": 11,
+            "oi": 1187,
+            "contract_size": 100
+          }
+        ],
+        "sweeps": [
+          {
+            "additional_chains": {},
+            "chains": {
+              "CELH": {
+                "expiration": "2026-11-06",
+                "fetched_ms": 1793975564513,
+                "rows": 84,
+                "status": "ok"
+              }
+            },
+            "ended_ms": 1793975705743,
+            "file": "sweep_0001.jsonl.gz",
+            "request_stats_delta": {
+              "rate_wait_seconds": 820.4770140647888,
+              "rate_waits": 1473,
+              "request_seconds": 65.70593667030334,
+              "requests": 510
+            },
+            "rows": 57908,
+            "start_interval_seconds": null,
+            "started_ms": 1793975400000,
+            "status_counts": {
+              "ok": 500
+            },
+            "sweep": 1,
+            "truncated": false
+          }
+        ]
+      }
+    }
+  ]
+}
