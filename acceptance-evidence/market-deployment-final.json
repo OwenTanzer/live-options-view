@@ -1,0 +1,58 @@
+[
+  {
+    "id": "05766984-efad-41c8-81b3-06ea5bb4b77c",
+    "status": "SUCCESS",
+    "createdAt": "2026-11-08T18:49:27.593Z",
+    "meta": {
+      "image": "ghcr.io/owentanzer/market-mcp-read-only@sha256:a649beb7a23c0f2698f8a7bb89edf58d07f5c1cb4bc7692896dfebdd3cb3c851",
+      "imageDigest": "sha256:a649beb7a23c0f2698f8a7bb89edf58d07f5c1cb4bc7692896dfebdd3cb3c851",
+      "logsV2": true,
+      "plan": "hobby",
+      "reason": "deploy",
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "RAILPACK",
+          "dockerfilePath": null,
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": 30,
+          "healthcheckPath": "/healthz",
+          "healthcheckTimeout": 60,
+          "ipv6EgressEnabled": false,
+          "limitOverride": {
+            "containers": {
+              "cpu": 0.2,
+              "memoryBytes": 500000000
+            }
+          },
+          "multiRegionConfig": {
+            "us-west2": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": 0,
+          "preDeployCommand": null,
+          "preDeployTimeoutSeconds": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 3,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": "node --max-old-space-size=256 market_mcp/production.js",
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  }
+]

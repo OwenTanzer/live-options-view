@@ -1,0 +1,85 @@
+{
+  "data": {
+    "serviceInstance": {
+      "cronSchedule": "45 12 * * 1-5",
+      "latestDeployment": {
+        "deploymentStopped": false,
+        "id": "f99f6c45-60f4-4b81-8150-51c18115e909",
+        "instances": [
+          {
+            "id": "e584a1fd-2828-440f-ab90-e924de62418a",
+            "status": "CREATED"
+          }
+        ],
+        "meta": {
+          "branch": "master",
+          "buildOnly": true,
+          "commitAuthor": "OwenTanzer",
+          "commitHash": "62ae9ffc36b2af8707e6709ca816bb1baf9d81df",
+          "commitMessage": "Merge pull request #144 from OwenTanzer/brian/r2-backtest-20261024\n\nResearch: chronological R2 coverage and first market hypothesis tests",
+          "fileServiceManifest": {},
+          "ignoreWatchPatterns": true,
+          "imageDigest": "sha256:bbb1350654b435830430a9bae747a377af62db0396a5e2c26cbf48c22a39be2c",
+          "logsV2": true,
+          "nixpacksProviders": [],
+          "plan": "hobby",
+          "propertyFileMapping": {
+            "build.builder": "$.build.builder",
+            "build.dockerfilePath": "$.build.dockerfilePath",
+            "deploy.restartPolicyType": "$.deploy.restartPolicyType",
+            "deploy.startCommand": "$.deploy.startCommand"
+          },
+          "reason": "deploy",
+          "repo": "OwenTanzer/live-options-view",
+          "rootDirectory": null,
+          "runtime": "V2",
+          "serviceManifest": {
+            "build": {
+              "buildCommand": null,
+              "buildEnvironment": "V3",
+              "builder": "DOCKERFILE",
+              "dockerfilePath": "Dockerfile",
+              "nixpacksConfigPath": null,
+              "nixpacksPlan": null,
+              "watchPatterns": []
+            },
+            "deploy": {
+              "cronSchedule": "45 12 * * 1-5",
+              "drainingSeconds": null,
+              "healthcheckPath": null,
+              "healthcheckTimeout": null,
+              "ipv6EgressEnabled": false,
+              "limitOverride": null,
+              "multiRegionConfig": {
+                "sfo": {
+                  "numReplicas": 1
+                }
+              },
+              "numReplicas": 1,
+              "overlapSeconds": null,
+              "preDeployCommand": null,
+              "preDeployTimeoutSeconds": null,
+              "region": null,
+              "registryCredentials": null,
+              "requiredMountPath": null,
+              "restartPolicyMaxRetries": null,
+              "restartPolicyType": "NEVER",
+              "runtime": "V2",
+              "sleepApplication": false,
+              "startCommand": "python -u scripts/oa203_return_scanner.py run",
+              "useLegacyStacker": false
+            }
+          },
+          "skipBuildCache": true,
+          "volumeMounts": [
+            "/data"
+          ]
+        },
+        "status": "SUCCESS"
+      },
+      "nextCronRunAt": "2026-11-09T12:45:00.000Z",
+      "railwayConfigFile": null,
+      "startCommand": "python -u scripts/oa203_return_scanner.py run"
+    }
+  }
+}
