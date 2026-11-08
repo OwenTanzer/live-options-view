@@ -1,0 +1,6 @@
+.........{"at": "2026-11-08T19:49:18.586348+00:00", "error": "BadGzipFile: Not a gzipped file (b'co')", "event": "oa203_damaged_artifact", "file": "sweeps/sweep_0002.jsonl.gz", "records_salvaged": 0}
+.............
+----------------------------------------------------------------------
+Ran 22 tests in 0.445s
+
+OK
