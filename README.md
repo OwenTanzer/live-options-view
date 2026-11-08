@@ -73,12 +73,12 @@ The general rule: every number on the page comes from a named R2 key through a n
 
 ## Review-readiness checklist (Cycle 5, Nov 7 2026)
 
-For Owen's Nov 8 review — what this draft can and cannot yet answer:
+For Owen's Nov 8 review — what this README can and cannot yet answer:
 
 - [x] **Where did this number come from?** Four paths traced end to end with code + live fetches + local replay (live VWAP, historical heatmap, STEO signal, settlement sweep), plus the Tradier lane traced to its loss point.
 - [x] **What runs when nobody has the site open?** Every runtime/job rowed with trigger, inputs, outputs, consumers, run/test (workspace map §2 in the [quest Log](https://app.notion.com/p/4123c519147b811dbd36da5d1bcd251b?pvs=204)); the scheduled jobs are named in the README above.
 - [x] **What ships if I change this file?** Deploy table above, per area, with the one deploying workflow and the Railway watch-path caveat.
 - [x] **Honest gaps:** every known break is listed above with its evidence, not smoothed over — stale archive, write-only Tradier lane, sweep spot marks, fossil position, runner quiet, stale deployment contract, external squeeze producer, unverified Crassus P0.
 - [x] **Panel-render verification for the STEO panel** — the publication exists, and `#steo-panel` renders on the live site with the published values (confirmed in the live browser, Cycle 5, 21:58 PT).
-- [ ] **Owen's verification items** (quest Log, §10): live Railway readback, R2 Tradier listing, Tradier decision, IBIT tests, archive producers, Crassus P0 probe, runner state Nov 5–6. None is answerable from the repo; the drafts record them rather than guessing.
+- [ ] **Owen's verification items** (quest Log, §10): live Railway readback, R2 Tradier listing, Tradier decision, IBIT tests, archive producers, Crassus P0 probe, runner state Nov 5–6. None is answerable from the repo; the docs record them rather than guessing.
 - [ ] **Q1 tripwire work** (redesign queue focus): the manifest-freshness tripwire and the README record of the archive producer + schedule are still undone — issue #148 is filed, work not yet done.
