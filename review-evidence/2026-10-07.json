@@ -1,0 +1,1128 @@
+{
+  "day": "2026-10-07",
+  "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+  "sweeps": 77,
+  "contracts": 50700,
+  "statuses": {
+    "eligible": 15702,
+    "excluded": 34998
+  },
+  "reasons": {
+    "entry_bid_nonpositive": 19848,
+    "entry_bid_timestamp_stale": 19936,
+    "entry_insufficient_samples_so_far": 34998,
+    "entry_premium": 10288,
+    "entry_spread": 7849,
+    "entry_volume_insufficient": 33403,
+    "no_qualified_entry": 34724,
+    "entry_ask_size_insufficient": 1402,
+    "entry_ask_timestamp_stale": 12691,
+    "entry_ask_missing": 111,
+    "entry_bid_missing": 111,
+    "exit_spread": 236,
+    "no_strictly_later_qualified_exit": 274,
+    "exit_ask_timestamp_stale": 23,
+    "exit_bid_nonpositive": 51,
+    "exit_bid_size_insufficient": 51,
+    "exit_bid_timestamp_stale": 32,
+    "entry_locked": 1
+  },
+  "qualified_negative_or_zero": 10730,
+  "qualified_top200_outside_legacy": 90,
+  "legacy_rows_compared": 251,
+  "legacy_mismatches": [],
+  "damaged": [],
+  "top10": [
+    {
+      "symbol": "MU261007C01070000",
+      "qualified_rank": 1,
+      "qualified_return": 83.545455,
+      "legacy_rank": 3,
+      "clean_rank": 3
+    },
+    {
+      "symbol": "MU261007C01065000",
+      "qualified_rank": 2,
+      "qualified_return": 82.214286,
+      "legacy_rank": 4,
+      "clean_rank": 4
+    },
+    {
+      "symbol": "MU261007C01075000",
+      "qualified_rank": 3,
+      "qualified_return": 77.888889,
+      "legacy_rank": 5,
+      "clean_rank": 5
+    },
+    {
+      "symbol": "MU261007C01060000",
+      "qualified_rank": 4,
+      "qualified_return": 70.923077,
+      "legacy_rank": 2,
+      "clean_rank": 2
+    },
+    {
+      "symbol": "MU261007C01055000",
+      "qualified_rank": 5,
+      "qualified_return": 61.169811,
+      "legacy_rank": 1,
+      "clean_rank": 1
+    },
+    {
+      "symbol": "MU261007C01050000",
+      "qualified_rank": 6,
+      "qualified_return": 50.824324,
+      "legacy_rank": 6,
+      "clean_rank": 6
+    },
+    {
+      "symbol": "MU261007C01080000",
+      "qualified_rank": 7,
+      "qualified_return": 44.909091,
+      "legacy_rank": 7,
+      "clean_rank": 7
+    },
+    {
+      "symbol": "MU261007C01045000",
+      "qualified_rank": 8,
+      "qualified_return": 40.298077,
+      "legacy_rank": 9,
+      "clean_rank": 9
+    },
+    {
+      "symbol": "MU261007C01085000",
+      "qualified_rank": 9,
+      "qualified_return": 38.411765,
+      "legacy_rank": 8,
+      "clean_rank": 8
+    },
+    {
+      "symbol": "MU261007C01090000",
+      "qualified_rank": 10,
+      "qualified_return": 33.166667,
+      "legacy_rank": 12,
+      "clean_rank": 11
+    }
+  ],
+  "controls": [
+    {
+      "symbol": "MU261007C01055000",
+      "mid_first_to_max_pct": 76.758621,
+      "exec_first_to_max_pct": 41.792208,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 61.169811,
+      "qualified_first_ask_to_later_bid_rank": 5,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 0.53,
+      "qualified_first_ask_to_later_bid_exit": 32.95,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 3242.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 872,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.46,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.53,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 61,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 39,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.07,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.141414,
+      "qualified_first_ask_to_later_bid_exit_bid": 32.95,
+      "qualified_first_ask_to_later_bid_exit_ask": 34.7,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 83,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 100,
+      "qualified_first_ask_to_later_bid_exit_spread": 1.75,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.051737,
+      "rank": 1,
+      "clean_rank": 1
+    },
+    {
+      "symbol": "MU261007C01060000",
+      "mid_first_to_max_pct": 63.829545,
+      "exec_first_to_max_pct": 34.961538,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 70.923077,
+      "qualified_first_ask_to_later_bid_rank": 4,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393681374,
+      "qualified_first_ask_to_later_bid_entry": 0.39,
+      "qualified_first_ask_to_later_bid_exit": 28.05,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 2766.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 627,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.32,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.39,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 47,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 27,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.07,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.197183,
+      "qualified_first_ask_to_later_bid_exit_bid": 28.05,
+      "qualified_first_ask_to_later_bid_exit_ask": 29.0,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393679000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393675000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 83,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 2,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.95,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.033304,
+      "rank": 2,
+      "clean_rank": 2
+    },
+    {
+      "symbol": "MU261007C01070000",
+      "mid_first_to_max_pct": 63.40678,
+      "exec_first_to_max_pct": 50.666667,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 83.545455,
+      "qualified_first_ask_to_later_bid_rank": 1,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393681374,
+      "qualified_first_ask_to_later_bid_entry": 0.22,
+      "qualified_first_ask_to_later_bid_exit": 18.6,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 1838.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 1158,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.19,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.22,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 29,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 32,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.03,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.146341,
+      "qualified_first_ask_to_later_bid_exit_bid": 18.6,
+      "qualified_first_ask_to_later_bid_exit_ask": 19.4,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393679000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393679000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 25,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 44,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.8,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.042105,
+      "rank": 3,
+      "clean_rank": 3
+    },
+    {
+      "symbol": "MU261007C01065000",
+      "mid_first_to_max_pct": 52.055556,
+      "exec_first_to_max_pct": 41.363636,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 82.214286,
+      "qualified_first_ask_to_later_bid_rank": 2,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 0.28,
+      "qualified_first_ask_to_later_bid_exit": 23.3,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 2302.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 925,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.25,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.28,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 4,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 8,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.03,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.113208,
+      "qualified_first_ask_to_later_bid_exit_bid": 23.3,
+      "qualified_first_ask_to_later_bid_exit_ask": 24.45,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 42,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 26,
+      "qualified_first_ask_to_later_bid_exit_spread": 1.15,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.048168,
+      "rank": 4,
+      "clean_rank": 4
+    },
+    {
+      "symbol": "MU261007C01075000",
+      "mid_first_to_max_pct": 51.818182,
+      "exec_first_to_max_pct": 34.5,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 77.888889,
+      "qualified_first_ask_to_later_bid_rank": 3,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393681374,
+      "qualified_first_ask_to_later_bid_entry": 0.18,
+      "qualified_first_ask_to_later_bid_exit": 14.2,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 1402.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 2325,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.15,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.18,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 10,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 65,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.03,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.181818,
+      "qualified_first_ask_to_later_bid_exit_bid": 14.2,
+      "qualified_first_ask_to_later_bid_exit_ask": 14.85,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393679000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393680000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 2,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 41,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.65,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.04475,
+      "rank": 5,
+      "clean_rank": 5
+    },
+    {
+      "symbol": "MU261007C01050000",
+      "mid_first_to_max_pct": 50.611842,
+      "exec_first_to_max_pct": 38.132653,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 50.824324,
+      "qualified_first_ask_to_later_bid_rank": 6,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 0.74,
+      "qualified_first_ask_to_later_bid_exit": 38.35,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 3761.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 3090,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.65,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.74,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 13,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 23,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.09,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.129496,
+      "qualified_first_ask_to_later_bid_exit_bid": 38.35,
+      "qualified_first_ask_to_later_bid_exit_ask": 40.1,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 23,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 58,
+      "qualified_first_ask_to_later_bid_exit_spread": 1.75,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.044614,
+      "rank": 6,
+      "clean_rank": 6
+    },
+    {
+      "symbol": "MU261007C01080000",
+      "mid_first_to_max_pct": 37.867925,
+      "exec_first_to_max_pct": 29.606061,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 44.909091,
+      "qualified_first_ask_to_later_bid_rank": 7,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 920.452,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380727792,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 0.22,
+      "qualified_first_ask_to_later_bid_exit": 10.1,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 988.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 1011,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.18,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.22,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380726000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380726000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 28,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 33,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.04,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.2,
+      "qualified_first_ask_to_later_bid_exit_bid": 10.1,
+      "qualified_first_ask_to_later_bid_exit_ask": 10.5,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 33,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 16,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.4,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.038835,
+      "rank": 7,
+      "clean_rank": 7
+    },
+    {
+      "symbol": "MU261007C01085000",
+      "mid_first_to_max_pct": 36.027027,
+      "exec_first_to_max_pct": 26.916667,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 38.411765,
+      "qualified_first_ask_to_later_bid_rank": 9,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 920.452,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380727792,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 0.17,
+      "qualified_first_ask_to_later_bid_exit": 6.7,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 653.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 478,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.14,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.17,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380727000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380727000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 41,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 3,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.03,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.193548,
+      "qualified_first_ask_to_later_bid_exit_bid": 6.7,
+      "qualified_first_ask_to_later_bid_exit_ask": 7.0,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 44,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 35,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.3,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.043796,
+      "rank": 8,
+      "clean_rank": 8
+    },
+    {
+      "symbol": "MU261007C01045000",
+      "mid_first_to_max_pct": 35.219008,
+      "exec_first_to_max_pct": 26.356688,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 40.298077,
+      "qualified_first_ask_to_later_bid_rank": 8,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 1.04,
+      "qualified_first_ask_to_later_bid_exit": 42.95,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 4191.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 616,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.93,
+      "qualified_first_ask_to_later_bid_entry_ask": 1.04,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 24,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 29,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.11,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.111675,
+      "qualified_first_ask_to_later_bid_exit_bid": 42.95,
+      "qualified_first_ask_to_later_bid_exit_ask": 44.7,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 48,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 18,
+      "qualified_first_ask_to_later_bid_exit_spread": 1.75,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.039932,
+      "rank": 9,
+      "clean_rank": 9
+    },
+    {
+      "symbol": "MU261007C01040000",
+      "mid_first_to_max_pct": 25.620879,
+      "exec_first_to_max_pct": 21.990196,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 30.904762,
+      "qualified_first_ask_to_later_bid_rank": 11,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 1.47,
+      "qualified_first_ask_to_later_bid_exit": 46.9,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 4543.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 1183,
+      "qualified_first_ask_to_later_bid_entry_bid": 1.32,
+      "qualified_first_ask_to_later_bid_entry_ask": 1.47,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 68,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 29,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.15,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.107527,
+      "qualified_first_ask_to_later_bid_exit_bid": 46.9,
+      "qualified_first_ask_to_later_bid_exit_ask": 50.0,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 110,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 134,
+      "qualified_first_ask_to_later_bid_exit_spread": 3.1,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.063983,
+      "rank": 11,
+      "clean_rank": 10
+    },
+    {
+      "symbol": "MU261007C01090000",
+      "mid_first_to_max_pct": 25.09375,
+      "exec_first_to_max_pct": 19.5,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 33.166667,
+      "qualified_first_ask_to_later_bid_rank": 10,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 920.452,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380727792,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791392761175,
+      "qualified_first_ask_to_later_bid_entry": 0.12,
+      "qualified_first_ask_to_later_bid_exit": 4.1,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 398.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 491,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.11,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.12,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380726000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380716000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 35,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 98,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.01,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.086957,
+      "qualified_first_ask_to_later_bid_exit_bid": 4.1,
+      "qualified_first_ask_to_later_bid_exit_ask": 4.25,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791392760000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791392760000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 33,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 38,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.15,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.035928,
+      "rank": 12,
+      "clean_rank": 11
+    },
+    {
+      "symbol": "MU261007C01095000",
+      "mid_first_to_max_pct": 21.454545,
+      "exec_first_to_max_pct": 13.352941,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 19.333333,
+      "qualified_first_ask_to_later_bid_rank": 13,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 2203.982,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791382011322,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791392761175,
+      "qualified_first_ask_to_later_bid_entry": 0.12,
+      "qualified_first_ask_to_later_bid_exit": 2.44,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 232.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 427,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.09,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.12,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791382010000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791382010000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 69,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 82,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.03,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.285714,
+      "qualified_first_ask_to_later_bid_exit_bid": 2.44,
+      "qualified_first_ask_to_later_bid_exit_ask": 2.5,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791392760000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791392760000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 1,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 2,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.06,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.024291,
+      "rank": 13,
+      "clean_rank": 12
+    },
+    {
+      "symbol": "MU261007C01035000",
+      "mid_first_to_max_pct": 20.636364,
+      "exec_first_to_max_pct": 17.607143,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 23.12037,
+      "qualified_first_ask_to_later_bid_rank": 12,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 2.16,
+      "qualified_first_ask_to_later_bid_exit": 52.1,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 4994.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 730,
+      "qualified_first_ask_to_later_bid_entry_bid": 1.93,
+      "qualified_first_ask_to_later_bid_entry_ask": 2.16,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 25,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 47,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.23,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.112469,
+      "qualified_first_ask_to_later_bid_exit_bid": 52.1,
+      "qualified_first_ask_to_later_bid_exit_ask": 55.0,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393066000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 44,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 55,
+      "qualified_first_ask_to_later_bid_exit_spread": 2.9,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.054155,
+      "rank": 14,
+      "clean_rank": 13
+    },
+    {
+      "symbol": "GS261009C00940000",
+      "mid_first_to_max_pct": 15.363636,
+      "exec_first_to_max_pct": -0.83871,
+      "clean": false,
+      "qualified_first_ask_to_later_bid_pct": null,
+      "qualified_first_ask_to_later_bid_rank": null,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "excluded",
+      "qualified_first_ask_to_later_bid_reasons": [
+        "entry_bid_nonpositive",
+        "entry_bid_timestamp_stale",
+        "entry_insufficient_samples_so_far",
+        "entry_premium",
+        "entry_spread",
+        "no_qualified_entry"
+      ],
+      "rank": 18,
+      "clean_rank": null
+    },
+    {
+      "symbol": "MU261007C01030000",
+      "mid_first_to_max_pct": 15.293706,
+      "exec_first_to_max_pct": 11.380435,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 17.672131,
+      "qualified_first_ask_to_later_bid_rank": 14,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 3.05,
+      "qualified_first_ask_to_later_bid_exit": 56.95,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 5390.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 1603,
+      "qualified_first_ask_to_later_bid_entry_bid": 2.79,
+      "qualified_first_ask_to_later_bid_entry_ask": 3.05,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 65,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 53,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.26,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.089041,
+      "qualified_first_ask_to_later_bid_exit_bid": 56.95,
+      "qualified_first_ask_to_later_bid_exit_ask": 59.4,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 70,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 70,
+      "qualified_first_ask_to_later_bid_exit_spread": 2.45,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.042114,
+      "rank": 19,
+      "clean_rank": 15
+    },
+    {
+      "symbol": "MU261007C01025000",
+      "mid_first_to_max_pct": 13.372881,
+      "exec_first_to_max_pct": 9.589744,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 13.576471,
+      "qualified_first_ask_to_later_bid_rank": 16,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 618.153,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791380425493,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791393067685,
+      "qualified_first_ask_to_later_bid_entry": 4.25,
+      "qualified_first_ask_to_later_bid_exit": 61.95,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 5770.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 1105,
+      "qualified_first_ask_to_later_bid_entry_bid": 4.0,
+      "qualified_first_ask_to_later_bid_entry_ask": 4.25,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791380424000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 14,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 4,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.25,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.060606,
+      "qualified_first_ask_to_later_bid_exit_bid": 61.95,
+      "qualified_first_ask_to_later_bid_exit_ask": 64.4,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791393067000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 28,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 13,
+      "qualified_first_ask_to_later_bid_exit_spread": 2.45,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.038781,
+      "rank": 21,
+      "clean_rank": 17
+    },
+    {
+      "symbol": "MU261007C01100000",
+      "mid_first_to_max_pct": 11.818182,
+      "exec_first_to_max_pct": 7.176471,
+      "clean": true,
+      "qualified_first_ask_to_later_bid_pct": 12.9,
+      "qualified_first_ask_to_later_bid_rank": 17,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "eligible",
+      "qualified_first_ask_to_later_bid_reasons": [],
+      "qualified_first_ask_to_later_bid_entry_delay_s": 2510.624,
+      "qualified_first_ask_to_later_bid_entry_ms": 1791382317964,
+      "qualified_first_ask_to_later_bid_exit_ms": 1791391840014,
+      "qualified_first_ask_to_later_bid_entry": 0.1,
+      "qualified_first_ask_to_later_bid_exit": 1.39,
+      "qualified_first_ask_to_later_bid_abs_change_per_contract": 129.0,
+      "qualified_first_ask_to_later_bid_entry_observed_volume": 5785,
+      "qualified_first_ask_to_later_bid_entry_bid": 0.08,
+      "qualified_first_ask_to_later_bid_entry_ask": 0.1,
+      "qualified_first_ask_to_later_bid_entry_bid_ms": 1791382282000,
+      "qualified_first_ask_to_later_bid_entry_ask_ms": 1791382317000,
+      "qualified_first_ask_to_later_bid_entry_bid_size": 100,
+      "qualified_first_ask_to_later_bid_entry_ask_size": 39,
+      "qualified_first_ask_to_later_bid_entry_spread": 0.02,
+      "qualified_first_ask_to_later_bid_entry_relative_spread": 0.222222,
+      "qualified_first_ask_to_later_bid_exit_bid": 1.39,
+      "qualified_first_ask_to_later_bid_exit_ask": 1.4,
+      "qualified_first_ask_to_later_bid_exit_bid_ms": 1791391839000,
+      "qualified_first_ask_to_later_bid_exit_ask_ms": 1791391839000,
+      "qualified_first_ask_to_later_bid_exit_bid_size": 5,
+      "qualified_first_ask_to_later_bid_exit_ask_size": 26,
+      "qualified_first_ask_to_later_bid_exit_spread": 0.01,
+      "qualified_first_ask_to_later_bid_exit_relative_spread": 0.007168,
+      "rank": 24,
+      "clean_rank": 18
+    },
+    {
+      "symbol": "GS261009C01160000",
+      "mid_first_to_max_pct": null,
+      "exec_first_to_max_pct": null,
+      "clean": false,
+      "qualified_first_ask_to_later_bid_pct": null,
+      "qualified_first_ask_to_later_bid_rank": null,
+      "qualified_first_ask_to_later_bid_policy_version": "oa203-qualified-ask-bid-v1",
+      "qualified_first_ask_to_later_bid_status": "excluded",
+      "qualified_first_ask_to_later_bid_reasons": [
+        "entry_ask_timestamp_stale",
+        "entry_bid_nonpositive",
+        "entry_bid_timestamp_stale",
+        "entry_insufficient_samples_so_far",
+        "entry_premium",
+        "entry_volume_insufficient",
+        "no_qualified_entry"
+      ],
+      "rank": null,
+      "clean_rank": null
+    }
+  ],
+  "sources": [
+    {
+      "key": "2026-10-07/leaderboard.csv",
+      "bytes": 175423,
+      "sha256": "20783308febf920daf8c58189de6d20d495bdd17f76f47a50f9c2e4414246b3f"
+    },
+    {
+      "key": "2026-10-07/summary.json",
+      "bytes": 1643,
+      "sha256": "b99d8295ec8cc8914b3f33c07ba8c99789ecc387ef11359c5c44b00e56cd62f6"
+    },
+    {
+      "key": "2026-10-07/sweeps/manifest.jsonl",
+      "bytes": 2574072,
+      "sha256": "9e75f6ca269ecd66088a952a36c2d3ec7cd8a1c04b24dd5069ffb9711e2f712a"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0001.jsonl.gz",
+      "bytes": 1349023,
+      "sha256": "10c1f4c164dfb56136e12b7687fd54939d14b49512b9a72bbf021078a33c803a"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0002.jsonl.gz",
+      "bytes": 1388305,
+      "sha256": "d7489159f5eec748c0d37b8b8a51e05b95c94210b4eb1071b169c3ecb1086bd5"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0003.jsonl.gz",
+      "bytes": 1404137,
+      "sha256": "2b52a1d6bdaa5b97fe106941f42fa9f06095789e107da3b43bcb337709a3b886"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0004.jsonl.gz",
+      "bytes": 1410630,
+      "sha256": "58343a7ff1447de1f19314b74d1965202e2a1a856e2e4a0f70b85bb01db40266"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0005.jsonl.gz",
+      "bytes": 1422589,
+      "sha256": "519b984525a85212fbbb5b6bb22968b61cbc56e367274a0dc92140f1b8d39489"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0006.jsonl.gz",
+      "bytes": 1426469,
+      "sha256": "0f5965ff69b2aa4552b9d98d59aab3066f4e0fbc50d995ad07c6c78b3a052a66"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0007.jsonl.gz",
+      "bytes": 1425585,
+      "sha256": "d2b26f01bfe5ac8c4e351452048a18721ba0551dfcb6ec0be2c7374f353caa61"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0008.jsonl.gz",
+      "bytes": 1434266,
+      "sha256": "fb8bb961421a1670382e03ce08ec66580aa45ea89252217617ae81bef505cd81"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0009.jsonl.gz",
+      "bytes": 1439121,
+      "sha256": "96efea8540fe2472bef1e33a05bf5c59709aaef83d51f4b66dd7c9d17e5062ad"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0010.jsonl.gz",
+      "bytes": 1444496,
+      "sha256": "cea2bafe87ff9df83998e725cfaa1cd8babf53fac39257e7cb302519864e0432"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0011.jsonl.gz",
+      "bytes": 1444636,
+      "sha256": "93cd19971d4b4601ef8f6db8dcdbcb539838b5a2a7bf17e73eb5073c2028da6b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0012.jsonl.gz",
+      "bytes": 1444792,
+      "sha256": "f33123a8a42790a2ac01d220236d87559caac7e17b588c5a33a9c7abefec004b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0013.jsonl.gz",
+      "bytes": 1444767,
+      "sha256": "3f07bcc4f899d76382b36daca79851a540bdddc10ae5543450247a5af6bb3f5b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0014.jsonl.gz",
+      "bytes": 1448340,
+      "sha256": "6e9d5bea237c321f041d784ba983917efb11ed788576503e3ea82413084be08c"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0015.jsonl.gz",
+      "bytes": 1451274,
+      "sha256": "d448b4c4e60f03595f6a4e9483a65f06341f24bed09a0e41007ce935da50be67"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0016.jsonl.gz",
+      "bytes": 1453416,
+      "sha256": "fbe8cca963a6b2cd166b23971aacb4c279a6dff9e605fa54b5c48ba7cf6221f3"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0017.jsonl.gz",
+      "bytes": 1453426,
+      "sha256": "4d06975218b6de434b982de1266359e1387ae228fb8a73ee76add6f5c649e5ab"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0018.jsonl.gz",
+      "bytes": 1453360,
+      "sha256": "86472566aa97e25e6b6e6f2055561ad018436ee3ec7eb1ee8835f772d9c5414f"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0019.jsonl.gz",
+      "bytes": 1453413,
+      "sha256": "e692fe4c70481663cc6f79b34ae80eec1e415908e93828df0de312abe84cff3b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0020.jsonl.gz",
+      "bytes": 1455914,
+      "sha256": "7f82d4edfae28afee884f88f7221ee57dc4c7b2fa60d7f1a3f50c62016b99179"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0021.jsonl.gz",
+      "bytes": 1454752,
+      "sha256": "ed7490e6428da725059f6878ac59da9043cda59167977ba027dad96d52a65eec"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0022.jsonl.gz",
+      "bytes": 1458963,
+      "sha256": "32d7a255c5416f0b14b679bb6f78b5291c7d2104f1578511ac7b841be6b9d66c"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0023.jsonl.gz",
+      "bytes": 1458779,
+      "sha256": "6ae9195ef583f37d63a41755ccab11cda27e7f836faf19aa3c3265ef1e8a4ff9"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0024.jsonl.gz",
+      "bytes": 1460649,
+      "sha256": "c98f9787d53cb8cd40ffae8ef6483375ff1f95dcf657d6b5eb7adbabcd611190"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0025.jsonl.gz",
+      "bytes": 1464077,
+      "sha256": "94171b0b607c4781156b42a0adf3952c5004c921f0a599d8ca64f2e99b67d696"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0026.jsonl.gz",
+      "bytes": 1466070,
+      "sha256": "1fea33d7fb602bf98722a387f24d67ffb96dfb94e9a9306784fd35ecdfcecd23"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0027.jsonl.gz",
+      "bytes": 1469549,
+      "sha256": "80a99324873c0a1cc4183e9f11c8850e89bc00ff760ac1279f28baf5fe8decfa"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0028.jsonl.gz",
+      "bytes": 1465065,
+      "sha256": "0270458915e8fc079b457e69ed0ba8d6c720f6ff9242b16bf320b9ed9af94f5e"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0029.jsonl.gz",
+      "bytes": 1465629,
+      "sha256": "4c58c99cc1b5fd4787a081df8126e86157117c61e78aa7dea29d8afc2664942d"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0030.jsonl.gz",
+      "bytes": 1459142,
+      "sha256": "cd50f00dae6ecd07115d3d70af259090e49ebb01a09d4bca4b91ce5ab73e1cc1"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0031.jsonl.gz",
+      "bytes": 1469258,
+      "sha256": "e68141ae31134162ac5677fcadea7f80810007229063105614d84f20ca15c753"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0032.jsonl.gz",
+      "bytes": 1472022,
+      "sha256": "2f2a9d2ea8bf5770540710f571015335745bc6fbfc6606ecb15182c8f6752601"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0033.jsonl.gz",
+      "bytes": 1471439,
+      "sha256": "123237384680e874c2136002743bcb6be7cd0fc7bedac1d724c05f2886ebb66b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0034.jsonl.gz",
+      "bytes": 1472519,
+      "sha256": "2265b8e8c7f6ecd18e9f63c25603cf67eb0927a64d76b69e0621b78ef82fcb60"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0035.jsonl.gz",
+      "bytes": 1475270,
+      "sha256": "5021ba79ace7200ab9163c7d7ebcca2f2cb712bfde632e9deb0ef1eaca2e8015"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0036.jsonl.gz",
+      "bytes": 1475526,
+      "sha256": "6fc78359c58e423e86d507c62d55926e451d5e8c9637211140fb77b6e7527d7a"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0037.jsonl.gz",
+      "bytes": 1477237,
+      "sha256": "92c81be1f72244a6140ceb6f93087e527cacb5bc551cd4f1e7120597d7a2f57e"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0038.jsonl.gz",
+      "bytes": 1481303,
+      "sha256": "adb73bd12e022904afe55f71dc186992fea0aa4a62af2e761f8d9236ca8e9062"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0039.jsonl.gz",
+      "bytes": 1479481,
+      "sha256": "8741d6f54a35474bd04ab4943f6410df0764e4f152e2928ec7c5808c0e574a82"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0040.jsonl.gz",
+      "bytes": 1479334,
+      "sha256": "0af89b4f46667ed77a175942e60c04b7ff8bd4afce72183aed2c26f0af70ef19"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0041.jsonl.gz",
+      "bytes": 1480402,
+      "sha256": "71fd81fc51e3ca291a3f05edd833022c8fc1e3587f871b2c1ddf4e7b108a5a97"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0042.jsonl.gz",
+      "bytes": 1468616,
+      "sha256": "48cd91ff78e83edcb7c5dec167d9120d07fa3e3428fddd99196c756e4a0fd134"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0043.jsonl.gz",
+      "bytes": 1472006,
+      "sha256": "60fd7a45c50ecdc4ce52e19a55d3241c2961b1c299148483f99b7f98d58d7ceb"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0044.jsonl.gz",
+      "bytes": 1477886,
+      "sha256": "b7e7a76ef0b433e4745d370b2466f605e16b7aa191f8a88d663d4c3b057d695b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0045.jsonl.gz",
+      "bytes": 1480801,
+      "sha256": "a7acd2521b7ada59944961c65fc5c722c7d7c70968ca9503a6bdd329901fc79e"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0046.jsonl.gz",
+      "bytes": 1477283,
+      "sha256": "b338f6e8a7a9d39ed918400ebfd9449d018d9f880b0ec1b7ac93ba0f12532b77"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0047.jsonl.gz",
+      "bytes": 1482888,
+      "sha256": "ab1689cc70b0c279a5670be8cc1c56487f8d36cc1aa5c011c7febb020df3413f"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0048.jsonl.gz",
+      "bytes": 1480279,
+      "sha256": "e545fb554a2df0e3dda2777a5ca0180f59d73cf7cdd6d07929ddce16e8bf9473"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0049.jsonl.gz",
+      "bytes": 1480998,
+      "sha256": "08888bf32cd4fca34536ca6b7695eef19984455890d0095b38e41b8c4a781f46"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0050.jsonl.gz",
+      "bytes": 1484365,
+      "sha256": "42219fb1af80716f62a415bfcf6faeee592472a3d50a13c14409aca9f2f08acb"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0051.jsonl.gz",
+      "bytes": 1483057,
+      "sha256": "abe0d4600bc95988bc4ee8e76b193483ecc7108ff152468a038c91535e76feb1"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0052.jsonl.gz",
+      "bytes": 1482399,
+      "sha256": "a40b69e665c194bd9ef33da742ff7360e13f86d4031f5896247a325cf37d78c1"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0053.jsonl.gz",
+      "bytes": 1464754,
+      "sha256": "5da181e7c68b900f7cf9183c4a76f748ab42e99a4e990850585de65d5b66d95d"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0054.jsonl.gz",
+      "bytes": 1472519,
+      "sha256": "581817a7aadc437a2caf30336d2401013bd2b818a093d5325d3d1e3adb04df46"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0055.jsonl.gz",
+      "bytes": 1476366,
+      "sha256": "e57396e30c1d18167a1ea4a38e46eccbc997fcced80d207cd94e417f1f216418"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0056.jsonl.gz",
+      "bytes": 1483405,
+      "sha256": "d2d69c405ccba47e3bb151ec4f1c27c8e8f275afa409b2195ceb7af113bb7309"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0057.jsonl.gz",
+      "bytes": 1486297,
+      "sha256": "dbad9285deb6683918bb8e4ad8c083d42fd7866f2501471b11ae6e71427640eb"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0058.jsonl.gz",
+      "bytes": 1484761,
+      "sha256": "ed9a3a70035c565cab472c9749f8b371feb99e9002c8bf2656effba5e47bc725"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0059.jsonl.gz",
+      "bytes": 1482703,
+      "sha256": "095c2f0801291dee8ff6bbd4a2858bbfc887bfcfe9898a838477755bed8951d8"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0060.jsonl.gz",
+      "bytes": 1480063,
+      "sha256": "d484c506349ff1ba308c797d538ae0593d7fd87bb8cc0dd1b2c4edc066ead94b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0061.jsonl.gz",
+      "bytes": 1480268,
+      "sha256": "e0a6c1a94450eb745d32cbcbc8d4b1f9ae76e1790836da443a57e26a0f17fe4f"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0062.jsonl.gz",
+      "bytes": 1482135,
+      "sha256": "fd92a38c62e3226a2de75dbdd6b4048a5d358e078cf285e104d68f4652bff2d6"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0063.jsonl.gz",
+      "bytes": 1487089,
+      "sha256": "e346a44f88cca2677e30f1846c1ebbb082d42067cd39f72d733cc46cf3b8914c"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0064.jsonl.gz",
+      "bytes": 1485903,
+      "sha256": "fd107d7488798092cad2a63871b8a689c0314c3dfbbd1b9398ced5cd411286fa"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0065.jsonl.gz",
+      "bytes": 1478628,
+      "sha256": "e0278cd0d6b1e6edd51fb07e404c17ade832d4bef64520c9be720708129ba8d4"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0066.jsonl.gz",
+      "bytes": 1474328,
+      "sha256": "9c30fc98fa26129703cbb8209e9ac20f89490388b49541bed9b4a029d4bfd823"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0067.jsonl.gz",
+      "bytes": 1484524,
+      "sha256": "4c381a39f0b19c5caff0b35f08f5500e027311110e374d6ff1ec27867f656a05"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0068.jsonl.gz",
+      "bytes": 1486101,
+      "sha256": "6dd16c9968a2692d07d770ad13b01f8d35a17ed82316a3da7ed3bc618dd05c5b"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0069.jsonl.gz",
+      "bytes": 1485557,
+      "sha256": "95b2dd341ca4b4738ea8f671868e7a92a6acc82e3fabe254ea6f6a8e2b775433"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0070.jsonl.gz",
+      "bytes": 1487291,
+      "sha256": "44792aa820b9b78aa589b97e4cd43d56c979a61a087901ca6fb2bfacd6924daa"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0071.jsonl.gz",
+      "bytes": 1481264,
+      "sha256": "e19381789c950749528a9cec76d3fd8a205092e83f9e2e56e82b0317cca47e1a"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0072.jsonl.gz",
+      "bytes": 1480576,
+      "sha256": "ea7cddf24202b18c807d9637ef443177271bb07bc75f296a4691debf1e7eee65"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0073.jsonl.gz",
+      "bytes": 1482226,
+      "sha256": "117784dd201968c8490d1c00a19b29737d7bd12e91c00302bae6a2f3a2395503"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0074.jsonl.gz",
+      "bytes": 1479230,
+      "sha256": "69da7306c75d81c60f00f7b357668480671ac3b1b20ea096088e64df7e8bb90f"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0075.jsonl.gz",
+      "bytes": 1472576,
+      "sha256": "ce4a3f980698fd91cf2fad631156d9dfa20785ee2ae195cecea9da0829becb3a"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0076.jsonl.gz",
+      "bytes": 1468882,
+      "sha256": "7841e15726b8ec92fbed8b5793a2752add35f9e7ffebec84b092278cbbf216b5"
+    },
+    {
+      "key": "2026-10-07/sweeps/sweep_0077.jsonl.gz",
+      "bytes": 48847,
+      "sha256": "8a071244317f6038159147c248c39b1fd5bd1e1524d5e07d2cab9901d822d62d"
+    }
+  ]
+}

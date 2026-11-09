@@ -1,0 +1,122 @@
+[
+  {
+    "day": "2026-09-28",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 76,
+    "contracts": 53646,
+    "statuses": {
+      "excluded": 35076,
+      "eligible": 18570
+    },
+    "qualified_negative_or_zero": 11768,
+    "qualified_top200_outside_legacy": 85,
+    "legacy_rows_compared": 370,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-09-29",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 53536,
+    "statuses": {
+      "excluded": 36336,
+      "eligible": 17200
+    },
+    "qualified_negative_or_zero": 11407,
+    "qualified_top200_outside_legacy": 111,
+    "legacy_rows_compared": 282,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-09-30",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 55822,
+    "statuses": {
+      "excluded": 39946,
+      "eligible": 15876
+    },
+    "qualified_negative_or_zero": 10864,
+    "qualified_top200_outside_legacy": 127,
+    "legacy_rows_compared": 292,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-10-01",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 54208,
+    "statuses": {
+      "excluded": 39333,
+      "eligible": 14875
+    },
+    "qualified_negative_or_zero": 9084,
+    "qualified_top200_outside_legacy": 98,
+    "legacy_rows_compared": 262,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-10-02",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 55430,
+    "statuses": {
+      "eligible": 14410,
+      "excluded": 41020
+    },
+    "qualified_negative_or_zero": 9789,
+    "qualified_top200_outside_legacy": 129,
+    "legacy_rows_compared": 277,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-10-05",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 51070,
+    "statuses": {
+      "excluded": 33126,
+      "eligible": 17944
+    },
+    "qualified_negative_or_zero": 12297,
+    "qualified_top200_outside_legacy": 96,
+    "legacy_rows_compared": 300,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-10-06",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 51140,
+    "statuses": {
+      "eligible": 17161,
+      "excluded": 33979
+    },
+    "qualified_negative_or_zero": 11554,
+    "qualified_top200_outside_legacy": 116,
+    "legacy_rows_compared": 267,
+    "legacy_mismatches": [],
+    "damaged": []
+  },
+  {
+    "day": "2026-10-07",
+    "revision": "65830835b0c45dd56601fe93e4d885a258eafcc2",
+    "sweeps": 77,
+    "contracts": 50700,
+    "statuses": {
+      "eligible": 15702,
+      "excluded": 34998
+    },
+    "qualified_negative_or_zero": 10730,
+    "qualified_top200_outside_legacy": 90,
+    "legacy_rows_compared": 251,
+    "legacy_mismatches": [],
+    "damaged": []
+  }
+]
