@@ -10,7 +10,7 @@ import { ISO_DATE, jsonResponse } from './common.js';
 const MAX_QUOTE_AGE_MS = 15 * 1000;
 const MAX_QUOTE_FUTURE_MS = 30 * 1000;
 const TRADEABLE_SHARE_SYMBOLS = new Set([
-  'QQQ', 'USO', 'SMH', 'IGV', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL',
+  'QQQ', 'SPY', 'USO', 'SMH', 'IGV', 'META', 'GOOGL', 'AMZN', 'TSLA', 'MU', 'SPCX', 'AAPL',
 ]);
 const MAX_STRING_LEN = 64;
 export const EXECUTION_RESERVATION_LEASE_MS = 30 * 1000;

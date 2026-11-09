@@ -1,0 +1,1036 @@
+{
+  "strategy": "spy_sma200_double_or_out",
+  "convention": {
+    "signal": "adjusted daily closes; SMA(200) includes signal day",
+    "execution": "next session adjusted open; no retrospective signal-close fill",
+    "costs": {
+      "slippage_bps": 5.0,
+      "commission_bps": 1.0,
+      "financing_rate_annual": 0.06
+    },
+    "split": {
+      "in_sample": "2006-11-07..2019-12-31",
+      "out_of_sample": "2020-01-01..2026-11-06"
+    }
+  },
+  "full": {
+    "strategy": {
+      "start": "2006-11-07",
+      "end": "2026-11-06",
+      "final_equity": 72954.07,
+      "total_return": 6.295407,
+      "annualized_return": 0.104481,
+      "annualized_volatility": 0.209604,
+      "sharpe": 0.5806,
+      "max_drawdown": -0.414202,
+      "turnover": 438.9811
+    },
+    "buy_and_hold": {
+      "start": "2006-11-07",
+      "end": "2026-11-06",
+      "final_equity": 76492.77,
+      "total_return": 6.631267,
+      "annualized_return": 0.10697,
+      "annualized_volatility": 0.19445,
+      "sharpe": 0.621,
+      "max_drawdown": -0.550811,
+      "turnover": 0.9948
+    }
+  },
+  "in_sample": {
+    "strategy": {
+      "start": "2006-11-07",
+      "end": "2019-12-31",
+      "final_equity": 27460.59,
+      "total_return": 1.746059,
+      "annualized_return": 0.079864,
+      "annualized_volatility": 0.199966,
+      "sharpe": 0.4854,
+      "max_drawdown": -0.414202,
+      "turnover": 186.199
+    },
+    "buy_and_hold": {
+      "start": "2006-11-07",
+      "end": "2019-12-31",
+      "final_equity": 30458.72,
+      "total_return": 2.038701,
+      "annualized_return": 0.088214,
+      "annualized_volatility": 0.191515,
+      "sharpe": 0.5379,
+      "max_drawdown": -0.550811,
+      "turnover": 0.9948
+    }
+  },
+  "out_of_sample": {
+    "strategy": {
+      "start": "2020-01-02",
+      "end": "2026-11-06",
+      "final_equity": 72954.07,
+      "total_return": 1.613267,
+      "annualized_return": 0.150669,
+      "annualized_volatility": 0.226989,
+      "sharpe": 0.7343,
+      "max_drawdown": -0.340392,
+      "turnover": 90.5483
+    },
+    "buy_and_hold": {
+      "start": "2020-01-02",
+      "end": "2026-11-06",
+      "final_equity": 24550.72,
+      "total_return": 1.446733,
+      "annualized_return": 0.139653,
+      "annualized_volatility": 0.195203,
+      "sharpe": 0.7692,
+      "max_drawdown": -0.327929,
+      "turnover": 0.9675
+    }
+  },
+  "trades": [
+    {
+      "date": "2007-08-30",
+      "side": "buy",
+      "qty": 195,
+      "price": 102.3125,
+      "notional": 19950.94,
+      "cost": 11.97,
+      "reason": "2007-08-29"
+    },
+    {
+      "date": "2007-11-09",
+      "side": "sell",
+      "qty": 195,
+      "price": 102.9675,
+      "notional": 20078.66,
+      "cost": 12.05,
+      "reason": "2007-11-08"
+    },
+    {
+      "date": "2007-11-14",
+      "side": "buy",
+      "qty": 189,
+      "price": 105.4623,
+      "notional": 19932.38,
+      "cost": 11.96,
+      "reason": "2007-11-13"
+    },
+    {
+      "date": "2007-11-16",
+      "side": "sell",
+      "qty": 189,
+      "price": 103.4057,
+      "notional": 19543.68,
+      "cost": 11.73,
+      "reason": "2007-11-15"
+    },
+    {
+      "date": "2007-12-03",
+      "side": "buy",
+      "qty": 183,
+      "price": 104.7344,
+      "notional": 19166.39,
+      "cost": 11.5,
+      "reason": "2007-11-30"
+    },
+    {
+      "date": "2007-12-05",
+      "side": "sell",
+      "qty": 183,
+      "price": 104.5506,
+      "notional": 19132.76,
+      "cost": 11.48,
+      "reason": "2007-12-04"
+    },
+    {
+      "date": "2007-12-06",
+      "side": "buy",
+      "qty": 181,
+      "price": 105.0453,
+      "notional": 19013.21,
+      "cost": 11.41,
+      "reason": "2007-12-05"
+    },
+    {
+      "date": "2007-12-17",
+      "side": "sell",
+      "qty": 181,
+      "price": 103.6177,
+      "notional": 18754.8,
+      "cost": 11.25,
+      "reason": "2007-12-14"
+    },
+    {
+      "date": "2007-12-24",
+      "side": "buy",
+      "qty": 174,
+      "price": 105.7379,
+      "notional": 18398.39,
+      "cost": 11.04,
+      "reason": "2007-12-21"
+    },
+    {
+      "date": "2007-12-31",
+      "side": "sell",
+      "qty": 174,
+      "price": 104.5158,
+      "notional": 18185.74,
+      "cost": 10.91,
+      "reason": "2007-12-28"
+    },
+    {
+      "date": "2008-05-07",
+      "side": "buy",
+      "qty": 177,
+      "price": 101.3131,
+      "notional": 17932.42,
+      "cost": 10.76,
+      "reason": "2008-05-06"
+    },
+    {
+      "date": "2008-05-08",
+      "side": "sell",
+      "qty": 177,
+      "price": 99.7779,
+      "notional": 17660.7,
+      "cost": 10.6,
+      "reason": "2008-05-07"
+    },
+    {
+      "date": "2008-05-16",
+      "side": "buy",
+      "qty": 170,
+      "price": 102.0057,
+      "notional": 17340.97,
+      "cost": 10.4,
+      "reason": "2008-05-15"
+    },
+    {
+      "date": "2008-05-22",
+      "side": "sell",
+      "qty": 170,
+      "price": 99.5566,
+      "notional": 16924.62,
+      "cost": 10.15,
+      "reason": "2008-05-21"
+    },
+    {
+      "date": "2009-06-01",
+      "side": "buy",
+      "qty": 241,
+      "price": 68.643,
+      "notional": 16542.97,
+      "cost": 9.93,
+      "reason": "2009-05-29"
+    },
+    {
+      "date": "2010-05-21",
+      "side": "sell",
+      "qty": 241,
+      "price": 79.1698,
+      "notional": 19079.92,
+      "cost": 11.45,
+      "reason": "2010-05-20"
+    },
+    {
+      "date": "2010-05-28",
+      "side": "buy",
+      "qty": 252,
+      "price": 82.7056,
+      "notional": 20841.81,
+      "cost": 12.51,
+      "reason": "2010-05-27"
+    },
+    {
+      "date": "2010-06-01",
+      "side": "sell",
+      "qty": 252,
+      "price": 80.9938,
+      "notional": 20410.43,
+      "cost": 12.25,
+      "reason": "2010-05-28"
+    },
+    {
+      "date": "2010-06-03",
+      "side": "buy",
+      "qty": 241,
+      "price": 82.713,
+      "notional": 19933.84,
+      "cost": 11.96,
+      "reason": "2010-06-02"
+    },
+    {
+      "date": "2010-06-07",
+      "side": "sell",
+      "qty": 241,
+      "price": 80.1341,
+      "notional": 19312.31,
+      "cost": 11.59,
+      "reason": "2010-06-04"
+    },
+    {
+      "date": "2010-06-16",
+      "side": "buy",
+      "qty": 224,
+      "price": 83.2886,
+      "notional": 18656.66,
+      "cost": 11.19,
+      "reason": "2010-06-15"
+    },
+    {
+      "date": "2010-06-23",
+      "side": "sell",
+      "qty": 224,
+      "price": 82.348,
+      "notional": 18445.95,
+      "cost": 11.07,
+      "reason": "2010-06-22"
+    },
+    {
+      "date": "2010-07-27",
+      "side": "buy",
+      "qty": 216,
+      "price": 84.2482,
+      "notional": 18197.61,
+      "cost": 10.92,
+      "reason": "2010-07-26"
+    },
+    {
+      "date": "2010-07-30",
+      "side": "sell",
+      "qty": 216,
+      "price": 81.995,
+      "notional": 17710.92,
+      "cost": 10.63,
+      "reason": "2010-07-29"
+    },
+    {
+      "date": "2010-08-03",
+      "side": "buy",
+      "qty": 203,
+      "price": 84.481,
+      "notional": 17149.65,
+      "cost": 10.29,
+      "reason": "2010-08-02"
+    },
+    {
+      "date": "2010-08-12",
+      "side": "sell",
+      "qty": 203,
+      "price": 80.8534,
+      "notional": 16413.23,
+      "cost": 9.85,
+      "reason": "2010-08-11"
+    },
+    {
+      "date": "2010-09-13",
+      "side": "buy",
+      "qty": 184,
+      "price": 84.5561,
+      "notional": 15558.33,
+      "cost": 9.33,
+      "reason": "2010-09-10"
+    },
+    {
+      "date": "2011-08-03",
+      "side": "sell",
+      "qty": 184,
+      "price": 96.2738,
+      "notional": 17714.38,
+      "cost": 10.63,
+      "reason": "2011-08-02"
+    },
+    {
+      "date": "2011-10-28",
+      "side": "buy",
+      "qty": 196,
+      "price": 98.574,
+      "notional": 19320.5,
+      "cost": 11.59,
+      "reason": "2011-10-27"
+    },
+    {
+      "date": "2011-11-01",
+      "side": "sell",
+      "qty": 196,
+      "price": 93.9764,
+      "notional": 18419.38,
+      "cost": 11.05,
+      "reason": "2011-10-31"
+    },
+    {
+      "date": "2011-11-09",
+      "side": "buy",
+      "qty": 181,
+      "price": 96.1789,
+      "notional": 17408.39,
+      "cost": 10.45,
+      "reason": "2011-11-08"
+    },
+    {
+      "date": "2011-11-10",
+      "side": "sell",
+      "qty": 181,
+      "price": 96.1019,
+      "notional": 17394.45,
+      "cost": 10.44,
+      "reason": "2011-11-09"
+    },
+    {
+      "date": "2011-11-14",
+      "side": "buy",
+      "qty": 179,
+      "price": 97.1801,
+      "notional": 17395.23,
+      "cost": 10.44,
+      "reason": "2011-11-11"
+    },
+    {
+      "date": "2011-11-15",
+      "side": "sell",
+      "qty": 179,
+      "price": 96.3946,
+      "notional": 17254.63,
+      "cost": 10.35,
+      "reason": "2011-11-14"
+    },
+    {
+      "date": "2011-12-06",
+      "side": "buy",
+      "qty": 175,
+      "price": 97.1955,
+      "notional": 17009.21,
+      "cost": 10.21,
+      "reason": "2011-12-05"
+    },
+    {
+      "date": "2011-12-09",
+      "side": "sell",
+      "qty": 175,
+      "price": 95.8863,
+      "notional": 16780.1,
+      "cost": 10.07,
+      "reason": "2011-12-08"
+    },
+    {
+      "date": "2011-12-12",
+      "side": "buy",
+      "qty": 172,
+      "price": 96.2252,
+      "notional": 16550.73,
+      "cost": 9.93,
+      "reason": "2011-12-09"
+    },
+    {
+      "date": "2011-12-13",
+      "side": "sell",
+      "qty": 172,
+      "price": 96.1558,
+      "notional": 16538.8,
+      "cost": 9.92,
+      "reason": "2011-12-12"
+    },
+    {
+      "date": "2011-12-23",
+      "side": "buy",
+      "qty": 169,
+      "price": 97.3934,
+      "notional": 16459.48,
+      "cost": 9.88,
+      "reason": "2011-12-22"
+    },
+    {
+      "date": "2012-11-15",
+      "side": "sell",
+      "qty": 169,
+      "price": 106.9618,
+      "notional": 18076.54,
+      "cost": 10.85,
+      "reason": "2012-11-14"
+    },
+    {
+      "date": "2012-11-20",
+      "side": "buy",
+      "qty": 174,
+      "price": 109.2666,
+      "notional": 19012.38,
+      "cost": 11.41,
+      "reason": "2012-11-19"
+    },
+    {
+      "date": "2014-10-14",
+      "side": "sell",
+      "qty": 174,
+      "price": 154.3996,
+      "notional": 26865.54,
+      "cost": 16.12,
+      "reason": "2014-10-13"
+    },
+    {
+      "date": "2014-10-21",
+      "side": "buy",
+      "qty": 211,
+      "price": 157.0711,
+      "notional": 33142.0,
+      "cost": 19.89,
+      "reason": "2014-10-20"
+    },
+    {
+      "date": "2015-08-21",
+      "side": "sell",
+      "qty": 211,
+      "price": 167.773,
+      "notional": 35400.09,
+      "cost": 21.24,
+      "reason": "2015-08-20"
+    },
+    {
+      "date": "2015-10-23",
+      "side": "buy",
+      "qty": 210,
+      "price": 173.2599,
+      "notional": 36384.57,
+      "cost": 21.83,
+      "reason": "2015-10-22"
+    },
+    {
+      "date": "2015-11-13",
+      "side": "sell",
+      "qty": 210,
+      "price": 170.8355,
+      "notional": 35875.45,
+      "cost": 21.53,
+      "reason": "2015-11-12"
+    },
+    {
+      "date": "2015-11-17",
+      "side": "buy",
+      "qty": 204,
+      "price": 172.2065,
+      "notional": 35130.13,
+      "cost": 21.08,
+      "reason": "2015-11-16"
+    },
+    {
+      "date": "2015-12-14",
+      "side": "sell",
+      "qty": 204,
+      "price": 168.9294,
+      "notional": 34461.6,
+      "cost": 20.68,
+      "reason": "2015-12-11"
+    },
+    {
+      "date": "2015-12-17",
+      "side": "buy",
+      "qty": 193,
+      "price": 174.2213,
+      "notional": 33624.7,
+      "cost": 20.17,
+      "reason": "2015-12-16"
+    },
+    {
+      "date": "2015-12-18",
+      "side": "sell",
+      "qty": 193,
+      "price": 170.5235,
+      "notional": 32911.03,
+      "cost": 19.75,
+      "reason": "2015-12-17"
+    },
+    {
+      "date": "2015-12-24",
+      "side": "buy",
+      "qty": 186,
+      "price": 173.0043,
+      "notional": 32178.8,
+      "cost": 19.31,
+      "reason": "2015-12-23"
+    },
+    {
+      "date": "2016-01-04",
+      "side": "sell",
+      "qty": 186,
+      "price": 168.606,
+      "notional": 31360.72,
+      "cost": 18.82,
+      "reason": "2015-12-31"
+    },
+    {
+      "date": "2016-03-14",
+      "side": "buy",
+      "qty": 179,
+      "price": 170.0105,
+      "notional": 30431.87,
+      "cost": 18.26,
+      "reason": "2016-03-11"
+    },
+    {
+      "date": "2016-06-28",
+      "side": "sell",
+      "qty": 179,
+      "price": 171.1982,
+      "notional": 30644.47,
+      "cost": 18.39,
+      "reason": "2016-06-27"
+    },
+    {
+      "date": "2016-06-29",
+      "side": "buy",
+      "qty": 174,
+      "price": 174.0532,
+      "notional": 30285.25,
+      "cost": 18.17,
+      "reason": "2016-06-28"
+    },
+    {
+      "date": "2018-10-12",
+      "side": "sell",
+      "qty": 174,
+      "price": 245.5456,
+      "notional": 42724.94,
+      "cost": 25.63,
+      "reason": "2018-10-11"
+    },
+    {
+      "date": "2018-10-15",
+      "side": "buy",
+      "qty": 213,
+      "price": 244.4632,
+      "notional": 52070.67,
+      "cost": 31.24,
+      "reason": "2018-10-12"
+    },
+    {
+      "date": "2018-10-24",
+      "side": "sell",
+      "qty": 213,
+      "price": 242.4937,
+      "notional": 51651.16,
+      "cost": 30.99,
+      "reason": "2018-10-23"
+    },
+    {
+      "date": "2018-11-07",
+      "side": "buy",
+      "qty": 207,
+      "price": 246.2464,
+      "notional": 50973.01,
+      "cost": 30.58,
+      "reason": "2018-11-06"
+    },
+    {
+      "date": "2018-11-13",
+      "side": "sell",
+      "qty": 207,
+      "price": 242.2808,
+      "notional": 50152.12,
+      "cost": 30.09,
+      "reason": "2018-11-12"
+    },
+    {
+      "date": "2018-11-29",
+      "side": "buy",
+      "qty": 203,
+      "price": 242.8309,
+      "notional": 49294.68,
+      "cost": 29.58,
+      "reason": "2018-11-28"
+    },
+    {
+      "date": "2018-11-30",
+      "side": "sell",
+      "qty": 203,
+      "price": 242.9196,
+      "notional": 49312.67,
+      "cost": 29.59,
+      "reason": "2018-11-29"
+    },
+    {
+      "date": "2018-12-03",
+      "side": "buy",
+      "qty": 198,
+      "price": 248.6596,
+      "notional": 49234.61,
+      "cost": 29.54,
+      "reason": "2018-11-30"
+    },
+    {
+      "date": "2018-12-06",
+      "side": "sell",
+      "qty": 198,
+      "price": 235.9197,
+      "notional": 46712.1,
+      "cost": 28.03,
+      "reason": "2018-12-04"
+    },
+    {
+      "date": "2019-02-05",
+      "side": "buy",
+      "qty": 181,
+      "price": 243.1155,
+      "notional": 44003.91,
+      "cost": 26.4,
+      "reason": "2019-02-04"
+    },
+    {
+      "date": "2019-02-08",
+      "side": "sell",
+      "qty": 181,
+      "price": 239.8228,
+      "notional": 43407.92,
+      "cost": 26.04,
+      "reason": "2019-02-07"
+    },
+    {
+      "date": "2019-02-13",
+      "side": "buy",
+      "qty": 174,
+      "price": 245.4269,
+      "notional": 42704.28,
+      "cost": 25.62,
+      "reason": "2019-02-12"
+    },
+    {
+      "date": "2019-06-03",
+      "side": "sell",
+      "qty": 174,
+      "price": 246.7588,
+      "notional": 42936.04,
+      "cost": 25.76,
+      "reason": "2019-05-31"
+    },
+    {
+      "date": "2019-06-05",
+      "side": "buy",
+      "qty": 168,
+      "price": 253.0508,
+      "notional": 42512.54,
+      "cost": 25.51,
+      "reason": "2019-06-04"
+    },
+    {
+      "date": "2020-02-28",
+      "side": "sell",
+      "qty": 168,
+      "price": 262.5038,
+      "notional": 44100.64,
+      "cost": 26.46,
+      "reason": "2020-02-27"
+    },
+    {
+      "date": "2020-03-03",
+      "side": "buy",
+      "qty": 157,
+      "price": 281.4165,
+      "notional": 44182.39,
+      "cost": 26.51,
+      "reason": "2020-03-02"
+    },
+    {
+      "date": "2020-03-04",
+      "side": "sell",
+      "qty": 157,
+      "price": 278.3431,
+      "notional": 43699.87,
+      "cost": 26.22,
+      "reason": "2020-03-03"
+    },
+    {
+      "date": "2020-03-05",
+      "side": "buy",
+      "qty": 156,
+      "price": 277.3066,
+      "notional": 43259.84,
+      "cost": 25.96,
+      "reason": "2020-03-04"
+    },
+    {
+      "date": "2020-03-06",
+      "side": "sell",
+      "qty": 156,
+      "price": 266.55,
+      "notional": 41581.81,
+      "cost": 24.95,
+      "reason": "2020-03-05"
+    },
+    {
+      "date": "2020-05-27",
+      "side": "buy",
+      "qty": 144,
+      "price": 276.3214,
+      "notional": 39790.28,
+      "cost": 23.87,
+      "reason": "2020-05-26"
+    },
+    {
+      "date": "2022-01-24",
+      "side": "sell",
+      "qty": 144,
+      "price": 405.4983,
+      "notional": 58391.76,
+      "cost": 35.04,
+      "reason": "2022-01-21"
+    },
+    {
+      "date": "2022-01-25",
+      "side": "buy",
+      "qty": 182,
+      "price": 406.465,
+      "notional": 73976.64,
+      "cost": 44.39,
+      "reason": "2022-01-24"
+    },
+    {
+      "date": "2022-01-26",
+      "side": "sell",
+      "qty": 182,
+      "price": 413.6546,
+      "notional": 75285.15,
+      "cost": 45.17,
+      "reason": "2022-01-25"
+    },
+    {
+      "date": "2022-01-31",
+      "side": "buy",
+      "qty": 184,
+      "price": 414.1427,
+      "notional": 76202.26,
+      "cost": 45.72,
+      "reason": "2022-01-28"
+    },
+    {
+      "date": "2022-02-14",
+      "side": "sell",
+      "qty": 184,
+      "price": 412.9038,
+      "notional": 75974.3,
+      "cost": 45.58,
+      "reason": "2022-02-11"
+    },
+    {
+      "date": "2022-02-16",
+      "side": "buy",
+      "qty": 181,
+      "price": 416.6676,
+      "notional": 75416.83,
+      "cost": 45.25,
+      "reason": "2022-02-15"
+    },
+    {
+      "date": "2022-02-18",
+      "side": "sell",
+      "qty": 181,
+      "price": 410.4728,
+      "notional": 74295.58,
+      "cost": 44.58,
+      "reason": "2022-02-17"
+    },
+    {
+      "date": "2022-03-21",
+      "side": "buy",
+      "qty": 175,
+      "price": 418.348,
+      "notional": 73210.9,
+      "cost": 43.93,
+      "reason": "2022-03-18"
+    },
+    {
+      "date": "2022-04-12",
+      "side": "sell",
+      "qty": 175,
+      "price": 417.1617,
+      "notional": 73003.3,
+      "cost": 43.8,
+      "reason": "2022-04-11"
+    },
+    {
+      "date": "2022-08-17",
+      "side": "buy",
+      "qty": 180,
+      "price": 402.7282,
+      "notional": 72491.08,
+      "cost": 43.49,
+      "reason": "2022-08-16"
+    },
+    {
+      "date": "2022-08-18",
+      "side": "sell",
+      "qty": 180,
+      "price": 403.6265,
+      "notional": 72652.77,
+      "cost": 43.59,
+      "reason": "2022-08-17"
+    },
+    {
+      "date": "2022-12-01",
+      "side": "buy",
+      "qty": 187,
+      "price": 388.1089,
+      "notional": 72576.36,
+      "cost": 43.55,
+      "reason": "2022-11-30"
+    },
+    {
+      "date": "2022-12-06",
+      "side": "sell",
+      "qty": 187,
+      "price": 379.2315,
+      "notional": 70916.29,
+      "cost": 42.55,
+      "reason": "2022-12-05"
+    },
+    {
+      "date": "2022-12-14",
+      "side": "buy",
+      "qty": 181,
+      "price": 381.3108,
+      "notional": 69017.26,
+      "cost": 41.41,
+      "reason": "2022-12-13"
+    },
+    {
+      "date": "2022-12-15",
+      "side": "sell",
+      "qty": 181,
+      "price": 374.3703,
+      "notional": 67761.02,
+      "cost": 40.66,
+      "reason": "2022-12-14"
+    },
+    {
+      "date": "2023-01-12",
+      "side": "buy",
+      "qty": 175,
+      "price": 378.35,
+      "notional": 66211.25,
+      "cost": 39.73,
+      "reason": "2023-01-11"
+    },
+    {
+      "date": "2023-01-19",
+      "side": "sell",
+      "qty": 175,
+      "price": 371.3776,
+      "notional": 64991.08,
+      "cost": 38.99,
+      "reason": "2023-01-18"
+    },
+    {
+      "date": "2023-01-23",
+      "side": "buy",
+      "qty": 168,
+      "price": 378.3977,
+      "notional": 63570.81,
+      "cost": 38.14,
+      "reason": "2023-01-20"
+    },
+    {
+      "date": "2023-03-13",
+      "side": "sell",
+      "qty": 168,
+      "price": 364.1763,
+      "notional": 61181.61,
+      "cost": 36.71,
+      "reason": "2023-03-10"
+    },
+    {
+      "date": "2023-03-15",
+      "side": "buy",
+      "qty": 159,
+      "price": 368.0678,
+      "notional": 58522.78,
+      "cost": 35.11,
+      "reason": "2023-03-14"
+    },
+    {
+      "date": "2023-03-16",
+      "side": "sell",
+      "qty": 159,
+      "price": 368.9549,
+      "notional": 58663.83,
+      "cost": 35.2,
+      "reason": "2023-03-15"
+    },
+    {
+      "date": "2023-03-17",
+      "side": "buy",
+      "qty": 155,
+      "price": 376.4907,
+      "notional": 58356.06,
+      "cost": 35.01,
+      "reason": "2023-03-16"
+    },
+    {
+      "date": "2023-10-26",
+      "side": "sell",
+      "qty": 155,
+      "price": 401.6253,
+      "notional": 62251.92,
+      "cost": 37.35,
+      "reason": "2023-10-25"
+    },
+    {
+      "date": "2023-11-02",
+      "side": "buy",
+      "qty": 157,
+      "price": 411.3946,
+      "notional": 64588.96,
+      "cost": 38.75,
+      "reason": "2023-11-01"
+    },
+    {
+      "date": "2025-03-11",
+      "side": "sell",
+      "qty": 157,
+      "price": 548.622,
+      "notional": 86133.66,
+      "cost": 51.68,
+      "reason": "2025-03-10"
+    },
+    {
+      "date": "2025-03-25",
+      "side": "buy",
+      "qty": 183,
+      "price": 565.913,
+      "notional": 103562.07,
+      "cost": 62.14,
+      "reason": "2025-03-24"
+    },
+    {
+      "date": "2025-03-27",
+      "side": "sell",
+      "qty": 183,
+      "price": 557.9254,
+      "notional": 102100.35,
+      "cost": 61.26,
+      "reason": "2025-03-26"
+    },
+    {
+      "date": "2025-05-13",
+      "side": "buy",
+      "qty": 175,
+      "price": 573.8906,
+      "notional": 100430.85,
+      "cost": 60.26,
+      "reason": "2025-05-12"
+    },
+    {
+      "date": "2026-03-23",
+      "side": "sell",
+      "qty": 175,
+      "price": 654.7531,
+      "notional": 114581.79,
+      "cost": 68.75,
+      "reason": "2026-03-20"
+    },
+    {
+      "date": "2026-04-09",
+      "side": "buy",
+      "qty": 186,
+      "price": 671.4386,
+      "notional": 124887.59,
+      "cost": 74.93,
+      "reason": "2026-04-08"
+    }
+  ],
+  "financing_paid": 12993.88
+}

@@ -1,0 +1,1263 @@
+<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  :root {
+    --bg:      #0d1117;
+    --panel:   #161b22;
+    --border:  #30363d;
+    --fg:      #c9d1d9;
+    --dim:     #6e7681;
+    --bright:  #f0f6fc;
+
+    --call0: #0d1117;  --call1: #0a1f14;  --call2: #0a3020;
+    --call3: #007730;  --call4: #00cc55;  --call5: #88ffcc;
+
+    --put0:  #0d1117;  --put1:  #1a0d0d;  --put2:  #2a0a0a;
+    --put3:  #881100;  --put4:  #ee3300;  --put5:  #ffaa88;
+
+    --call-text3: #ffffff; --call-text4: #ffffff; --call-text5: #0d1117;
+    --put-text3:  #ffffff; --put-text4:  #ffffff; --put-text5:  #0d1117;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 1.25rem;
+  }
+
+  /* ── header ─────────────────────────────────────────────────────────── */
+  #header {
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+  #title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
+  #underlying-select {
+    font: inherit; font-size: 0.85rem; font-weight: 700;
+    color: var(--bright); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
+  }
+  #underlying-select:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+  .chain-note { font-size: 0.72rem; color: var(--dim); }
+  #price { font-size: 1.6rem; font-weight: 700; color: var(--bright); letter-spacing: -0.02em; }
+  #tier-badge {
+    font-size: 0.72rem; font-weight: 600;
+    padding: 2px 8px; border-radius: 4px;
+    background: #1c2128; border: 1px solid var(--border);
+  }
+  #vwap-rvol, #momentum {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--dim);
+  }
+  #vwap-rvol[data-state="live"], #momentum[data-state="live"] { color: var(--bright); }
+  #vwap-rvol[data-state="stale"], #momentum[data-state="stale"],
+  #vwap-rvol[data-state="fallback"], #momentum[data-state="fallback"],
+  #vwap-rvol[data-state="closed"], #momentum[data-state="closed"] { opacity: 0.72; }
+
+  /* ── status bar ──────────────────────────────────────────────────────── */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.76rem;
+    color: var(--dim);
+    flex-wrap: wrap;
+  }
+  #status-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--dim); flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  #status-dot.live { background: #00cc55; }
+  #status-dot.stale { background: #ee3300; }
+  #quote-health { margin-left: auto; }
+  .transport-health { color: var(--dim); }
+  .transport-health.live { color: #00a844; }
+  .transport-health.stale, .transport-health.rate-limited { color: #d49a00; }
+  .transport-health.backing-off, .transport-health.unavailable { color: #ee3300; }
+
+  /* ── heatmap table ───────────────────────────────────────────────────── */
+  #heatmap-wrap {
+    overflow-x: auto;
+    margin-bottom: 1rem;
+  }
+  table {
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    min-width: 420px;
+  }
+  th {
+    color: var(--dim);
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 4px 6px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 2px 4px;
+    text-align: center;
+    width: 80px;
+    height: 38px;
+    font-weight: 700;
+    font-size: 0.68rem;
+    position: relative;
+    line-height: 1.1;
+    vertical-align: middle;
+  }
+  td.strike-cell {
+    color: var(--fg);
+    font-size: 0.72rem;
+    font-weight: 400;
+    width: 70px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+  td.atm { color: var(--bright); font-weight: 700; }
+  tr.atm-row td.strike-cell {
+    background: #1c2128;
+    color: var(--bright);
+    font-weight: 700;
+  }
+  tr.atm-row td.call-cell,
+  tr.atm-row td.put-cell {
+    outline: 1px solid rgba(255,255,255,0.12);
+    outline-offset: -1px;
+  }
+
+  /* call cell colors */
+  td.c0 { background: var(--call0); color: var(--dim); }
+  td.c1 { background: var(--call1); color: var(--dim); }
+  td.c2 { background: var(--call2); color: #aaaaaa; }
+  td.c3 { background: var(--call3); color: var(--call-text3); }
+  td.c4 { background: var(--call4); color: var(--call-text4); }
+  td.c5 { background: var(--call5); color: var(--call-text5); }
+
+  /* put cell colors */
+  td.p0 { background: var(--put0); color: var(--dim); }
+  td.p1 { background: var(--put1); color: var(--dim); }
+  td.p2 { background: var(--put2); color: #aaaaaa; }
+  td.p3 { background: var(--put3); color: var(--put-text3); }
+  td.p4 { background: var(--put4); color: var(--put-text4); }
+  td.p5 { background: var(--put5); color: var(--put-text5); }
+
+  /* volume overlay — shown as small superscript when present */
+  .vol {
+    position: absolute;
+    top: 2px; right: 3px;
+    font-size: 0.55rem;
+    font-weight: 400;
+    color: rgba(255,255,255,0.55);
+    line-height: 1;
+  }
+  td.c5 .vol, td.p5 .vol { color: rgba(0,0,0,0.55); }
+
+  /* bid×ask quote line */
+  .quote {
+    display: block;
+    font-size: 0.54rem;
+    font-weight: 400;
+    color: rgba(255,255,255,0.5);
+    letter-spacing: 0.01em;
+  }
+  td.c5 .quote, td.p5 .quote { color: rgba(0,0,0,0.45); }
+
+  /* flow delta — contracts traded since last snapshot */
+  .flow {
+    position: absolute;
+    bottom: 2px; right: 3px;
+    font-size: 0.52rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .flow-0  { display: none; }
+  .flow-1  { color: rgba(255,255,255,0.28); }
+  .flow-2  { color: #c8a84b; }
+  .flow-3  { color: #ff8c00; }
+  .flow-4  { color: #ffffff; text-shadow: 0 0 6px #ff8c00; }
+  td.c5 .flow-1, td.p5 .flow-1 { color: rgba(0,0,0,0.28); }
+  td.c5 .flow-2, td.p5 .flow-2 { color: #7a5c00; }
+  td.c5 .flow-3, td.p5 .flow-3 { color: #8b3a00; }
+  td.c5 .flow-4, td.p5 .flow-4 { color: #000; text-shadow: none; }
+
+  /* ── price strip ─────────────────────────────────────────────────────── */
+  #price-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .quote-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .quote-section + .quote-section {
+    border-top: 1px solid var(--border);
+    padding-top: 0.7rem;
+  }
+  .quote-heading-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .quote-section h2 {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0;
+  }
+  .quote-section h3 {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 0.25rem;
+  }
+  .quote-session {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: rgba(88,166,255,0.14);
+    color: #58a6ff;
+  }
+  .quote-session[data-mode="crypto"] { background: rgba(210,153,34,0.16); color: #d29922; }
+  .quote-session[data-mode="none"] { background: rgba(139,148,158,0.16); color: var(--dim); }
+  .quote-updated {
+    margin-left: auto;
+    font-size: 0.62rem;
+    color: var(--dim);
+  }
+  .quote-note {
+    font-size: 0.6rem;
+    color: var(--dim);
+    margin: 0.2rem 0 0;
+  }
+  .quote-section .price-group {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  #qp-pin-add {
+    align-self: flex-start;
+    font-size: 0.64rem;
+    padding: 2px 8px;
+  }
+  .ticker-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    min-width: 68px;
+    cursor: default;
+    transition: border-color 0.2s;
+  }
+  .ticker-btn.tradable { cursor: pointer; }
+  .ticker-btn.tradable:hover { border-color: #58a6ff; }
+  .ticker-btn.sm {
+    min-width: 58px;
+    padding: 3px 7px;
+  }
+  .ticker-btn .sym {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+  .ticker-btn .px {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--bright);
+    line-height: 1;
+  }
+  .ticker-btn.sm .px { font-size: 0.78rem; }
+  .ticker-btn .quote-age {
+    font-size: 0.48rem;
+    color: var(--dim);
+    line-height: 1;
+    margin-top: 2px;
+  }
+  .pin-controls {
+    display: flex;
+    gap: 2px;
+    margin-top: 3px;
+  }
+  .pin-controls button {
+    font-size: 0.56rem;
+    line-height: 1;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 1px 4px;
+    background: var(--panel);
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .pin-controls button:hover:not(:disabled),
+  .pin-controls button:focus-visible { color: var(--bright); border-color: #58a6ff; }
+  .pin-controls button:disabled { opacity: 0.35; cursor: default; }
+  .movers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  .mover-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 620px;
+  }
+  .mover {
+    display: grid;
+    grid-template-columns: 1.1rem 1fr auto auto;
+    gap: 0.45rem;
+    align-items: baseline;
+    font-size: 0.72rem;
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--border);
+  }
+  .mover-rank { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .mover-name { font-weight: 700; color: var(--bright); }
+  .mover-price, .mover-change { font-variant-numeric: tabular-nums; }
+  .mover-change.up { color: #00cc55; }
+  .mover-change.down { color: #ee3300; }
+  .quote-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem 1rem;
+    background: rgba(0,0,0,0.65);
+  }
+  .quote-dialog[hidden] { display: none; }
+  .quote-dialog-body {
+    width: min(560px, 100%);
+    max-height: 85vh;
+    overflow: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .quote-dialog-body h2 {
+    margin: 0 0 0.6rem;
+    font-size: 0.95rem;
+  }
+  #qp-pin-search {
+    width: 100%;
+    margin-bottom: 0.6rem;
+  }
+  .pin-candidates {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pin-candidate {
+    display: grid;
+    grid-template-columns: auto 5.5rem 1fr auto;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 3px 0;
+    border-bottom: 1px dotted var(--border);
+    font-size: 0.72rem;
+  }
+  .pin-candidate-name { color: var(--dim); font-size: 0.66rem; }
+  .pin-candidate-price { font-variant-numeric: tabular-nums; }
+  #qp-pin-close { margin-top: 0.75rem; }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border: 0;
+  }
+  @media (max-width: 640px) {
+    .movers-grid { grid-template-columns: 1fr; }
+    .ticker-btn { min-width: 62px; padding: 4px 7px; }
+    .quote-updated { margin-left: 0; }
+    .pin-candidate { grid-template-columns: auto 1fr auto; }
+    .pin-candidate-name { display: none; }
+  }
+
+  /* ── crude calibration panel ─────────────────────────────────────────── */
+  #steo-panel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-bottom: 1rem;
+    font-size: 0.76rem;
+    color: var(--dim);
+  }
+  #steo-panel.hidden { display: none; }
+  #steo-panel .steo-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.62rem;
+    color: var(--dim);
+    margin-right: 4px;
+  }
+  #steo-panel .steo-value { color: var(--bright); font-weight: 600; }
+  #steo-panel .steo-delta.up   { color: #3fb950; }
+  #steo-panel .steo-delta.down { color: #f85149; }
+  #steo-panel .ovx-regime {
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 1px 6px;
+    border-radius: 8px;
+  }
+  #steo-panel .ovx-regime.calm     { background: rgba(63,185,80,0.18); color: #3fb950; }
+  #steo-panel .ovx-regime.elevated { background: rgba(210,153,34,0.18); color: #d29922; }
+  #steo-panel .ovx-regime.high     { background: rgba(248,81,73,0.18); color: #f85149; }
+  #steo-panel .ovx-regime.no_data  { background: rgba(139,148,158,0.18); color: var(--dim); }
+  .ticker-btn .chg {
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+    margin-top: 1px;
+  }
+  .ticker-btn .market-state {
+    font-size: 0.48rem;
+    color: var(--dim);
+    line-height: 1;
+    margin-top: 2px;
+    text-transform: uppercase;
+  }
+  .ticker-btn .vwap-line, .ticker-btn .momentum-line {
+    font-size: 0.52rem;
+    color: var(--dim);
+    line-height: 1.2;
+    margin-top: 2px;
+    text-align: center;
+  }
+  .ticker-btn .vwap-line[data-state="live"], .ticker-btn .momentum-line[data-state="live"] { color: var(--bright); }
+  .ticker-btn[data-state="live"] { border-color: #167a3f; }
+  .ticker-btn[data-state="extended"] { border-color: #9a6a18; }
+  .ticker-btn[data-state="stale"], .ticker-btn[data-state="fallback"] { opacity: 0.72; }
+  .chg.up   { color: #00cc55; }
+  .chg.down { color: #ee3300; }
+  .chg.flat { color: var(--dim); }
+
+  /* flash animation on price update */
+  @keyframes flash-up   { 0%,100%{background:var(--panel)} 30%{background:#003318} }
+  @keyframes flash-down { 0%,100%{background:var(--panel)} 30%{background:#330808} }
+  .flash-up   { animation: flash-up   0.6s ease; }
+  .flash-down { animation: flash-down 0.6s ease; }
+
+  /* ── calibration error banner ────────────────────────────────────────── */
+  #cal-error {
+    display: none;
+    padding: 6px 10px;
+    margin-bottom: 0.6rem;
+    background: #2a0808;
+    border: 1px solid #ee3300;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: #ffaa88;
+  }
+
+  /* ── no-data state ───────────────────────────────────────────────────── */
+  #no-data {
+    padding: 3rem;
+    text-align: center;
+    color: var(--dim);
+    font-size: 0.9rem;
+  }
+  #no-data.hidden { display: none; }
+  #heatmap-wrap.hidden { display: none; }
+  #auth-panel.hidden { display: none; }
+  #paper-panel.hidden { display: none; }
+  #margin-call-screen.hidden { display: none; }
+
+  /* ── paper trading ───────────────────────────────────────────────────── */
+  td.tradable { cursor: pointer; }
+  td.tradable:hover { outline: 2px solid #58a6ff; outline-offset: -2px; }
+  .pos-badge {
+    position: absolute;
+    top: 2px; left: 3px;
+    font-size: 0.52rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: #58a6ff;
+    background: rgba(13,17,23,0.6);
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+  #trade-ticket {
+    position: absolute;
+    z-index: 50;
+    background: var(--panel);
+    border: 1px solid #58a6ff;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  }
+  #trade-ticket .t-head { font-weight: 700; color: var(--bright); margin-bottom: 6px; }
+  #trade-ticket .t-row { display: flex; gap: 6px; align-items: center; }
+  #trade-ticket .t-order-row { margin-bottom: 6px; }
+  #trade-ticket select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 0.72rem;
+  }
+  #trade-ticket .t-limit.hidden { display: none; }
+  #trade-ticket input {
+    width: 46px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--bright);
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 0.72rem;
+    text-align: center;
+  }
+  #trade-ticket button {
+    border: none;
+    border-radius: 4px;
+    padding: 4px 9px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+    color: #fff;
+  }
+  #trade-ticket button:disabled { opacity: 0.4; cursor: default; }
+  .btn-buy  { background: #007730; }
+  .btn-sell { background: #881100; }
+  #paper-panel {
+    margin-top: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.72rem;
+    max-width: 760px;
+  }
+  #paper-panel h3 {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  #paper-summary { color: var(--fg); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  #paper-hint { color: var(--dim); font-size: 0.68rem; }
+  #paper-order-status { color: var(--dim); font-size: 0.68rem; min-height: 1em; margin-top: 4px; }
+  #paper-order-status.error { color: #ff6666; }
+  #paper-order-status.success { color: #00cc55; }
+  #paper-panel table { min-width: 0; width: 100%; }
+  #paper-positions h4 { color: var(--dim); font-size: 0.66rem; margin: 8px 0 3px; text-transform: uppercase; }
+  #paper-panel th, #paper-panel td {
+    width: auto; height: auto;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-align: right;
+  }
+  #paper-panel th { text-transform: none; letter-spacing: 0.02em; }
+  #auth-panel {
+    margin-top: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 0.78rem;
+    max-width: 320px;
+  }
+  #auth-panel h3 {
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 10px;
+  }
+  #auth-panel form { display: flex; flex-direction: column; gap: 8px; }
+  #auth-panel input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--bright);
+    border-radius: 4px; padding: 6px 8px; font-size: 0.78rem;
+  }
+  #auth-panel button {
+    border: none; border-radius: 4px; padding: 6px 9px; font-size: 0.74rem;
+    font-weight: 700; cursor: pointer; color: #fff; background: #007730;
+  }
+  #auth-panel button:disabled { opacity: 0.4; cursor: default; }
+  #auth-toggle {
+    background: none; color: var(--dim); font-weight: 400; text-decoration: underline;
+    padding: 2px 0; margin-top: 2px; align-self: flex-start;
+  }
+  #auth-warning { color: #ee9955; font-size: 0.68rem; line-height: 1.4; }
+  #auth-error { color: #ff6666; font-size: 0.7rem; min-height: 1em; }
+  #user-bar { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--dim); }
+  #user-bar button.paper-btn { margin-left: 4px; }
+  #margin-call-screen {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(13,17,23,0.96);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 20px; text-align: center;
+  }
+  #margin-call-screen img {
+    max-width: min(480px, 90vw); max-height: 55vh; border-radius: 8px;
+    border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  }
+  #margin-call-screen h2 {
+    color: #ee3300; font-size: 1.6rem; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  #margin-call-screen p { color: var(--fg); font-size: 0.85rem; max-width: 460px; }
+  #margin-call-screen button {
+    border: none; border-radius: 4px; padding: 8px 16px; font-size: 0.8rem;
+    font-weight: 700; cursor: pointer; color: #fff; background: #007730; margin-top: 8px;
+  }
+  #paper-panel th:first-child, #paper-panel td:first-child { text-align: left; }
+  .pnl-up   { color: #00cc55; }
+  .pnl-down { color: #ee3300; }
+  .paper-btn {
+    background: #1c2128;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 2px 7px;
+    cursor: pointer;
+    font-size: 0.64rem;
+  }
+  #paper-actions { margin-left: auto; display: flex; gap: 4px; }
+  select.paper-btn { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--bright); }
+  #paper-log { margin-top: 6px; color: var(--dim); font-size: 0.66rem; }
+  #paper-log summary { cursor: pointer; }
+  #paper-log-body { margin-top: 4px; line-height: 1.7; max-height: 180px; overflow-y: auto; }
+
+  /* ── footer ──────────────────────────────────────────────────────────── */
+  #footer {
+    font-size: 0.68rem;
+    color: var(--dim);
+    margin-top: 1rem;
+    line-height: 1.8;
+  }
+  #footer a { color: #58a6ff; text-decoration: none; }
+
+  /* ── tabs ────────────────────────────────────────────────────────────── */
+  #tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 0.9rem;
+  }
+  .tab-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 6px;
+    padding: 5px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .analysis-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: #58a6ff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .analysis-link:hover { background: var(--panel); }
+  .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+  .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden { display: none; }
+
+  /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
+  #squeeze-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #squeeze-title { font-weight: 600; color: var(--bright); }
+  #squeeze-status { color: var(--dim); font-size: 0.76rem; }
+  #squeeze-status[data-state="stale"], #squeeze-status[data-state="fallback"] { opacity: 0.72; }
+  #squeeze-warning {
+    background: #2d1f0a;
+    border: 1px solid #d49a00;
+    color: #ffcc66;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    margin-bottom: 0.7rem;
+  }
+  #squeeze-warning.hidden { display: none; }
+  #squeeze-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
+  #squeeze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  #squeeze-table th {
+    text-align: right;
+    color: var(--dim);
+    font-weight: 500;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  #squeeze-table th:first-child, #squeeze-table td:first-child { text-align: left; }
+  #squeeze-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  #squeeze-table td a { color: #58a6ff; text-decoration: none; }
+  #squeeze-table td a:hover { text-decoration: underline; }
+  .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
+  .squeeze-new-badge {
+    background: #167a3f;
+    color: #fff;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
+
+  /* ── automated (bot) panel ───────────────────────────────────────────── */
+  #bots-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #bots-title { font-weight: 600; color: var(--bright); }
+  #bots-status { color: var(--dim); font-size: 0.76rem; }
+  #bots-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
+  #bots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+  }
+  .bot-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .bot-card.leader { border-color: #007730; }
+  .bot-card h4 {
+    margin: 0 0 2px;
+    font-size: 0.9rem;
+    color: var(--bright);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .bot-user { font-size: 0.7rem; color: var(--dim); font-weight: 400; }
+  .bot-strategy {
+    font-size: 0.68rem;
+    color: var(--dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .bot-strategy-state {
+    font-size: 0.68rem;
+    color: var(--dim);
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+  #bots-by-strategy {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 0.9rem;
+  }
+  .strat-tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+  .strat-tile .strat-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg);
+  }
+  .strat-tile .strat-meta { color: var(--dim); }
+  .bot-equity { font-size: 1.15rem; font-weight: 600; margin: 6px 0 2px; }
+  .bot-pnl.up   { color: #00cc55; }
+  .bot-pnl.down { color: #ee3300; }
+  .bot-pnl.flat { color: var(--dim); }
+  .bot-meta { font-size: 0.72rem; color: var(--dim); margin-top: 4px; }
+  .bot-last-trade { font-size: 0.8rem; line-height: 1.5; color: var(--fg); }
+  .bot-card table { width: 100%; min-width: 0; margin-top: 8px; font-size: 0.72rem; }
+  .bot-card th { color: var(--dim); font-weight: 500; text-align: right; }
+  .bot-card th:first-child, .bot-card td:first-child { text-align: left; }
+  .bot-card td { text-align: right; }
+  .bot-nopos { color: var(--dim); font-size: 0.72rem; margin-top: 8px; }
+  .bot-unmarked { color: #d49a00; }
+
+  /* ── historical panel ────────────────────────────────────────────────── */
+  #hist-header {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+  #hist-title { font-size: 1.05rem; font-weight: 700; color: var(--bright); }
+  #hist-date {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.76rem;
+  }
+  #hist-price { font-size: 1.3rem; font-weight: 700; color: var(--bright); }
+  #hist-tier-badge {
+    font-size: 0.72rem; font-weight: 600;
+    padding: 2px 8px; border-radius: 4px;
+    background: #1c2128; border: 1px solid var(--border);
+  }
+  #hist-status { font-size: 0.76rem; color: var(--dim); }
+  #hist-no-data {
+    padding: 3rem;
+    text-align: center;
+    color: var(--dim);
+    font-size: 0.9rem;
+  }
+  #hist-no-data.hidden { display: none; }
+  #hist-body { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+  #hist-heatmap-wrap { overflow-x: auto; margin-bottom: 1rem; }
+  #hist-heatmap-wrap.hidden, #hist-sidebar.hidden { display: none; }
+
+  /* ── historical sidebar widgets ──────────────────────────────────────── */
+  #hist-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 260px;
+    flex-shrink: 0;
+  }
+  .hist-widget {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    /* A touch-and-hold anywhere on one of these cards (title, canvas,
+       labels, the Similar Sessions list) is easy to do since the canvas is
+       meant for touch-scrubbing — shouldn't kick off text selection or
+       iOS's copy/lookup callout instead of the intended tooltip
+       interaction, so the whole card opts out, not just the title. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .hist-widget h4 {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .hist-widget canvas { display: block; width: 100%; touch-action: none; }
+  .canvas-tooltip {
+    position: absolute;
+    z-index: 70;
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: var(--fg);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .canvas-tooltip .tt-title { color: var(--dim); font-size: 0.64rem; margin-bottom: 2px; }
+  .hist-widget .widget-empty { color: var(--dim); font-size: 0.7rem; padding: 1.5rem 0; text-align: center; }
+  #similar-list { display: flex; flex-direction: column; gap: 4px; }
+  .similar-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 3px;
+    cursor: default;
+  }
+  .similar-row:hover { background: #1c2128; }
+  .similar-date { color: var(--fg); }
+  .similar-score { color: var(--dim); }
+  .similar-move.up { color: #00cc55; }
+  .similar-move.down { color: #ee3300; }
+  #similar-popup {
+    position: absolute;
+    z-index: 60;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  }
+  #similar-popup canvas { display: block; }
+
+  /* ── touch targets ───────────────────────────────────────────────────────
+     Scoped to coarse pointers (touch) only — desktop/mouse density is
+     unaffected. Bumps tap areas toward the ~44px baseline and raises form
+     control font-size to 16px, since iOS Safari auto-zooms the page on
+     focusing any input/select rendered below that size. */
+  @media (pointer: coarse) {
+    .tab-btn, .analysis-link {
+      min-height: 44px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+    }
+    #hist-date {
+      min-height: 44px;
+      padding: 8px 10px;
+      font-size: 1rem;
+    }
+    td.tradable { height: 44px; }
+    #trade-ticket input {
+      min-height: 40px;
+      width: 56px;
+      font-size: 1rem;
+    }
+    #trade-ticket button {
+      min-height: 40px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+    }
+    .paper-btn {
+      min-height: 36px;
+      padding: 5px 10px;
+      font-size: 0.72rem;
+    }
+    select.paper-btn { font-size: 1rem; }
+  }
+</style></head>
+<body style="background:var(--bg);color:var(--fg);padding:16px;font-family:system-ui,sans-serif">
+<h1 style="font-size:18px;margin-bottom:12px">Automated · local SMA(200) fixture</h1>
+<section id="bots-panel"><div id="bots-status"></div><div id="bots-by-strategy"></div><div id="bots-grid"></div></section>
+<script>// Reads /api/bots, a public read-only roster of the Crassus paper-trading
+// accounts. Positions come back netted but unmarked; they're marked here
+// against the shared liveQuotes service so a bot's mark is by construction the
+// same number the Live tab shows for that contract.
+const BOTS_POLL_MS = 30_000;
+// A mark older than this no longer counts as a mark. LiveQuoteService keeps
+// whatever it last received until the symbol leaves the interest set, so
+// without an age check a quote frozen by an upstream outage would keep every
+// account looking "complete" and keep ranking them on prices from minutes ago
+// -- exactly the confidently-wrong total the completeness state exists to
+// prevent. The quote poller runs on a 5s cycle while this tab is open, so 60s
+// is a dozen missed cycles: an outage, not jitter. Matches the spirit of the
+// 30s staleness bound TickerStateStore already applies to the price strip.
+const BOT_MARK_MAX_AGE_MS = 60_000;
+let botsTimer = null;
+let botsData  = null;
+let botsInFlight = false;
+let botsError = null;
+
+function setBotsPolling(on) {
+  if (on) {
+    if (botsTimer) return;
+    fetchBots();
+    botsTimer = setInterval(fetchBots, BOTS_POLL_MS);
+  } else {
+    if (botsTimer) clearInterval(botsTimer);
+    botsTimer = null;
+    // Stop paying for bot-only quotes once the tab is off screen.
+    liveQuotes.setBotPositions([]);
+  }
+}
+
+async function fetchBots() {
+  if (botsInFlight) return;
+  botsInFlight = true;
+  try {
+    const res = await fetch('/api/bots', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    botsData = await res.json();
+    botsError = null;
+    renderBots();
+  } catch (err) {
+    // Held in state rather than written straight to the status line: a quote
+    // tick fires renderBots() every few seconds, which would otherwise paint
+    // a fresh-looking "updated 12:34:56" over the warning while still showing
+    // the last successful roster. The balances on screen are real but no
+    // longer current, so the failure has to survive until a fetch succeeds.
+    botsError = err.message;
+    renderBots();
+  } finally {
+    botsInFlight = false;
+  }
+}
+
+// Equity = cash + mark value of open positions, but only when every position
+// has a mark.
+//
+// Skipping an unmarked leg and returning the remaining sum is worse than
+// returning nothing: an unmarked *short* has its liability omitted, which
+// inflates equity and could crown that account leader on the strength of a
+// number nobody computed. So an account with any unmarked position reports
+// complete:false and equity:null, and is excluded from leader selection and
+// from strategy aggregation rather than ranked on a partial figure.
+// A quote counts only while it is fresh. An absent quote and a frozen one are
+// the same thing for ranking purposes: in both cases nobody knows what the leg
+// is worth right now.
+function botMark(sym) {
+  const q = liveQuotes.get(sym);
+  if (!q || q.mid == null) return null;
+  const age = Date.now() - Date.parse(q.observedAt);
+  // A non-finite age means no usable timestamp; a large negative one means
+  // clock skew. Neither is evidence of freshness, so neither is trusted.
+  if (!Number.isFinite(age) || age > BOT_MARK_MAX_AGE_MS || age < -30_000) return null;
+  return q.mid;
+}
+
+function botEquity(bot) {
+  let openValue = 0;
+  let unmarked = 0;
+  for (const p of bot.positions) {
+    const mark = botMark(p.sym);
+    if (mark == null) { unmarked++; continue; }
+    openValue += mark * p.qty * (p.multiplier ?? 100);
+  }
+  const complete = unmarked === 0;
+  return {
+    complete,
+    unmarked,
+    openValue: complete ? openValue : null,
+    equity: complete ? bot.balance_cash + openValue : null,
+  };
+}
+
+// Aggregate PnL per strategy. With more than one strategy in play (#22 added
+// reddit_sentiment_qqq alongside smoke_atm_roundtrip) the interesting
+// comparison is strategy-vs-strategy, not just account-vs-account -- six
+// accounts running one strategy only tell you about variance.
+//
+// A strategy with any unmarked leg is reported as partial rather than given a
+// confident total, for the same reason individual cards are.
+function renderStrategyRollup(scored) {
+  const el = document.getElementById('bots-by-strategy');
+  const byStrategy = new Map();
+  for (const s of scored) {
+    const id = s.bot.strategy_id || 'unassigned';
+    const agg = byStrategy.get(id) || { id, accounts: 0, rankable: 0, pnl: 0, staked: 0, pending: 0 };
+    agg.accounts++;
+    // Only complete accounts contribute to the aggregate. Folding in an
+    // account whose equity nobody could compute would rank a strategy on a
+    // number that is partly missing.
+    if (s.complete) {
+      agg.rankable++;
+      agg.pnl += s.equity - s.bot.starting_balance;
+      agg.staked += s.bot.starting_balance;
+    } else {
+      agg.pending++;
+    }
+    byStrategy.set(id, agg);
+  }
+
+  // One strategy across the board means the rollup restates the cards below.
+  if (byStrategy.size < 2) { el.innerHTML = ''; return; }
+
+  // A strategy is only ranked when *every* one of its accounts is marked.
+  // Ranking a subtotal from the complete accounts would order strategies on
+  // figures covering different fractions of their books -- a 2-of-3 subtotal
+  // sitting above a fully-marked rival says nothing about which is ahead.
+  // Partial strategies still show their subtotal, explicitly labelled with the
+  // coverage it represents, but are excluded from ordering and parked after
+  // the ranked ones.
+  el.innerHTML = [...byStrategy.values()]
+    .sort((a, b) => {
+      const aFull = a.pending === 0;
+      const bFull = b.pending === 0;
+      if (aFull !== bFull) return aFull ? -1 : 1;
+      if (!aFull) return a.id.localeCompare(b.id);
+      return b.pnl - a.pnl;
+    })
+    .map(a => {
+      const full = a.pending === 0;
+      const pct = a.staked ? (a.pnl / a.staked) * 100 : 0;
+      const accounts = `${a.accounts} account${a.accounts === 1 ? '' : 's'}`;
+      if (full) {
+        return `<div class="strat-tile">
+          <span class="strat-name">${escapeHtml(a.id)}</span>
+          <span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+          <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) · ${accounts}</span>
+        </div>`;
+      }
+      // Nothing marked at all: there is no subtotal to show, partial or not.
+      const subtotal = a.rankable
+        ? `<span class="${pnlClass(a.pnl)}"> ${fmtMoney(a.pnl)}</span>
+           <span class="strat-meta"> (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%) subtotal</span>`
+        : '';
+      return `<div class="strat-tile">
+        <span class="strat-name">${escapeHtml(a.id)}</span>
+        ${subtotal}
+        <span class="strat-meta bot-unmarked"> · ${a.rankable}/${a.accounts} marked — unranked</span>
+      </div>`;
+    }).join('');
+}
+
+// A roster fetch failure outranks anything the cards have to say: whatever is
+// on screen came from an earlier successful poll and is no longer current.
+function botsStatusLine(suffix) {
+  return botsError ? `roster unavailable — ${botsError} · showing last known` : suffix;
+}
+
+// Display only: retain the original trade timestamp and financial history.
+const botTradeDateFormat = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', year: 'numeric', month: 'short', day: 'numeric',
+  hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  timeZoneName: 'short',
+});
+function formatBotLastTrade(value) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return 'Not recorded';
+  if (typeof value !== 'string' && typeof value !== 'number') return 'Invalid timestamp';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Invalid timestamp';
+  return `${botTradeDateFormat.format(date)} (New York)`;
+}
+
+function renderBots() {
+  if (!botsData) {
+    if (botsError) {
+      document.getElementById('bots-status').textContent = botsStatusLine('');
+    }
+    return;
+  }
+  const grid = document.getElementById('bots-grid');
+  const bots = botsData.bots || [];
+
+  liveQuotes.setBotPositions(bots.flatMap(b => b.positions.map(p => p.sym)));
+
+  if (!bots.length) {
+    grid.innerHTML = '';
+    // Clear the rollup too, or tiles from the last populated render survive
+    // the liquidation of the final bot and read as live.
+    document.getElementById('bots-by-strategy').innerHTML = '';
+    document.getElementById('bots-status').textContent =
+      botsStatusLine('no automated accounts registered yet');
+    return;
+  }
+
+  // Rank by equity descending, with accounts that have no complete equity
+  // parked after them -- they are unranked, not last-placed.
+  const scored = bots.map(b => ({ bot: b, ...botEquity(b) }))
+    .sort((a, b) => {
+      if (a.complete !== b.complete) return a.complete ? -1 : 1;
+      if (!a.complete) return a.bot.alias.localeCompare(b.bot.alias);
+      return b.equity - a.equity;
+    });
+  const rankable = scored.filter(s => s.complete);
+  const best = rankable.length ? rankable[0].equity : null;
+  renderStrategyRollup(scored);
+
+  grid.innerHTML = scored.map(({ bot, equity, complete, unmarked }) => {
+    const pnl = complete ? equity - bot.starting_balance : null;
+    const pct = complete && bot.starting_balance ? (pnl / bot.starting_balance) * 100 : 0;
+    const dir = !complete ? 'flat' : pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'flat';
+    // Only a complete account can lead, and only when something else could
+    // have beaten it.
+    const isLeader = complete && rankable.length > 1 && equity === best;
+
+    const posRows = bot.positions.map(p => {
+      const mark = botMark(p.sym);
+      const mult = p.multiplier ?? 100;
+      const ppnl = mark != null && p.avg_price != null
+        ? (mark - p.avg_price) * p.qty * mult : null;
+      const label = p.instrument_type === 'share'
+        ? escapeHtml(p.sym)
+        : `${occRoot(p.sym || p.symbol) || p.underlying || 'QQQ'} ${p.strike} ${p.type === 'call' ? 'C' : 'P'}`;
+      return `<tr>
+        <td>${label}</td>
+        <td>${p.qty > 0 ? '+' : ''}${p.qty}</td>
+        <td>${p.avg_price != null ? fmtQ(p.avg_price) : '—'}</td>
+        <td>${mark != null ? fmtQ(mark) : '—'}</td>
+        <td class="${ppnl != null ? pnlClass(ppnl) : ''}">${ppnl != null ? fmtMoney(ppnl) : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    const state = bot.strategy_state && typeof bot.strategy_state === 'object'
+      ? bot.strategy_state : null;
+    const stateText = state
+      ? `<div class="bot-strategy-state">${[
+          state.signal_date ? `Bar ${escapeHtml(String(state.signal_date))}` : '',
+          state.signal ? `Signal ${escapeHtml(String(state.signal))}` : '',
+          state.close != null ? `Close ${Number(state.close).toFixed(2)}` : '',
+          state.sma != null ? `SMA ${Number(state.sma).toFixed(2)}` : '',
+          state.target ? `Target ${escapeHtml(String(state.target))}` : '',
+          state.position ? `Position ${escapeHtml(String(state.position))}` : '',
+          state.reason ? escapeHtml(String(state.reason)) : '',
+        ].filter(Boolean).join(' · ')}</div>`
+      : '';
+
+    return `<div class="bot-card${isLeader ? ' leader' : ''}">
+      <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
+      <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
+      ${bot.account_closed ? '<div class="bot-strategy">Closed — trading stopped; history retained</div>' : ''}
+      ${stateText}
+      <div class="bot-equity">${complete ? `$${equity.toFixed(2)}` : '<span class="bot-unmarked">pending</span>'}</div>
+      <div class="bot-pnl ${dir}">${complete
+        ? `${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)`
+        : '<span class="bot-unmarked">awaiting marks</span>'}</div>
+      <div class="bot-meta">
+        Cash ${bot.balance_cash < 0 ? '−$' + Math.abs(bot.balance_cash).toFixed(2) : '$' + bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
+        <br><span class="bot-last-trade">Last trade: ${escapeHtml(formatBotLastTrade(bot.last_trade_ts))}</span>
+        ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} without a mark — equity and PnL withheld, and this account is unranked</span>` : ''}
+      </div>
+      ${bot.positions.length
+        ? `<table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th></tr>${posRows}</table>`
+        : '<div class="bot-nopos">flat — no open positions</div>'}
+    </div>`;
+  }).join('');
+
+  const asOf = botsData.as_of ? new Date(botsData.as_of).toLocaleTimeString() : '—';
+  document.getElementById('bots-status').textContent =
+    botsStatusLine(`${bots.length} account${bots.length === 1 ? '' : 's'} · updated ${asOf}`);
+}
+</script>
+</body></html>

@@ -67,6 +67,17 @@ def _resolve_window_minutes(params: dict[str, Any]) -> float:
     return minutes
 
 
+def _resolve_unquoted_exit_minutes(params: dict[str, Any]) -> float:
+    """`params["eod_unquoted_exit_minutes"]` (default 5), only consulted
+    when `eod_unquoted_exit` is "market". A bad value falls back to the
+    default rather than widening the window."""
+    try:
+        minutes = float(params.get("eod_unquoted_exit_minutes", 5))
+    except (TypeError, ValueError):
+        return 5.0
+    return minutes if math.isfinite(minutes) and minutes > 0 else 5.0
+
+
 def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | None:
     """A `Decision` once the flatten window is open, else `None` (meaning the
     caller should fall through to the account's own strategy).
@@ -108,6 +119,13 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
     if ctx.session_phase != "open":
         return None
 
+    # Opt-in only: a strategy that explicitly holds an underlying across
+    # sessions (the daily SMA bot) must not be force-flattened. The default
+    # remains mandatory for every existing account, so this does not weaken
+    # the intraday policy for options strategies.
+    if params.get("overnight_hold") is True:
+        return None
+
     minutes_before_close = _resolve_window_minutes(params)
     close_time = exchange_calendar.session_close(ctx.now_et.date())
     market_close = ctx.now_et.replace(
@@ -134,6 +152,41 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
     symbols = sorted(ctx.book.positions.keys())  # deterministic scan order
     quotes = ctx.quotes(symbols)
     symbol = next((s for s in symbols if quotes.get(s) is not None and quotes[s].is_executable), None)
+
+    unquoted_minutes = _resolve_unquoted_exit_minutes(params)
+    if (
+        symbol is None
+        and params.get("eod_unquoted_exit") == "market"
+        and minutes_to_close <= unquoted_minutes
+    ):
+        # Owner-chosen degraded-data exit (brokerage-routed accounts only;
+        # see tastytrade_broker.EXIT_POLICIES): in the final minutes, close
+        # the first held leg without a quote rather than carry it into
+        # expiration. The executor decides how (a market order); this only
+        # makes the path reachable and names why.
+        symbol = symbols[0]
+        position = ctx.book.positions[symbol]
+        return Decision(
+            action="sell" if position.quantity > 0 else "buy",
+            symbol=symbol,
+            quantity=abs(position.quantity),
+            reason=(
+                f"End-of-day flatten: {minutes_to_close:.1f} minute(s) to close and no "
+                f"live/fresh quote for {symbols}; eod_unquoted_exit=market closes "
+                f"{symbol} without a quote inside the final {unquoted_minutes:g} minute(s)."
+            ),
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            metadata={
+                "flatten_minutes_before_close": minutes_before_close,
+                "minutes_to_close": minutes_to_close,
+                "symbol": symbol,
+                "held_quantity": position.quantity,
+                "unquoted_exit": True,
+                "bid": None,
+                "ask": None,
+            },
+        )
 
     if symbol is None:
         # None of the held legs have a live/fresh quote this cycle -- still

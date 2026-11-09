@@ -73,6 +73,12 @@ jobs:
       - name: Run changing-ATM position-stacking fixture (#86)
         working-directory: crassus
         run: python scripts/verify_position_stacking.py
+      - name: Run bot credential preflight suite (#41)
+        working-directory: crassus
+        run: python scripts/verify_preflight.py
+      - name: Run isolated paper lifecycle with real Runner + Worker harness (#41/#86/#102)
+        working-directory: crassus
+        run: python scripts/verify_paper_lifecycle.py
       - name: Run looking_glass_straddle strategy suite
         working-directory: crassus
         run: python scripts/verify_looking_glass_straddle.py

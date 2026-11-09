@@ -67,7 +67,7 @@ export async function handleRegister(request, env) {
   if (originError) return originError;
   const bodyResult = await readJsonBody(request);
   if (bodyResult.error) return bodyResult.error;
-  const { username, password, alias, strategy_id } = bodyResult.body || {};
+  const { username, password, alias, strategy_id, paper_margin_limit, paper_financing_rate } = bodyResult.body || {};
 
   // A bot account is only ever created by an operator presenting the shared
   // BOT_REGISTRATION_KEY. A wrong key is rejected outright rather than quietly
@@ -93,6 +93,16 @@ export async function handleRegister(request, env) {
   if (isBot && strategy_id !== undefined &&
       (typeof strategy_id !== 'string' || !STRATEGY_ID_RE.test(strategy_id))) {
     return jsonResponse({ error: 'strategy_id must be 1-40 chars: lowercase letters, numbers, underscore' }, 400);
+  }
+  if (isBot && paper_margin_limit !== undefined &&
+      (typeof paper_margin_limit !== 'number' || !Number.isFinite(paper_margin_limit) ||
+       paper_margin_limit < 1 || paper_margin_limit > 4)) {
+    return jsonResponse({ error: 'paper_margin_limit must be a number from 1 to 4' }, 400);
+  }
+  if (isBot && paper_financing_rate !== undefined &&
+      (typeof paper_financing_rate !== 'number' || !Number.isFinite(paper_financing_rate) ||
+       paper_financing_rate < 0 || paper_financing_rate > 1)) {
+    return jsonResponse({ error: 'paper_financing_rate must be a number from 0 to 1' }, 400);
   }
 
   if (typeof username !== 'string' || !(isBot ? BOT_USERNAME_RE : USERNAME_RE).test(username)) {
@@ -121,7 +131,11 @@ export async function handleRegister(request, env) {
     trades: [],
     createdAt: new Date().toISOString(),
     version: 0,
-    ...(isBot ? { is_bot: true, alias: alias || username, strategy_id: strategy_id || null } : {}),
+    ...(isBot ? {
+      is_bot: true, alias: alias || username, strategy_id: strategy_id || null,
+      ...(paper_margin_limit !== undefined ? { paper_margin_limit } : {}),
+      ...(paper_financing_rate !== undefined ? { paper_financing_rate } : {}),
+    } : {}),
   };
   await env.USERS.put(key, JSON.stringify(record));
   // Index after the record exists, so the roster can never point at a

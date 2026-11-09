@@ -223,14 +223,36 @@ export async function handlePaperTrade(request, env) {
     }
   }
 
-  const trade = candidate;
+  let trade = candidate;
   // Buys debit cash and are capped by balance below. Option sells retain the
   // existing uncovered-short behavior; share sells are constrained to the
   // held long quantity inside the account mutation below.
   const multiplier = trade.multiplier ?? 100;
-  const cashDelta = trade.side === 'buy'
+  let financingCost = 0;
+  let financingDays = 0;
+  let cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+  // Financing is charged only when closing a leveraged share position. The
+  // loan is the negative cash created by the entry; one annual rate and the
+  // elapsed calendar days are enough for this single-position paper bot.
+  if (trade.side === 'sell' && (trade.instrument_type ?? 'option') === 'share') {
+    const record = session.record;
+    const rate = Number(record.paper_financing_rate ?? 0);
+    const loan = Math.max(0, -Number(record.balance_cash ?? 0));
+    const entry = (record.trades || []).find(t =>
+      t.side === 'buy' && (t.instrument_type ?? 'option') === 'share' && t.sym === trade.sym);
+    if (rate > 0 && loan > 0 && entry?.ts) {
+      const entryMs = Date.parse(entry.ts);
+      const elapsed = Number.isFinite(entryMs) ? executedAt.getTime() - entryMs : 0;
+      financingDays = Math.max(0, elapsed / 86_400_000);
+      financingCost = Math.round(loan * rate * financingDays / 365 * 100) / 100;
+      cashDelta -= financingCost;
+      trade = { ...trade, financing_cost: financingCost,
+        financing_days: Number(financingDays.toFixed(4)),
+        financing_rate_annual: rate };
+    }
+  }
 
   try {
     const fenced = await renewExecutionReservation(
@@ -252,15 +274,23 @@ export async function handlePaperTrade(request, env) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
     if (record.account_closed) return { error: 'account_closed' };
-    if (trade.side === 'buy' && -cashDelta > record.balance_cash) {
-      if (record.is_bot) {
-        const rejection = { ...common, error: 'Insufficient balance', status: 'rejected',
-          http_status: 400, account_closed: true };
-        return { record: { ...record, account_closed: true, closed_at: executedAt.toISOString(),
-          closure_reason: 'insufficient_balance', closure_execution: rejection },
-          result: { balance_rejection: rejection } };
+    if (trade.side === 'buy' && (record.balance_cash < 0 || -cashDelta > record.balance_cash)) {
+      const marginLimit = Number(record.paper_margin_limit ?? 1);
+      const book = computeBookFromTrades(record.trades);
+      const isFlat = Object.values(book).every(position => position.pos === 0);
+      const leveragedEntry = record.is_bot === true &&
+        (trade.instrument_type ?? 'option') === 'share' &&
+        Number.isFinite(marginLimit) && marginLimit > 1 && marginLimit <= 4 && isFlat;
+      if (!leveragedEntry || -cashDelta > record.balance_cash * marginLimit) {
+        if (record.is_bot) {
+          const rejection = { ...common, error: 'Insufficient balance', status: 'rejected',
+            http_status: 400, account_closed: true };
+          return { record: { ...record, account_closed: true, closed_at: executedAt.toISOString(),
+            closure_reason: 'insufficient_balance', closure_execution: rejection },
+            result: { balance_rejection: rejection } };
+        }
+        return { error: 'insufficient_balance' };
       }
-      return { error: 'insufficient_balance' };
     }
     if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
       const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;

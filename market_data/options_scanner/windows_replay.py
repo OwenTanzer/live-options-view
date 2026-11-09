@@ -38,10 +38,29 @@ MAX_UNDERLYINGS = 50
 MAX_SESSIONS = 10
 SOURCES: list[dict] = []  # every fetched public artifact with its SHA-256
 EXPECTED_HASHES: dict[str, str] | None = None
+CACHE_DIR: Path | None = None  # local cache of source blobs; a hit is verified by SHA-256
 
 
 def fetch(key: str, attempts: int = 4) -> bytes:
-    """GET one public artifact; bounded retries with backoff on transport errors."""
+    """GET one public artifact; bounded retries with backoff on transport errors.
+
+    With --cache-dir, a blob already on disk is reused (its SHA-256 is still
+    verified against the source lock when one is given, and is recorded in
+    SOURCES either way); otherwise it is fetched from the origin and saved
+    to the cache. This lets bounded batches covering a large universe reuse
+    the same sweep blobs instead of re-downloading them per batch. The cache
+    is a local read-through: it never invents content, and a cached blob
+    whose hash disagrees with the lock is rejected, not trusted.
+    """
+    if CACHE_DIR is not None:
+        cached = CACHE_DIR / key
+        if cached.is_file():
+            body = cached.read_bytes()
+            digest = hashlib.sha256(body).hexdigest()
+            if EXPECTED_HASHES is not None and EXPECTED_HASHES.get(key) != digest:
+                raise RuntimeError(f"source missing from lock or changed: {key}")
+            SOURCES.append({"key": key, "sha256": digest, "bytes": len(body), "cached": True})
+            return body
     req = urllib.request.Request(f"{ORIGIN}/{key}", headers={"User-Agent": "oa203-windows-replay/1"})
     for attempt in range(attempts):
         try:
@@ -51,6 +70,10 @@ def fetch(key: str, attempts: int = 4) -> bytes:
             if EXPECTED_HASHES is not None and EXPECTED_HASHES.get(key) != digest:
                 raise RuntimeError(f"source missing from lock or changed: {key}")
             SOURCES.append({"key": key, "sha256": digest, "bytes": len(body)})
+            if CACHE_DIR is not None:
+                dest = CACHE_DIR / key
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(body)
             return body
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             if attempt == attempts - 1:
@@ -69,8 +92,20 @@ def validate_manifest(manifest: list[dict], summary: dict, day: str,
     files = [m.get("file") for m in manifest]
     if len(set(files)) != len(files) or any(f != f"sweep_{i:04d}.jsonl.gz" for i, f in enumerate(files, 1)):
         raise RuntimeError(f"{day}: invalid or repeated sweep file")
-    if any(m.get("truncated") or not isinstance(m.get("chains"), dict) for m in manifest):
-        raise RuntimeError(f"{day}: truncated or damaged sweep")
+    # A truncated FINAL sweep is the normal end-of-day partial sweep: the
+    # scanner stops at market close, so the last sweep only fetches a
+    # fraction of the chains before the session ends. The archive's own
+    # assessment still marks such a day "complete" (complete_sweeps counts
+    # only the full sweeps). A truncated NON-final sweep is a real mid-
+    # session gap and is still rejected. The final sweep's rows are
+    # excluded from window evidence in load_session; they are never used
+    # as endpoints, so no coverage is invented.
+    for m in manifest[:-1]:
+        if m.get("truncated") or not isinstance(m.get("chains"), dict):
+            raise RuntimeError(f"{day}: truncated or damaged sweep {m.get('sweep')}")
+    if manifest and not isinstance(manifest[-1].get("chains"), dict):
+        raise RuntimeError(f"{day}: damaged final sweep")
+    final_truncated = bool(manifest and manifest[-1].get("truncated"))
     previous_end = None
     for entry in manifest:
         start, end = entry.get("started_ms"), entry.get("ended_ms")
@@ -83,6 +118,10 @@ def validate_manifest(manifest: list[dict], summary: dict, day: str,
             fetched = st.get("fetched_ms")
             if type(fetched) is not int or not start <= fetched <= end:
                 raise RuntimeError(f"{day}: missing or invalid chain fetch time in sweep {entry['sweep']}")
+        # A truncated final sweep is incomplete by construction; do not
+        # demand its additional chains (they were never fetched).
+        if final_truncated and entry is manifest[-1]:
+            continue
         for name, expiries in (selected or {}).items():
             extra = expiries.get("additional")
             if extra:
@@ -90,6 +129,7 @@ def validate_manifest(manifest: list[dict], summary: dict, day: str,
                 if not st or st.get("status") != "ok" or st.get("expiration") != extra or \
                         type(st.get("rows")) is not int or st["rows"] <= 0:
                     raise RuntimeError(f"{day}: incomplete additional chain {name} {extra} in sweep {entry['sweep']}")
+    return final_truncated
 
 
 def validate_contract_identity(symbol: str, row: dict) -> None:
@@ -121,9 +161,18 @@ def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled:
     selected = {u["underlying"]: {"nearest": u["expiration"], "additional": u.get("additional_expiration")}
                 for u in universe.get("selected", [])}
     manifest = [json.loads(line) for line in fetch(prefix + "sweeps/manifest.jsonl").decode().splitlines() if line.strip()]
-    validate_manifest(manifest, summary, day, selected)
+    final_truncated = validate_manifest(manifest, summary, day, selected)
     kept = 0
+    excluded_final_sweep = None
     for entry in manifest:
+        # A truncated final sweep is excluded from window evidence: its
+        # rows are a partial end-of-day fetch, not a complete sweep. The
+        # exclusion is recorded in the returned metadata and the report.
+        if final_truncated and entry is manifest[-1]:
+            excluded_final_sweep = {"sweep": entry["sweep"], "rows": entry.get("rows"),
+                                    "chains": len(entry.get("chains", {})),
+                                    "reason": "truncated_final_sweep_excluded"}
+            continue
         counts: dict[tuple[str, str], int] = defaultdict(int)
         in_session_counts: dict[tuple[str, str], int] = defaultdict(int)
         raw_count = 0
@@ -174,6 +223,7 @@ def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled:
     return {"day": day, "session": w.Session(day, summary["session_open_ms"], summary["session_close_ms"]),
             "sweeps": len(manifest), "rows_kept": kept, "final": bool(summary.get("final")),
             "assessment": summary["assessment"]["status"],
+            "excluded_final_sweep": excluded_final_sweep,
             "universe_selection_version": universe.get("selection_version"),
             "universe_selected_at": universe.get("selected_at"),
             "occ_sha256": universe.get("occ_sha256")}
@@ -206,6 +256,32 @@ def validate_calendar(sessions: list[w.Session]) -> set[tuple[int, int]]:
             <= set(days)}
 
 
+RANKED_CSV_COLUMNS = ["rank", "symbol", "underlying", "option_type", "strike", "expiration", "pct", "entry", "exit",
+                      "abs_change_per_contract", "entry_session", "exit_session", "entry_ms", "exit_ms", "flags", "status", "reasons"]
+
+
+def write_ranked_csv(path: Path, ranked: list[dict], basis: str) -> None:
+    """Write one window's ranked contracts as CSV.
+
+    The ``status``/``pct``/``rank`` in this file are the named basis's values
+    (the replay writes the ``qualified`` basis). Status and returns are
+    basis-specific: a row can be eligible on ``mid``/``exec`` while excluded
+    on ``qualified`` (e.g. a wide spread), and the top-ranked contract
+    differs by basis. The per-basis eligible counts and top lists live in
+    replay_summary.json. Every ranked row is written, eligible or excluded,
+    so losses and exclusions are retained.
+    """
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        wr = csv.writer(f)
+        wr.writerow(RANKED_CSV_COLUMNS)
+        for r in ranked:
+            b = r[basis]
+            wr.writerow([r[f"{basis}_rank"], r["symbol"], r["underlying"], r["option_type"], r["strike"], r["expiration"],
+                         b.get("pct"), b.get("entry"), b.get("exit"), b.get("abs_change_per_contract"),
+                         b.get("entry_session"), b.get("exit_session"), b.get("entry_ms"), b.get("exit_ms"),
+                         ";".join(r["flags"]), b["status"], ";".join(b["reasons"])])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--days", nargs="+", required=True)
@@ -214,8 +290,10 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--emit-root", type=Path, help="also write oa203/windows/ outputs under this local directory")
     ap.add_argument("--source-lock", type=Path, help="verify every source against a previous replay's SHA-256 lock")
+    ap.add_argument("--cache-dir", type=Path, help="local read-through cache of source blobs, reused across batches")
     a = ap.parse_args()
-    global EXPECTED_HASHES
+    global EXPECTED_HASHES, CACHE_DIR
+    CACHE_DIR = a.cache_dir
     if a.source_lock:
         lock = json.loads(a.source_lock.read_text(encoding="utf-8"))
         EXPECTED_HASHES = {s["key"]: s["sha256"] for s in lock["sources"]}
@@ -299,16 +377,7 @@ def main() -> int:
                                        "entry_session": r[basis]["entry_session"], "exit_session": r[basis]["exit_session"],
                                        "flags": r["flags"]} for r in elig[:a.top]]}
             if basis == "qualified":
-                with open(a.out / f"{win.window_id}.csv", "w", newline="", encoding="utf-8") as f:
-                    cols = ["rank", "symbol", "underlying", "option_type", "strike", "expiration", "pct", "entry", "exit",
-                            "abs_change_per_contract", "entry_session", "exit_session", "entry_ms", "exit_ms", "flags", "status", "reasons"]
-                    wr = csv.writer(f); wr.writerow(cols)
-                    for r in ranked:
-                        b = r[basis]
-                        wr.writerow([r[f"{basis}_rank"], r["symbol"], r["underlying"], r["option_type"], r["strike"], r["expiration"],
-                                     b.get("pct"), b.get("entry"), b.get("exit"), b.get("abs_change_per_contract"),
-                                     b.get("entry_session"), b.get("exit_session"), b.get("entry_ms"), b.get("exit_ms"),
-                                     ";".join(r["flags"]), b["status"], ";".join(b["reasons"])])
+                write_ranked_csv(a.out / f"{win.window_id}.csv", ranked, basis)
         report["windows"].append(summary)
     (a.out / "replay_summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (a.out / "source_lock.json").write_text(json.dumps({"sources": SOURCES}, indent=2) + "\n", encoding="utf-8")

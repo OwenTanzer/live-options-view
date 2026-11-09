@@ -92,6 +92,9 @@ class Construction(unittest.TestCase):
         d = w.WindowPolicy().as_dict()
         self.assertEqual(d["version"], "oa203-windows-v1")
         self.assertIn("D1-D5_D7_D8_approved", d["decisions_status"])
+        # D6/D9/opening tolerance/continuity are Chej engineering-reviewed
+        # for inert/offline use only, not Owen release approval.
+        self.assertIn("chej_engineering_reviewed_offline_only", d["decisions_status"])
         self.assertEqual(d["close_tolerance_s"], 900)
         self.assertEqual(d["qualified_endpoint_policy"]["max_quote_age_s"], 1800)
         with self.assertRaises(ValueError):
@@ -163,6 +166,53 @@ class Weekly(unittest.TestCase):
         self.assertIn("exit_on_expiration_day_disallowed", self.run_kind("weekly_cheapest", policy=strict)["contract_exclusions"])
         later = info(expiration="2026-10-16", symbol="ABC261016C00100000")
         self.assertEqual(self.run_kind("weekly_cheapest", info=later)["flags"], [])
+
+    def test_d8_friday_to_monday_same_contract_continuity(self):
+        # D8: one additional expiry for SPY/QQQ only. The Oct 23 contract
+        # sampled as the additional chain on Friday Oct 16 is the SAME
+        # contract sampled as the nearest chain on Monday Oct 19, so a
+        # Friday->Monday overnight window can follow it. Within the
+        # approved two-chain limit: nearest + one additional, nothing more.
+        fri = sess("2026-10-16")
+        mon = sess("2026-10-19")
+        win = w.overnight_windows([fri, mon])[0]
+        self.assertEqual(win.window_id, "overnight-2026-10-16_2026-10-19")
+        contract = info(expiration="2026-10-23", symbol="SPY261023C00100000",
+                        underlying="SPY", root="SPY")
+        path = [ob("2026-10-16", 15, 55, 2.0, 2.1), ob("2026-10-19", 9, 35, 2.4, 2.5)]
+        row = w.evaluate(win, contract, path, ["2026-10-16", "2026-10-19"])
+        self.assertEqual(row["exec"]["status"], "eligible")
+        self.assertEqual(row["exec"]["entry_session"], "2026-10-16")
+        self.assertEqual(row["exec"]["exit_session"], "2026-10-19")
+        # If the Oct 23 chain had NOT been sampled on Monday (no second
+        # chain retained), the hold cannot be fabricated.
+        row = w.evaluate(win, contract, path, ["2026-10-16"])
+        self.assertEqual(row["exec"]["status"], "excluded")
+        self.assertIn("missing_session:2026-10-19", row["exec"]["reasons"])
+        # A contract expiring on the Friday itself cannot cross the weekend.
+        expiring = info(expiration="2026-10-16", symbol="SPY261016C00100000",
+                        underlying="SPY", root="SPY")
+        row = w.evaluate(win, expiring, path, ["2026-10-16", "2026-10-19"])
+        self.assertIn("expires_before_exit", row["exec"]["reasons"])
+
+    def test_adjusted_deliverable_fails_closed(self):
+        # An adjusted root (corporate action, e.g. XYZ1) means the economic
+        # deliverable is unknown from the quote alone. It cannot become an
+        # ordinary continuity-qualified result: it is EXCLUDED, not merely
+        # flagged. Raw observations are preserved in the row (the contract
+        # still appears with its exclusion reason), never deleted.
+        adjusted = info(symbol="XYZ1261009C00100000", underlying="XYZ", root="XYZ1")
+        row = self.run_kind("weekly_cheapest", info=adjusted)
+        self.assertIn("adjusted_deliverable_unknown", row["contract_exclusions"])
+        for basis in w.BASES:
+            self.assertEqual(row[basis]["status"], "excluded")
+            self.assertIn("adjusted_deliverable_unknown", row[basis]["reasons"])
+        self.assertIn("adjusted_root_check_deliverable", row["flags"])
+        # A standard (unadjusted) root with the same shape is unaffected.
+        normal = info(symbol="XYZ261009C00100000", underlying="XYZ", root="XYZ")
+        row = self.run_kind("weekly_cheapest", info=normal)
+        self.assertNotIn("adjusted_deliverable_unknown", row["contract_exclusions"])
+        self.assertEqual(row["exec"]["status"], "eligible")
 
     def test_close_endpoint_tolerance_and_no_interpolation(self):
         path = [o for o in week_path() if o.t != ms("2026-10-09", 15, 55)]  # last Fri obs is 10:00

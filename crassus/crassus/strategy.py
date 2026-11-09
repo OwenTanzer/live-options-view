@@ -29,12 +29,15 @@ class Decision:
     quantity: int | None = None
     confidence: float | None = None
     metadata: dict[str, Any] | None = None
+    instrument_type: str | None = None
 
     def __post_init__(self) -> None:
         if self.action not in ACTIONS:
             raise ValueError(f"action must be one of {sorted(ACTIONS)}, got {self.action!r}")
         if not self.reason:
             raise ValueError("reason is required -- a no_trade with no reason is unevaluable")
+        if self.instrument_type not in (None, "option", "share"):
+            raise ValueError("instrument_type must be 'option' or 'share'")
 
         if self.action == "no_trade":
             if self.symbol is not None or self.quantity is not None:
@@ -60,6 +63,7 @@ class Decision:
             "strategy_version": self.strategy_version,
             "confidence": self.confidence,
             "metadata": self.metadata,
+            "instrument_type": self.instrument_type,
         }
 
     @classmethod

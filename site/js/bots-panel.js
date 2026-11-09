@@ -80,7 +80,7 @@ function botEquity(bot) {
   for (const p of bot.positions) {
     const mark = botMark(p.sym);
     if (mark == null) { unmarked++; continue; }
-    openValue += mark * p.qty * 100;
+    openValue += mark * p.qty * (p.multiplier ?? 100);
   }
   const complete = unmarked === 0;
   return {
@@ -224,10 +224,14 @@ function renderBots() {
 
     const posRows = bot.positions.map(p => {
       const mark = botMark(p.sym);
+      const mult = p.multiplier ?? 100;
       const ppnl = mark != null && p.avg_price != null
-        ? (mark - p.avg_price) * p.qty * 100 : null;
+        ? (mark - p.avg_price) * p.qty * mult : null;
+      const label = p.instrument_type === 'share'
+        ? escapeHtml(p.sym)
+        : `${occRoot(p.sym || p.symbol) || p.underlying || 'QQQ'} ${p.strike} ${p.type === 'call' ? 'C' : 'P'}`;
       return `<tr>
-        <td>${occRoot(p.sym || p.symbol) || p.underlying || 'QQQ'} ${p.strike} ${p.type === 'call' ? 'C' : 'P'}</td>
+        <td>${label}</td>
         <td>${p.qty > 0 ? '+' : ''}${p.qty}</td>
         <td>${p.avg_price != null ? fmtQ(p.avg_price) : '—'}</td>
         <td>${mark != null ? fmtQ(mark) : '—'}</td>
@@ -235,16 +239,31 @@ function renderBots() {
       </tr>`;
     }).join('');
 
+    const state = bot.strategy_state && typeof bot.strategy_state === 'object'
+      ? bot.strategy_state : null;
+    const stateText = state
+      ? `<div class="bot-strategy-state">${[
+          state.signal_date ? `Bar ${escapeHtml(String(state.signal_date))}` : '',
+          state.signal ? `Signal ${escapeHtml(String(state.signal))}` : '',
+          state.close != null ? `Close ${Number(state.close).toFixed(2)}` : '',
+          state.sma != null ? `SMA ${Number(state.sma).toFixed(2)}` : '',
+          state.target ? `Target ${escapeHtml(String(state.target))}` : '',
+          state.position ? `Position ${escapeHtml(String(state.position))}` : '',
+          state.reason ? escapeHtml(String(state.reason)) : '',
+        ].filter(Boolean).join(' · ')}</div>`
+      : '';
+
     return `<div class="bot-card${isLeader ? ' leader' : ''}">
       <h4><span>${escapeHtml(bot.alias)}</span><span class="bot-user">${escapeHtml(bot.username)}</span></h4>
       <div class="bot-strategy">${bot.strategy_id ? escapeHtml(bot.strategy_id) : 'no strategy recorded'}</div>
       ${bot.account_closed ? '<div class="bot-strategy">Closed — trading stopped; history retained</div>' : ''}
+      ${stateText}
       <div class="bot-equity">${complete ? `$${equity.toFixed(2)}` : '<span class="bot-unmarked">pending</span>'}</div>
       <div class="bot-pnl ${dir}">${complete
         ? `${fmtMoney(pnl)} (${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(2)}%)`
         : '<span class="bot-unmarked">awaiting marks</span>'}</div>
       <div class="bot-meta">
-        Cash $${bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
+        Cash ${bot.balance_cash < 0 ? '−$' + Math.abs(bot.balance_cash).toFixed(2) : '$' + bot.balance_cash.toFixed(2)} · ${bot.trade_count} trade${bot.trade_count === 1 ? '' : 's'}
         <br><span class="bot-last-trade">Last trade: ${escapeHtml(formatBotLastTrade(bot.last_trade_ts))}</span>
         ${unmarked ? `<br><span class="bot-unmarked">${unmarked} position${unmarked === 1 ? '' : 's'} without a mark — equity and PnL withheld, and this account is unranked</span>` : ''}
       </div>

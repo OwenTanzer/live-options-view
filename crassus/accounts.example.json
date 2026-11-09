@@ -1,5 +1,5 @@
 {
-  "_comment": "This deployable catalog contains 32 bots covering twenty registered strategies: the nine current base strategies (including Canopus and looking_glass_straddle) plus momentum_puts_only_qqq, smoke_atm_roundtrip_phelps, reddit_sentiment_qqq_phelps, trump_whisperer_qqq_phelps, momentum_qqq_phelps, momentum_puts_only_qqq_phelps, phelps_pure_qqq, and (MOO-161) smoke_atm_roundtrip_fixed_window, reddit_sentiment_qqq_fixed_window, trump_whisperer_qqq_fixed_window, momentum_qqq_fixed_window. The Phelps twins preserve their base accounts' strategy/params while adding only the validated hold-time wrapper; the eight fixed-window (FW) twins preserve the same strategy/params again but force-close the position unconditionally at the Phelps boundary instead of merely releasing it back to the base strategy -- see phelps.fixed_window_wrap. Bowman exercises the pure Phelps strategy. Persephone / Persephone Phelps are the puts-only comparison pair: momentum_puts_only_qqq (crassus/strategies/momentum_puts_only.py) is momentum_qqq with the call side removed -- it only ever opens or holds a put -- run bare on Persephone and through phelps_wrap on Persephone Phelps, isolating the hold-time floor's effect on a directionally-restricted book. Canopus implements the frozen Down-Day 14 forward-test rule: capture a trustworthy 09:30 ET reference, buy one ATM 0DTE put during 14:45-14:51 only when QQQ is down at least 0.25%, sell when the live bid reaches 1.14x the fill (rounded up to the next cent), or liquidate at 15:45. Do not retune it from individual outcomes. looking_glass_straddle (alias 'Cheshire' below) is a provisional-research direction-neutral 0DTE QQQ opening straddle -- buy num_straddles ATM calls+puts at entry_time_et, sell core_sell_count of each leg the first time the position's live value reaches C0*(1+core_profit_threshold_pct), and let the N-k runner ride uncapped to terminal_exit_time_et (or liquidate everything there on a no-touch day); no re-entry once a day's sequence has traded. See crassus/strategies/looking_glass_straddle.py's module docstring for why entry/exit are unavoidably two legs across separate runner cycles (Decision only ever places one symbol per cycle) and for why the params below are one representative point in the strategy brief's own validation sweep, not a tuned result. Every listed password environment variable must be provisioned because this tracked catalog is the runtime roster, not an inactive example. Every account is also end-of-day flattened (see crassus/flatten.py): this is mandatory, not a params opt-in -- a position that never gets a reversing signal from its own strategy still gets force-closed inside the last DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE (15) minutes before the real exchange close, rather than riding untouched into next session's settlement sweep. 'flatten_minutes_before_close' can widen or narrow that window per account if set explicitly, but no params value turns it off.",
+  "_comment": "This deployable catalog contains 33 bots covering twenty-one registered strategies: the nine current base strategies (including Canopus and looking_glass_straddle) plus momentum_puts_only_qqq, smoke_atm_roundtrip_phelps, reddit_sentiment_qqq_phelps, trump_whisperer_qqq_phelps, momentum_qqq_phelps, momentum_puts_only_qqq_phelps, phelps_pure_qqq, and (MOO-161) smoke_atm_roundtrip_fixed_window, reddit_sentiment_qqq_fixed_window, trump_whisperer_qqq_fixed_window, momentum_qqq_fixed_window, and spy_sma200_double_or_out. The Phelps twins preserve their base accounts' strategy/params while adding only the validated hold-time wrapper; the eight fixed-window (FW) twins preserve the same strategy/params again but force-close the position unconditionally at the Phelps boundary instead of merely releasing it back to the base strategy -- see phelps.fixed_window_wrap. Bowman exercises the pure Phelps strategy. Persephone / Persephone Phelps are the puts-only comparison pair: momentum_puts_only_qqq (crassus/strategies/momentum_puts_only.py) is momentum_qqq with the call side removed -- it only ever opens or holds a put -- run bare on Persephone and through phelps_wrap on Persephone Phelps, isolating the hold-time floor's effect on a directionally-restricted book. Canopus implements the frozen Down-Day 14 forward-test rule: capture a trustworthy 09:30 ET reference, buy one ATM 0DTE put during 14:45-14:51 only when QQQ is down at least 0.25%, sell when the live bid reaches 1.14x the fill (rounded up to the next cent), or liquidate at 15:45. Do not retune it from individual outcomes. looking_glass_straddle (alias 'Cheshire' below) is a provisional-research direction-neutral 0DTE QQQ opening straddle -- buy num_straddles ATM calls+puts at entry_time_et, sell core_sell_count of each leg the first time the position's live value reaches C0*(1+core_profit_threshold_pct), and let the N-k runner ride uncapped to terminal_exit_time_et (or liquidate everything there on a no-touch day); no re-entry once a day's sequence has traded. See crassus/strategies/looking_glass_straddle.py's module docstring for why entry/exit are unavoidably two legs across separate runner cycles (Decision only ever places one symbol per cycle) and for why the params below are one representative point in the strategy brief's own validation sweep, not a tuned result. Every listed password environment variable must be provisioned because this tracked catalog is the runtime roster, not an inactive example. Every account is also end-of-day flattened (see crassus/flatten.py): this is mandatory, not a params opt-in -- a position that never gets a reversing signal from its own strategy still gets force-closed inside the last DEFAULT_FLATTEN_MINUTES_BEFORE_CLOSE (15) minutes before the real exchange close, rather than riding untouched into next session's settlement sweep. 'flatten_minutes_before_close' can widen or narrow that window per account if set explicitly, but no params value turns it off.",
   "_runtime_note": "This tracked file is the default bot catalog. An ignored accounts.json overlays matching usernames and may add private accounts; it does not replace or hide catalog entries.",
 
   "accounts": [
@@ -87,7 +87,9 @@
           "max_premium_per_contract": 3.0,
           "max_daily_loss_usd": 250.0,
           "max_opens_per_day": 4
-        }
+        },
+        "eod_unquoted_exit": "retry",
+        "eod_unquoted_exit_minutes": 5
       }
     },
     {
@@ -270,6 +272,23 @@
       "username": "crassus_newton_fw",
       "password_env": "CRASSUS_PW_NEWTON_FW",
       "strategy_id": "momentum_qqq_fixed_window",
+      "active": false
+    },
+    {
+      "_comment": "#97 SPY SMA(200) double-or-out. Inactive until review/release: it needs the paper-only SPY share/margin extension and a provisioned CRASSUS_PW_SPY200 credential. It deliberately opts out of intraday flatten via overnight_hold; size is 2x entry equity, notional, with 6% annual paper financing.",
+      "alias": "SPY 200D",
+      "username": "crassus_spy200",
+      "password_env": "CRASSUS_PW_SPY200",
+      "strategy_id": "spy_sma200_double_or_out",
+      "paper_margin_limit": 2.0,
+      "paper_financing_rate": 0.06,
+      "params": {
+        "symbol": "SPY",
+        "window": 200,
+        "leverage": 2.0,
+        "financing_rate": 0.06,
+        "overnight_hold": true
+      },
       "active": false
     }
   ]

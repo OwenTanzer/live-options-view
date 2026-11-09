@@ -147,6 +147,27 @@ export async function handleBotIndexReconcile(request, env) {
 // Authenticated with the same operator key as bot registration: this edits the
 // public roster's attribution, so it must not be reachable by a logged-in bot
 // session, let alone anonymously.
+// Public strategy summary for the Automated card. Only the fields the runner
+// intentionally publishes are retained; nested objects, credentials and
+// arbitrary metadata are rejected rather than copied into KV.
+const STRATEGY_STATE_KEYS = new Set([
+  'strategy', 'symbol', 'window', 'signal_date', 'close', 'sma',
+  'prior_close', 'prior_sma', 'signal', 'target', 'position', 'position_qty',
+  'equity', 'ask', 'pending', 'reason', 'adjustment_basis', 'execution_convention',
+]);
+function sanitizeStrategyState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!STRATEGY_STATE_KEYS.has(key)) return null;
+    if (item === null || typeof item === 'boolean') { out[key] = item; continue; }
+    if (typeof item === 'number' && Number.isFinite(item)) { out[key] = item; continue; }
+    if (typeof item === 'string' && item.length <= 500) { out[key] = item; continue; }
+    return null;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export async function handleBotMetadata(request, env) {
   const key = request.headers.get('X-Bot-Registration-Key');
   if (!env.BOT_REGISTRATION_KEY || key !== env.BOT_REGISTRATION_KEY) {
@@ -154,7 +175,10 @@ export async function handleBotMetadata(request, env) {
   }
   const bodyResult = await readJsonBody(request);
   if (bodyResult.error) return bodyResult.error;
-  const { username, strategy_id, alias } = bodyResult.body || {};
+  const {
+    username, strategy_id, alias, paper_margin_limit, paper_financing_rate,
+    strategy_state,
+  } = bodyResult.body || {};
 
   if (typeof username !== 'string' || !BOT_USERNAME_RE.test(username)) {
     return jsonResponse({ error: 'username must be a valid username' }, 400);
@@ -166,14 +190,40 @@ export async function handleBotMetadata(request, env) {
   if (alias !== undefined && (typeof alias !== 'string' || alias.length > 40)) {
     return jsonResponse({ error: 'Alias must be a string of at most 40 characters' }, 400);
   }
+  if (paper_margin_limit !== undefined &&
+      (typeof paper_margin_limit !== 'number' || !Number.isFinite(paper_margin_limit) ||
+       paper_margin_limit < 1 || paper_margin_limit > 4)) {
+    return jsonResponse({ error: 'paper_margin_limit must be a number from 1 to 4' }, 400);
+  }
+  if (paper_financing_rate !== undefined &&
+      (typeof paper_financing_rate !== 'number' || !Number.isFinite(paper_financing_rate) ||
+       paper_financing_rate < 0 || paper_financing_rate > 1)) {
+    return jsonResponse({ error: 'paper_financing_rate must be a number from 0 to 1' }, 400);
+  }
+  const cleanState = strategy_state === undefined ? undefined : sanitizeStrategyState(strategy_state);
+  if (strategy_state !== undefined && cleanState === null) {
+    return jsonResponse({ error: 'strategy_state must be a small flat object' }, 400);
+  }
 
   const outcome = await withUserRecord(env, username, (record) => {
     if (!record.is_bot) return { error: 'not_a_bot' };
     const next = { ...record };
     if (strategy_id !== undefined) next.strategy_id = strategy_id;
     if (alias !== undefined) next.alias = alias;
-    const result = { strategy_id: next.strategy_id, alias: next.alias };
-    if (next.strategy_id === record.strategy_id && next.alias === record.alias) return { result };
+    if (paper_margin_limit !== undefined) next.paper_margin_limit = paper_margin_limit;
+    if (paper_financing_rate !== undefined) next.paper_financing_rate = paper_financing_rate;
+    if (cleanState !== undefined) next.strategy_state = cleanState;
+    const result = {
+      strategy_id: next.strategy_id, alias: next.alias,
+      paper_margin_limit: next.paper_margin_limit ?? 1,
+      paper_financing_rate: next.paper_financing_rate ?? 0,
+    };
+    if (next.strategy_id === record.strategy_id && next.alias === record.alias &&
+        next.paper_margin_limit === record.paper_margin_limit &&
+        next.paper_financing_rate === record.paper_financing_rate &&
+        JSON.stringify(next.strategy_state) === JSON.stringify(record.strategy_state)) {
+      return { result };
+    }
     return { record: next, result };
   });
 
@@ -229,6 +279,9 @@ export async function handleBots(request, env) {
         first_trade_ts: trades.length ? trades[0].ts : null,
         last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
         positions: netPositions(trades),
+        strategy_state: record.strategy_state ?? null,
+        paper_margin_limit: record.paper_margin_limit ?? 1,
+        paper_financing_rate: record.paper_financing_rate ?? 0,
         created_at: record.createdAt ?? null,
       });
     }

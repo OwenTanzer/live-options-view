@@ -517,10 +517,11 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
-            elif snapshot is None:
+            elif snapshot is None and getattr(strategy, "requires_snapshot", True):
                 # Ordinary strategy evaluation does need a snapshot -- only
-                # the mandatory flatten is exempt. No flatten fired above, so
-                # there's nothing safe to decide against this cycle.
+                # the mandatory flatten and a strategy that declares its own
+                # durable daily-bar source are exempt. No flatten fired above,
+                # so there's nothing safe to decide against this cycle.
                 self.ledger.record(
                     **base,
                     outcome_class=Outcome.RUNNER_ERROR,
@@ -569,7 +570,19 @@ class Runner:
             "account_strategy_id": account.strategy_id,
         }
 
+        # Optional public strategy summary for the Automated card. Best-effort:
+        # a metadata write failure must not turn a valid trading decision into
+        # a skipped cycle, and only strategies that opt in send this field.
+        # This is a real Worker write, so it is skipped in dry-run mode below.
+
         if not decision.is_trade:
+            if not self.dry_run:
+                strategy_state = (decision.metadata or {}).get("strategy_state")
+                if isinstance(strategy_state, dict):
+                    try:
+                        session.sync_metadata(strategy_state=strategy_state)
+                    except Exception as exc:
+                        log.warning("%s: strategy_state metadata sync failed: %s", alias, exc)
             log.info("%s: no_trade -- %s", alias, decision.reason)
             self.ledger.record(
                 **decision_fields,
@@ -595,12 +608,20 @@ class Runner:
             )
             return
 
+        strategy_state = (decision.metadata or {}).get("strategy_state")
+        if isinstance(strategy_state, dict):
+            try:
+                session.sync_metadata(strategy_state=strategy_state)
+            except Exception as exc:
+                log.warning("%s: strategy_state metadata sync failed: %s", alias, exc)
+
         log.info("%s: %s %s x%s -- %s", alias, decision.action, decision.symbol, decision.quantity, decision.reason)
         try:
             result = executor.submit(
                 symbol=decision.symbol,
                 side=decision.action,
                 quantity=decision.quantity,
+                instrument_type=decision.instrument_type,
                 decision_id=decision_id,
                 strategy_id=decision.strategy_id,
                 strategy_version=decision.strategy_version,

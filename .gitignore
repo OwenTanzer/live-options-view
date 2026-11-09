@@ -2,3 +2,6 @@
 __pycache__/
 experiments/news_pin_bot/.env
 experiments/news_pin_bot/db/*.sqlite3
+replay-cache/
+replay-130-full/
+replay-130-full-combined/

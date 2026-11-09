@@ -7,8 +7,13 @@ without stitching contracts, looking ahead, or interpolating endpoints. See
 docs/specs/OA203_MULTI_SESSION_WINDOWS.md for the design and the open decisions D1-D9.
 
 **Every D1-D9 choice is an explicit WindowPolicy field.** The defaults are the
-design doc's *recommended* values and are marked provisional in every output
-(`decisions_status`); none is an owner decision until confirmed.
+design doc's *recommended* values. D1-D5, D7 and bounded D8 are owner-approved.
+D6 (rolling 2/3-session windows), D9 (expiration-day PM exit with known
+AM-settled roots excluded), the 900 s opening tolerance, and the same-OCC
+continuity algorithm are Chej engineering-reviewed definitions for
+inert/offline use only (2026-11-09); they are NOT Owen release approval.
+Cheapest-entry results stay separately labeled as retrospective hindsight.
+The 30-minute quote-side freshness limit is unchanged.
 
 Window kinds (separately named so a hindsight variant never replaces a
 fixed-endpoint statistic):
@@ -74,7 +79,8 @@ class WindowPolicy:
     # Weekly PM-settled roots (SPXW, NDXP, RUTW) are not listed.
     am_settled_roots: frozenset[str] = frozenset({"SPX", "NDX", "RUT", "VIX"})
     qualified: QualifiedPolicy = field(default_factory=QualifiedPolicy)
-    decisions_status: str = "D1-D5_D7_D8_approved; D6_D9_opening_tolerance_provisional"
+    decisions_status: str = ("D1-D5_D7_D8_approved; "
+                             "D6_D9_opening_tolerance_continuity_chej_engineering_reviewed_offline_only")
 
     def __post_init__(self) -> None:
         if (type(self.early_week_sessions) is not int or not 1 <= self.early_week_sessions <= 4
@@ -361,6 +367,15 @@ def continuity(window: Window, info: ContractInfo, sampled_days: Iterable[str],
             flags.append("exit_on_expiration_day")
     root = _root(info)
     if root != info.underlying and root[-1:].isdigit():
+        # Fail closed: an adjusted root (corporate action) means the economic
+        # deliverable is unknown from the quote alone. A quote comparison
+        # cannot establish that an adjusted deliverable (e.g. fewer shares
+        # plus cash) is economically equivalent to the standard 100-share
+        # deliverable, so the path cannot become an ordinary
+        # continuity-qualified result without deliverable evidence. The
+        # contract is EXCLUDED, not deleted: raw observations are preserved
+        # in the output with this reason, and the flag stays for visibility.
+        excluded.append("adjusted_deliverable_unknown")
         flags.append("adjusted_root_check_deliverable")
     return excluded, flags
 
