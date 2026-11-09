@@ -115,9 +115,27 @@ docs and need one sandbox session to confirm:
   `QQQ   261109C00500000`).
 - **Cancel:** `DELETE /accounts/{n}/orders/{id}` cancels an order.
 
-## Evidence caveat
+## Evidence
 
-In the 40-day synthetic backtest (2026-08-14), `oi_skew_qqq` never traded,
-and it has no live paper P&L history that supports real-money use. This
-route makes real trading *possible*. It does not show that the strategy has
-an edge. The sandbox step and a paper track record should come before step 3.
+**Live paper record.** `crassus_oiskew` on `/api/bots`, 2026-11-09:
+
+- Cash is $10,792 against a $10,000 start, with one open call held at cost
+  ($295). That is **+$1,087 (+10.9%) over 149 trades** since 2026-08-12.
+- It ranks first of the 31 roster bots. The next best is +$507.
+- The per-day FIFO ledger through 2026-09-03 showed −$544 realized, so the
+  gain came from September onward.
+
+**Backtest.** In the 40-day synthetic backtest (2026-08-14) the strategy
+never fired. That says more about the synthetic days' OI dynamics than about
+the strategy.
+
+**Limitations.**
+
+- This is paper P&L. Fills happen at the Worker's quote, which tastytrade
+  will not match exactly.
+- The sample is one strategy on roughly three months of data.
+- Real money also caps the bot at 1 contract with the loss and premium
+  limits above.
+
+Running the sandbox step first is still the plan, mainly to confirm the API
+details listed above.
