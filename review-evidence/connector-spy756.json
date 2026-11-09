@@ -1,0 +1,221 @@
+{
+  "schema": "options-view-mcp.v1",
+  "dataset": "spy_snapshot",
+  "requested_filters": {
+    "underlying": "SPY",
+    "strike": 756,
+    "limit": 2
+  },
+  "actual": {
+    "underlying": "SPY",
+    "snapshot_timestamp": "2026-11-06T21:14:26.703657+00:00",
+    "snapshot_key": "intraday/spy/20261106/snapshot_161426703634.csv",
+    "session": "2026-11-06",
+    "payload_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698"
+  },
+  "source_mode": "public_anonymous",
+  "retrieval_time": "2026-11-09T06:01:10.416Z",
+  "producer_times": {
+    "observation": null,
+    "acquisition_start": null,
+    "acquisition_end": "2026-11-06T21:14:26.703657+00:00",
+    "publication": null
+  },
+  "status": "available",
+  "freshness": {
+    "status": "stale",
+    "observed_at": "2026-11-06T21:14:26.703657+00:00",
+    "age_seconds": 204404.07,
+    "stale_after_seconds": 120,
+    "basis": "collection_timestamp"
+  },
+  "coverage": {
+    "source_rows": 114,
+    "matched_rows": 2,
+    "expiration": "2026-11-06"
+  },
+  "units": {
+    "spot": "USD/share",
+    "vwap": "USD/share (snapshot-weighted approximation)",
+    "rvol": "multiple",
+    "momentum_return_pct": "percentage points",
+    "OpenInterest": "contracts (lagged; zero and missing conflated)",
+    "Bid": "USD/share",
+    "Ask": "USD/share",
+    "Strike": "USD/share"
+  },
+  "warnings": [
+    "Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.",
+    "VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.",
+    "OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.",
+    "Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.",
+    "SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.",
+    "SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production."
+  ],
+  "sources": [
+    {
+      "locator": "intraday/spy/latest.json",
+      "link": "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/spy/latest.json",
+      "retrieval_time": "2026-11-09T06:01:10.772Z",
+      "bytes": 84465,
+      "retrieved_sha256": "cc41b46903d6d8cece9ae938c07e939eb25c4824ef064084af102b0fd4018698",
+      "checksum_verification": "not_verified_against_producer"
+    }
+  ],
+  "pagination": {
+    "offset": 0,
+    "limit": 2,
+    "total": 2,
+    "truncated": false,
+    "next_offset": null
+  },
+  "errors": [],
+  "requested_underlying": "SPY",
+  "readings": {
+    "symbol": "SPY",
+    "spot": 736,
+    "spot_ts": "2026-11-06T21:14:25.847155+00:00",
+    "vwap": 737.7184,
+    "vwap_ts": "2026-11-06T21:14:25.847155+00:00",
+    "vwap_session_date": "2026-11-06",
+    "vwap_session_started_at": "2026-11-06T11:01:18.845785+00:00",
+    "vwap_partial_session": false,
+    "price_vs_vwap_abs": -1.7184,
+    "price_vs_vwap_pct": -0.2329,
+    "session_volume": 56141095,
+    "session_volume_ts": "2026-11-06T21:14:25.847155+00:00",
+    "rvol": {
+      "status": "ok",
+      "multiple": 1.2318,
+      "bucket_label": "16:10",
+      "baseline_volume": 45577436.733333334,
+      "baseline_days_used": 15,
+      "baseline_lookback_days": 20,
+      "baseline_updated_through": "2026-11-05"
+    },
+    "momentum": {
+      "status": "ok",
+      "return_pct": -0.3696,
+      "lookback_minutes": 60,
+      "anchor_age_minutes": 60.21424063333333,
+      "sample_count": 571,
+      "direction": "down"
+    },
+    "source": "dxlink",
+    "freshness": "live",
+    "field_freshness": {
+      "spot": {
+        "status": "stale",
+        "observed_at": "2026-11-06T21:14:25.847155+00:00",
+        "age_seconds": 204404.926,
+        "stale_after_seconds": 120
+      },
+      "vwap": {
+        "status": "stale",
+        "observed_at": "2026-11-06T21:14:25.847155+00:00",
+        "age_seconds": 204404.926,
+        "stale_after_seconds": 120
+      },
+      "session_volume": {
+        "status": "stale",
+        "observed_at": "2026-11-06T21:14:25.847155+00:00",
+        "age_seconds": 204404.926,
+        "stale_after_seconds": 120
+      },
+      "rvol": {
+        "status": "stale",
+        "observed_at": "2026-11-06T21:14:25.847155+00:00",
+        "age_seconds": 204404.926,
+        "stale_after_seconds": 120,
+        "producer_status": "ok"
+      },
+      "momentum": {
+        "status": "unknown",
+        "observed_at": null,
+        "age_seconds": null,
+        "stale_after_seconds": 120,
+        "producer_status": "ok"
+      }
+    }
+  },
+  "rows": [
+    {
+      "TradeDate": "2026-11-06",
+      "Expiration": "2026-11-06",
+      "Strike": 756,
+      "Type": "call",
+      "OptionSymbol": "SPY261106C00756000",
+      "DTE": 0,
+      "OpenInterest": 6629,
+      "Volume": 28779,
+      "VolDelta": 0,
+      "Bid": 0,
+      "Mid": 0.005,
+      "Ask": 0.01,
+      "Last": 0.01,
+      "IV": 1.124277022649985,
+      "Delta": 2.58864270086378e-20,
+      "Gamma": 1.125977233839929e-19,
+      "Theta": -0.00417711758379552,
+      "Vega": 4.54586486768834e-21,
+      "UnderlyingPrice": 736,
+      "QQQ": 656.2,
+      "USO": 148.41,
+      "VIX": 25.489999771118164,
+      "OVX": 58.290000915527344,
+      "SMH": 463.73,
+      "IGV": 98.85,
+      "10Y": 4.859000205993652,
+      "JPY_USD": 0.0063265,
+      "KOSPI": 5059.69,
+      "BTC_USD": 75784.4375,
+      "META": 610.13,
+      "GOOGL": 284.66,
+      "AMZN": 259.35,
+      "TSLA": 358.12,
+      "MU": 689.33,
+      "SPCX": 134.21,
+      "AAPL": 342.39,
+      "detail_reference": "d339a4d4-4b6d-42d6-af41-687f9661e426"
+    },
+    {
+      "TradeDate": "2026-11-06",
+      "Expiration": "2026-11-06",
+      "Strike": 756,
+      "Type": "put",
+      "OptionSymbol": "SPY261106P00756000",
+      "DTE": 0,
+      "OpenInterest": 399,
+      "Volume": 1251,
+      "VolDelta": 0,
+      "Bid": 19.93,
+      "Mid": 19.995,
+      "Ask": 20.06,
+      "Last": 20.8,
+      "IV": 1.229568350622246,
+      "Delta": -1,
+      "Gamma": 1.001365091313723e-16,
+      "Theta": -0.01450894116604928,
+      "Vega": 4.42138873320419e-18,
+      "UnderlyingPrice": 736,
+      "QQQ": 656.2,
+      "USO": 148.41,
+      "VIX": 25.489999771118164,
+      "OVX": 58.290000915527344,
+      "SMH": 463.73,
+      "IGV": 98.85,
+      "10Y": 4.859000205993652,
+      "JPY_USD": 0.0063265,
+      "KOSPI": 5059.69,
+      "BTC_USD": 75784.4375,
+      "META": 610.13,
+      "GOOGL": 284.66,
+      "AMZN": 259.35,
+      "TSLA": 358.12,
+      "MU": 689.33,
+      "SPCX": 134.21,
+      "AAPL": 342.39,
+      "detail_reference": "287f5d16-b3bd-4db9-8155-72ad45256a3c"
+    }
+  ]
+}

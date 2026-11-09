@@ -1,0 +1,413 @@
+Live
+Historical
+Automated
+Squeeze
+Move analysis ↗
+Options chain underlying
+SPY 0DTE Live OI
+$736.00
+Regular
+VWAP/RVOL: session closed
+Momentum: session closed
+view-only · OI colors relative to this snapshot
+￼
+16:14 ET
+Options: backing off · retry 5s
+Tickers: backing off · retry 76s
+SPY: stale
+QQQ
+656.20
++0.02%
+FALLBACK
+VWAP/RVOL: session closed
+Momentum: session closed
+SPY
+738.77
++0.47%
+STALE
+VIX
+25.64
+FALLBACK
+OVX
+58.29
+FALLBACK
+SMH
+463.73
+-0.05%
+FALLBACK
+IGV
+98.85
+-0.03%
+FALLBACK
+JPY/USD
+¥157.79
++0.17%
+FALLBACK
+KOSPI
+5113.83
+FALLBACK
+USO
+148.41
++0.00%
+FALLBACK
+10Y
+4.859%
+FALLBACK
+AAPL
+342.39
++0.01%
+FALLBACK
+META
+610.13
++0.00%
+FALLBACK
+GOOGL
+284.66
+-0.04%
+FALLBACK
+AMZN
+259.35
++0.02%
+FALLBACK
+TSLA
+358.12
+-0.03%
+FALLBACK
+MU
+689.33
+-0.10%
+FALLBACK
+SPCX
+134.21
+-0.04%
+FALLBACK
+BTC/USD
+74,527
+-1.58%
+FALLBACK
+EIA STEO2026-11
+FORECAST2026-11
+BRENT FCST$104.00
+￼
+WTI FCST$97.00
+￼
+WORLD BALANCE0.47 Mbbl/d
+￼
+OVX—NO_DATA
+CALLS
+STRIKE
+PUTS
+6.6K
+0.00 × 0.01
+28k
+756
+399
+19.9 × 20.1
+1.3k
+18K
+0.00 × 0.01
+60k
+755
+4.0K
+18.9 × 19.1
+2.5k
+8.6K
+0.00 × 0.01
+36k
+754
+728
+17.9 × 18.1
+2.7k
+6.8K
+0.00 × 0.01
+61k
+753
+1.7K
+16.9 × 17.1
+1.6k
++5
+4.9K
+0.00 × 0.01
+71k
+752
+1.8K
+15.9 × 16.1
+1.8k
++5
+3.5K
+0.00 × 0.01
+75k
+751
+3.8K
+14.9 × 15.1
+3.1k
+23K
+0.00 × 0.01
+211k
+750
+26K
+14.0 × 14.0
+16k
+5.7K
+0.00 × 0.01
+86k
+749
+7.5K
+12.9 × 13.1
+5.6k
+3.8K
+0.00 × 0.01
+103k
+748
+2.5K
+11.9 × 12.1
+3.9k
+3.8K
+0.00 × 0.01
+135k
+747
+2.8K
+10.9 × 11.1
+4.3k
+3.4K
+0.00 × 0.01
+145k
+746
+3.3K
+9.93 × 10.1
+6.4k
+13K
+0.00 × 0.01
+314k
+745
+11K
+8.93 × 9.06
+12k
+4.1K
+0.00 × 0.01
+167k
+744
+4.9K
+7.93 × 8.06
+15k
+4.0K
+0.00 × 0.01
+200k
+743
+4.0K
+6.93 × 7.06
+16k
+3.9K
+0.00 × 0.01
+314k
+742
+4.6K
+5.97 × 6.03
+33k
+2.6K
+0.00 × 0.01
+307k
+741
+4.7K
+4.98 × 5.03
+87k
++1
+10K
+0.00 × 0.01
+494k
+740
+17K
+3.98 × 4.03
+217k
++6
+3.3K
+0.01 × 0.02
+330k
++234
+739
+3.2K
+2.98 × 3.03
+271k
++2
+3.5K
+0.01 × 0.02
+306k
++91
+738
+5.6K
+2.00 × 2.04
+446k
++60
+5.1K
+0.06 × 0.08
+174k
++530
+737
+4.2K
+1.04 × 1.09
+428k
++45
+4.8K
+0.32 × 0.34
+109k
++355
+736 ★
+3.3K
+0.31 × 0.33
+336k
++244
+6.3K
+1.03 × 1.08
+62k
++24
+735
+15K
+0.06 × 0.07
+398k
++365
+2.5K
+2.00 × 2.05
+20k
++2
+734
+4.3K
+0.01 × 0.02
+205k
++116
+1.9K
+2.83 × 3.08
+12k
++5
+733
+4.5K
+0.01 × 0.02
+168k
++25
+1.6K
+3.94 × 4.08
+10k
+732
+4.9K
+0.00 × 0.01
+157k
+687
+4.94 × 5.08
+7.8k
+731
+4.8K
+0.00 × 0.01
+142k
+1.0K
+5.94 × 6.08
+7.1k
+730
+13K
+0.00 × 0.01
+228k
+268
+6.94 × 7.08
+3.8k
+729
+3.8K
+0.00 × 0.01
+119k
+207
+7.94 × 8.07
+2.7k
+728
+5.1K
+0.00 × 0.01
+86k
+232
+8.94 × 9.07
+2.2k
+727
+4.2K
+0.00 × 0.01
+95k
+184
+9.94 × 10.1
+2.9k
+726
+3.3K
+0.00 × 0.01
+45k
+392
+10.9 × 11.1
+1.8k
+725
+20K
+0.00 × 0.01
+118k
+101
+11.9 × 12.1
+1.3k
+724
+4.1K
+0.00 × 0.01
+63k
+119
+12.9 × 13.1
+1.2k
+723
+4.7K
+0.00 × 0.01
+65k
+131
+13.9 × 14.1
+1.1k
+722
+4.5K
+0.00 × 0.01
+39k
+71
+14.9 × 15.1
+1.7k
+721
+5.2K
+0.00 × 0.01
+40k
+164
+15.9 × 16.1
+1.1k
+720
+19K
+0.00 × 0.01
+80k
+63
+16.9 × 17.1
+862
+719
+16K
+0.00 × 0.01
+39k
+135
+17.9 × 18.1
+602
+718
+2.0K
+0.00 × 0.01
+23k
+32
+18.9 × 19.1
+673
+717
+2.9K
+0.00 × 0.01
+35k
+56
+19.9 × 20.1
+954
+716
+3.7K
+0.00 × 0.01
+22k
+LOG IN
+￼
+regulus
+••••••••
+There is no password recovery. If you lose your password, this account and its $10,000 balance are gone for good — write it down somewhere safe.
+Log In
+Need an account? Register
+OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).
+Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. ← Download desktop app
