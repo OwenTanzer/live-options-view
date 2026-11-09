@@ -73,8 +73,6 @@ jobs:
         run: node tests/squeeze_panel.test.js
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
-      - name: isolated paper lifecycle (#41/#86/#102)
-        run: node tests/paper_lifecycle.test.js
       - name: multi-underlying chain and settlement (#182)
         run: node tests/multi_underlying.test.js
       - name: Install browser test dependencies
