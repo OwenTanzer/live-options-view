@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import clock, strategies  # noqa: F401  (import registers strategies)
+from . import clock, strategies, tastytrade_broker  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
 from .archive import from_environment as archive_from_environment
 from .bs_edge import annotate_buy_decision
@@ -170,7 +170,35 @@ class Runner:
 
         self.sessions: dict[str, AccountSession] = {}
         self.executors: dict[str, ExecutionClient] = {}
+        routed: list[Any] = []
         for account in accounts:
+            if getattr(account, "broker", "worker") == "tastytrade":
+                # Real brokerage orders. Fails closed per account: a missing
+                # credential or owner approval disables this one bot and is
+                # recorded, rather than stopping every paper bot with it.
+                try:
+                    session, executor = tastytrade_broker.build_for_account(
+                        account,
+                        state_dir=self.state_dir,
+                        rate_limiter=self.rate_limiter,
+                        quotes=self.quotes.quotes,
+                    )
+                except CrassusError as exc:
+                    log.error("%s: tastytrade routing disabled: %s", account.alias, exc)
+                    self.ledger.record(
+                        decision_id=self.ledger.new_decision_id(),
+                        account_alias=account.alias,
+                        strategy_id=account.strategy_id,
+                        strategy_version="n/a",
+                        outcome_class=Outcome.RUNNER_ERROR,
+                        reason=f"tastytrade routing disabled: {exc}",
+                        market_snapshot_lineage=unavailable_lineage("not_observed"),
+                    )
+                    continue
+                self.sessions[account.alias] = session
+                self.executors[account.alias] = executor
+                routed.append(account)
+                continue
             session = AccountSession(
                 account,
                 base_url=base_url,
@@ -179,6 +207,8 @@ class Runner:
             )
             self.sessions[account.alias] = session
             self.executors[account.alias] = ExecutionClient(session, self.state_dir)
+            routed.append(account)
+        self.accounts = routed
 
         self._stop = threading.Event()
         self.retired: set[str] = set()

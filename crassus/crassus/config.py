@@ -52,6 +52,9 @@ REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
 TRUMP_FEED_USER_AGENT = os.environ.get("TRUMP_FEED_USER_AGENT")
 
 
+BROKERS = frozenset({"worker", "tastytrade"})
+
+
 @dataclass
 class Account:
     """One bot account. An account *is* a login -- the server has no account_id,
@@ -62,6 +65,10 @@ class Account:
     password: str = field(repr=False)
     strategy_id: str
     params: dict[str, Any] = field(default_factory=dict)
+    # "worker" (paper trading on the Worker, the default) or "tastytrade"
+    # (real brokerage orders via crassus/tastytrade_broker.py; credentials and
+    # the owner's live approval come only from CRASSUS_TASTY_* env vars).
+    broker: str = "worker"
 
     def __repr__(self) -> str:  # keep passwords out of tracebacks and logs
         return f"Account(alias={self.alias!r}, username={self.username!r}, strategy_id={self.strategy_id!r})"
@@ -159,6 +166,26 @@ def load_accounts(
     accounts = []
     for entry in entries:
         if entry.get("active", True) is False:
+            continue
+        broker = entry.get("broker", "worker")
+        if broker not in BROKERS:
+            raise ValueError(f"Account {entry['alias']}: broker must be one of {sorted(BROKERS)}, got {broker!r}")
+        if broker == "tastytrade":
+            if entry.get("password") or entry.get("password_env"):
+                raise ValueError(
+                    f"Account {entry['alias']}: a tastytrade-routed account takes no Worker password; "
+                    "its credentials come only from CRASSUS_TASTY_* environment variables"
+                )
+            accounts.append(
+                Account(
+                    alias=entry["alias"],
+                    username=entry["username"],
+                    password="",
+                    strategy_id=entry["strategy_id"],
+                    params=entry.get("params", {}),
+                    broker=broker,
+                )
+            )
             continue
         password = entry.get("password")
         if not password and entry.get("password_env"):
