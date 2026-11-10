@@ -28,7 +28,13 @@ three things here deliberately differ from `ExecutionClient`:
    trades, hedges). `OwnershipStore` records the contracts this bot's own
    fills produced; only those reach the `Book`, so neither the strategy nor
    the EOD flatten can trade anything else. Other holdings are reported as
-   `external_positions` but never managed.
+   `external_positions` but never managed. Ownership only shrinks on
+   evidence (expiry, or a confirmed non-bot closing fill); an unexplained
+   gap between ownership and the broker's positions is kept as attributed
+   exposure and blocks new opens until it resolves.
+5. All persistent state (ownership, risk day, in-flight intent) lives in a
+   directory bound to the broker environment and account (`bind_state`), so
+   sandbox state can never be read as live state or vice versa.
 
 The mode is fail-closed. Nothing trades unless `CRASSUS_TASTY_MODE` is
 exactly `sandbox` or `live`; `live` additionally requires
@@ -39,19 +45,21 @@ See `docs/tastytrade-live-trading.md`.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 import requests
 
-from . import clock
+from . import clock, exchange_calendar
 from .audit import Outcome
 from .client import (
     AccountState,
@@ -64,14 +72,16 @@ from .client import (
     TransportError,
 )
 from .durability import durable_mkdir, sync_directory
+from .market import executable_price
 
 LIVE_BASE = "https://api.tastyworks.com"
 SANDBOX_BASE = "https://api.cert.tastyworks.com"
 USER_AGENT = "crassus-tasty-router/1.0"
 TOKEN_REFRESH_BUFFER_S = 60
 
-# Hard ceilings. Account params may tighten these but never loosen them;
-# raising one is a code change that goes through review.
+# Hard ceilings. Account params may set each limit anywhere above zero up
+# to its ceiling, including above the default; nothing in config can exceed
+# a ceiling. Raising a ceiling is a code change that goes through review.
 HARD_MAX_CONTRACTS_PER_ORDER = 1
 HARD_MAX_OPEN_CONTRACTS = 1
 HARD_MAX_PREMIUM_PER_CONTRACT = 5.00  # option price, i.e. $500 per contract
@@ -82,8 +92,8 @@ DEFAULT_LIMITS = {
     "max_contracts_per_order": 1,
     "max_open_contracts": 1,
     "max_premium_per_contract": 3.00,
-    # An *entry stop*, not a loss cap: once account net liq is down this much
-    # from the session's first reading, no new position may be opened. It
+    # An *entry stop*, not a stop-loss: once the day's loss on the chosen
+    # basis (`entry_stop_basis`) reaches this, no new position may open. It
     # cannot stop out a position already held. See `worst_case_daily_loss`.
     "max_daily_loss_usd": 250.0,
     "max_opens_per_day": 4,
@@ -106,10 +116,20 @@ CONTRACT_MULTIPLIER = 100
 EXIT_POLICIES = frozenset({"retry", "market"})
 DEFAULT_EXIT_POLICY = "retry"
 
+# Which loss the daily entry stop measures (an owner decision):
+# * "bot": the bot's own fills today (plus positions it carried in at cost),
+#   unaffected by manual trades, deposits or withdrawals.
+# * "account": whole-account net liquidating value against the first value
+#   seen this session. Manual gains and deposits can mask bot losses.
+# * "both" (default): either one stops new entries.
+ENTRY_STOP_BASES = frozenset({"bot", "account", "both"})
+DEFAULT_ENTRY_STOP_BASIS = "both"
+
 # Declaring an in-flight order "never placed" needs repeated, complete
 # order-history scans spread over time, not one first-page miss.
 ABSENCE_MIN_AGE_S = 15 * 60
 ABSENCE_MIN_SCANS = 3
+ABSENCE_MIN_SPAN_S = 15 * 60  # first to last absent scan, not intent age
 ORDERS_PER_PAGE = 200
 LATE_FILL_WATCH_S = 2 * 24 * 3600
 
@@ -187,11 +207,14 @@ class TastyConfig:
 
 
 def resolve_limits(params: dict[str, Any] | None) -> dict[str, float]:
-    """Account params tighten the defaults; the hard ceilings always win.
+    """Defaults, overridden by account params, capped by the hard ceilings.
+
+    A param may set a limit anywhere above zero up to its ceiling, so it can
+    be looser than the default; a value above the ceiling is clamped to it.
 
     Units: `max_premium_per_contract` is the option *price* (3.00 means $300
-    for one 100-share contract); `max_daily_loss_usd` is dollars of account
-    net liquidating value; the other three are whole contracts / orders.
+    for one 100-share contract); `max_daily_loss_usd` is dollars of loss on
+    the `entry_stop_basis`; the other three are whole contracts / orders.
     Unknown keys, non-numbers, non-integers for counts and non-positive
     values are configuration errors, never silently ignored.
     """
@@ -212,19 +235,41 @@ def resolve_limits(params: dict[str, Any] | None) -> dict[str, float]:
     return limits
 
 
-def worst_case_daily_loss(limits: dict[str, float]) -> float:
-    """Upper bound, in dollars, on what the bot's own trades can lose in one
-    session under these limits, before fees and before gap/assignment risk.
+def worst_case_daily_loss(limits: dict[str, float], basis: str = DEFAULT_ENTRY_STOP_BASIS) -> float | None:
+    """Bound, in dollars, on the bot's own trading loss in one ET session,
+    or None when the configured basis gives no such bound.
 
-    The bot only ever holds long options (no naked shorts), so a held
-    position can lose at most the premium paid. The entry stop lets a new
-    position open while the account is down by just under
-    `max_daily_loss_usd`, and that position can then lose its whole
-    premium. So the bound is the entry stop plus one full position at the
-    premium cap. It is *not* a stop-loss on any single position.
+    Only the "bot" component bounds the bot's own loss. With basis
+    "account" alone, gains elsewhere in the account (or a deposit) can hide
+    bot losses from the stop, so there is no bot-loss bound at all; that is
+    why this returns None for it.
+
+    With "bot" or "both": the bot-attributed loss counts every open bought
+    today at its cost (premium paid; a still-held position is valued at
+    zero) plus positions carried in at cost, minus today's sale proceeds. A
+    new open is allowed only while that loss is below `max_daily_loss_usd`,
+    and the open adds at most `max_contracts_per_order` contracts at the
+    premium cap. So the bound is the entry stop plus one order at the
+    premium cap.
+
+    Excluded, and reported separately: fees and commissions; fill prices
+    beyond the limit (opens are limit orders priced within the cap); and
+    exposure after expiry, exercise or assignment, where a long option can
+    turn into a stock position whose loss is not limited to the premium.
     """
-    position_cap = limits["max_premium_per_contract"] * CONTRACT_MULTIPLIER * limits["max_open_contracts"]
-    return round(limits["max_daily_loss_usd"] + position_cap, 2)
+    if basis not in ENTRY_STOP_BASES:
+        raise ConfigError(f"unknown entry_stop_basis {basis!r}")
+    if basis == "account":
+        return None
+    order_cap = limits["max_premium_per_contract"] * CONTRACT_MULTIPLIER * limits["max_contracts_per_order"]
+    return round(limits["max_daily_loss_usd"] + order_cap, 2)
+
+
+def resolve_entry_stop_basis(params: dict[str, Any] | None) -> str:
+    basis = (params or {}).get("entry_stop_basis", DEFAULT_ENTRY_STOP_BASIS)
+    if basis not in ENTRY_STOP_BASES:
+        raise ConfigError(f"entry_stop_basis must be one of {sorted(ENTRY_STOP_BASES)}, got {basis!r}")
+    return basis
 
 
 def resolve_exit_policy(params: dict[str, Any] | None) -> tuple[str, float]:
@@ -233,7 +278,8 @@ def resolve_exit_policy(params: dict[str, Any] | None) -> tuple[str, float]:
     if policy not in EXIT_POLICIES:
         raise ConfigError(f"eod_unquoted_exit must be one of {sorted(EXIT_POLICIES)}, got {policy!r}")
     minutes = params.get("eod_unquoted_exit_minutes", 5)
-    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not minutes > 0:
+    if (isinstance(minutes, bool) or not isinstance(minutes, (int, float))
+            or not math.isfinite(minutes) or not minutes > 0):
         raise ConfigError(f"eod_unquoted_exit_minutes must be a positive number, got {minutes!r}")
     return policy, float(minutes)
 
@@ -264,6 +310,73 @@ def underlying_of(symbol: str) -> str | None:
     return match.group(1) if match else None
 
 
+def expiry_of(symbol: str) -> date | None:
+    match = _OCC_RE.match(symbol.strip())
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(2), "%y%m%d").date()
+    except ValueError:
+        return None
+
+
+# --------------------------------------------------------------------------
+# State identity
+# --------------------------------------------------------------------------
+
+LEGACY_STATE_SUFFIXES = (".tasty_owned.json", ".tasty_day.json")
+
+
+def bind_state(base_dir: Path, alias: str, config: TastyConfig) -> tuple[Path, str]:
+    """The state directory for this alias on this broker environment and
+    account, and the identity tag every state file inside it carries.
+
+    Ownership, the risk day and the in-flight intent all live in
+    `<base>/tastytrade/<alias>.<mode>.<account hash>/`. A different mode or
+    account number is a different directory, so sandbox state can never be
+    read as live state, nor one live account's state as another's. Nothing
+    migrates automatically: a new environment or account starts owning
+    nothing, and the old directory is left untouched for audit.
+
+    Fails closed (ConfigError) when:
+    * the directory's `identity.json` names a different alias, mode or
+      account (a copied or hand-edited directory), or is unreadable;
+    * unscoped state from an earlier build exists for this alias
+      (`<base>/<alias>.tasty_owned.json` / `.tasty_day.json`). Its account is
+      unknown, so it needs an explicit operator decision (move it into the
+      right scoped directory, or archive it) before this bot trades.
+    The account number itself is stored only as a SHA-256 digest.
+    """
+    base_dir = Path(base_dir)
+    for suffix in LEGACY_STATE_SUFFIXES:
+        legacy = base_dir / f"{alias}{suffix}"
+        if legacy.exists():
+            raise ConfigError(
+                f"unscoped tastytrade state {legacy.name} found; its broker account is unknown. "
+                "Move it into the scoped state directory for the right account or archive it, "
+                "then restart. Refusing to trade."
+            )
+    digest = hashlib.sha256(f"{config.mode}:{config.account_number}".encode()).hexdigest()
+    safe_alias = re.sub(r"[^A-Za-z0-9_.-]+", "_", alias).strip("._") or "account"
+    scoped = base_dir / "tastytrade" / f"{safe_alias}.{config.mode}.{digest[:16]}"
+    durable_mkdir(scoped)
+    expected = {"alias": alias, "mode": config.mode, "account_sha256": digest}
+    marker = scoped / "identity.json"
+    if marker.exists():
+        try:
+            found = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ConfigError(f"unreadable state identity {marker}: {exc}; refusing to trade") from exc
+        if found != expected:
+            raise ConfigError(
+                f"state directory {scoped.name} belongs to a different alias, environment or account; "
+                "refusing to trade."
+            )
+    else:
+        _atomic_write_json(marker, expected)
+    return scoped, digest[:16]
+
+
 # --------------------------------------------------------------------------
 # Ownership
 # --------------------------------------------------------------------------
@@ -286,26 +399,38 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
 class OwnershipStore:
     """Which contracts on the brokerage account belong to this bot.
 
-    Persisted at `<state_dir>/<alias>.tasty_owned.json`:
+    Persisted at `<scoped state dir>/<alias>.tasty_owned.json`:
 
+    * `identity`: the `bind_state` tag; a file carrying another tag is
+      refused, so state cannot cross environments or accounts.
     * `owned`: crassus symbol -> signed contracts this bot holds.
-    * `orders`: execution_request_id -> {symbol, action, applied, final,
-      created_utc}. `applied` is the filled quantity already credited, so
-      crediting the same fill twice (reconcile, recovery, restart) is a
-      no-op. Non-final entries younger than `LATE_FILL_WATCH_S` are
-      re-checked against the broker's order history each cycle, so a fill
-      that only becomes visible late is still attributed.
+    * `orders`: execution_request_id -> {symbol, action, quantity, applied,
+      final, created_utc, notional, filled_utc, fill_et_date}. `applied` is
+      the filled quantity already credited, so crediting the same fill twice
+      (reconcile, recovery, restart) is a no-op. `notional` is the dollar
+      value of those fills (conservative when the broker gives no fill
+      price). Non-final entries younger than `LATE_FILL_WATCH_S` are
+      re-checked against the order history each cycle.
+    * `discrepancies`: symbol -> details, while the broker shows fewer
+      contracts than the bot owns and nothing explains it yet.
 
-    Only this bot's own fills ever increase `owned`. A missing file means
-    "owns nothing" (a fresh deployment). An unreadable or malformed file
-    raises `OwnershipError`, which stops this bot's cycle rather than
-    guessing.
+    Only this bot's own fills ever increase `owned`. Ownership shrinks only
+    on evidence: the contract has expired, or a non-bot closing fill on that
+    symbol after the bot's fill accounts for the gap. A position that is
+    merely missing from a snapshot (the positions endpoint lagging the
+    fill, or a transient disappearance) is kept as owned and recorded as a
+    discrepancy, which blocks new opens until it resolves.
+
+    A missing file means "owns nothing" (a fresh deployment). An unreadable
+    or malformed file raises `OwnershipError`, which stops this bot's cycle
+    rather than guessing.
     """
 
-    def __init__(self, alias: str, state_dir: Path):
+    def __init__(self, alias: str, state_dir: Path, *, identity: str | None = None):
         self.state_dir = Path(state_dir)
         durable_mkdir(self.state_dir)
         self.path = self.state_dir / f"{alias}.tasty_owned.json"
+        self.identity = identity
         self._lock = threading.RLock()
 
     def load(self) -> dict[str, Any]:
@@ -313,35 +438,48 @@ class OwnershipStore:
             try:
                 raw = self.path.read_text(encoding="utf-8")
             except FileNotFoundError:
-                return {"owned": {}, "orders": {}}
+                return {"identity": self.identity, "owned": {}, "orders": {}, "discrepancies": {}}
             except OSError as exc:
                 raise OwnershipError(f"cannot read ownership file {self.path.name}: {exc}") from exc
             try:
                 data = json.loads(raw)
                 owned = {str(k): int(v) for k, v in (data.get("owned") or {}).items()}
                 orders = dict(data.get("orders") or {})
+                discrepancies = dict(data.get("discrepancies") or {})
+                found = data.get("identity")
             except (ValueError, TypeError, AttributeError) as exc:
                 raise OwnershipError(
                     f"ownership file {self.path.name} is malformed ({exc}); refusing to trade until it is repaired"
                 ) from exc
-            return {"owned": owned, "orders": orders}
+            if self.identity is not None and found != self.identity:
+                raise OwnershipError(
+                    f"ownership file {self.path.name} belongs to a different broker account or environment; "
+                    "refusing to trade"
+                )
+            return {"identity": self.identity, "owned": owned, "orders": orders, "discrepancies": discrepancies}
 
     def _save(self, data: dict[str, Any]) -> None:
         data["owned"] = {k: v for k, v in data["owned"].items() if v != 0}
+        data["identity"] = self.identity
         _atomic_write_json(self.path, data)
 
-    def register(self, request_id: str, symbol: str, action: str) -> None:
+    def register(self, request_id: str, symbol: str, action: str, quantity: int = 1) -> None:
         """Record a submission before it is sent, so a late fill can be found."""
         with self._lock:
             data = self.load()
             data["orders"].setdefault(request_id, {
-                "symbol": symbol, "action": action, "applied": 0, "final": False,
+                "symbol": symbol, "action": action, "quantity": int(quantity), "applied": 0, "final": False,
                 "created_utc": clock.iso_utc(),
             })
             self._save(data)
 
-    def apply_fill(self, request_id: str, filled_quantity: int, *, final: bool) -> int:
-        """Credit the not-yet-credited part of a fill. Returns the delta."""
+    def apply_fill(self, request_id: str, filled_quantity: int, *, final: bool,
+                   notional: float | None = None) -> int:
+        """Credit the not-yet-credited part of a fill. Returns the delta.
+
+        `notional` is the dollar value of all `filled_quantity` contracts so
+        far, when known.
+        """
         with self._lock:
             data = self.load()
             entry = data["orders"].get(request_id)
@@ -353,6 +491,10 @@ class OwnershipStore:
                 sym = entry["symbol"]
                 data["owned"][sym] = data["owned"].get(sym, 0) + sign * delta
                 entry["applied"] = int(entry.get("applied", 0)) + delta
+                entry["filled_utc"] = clock.iso_utc()
+                entry.setdefault("fill_et_date", clock.now_et().date().isoformat())
+            if notional is not None and filled_quantity:
+                entry["notional"] = round(float(notional), 2)
             if final:
                 entry["final"] = True
             self._save(data)
@@ -361,38 +503,98 @@ class OwnershipStore:
     def watch_ids(self) -> list[str]:
         """Non-final submissions still young enough to watch for a late fill."""
         with self._lock:
-            ids = []
-            for rid, entry in self.load()["orders"].items():
-                if entry.get("final"):
+            return [rid for rid, _ in self._watched(self.load())]
+
+    @staticmethod
+    def _watched(data: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        out = []
+        for rid, entry in data["orders"].items():
+            if entry.get("final"):
+                continue
+            age = _age_s(entry.get("created_utc"))
+            if age is None or age <= LATE_FILL_WATCH_S:
+                out.append((rid, entry))
+        return out
+
+    def oldest_watch_date(self) -> date | None:
+        with self._lock:
+            dates = [_et_date(e.get("created_utc")) for _, e in self._watched(self.load())]
+            dates = [d for d in dates if d is not None]
+            return min(dates) if dates else None
+
+    def pending_open_contracts(self, today: date) -> int:
+        """Contracts that opening orders sent today could still add.
+
+        Day orders cannot fill after their session, so only orders created
+        in today's ET session count. A non-final order counts its unfilled
+        remainder until the broker reports it terminal; that includes an
+        order already recorded as "not placed", because absence from the
+        history is not proof.
+        """
+        with self._lock:
+            pending = 0
+            for entry in self.load()["orders"].values():
+                if entry.get("final") or not str(entry.get("action", "")).endswith("Open"):
                     continue
-                age = _age_s(entry.get("created_utc"))
-                if age is None or age <= LATE_FILL_WATCH_S:
-                    ids.append(rid)
-            return ids
+                if _et_date(entry.get("created_utc")) != today:
+                    continue
+                pending += max(int(entry.get("quantity", 1)) - int(entry.get("applied", 0)), 0)
+            return pending
 
-    def reconcile_with_broker(self, broker_qty: dict[str, int]) -> dict[str, int]:
-        """Shrink ownership to what the broker still holds.
+    def reconcile_with_broker(self, broker_qty: dict[str, int], *, manual_closes: dict[str, list[tuple[str, int]]],
+                              today: date) -> tuple[dict[str, int], dict[str, Any], list[dict[str, Any]]]:
+        """Compare ownership with the broker's positions.
 
-        A position that expired, was assigned or was closed by hand is no
-        longer the bot's to manage. Ownership never grows here.
+        Returns (owned, open discrepancies, resolutions this call). Ownership
+        never grows here, and only shrinks on evidence:
+
+        * `expired`: the contract's expiry date is before today (ET);
+        * `manual_close`: non-bot closing fills on that symbol, after the
+          bot's latest opening fill, cover the shortfall.
+
+        Anything else is a discrepancy: ownership is kept (the bot still
+        treats the exposure as its own) and the caller blocks new opens.
         """
         with self._lock:
             data = self.load()
+            now = clock.iso_utc()
             changed = False
+            resolved: list[dict[str, Any]] = []
+            discrepancies = data["discrepancies"]
             for sym, qty in list(data["owned"].items()):
                 held = broker_qty.get(sym, 0)
-                if qty > 0:
-                    new = max(min(qty, held), 0)
-                elif qty < 0:
-                    new = min(max(qty, held), 0)
+                covered = max(min(qty, held), 0) if qty > 0 else min(max(qty, held), 0)
+                if covered == qty:
+                    if discrepancies.pop(sym, None) is not None:
+                        changed = True
+                    continue
+                shortfall = abs(qty - covered)
+                last_fill = max((e.get("filled_utc") or "" for e in data["orders"].values()
+                                 if e.get("symbol") == sym and str(e.get("action", "")).endswith("Open")
+                                 and int(e.get("applied", 0)) > 0), default="")
+                expiry = expiry_of(sym)
+                after_fill = sum(q for ts, q in manual_closes.get(sym, []) if ts and _ts(ts) >= _ts(last_fill))
+                if expiry is not None and expiry < today:
+                    reason = "expired"
+                elif last_fill and after_fill >= shortfall:
+                    reason = "manual_close"
                 else:
-                    new = 0
-                if new != qty:
-                    data["owned"][sym] = new
+                    entry = discrepancies.setdefault(sym, {"first_seen_utc": now, "snapshots": 0})
+                    entry.update(owned=qty, broker_held=held, last_seen_utc=now,
+                                 snapshots=int(entry.get("snapshots", 0)) + 1)
                     changed = True
+                    continue
+                data["owned"][sym] = covered
+                discrepancies.pop(sym, None)
+                resolved.append({"symbol": sym, "from": qty, "to": covered, "reason": reason})
+                changed = True
+            for sym in [s for s in discrepancies if s not in data["owned"]]:
+                discrepancies.pop(sym)
+                changed = True
             if changed:
                 self._save(data)
-            return {k: v for k, v in data["owned"].items() if v != 0}
+            owned = {k: v for k, v in data["owned"].items() if v != 0}
+            return owned, dict(discrepancies), resolved
 
 
 # --------------------------------------------------------------------------
@@ -407,6 +609,14 @@ class TastyAccountState(AccountState):
     # Option positions on the account that this bot did not open. Visible
     # for audit, never put in the Book, never traded.
     external_positions: dict[str, int] = field(default_factory=dict)
+    # Every option position the broker reports (bot and external).
+    broker_positions: dict[str, int] = field(default_factory=dict)
+    # Owned contracts the broker does not currently show, with no evidence
+    # yet of why. Kept as the bot's exposure; new opens are blocked.
+    ownership_discrepancies: dict[str, Any] = field(default_factory=dict)
+    ownership_resolved: list[dict[str, Any]] = field(default_factory=list)
+    # Contracts that today's unresolved opening orders could still add.
+    pending_open_contracts: int = 0
     late_fills: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -417,6 +627,12 @@ class TastyAccountState(AccountState):
             "net_liquidating_value": self.net_liquidating_value,
             "external_positions": dict(self.external_positions),
         }
+        if self.ownership_discrepancies:
+            out["ownership_discrepancies"] = dict(self.ownership_discrepancies)
+        if self.ownership_resolved:
+            out["ownership_resolved"] = list(self.ownership_resolved)
+        if self.pending_open_contracts:
+            out["pending_open_contracts"] = self.pending_open_contracts
         if self.late_fills:
             out["late_fills"] = list(self.late_fills)
         return out
@@ -549,27 +765,40 @@ class TastySession:
         """Paper-roster metadata has no brokerage equivalent; nothing to sync."""
         return None
 
-    def list_orders(self) -> list[dict[str, Any]]:
-        """Every order since yesterday (ET), across all pages.
+    def list_orders(self, since: date | None = None) -> list[dict[str, Any]]:
+        """Every order from the day before `since` (default: yesterday, ET),
+        across all pages.
 
-        Raises `TransportError` if the history cannot be shown to be
-        complete, so a caller can never mistake "not on page one" for
-        "never placed".
+        Raises `TransportError` unless every page is a well-formed success
+        (`data.items` a list of objects, valid pagination metadata), so a
+        caller can never mistake a malformed, empty-bodied or truncated
+        response for "never placed".
         """
-        start = (clock.now_et().date() - timedelta(days=1)).isoformat()
+        start = clock.now_et().date() - timedelta(days=1)
+        if since is not None and since - timedelta(days=1) < start:
+            start = since - timedelta(days=1)
         items: list[dict[str, Any]] = []
         page = 0
         while True:
             resp = self.request("GET", f"/accounts/{self.config.account_number}/orders",
-                                params={"start-date": start, "per-page": ORDERS_PER_PAGE, "page-offset": page})
+                                params={"start-date": start.isoformat(), "per-page": ORDERS_PER_PAGE,
+                                        "page-offset": page})
             if resp.status_code >= 400:
                 raise TransportError(f"GET orders -> {resp.status_code} {self._error_text(resp)}")
-            payload = _json(resp) or {}
-            batch = (payload.get("data") or {}).get("items") or []
-            items.extend(o for o in batch if isinstance(o, dict))
-            pagination = payload.get("pagination") or {}
-            total_pages = pagination.get("total-pages")
-            if isinstance(total_pages, int) and not isinstance(total_pages, bool):
+            payload = _json(resp)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            batch = data.get("items") if isinstance(data, dict) else None
+            if not isinstance(batch, list) or not all(isinstance(o, dict) for o in batch):
+                raise TransportError("order history response is malformed (no data.items list of orders); "
+                                     "cannot treat it as complete")
+            items.extend(batch)
+            pagination = payload.get("pagination")
+            if pagination is not None and not isinstance(pagination, dict):
+                raise TransportError("order history pagination is malformed; cannot treat it as complete")
+            total_pages = (pagination or {}).get("total-pages")
+            if total_pages is not None:
+                if isinstance(total_pages, bool) or not isinstance(total_pages, int) or total_pages < 0:
+                    raise TransportError("order history total-pages is malformed; cannot treat it as complete")
                 page += 1
                 if page >= total_pages:
                     return items
@@ -580,18 +809,18 @@ class TastySession:
                 return items
             raise TransportError("order history is a full page with no pagination metadata; cannot prove completeness")
 
-    def find_order(self, execution_request_id: str) -> dict[str, Any] | None:
-        return next((o for o in self.list_orders() if o.get("external-identifier") == execution_request_id), None)
+    def find_order(self, execution_request_id: str, since: date | None = None) -> dict[str, Any] | None:
+        return next((o for o in self.list_orders(since) if o.get("external-identifier") == execution_request_id), None)
 
-    def _credit_late_fills(self) -> list[str]:
+    def _credit_late_fills(self, orders: list[dict[str, Any]]) -> list[str]:
         """Attribute fills of this bot's own orders that became visible late."""
         watch = self.ownership.watch_ids()
         if not watch:
             return []
-        orders = {o.get("external-identifier"): o for o in self.list_orders()}
+        by_id = {o.get("external-identifier"): o for o in orders}
         credited = []
         for rid in watch:
-            order = orders.get(rid)
+            order = by_id.get(rid)
             if order is None:
                 continue
             filled = _filled_quantity(order)
@@ -599,20 +828,29 @@ class TastySession:
                 continue
             status = order.get("status")
             terminal = status == FILLED or status in DEAD_STATUSES
-            if self.ownership.apply_fill(rid, filled, final=terminal):
+            if self.ownership.apply_fill(rid, filled, final=terminal, notional=_fill_notional(order, filled)):
                 credited.append(rid)
         return credited
 
     def me(self) -> TastyAccountState:
         n = self.config.account_number
+        today = clock.now_et().date()
         balances = self._get_data(f"/accounts/{n}/balances") or {}
+        if not isinstance(balances, dict):
+            raise TransportError("balances response is malformed")
+        data = self.ownership.load()
+        orders: list[dict[str, Any]] = []
+        if data["owned"] or self.ownership.watch_ids():
+            # Needed both for late fills and as evidence for any ownership
+            # gap. Incomplete history raises, failing this cycle closed.
+            orders = self.list_orders(self.ownership.oldest_watch_date())
+        late = self._credit_late_fills(orders)
         positions = (self._get_data(f"/accounts/{n}/positions") or {}).get("items", [])
-        late = self._credit_late_fills()
 
         broker_qty: dict[str, int] = {}
         avg_price: dict[str, float] = {}
         for pos in positions:
-            if pos.get("instrument-type") != "Equity Option":
+            if not isinstance(pos, dict) or pos.get("instrument-type") != "Equity Option":
                 continue
             qty = int(float(pos.get("quantity") or 0))
             if qty == 0:
@@ -623,14 +861,18 @@ class TastySession:
                 continue
             signed = -abs(qty) if pos.get("quantity-direction") == "Short" else abs(qty)
             broker_qty[symbol] = broker_qty.get(symbol, 0) + signed
-            avg_price[symbol] = float(pos.get("average-open-price") or 0.0)
+            avg_price[symbol] = _float(pos.get("average-open-price")) or 0.0
 
-        owned = self.ownership.reconcile_with_broker(broker_qty)
+        bot_ids = set(self.ownership.load()["orders"])
+        owned, discrepancies, resolved = self.ownership.reconcile_with_broker(
+            broker_qty, manual_closes=_non_bot_closes(orders, bot_ids), today=today,
+        )
         trades = []
         for symbol, qty in sorted(owned.items()):
             # One synthetic opening trade per *owned* position, so `Book`,
             # the strategy and the EOD flatten only ever see the bot's own
-            # contracts.
+            # contracts, including ones the positions endpoint has not
+            # caught up with yet.
             trades.append({
                 "sym": symbol,
                 "side": "buy" if qty > 0 else "sell",
@@ -638,11 +880,12 @@ class TastySession:
                 "price": avg_price.get(symbol, 0.0),
                 "source": "tastytrade_position",
             })
-        external = {
-            sym: qty - owned.get(sym, 0)
-            for sym, qty in broker_qty.items()
-            if qty - owned.get(sym, 0) != 0
-        }
+        external = {}
+        for sym, qty in broker_qty.items():
+            mine = owned.get(sym, 0)
+            covered = max(min(mine, qty), 0) if mine > 0 else min(max(mine, qty), 0)
+            if qty - covered != 0:
+                external[sym] = qty - covered
         return TastyAccountState(
             username=self.account.username,
             balance_cash=_float(balances.get("cash-balance")) or 0.0,
@@ -650,6 +893,10 @@ class TastySession:
             net_liquidating_value=_float(balances.get("net-liquidating-value")),
             broker_mode=self.config.mode,
             external_positions=external,
+            broker_positions=dict(broker_qty),
+            ownership_discrepancies=discrepancies,
+            ownership_resolved=resolved,
+            pending_open_contracts=self.ownership.pending_open_contracts(today),
             late_fills=late,
         )
 
@@ -662,23 +909,39 @@ class TastySession:
 class RiskGuard:
     """Per-day limits that the strategy layer cannot see or override.
 
-    Day state is kept in `<state_dir>/<alias>.tasty_day.json`, keyed by the
-    ET session date, so a restart mid-session resets nothing:
+    Day state is kept in `<scoped state dir>/<alias>.tasty_day.json`, keyed by
+    the ET session date, so a restart mid-session resets nothing:
 
-    * `start_nlv`: the first net liquidating value seen this session.
+    * `start_nlv`: the first finite net liquidating value seen this session
+      (the "account" basis compares against it).
+    * `carry_cost`: dollars paid for bot positions already held when the
+      session was first observed (the "bot" basis counts them at cost).
     * `opens`: execution_request_id -> "reserved" | "filled". An opening
       order reserves its slot *before* it is sent and keeps it through any
       uncertainty (timeout, unknown status, crash). The slot is released
       only when the broker definitively reports the order ended unfilled.
       Keyed by request id, so reconciling the same order twice, or after a
       restart, never counts it twice.
+
+    The kill-switch file stays in the unscoped base state directory
+    (`halt_dir`), where an operator expects it.
     """
 
-    def __init__(self, alias: str, state_dir: Path, limits: dict[str, float], halt_env: str = "CRASSUS_TASTY_HALT"):
+    def __init__(self, alias: str, state_dir: Path, limits: dict[str, float], halt_env: str = "CRASSUS_TASTY_HALT",
+                 *, ownership: OwnershipStore | None = None, basis: str = DEFAULT_ENTRY_STOP_BASIS,
+                 identity: str | None = None, halt_dir: Path | None = None):
+        if basis not in ENTRY_STOP_BASES:
+            raise ConfigError(f"unknown entry_stop_basis {basis!r}")
+        if basis != "account" and ownership is None:
+            raise ConfigError("the bot-loss entry stop needs the ownership store")
         self.alias = alias
         self.state_dir = Path(state_dir)
         self.limits = limits
         self.halt_env = halt_env
+        self.ownership = ownership
+        self.basis = basis
+        self.identity = identity
+        self.halt_dir = Path(halt_dir) if halt_dir is not None else self.state_dir
         self._lock = threading.RLock()
         durable_mkdir(self.state_dir)
 
@@ -688,7 +951,7 @@ class RiskGuard:
 
     @property
     def halt_file(self) -> Path:
-        return self.state_dir / "TASTY_HALT"
+        return self.halt_dir / "TASTY_HALT"
 
     def _day(self) -> dict[str, Any]:
         today = clock.now_et().date().isoformat()
@@ -698,18 +961,79 @@ class RiskGuard:
             state = {}
         except (OSError, ValueError) as exc:
             raise OwnershipError(f"cannot read risk day state {self._path.name}: {exc}") from exc
+        if state and self.identity is not None and state.get("identity") != self.identity:
+            raise OwnershipError(f"risk day state {self._path.name} belongs to a different broker account; refusing")
         if state.get("date") != today or not isinstance(state.get("opens"), dict):
-            state = {"date": today, "start_nlv": None, "opens": {}}
+            state = {"date": today, "start_nlv": None, "carry_cost": None, "opens": {}}
         return state
 
     def _save(self, state: dict[str, Any]) -> None:
+        state["identity"] = self.identity
         _atomic_write_json(self._path, state)
 
     def observe(self, state: TastyAccountState) -> dict[str, Any]:
         with self._lock:
             day = self._day()
-            if day["start_nlv"] is None and state.net_liquidating_value is not None:
-                day["start_nlv"] = state.net_liquidating_value
+            changed = False
+            nlv = state.net_liquidating_value
+            if day.get("start_nlv") is None and nlv is not None and math.isfinite(nlv):
+                day["start_nlv"] = nlv
+                changed = True
+            if day.get("carry_cost") is None and self.ownership is not None:
+                day["carry_cost"] = self._carry_cost(day["date"])
+                changed = True
+            if changed:
+                self._save(day)
+            return day
+
+    def _carry_cost(self, today: str) -> float:
+        """Cost of bot positions held into this session from an earlier one."""
+        data = self.ownership.load()
+        cap = self.limits["max_premium_per_contract"] * CONTRACT_MULTIPLIER
+        total = 0.0
+        for sym, qty in data["owned"].items():
+            if qty <= 0:
+                continue
+            opens = [e for e in data["orders"].values()
+                     if e.get("symbol") == sym and e.get("action") == "Buy to Open" and int(e.get("applied", 0)) > 0]
+            if opens and all(e.get("fill_et_date") == today for e in opens):
+                continue  # opened today: counted in today's buys instead
+            latest = max(opens, key=lambda e: e.get("filled_utc") or "", default=None)
+            per_contract = cap
+            if latest and latest.get("notional") is not None and int(latest["applied"]) > 0:
+                per_contract = float(latest["notional"]) / int(latest["applied"])
+            total += per_contract * qty
+        return round(total, 2)
+
+    def bot_loss_today(self) -> float:
+        """The bot's own loss this ET session, in dollars (positive = loss).
+
+        carry_cost + cost of today's bot buys - proceeds of today's bot sells.
+        A still-held position is valued at zero and a buy with no known fill
+        price at the premium cap; a sale with no known price adds nothing.
+        Every unknown errs towards a larger loss.
+        """
+        day = self.observe_day_only()
+        today = day["date"]
+        cap = self.limits["max_premium_per_contract"] * CONTRACT_MULTIPLIER
+        cost = float(day.get("carry_cost") or 0.0)
+        proceeds = 0.0
+        for e in self.ownership.load()["orders"].values():
+            applied = int(e.get("applied", 0))
+            if not applied or e.get("fill_et_date") != today:
+                continue
+            notional = e.get("notional")
+            if str(e.get("action", "")).startswith("Buy"):
+                cost += float(notional) if notional is not None else applied * cap
+            elif notional is not None:
+                proceeds += float(notional)
+        return round(cost - proceeds, 2)
+
+    def observe_day_only(self) -> dict[str, Any]:
+        with self._lock:
+            day = self._day()
+            if day.get("carry_cost") is None and self.ownership is not None:
+                day["carry_cost"] = self._carry_cost(day["date"])
                 self._save(day)
             return day
 
@@ -744,11 +1068,17 @@ class RiskGuard:
             return f"strategy {strategy_id!r} is not allowed to open positions on the brokerage account"
         if underlying_of(symbol) not in ALLOWED_UNDERLYINGS:
             return f"{symbol} is not an allowed underlying"
+        if state.ownership_discrepancies:
+            return ("ownership discrepancy unresolved for "
+                    f"{sorted(state.ownership_discrepancies)} (bot owns more than the broker shows, unexplained); "
+                    "no new positions until it resolves")
         if quantity > self.limits["max_contracts_per_order"]:
             return f"quantity {quantity} exceeds max_contracts_per_order {self.limits['max_contracts_per_order']:g}"
         held = sum(abs(p.quantity) for p in book.positions.values())
-        if held + quantity > self.limits["max_open_contracts"]:
-            return f"would hold {held + quantity} contracts; max_open_contracts is {self.limits['max_open_contracts']:g}"
+        pending = int(state.pending_open_contracts or 0)
+        if held + pending + quantity > self.limits["max_open_contracts"]:
+            return (f"would hold {held + pending + quantity} contracts ({held} held, {pending} from unresolved "
+                    f"opening orders); max_open_contracts is {self.limits['max_open_contracts']:g}")
         if limit_price is None:
             return "no executable quote to price the order"
         if limit_price > self.limits["max_premium_per_contract"]:
@@ -756,12 +1086,18 @@ class RiskGuard:
         day = self.observe(state)
         if len(day["opens"]) >= self.limits["max_opens_per_day"]:
             return f"max_opens_per_day {self.limits['max_opens_per_day']:g} reached (filled or still uncertain)"
+        stop = self.limits["max_daily_loss_usd"]
         start, now = day.get("start_nlv"), state.net_liquidating_value
-        if start is None or now is None:
-            return "net liquidating value unavailable; cannot enforce the daily entry stop"
-        if start - now >= self.limits["max_daily_loss_usd"]:
-            return (f"daily entry stop hit: account down {start - now:.2f} USD today "
-                    f"(entry stop {self.limits['max_daily_loss_usd']:.2f}); no new positions")
+        if start is None or now is None or not math.isfinite(start) or not math.isfinite(now):
+            return "net liquidating value unavailable or not a finite number; no new positions"
+        if self.basis in ("bot", "both"):
+            loss = self.bot_loss_today()
+            if loss >= stop:
+                return (f"bot entry stop hit: the bot's own loss today is {loss:.2f} USD "
+                        f"(entry stop {stop:.2f}); no new positions")
+        if self.basis in ("account", "both") and start - now >= stop:
+            return (f"account entry stop hit: account net liq down {start - now:.2f} USD today "
+                    f"(entry stop {stop:.2f}); no new positions")
         return None
 
 
@@ -784,6 +1120,7 @@ class TastyExecutionClient(ExecutionClient):
         guard: RiskGuard,
         *,
         exit_policy: str = DEFAULT_EXIT_POLICY,
+        exit_minutes: float = 5.0,
         fill_timeout_s: float = 20.0,
         poll_interval_s: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
@@ -796,6 +1133,7 @@ class TastyExecutionClient(ExecutionClient):
         self.quotes = quotes
         self.guard = guard
         self.exit_policy = exit_policy
+        self.exit_minutes = float(exit_minutes)
         self.fill_timeout_s = fill_timeout_s
         self.poll_interval_s = poll_interval_s
         self._sleep = sleep
@@ -807,19 +1145,33 @@ class TastyExecutionClient(ExecutionClient):
     # -- pricing ----------------------------------------------------------
 
     def _price(self, symbol: str, side: str) -> float | None:
-        """Limit price from a fresh, well-formed quote; None otherwise."""
-        quote = (self.quotes([symbol]) or {}).get(symbol)
-        if quote is None or not getattr(quote, "is_executable", False):
-            return None
-        bid, ask = quote.bid, quote.ask
-        if not isinstance(bid, (int, float)) or not isinstance(ask, (int, float)):
-            return None
-        if bid < 0 or ask <= 0 or bid > ask:
-            return None  # malformed / crossed quote is not a price
-        price = ask if side == "buy" else bid
-        if price <= 0:
-            return None
-        return round(float(price), 2)
+        """Limit price from a fresh, well-formed quote; None otherwise.
+
+        Same predicate (`market.executable_price`) the brokerage EOD flatten
+        uses to decide whether a quote exists at all.
+        """
+        return executable_price((self.quotes([symbol]) or {}).get(symbol), side)
+
+    def _unquoted_exit_blocker(self) -> str | None:
+        """Why an unquoted market close may not go out *now*, or None.
+
+        Enforced here, at the last step before the order leaves, from the
+        exchange calendar (holidays and early closes) and the current time,
+        whatever the caller decided earlier with an older quote.
+        """
+        now = clock.now_et()
+        today = now.date()
+        if now.weekday() >= 5 or exchange_calendar.is_holiday(today):
+            return "the market is closed today"
+        close = exchange_calendar.session_close(today)
+        close_at = now.replace(hour=close.hour, minute=close.minute, second=0, microsecond=0)
+        minutes = (close_at - now).total_seconds() / 60.0
+        if minutes <= 0:
+            return f"the session closed {-minutes:.1f} minute(s) ago"
+        if minutes > self.exit_minutes:
+            return (f"{minutes:.1f} minute(s) to the {close.strftime('%H:%M')} close is outside the final "
+                    f"{self.exit_minutes:g} minute(s) allowed for an unquoted market exit")
+        return None
 
     @staticmethod
     def _order_body(symbol: str, action: str, quantity: int, price: float | None,
@@ -846,8 +1198,8 @@ class TastyExecutionClient(ExecutionClient):
 
     # -- lookup -----------------------------------------------------------
 
-    def find_order(self, execution_request_id: str) -> dict[str, Any] | None:
-        return self.session.find_order(execution_request_id)
+    def find_order(self, execution_request_id: str, since: date | None = None) -> dict[str, Any] | None:
+        return self.session.find_order(execution_request_id, since)
 
     def find_trade(self, execution_request_id: str, state: AccountState | None = None) -> dict[str, Any] | None:
         order = self.find_order(execution_request_id)
@@ -858,9 +1210,11 @@ class TastyExecutionClient(ExecutionClient):
 
     # -- bookkeeping ------------------------------------------------------
 
-    def _account_for(self, request_id: str, action: str | None, filled: int, *, final: bool) -> None:
+    def _account_for(self, request_id: str, action: str | None, filled: int, *, final: bool,
+                     order: dict[str, Any] | None = None) -> None:
         """Credit ownership and settle the open reservation, idempotently."""
-        self.ownership.apply_fill(request_id, filled, final=final)
+        notional = _fill_notional(order, filled) if order is not None else None
+        self.ownership.apply_fill(request_id, filled, final=final, notional=notional)
         if action and action.endswith("Open"):
             if filled > 0:
                 self.guard.confirm_open(request_id)
@@ -889,7 +1243,7 @@ class TastyExecutionClient(ExecutionClient):
             if order.get("status") in WORKING_STATUSES:
                 partial = _filled_quantity(order)
                 if partial:
-                    self._account_for(request_id, action, partial, final=False)
+                    self._account_for(request_id, action, partial, final=False, order=order)
                 return ExecutionResult(
                     outcome_class=Outcome.AMBIGUOUS,
                     execution_request_id=request_id,
@@ -912,7 +1266,7 @@ class TastyExecutionClient(ExecutionClient):
                       "intent retained, not resubmitted."),
             )
 
-        self._account_for(request_id, action, filled, final=True)
+        self._account_for(request_id, action, filled, final=True, order=order)
         state_after = self._safe_me()
         if filled > 0:
             partial_note = None if status == FILLED else f"Partially filled ({filled}) then ended {status!r}."
@@ -994,6 +1348,17 @@ class TastyExecutionClient(ExecutionClient):
 
             if action.endswith("Close") and quantity > abs(held):
                 return self._blocked(request_id, f"Close quantity {quantity} exceeds bot-held {abs(held)}.", state)
+            broker_held = max(state.broker_positions.get(symbol, 0), 0)
+            if action == "Sell to Close" and quantity > broker_held:
+                # The bot owns it but the broker does not show it (yet):
+                # never send a close the broker cannot match to a position,
+                # and never let it consume a manual contract.
+                return self._blocked(
+                    request_id,
+                    f"Broker shows {broker_held} {symbol} held; the bot owns {abs(held)} "
+                    "(ownership discrepancy unresolved). Not closing until they agree.",
+                    state,
+                )
 
             price = self._price(symbol, side)
             if action.endswith("Open"):
@@ -1015,6 +1380,13 @@ class TastyExecutionClient(ExecutionClient):
                         "Will retry next cycle.",
                         state,
                     )
+                too_early = self._unquoted_exit_blocker()
+                if too_early:
+                    return self._blocked(
+                        request_id,
+                        f"No executable quote to close {symbol}, and {too_early}. Will retry next cycle.",
+                        state,
+                    )
             body = self._order_body(symbol, action, quantity, price, request_id)
 
             dry = self.session.request("POST", f"{self._orders_path}/dry-run", json=body)
@@ -1030,7 +1402,7 @@ class TastyExecutionClient(ExecutionClient):
             # order reserves its daily slot.
             intent["broker_action"] = action
             self._persist_intent(intent)
-            self.ownership.register(request_id, symbol, action)
+            self.ownership.register(request_id, symbol, action, quantity)
             if action.endswith("Open"):
                 self.guard.reserve_open(request_id)
 
@@ -1090,32 +1462,37 @@ class TastyExecutionClient(ExecutionClient):
                 self._safe_me(),
             )
         try:
-            order = self.find_order(request_id)
+            order = self.find_order(request_id, since=_et_date(intent.get("created_utc")))
         except TransportError as exc:
             return ExecutionResult(
                 outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
                 note=f"Order history unavailable or incomplete ({exc}); intent retained.",
             )
         if order is None:
-            scans = int(intent.get("absent_scans", 0)) + 1
-            intent["absent_scans"] = scans
+            times = [t for t in (intent.get("absent_scan_utc") or []) if isinstance(t, str)] + [clock.iso_utc()]
+            intent["absent_scan_utc"] = times
+            intent["absent_scans"] = len(times)
             self._persist_intent(intent)
             age_s = _age_s(intent.get("created_utc"))
-            if age_s is None or age_s < ABSENCE_MIN_AGE_S or scans < ABSENCE_MIN_SCANS:
+            span_s = (_ts(times[-1]) - _ts(times[0])).total_seconds()
+            if (age_s is None or age_s < ABSENCE_MIN_AGE_S or len(times) < ABSENCE_MIN_SCANS
+                    or span_s < ABSENCE_MIN_SPAN_S):
                 return ExecutionResult(
                     outcome_class=Outcome.AMBIGUOUS, execution_request_id=request_id,
                     note=(f"In-flight order not in the broker's complete order history "
-                          f"(scan {scans}, age {age_s if age_s is None else round(age_s)}s); "
-                          "retained until absence is established."),
+                          f"(scan {len(times)} over {round(span_s)}s, age "
+                          f"{age_s if age_s is None else round(age_s)}s); retained until absence is established."),
                 )
-            # Absent from every complete scan for long enough to call it
-            # never placed. The id stays on the ownership late-fill watch and
-            # its open slot stays reserved for the day, so a fill that
-            # surfaces later is still attributed and still counted.
+            # Absent from complete scans spread over the minimum span. The
+            # intent is released, but not the exposure: the order stays on
+            # the late-fill watch, its daily slot stays reserved and its
+            # quantity still counts against max_open_contracts for the rest
+            # of its session, so a late fill can never be doubled.
             return self._blocked(
                 request_id,
-                f"Order not found in {scans} complete order-history scans over {round(age_s)}s; "
-                "recorded as not placed (not replayed). Still watched for a late fill.",
+                f"Order not found in {len(times)} complete order-history scans over {round(span_s)}s; "
+                "recorded as not placed (not replayed). Its exposure stays reserved for the session "
+                "and it is still watched for a late fill.",
                 self._safe_me(),
             )
         action = action or ((order.get("legs") or [{}])[0].get("action"))
@@ -1136,10 +1513,91 @@ def _json(resp: Any) -> Any:
 
 
 def _float(value: Any) -> float | None:
+    """A finite float, or None. NaN and infinity are not account values."""
     try:
-        return float(value)
+        out = float(value)
     except (TypeError, ValueError):
         return None
+    return out if math.isfinite(out) else None
+
+
+def _ts(iso: Any) -> datetime:
+    try:
+        out = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=clock.ET)
+    return out if out.tzinfo else out.replace(tzinfo=clock.ET)
+
+
+def _et_date(iso: Any) -> date | None:
+    try:
+        return datetime.fromisoformat(str(iso)).astimezone(clock.ET).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _leg_filled(order: dict[str, Any], leg: dict[str, Any]) -> int:
+    fills = leg.get("fills")
+    try:
+        if isinstance(fills, list) and fills:
+            return sum(int(float(f.get("quantity") or 0)) for f in fills if isinstance(f, dict))
+        if leg.get("remaining-quantity") is not None and leg.get("quantity") is not None:
+            return max(int(float(leg["quantity"])) - int(float(leg["remaining-quantity"])), 0)
+        if order.get("status") == FILLED and leg.get("quantity") is not None:
+            return int(float(leg["quantity"]))
+    except (TypeError, ValueError):
+        return 0
+    return 0
+
+
+def _non_bot_closes(orders: list[dict[str, Any]], bot_ids: set[str]) -> dict[str, list[tuple[str, int]]]:
+    """Closing fills on the account that this bot did not send:
+    symbol -> [(broker timestamp, contracts)]. Evidence for a manual close."""
+    out: dict[str, list[tuple[str, int]]] = {}
+    for order in orders:
+        if order.get("external-identifier") in bot_ids:
+            continue
+        when = order.get("terminal-at") or order.get("updated-at") or order.get("received-at")
+        for leg in order.get("legs") or []:
+            if not isinstance(leg, dict) or not str(leg.get("action", "")).endswith("Close"):
+                continue
+            try:
+                sym = to_crassus_symbol(str(leg.get("symbol", "")))
+            except ValueError:
+                continue
+            qty = _leg_filled(order, leg)
+            if qty:
+                out.setdefault(sym, []).append((str(when) if when else "", qty))
+    return out
+
+
+def _fill_notional(order: dict[str, Any] | None, filled: int | None) -> float | None:
+    """Dollar value of `filled` contracts of this order, or None if unknown.
+
+    Uses the legs' fill prices when they cover the whole filled quantity,
+    otherwise the order's limit price (no better than the fill for a buy or
+    for a sell, so the bot-loss stop errs high). A market order with no fill
+    prices is unknown.
+    """
+    if not order or not filled:
+        return None
+    total_qty, total_value, complete = 0, 0.0, True
+    for leg in order.get("legs") or []:
+        for f in (leg.get("fills") or []) if isinstance(leg, dict) else []:
+            if not isinstance(f, dict):
+                continue
+            q, px = _float(f.get("quantity")), _float(f.get("fill-price"))
+            if q is None or px is None:
+                complete = False
+                continue
+            total_qty += int(q)
+            total_value += q * px
+    if complete and total_qty == filled:
+        return round(total_value * CONTRACT_MULTIPLIER, 2)
+    limit = _float(order.get("price"))
+    if limit is not None and limit > 0:
+        return round(limit * filled * CONTRACT_MULTIPLIER, 2)
+    return None
 
 
 def _age_s(created_utc: Any) -> float | None:
@@ -1194,13 +1652,27 @@ def _order_summary(order: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def assemble(account: Any, config: TastyConfig, *, state_dir: Path, quotes: QuoteProvider,
+             rate_limiter: RateLimiter | None = None, http: Any = None,
+             **executor_kw: Any) -> tuple[TastySession, TastyExecutionClient]:
+    """Wire one routed account. Every persistent file goes in the directory
+    `bind_state` gives for this alias, environment and account."""
+    limits = resolve_limits(account.params)
+    exit_policy, exit_minutes = resolve_exit_policy(account.params)
+    basis = resolve_entry_stop_basis(account.params)
+    scoped, identity = bind_state(state_dir, account.alias, config)
+    ownership = OwnershipStore(account.alias, scoped, identity=identity)
+    session = TastySession(account, config, rate_limiter=rate_limiter, http=http, ownership=ownership)
+    guard = RiskGuard(account.alias, scoped, limits, ownership=ownership, basis=basis, identity=identity,
+                      halt_dir=state_dir)
+    executor = TastyExecutionClient(session, scoped, quotes, guard, exit_policy=exit_policy,
+                                    exit_minutes=exit_minutes, **executor_kw)
+    return session, executor
+
+
 def build_for_account(account: Any, *, state_dir: Path, rate_limiter: RateLimiter,
                       quotes: QuoteProvider, http: Any = None) -> tuple[TastySession, TastyExecutionClient]:
-    """Runner hook. Raises ConfigError (fail closed) on any missing approval."""
+    """Runner hook. Raises ConfigError (fail closed) on any missing approval
+    or state that belongs to a different broker account."""
     config = TastyConfig.from_env()
-    limits = resolve_limits(account.params)
-    exit_policy, _ = resolve_exit_policy(account.params)
-    ownership = OwnershipStore(account.alias, state_dir)
-    session = TastySession(account, config, rate_limiter=rate_limiter, http=http, ownership=ownership)
-    guard = RiskGuard(account.alias, state_dir, limits)
-    return session, TastyExecutionClient(session, state_dir, quotes, guard, exit_policy=exit_policy)
+    return assemble(account, config, state_dir=state_dir, quotes=quotes, rate_limiter=rate_limiter, http=http)

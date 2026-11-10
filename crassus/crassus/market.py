@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,6 +67,29 @@ class Quote:
             and age is not None
             and age <= EXECUTION_QUOTE_MAX_AGE_S
         )
+
+
+def executable_price(quote: "Quote | None", side: str) -> float | None:
+    """The price a real-money order on `side` may use, or None.
+
+    Stricter than `Quote.is_executable`: the quote must also be well formed
+    (numeric, finite, bid >= 0, ask > 0, not crossed) and the side's price
+    must be positive. Shared by the brokerage EOD flatten and the brokerage
+    executor so both sides of the boundary agree on what "no usable quote"
+    means. Paper accounts keep the looser check, because the Worker can fill
+    a zero bid.
+    """
+    if quote is None or not quote.is_executable:
+        return None
+    bid, ask = quote.bid, quote.ask
+    if isinstance(bid, bool) or isinstance(ask, bool):
+        return None
+    if not isinstance(bid, (int, float)) or not isinstance(ask, (int, float)):
+        return None
+    if not (math.isfinite(bid) and math.isfinite(ask)) or bid < 0 or ask <= 0 or bid > ask:
+        return None
+    price = ask if side == "buy" else bid
+    return round(float(price), 2) if price > 0 else None
 
 
 @dataclass(frozen=True)

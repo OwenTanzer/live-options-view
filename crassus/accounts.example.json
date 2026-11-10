@@ -89,7 +89,8 @@
           "max_opens_per_day": 4
         },
         "eod_unquoted_exit": "retry",
-        "eod_unquoted_exit_minutes": 5
+        "eod_unquoted_exit_minutes": 5,
+        "entry_stop_basis": "both"
       }
     },
     {

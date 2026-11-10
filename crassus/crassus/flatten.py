@@ -37,6 +37,7 @@ import math
 from typing import Any
 
 from . import exchange_calendar
+from .market import executable_price
 from .strategy import Decision, StrategyContext
 
 STRATEGY_ID = "eod_flatten"
@@ -151,7 +152,18 @@ def maybe_flatten(ctx: StrategyContext, params: dict[str, Any]) -> Decision | No
 
     symbols = sorted(ctx.book.positions.keys())  # deterministic scan order
     quotes = ctx.quotes(symbols)
-    symbol = next((s for s in symbols if quotes.get(s) is not None and quotes[s].is_executable), None)
+    if "eod_unquoted_exit" in params:
+        # Brokerage-routed account: use the same usable-price test as the
+        # brokerage executor, so a crossed, zero-bid or malformed quote is
+        # "no usable quote" here too and cannot become an ordinary close
+        # that the executor then turns into an early market order.
+        def usable(s: str) -> bool:
+            side = "sell" if ctx.book.positions[s].quantity > 0 else "buy"
+            return executable_price(quotes.get(s), side) is not None
+    else:
+        def usable(s: str) -> bool:
+            return quotes.get(s) is not None and quotes[s].is_executable
+    symbol = next((s for s in symbols if usable(s)), None)
 
     unquoted_minutes = _resolve_unquoted_exit_minutes(params)
     if (

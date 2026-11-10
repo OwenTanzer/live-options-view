@@ -41,9 +41,20 @@ sending it) and credits only that order's fills, idempotently by
 - Manual trades, hedges and other underlyings are reported in every ledger
   record as `external_positions`, but are never in the `Book`. The strategy
   and the EOD flatten cannot close, size against or sell them.
-- If the broker holds less than the bot believes it owns (expired, assigned
-  or closed by hand), ownership shrinks to match. It never grows from a
-  position the bot did not fill.
+- Ownership never grows from a position the bot did not fill, and it only
+  shrinks on evidence:
+  - **expired**: the contract's expiry date has passed;
+  - **manual close**: the order history shows a closing fill on that
+    symbol, not sent by the bot, after the bot's own fill, covering the gap.
+- If the broker shows fewer contracts than the bot owns and neither applies
+  (the positions endpoint lagging a fill, a contract briefly missing from a
+  snapshot), the bot **keeps** the contract as its exposure and records an
+  `ownership_discrepancies` entry in every ledger record. While one is open:
+  - new opens are blocked;
+  - a close is not sent for more than the broker currently shows, so it can
+    never consume a manual contract of the same series;
+  - it clears by itself when the position reappears, or resolves as expired
+    (a 0DTE contract the next session).
 - Ownership survives restarts. A missing file means "owns nothing". An
   unreadable or malformed file stops this bot's cycle, with the reason in
   the ledger, rather than guessing.
@@ -51,13 +62,31 @@ sending it) and credits only that order's fills, idempotently by
   each cycle for two days, so a fill that becomes visible late is still
   attributed (`late_fills` in the ledger).
 
+## State is bound to the broker account
+
+All of the route's state (ownership, the risk day and the in-flight intent)
+lives in `state/tastytrade/<alias>.<mode>.<hash>/`, where the hash is a
+SHA-256 of the mode and account number (the number itself is not stored).
+The directory's `identity.json`, and a tag inside each state file, must match
+the configured mode and account, or the bot refuses to trade.
+
+- Moving from sandbox to live, or to another account, starts in a fresh
+  directory that owns nothing. The old directory is left untouched for audit.
+  Nothing migrates automatically.
+- Unscoped state from an earlier build (`state/<alias>.tasty_owned.json` or
+  `.tasty_day.json`) stops the bot until an operator moves it into the right
+  scoped directory or archives it.
+- The kill-switch file stays at `state/TASTY_HALT`.
+
 ## Real-money differences from the paper executor
 
 | Situation | Paper (Worker) | tastytrade route |
 |---|---|---|
 | Timeout / 5xx on submit | reconcile, may retry (Worker dedupes ids) | look up by `external-identifier` across **every page** of order history; **never resubmitted** |
 | Crash before the order was sent | replay if the trade is absent | **never replayed**: recorded `rejected` (the intent shows it was never sent) |
-| Crash or timeout after sending | replay if the trade is absent | **never replayed**; stays `ambiguous` until found, or until absent from 3 complete history scans over at least 15 minutes, and is still watched for a late fill after that |
+| Crash or timeout after sending | replay if the trade is absent | **never replayed**; stays `ambiguous` until found, or until absent from at least 3 complete history scans whose first and last are at least 15 minutes apart. Even then its contracts stay counted as exposure for the rest of the session and it is watched for a late fill |
+| Order history that is malformed, empty-bodied or missing pagination | n/a | not evidence of anything: the lookup fails and the order stays `ambiguous` |
+| Recovery after a long outage | n/a | the history search starts the day before the in-flight order was created, not just yesterday |
 | Unknown or missing order status, or a terminal status with no fill data | n/a | stays `ambiguous`; the intent is kept |
 | Order not filled | n/a (instant fill) | cancelled after 20 s; a failed cancel stays `ambiguous`; a fill that wins the cancel race is recorded `filled` |
 | Sell with no position | allowed (paper short) | **refused**: no naked shorts, and never against a position the bot did not open |
@@ -68,7 +97,9 @@ Opening orders must pass every check. Closing orders are always allowed,
 since they can only reduce exposure.
 
 The **default** is what the catalog entry runs with. The **hard ceiling** is
-the most account params can set; going beyond it is a code change. Owen
+the most account params can set. A param may set a limit anywhere above zero
+up to its ceiling, including looser than the default; a value above the
+ceiling is clamped to it, and going beyond a ceiling is a code change. Owen
 chooses the values to run with; these are proposals.
 
 | Limit | Units | Default | Hard ceiling |
@@ -76,26 +107,45 @@ chooses the values to run with; these are proposals.
 | Contracts per order | contracts | 1 | 1 |
 | Open contracts held by the bot | contracts | 1 | 1 |
 | Premium per contract | option price | 3.00 ($300) | 5.00 ($500) |
-| Daily **entry stop** | USD of account net liq | $250 | $500 |
+| Daily **entry stop** | USD of loss on the chosen basis | $250 | $500 |
 | Opens per day | orders | 4 | 6 |
 
-**What the entry stop does and does not do.** It compares account net
-liquidating value with the first value seen that ET session. Once the account
-is down by the stop amount, no new position may open. It does **not** stop
-out a position already held, and it does not cap the day's loss at $250.
-Because the bot only holds long options, a held position can lose at most its
-premium. The bot's own worst case for one session is therefore the entry stop
-plus one full position at the premium cap, before fees and before gap or
-assignment risk:
+**What the entry stop measures (`entry_stop_basis`, an owner choice).**
 
-| | Entry stop | + one position at the premium cap | = worst-case session loss |
+| Basis | Loss measured | Masked by | Bounds the bot's own loss? |
+|---|---|---|---|
+| `bot` | the bot's own fills this ET session: cost of today's buys plus positions carried in at cost, minus today's sale proceeds | nothing outside the bot | yes |
+| `account` | whole-account net liq against the first finite value seen this session | manual gains, deposits; a late first reading misses earlier losses | **no** |
+| `both` (default) | either one stops new entries | — | yes |
+
+The bot-attributed loss errs high: a held position is valued at zero, a buy
+with no reported fill price counts at the premium cap, and a sale with no
+reported price adds nothing.
+
+**What it does and does not do.** Once the loss reaches the stop, no new
+position may open. It does **not** stop out a position already held.
+
+With `bot` or `both`, a new open is allowed only while the bot's own loss is
+below the stop, and that open adds at most one order at the premium cap. The
+bot's own loss for one session is therefore bounded by the entry stop plus
+one order at the premium cap:
+
+| | Entry stop | + one order at the premium cap | = bound on the bot's session loss |
 |---|---|---|---|
 | Defaults | $250 | $300 | **$550** |
 | Hard ceilings | $500 | $500 | **$1,000** |
 
-(`tastytrade_broker.worst_case_daily_loss`.) The stop uses whole-account net
-liq, so losses in manual holdings also stop the bot's new entries. That is
-deliberately conservative.
+(`tastytrade_broker.worst_case_daily_loss`.) The bound excludes fees and
+commissions. It also excludes exposure after expiry, exercise or
+assignment: a long option can become a stock position whose loss is not
+limited to the premium. A position carried past the close (see the unquoted
+exit below) carries that risk separately.
+
+With `account` alone there is **no** bound on the bot's own loss. Four $300
+bot losses offset by $300 manual gains leave net liq flat, so every open
+passes. Account-level losses also stop the bot under `both`, which is the
+conservative default; whether manual losses should halt the bot is Owen's
+call.
 
 Other checks on opening orders:
 
@@ -104,17 +154,26 @@ Other checks on opening orders:
 - Each opening order reserves its slot in the daily count **before** it is
   sent, keyed by request id. A timeout, unknown status or crash keeps the
   slot reserved; only a broker-reported unfilled end releases it. A
-  reconciled or recovered fill counts once, including across restarts. Day
-  state is kept in `state/<alias>.tasty_day.json`. If net liq is
-  unavailable, opening is refused.
-- `params.tastytrade_limits` can tighten these limits but never loosen them.
-  Unknown keys, non-numbers, fractional counts and non-positive values are
-  configuration errors.
+  reconciled or recovered fill counts once, including across restarts.
+- An opening order that is still unresolved also counts its contracts
+  against `max_open_contracts` for the rest of its session. That holds even
+  after it was recorded "not placed", because a Day order could still fill
+  until the close.
+- If net liq is unavailable or not a finite number (NaN, infinity), opening is
+  refused, and such a value never becomes the session baseline.
+- An open `ownership_discrepancies` entry blocks opening (see Ownership).
+- `params.tastytrade_limits` sets values up to the ceilings. Unknown keys,
+  non-numbers, fractional counts and non-positive values are configuration
+  errors.
 
 ## Closing without a usable quote (owner choice)
 
 In the EOD flatten window the bot normally closes with a limit at the bid.
-If there is no fresh, well-formed quote, `params.eod_unquoted_exit` decides:
+"Usable quote" means one test, shared by the flatten and the executor
+(`market.executable_price`): fresh, numeric and finite, bid ≥ 0, ask > 0,
+not crossed, and a positive price on the closing side. A crossed or zero-bid
+quote counts as no quote. If there is no usable quote,
+`params.eod_unquoted_exit` decides:
 
 - `"retry"` (catalog default): send nothing and retry every cycle, with the
   reason in the ledger. If no quote ever arrives, **the position is carried
@@ -123,6 +182,12 @@ If there is no fresh, well-formed quote, `params.eod_unquoted_exit` decides:
   flatten sends a market sell-to-close for the first held contract. Only
   `eod_flatten` may do this; a strategy close without a quote is always
   refused.
+  - The executor re-checks the window itself, from the exchange calendar,
+    immediately before sending. That covers holidays and early closes such
+    as 13:00, and a quote that deteriorates between the flatten's decision
+    and the order.
+  - Outside the window, after the close, or on a non-trading day, it sends
+    nothing and retries.
 
 Which one to run is a risk decision for the account owner.
 
@@ -190,19 +255,35 @@ docs and need one sandbox session to confirm:
   terminal order stays `ambiguous`. This fails closed: the bot stops until
   the order is resolved.
 - **Visibility delay:** how soon an accepted order appears in `GET /orders`.
+- **Positions lag:** how far `/positions` can trail a fill. Until it catches
+  up, the bot holds the contract as a discrepancy and opens nothing.
+- **Order timestamps and history window:** whether `terminal-at` /
+  `received-at` are present (manual-close evidence needs one), and whether
+  `start-date` filters on the order's creation date.
+- **Fill prices:** `legs[].fills[].fill-price`. Without it the bot-loss stop
+  falls back to the limit price, or to the premium cap for a buy.
 
 ## Evidence
 
 These are source claims awaiting Chej's independent reconstruction from the
 full paper ledger. They are not verified net returns or live performance.
 
-**Live paper record.** `crassus_oiskew` on `/api/bots`, 2026-11-09:
+**Live paper record.** From the read-only export sent for review
+(Cloudflare KV record and the runner's decision ledger, pulled 2026-11-10;
+file hashes are in the export):
 
-- Cash is $10,792 against a $10,000 start, with one open call held at cost
-  ($295). That is **+$1,087 (+10.9%) over 149 trades** since 2026-08-12.
-- It ranks first of the 31 roster bots. The next best is +$507.
-- The per-day FIFO ledger through 2026-09-03 showed −$544 realized, so the
-  gain came from September onward.
+- 150 fills (75 round trips) from 2026-08-12 to 2026-11-09, all closed.
+  Cash is $12,085 against a $10,000 start, and replaying every fill
+  reproduces it exactly. That is **+$2,085 realized (+20.9%)**, before fees,
+  with no deposits, withdrawals or resets.
+- The earlier "+$1,087 over 149 trades" counted fills and valued one open
+  call at cost. That call closed at the 2026-11-09 flatten for +$998.
+- 18 wins and 57 losses. The 4 largest wins total +$4,138; the other 71
+  trades total −$2,053. The closed-trade max drawdown is −$1,163.
+- By month of close: Aug −$656, Sep +$631, Oct +$1,227, Nov +$883.
+- Decision records exist from 2026-08-31 onward; 2026-08-12 to 08-31 was lost
+  in a runner restart. The bot was logged out of the paper server for most
+  of Nov 4–6.
 
 **Backtest.** In the 40-day synthetic backtest (2026-08-14) the strategy
 never fired. That says more about the synthetic days' OI dynamics than about
@@ -212,7 +293,10 @@ the strategy.
 
 - This is paper P&L. Fills happen at the Worker's quote, which tastytrade
   will not match exactly.
-- The sample is one strategy on roughly three months of data.
+- The sample is one strategy on roughly three months of data, and the result
+  depends on a few large winners.
+- It was picked as the best of 31 bots, which overstates how promising it
+  looks.
 - Real money also caps the bot at 1 contract with the loss and premium
   limits above.
 
