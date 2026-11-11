@@ -24,7 +24,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from market_data.live_market.manifest import (  # noqa: E402
-    MANIFEST_ATTEMPTS, ConditionalWriteUnsupported, ManifestConflict,
+    MANIFEST_ATTEMPTS, MANIFEST_BACKOFF_BASE_SECS, MANIFEST_BACKOFF_CAP_SECS,
+    ConditionalWriteUnsupported, ManifestConflict,
     ManifestDamaged, ManifestUnreadable, add_weekly_key, read_manifest,
     update_manifest, write_manifest,
 )
@@ -297,6 +298,87 @@ def test_corrupt_json_is_unreadable_not_empty():
     else:
         raise AssertionError("a truncated document must not be treated as an empty index")
     assert stub.writes == [], "no write follows an unreadable document"
+
+
+def test_conflict_shapes_are_all_recognised_and_retried():
+    """A lost precondition must be recognised however the client reports it.
+
+    R2's SDK path surfaces `Error.Code`, but boto3 also synthesises failures
+    from the HTTP status alone, and a client reset can leave only a `.status`
+    attribute. The classifier has three fallbacks; if any is dropped the
+    exception propagates as itself, the caller stops retrying and the index
+    write fails instead of merging.
+    """
+    class CodeOnly(Exception):
+        response = {"Error": {"Code": "PreconditionFailed"}}
+
+    class HttpStatusOnly(Exception):
+        response = {"ResponseMetadata": {"HTTPStatusCode": 412}}
+
+    class AttrStatusOnly(Exception):
+        status = 412
+
+    class AttrCodeOnly(Exception):
+        code = 409
+
+    class PlainConflict(Exception):
+        response = {"Error": {"Code": "ConditionalRequestConflict"}}
+
+    shapes = [
+        ("Error.Code PreconditionFailed", CodeOnly),
+        ("Error.Code ConditionalRequestConflict", PlainConflict),
+        ("ResponseMetadata 412", HttpStatusOnly),
+        ("status attribute 412", AttrStatusOnly),
+        ("code attribute 409", AttrCodeOnly),
+    ]
+
+    for label, factory in shapes:
+        stub = R2Stub({"dates": ["2026-11-10"], "weekly_expirations": {}})
+
+        def _raise(*_args, _factory=factory, **_kwargs):
+            raise _factory(f"injected {label}")
+
+        stub.put_object = _raise
+        try:
+            _weekly_write(stub, sleeper=lambda _: None)
+        except ManifestConflict:
+            pass
+        except factory as exc:  # the classifier missed it: propagate is a defect
+            raise AssertionError(f"{label} was not classified as a conflict: {exc}") from exc
+        else:
+            raise AssertionError(f"{label} must exhaust retries and raise ManifestConflict")
+        assert stub.reads == MANIFEST_ATTEMPTS, (label, stub.reads)
+
+    # A non-conflict binding error must still stop immediately.
+    class ServerError(Exception):
+        response = {"Error": {"Code": "InternalError"}}
+
+    stub = R2Stub({"dates": ["2026-11-10"], "weekly_expirations": {}})
+
+    def _boom(*_args, **_kwargs):
+        raise ServerError("boom")
+
+    stub.put_object = _boom
+    try:
+        _weekly_write(stub, sleeper=lambda _: None)
+    except ServerError:
+        pass
+    else:
+        raise AssertionError("a 5xx must propagate, not be retried as a conflict")
+    assert stub.reads == 1, "a non-conflict failure gets exactly one attempt"
+
+
+def test_protocol_constants_are_pinned():
+    """The two repositories keep this protocol as a copy, not an import.
+
+    A one-sided edit to the retry budget or the conflict set would be invisible
+    to the other repository's suite, so the values are asserted here and in the
+    pipeline's copy. Changing one without the other is then a deliberate act
+    with two failing tests, not a silent divergence.
+    """
+    assert MANIFEST_ATTEMPTS == 5, MANIFEST_ATTEMPTS
+    assert MANIFEST_BACKOFF_BASE_SECS == 0.1, MANIFEST_BACKOFF_BASE_SECS
+    assert MANIFEST_BACKOFF_CAP_SECS == 1.1, MANIFEST_BACKOFF_CAP_SECS
 
 
 def test_read_without_an_etag_cannot_be_made_conditional():
