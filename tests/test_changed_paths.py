@@ -362,6 +362,128 @@ class WorkflowParsing(unittest.TestCase):
                 cp.image_inputs(str(root), "Dockerfile")
 
 
+class AssetApiSplit(unittest.TestCase):
+    """G1's contract: which artifact a change belongs to.
+
+    `docs/ASSET_BOUNDARY.md` in Musef's worktree (branch
+    `musef/225-assets-preview`, base `90cdc56`, uncommitted when read) proposes
+    one public origin serving a static gateway that forwards the API paths to a
+    separately bound service. The topology is not applied and no provider fact
+    here is verified; what is testable is the classification.
+    """
+
+    def view(self, changed):
+        return cp.effects(changed, REPO, TRIGGERS).artifact
+
+    def test_site_assets_belong_to_the_asset_artifact(self):
+        view = self.view(["site/index.html"])
+        self.assertTrue(view.asset)
+        self.assertFalse(view.api)
+        self.assertFalse(view.prose)
+
+    def test_site_prose_is_classified_as_prose_not_asset(self):
+        view = self.view(["site/DEPLOYMENTS.md"])
+        self.assertTrue(view.prose)
+        self.assertFalse(
+            view.asset,
+            "a Markdown file inside site/ is a document, not a shipped asset",
+        )
+        # The current combined workflow still fires on it; that coupling is the
+        # thing the split removes, and the test states both halves.
+        self.assertIn("cloudflare_deploy", cp.effects(["site/DEPLOYMENTS.md"], REPO, TRIGGERS).triggered)
+
+    def test_gateway_and_build_script_belong_to_the_asset_artifact(self):
+        for path in (
+            "frontend/worker.mjs",
+            "frontend/preview-policy.mjs",
+            "scripts/build-assets.mjs",
+            "scripts/stamp-build.mjs",
+        ):
+            with self.subTest(path=path):
+                view = self.view([path])
+                self.assertTrue(view.asset)
+                self.assertFalse(view.api)
+
+    def test_frontend_prose_is_prose(self):
+        view = self.view(["frontend/README.md"])
+        self.assertTrue(view.prose)
+        self.assertFalse(view.asset)
+
+    def test_backend_belongs_to_the_api_artifact_only(self):
+        for path in ("backend/index.js", "backend/execution.js", "backend/bots.js"):
+            with self.subTest(path=path):
+                view = self.view([path])
+                self.assertTrue(view.api)
+                self.assertFalse(view.asset, "the asset artifact excludes backend code")
+                self.assertFalse(view.prose)
+
+    def test_shared_configuration_is_a_reviewed_mixed_change(self):
+        for path in ("wrangler.toml", "wrangler.recovery.toml", ".github/workflows/deploy.yml"):
+            with self.subTest(path=path):
+                view = self.view([path])
+                self.assertTrue(view.shared)
+                self.assertTrue(view.needs_integration_review)
+                self.assertFalse(view.asset)
+                self.assertFalse(view.api)
+
+    def test_a_commit_spanning_both_artifacts_needs_review(self):
+        for changed in (
+            ["site/index.html", "backend/index.js"],
+            ["frontend/worker.mjs", "backend/index.js"],
+        ):
+            with self.subTest(changed=changed):
+                view = self.view(changed)
+                self.assertTrue(view.asset)
+                self.assertTrue(view.api)
+                self.assertTrue(view.mixed)
+                self.assertTrue(view.needs_integration_review)
+
+    def test_tests_docs_and_producers_are_not_artifacts(self):
+        for path in (
+            "tests/asset_boundary.test.mjs",
+            "docs/ASSET_BOUNDARY.md",
+            "market_data/live_market/state.py",
+            "crassus/runner.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.view([path]).describe(), "none", f"{path} must not be an artifact input"
+                )
+
+    def test_preview_is_stale_for_asset_and_config_but_not_for_api_or_docs(self):
+        stale = {
+            "site/index.html": True,
+            "frontend/worker.mjs": True,
+            "scripts/build-assets.mjs": True,
+            "wrangler.toml": True,
+            "backend/index.js": False,
+            "tests/worker_logic.test.js": False,
+            "docs/README.md": False,
+            "site/README.md": False,
+        }
+        for path, expected in stale.items():
+            with self.subTest(path=path):
+                self.assertEqual(cp.effects([path], REPO, TRIGGERS).preview_stale, expected)
+
+    def test_preview_contract_is_named_once(self):
+        contract = cp.PREVIEW_CONTRACT
+        self.assertEqual(contract["ENVIRONMENT"], "preview")
+        self.assertEqual(contract["ISOLATION"], "disposable")
+        self.assertIn("/r2-proxy/", contract["denied_routes"])
+
+    def test_every_existing_asset_input_is_also_tested(self):
+        problems = cp.asset_input_coverage_problems(REPO, TRIGGERS)
+        self.assertEqual(problems, [], msg="\n".join(problems))
+
+    def test_the_gateway_never_imports_the_api(self):
+        problems = cp.gateway_import_problems(REPO)
+        self.assertEqual(problems, [], msg="\n".join(problems))
+
+    def test_no_browser_file_addresses_the_api_absolutely(self):
+        problems = cp.absolute_api_route_problems(REPO)
+        self.assertEqual(problems, [], msg="\n".join(problems))
+
+
 class DocumentAgreement(unittest.TestCase):
     """The prose record and the executable record name the same things."""
 
@@ -373,6 +495,18 @@ class DocumentAgreement(unittest.TestCase):
         for service in cp.PROVIDER_SERVICES:
             with self.subTest(service=service.name):
                 self.assertIn(service.name, text)
+
+    def test_document_names_the_asset_api_split(self):
+        text = DOC.read_text(encoding="utf-8")
+        for needed in (
+            "frontend/",
+            "scripts/build-assets.mjs",
+            "backend/**",
+            "prose",
+            "preview",
+        ):
+            with self.subTest(needed=needed):
+                self.assertIn(needed, text)
 
     def test_document_carries_its_own_provenance(self):
         text = DOC.read_text(encoding="utf-8")

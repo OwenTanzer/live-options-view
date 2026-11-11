@@ -151,29 +151,90 @@ Before any site or backend change ships during market hours, confirm all of the
 following on the exact candidate revision.
 
 1. `python tests/test_changed_paths.py` passes, and the case for this change
-   shows `lanes=['cloudflare_deploy', 'web_ci']` and `auto=[]`.
-2. `web_ci` is green for the commit being promoted, not for an earlier one.
-3. No producer appears in `auto` or `manual` for this change. If one does, the
+   shows the lanes you expect and `auto=[]` for the producers.
+2. The artifact classification is the one you want: an asset change shows
+   `artifact=asset` and `preview_stale=True`; a backend change shows
+   `artifact=api` and `preview_stale=False`; a commit showing
+   `needs_integration_review` is a mixed change and goes to Nova rather than
+   straight out.
+3. `web_ci` is green for the commit being promoted, not for an earlier one.
+4. No producer appears in `auto` or `manual` for this change. If one does, the
    change is a producer release; stop and schedule it deliberately.
-4. The Worker version currently serving is recorded, so the rollback target is
+5. The Worker version currently serving is recorded, so the rollback target is
    named rather than remembered.
-5. Producer deployment IDs and instance identities are recorded before the
+6. Producer deployment IDs and instance identities are recorded before the
    canary, so "unchanged" is a comparison rather than an impression.
 
 A change that ships the website alone cannot create a collector observation gap.
 A change that promotes a producer during a live session does, and no checklist
 item makes that gap go away.
 
-## Where a preview lane will attach
+## The asset/API split (proposed, not applied)
 
-G3a's outstanding dependency is G1, Jayden's preview contract. When it lands, a
-preview deployment is a repository lane rather than a promotion: it gets an
-entry in `LANE_WORKFLOWS` if it has its own workflow file, and no entry in the
-promoting set. If previews turn out to be provider-native (Cloudflare preview
-settings rather than Actions), it cannot be a repository lane at all and belongs
-in the provider table with the other readback questions. Either answer is a
-small explicit change here rather than a rewrite, because the matcher already
-separates "runs" from "promotes".
+Musef's G1 design proposes one public origin serving a static asset gateway in
+`frontend/`, which forwards the reserved API paths to a separately bound API
+service while every browser URL and relative `/api` call stays unchanged. None
+of that topology is applied: production still runs the combined Worker, and the
+provider facts it depends on — service binding, name split, trigger ownership,
+disposable resources, D1 readback — are unverified under Nova's hold. What the
+design does settle for this record is which artifact a change belongs to, and
+that is now classified and tested.
+
+| Change | Asset artifact | API artifact | Shared configuration |
+|---|---|---|---|
+| `site/**` except Markdown | yes | no | no |
+| `frontend/**` except Markdown | yes | no | no |
+| `scripts/build-assets.mjs`, `scripts/stamp-build.mjs` | yes | no | no |
+| `backend/**` | no | yes | no |
+| `wrangler.toml`, `wrangler.recovery.toml`, `.github/workflows/**` | no | no | yes |
+| Markdown under `site/` or `frontend/` | prose, excluded | no | no |
+
+**Prose is classified, not assumed.** `site/DEPLOYMENTS.md` is a document that
+lives inside the asset tree, and the design asks for that to be explicit rather
+than a side effect of a glob. It is therefore its own class: it is not a shipped
+asset, so it cannot change the artifact's bytes, and it is not an API change
+either. Today it still fires the combined workflow, which is the coupling the
+split removes; after the split it rebuilds static bytes and cannot reach the
+API.
+
+**A commit spanning both artifacts is a reviewed mixed change.** `backend/` and
+`site/` in one commit belongs to both artifacts and to neither workflow alone,
+and so does any edit to the shared configuration that decides how either is
+built or promoted. The classifier marks those rather than letting one lane carry
+the other silently.
+
+**Preview is stale on asset and configuration changes only.** A preview built
+from a commit's inputs is out of date when an asset input or the shared
+configuration changes, and not when the API, a test or a document changes. The
+identity the design hands to Steve is `ENVIRONMENT=preview` with
+`ISOLATION=disposable`, `/r2-proxy/` denied, and the API reached through local
+handlers over disposable D1 and memory stores. Those are runtime properties, not
+path selection: they belong to the asset and preview suites, and this record
+only names them so the two do not drift apart.
+
+**Proposed selectors live in a patch.** `patches/brian-225/deploy-selectors.patch`
+adds `frontend/**` and `scripts/build-assets.mjs` to `deploy.yml` and
+`web-ci.yml`, so an asset change is built and tested. It touches no `backend/**`
+path, adds no second promotion lane, and changes no provider topology: splitting
+the two workflows is Nova's step after the switch, and it needs P2 and P3 first.
+The suite enforces the moment it matters — if a file appears under an asset
+input that `web-ci` does not select, the coverage test fails, which is why the
+patch stops being optional exactly when the gateway lands.
+
+**The gateway may not import the API.** A static gateway that reaches into
+`backend/` drags operational code into the asset bundle whatever the path
+filters say, so the suite scans `frontend/` for any import whose specifier names
+`backend/` and fails on one. On the base revision there is no `frontend/` tree
+yet, so the check is vacuous until the design's files arrive; it becomes real
+the day they do.
+
+**The browser must not address the API by absolute URL.** The design keeps every
+browser URL and relative `/api` call unchanged, and Steve's preview contract
+forbids a URL-based production fallback. Both hold only while the page says
+`/api/...`: an absolute origin would let a preview call production, and would
+keep working after the topology split precisely because it bypassed the
+gateway. The site is clean today, every call relative, so the check has no
+exceptions to carry.
 
 ## Open questions for the provider-side readback
 Each of these is a readback, not a design decision. Until it is answered the

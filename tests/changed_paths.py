@@ -61,6 +61,106 @@ LANE_WORKFLOWS = {
 #: Lanes that promote code to something a user or a producer runs.
 PROMOTING_LANES = ("cloudflare_deploy",)
 
+# --------------------------------------------------------------------------
+# The asset/API split (G1)
+# --------------------------------------------------------------------------
+#
+# Musef's G1 design, docs/ASSET_BOUNDARY.md in worktree
+# lov-musef-225-assets-20261111 (branch musef/225-assets-preview, base
+# 90cdc56, uncommitted at review time), proposes one public origin serving a
+# static asset gateway that forwards reserved API paths to a separately bound
+# API service. What that means for path selection is small and testable even
+# though the topology is not yet applied.
+
+#: Paths that become part of the packaged static asset artifact.
+ASSET_INPUTS = (
+    "site/**",
+    "frontend/**",
+    "scripts/build-assets.mjs",
+    "scripts/stamp-build.mjs",
+)
+
+#: Paths that belong to the operational API service and never to the artifact.
+#: The design says so twice: "Asset artifact excludes backend/producers", and
+#: "`backend/**` is API-only; no asset release imports it".
+API_INPUTS = ("backend/**",)
+
+#: Files whose change alters how either artifact is built or promoted. Editing
+#: one is a reviewed mixed change, not a routine release of either artifact.
+SHARED_CONFIG_INPUTS = (
+    "wrangler.toml",
+    "wrangler.recovery.toml",
+    ".github/workflows/**",
+)
+
+#: Trees where a Markdown file is prose rather than shipped content. The design
+#: requires this be classified explicitly "rather than assume glob exclusion":
+#: a `site/notes.md` is not a broken asset, it is a document that happens to
+#: live inside the asset tree.
+ASSET_PROSE_ROOTS = ("site/", "frontend/")
+PROSE_SUFFIXES = (".md", ".markdown")
+
+#: The preview identity the design hands to Steve's G4a/G4b work. Recorded here
+#: so one place names the contract; the runtime checks that enforce it are not
+#: path selection and are not asserted here.
+PREVIEW_CONTRACT = {
+    "ENVIRONMENT": "preview",
+    "ISOLATION": "disposable",
+    "denied_routes": ("/r2-proxy/",),
+    "api_transport": "local handlers over disposable D1 and memory stores",
+}
+
+
+@dataclass(frozen=True)
+class ArtifactView:
+    """Which release artifact a change belongs to."""
+
+    asset: bool
+    api: bool
+    shared: bool
+    prose: bool
+
+    @property
+    def mixed(self) -> bool:
+        """A commit that belongs to both artifacts at once."""
+        return self.asset and self.api
+
+    @property
+    def needs_integration_review(self) -> bool:
+        """Shared configuration, or a commit spanning both artifacts."""
+        return self.shared or self.mixed
+
+    def describe(self) -> str:
+        parts = [
+            name
+            for name, hit in (
+                ("asset", self.asset),
+                ("api", self.api),
+                ("shared", self.shared),
+                ("prose", self.prose),
+            )
+            if hit
+        ]
+        return "+".join(parts) if parts else "none"
+
+
+def is_asset_prose(path: str) -> bool:
+    """True for a Markdown file inside an asset tree."""
+    return path.startswith(ASSET_PROSE_ROOTS) and path.endswith(PROSE_SUFFIXES)
+
+
+def artifact_view(paths) -> ArtifactView:
+    """Classify a change set as asset, API, shared configuration or prose."""
+    normalised = [_normalise(p) for p in paths]
+    prose = any(is_asset_prose(p) for p in normalised)
+    asset = any(
+        any_match(ASSET_INPUTS, p) and not is_asset_prose(p) for p in normalised
+    )
+    api = any(any_match(API_INPUTS, p) for p in normalised)
+    shared = any(any_match(SHARED_CONFIG_INPUTS, p) for p in normalised)
+    return ArtifactView(asset=asset, api=api, shared=shared, prose=prose)
+
+
 #: The image the three Python producers are built from.
 PRODUCER_DOCKERFILE = "deployment/python/Dockerfile"
 
@@ -524,12 +624,33 @@ class Effects:
     changed: tuple[str, ...]
     lanes: dict[str, bool]
     services: dict[str, ServiceView]
+    artifact: ArtifactView
     notes: tuple[str, ...] = field(default=())
 
     @property
     def triggered(self) -> tuple[str, ...]:
         """Repository CI lanes that run for this change."""
         return tuple(name for name, hit in self.lanes.items() if hit)
+
+    @property
+    def asset_release(self) -> bool:
+        """A change to the packaged static artifact."""
+        return self.artifact.asset
+
+    @property
+    def api_release(self) -> bool:
+        """A change to the operational API artifact."""
+        return self.artifact.api
+
+    @property
+    def preview_stale(self) -> bool:
+        """Whether a preview built from this commit's inputs would be out of date.
+
+        A preview is the asset artifact plus the configuration that builds it,
+        so it must be rebuilt for an asset change or a shared configuration
+        change and for nothing else.
+        """
+        return self.artifact.asset or self.artifact.shared
 
     def _service(self, name: str) -> ProviderService:
         for service in PROVIDER_SERVICES:
@@ -563,7 +684,8 @@ class Effects:
         return (
             f"lanes={list(self.triggered)} "
             f"auto={list(self.auto_promoting)} "
-            f"manual={list(self.requiring_promotion)}"
+            f"manual={list(self.requiring_promotion)} "
+            f"artifact={self.artifact.describe()}"
         )
 
 
@@ -614,6 +736,7 @@ def effects(changed, repo_root=None, triggers: dict | None = None) -> Effects:
         changed=paths,
         lanes=lanes,
         services=services,
+        artifact=artifact_view(paths),
         notes=tuple(notes),
     )
 
@@ -668,3 +791,96 @@ def closure_outside_scope(
         for rel in import_closure(root, entry_module, module_root)
         if not any_match(scope, rel, scope_matches)
     ]
+
+
+def _existing_sample(root: Path, pattern: str) -> str | None:
+    """One concrete path the pattern selects that exists in the tree."""
+    if pattern.endswith("/**"):
+        base = root / pattern[:-3]
+        if not base.is_dir():
+            return None
+        for path in sorted(base.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                return path.relative_to(root).as_posix()
+        return None
+    return pattern if (root / pattern).is_file() else None
+
+
+_ABSOLUTE_URL = re.compile(r"""https?://[^\s'"`)]+""")
+
+
+def absolute_api_route_problems(repo_root) -> list[str]:
+    """No browser file may address the API by absolute URL.
+
+    G1 keeps every browser URL and relative `/api` call unchanged, and Steve's
+    preview contract forbids a URL-based production API fallback. Both hold
+    only while the browser says `/api/...` rather than naming a host: an
+    absolute origin would make a preview call production, and would keep
+    working after the topology split precisely because it skipped the gateway.
+    """
+    from urllib.parse import urlsplit
+
+    root = Path(repo_root)
+    problems: list[str] = []
+    for tree, suffixes in (("site", {".js", ".html"}), ("frontend", {".js", ".mjs"})):
+        base = root / tree
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in suffixes or "__pycache__" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for url in _ABSOLUTE_URL.findall(text):
+                if urlsplit(url).path.startswith("/api"):
+                    problems.append(
+                        f"{path.relative_to(root).as_posix()} addresses the API absolutely: {url}"
+                    )
+    return problems
+
+
+def asset_input_coverage_problems(repo_root, triggers: dict) -> list[str]:
+    """Every asset input that exists must also be selected by the test workflow.
+
+    Deliberately forward-looking: `frontend/**` and `scripts/build-assets.mjs`
+    do not exist yet, so this passes today and starts failing the moment the
+    gateway lands without its filter. That is the point at which the proposed
+    selector patch stops being optional.
+    """
+    root = Path(repo_root)
+    tested = _event(triggers, "web-ci.yml", "push", "paths")
+    problems: list[str] = []
+    for pattern in ASSET_INPUTS:
+        sample = _existing_sample(root, pattern)
+        if sample is None:
+            continue
+        if not any_match(tested, sample):
+            problems.append(
+                f"asset input {pattern!r} exists ({sample}) but web-ci does not select it"
+            )
+    return problems
+
+
+_IMPORT_SPEC = re.compile(r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]""")
+
+
+def gateway_import_problems(repo_root) -> list[str]:
+    """No file under `frontend/` may import the operational API.
+
+    The design is explicit twice: the asset artifact excludes backend code, and
+    no asset release imports it. A static gateway that reaches into `backend/`
+    would drag the API into the asset bundle whatever the path filters say.
+    """
+    root = Path(repo_root) / "frontend"
+    if not root.is_dir():
+        return []
+    problems: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in {".js", ".mjs"} or "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for spec in _IMPORT_SPEC.findall(text):
+            if "backend/" in spec:
+                problems.append(
+                    f"{path.relative_to(root.parent).as_posix()} imports {spec!r}"
+                )
+    return problems

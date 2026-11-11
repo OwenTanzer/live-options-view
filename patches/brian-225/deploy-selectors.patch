@@ -1,0 +1,50 @@
+# Proposed selector change for #225 G3a (Brian, 2026-11-11).
+#
+# Applies at 280f4035 on brian/225-deployment-boundaries. It adds the
+# asset inputs G1 names to the workflows that build and test them. It
+# does not touch any backend/** path, add a second promotion lane, or
+# change provider topology; splitting the workflows is Nova's step after
+# the switch and needs P2/P3 first.
+#
+# Apply with: git apply patches/brian-225/deploy-selectors.patch
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index 9b2fecdd..14e6a309 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -5,8 +5,10 @@ on:
+     branches: [master]
+     paths:
+       - "site/**"
++      - "frontend/**"
+       - "backend/**"
+       - "wrangler.toml"
++      - "scripts/build-assets.mjs"
+       - "scripts/stamp-build.mjs"
+       - "tests/build_stamp.test.mjs"
+       - ".github/workflows/deploy.yml"
+diff --git a/.github/workflows/web-ci.yml b/.github/workflows/web-ci.yml
+index 08f55804..a53303e7 100644
+--- a/.github/workflows/web-ci.yml
++++ b/.github/workflows/web-ci.yml
+@@ -9,8 +9,10 @@ on:
+     paths:
+       - "backend/**"
+       - "site/**"
++      - "frontend/**"
+       - "tests/**"
+       - "wrangler.toml"
++      - "scripts/build-assets.mjs"
+       - "scripts/stamp-build.mjs"
+       - "scripts/generate-quote-instruments.mjs"
+       - ".github/workflows/deploy.yml"
+@@ -20,8 +22,10 @@ on:
+     paths:
+       - "backend/**"
+       - "site/**"
++      - "frontend/**"
+       - "tests/**"
+       - "wrangler.toml"
++      - "scripts/build-assets.mjs"
+       - "scripts/stamp-build.mjs"
+       - "scripts/generate-quote-instruments.mjs"
+       - ".github/workflows/deploy.yml"
