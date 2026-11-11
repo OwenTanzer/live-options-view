@@ -78,6 +78,8 @@ from .chain import *
 from .chain import __all__ as _chain_all
 from .state import *
 from .state import __all__ as _state_all
+from .manifest import *
+from .manifest import __all__ as _manifest_all
 from .quotes import *
 from .quotes import __all__ as _quotes_all
 from .price_sessions import *
@@ -106,10 +108,10 @@ from .runner import __all__ as _runner_all
 # and probe scripts read some of them off `collector` directly
 # (collector.requests, collector.threading, collector.datetime).
 __all__ = sorted(
-    set(_config_all) | set(_feed_all) | set(_oauth_all) | set(_tiers_all) | set(_chain_all) | set(_state_all) | set(_quotes_all) | set(_price_sessions_all) | set(_price_history_all) | set(_price_lane_all) | set(_prices_all) | set(_steo_all) | set(_health_all) | set(_market_all) | set(_weekly_all) | set(_sessions_all) | set(_runner_all)
+    set(_config_all) | set(_feed_all) | set(_oauth_all) | set(_tiers_all) | set(_chain_all) | set(_state_all) | set(_manifest_all) | set(_quotes_all) | set(_price_sessions_all) | set(_price_history_all) | set(_price_lane_all) | set(_prices_all) | set(_steo_all) | set(_health_all) | set(_market_all) | set(_weekly_all) | set(_sessions_all) | set(_runner_all)
     | {"cc", "ms"}
     | set(['BaseHTTPRequestHandler', 'Optional', 'ThreadingHTTPServer', 'boto3', 'date', 'datetime', 'io', 'json', 'logging', 'lru_cache', 'math', 'os', 'parse_qs', 'pd', 'pytz', 're', 'requests', 'secrets', 'sys', 'threading', 'time', 'timedelta', 'timezone', 'urlparse', 'websocket', 'yf'])
 )
 
 # Star-import bookkeeping is not part of the collector surface.
-del _config_all, _feed_all, _oauth_all, _tiers_all, _chain_all, _state_all, _quotes_all, _price_sessions_all, _price_history_all, _price_lane_all, _prices_all, _steo_all, _health_all, _market_all, _weekly_all, _sessions_all, _runner_all
+del _config_all, _feed_all, _oauth_all, _tiers_all, _chain_all, _state_all, _manifest_all, _quotes_all, _price_sessions_all, _price_history_all, _price_lane_all, _prices_all, _steo_all, _health_all, _market_all, _weekly_all, _sessions_all, _runner_all

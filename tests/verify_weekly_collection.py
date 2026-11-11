@@ -27,21 +27,55 @@ class MissingKey(Exception):
     response = {"Error": {"Code": "NoSuchKey"}}
 
 
+class PreconditionFailed(Exception):
+    """What R2 raises when a conditional write loses the race."""
+
+    response = {"Error": {"Code": "PreconditionFailed"}}
+
+
 class FakeS3:
+    """In-memory R2 stub that models ETags and conditional writes.
+
+    `manifest.json` is written compare-and-swap now, so a double that accepted
+    every `put_object` would pass whether or not the precondition was sent. The
+    stub therefore keeps a version per object, returns it as the ETag, and
+    rejects a stale `IfMatch` (or a create-only `IfNoneMatch` against an
+    existing object) the way the service does.
+    """
+
     def __init__(self, manifest=None):
         self.store = {}
+        self.etags = {}
+        self.version = 0
         self.put_calls = []
+        self.conflicts = 0
         if manifest is not None:
-            self.store["manifest.json"] = json.dumps(manifest).encode()
+            self._stamp("manifest.json", json.dumps(manifest).encode())
+
+    def _stamp(self, key, payload):
+        self.version += 1
+        self.store[key] = payload
+        self.etags[key] = f'"{self.version}"'
+        return {"ETag": self.etags[key]}
 
     def get_object(self, Bucket, Key):  # noqa: N803
         if Key not in self.store:
             raise MissingKey(Key)
-        return {"Body": FakeBody(self.store[Key])}
+        return {"Body": FakeBody(self.store[Key]), "ETag": self.etags[Key]}
 
     def put_object(self, Bucket, Key, Body, **kwargs):  # noqa: N803
-        self.store[Key] = Body if isinstance(Body, bytes) else Body.encode()
+        payload = Body if isinstance(Body, bytes) else Body.encode()
+        current = self.etags.get(Key)
+        expected = kwargs.get("IfMatch")
+        create_only = kwargs.get("IfNoneMatch")
+        if expected is not None and expected != current:
+            self.conflicts += 1
+            raise PreconditionFailed(f"IfMatch {expected} != {current}")
+        if create_only == "*" and current is not None:
+            self.conflicts += 1
+            raise PreconditionFailed(f"{Key} already exists")
         self.put_calls.append(Key)
+        return self._stamp(Key, payload)
 
     def list_objects_v2(self, Bucket, Prefix):  # noqa: N803
         return {

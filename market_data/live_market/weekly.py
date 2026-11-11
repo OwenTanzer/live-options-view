@@ -10,10 +10,9 @@ verify_weekly_collection) resolves through the package entry.
 """
 
 import io
-import json
 import math
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Optional
 
@@ -33,6 +32,7 @@ from .config import (
     log,
 )
 from .feed import DXLinkFeed
+from .manifest import add_weekly_key, empty_manifest_seed, update_manifest
 from .market import _resolve_underlying_spot
 
 @lru_cache(maxsize=32)
@@ -85,37 +85,21 @@ def _weekly_existing_snapshot(s3, exp_date: str, trade_date: date,
     return None
 
 
-def _load_pipeline_manifest(s3) -> dict:
-    try:
-        body = s3.get_object(Bucket=R2_BUCKET, Key="manifest.json")["Body"].read()
-        return json.loads(body.decode())
-    except Exception as exc:
-        response = getattr(exc, "response", {})
-        error = response.get("Error", {}) if isinstance(response, dict) else {}
-        if error.get("Code") in {"NoSuchKey", "404", "NotFound"}:
-            return {"dates": []}
-        raise
-
-
 def _update_weekly_manifest(s3, exp_date: str, snapshot_key: str) -> None:
-    """Extend the existing pipeline manifest without changing its date index."""
-    manifest = _load_pipeline_manifest(s3)
-    weekly = manifest.setdefault("weekly_expirations", {})
-    if not isinstance(weekly, dict):
-        raise RuntimeError("manifest weekly_expirations must be an object")
-    keys = weekly.setdefault(exp_date, [])
-    if not isinstance(keys, list):
-        raise RuntimeError(f"manifest weekly_expirations[{exp_date}] must be a list")
-    if snapshot_key not in keys:
-        keys.append(snapshot_key)
-        keys.sort()
-    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
-    s3.put_object(
-        Bucket=R2_BUCKET,
-        Key="manifest.json",
-        Body=json.dumps(manifest, indent=2, sort_keys=True).encode(),
-        ContentType="application/json",
+    """Index one weekly key under its expiry without touching anyone's field.
+
+    Compare-and-swap on the object's ETag: read, merge only `weekly_expirations`,
+    write back with `IfMatch`. A concurrent daily-pipeline write therefore costs
+    one re-read, not the new date it just added. Exhaustion raises, and the
+    already-uploaded CSV stays discoverable through the prefix listing, so the
+    next slot re-derives this index entry.
+    """
+    update_manifest(
+        s3,
+        lambda document: add_weekly_key(document, exp_date, snapshot_key),
+        seed=empty_manifest_seed(),
     )
+    log.info(f"manifest.json indexed {snapshot_key} under {exp_date}")
 
 
 def _weekly_fresh_value(value, observed_at, now: datetime) -> bool:
@@ -235,7 +219,6 @@ __all__ = [
     "_weekly_snapshot_slot",
     "_weekly_day_prefix",
     "_weekly_existing_snapshot",
-    "_load_pipeline_manifest",
     "_update_weekly_manifest",
     "_weekly_fresh_value",
     "take_weekly_snapshot",

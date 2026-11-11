@@ -48,6 +48,7 @@ on:
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
+      - "tests/verify_manifest_concurrency.py"
       - ".github/workflows/collector-ci.yml"
   pull_request:
     paths:
@@ -92,6 +93,7 @@ on:
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
+      - "tests/verify_manifest_concurrency.py"
       - ".github/workflows/collector-ci.yml"
 
 jobs:
@@ -148,6 +150,8 @@ jobs:
         run: python tests/verify_eia_steo_calibration.py
       - name: Run weekly collection suite
         run: python tests/verify_weekly_collection.py
+      - name: Run manifest merge protocol suite (#225 R2b)
+        run: python tests/verify_manifest_concurrency.py
       - name: Verify actual producer image entry points (offline)
         run: |
           docker build -f deployment/python/Dockerfile -t producer-check .
