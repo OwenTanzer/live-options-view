@@ -1,5 +1,4 @@
-import { R2_ORIGIN } from './common.js';
-import { BROWSER_DATA_PREFIX, handleBrowserData, handleLiveQuotes } from './browser-data.js';
+import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
 import { handleBotIndexReconcile, handleBotMetadata, handleBots } from './bots.js';
 import { handleLogin, handleLogout, handleMe, handleRegister } from './auth.js';
@@ -27,19 +26,14 @@ export default {
       return handleBrowserData(request, url);
     }
 
-    // Same-origin passthrough to the R2 bucket, fetched edge-to-edge by
-    // Cloudflare rather than over the client's own network. Exists so
-    // diag.html can compare "direct to the r2.dev subdomain" against "same
-    // origin as the page" — if a client's network/DNS/carrier treats the two
-    // hostnames differently, this tells them apart instead of leaving it a
-    // guess. Not used by the main app yet.
-    if (url.pathname.startsWith("/r2-proxy/")) {
-      const key = url.pathname.slice("/r2-proxy/".length);
-      const upstream = await fetch(`${R2_ORIGIN}/${key}${url.search}`, { cf: { cacheTtl: 0 } });
-      const proxied = new Response(upstream.body, upstream);
-      proxied.headers.set("Cache-Control", "no-store");
-      proxied.headers.set("Access-Control-Allow-Origin", "*");
-      return proxied;
+    // Bounded legacy route (G4b): /r2-proxy/ now enforces the same
+    // public-key/read policy as /browser-data/ — allowlisted keys only, GET
+    // only, same origin/query discipline, same upstream discipline, and no
+    // Access-Control-Allow-Origin passthrough. The only consumer is
+    // site/diag.html; the main app uses /browser-data/. Preview still denies
+    // it (frontend/worker.mjs returns 403 there).
+    if (url.pathname === '/r2-proxy' || url.pathname.startsWith(LEGACY_R2_PROXY_PREFIX)) {
+      return handleLegacyR2Proxy(request, url);
     }
 
     // Post-cutover fence check. The migration route is retired from this

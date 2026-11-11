@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const KEYS = [
-  'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/prices.json',
+  'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json', 'intraday/prices.json',
   'intraday/health.json', 'derived/OIranges.csv',
   'macro/eia_steo.json',
   'manifest.json', 'raw/qqq_chain_20261027.csv',

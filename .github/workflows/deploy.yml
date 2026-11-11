@@ -5,8 +5,11 @@ on:
     branches: [master]
     paths:
       - "site/**"
+      - "frontend/**"
       - "backend/**"
       - "wrangler.toml"
+      - "wrangler.assets.toml"
+      - "scripts/build-assets.mjs"
       - "scripts/stamp-build.mjs"
       - "tests/build_stamp.test.mjs"
       - ".github/workflows/deploy.yml"

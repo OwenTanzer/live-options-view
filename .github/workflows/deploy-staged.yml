@@ -1,0 +1,49 @@
+name: Deploy staged asset payload (G3b)
+
+# LOCAL PROPOSAL — not merged. Promotion stays manual until the C2 packet is
+# approved; this workflow only runs the staged-payload gate, which refuses
+# without a checked-in authorization record for the exact revision. It
+# serializes promotion with the deploy-live-options-view concurrency group so
+# an old candidate A cannot overwrite a newer authorized candidate B.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Staging directory (from prepare-asset-release.mjs)'
+        required: true
+      revision:
+        description: 'Full 40-hex revision the stage was built from'
+        required: true
+      web-check:
+        description: 'Web check evidence as <run-id>:<status>'
+        required: false
+        default: ''
+      api-check:
+        description: 'API check evidence as <run-id>:<status>'
+        required: false
+        default: ''
+      execute:
+        description: 'Execute the promotion (default is dry-run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-live-options-view
+  cancel-in-progress: false
+
+jobs:
+  deploy-staged:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deploy staged payload (G3b gate)
+        run: |
+          node scripts/deploy-staged-payload.mjs --deploy \
+            --stage "${{ inputs.stage }}" \
+            --revision "${{ inputs.revision }}" \
+            ${{ inputs.web-check != '' && format('--web-check {0}', inputs.web-check) || '' }} \
+            ${{ inputs.api-check != '' && format('--api-check {0}', inputs.api-check) || '' }} \
+            ${{ inputs.execute && '--execute' || '' }}

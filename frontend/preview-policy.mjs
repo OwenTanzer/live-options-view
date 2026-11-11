@@ -17,6 +17,16 @@ export function publicReadAllowed(url) {
   if (url.search && !/^\?_=[0-9]{1,20}$/.test(url.search)) return false;
   const key = url.pathname.slice('/browser-data/'.length);
   if (PUBLIC_KEYS.has(key)) return true;
+  // MediaFlow news views — same prefix rule as backend/browser-data.js
+  // (isNewsViewsKey); keep the two in sync or preview and production
+  // diverge. tests/r2_proxy_bounded.test.js pins their agreement.
+  if (key.startsWith('news/v1/views/')) {
+    const rest = key.slice('news/v1/views/'.length);
+    // Reject literal and percent-encoded dot traversal, mirroring
+    // backend/browser-data.js (isNewsViewsKey).
+    return rest.length > 0 && !rest.includes('..') && !/%2e/i.test(rest) &&
+      !rest.includes('\\') && !rest.includes('\0');
+  }
   const m = /^(?:raw\/(?:opex\/)?qqq_chain_|prices\/qqq_intraday_)(\d{4})(\d{2})(\d{2})\.csv$/.exec(key);
   if (!m) return false;
   const date = `${m[1]}-${m[2]}-${m[3]}`;

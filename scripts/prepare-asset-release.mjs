@@ -47,13 +47,13 @@ const configHash = config => createHash('sha256').update(config).digest('hex');
 // Commands are review material for this Windows/PowerShell operating procedure.
 const literal = value => "'" + value.replaceAll("'", "''") + "'";
 const deploymentCommand = (stage, revision) => `wrangler deploy --config ${literal(resolve(stage,'wrangler.assets.toml'))} --var ${literal('ASSET_REVISION:'+revision)}`;
-export function verifyStage(stage) {
+export function verifyStage(stage, expectedStates = ['prepared-not-approved-not-deployed']) {
   const staging=resolve(stage), plan=JSON.parse(readFileSync(resolve(staging,'plan.json'),'utf8'));
   const manifest=verifyArtifact(resolve(staging,'payload'));
   const configPath=resolve(staging,'wrangler.assets.toml');
   if(lstatSync(configPath).isSymbolicLink())throw new Error('Stage config symlink refused');
   const config=readFileSync(configPath,'utf8'); validateAssetConfig(config,manifest);
-  if(plan.state!=='prepared-not-approved-not-deployed'||plan.asset_revision!==manifest.revision||
+  if(!expectedStates.includes(plan.state)||plan.asset_revision!==manifest.revision||
       plan.asset_target!==manifest.targets.assets||plan.unchanged_api_target!==manifest.targets.api||
       plan.artifact!==resolve(staging,'payload')||plan.config_sha256!==configHash(config)||
       plan.proposed_command!==deploymentCommand(staging,manifest.revision)||
@@ -63,6 +63,16 @@ export function verifyStage(stage) {
     throw new Error('Stage plan/config/payload contract mismatch');
   }
   return plan;
+}
+// State transitions go through here only — never by editing plan.json.
+// The contract (payload/config/command) is re-verified under the new state.
+export function transitionPlanState(stage, fromStates, to) {
+  const staging=resolve(stage), planPath=resolve(staging,'plan.json');
+  const plan=JSON.parse(readFileSync(planPath,'utf8'));
+  if(!fromStates.includes(plan.state))throw new Error(`Stage state ${plan.state} cannot transition to ${to}`);
+  plan.state=to;
+  writeFileSync(planPath,JSON.stringify(plan,null,2)+'\n');
+  return verifyStage(staging,[to]);
 }
 
 export function prepareRelease({artifact,out,current=null,configRoot=ROOT}) {

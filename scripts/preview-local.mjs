@@ -2,18 +2,18 @@
 import http from 'node:http';
 import { readFileSync, existsSync, statSync, realpathSync } from 'node:fs';
 import { resolve, extname, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import gateway from '../frontend/worker.mjs';
 import api from '../backend/index.js';
 import { withD1 } from '../tests/helpers/test_env.mjs';
 import { publicReadAllowed } from '../frontend/preview-policy.mjs';
+import { assertOperationalKey, CaptureWriteRefused } from '../backend/operational-storage.js';
 export const LOCAL_ORIGIN = 'http://localhost:8787';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-// Steve owns this shared product module; do not copy it into this lane. Once
-// Nova integrates it, import it automatically and fail on import errors.
-const boundaryPath = resolve(ROOT, 'backend/operational-storage.js');
-const productionBoundary = existsSync(boundaryPath) ? await import(pathToFileURL(boundaryPath).href) : null;
-export const OPERATIONAL_POLICY_SOURCE = productionBoundary ? 'g4a-product' : 'local-fixture-pending-g4a';
+// G4a product module integrated (Nova, 2026-11-11): the preview store uses
+// the production boundary directly and fails on import errors; no private
+// copy of the prefix rule remains in this file.
+export const OPERATIONAL_POLICY_SOURCE = 'g4a-product';
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 export function assetBinding(root = resolve(ROOT, 'site')) {
   const base = resolve(root);
@@ -63,16 +63,8 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
       return item ? { etag: item.etag, json: async () => JSON.parse(item.value), text: async () => item.value } : null;
     },
     async put(key, value, options = {}) {
-      if (productionBoundary) {
-        try { productionBoundary.assertOperationalKey(key); }
-        catch (error) { throw new productionBoundary.CaptureWriteRefused('Capture write denied: ' + error.message, key); }
-      } else {
-        // Explicit fixture-only fallback until Nova integrates Steve's module.
-        // This is not represented as acceptance of the production wrapper.
-        if (typeof key !== 'string' || key.length > 1024 || key.includes('\u0000') ||
-            !/^(system|paper-trades)\//.test(key) || key.split('/').some(s => !s || s === '.' || s === '..') ||
-            key.includes('\\')) throw new Error('Capture write denied');
-      }
+      try { assertOperationalKey(key); }
+      catch (error) { throw new CaptureWriteRefused('Capture write denied: ' + error.message, key); }
       const old = objects.get(key), condition = options.onlyIf;
       if ((condition?.etagDoesNotMatch === '*' && old) || (condition?.etagMatches && condition.etagMatches !== old?.etag)) return null;
       const item = { value: String(value), etag: String(++serial) };
