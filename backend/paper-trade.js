@@ -11,6 +11,7 @@ import {
   requireSession, withUserRecord,
 } from './common.js';
 import { fetchLiveQuotes } from './browser-data.js';
+import { operationalBucket } from './operational-storage.js';
 import {
   exactExecutionQuote, executionIntentMatches, executionPriceForOrder,
   executionReservationExpired, existingExecutionResponse,
@@ -37,6 +38,18 @@ export async function handlePaperTrade(request, env) {
 
   const originError = checkOrigin(request);
   if (originError) return originError;
+
+  // Execution records share a bucket with the capture producer. Every read and
+  // conditional write below goes through the operational boundary, so a defect
+  // in key construction refuses instead of overwriting a published artifact.
+  // A missing binding keeps the endpoint's existing 503 rather than surfacing
+  // as an unhandled Worker error.
+  let executionStore;
+  try {
+    executionStore = operationalBucket(env, 'paper_trade');
+  } catch {
+    return jsonResponse({ error: 'Execution state unavailable' }, 503);
+  }
 
   const contentLength = Number(request.headers.get('Content-Length') || 0);
   if (contentLength > MAX_BODY_BYTES) {
@@ -76,7 +89,7 @@ export async function handlePaperTrade(request, env) {
       const closure = session.record.closure_execution;
       if (session.record.account_closed && closure?.execution_request_id === executionId) {
         try {
-          const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, closure, etag);
+          const recovered = await finalizeExecutionRequest(executionStore, key, closure, etag);
           return existingExecutionResponse(recovered.outcome, body);
         } catch (error) {
           return jsonResponse({ error: 'Closed-account rejection could not be recovered' }, 503);
@@ -86,7 +99,7 @@ export async function handlePaperTrade(request, env) {
       if (!appliedTrade) {
         if (session.record.account_closed) {
           try {
-            const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key,
+            const recovered = await finalizeExecutionRequest(executionStore, key,
               { ...storedOutcome, status: 'rejected', http_status: 403,
                 error: 'Account closed', account_closed: true }, etag);
             return existingExecutionResponse(recovered.outcome, body);
@@ -101,7 +114,7 @@ export async function handlePaperTrade(request, env) {
         }, 409);
       }
       try {
-        const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, appliedTrade, etag);
+        const recovered = await finalizeExecutionRequest(executionStore, key, appliedTrade, etag);
         storedOutcome = recovered.outcome;
       } catch (error) {
         return jsonResponse({ error: 'Pending execution could not be recovered' }, 503);
@@ -115,7 +128,7 @@ export async function handlePaperTrade(request, env) {
   };
 
   try {
-    const existing = await env.PAPER_TRADES.get(key);
+    const existing = await executionStore.get(key);
     if (existing) {
       const storedOutcome = await existing.json();
       const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
@@ -131,7 +144,7 @@ export async function handlePaperTrade(request, env) {
       }
 
       const renewed = await renewExecutionReservation(
-        env.PAPER_TRADES,
+        executionStore,
         key,
         storedOutcome,
         existing.etag,
@@ -207,7 +220,7 @@ export async function handlePaperTrade(request, env) {
       ts: executedAt.toISOString(),
     });
     try {
-      reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
+      reserved = await reserveExecutionRequest(executionStore, key, reservation);
     } catch (error) {
       return jsonResponse({ error: 'Execution could not be reserved' }, 503);
     }
@@ -216,7 +229,7 @@ export async function handlePaperTrade(request, env) {
 
   if (candidate.status === 'rejected') {
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, candidate, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, candidate, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
@@ -256,7 +269,7 @@ export async function handlePaperTrade(request, env) {
 
   try {
     const fenced = await renewExecutionReservation(
-      env.PAPER_TRADES,
+      executionStore,
       key,
       reserved.outcome,
       reserved.etag,
@@ -311,7 +324,7 @@ export async function handlePaperTrade(request, env) {
       http_status: 400,
     });
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
@@ -321,7 +334,7 @@ export async function handlePaperTrade(request, env) {
     const rejection = { ...common, error: 'Account closed', account_closed: true,
       status: 'rejected', http_status: 403 };
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Account closure rejection could not be recorded' }, 503);
@@ -335,7 +348,7 @@ export async function handlePaperTrade(request, env) {
       http_status: 400,
     });
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Position rejection could not be recorded' }, 503);
@@ -346,7 +359,7 @@ export async function handlePaperTrade(request, env) {
   }
 
   try {
-    const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, trade, reserved.etag);
+    const finalized = await finalizeExecutionRequest(executionStore, key, trade, reserved.etag);
     if (finalized.outcome.status !== 'filled') {
       return jsonResponse({ error: 'Execution finalization conflicted' }, 503);
     }

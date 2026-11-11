@@ -10,6 +10,7 @@ import {
   withUserRecord,
 } from './common.js';
 import { createStorage } from './storage.js';
+import { operationalBucket } from './operational-storage.js';
 
 export const BOT_INDEX_KEY = 'system/bot-membership-v1.json';
 const MAX_BOT_INDEX_MEMBERS = 500;
@@ -31,13 +32,16 @@ async function loadBotIndex(env) {
 export async function updateBotIndex(env, additions, { ready = false, sleeper = sleep } = {}) {
   const names = additions.map(n => n.toLowerCase());
   if (names.some(n => !BOT_USERNAME_RE.test(n))) throw new Error('Invalid bot membership');
+  // The roster index shares a bucket with the capture producer; writes go
+  // through the operational boundary so a wrong key cannot reach capture.
+  const indexWrites = operationalBucket(env, 'bot_index');
   for (let attempt = 0; attempt < MAX_KV_WRITE_ATTEMPTS; attempt++) {
     const current = await loadBotIndex(env);
     const members = [...new Set([...(current?.value.members || []), ...names])].sort();
     const next = validateBotIndex({ schema_version: 1, ready: ready || current?.value.ready || false, members });
     if (current && JSON.stringify(current.value) === JSON.stringify(next)) return next;
     try {
-      const stored = await env.PAPER_TRADES.put(BOT_INDEX_KEY, JSON.stringify(next), {
+      const stored = await indexWrites.put(BOT_INDEX_KEY, JSON.stringify(next), {
         onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' },
         httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
       });
