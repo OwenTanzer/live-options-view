@@ -1,0 +1,47 @@
+name: Release boundary contract
+
+# #225: make the changed-path-to-service contract executable. This workflow is
+# deliberately inert -- it runs one stdlib-only test file and promotes nothing.
+# It watches the inputs that could invalidate its own expectations: the test
+# and matrix module, the boundary record, every workflow filter, and the two
+# build files that decide which service an image change reaches.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "tests/changed_paths.py"
+      - "tests/test_changed_paths.py"
+      - "docs/RELEASE_BOUNDARIES.md"
+      - ".github/workflows/**"
+      - "wrangler.toml"
+      - "wrangler.recovery.toml"
+      - "deployment/python/**"
+      - "crassus/railway.toml"
+      - "crassus/Dockerfile"
+      - "crassus/Dockerfile.dockerignore"
+  pull_request:
+    paths:
+      - "tests/changed_paths.py"
+      - "tests/test_changed_paths.py"
+      - "docs/RELEASE_BOUNDARIES.md"
+      - ".github/workflows/**"
+      - "wrangler.toml"
+      - "wrangler.recovery.toml"
+      - "deployment/python/**"
+      - "crassus/railway.toml"
+      - "crassus/Dockerfile"
+      - "crassus/Dockerfile.dockerignore"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Changed-path to service contract
+        run: python tests/test_changed_paths.py
