@@ -41,10 +41,10 @@ index 9b2fecdd..d8ed41b8 100644
        - "tests/build_stamp.test.mjs"
        - ".github/workflows/deploy.yml"
 diff --git a/.github/workflows/web-ci.yml b/.github/workflows/web-ci.yml
-index 08f55804..f469cf58 100644
+index 08f55804..fa5dca03 100644
 --- a/.github/workflows/web-ci.yml
 +++ b/.github/workflows/web-ci.yml
-@@ -9,8 +9,15 @@ on:
+@@ -9,8 +9,17 @@ on:
      paths:
        - "backend/**"
        - "site/**"
@@ -57,10 +57,12 @@ index 08f55804..f469cf58 100644
 +      - "scripts/build-assets.mjs"
 +      - "scripts/prepare-asset-release.mjs"
 +      - "scripts/preview-local.mjs"
++      - "scripts/deploy-staged-payload.mjs"
++      - ".github/workflows/deploy-staged.yml"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"
-@@ -20,8 +27,15 @@ on:
+@@ -20,8 +29,17 @@ on:
      paths:
        - "backend/**"
        - "site/**"
@@ -73,6 +75,8 @@ index 08f55804..f469cf58 100644
 +      - "scripts/build-assets.mjs"
 +      - "scripts/prepare-asset-release.mjs"
 +      - "scripts/preview-local.mjs"
++      - "scripts/deploy-staged-payload.mjs"
++      - ".github/workflows/deploy-staged.yml"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"

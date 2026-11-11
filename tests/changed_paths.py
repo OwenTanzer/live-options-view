@@ -149,8 +149,19 @@ ASSET_INPUTS = (
     "frontend/**",
 ) + ASSET_TOOLING_INPUTS
 
+#: The promotion gate itself: the staged-deploy script and the workflow that
+#: calls it. Neither produces artifact bytes, so neither is an asset input, but a
+#: change to either decides whether anything reaches production at all — which is
+#: exactly why the test workflow has to run for them.
+PROMOTION_INPUTS = (
+    "scripts/deploy-staged-payload.mjs",
+    ".github/workflows/deploy-staged.yml",
+)
+
 #: Everything that must be exercised by the test workflow when it changes.
-COVERAGE_INPUTS = ASSET_INPUTS + SELECTED_CONFIG_INPUTS + PREVIEW_ACCEPTANCE_INPUTS
+COVERAGE_INPUTS = (
+    ASSET_INPUTS + SELECTED_CONFIG_INPUTS + PREVIEW_ACCEPTANCE_INPUTS + PROMOTION_INPUTS
+)
 
 #: Trees where a Markdown file is prose rather than shipped content. The design
 #: requires this be classified explicitly "rather than assume glob exclusion":
