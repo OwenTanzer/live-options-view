@@ -66,7 +66,8 @@ test('release/rollback staging changes only asset target and never executes a pr
   assert.deepEqual(verifyArtifact(resolve(stage,'payload')),before);
   const config=readFileSync(resolve(stage,'wrangler.assets.toml'),'utf8');
   assert.match(config,/run_worker_first = true/);assert.match(config,/payload\/frontend\/worker.mjs/);
-  assert.doesNotMatch(config,/\[\[(r2_buckets|d1_databases|kv_namespaces)\]\]|\[triggers\]/);
+  assert.doesNotMatch(config,/\[\[(r2_buckets|d1_databases|kv_namespaces)\]\]/);
+  assert.match(config,/\[triggers\]\s*crons\s*=\s*\[\s*\]/);
   assert.throws(()=>prepareRelease({artifact:old,out:resolve(old,'nested')}),/outside artifact/);
 });
 test('rollback refuses tampered payload and unmanifested operational file',()=>{
@@ -103,7 +104,7 @@ test('stage uses actual applied config, not stale proposal, and records exact by
 });
 test('invalid applied config cannot silently fall back to valid proposal or leave a stage',()=>{
   const {old}=artifacts(),{root,out}=configFixture();
-  writeFileSync(resolve(root,'wrangler.assets.toml'),proposedConfig+'\n[triggers]\ncrons = ["* * * * *"]\n');
+  writeFileSync(resolve(root,'wrangler.assets.toml'),proposedConfig.replace('crons = []','crons = ["* * * * *"]'));
   assert.throws(()=>prepareRelease({artifact:old,out,configRoot:root}),/Unsupported asset config/);
   assert.equal(existsSync(out),false);
 });
@@ -168,6 +169,18 @@ test('proposed PowerShell command quotes stage metacharacters literally, without
   assert.ok(plan.proposed_command.includes("reader''s-$(not-a-command)"));
   assert.ok(plan.proposed_command.includes("--config '"));
   assert.deepEqual(verifyStage(path),plan);
+});
+test('asset cutover requires explicit empty cron clearing and rejects all active or extra triggers',()=>{
+  const manifest={targets:{assets:'live-options-view',api:'live-options-api'},revision:'a'.repeat(40)};
+  assert.doesNotThrow(()=>validateAssetConfig(proposedConfig,manifest));
+  assert.doesNotThrow(()=>validateAssetConfig(proposedConfig.replace('crons = []','crons = [  ] # clear'),manifest));
+  for(const config of [
+    proposedConfig.replace('[triggers]\ncrons = []',''),
+    ...['["*/15 12-23 * * 1-5"]','"[]"','false'].map(value=>proposedConfig.replace('crons = []','crons = '+value)),
+    proposedConfig.replace('crons = []','crons = []\nother = true'),
+    proposedConfig+'\n[triggers]\ncrons = []',
+    proposedConfig.replace('crons = []','crons = []\ncrons = []'),
+  ]) assert.throws(()=>validateAssetConfig(config,manifest),/Asset config|asset config/);
 });
 test('stage config integrity does not attest current source selection or freshness',()=>{
   const {old}=artifacts(),{root,out}=configFixture();

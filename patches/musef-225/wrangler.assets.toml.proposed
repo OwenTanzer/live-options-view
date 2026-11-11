@@ -18,4 +18,9 @@ run_worker_first = true
 binding = "API"
 service = "live-options-api"
 
-# Deliberately no D1, R2, KV, secrets, cron, producer or recovery binding.
+# Explicitly clear the old combined Worker's schedule; omission may retain it.
+[triggers]
+crons = []
+
+# No D1, R2, KV, secrets, active cron, producer or recovery binding.
+# Nova verifies live asset triggers empty and API sole cron ownership at cutover.
