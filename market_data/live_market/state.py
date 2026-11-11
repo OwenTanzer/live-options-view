@@ -162,6 +162,80 @@ UNDERLYING_SESSIONS: dict[str, UnderlyingSession] = {
 }
 
 
+# -- archive listing ----------------------------------------------------------
+#
+# One minute snapshot writes two objects under its day prefix (the CSV and its
+# `snapshot_provenance.v1` sidecar), so a single session already runs to ~1,800
+# keys for QQQ -- well past S3's 1,000-key list page. `list_objects_v2` returns
+# keys in ascending order and stops at the page boundary, so an unpaginated
+# call sees the *oldest* page; taking the last CSV of that page restores from a
+# mid-morning snapshot while reporting success. Page to the end instead.
+
+LIST_PAGE_LIMIT = 50                     # 50,000 keys; a day prefix is orders below this
+_SNAPSHOT_NAME_RE = re.compile(r"snapshot_(\d{4}|\d{6}|\d{12})\.csv$")
+
+
+def _list_prefix(s3, prefix: str, max_pages: int = LIST_PAGE_LIMIT) -> list[str]:
+    """Every key under `prefix`, following continuation tokens to the end.
+
+    Raises rather than returning a partial listing: a truncated prefix is
+    indistinguishable from a complete one at the call site, and restoring from
+    the wrong snapshot is worse than not restoring at all -- the same "prefer a
+    clean miss over corrupt state" rule this module already applies to CSV
+    contents. The caller logs the miss and starts a fresh session.
+    """
+    keys: list[str] = []
+    token = None
+    for _ in range(max_pages):
+        request = {"Bucket": R2_BUCKET, "Prefix": prefix}
+        if token:
+            request["ContinuationToken"] = token
+        response = s3.list_objects_v2(**request)
+        keys.extend(item["Key"] for item in response.get("Contents", []) if "Key" in item)
+        if not response.get("IsTruncated"):
+            return keys
+        token = response.get("NextContinuationToken")
+        if not token:
+            raise RuntimeError(f"archive listing truncated without a continuation token: {prefix}")
+    raise RuntimeError(f"archive listing exceeded {max_pages} pages: {prefix}")
+
+
+def _snapshot_digits(name: str) -> Optional[str]:
+    """The 12-digit HHMMSSffffff digits of one snapshot basename, or None.
+
+    Older archives wrote fewer digits (`snapshot_1200.csv`), and the reader in
+    crassus/crassus/market.py accepts 4, 6 or 12. Right-padding to 12 makes
+    every accepted width comparable on one scale and derivable back to a
+    capture time: `1200` becomes `120000000000`, not something that sorts
+    before `0930...` as plain string ordering of mixed widths would.
+    """
+    match = _SNAPSHOT_NAME_RE.fullmatch(name)
+    return match.group(1).ljust(12, "0") if match else None
+
+
+def _snapshot_order(name: str) -> int:
+    """Order one `snapshot_<digits>.csv` basename by capture time."""
+    digits = _snapshot_digits(name)
+    return int(digits) if digits is not None else -1
+
+
+def _latest_snapshot_key(keys: list[str], prefix: str) -> Optional[str]:
+    """The newest timestamped snapshot CSV under `prefix`, or None.
+
+    Only `snapshot_<digits>.csv` qualifies. `first.csv`, the provenance
+    sidecars, `vwap_state.json`, `momentum_log.jsonl` and anything else that
+    happens to live in the prefix are never a restore source, so a stray CSV
+    cannot displace the real latest snapshot. `prefix` carries the underlying
+    and the session date, so a key from another symbol's or another day's
+    archive cannot match.
+    """
+    candidates = [
+        key for key in keys
+        if key.startswith(prefix) and _snapshot_digits(key[len(prefix):]) is not None
+    ]
+    return max(candidates, key=lambda key: _snapshot_order(key[len(prefix):])) if candidates else None
+
+
 def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> None:
     """Seed one underlying's prev_vol/last_spot (and, for QQQ only, the shared
     _last_prices strip) from its most recent R2 snapshot.
@@ -186,18 +260,18 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
         us.session_date = today
     date_str = today.strftime("%Y%m%d")
     try:
-        resp = s3.list_objects_v2(Bucket=R2_BUCKET, Prefix=us.day_prefix(date_str))
-        csvs = sorted(
-            [o for o in resp.get("Contents", []) if o["Key"].endswith(".csv")],
-            key=lambda o: o["Key"],
-        )
-        if not csvs:
-            log.info(f"restore_state: no {us.symbol} snapshots found for today, starting fresh")
+        prefix = us.day_prefix(date_str)
+        listed = _list_prefix(s3, prefix)
+        latest_key = _latest_snapshot_key(listed, prefix)
+        if latest_key is None:
+            log.info(
+                f"restore_state: no {us.symbol} snapshot CSV under {prefix} "
+                f"({len(listed)} objects listed), starting fresh"
+            )
             return
 
         us.first_snapshot_written = True  # prior snapshots exist; first.csv already written
 
-        latest_key = csvs[-1]["Key"]
         body = s3.get_object(Bucket=R2_BUCKET, Key=latest_key)["Body"].read().decode()
         df = pd.read_csv(io.StringIO(body))
 
@@ -227,9 +301,9 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
             if spot:
                 us.last_spot[0] = float(spot)
                 us.last_spot[1] = None
-                name_match = re.search(r"snapshot_(\d{6})(\d{6})\.csv$", latest_key)
+                name_match = _snapshot_digits(latest_key.rsplit("/", 1)[-1])
                 if name_match:
-                    hms, micro = name_match.groups()
+                    hms, micro = name_match[:6], name_match[6:]
                     try:
                         spot_dt = ET.localize(datetime(
                             today.year, today.month, today.day,
@@ -255,7 +329,8 @@ def restore_state(s3, today: date, us: "UnderlyingSession | None" = None) -> Non
 
         log.info(
             f"restore_state: {us.symbol} loaded {latest_key.split('/')[-1]} -- "
-            f"vol_keys={len(us.prev_vol)}  spot={us.last_spot[0]}  prices={len(_last_prices)}"
+            f"vol_keys={len(us.prev_vol)}  spot={us.last_spot[0]}  prices={len(_last_prices)}  "
+            f"listed={len(listed)}"
         )
     except Exception as e:
         log.warning(f"restore_state failed for {us.symbol} (non-fatal): {e}")
@@ -427,6 +502,10 @@ __all__ = [
     "UnderlyingSession",
     "QQQ_SESSION",
     "UNDERLYING_SESSIONS",
+    "LIST_PAGE_LIMIT",
+    "_list_prefix",
+    "_snapshot_order",
+    "_latest_snapshot_key",
     "restore_state",
     "_vwap_state_key",
     "_restore_vwap_state",
