@@ -1,50 +1,69 @@
 # Proposed selector change for #225 G3a (Brian, 2026-11-11).
 #
-# Applies at 280f4035 on brian/225-deployment-boundaries. It adds the
-# asset inputs G1 names to the workflows that build and test them. It
-# does not touch any backend/** path, add a second promotion lane, or
-# change provider topology; splitting the workflows is Nova's step after
-# the switch and needs P2/P3 first.
+# Applies at e41745d7 on brian/225-deployment-boundaries, and is rebound on the
+# packaging rules in Musef's 0434bf1b tree (branch musef/225-assets-preview).
+#
+# deploy.yml gains frontend/**, scripts/build-assets.mjs and wrangler.assets.toml:
+# the two packaged gateway files, the packager that assembles artifact bytes, and
+# the applied asset configuration.
+#
+# web-ci.yml gains those three plus scripts/prepare-asset-release.mjs, which
+# stages and verifies a release without producing artifact bytes, so it is
+# tested but is not a promotion trigger.
+#
+# Nothing here touches a backend/** path, adds a second promotion lane, or
+# changes provider topology: splitting the two workflows is Nova's step after
+# P2/P3. It also does not sequence build -> verify -> deploy of a staged
+# payload/, which is G3b work.
+#
+# Without this patch, tests/test_changed_paths.py on Musef's tree fails the
+# coverage guard on the three asset inputs that exist there and that neither
+# workflow selects.
 #
 # Apply with: git apply patches/brian-225/deploy-selectors.patch
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
-index 9b2fecdd..14e6a309 100644
+index 9b2fecdd..d8ed41b8 100644
 --- a/.github/workflows/deploy.yml
 +++ b/.github/workflows/deploy.yml
-@@ -5,8 +5,10 @@ on:
+@@ -5,8 +5,11 @@ on:
      branches: [master]
      paths:
        - "site/**"
 +      - "frontend/**"
        - "backend/**"
        - "wrangler.toml"
++      - "wrangler.assets.toml"
 +      - "scripts/build-assets.mjs"
        - "scripts/stamp-build.mjs"
        - "tests/build_stamp.test.mjs"
        - ".github/workflows/deploy.yml"
 diff --git a/.github/workflows/web-ci.yml b/.github/workflows/web-ci.yml
-index 08f55804..a53303e7 100644
+index 08f55804..63647f35 100644
 --- a/.github/workflows/web-ci.yml
 +++ b/.github/workflows/web-ci.yml
-@@ -9,8 +9,10 @@ on:
+@@ -9,8 +9,12 @@ on:
      paths:
        - "backend/**"
        - "site/**"
 +      - "frontend/**"
        - "tests/**"
        - "wrangler.toml"
++      - "wrangler.assets.toml"
 +      - "scripts/build-assets.mjs"
++      - "scripts/prepare-asset-release.mjs"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"
-@@ -20,8 +22,10 @@ on:
+@@ -20,8 +24,12 @@ on:
      paths:
        - "backend/**"
        - "site/**"
 +      - "frontend/**"
        - "tests/**"
        - "wrangler.toml"
++      - "wrangler.assets.toml"
 +      - "scripts/build-assets.mjs"
++      - "scripts/prepare-asset-release.mjs"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"

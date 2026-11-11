@@ -397,6 +397,7 @@ class AssetApiSplit(unittest.TestCase):
             "frontend/worker.mjs",
             "frontend/preview-policy.mjs",
             "scripts/build-assets.mjs",
+            "scripts/prepare-asset-release.mjs",
             "scripts/stamp-build.mjs",
         ):
             with self.subTest(path=path):
@@ -418,7 +419,13 @@ class AssetApiSplit(unittest.TestCase):
                 self.assertFalse(view.prose)
 
     def test_shared_configuration_is_a_reviewed_mixed_change(self):
-        for path in ("wrangler.toml", "wrangler.recovery.toml", ".github/workflows/deploy.yml"):
+        for path in (
+            "wrangler.toml",
+            "wrangler.recovery.toml",
+            "wrangler.assets.toml",
+            "wrangler.api.toml",
+            ".github/workflows/deploy.yml",
+        ):
             with self.subTest(path=path):
                 view = self.view([path])
                 self.assertTrue(view.shared)
@@ -455,7 +462,10 @@ class AssetApiSplit(unittest.TestCase):
             "site/index.html": True,
             "frontend/worker.mjs": True,
             "scripts/build-assets.mjs": True,
+            "scripts/prepare-asset-release.mjs": True,
+            "scripts/stamp-build.mjs": True,
             "wrangler.toml": True,
+            "wrangler.assets.toml": True,
             "backend/index.js": False,
             "tests/worker_logic.test.js": False,
             "docs/README.md": False,
@@ -482,6 +492,86 @@ class AssetApiSplit(unittest.TestCase):
     def test_no_browser_file_addresses_the_api_absolutely(self):
         problems = cp.absolute_api_route_problems(REPO)
         self.assertEqual(problems, [], msg="\n".join(problems))
+
+
+class PackagingContract(unittest.TestCase):
+    """The classifier against the packager that actually runs.
+
+    `scripts/build-assets.mjs` copies `site/` through an extension allowlist and
+    then a literal pair of gateway files. Those rules, not a `site/**` sweep,
+    decide what ships, so the classifier reads them from the script and this
+    suite fails if the declared copy drifts from it.
+    """
+
+    def test_declared_copy_matches_the_packaging_script(self):
+        problems = cp.packaging_contract_problems(REPO)
+        self.assertEqual(problems, [], msg="\n".join(problems))
+
+    def test_contract_source_matches_what_is_in_the_tree(self):
+        source = cp.packaging_contract(str(REPO))["source"]
+        script_present = (REPO / "scripts" / "build-assets.mjs").is_file()
+        self.assertEqual(source, "script" if script_present else "declared")
+
+    def test_site_payload_is_an_extension_allowlist(self):
+        packaged = {
+            "site/index.html": True,
+            "site/js/auth.js": True,
+            "site/shared/heatmap.js": True,
+            "site/margin-call.png": True,
+            "site/robots.txt": True,
+            "site/notes.md": False,
+            "site/tool.mjs": False,
+            "site/archive.zip": False,
+        }
+        for path, expected in packaged.items():
+            with self.subTest(path=path):
+                self.assertEqual(cp.artifact_view([path], REPO).payload, expected)
+
+    def test_markdown_inside_an_asset_tree_is_prose(self):
+        for path in ("site/DEPLOYMENTS.md", "site/plans/2026-07-vwap-rvol.md", "frontend/README.md"):
+            with self.subTest(path=path):
+                view = cp.artifact_view([path], REPO)
+                self.assertTrue(view.prose)
+                self.assertFalse(view.payload)
+
+    def test_only_the_two_named_gateway_files_are_packaged(self):
+        for path in cp.PACKAGED_GATEWAY_FILES:
+            with self.subTest(path=path):
+                self.assertTrue(cp.artifact_view([path], REPO).payload)
+        self.assertFalse(cp.artifact_view(["frontend/extra.mjs"], REPO).payload)
+        self.assertFalse(cp.artifact_view(["frontend/preview-notes.txt"], REPO).payload)
+
+    def test_migrations_are_contract_inputs_not_payload(self):
+        for name in cp.PACKAGED_SCHEMA_FILES:
+            path = f"{cp.PACKAGED_SCHEMA_DIR}/{name}"
+            with self.subTest(path=path):
+                view = cp.artifact_view([path], REPO)
+                self.assertTrue(view.contract)
+                self.assertFalse(view.payload)
+                self.assertTrue(view.api)
+                self.assertTrue(view.needs_asset_rebuild)
+
+    def test_tooling_belongs_to_the_asset_release_without_shipping_bytes(self):
+        for path in cp.ASSET_TOOLING_INPUTS:
+            with self.subTest(path=path):
+                view = cp.artifact_view([path], REPO)
+                self.assertTrue(view.tooling)
+                self.assertFalse(view.payload)
+                self.assertTrue(view.asset)
+                self.assertTrue(view.needs_asset_rebuild)
+
+    def test_an_unparsable_packager_fails_loudly(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            (root / "scripts" / "build-assets.mjs").write_text(
+                "// rewritten without the literals this module reads\nconst x = 1;\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(cp.UnparsablePackaging):
+                cp.packaging_contract(str(root))
 
 
 class DocumentAgreement(unittest.TestCase):

@@ -65,18 +65,38 @@ PROMOTING_LANES = ("cloudflare_deploy",)
 # The asset/API split (G1)
 # --------------------------------------------------------------------------
 #
-# Musef's G1 design, docs/ASSET_BOUNDARY.md in worktree
-# lov-musef-225-assets-20261111 (branch musef/225-assets-preview, base
-# 90cdc56, uncommitted at review time), proposes one public origin serving a
-# static asset gateway that forwards reserved API paths to a separately bound
-# API service. What that means for path selection is small and testable even
-# though the topology is not yet applied.
+# Musef's G1 design and G2 implementation (`0434bf1b`, branch
+# `musef/225-assets-preview`) propose one public origin serving a static asset
+# gateway that forwards reserved API paths to a separately bound API service.
+# What survives as path selection is decided by `scripts/build-assets.mjs`,
+# which is an extension allowlist plus a hard-coded pair of gateway files, not
+# a `site/**`/`frontend/**` sweep. The declared lists below are a dated copy of
+# that script; `packaging_contract_problems` fails if the two diverge, so a
+# change to the script is a deliberate update here rather than silent drift.
 
-#: Paths that become part of the packaged static asset artifact.
-ASSET_INPUTS = (
-    "site/**",
-    "frontend/**",
+#: Extensions the packager copies out of `site/`, in its own order.
+PACKAGED_SITE_EXTENSIONS = (
+    ".html", ".js", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".ico",
+    ".woff", ".woff2", ".txt", ".webp",
+)
+
+#: The gateway is a fixed pair of files, not a directory sweep. A new `.mjs`
+#: under `frontend/` is not in the artifact until the script names it.
+PACKAGED_GATEWAY_FILES = ("frontend/worker.mjs", "frontend/preview-policy.mjs")
+
+#: Migrations are read for their hashes into `release.json`, so their content
+#: changes the artifact's embedded contract without ever being packaged. The
+#: script names bare filenames and resolves them against a directory; both are
+#: read from it, because a mismatch here would silently detach the classifier
+#: from the files it claims to track.
+PACKAGED_SCHEMA_DIR = "backend/migrations"
+PACKAGED_SCHEMA_FILES = ("0001_accounts_sessions.sql", "0002_cutover_support.sql")
+
+#: Scripts that assemble or verify the artifact. A change to one does not change
+#: the payload for unchanged source, but it does change how the payload is made.
+ASSET_TOOLING_INPUTS = (
     "scripts/build-assets.mjs",
+    "scripts/prepare-asset-release.mjs",
     "scripts/stamp-build.mjs",
 )
 
@@ -92,6 +112,17 @@ SHARED_CONFIG_INPUTS = (
     "wrangler.recovery.toml",
     ".github/workflows/**",
 )
+
+#: Applied per-artifact configuration. Named as the proposals are applied, not as
+#: they sit in `patches/musef-225/`: proposal material is not a release input.
+APPLIED_ASSET_CONFIG = ("wrangler.assets.toml",)
+APPLIED_API_CONFIG = ("wrangler.api.toml",)
+
+#: Everything the asset release is built from, for the "is it tested" guard.
+ASSET_INPUTS = (
+    "site/**",
+    "frontend/**",
+) + ASSET_TOOLING_INPUTS
 
 #: Trees where a Markdown file is prose rather than shipped content. The design
 #: requires this be classified explicitly "rather than assume glob exclusion":
@@ -111,14 +142,111 @@ PREVIEW_CONTRACT = {
 }
 
 
+class UnparsablePackaging(ValueError):
+    """The packaging script changed shape and must be re-read, not guessed."""
+
+
+def _literal_list(text: str, pattern: str, name: str) -> tuple[str, ...]:
+    match = re.search(pattern, text)
+    if match is None:
+        raise UnparsablePackaging(f"{name}: no literal list found to read")
+    items = tuple(re.findall(r"'([^']+)'|\"([^\"]+)\"", match.group(1)))
+    values = tuple(a or b for a, b in items)
+    if not values:
+        raise UnparsablePackaging(f"{name}: literal list is empty")
+    return values
+
+
+@lru_cache(maxsize=8)
+def packaging_contract(repo_root: str) -> dict:
+    """The packaging inputs, read from `scripts/build-assets.mjs` when present.
+
+    Absent, the declared copy is returned, so this module still classifies paths
+    on a tree that predates the gateway.
+    """
+    root = Path(repo_root)
+    script = root / "scripts" / "build-assets.mjs"
+    declared = {
+        "source": "declared",
+        "extensions": PACKAGED_SITE_EXTENSIONS,
+        "gateway": PACKAGED_GATEWAY_FILES,
+        "schema": PACKAGED_SCHEMA_FILES,
+        "schema_dir": PACKAGED_SCHEMA_DIR,
+    }
+    if not script.is_file():
+        return declared
+    text = script.read_text(encoding="utf-8")
+    schema_match = re.search(r"const schema = \[([^\]]*)\]", text)
+    if schema_match is None:
+        raise UnparsablePackaging("schema file list: no literal list found to read")
+    # The directory is resolved inside the schema mapping that follows that
+    # literal; searching the whole file would find the unrelated `site` read.
+    tail = text[schema_match.end(): schema_match.end() + 400]
+    directory = re.search(r"resolve\(root,\s*'([^']+)',\s*name\)", tail)
+    if directory is None:
+        raise UnparsablePackaging("schema directory: no literal resolved against name")
+    return {
+        "source": "script",
+        "extensions": _literal_list(
+            text, r"ASSET_EXTENSIONS\s*=\s*new Set\(\[([^\]]*)\]\)", "ASSET_EXTENSIONS"
+        ),
+        "gateway": _literal_list(
+            text, r"for \(const name of \[([^\]]*)\]\)", "gateway file list"
+        ),
+        "schema": tuple(re.findall(r"'([^']+)'", schema_match.group(1))),
+        "schema_dir": directory.group(1),
+    }
+
+
+def packaging_contract_problems(repo_root) -> list[str]:
+    """Where the script and the declared copy disagree."""
+    contract = packaging_contract(str(Path(repo_root).resolve()))
+    if contract["source"] != "script":
+        return []
+    problems: list[str] = []
+    for name, declared in (
+        ("extensions", PACKAGED_SITE_EXTENSIONS),
+        ("gateway", PACKAGED_GATEWAY_FILES),
+        ("schema", PACKAGED_SCHEMA_FILES),
+    ):
+        parsed = contract[name]
+        if tuple(sorted(parsed)) != tuple(sorted(declared)):
+            problems.append(
+                f"{name}: script has {list(parsed)}, declared copy has {list(declared)}"
+            )
+    if contract["schema_dir"] != PACKAGED_SCHEMA_DIR:
+        problems.append(
+            f"schema_dir: script resolves against {contract['schema_dir']!r}, "
+            f"declared copy uses {PACKAGED_SCHEMA_DIR!r}"
+        )
+    return problems
+
+
 @dataclass(frozen=True)
 class ArtifactView:
     """Which release artifact a change belongs to."""
 
-    asset: bool
+    payload: bool
+    tooling: bool
+    contract: bool
     api: bool
     shared: bool
     prose: bool
+
+    @property
+    def asset(self) -> bool:
+        """Belongs to the asset release: packaged bytes or the tool that makes them."""
+        return self.payload or self.tooling
+
+    @property
+    def needs_asset_rebuild(self) -> bool:
+        """A new artifact would differ from the last one.
+
+        True for a payload or packaging change, and also for a migration
+        change: the artifact embeds the migrations' hashes, so its recorded
+        contract goes stale even though no migration is ever packaged.
+        """
+        return self.payload or self.tooling or self.contract
 
     @property
     def mixed(self) -> bool:
@@ -131,16 +259,10 @@ class ArtifactView:
         return self.shared or self.mixed
 
     def describe(self) -> str:
-        parts = [
-            name
-            for name, hit in (
-                ("asset", self.asset),
-                ("api", self.api),
-                ("shared", self.shared),
-                ("prose", self.prose),
-            )
-            if hit
-        ]
+        parts = []
+        for name in ("payload", "tooling", "contract", "api", "shared", "prose"):
+            if getattr(self, name):
+                parts.append(name)
         return "+".join(parts) if parts else "none"
 
 
@@ -149,16 +271,40 @@ def is_asset_prose(path: str) -> bool:
     return path.startswith(ASSET_PROSE_ROOTS) and path.endswith(PROSE_SUFFIXES)
 
 
-def artifact_view(paths) -> ArtifactView:
-    """Classify a change set as asset, API, shared configuration or prose."""
+def artifact_view(paths, repo_root=None) -> ArtifactView:
+    """Classify a change set against the real packaging rules.
+
+    ``payload`` is what the script would copy, ``tooling`` is what the script is,
+    and ``contract`` is the migrations whose hashes the artifact records. The
+    three are separate because a payload change ships bytes, a tooling change
+    ships a different build of the same bytes, and a migration change ships
+    nothing to the asset artifact while still invalidating its recorded contract.
+    """
+    root = str(Path(repo_root or Path(__file__).resolve().parents[1]).resolve())
+    contract = packaging_contract(root)
+    extensions = tuple(contract["extensions"])
+    gateway = tuple(contract["gateway"])
+    schema = tuple(f"{contract['schema_dir']}/{name}" for name in contract["schema"])
     normalised = [_normalise(p) for p in paths]
-    prose = any(is_asset_prose(p) for p in normalised)
-    asset = any(
-        any_match(ASSET_INPUTS, p) and not is_asset_prose(p) for p in normalised
+
+    def packaged(path: str) -> bool:
+        if path in gateway:
+            return True
+        if not path.startswith("site/"):
+            return False
+        return Path(path).suffix.lower() in extensions
+
+    return ArtifactView(
+        payload=any(packaged(p) for p in normalised),
+        tooling=any(p in ASSET_TOOLING_INPUTS for p in normalised),
+        contract=any(p in schema for p in normalised),
+        api=any(any_match(API_INPUTS, p) for p in normalised),
+        shared=any(
+            any_match(SHARED_CONFIG_INPUTS + APPLIED_ASSET_CONFIG + APPLIED_API_CONFIG, p)
+            for p in normalised
+        ),
+        prose=any(is_asset_prose(p) for p in normalised),
     )
-    api = any(any_match(API_INPUTS, p) for p in normalised)
-    shared = any(any_match(SHARED_CONFIG_INPUTS, p) for p in normalised)
-    return ArtifactView(asset=asset, api=api, shared=shared, prose=prose)
 
 
 #: The image the three Python producers are built from.
@@ -646,11 +792,17 @@ class Effects:
     def preview_stale(self) -> bool:
         """Whether a preview built from this commit's inputs would be out of date.
 
-        A preview is the asset artifact plus the configuration that builds it,
-        so it must be rebuilt for an asset change or a shared configuration
-        change and for nothing else.
+        Anything that determines the artifact's bytes makes a preview stale:
+        packaged content, the tooling that assembles it, and the configuration
+        that decides how it is served. The API, tests, documents and prose do
+        not, because none of them is part of the preview's payload.
         """
-        return self.artifact.asset or self.artifact.shared
+        return self.artifact.payload or self.artifact.tooling or self.artifact.shared
+
+    @property
+    def needs_asset_rebuild(self) -> bool:
+        """A fresh artifact would differ from the last one."""
+        return self.artifact.needs_asset_rebuild
 
     def _service(self, name: str) -> ProviderService:
         for service in PROVIDER_SERVICES:
@@ -736,7 +888,7 @@ def effects(changed, repo_root=None, triggers: dict | None = None) -> Effects:
         changed=paths,
         lanes=lanes,
         services=services,
-        artifact=artifact_view(paths),
+        artifact=artifact_view(paths, root),
         notes=tuple(notes),
     )
 

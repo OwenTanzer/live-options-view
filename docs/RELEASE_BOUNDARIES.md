@@ -169,33 +169,49 @@ A change that ships the website alone cannot create a collector observation gap.
 A change that promotes a producer during a live session does, and no checklist
 item makes that gap go away.
 
-## The asset/API split (proposed, not applied)
+## The asset/API split (tested against Musef's actual tree)
 
-Musef's G1 design proposes one public origin serving a static asset gateway in
-`frontend/`, which forwards the reserved API paths to a separately bound API
-service while every browser URL and relative `/api` call stays unchanged. None
-of that topology is applied: production still runs the combined Worker, and the
-provider facts it depends on — service binding, name split, trigger ownership,
-disposable resources, D1 readback — are unverified under Nova's hold. What the
-design does settle for this record is which artifact a change belongs to, and
-that is now classified and tested.
+Musef's G1/G2 tree (`0434bf1b`, branch `musef/225-assets-preview`) puts a static
+asset gateway in `frontend/` that forwards the reserved API paths to a
+separately bound API service, with every browser URL and relative `/api` call
+left alone. None of the topology is applied: production still runs the combined
+Worker, and the provider facts it needs — service binding, name split, trigger
+ownership, disposable resources, D1 readback — remain unverified under Nova's
+hold. What the tree does settle is which artifact a change belongs to, and the
+packager decides that, not a directory sweep.
 
-| Change | Asset artifact | API artifact | Shared configuration |
-|---|---|---|---|
-| `site/**` except Markdown | yes | no | no |
-| `frontend/**` except Markdown | yes | no | no |
-| `scripts/build-assets.mjs`, `scripts/stamp-build.mjs` | yes | no | no |
-| `backend/**` | no | yes | no |
-| `wrangler.toml`, `wrangler.recovery.toml`, `.github/workflows/**` | no | no | yes |
-| Markdown under `site/` or `frontend/` | prose, excluded | no | no |
+`scripts/build-assets.mjs` copies `site/` through a thirteen-extension allowlist
+(`.html .js .css .json .svg .png .jpg .jpeg .ico .woff .woff2 .txt .webp`) and
+then exactly two gateway files, `frontend/worker.mjs` and
+`frontend/preview-policy.mjs`. It also reads the two migrations under
+`backend/migrations/` for the hashes it embeds in `release.json`. Those three
+rules, read out of the script itself, are what the classifier now applies:
 
-**Prose is classified, not assumed.** `site/DEPLOYMENTS.md` is a document that
-lives inside the asset tree, and the design asks for that to be explicit rather
-than a side effect of a glob. It is therefore its own class: it is not a shipped
-asset, so it cannot change the artifact's bytes, and it is not an API change
-either. Today it still fires the combined workflow, which is the coupling the
-split removes; after the split it rebuilds static bytes and cannot reach the
-API.
+| Change | Payload | Tooling | Contract | API | Shared |
+|---|---|---|---|---|---|
+| `site/**` with an allowed extension | yes | no | no | no | no |
+| Markdown under `site/` or `frontend/` | prose | no | no | no | no |
+| `frontend/worker.mjs`, `frontend/preview-policy.mjs` | yes | no | no | no | no |
+| any other file under `frontend/` | no | no | no | no | no |
+| `scripts/build-assets.mjs`, `prepare-asset-release.mjs`, `stamp-build.mjs` | no | yes | no | no | no |
+| `backend/migrations/0001…`, `0002…` | no | no | yes | yes | no |
+| `backend/**` otherwise | no | no | no | yes | no |
+| `wrangler.assets.toml`, `wrangler.api.toml`, `wrangler.toml`, recovery, workflows | no | no | no | no | yes |
+
+Measured on that tree: 710 tracked files, 31 artifact entries, and no path
+classified as payload that `release.json` does not list, or the reverse. Eighteen
+Markdown files sit inside `site/` today, so the prose class is not hypothetical.
+A migration change is both an API change and a rebuild trigger: it ships nothing
+to the artifact, but the artifact's recorded schema hashes go stale, which is why
+`needs_asset_rebuild` is separate from `payload`.
+
+**Prose is classified, not assumed.** `site/DEPLOYMENTS.md` and the seventeen
+plan and operation notes beside it are documents that live inside the asset
+tree. The design asks for that to be explicit rather than a side effect of a
+glob, so it is its own class: it cannot change the artifact's bytes and it is
+not an API change. Today it still fires the combined workflow, which is the
+coupling the split removes; after the split it rebuilds static bytes and cannot
+reach the API.
 
 **A commit spanning both artifacts is a reviewed mixed change.** `backend/` and
 `site/` in one commit belongs to both artifacts and to neither workflow alone,
@@ -203,30 +219,48 @@ and so does any edit to the shared configuration that decides how either is
 built or promoted. The classifier marks those rather than letting one lane carry
 the other silently.
 
-**Preview is stale on asset and configuration changes only.** A preview built
-from a commit's inputs is out of date when an asset input or the shared
-configuration changes, and not when the API, a test or a document changes. The
-identity the design hands to Steve is `ENVIRONMENT=preview` with
-`ISOLATION=disposable`, `/r2-proxy/` denied, and the API reached through local
-handlers over disposable D1 and memory stores. Those are runtime properties, not
-path selection: they belong to the asset and preview suites, and this record
-only names them so the two do not drift apart.
+**Preview is stale on anything that determines its bytes.** A preview built from
+a commit's inputs is out of date when packaged content, the tooling that
+assembles it, or the configuration that serves it changes — and not when the
+API, a test, a document or prose changes. The identity the design hands to Steve
+is `ENVIRONMENT=preview` with `ISOLATION=disposable`, `/r2-proxy/` denied, and
+the API reached through local handlers over disposable D1 and memory stores.
+Those are runtime properties, not path selection: they belong to the asset and
+preview suites, and this record only names them so the two do not drift apart.
 
-**Proposed selectors live in a patch.** `patches/brian-225/deploy-selectors.patch`
-adds `frontend/**` and `scripts/build-assets.mjs` to `deploy.yml` and
-`web-ci.yml`, so an asset change is built and tested. It touches no `backend/**`
-path, adds no second promotion lane, and changes no provider topology: splitting
-the two workflows is Nova's step after the switch, and it needs P2 and P3 first.
-The suite enforces the moment it matters — if a file appears under an asset
-input that `web-ci` does not select, the coverage test fails, which is why the
-patch stops being optional exactly when the gateway lands.
+**Proposed selectors live in a patch.**
+`patches/brian-225/deploy-selectors.patch` adds `frontend/**`,
+`scripts/build-assets.mjs` and `wrangler.assets.toml` to `deploy.yml`, and those
+three plus `scripts/prepare-asset-release.mjs` to `web-ci.yml`. The split is
+deliberate: the packager assembles the artifact, so a change to it is a
+promotion candidate, while `prepare-asset-release.mjs` only stages and verifies
+a release it does not produce, so it is tested and not deployed. The patch
+touches no `backend/**` path, adds no second promotion lane, and changes no
+provider topology; splitting the two workflows is Nova's step after the switch
+and needs P2 and P3 first.
+
+The suite enforces the moment it matters. Run against Musef's tree without the
+patch, the coverage guard fails on `frontend/worker.mjs`,
+`scripts/build-assets.mjs` and `scripts/prepare-asset-release.mjs` — the three
+inputs that exist there and that neither workflow selected. With the patch
+applied the same suite passes; both runs are in the return.
+
+**The deployed asset config points at a staged layout.**
+`patches/musef-225/wrangler.assets.toml.proposed` names
+`main = "payload/frontend/worker.mjs"` and `directory = "payload/site"`, because
+`prepare-asset-release.mjs` copies a verified artifact into `payload/` before
+`wrangler deploy` runs. So the asset workflow cannot simply deploy the checkout:
+it has to build the artifact, verify it, then deploy the staging directory. That
+sequencing is Nova's G3b, and this patch deliberately does not attempt it — a
+selector change that assumed a staging convention would break the first time the
+staging layout moved.
 
 **The gateway may not import the API.** A static gateway that reaches into
 `backend/` drags operational code into the asset bundle whatever the path
 filters say, so the suite scans `frontend/` for any import whose specifier names
 `backend/` and fails on one. On the base revision there is no `frontend/` tree
-yet, so the check is vacuous until the design's files arrive; it becomes real
-the day they do.
+yet, so the check is vacuous until the design's files arrive; against the
+`0434bf1b` tree it is live and clean.
 
 **The browser must not address the API by absolute URL.** The design keeps every
 browser URL and relative `/api` call unchanged, and Steve's preview contract
