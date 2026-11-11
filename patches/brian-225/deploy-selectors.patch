@@ -1,24 +1,27 @@
 # Proposed selector change for #225 G3a (Brian, 2026-11-11).
 #
-# Applies at e41745d7 on brian/225-deployment-boundaries, and is rebound on the
-# packaging rules in Musef's 0434bf1b tree (branch musef/225-assets-preview).
+# Applies at 16a4494d on brian/225-deployment-boundaries, and is rebound on the
+# packaging and staging rules in Musef's bff49eed tree (origin/musef/225-assets-preview).
 #
 # deploy.yml gains frontend/**, scripts/build-assets.mjs and wrangler.assets.toml:
 # the two packaged gateway files, the packager that assembles artifact bytes, and
-# the applied asset configuration.
+# the applied asset configuration that decides how they are served.
 #
-# web-ci.yml gains those three plus scripts/prepare-asset-release.mjs, which
-# stages and verifies a release without producing artifact bytes, so it is
-# tested but is not a promotion trigger.
+# web-ci.yml gains frontend/**, wrangler.assets.toml, wrangler.api.toml, the
+# labelled fallback template patches/musef-225/wrangler.assets.toml.proposed, and
+# the three scripts build-assets, prepare-asset-release and preview-local. Those
+# are inputs to the artifact, to the staged plan or to the preview evidence; none
+# of them is a promotion trigger except the packager and the applied asset config
+# listed above.
+#
+# This matches Musef's patches/musef-225/web-ci-only.patch on the overlapping
+# filter lines, so Nova can consolidate the two hunks without choosing between
+# them. The deploy-side material here is separate and not part of that patch.
 #
 # Nothing here touches a backend/** path, adds a second promotion lane, or
 # changes provider topology: splitting the two workflows is Nova's step after
 # P2/P3. It also does not sequence build -> verify -> deploy of a staged
 # payload/, which is G3b work.
-#
-# Without this patch, tests/test_changed_paths.py on Musef's tree fails the
-# coverage guard on the three asset inputs that exist there and that neither
-# workflow selects.
 #
 # Apply with: git apply patches/brian-225/deploy-selectors.patch
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
@@ -38,10 +41,10 @@ index 9b2fecdd..d8ed41b8 100644
        - "tests/build_stamp.test.mjs"
        - ".github/workflows/deploy.yml"
 diff --git a/.github/workflows/web-ci.yml b/.github/workflows/web-ci.yml
-index 08f55804..63647f35 100644
+index 08f55804..f469cf58 100644
 --- a/.github/workflows/web-ci.yml
 +++ b/.github/workflows/web-ci.yml
-@@ -9,8 +9,12 @@ on:
+@@ -9,8 +9,15 @@ on:
      paths:
        - "backend/**"
        - "site/**"
@@ -49,12 +52,15 @@ index 08f55804..63647f35 100644
        - "tests/**"
        - "wrangler.toml"
 +      - "wrangler.assets.toml"
++      - "wrangler.api.toml"
++      - "patches/musef-225/wrangler.assets.toml.proposed"
 +      - "scripts/build-assets.mjs"
 +      - "scripts/prepare-asset-release.mjs"
++      - "scripts/preview-local.mjs"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"
-@@ -20,8 +24,12 @@ on:
+@@ -20,8 +27,15 @@ on:
      paths:
        - "backend/**"
        - "site/**"
@@ -62,8 +68,11 @@ index 08f55804..63647f35 100644
        - "tests/**"
        - "wrangler.toml"
 +      - "wrangler.assets.toml"
++      - "wrangler.api.toml"
++      - "patches/musef-225/wrangler.assets.toml.proposed"
 +      - "scripts/build-assets.mjs"
 +      - "scripts/prepare-asset-release.mjs"
++      - "scripts/preview-local.mjs"
        - "scripts/stamp-build.mjs"
        - "scripts/generate-quote-instruments.mjs"
        - ".github/workflows/deploy.yml"

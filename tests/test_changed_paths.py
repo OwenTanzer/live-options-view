@@ -205,7 +205,7 @@ class PromotionOrdering(unittest.TestCase):
     """#225's CI-ordering clause, as a check rather than a reading."""
 
     def test_everything_that_can_promote_is_also_tested(self):
-        problems = cp.promotion_coverage_problems(TRIGGERS)
+        problems = cp.promotion_coverage_problems(REPO, TRIGGERS)
         self.assertEqual(problems, [], msg="\n".join(problems))
 
     def test_promotion_lane_has_no_serialisation_yet(self):
@@ -481,9 +481,75 @@ class AssetApiSplit(unittest.TestCase):
         self.assertEqual(contract["ISOLATION"], "disposable")
         self.assertIn("/r2-proxy/", contract["denied_routes"])
 
-    def test_every_existing_asset_input_is_also_tested(self):
-        problems = cp.asset_input_coverage_problems(REPO, TRIGGERS)
+    def test_every_existing_input_is_also_tested(self):
+        problems = cp.input_coverage_problems(REPO, TRIGGERS)
         self.assertEqual(problems, [], msg="\n".join(problems))
+
+
+class PreviewAcceptance(unittest.TestCase):
+    """Two different kinds of staleness, and the case-sensitivity of the packager."""
+
+    def view(self, changed):
+        return cp.effects(changed, REPO, TRIGGERS)
+
+    def test_real_handler_changes_stale_acceptance_without_becoming_payload(self):
+        for path in ("backend/index.js", "backend/execution.js"):
+            with self.subTest(path=path):
+                result = self.view([path])
+                self.assertTrue(result.artifact.api)
+                self.assertTrue(result.artifact.acceptance)
+                self.assertFalse(result.artifact.payload)
+                self.assertFalse(result.preview_stale, "preview bytes are unchanged")
+                self.assertTrue(result.acceptance_evidence_stale)
+
+    def test_preview_constructor_helpers_and_suites_stale_acceptance(self):
+        for path in (
+            "scripts/preview-local.mjs",
+            "frontend/preview-policy.mjs",
+            "tests/helpers/test_env.mjs",
+            "tests/preview_isolation.test.mjs",
+            "tests/preview_storage_boundary.test.mjs",
+        ):
+            with self.subTest(path=path):
+                result = self.view([path])
+                self.assertTrue(result.artifact.acceptance, f"{path} gates acceptance evidence")
+                self.assertTrue(result.acceptance_evidence_stale)
+
+    def test_asset_and_migration_changes_stale_acceptance_too(self):
+        for path in (
+            "site/index.html",
+            "backend/migrations/0001_accounts_sessions.sql",
+            "wrangler.assets.toml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(self.view([path]).acceptance_evidence_stale)
+
+    def test_unrelated_documents_leave_acceptance_alone(self):
+        for path in ("docs/README.md", "README.md", "site/plans/2026-07-vwap-rvol.md"):
+            with self.subTest(path=path):
+                self.assertFalse(self.view([path]).acceptance_evidence_stale)
+
+    def test_either_selected_config_makes_recorded_config_evidence_stale(self):
+        for path in cp.SELECTED_CONFIG_INPUTS:
+            with self.subTest(path=path):
+                result = self.view([path])
+                self.assertTrue(result.artifact.config, f"{path} can be the staged config")
+                self.assertTrue(result.config_evidence_stale)
+                self.assertTrue(result.artifact.shared, "a config change is reviewed")
+                self.assertFalse(result.artifact.payload)
+
+    def test_a_payload_change_does_not_touch_config_evidence(self):
+        result = self.view(["site/index.html"])
+        self.assertFalse(result.config_evidence_stale)
+        self.assertTrue(result.needs_asset_rebuild)
+
+    def test_extension_matching_is_case_sensitive_like_the_packager(self):
+        self.assertFalse(
+            cp.artifact_view(["site/UPPER.JS"], REPO).payload,
+            "the packager compares extname() case-sensitively, so this file does not ship",
+        )
+        self.assertFalse(cp.artifact_view(["site/index.HTML"], REPO).payload)
+        self.assertTrue(cp.artifact_view(["site/index.html"], REPO).payload)
 
     def test_the_gateway_never_imports_the_api(self):
         problems = cp.gateway_import_problems(REPO)

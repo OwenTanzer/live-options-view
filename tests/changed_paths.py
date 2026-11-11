@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -100,6 +101,29 @@ ASSET_TOOLING_INPUTS = (
     "scripts/stamp-build.mjs",
 )
 
+#: The two files that can be selected as the staged asset configuration. The
+#: applied root file wins; the proposal template is the labelled fallback while
+#: Nova has not integrated it. Either one is what a staged plan hashes, so a
+#: change to either makes previously recorded config evidence stale.
+SELECTED_CONFIG_INPUTS = (
+    "wrangler.assets.toml",
+    "patches/musef-225/wrangler.assets.toml.proposed",
+)
+
+#: Inputs the preview and A1 acceptance evidence actually depend on. The preview
+#: composes the real API handlers through a constructor and a shared helper, and
+#: the executed suites are evidence only for the revision they ran against. None
+#: of this becomes asset payload: `backend/**` stays API, and a helper or suite
+#: change stales the evidence without shipping anything.
+PREVIEW_ACCEPTANCE_INPUTS = (
+    "backend/**",
+    "scripts/preview-local.mjs",
+    "frontend/preview-policy.mjs",
+    "tests/helpers/**",
+    "tests/preview_*.mjs",
+    "tests/fixtures/**",
+)
+
 #: Paths that belong to the operational API service and never to the artifact.
 #: The design says so twice: "Asset artifact excludes backend/producers", and
 #: "`backend/**` is API-only; no asset release imports it".
@@ -113,8 +137,9 @@ SHARED_CONFIG_INPUTS = (
     ".github/workflows/**",
 )
 
-#: Applied per-artifact configuration. Named as the proposals are applied, not as
-#: they sit in `patches/musef-225/`: proposal material is not a release input.
+#: Applied per-artifact configuration, plus the labelled fallback the stager uses
+#: while Nova has not integrated it. The proposal is a release input only in that
+#: fallback role, which is why it is selected-configuration rather than payload.
 APPLIED_ASSET_CONFIG = ("wrangler.assets.toml",)
 APPLIED_API_CONFIG = ("wrangler.api.toml",)
 
@@ -123,6 +148,9 @@ ASSET_INPUTS = (
     "site/**",
     "frontend/**",
 ) + ASSET_TOOLING_INPUTS
+
+#: Everything that must be exercised by the test workflow when it changes.
+COVERAGE_INPUTS = ASSET_INPUTS + SELECTED_CONFIG_INPUTS + PREVIEW_ACCEPTANCE_INPUTS
 
 #: Trees where a Markdown file is prose rather than shipped content. The design
 #: requires this be classified explicitly "rather than assume glob exclusion":
@@ -229,6 +257,8 @@ class ArtifactView:
     payload: bool
     tooling: bool
     contract: bool
+    config: bool
+    acceptance: bool
     api: bool
     shared: bool
     prose: bool
@@ -249,6 +279,34 @@ class ArtifactView:
         return self.payload or self.tooling or self.contract
 
     @property
+    def config_evidence_stale(self) -> bool:
+        """A previously staged plan no longer names the configuration it used.
+
+        The plan records `config_source` and `config_sha256` for whichever file
+        was selected — the applied root config, or the proposal template when no
+        root file exists. Either one changing makes that record a statement
+        about the past, so it has to be restaged; the artifact itself may be
+        unchanged.
+        """
+        return self.config
+
+    @property
+    def acceptance_evidence_stale(self) -> bool:
+        """The preview or A1 evidence must be re-run for this revision.
+
+        Separate from `preview_stale`, which asks whether a built preview would
+        serve different bytes. Evidence also goes stale when the real handlers,
+        the preview constructor, a shared helper or an executed suite changes,
+        and none of those is asset payload.
+        """
+        return self.preview_stale or self.acceptance
+
+    @property
+    def preview_stale(self) -> bool:
+        """A built preview would serve different bytes for this revision."""
+        return self.payload or self.tooling or self.shared
+
+    @property
     def mixed(self) -> bool:
         """A commit that belongs to both artifacts at once."""
         return self.asset and self.api
@@ -260,7 +318,16 @@ class ArtifactView:
 
     def describe(self) -> str:
         parts = []
-        for name in ("payload", "tooling", "contract", "api", "shared", "prose"):
+        for name in (
+            "payload",
+            "tooling",
+            "contract",
+            "config",
+            "acceptance",
+            "api",
+            "shared",
+            "prose",
+        ):
             if getattr(self, name):
                 parts.append(name)
         return "+".join(parts) if parts else "none"
@@ -275,10 +342,10 @@ def artifact_view(paths, repo_root=None) -> ArtifactView:
     """Classify a change set against the real packaging rules.
 
     ``payload`` is what the script would copy, ``tooling`` is what the script is,
-    and ``contract`` is the migrations whose hashes the artifact records. The
-    three are separate because a payload change ships bytes, a tooling change
-    ships a different build of the same bytes, and a migration change ships
-    nothing to the asset artifact while still invalidating its recorded contract.
+    ``contract`` is the migrations whose hashes the artifact records, ``config``
+    is the file a stage would hash as its configuration, and ``acceptance`` is
+    what the preview and A1 evidence were collected against. They are separate
+    because each goes stale for a different reason and only one of them ships.
     """
     root = str(Path(repo_root or Path(__file__).resolve().parents[1]).resolve())
     contract = packaging_contract(root)
@@ -292,15 +359,24 @@ def artifact_view(paths, repo_root=None) -> ArtifactView:
             return True
         if not path.startswith("site/"):
             return False
-        return Path(path).suffix.lower() in extensions
+        # Case-sensitive on purpose: the packager compares extname() against a
+        # lower-case set, so `site/UPPER.JS` is not packaged and must not be
+        # classified as payload here either.
+        return Path(path).suffix in extensions
 
     return ArtifactView(
         payload=any(packaged(p) for p in normalised),
         tooling=any(p in ASSET_TOOLING_INPUTS for p in normalised),
         contract=any(p in schema for p in normalised),
+        config=any(p in SELECTED_CONFIG_INPUTS for p in normalised),
+        acceptance=any(any_match(PREVIEW_ACCEPTANCE_INPUTS, p) for p in normalised),
         api=any(any_match(API_INPUTS, p) for p in normalised),
         shared=any(
-            any_match(SHARED_CONFIG_INPUTS + APPLIED_ASSET_CONFIG + APPLIED_API_CONFIG, p)
+            any_match(
+                SHARED_CONFIG_INPUTS + APPLIED_ASSET_CONFIG + APPLIED_API_CONFIG
+                + SELECTED_CONFIG_INPUTS,
+                p,
+            )
             for p in normalised
         ),
         prose=any(is_asset_prose(p) for p in normalised),
@@ -797,7 +873,22 @@ class Effects:
         that decides how it is served. The API, tests, documents and prose do
         not, because none of them is part of the preview's payload.
         """
-        return self.artifact.payload or self.artifact.tooling or self.artifact.shared
+        return self.artifact.preview_stale
+
+    @property
+    def acceptance_evidence_stale(self) -> bool:
+        """Whether preview and A1 evidence has to be re-run for this revision.
+
+        A superset of preview staleness: the real handlers, the preview
+        constructor, a shared helper or an executed suite also invalidate the
+        evidence, without any of them becoming asset payload.
+        """
+        return self.artifact.acceptance_evidence_stale
+
+    @property
+    def config_evidence_stale(self) -> bool:
+        """Whether a staged plan's recorded configuration has been superseded."""
+        return self.artifact.config_evidence_stale
 
     @property
     def needs_asset_rebuild(self) -> bool:
@@ -906,14 +997,64 @@ def _normalise(path) -> str:
 # --------------------------------------------------------------------------
 
 
-def promotion_coverage_problems(triggers: dict) -> list[str]:
-    """Every path that can promote must also be selected by the test workflow.
+def tracked_files(repo_root, *roots) -> tuple[str, ...]:
+    """Repository-relative paths tracked by git under the given roots.
+
+    Tracked, not present: the packager copies `git ls-files -- site/`, so an
+    untracked scratch file is not an input to a release and must not make this
+    guard fail. When git is unavailable the walk falls back to every file on
+    disk, which is the stricter reading.
+    """
+    root = Path(repo_root)
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", *roots],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout:
+        return tuple(path for path in result.stdout.split("\0") if path)
+    found: list[str] = []
+    for base in roots:
+        start = root / base
+        if start.is_file():
+            found.append(base)
+            continue
+        if not start.is_dir():
+            continue
+        for path in start.rglob("*"):
+            if path.is_file() and "__pycache__" not in path.parts:
+                found.append(path.relative_to(root).as_posix())
+    return tuple(sorted(found))
+
+
+def _pattern_candidates(repo_root, patterns) -> tuple[str, ...]:
+    """Files a pattern list could select: tracked subtrees plus exact paths.
+
+    Exact patterns such as `wrangler.assets.toml` are not under a directory
+    root, so they would be missed by a subtree walk alone — which is precisely
+    how a narrowed filter for a single file slips through a sample check.
+    """
+    root = Path(repo_root)
+    trees = sorted({pattern.split("/**")[0] for pattern in patterns if "/**" in pattern})
+    exact = [pattern for pattern in patterns if "/**" not in pattern]
+    found = list(tracked_files(repo_root, *trees)) if trees else []
+    found.extend(path for path in exact if (root / path).is_file())
+    return tuple(sorted(set(found)))
+
+
+def promotion_coverage_problems(repo_root, triggers: dict) -> list[str]:
+    """Every tracked file that can promote must also be selected by the tests.
 
     This is the executable form of #225's "Audit CI ordering as well as
-    filtering". deploy.yml fires straight at production, so anything its filter
-    selects must also be a sample that web-ci's filter selects; otherwise a
-    change can be promoted while the suite for that commit was never asked to
-    run. Each promoted pattern is sampled once.
+    filtering". deploy.yml fires straight at production, so every file its filter
+    selects must also be selected by web-ci's filter; otherwise a change can be
+    promoted while the suite for that commit was never asked to run.
+
+    Exhaustive over real files rather than one synthetic sample per pattern: a
+    narrowed test filter that still matches `site/x` would satisfy a sample check
+    while omitting `site/index.html`, which is exactly the false pass this
+    replaces.
     """
     deploy = _event(triggers, "deploy.yml", "push", "paths")
     if not deploy:
@@ -922,14 +1063,37 @@ def promotion_coverage_problems(triggers: dict) -> list[str]:
     if not tested:
         return ["web-ci.yml has no push path filter"]
 
+    roots = tuple(sorted({pattern.split("/**")[0] for pattern in deploy if "/**" in pattern}))
+    candidates = _pattern_candidates(repo_root, deploy)
     problems: list[str] = []
-    for pattern in deploy:
-        sample = pattern.replace("/**", "/x").replace("**", "x").replace("*", "x")
-        if not any_match(tested, sample):
+    for path in candidates:
+        if any_match(deploy, path) and not any_match(tested, path):
             problems.append(
-                f"promoted path {pattern!r} (sample {sample!r}) is not covered by "
-                "the test workflow"
+                f"promoted file {path!r} is not selected by the test workflow"
             )
+    return problems
+
+
+def input_coverage_problems(repo_root, triggers: dict) -> list[str]:
+    """Every tracked asset, config or acceptance input must be selected by web-ci.
+
+    Exhaustive by construction, and forward-looking: a file added tomorrow under
+    an input root fails this the moment it is committed, without anyone having
+    remembered to add it here. That is the new-path control, not a separate test.
+    """
+    tested = _event(triggers, "web-ci.yml", "push", "paths")
+    if not tested:
+        return ["web-ci.yml has no push path filter"]
+    roots = tuple(
+        sorted({pattern.split("/**")[0] for pattern in COVERAGE_INPUTS if "/**" in pattern})
+    )
+    candidates = _pattern_candidates(repo_root, COVERAGE_INPUTS)
+    problems: list[str] = []
+    for path in candidates:
+        if not any_match(COVERAGE_INPUTS, path):
+            continue
+        if not any_match(tested, path):
+            problems.append(f"input {path!r} exists but web-ci does not select it")
     return problems
 
 
@@ -991,25 +1155,12 @@ def absolute_api_route_problems(repo_root) -> list[str]:
 
 
 def asset_input_coverage_problems(repo_root, triggers: dict) -> list[str]:
-    """Every asset input that exists must also be selected by the test workflow.
+    """Deprecated alias for :func:`input_coverage_problems`.
 
-    Deliberately forward-looking: `frontend/**` and `scripts/build-assets.mjs`
-    do not exist yet, so this passes today and starts failing the moment the
-    gateway lands without its filter. That is the point at which the proposed
-    selector patch stops being optional.
+    Kept because the earlier receipts name it; the guard behind it is now
+    exhaustive over tracked inputs rather than one sample per pattern.
     """
-    root = Path(repo_root)
-    tested = _event(triggers, "web-ci.yml", "push", "paths")
-    problems: list[str] = []
-    for pattern in ASSET_INPUTS:
-        sample = _existing_sample(root, pattern)
-        if sample is None:
-            continue
-        if not any_match(tested, sample):
-            problems.append(
-                f"asset input {pattern!r} exists ({sample}) but web-ci does not select it"
-            )
-    return problems
+    return input_coverage_problems(repo_root, triggers)
 
 
 _IMPORT_SPEC = re.compile(r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]""")

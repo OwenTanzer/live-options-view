@@ -171,7 +171,7 @@ item makes that gap go away.
 
 ## The asset/API split (tested against Musef's actual tree)
 
-Musef's G1/G2 tree (`0434bf1b`, branch `musef/225-assets-preview`) puts a static
+Musef's G1/G2 tree (`bff49eed` on `origin/musef/225-assets-preview`) puts a static
 asset gateway in `frontend/` that forwards the reserved API paths to a
 separately bound API service, with every browser URL and relative `/api` call
 left alone. None of the topology is applied: production still runs the combined
@@ -184,26 +184,51 @@ packager decides that, not a directory sweep.
 (`.html .js .css .json .svg .png .jpg .jpeg .ico .woff .woff2 .txt .webp`) and
 then exactly two gateway files, `frontend/worker.mjs` and
 `frontend/preview-policy.mjs`. It also reads the two migrations under
-`backend/migrations/` for the hashes it embeds in `release.json`. Those three
-rules, read out of the script itself, are what the classifier now applies:
+`backend/migrations/` for the hashes it embeds in `release.json`. Extension
+matching is case-sensitive here because it is case-sensitive there:
+`site/index.HTML` is not packaged, so it is not payload here either. Those rules,
+read out of the script itself, are what the classifier applies:
 
-| Change | Payload | Tooling | Contract | API | Shared |
-|---|---|---|---|---|---|
-| `site/**` with an allowed extension | yes | no | no | no | no |
-| Markdown under `site/` or `frontend/` | prose | no | no | no | no |
-| `frontend/worker.mjs`, `frontend/preview-policy.mjs` | yes | no | no | no | no |
-| any other file under `frontend/` | no | no | no | no | no |
-| `scripts/build-assets.mjs`, `prepare-asset-release.mjs`, `stamp-build.mjs` | no | yes | no | no | no |
-| `backend/migrations/0001…`, `0002…` | no | no | yes | yes | no |
-| `backend/**` otherwise | no | no | no | yes | no |
-| `wrangler.assets.toml`, `wrangler.api.toml`, `wrangler.toml`, recovery, workflows | no | no | no | no | yes |
+| Change | Payload | Tooling | Contract | Config | Acceptance | API | Shared |
+|---|---|---|---|---|---|---|---|
+| `site/**` with an allowed extension | yes | no | no | no | yes | no | no |
+| Markdown under `site/` or `frontend/` | prose | no | no | no | no | no | no |
+| `frontend/worker.mjs`, `frontend/preview-policy.mjs` | yes | no | no | no | yes | no | no |
+| any other file under `frontend/` | no | no | no | no | no | no | no |
+| `scripts/build-assets.mjs`, `prepare-asset-release.mjs`, `stamp-build.mjs` | no | yes | no | no | yes | no | no |
+| `scripts/preview-local.mjs`, `tests/helpers/**`, `tests/preview_*.mjs` | no | no | no | no | yes | no | no |
+| `backend/migrations/0001…`, `0002…` | no | no | yes | no | yes | yes | no |
+| `backend/**` otherwise | no | no | no | no | yes | yes | no |
+| `wrangler.assets.toml`, the fallback template under `patches/musef-225/` | no | no | no | yes | yes | no | yes |
+| `wrangler.api.toml`, `wrangler.toml`, recovery, workflows | no | no | no | no | yes | no | yes |
 
-Measured on that tree: 710 tracked files, 31 artifact entries, and no path
+Measured on that tree: 715 tracked files, 31 artifact entries, and no path
 classified as payload that `release.json` does not list, or the reverse. Eighteen
 Markdown files sit inside `site/` today, so the prose class is not hypothetical.
 A migration change is both an API change and a rebuild trigger: it ships nothing
 to the artifact, but the artifact's recorded schema hashes go stale, which is why
 `needs_asset_rebuild` is separate from `payload`.
+
+**Two kinds of staleness, not one.** `preview_stale` asks whether a built preview
+would serve different bytes, so it turns on packaged content, the tooling that
+assembles it, and the configuration that serves it. `acceptance_evidence_stale`
+asks whether the preview and A1 evidence must be re-run, and it also turns on the
+real handlers under `backend/`, the preview constructor in
+`scripts/preview-local.mjs`, the shared helper the preview imports, and the
+executed suites. A backend change is therefore an API change and an
+acceptance-stale change while remaining no part of asset payload: the preview
+composes those handlers at the revision it ran against, and a helper or suite edit
+retires the evidence without shipping a byte.
+
+**Configuration evidence has its own clock.** A staged plan records
+`config_source` and `config_sha256` for whichever file was selected — the applied
+root `wrangler.assets.toml`, or the labelled fallback template under
+`patches/musef-225/` while none exists. Either candidate changing makes that
+record a statement about the past even when the artifact is untouched, so
+`config_evidence_stale` is tracked apart from `needs_asset_rebuild`. The stager
+itself prefers the applied config, refuses an invalid present one rather than
+falling back, and names the fallback in the plan; what it cannot know is whether
+the file it named has changed since.
 
 **Prose is classified, not assumed.** `site/DEPLOYMENTS.md` and the seventeen
 plan and operation notes beside it are documents that live inside the asset
@@ -230,20 +255,30 @@ preview suites, and this record only names them so the two do not drift apart.
 
 **Proposed selectors live in a patch.**
 `patches/brian-225/deploy-selectors.patch` adds `frontend/**`,
-`scripts/build-assets.mjs` and `wrangler.assets.toml` to `deploy.yml`, and those
-three plus `scripts/prepare-asset-release.mjs` to `web-ci.yml`. The split is
-deliberate: the packager assembles the artifact, so a change to it is a
-promotion candidate, while `prepare-asset-release.mjs` only stages and verifies
-a release it does not produce, so it is tested and not deployed. The patch
-touches no `backend/**` path, adds no second promotion lane, and changes no
-provider topology; splitting the two workflows is Nova's step after the switch
-and needs P2 and P3 first.
+`scripts/build-assets.mjs` and `wrangler.assets.toml` to `deploy.yml`; to
+`web-ci.yml` it adds those three plus `wrangler.api.toml`, the labelled fallback
+template under `patches/musef-225/`, and `scripts/prepare-asset-release.mjs` with
+`scripts/preview-local.mjs`. The split is deliberate: the packager assembles the
+artifact and the applied asset config decides how it is served, so those two are
+promotion candidates, while the stager, the preview constructor, the fallback
+template and the API config are inputs to a release or to its evidence and are
+tested without ever deploying. Those `web-ci.yml` lines match Musef's
+`patches/musef-225/web-ci-only.patch`, so Nova can consolidate the overlapping
+hunk without choosing between two versions of it.
 
-The suite enforces the moment it matters. Run against Musef's tree without the
-patch, the coverage guard fails on `frontend/worker.mjs`,
-`scripts/build-assets.mjs` and `scripts/prepare-asset-release.mjs` — the three
-inputs that exist there and that neither workflow selected. With the patch
-applied the same suite passes; both runs are in the return.
+**Coverage is exhaustive, not sampled.** Both guards enumerate the tracked files
+a filter could select and require the test workflow to select each one. A sample
+per pattern was the earlier design and it could be fooled: with `frontend/**`
+sampled as `frontend/preview-policy.mjs`, a test filter listing only that file
+passed while `frontend/worker.mjs` shipped untested. The same shape applied to
+promotion, where a filter matching a synthetic `site/x` looked covered while
+`site/index.html` was never selected. Both are now caught, and a file added later
+under any input root fails the guard the moment it is committed, which is the
+new-path control rather than a separate test.
+
+Run against Musef's `bff49eed` tree without the patch, the guard names all six
+inputs that exist there and that neither workflow selected; with the patch the
+same suite passes. Both runs are in the return.
 
 **The deployed asset config points at a staged layout.**
 `patches/musef-225/wrangler.assets.toml.proposed` names
@@ -259,8 +294,9 @@ staging layout moved.
 `backend/` drags operational code into the asset bundle whatever the path
 filters say, so the suite scans `frontend/` for any import whose specifier names
 `backend/` and fails on one. On the base revision there is no `frontend/` tree
-yet, so the check is vacuous until the design's files arrive; against the
-`0434bf1b` tree it is live and clean.
+yet, so the check is vacuous until the design's files arrive; against
+`bff49eed` it is live and clean, with the one `backend/` import in the tree
+belonging to the preview constructor rather than to the gateway.
 
 **The browser must not address the API by absolute URL.** The design keeps every
 browser URL and relative `/api` call unchanged, and Steve's preview contract
