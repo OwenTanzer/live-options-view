@@ -214,7 +214,7 @@ function testImg(url) {
     const img = new Image();
     const done = (ok) => resolve({ ok, detail: `${ok ? 'loaded' : 'errored'} · ${Math.round(performance.now() - start)}ms` });
     img.onload = () => done(true);
-    img.onerror = () => done(true); // onerror still fires after the network request completes — a non-image response counts as "reached"
+    img.onerror = () => done(true); // onerror still fires after the network request completes — a non-image response counts as "reached". The bounded /r2-proxy/ route returns 400/404 for this .png+imgtest probe URL; that still counts as reached, not as a 200.
     img.src = url + (url.includes('?') ? '&' : '?') + 'imgtest=' + Date.now();
     setTimeout(() => resolve({ ok: false, detail: 'timed out after 8s (never reached server)' }), 8000);
   });
@@ -444,7 +444,10 @@ document.getElementById('burst-run').onclick = async () => {
   const attempts = [];
   for (let i = 0; i < 6; i++) {
     attempts.push(fetch(`${R2}/intraday/latest.json?_=${Date.now()}_${i}a`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
-    attempts.push(fetch(`${PROXY}/intraday/latest.json?_=${Date.now()}_${i}b`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
+    // Proxy burst query must stay digits-only (?_= form): the bounded
+    // /r2-proxy/ route rejects anything else, so the a/b suffix lives only
+    // on the direct-R2 line above.
+    attempts.push(fetch(`${PROXY}/intraday/latest.json?_=${Date.now()}${i}`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
   }
   const results = await Promise.all(attempts);
   const okCount = results.filter(Boolean).length;

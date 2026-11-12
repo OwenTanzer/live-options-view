@@ -1,0 +1,55 @@
+diff --git a/.github/workflows/web-ci.yml b/.github/workflows/web-ci.yml
+--- a/.github/workflows/web-ci.yml
++++ b/.github/workflows/web-ci.yml
+@@ -11,6 +11,13 @@
+       - "site/**"
+       - "tests/**"
+       - "wrangler.toml"
++      - "frontend/**"
++      - "scripts/build-assets.mjs"
++      - "scripts/prepare-asset-release.mjs"
++      - "scripts/preview-local.mjs"
++      - "patches/musef-225/wrangler.assets.toml.proposed"
++      - "wrangler.assets.toml"
++      - "wrangler.api.toml"
+       - "scripts/stamp-build.mjs"
+       - "scripts/generate-quote-instruments.mjs"
+       - ".github/workflows/deploy.yml"
+@@ -22,6 +29,13 @@
+       - "site/**"
+       - "tests/**"
+       - "wrangler.toml"
++      - "frontend/**"
++      - "scripts/build-assets.mjs"
++      - "scripts/prepare-asset-release.mjs"
++      - "scripts/preview-local.mjs"
++      - "patches/musef-225/wrangler.assets.toml.proposed"
++      - "wrangler.assets.toml"
++      - "wrangler.api.toml"
+       - "scripts/stamp-build.mjs"
+       - "scripts/generate-quote-instruments.mjs"
+       - ".github/workflows/deploy.yml"
+@@ -68,6 +82,12 @@
+         env:
+           NODE_OPTIONS: --experimental-sqlite
+         run: node tests/no_runtime_kv.test.mjs
++      - name: Independent asset, preview and rollback contracts (#225)
++        env:
++          NODE_OPTIONS: --experimental-sqlite
++        run: node --test tests/asset_boundary.test.mjs tests/asset_rollback.test.mjs tests/preview_isolation.test.mjs tests/preview_transport.test.mjs tests/preview_storage_boundary.test.mjs
++      - name: Changed-path boundaries (#225, Brian)
++        run: python tests/test_changed_paths.py
+       - name: bot registration probe contract
+         run: node tests/preflight_worker_contract.test.js
+       - name: bot account closure and identity compatibility
+@@ -106,6 +126,10 @@
+         run: |
+           npm install --no-save --package-lock=false playwright@1.56.1
+           npx playwright install --with-deps chromium
++      - name: Disposable preview rendered workflow (#225)
++        env:
++          NODE_OPTIONS: --experimental-sqlite
++        run: node tests/preview_browser.test.mjs
+       - name: Historical rendered browser workflow
+         run: node tests/historical_browser.test.js
+       # Catches syntax errors in the inline <script> that the panel test would

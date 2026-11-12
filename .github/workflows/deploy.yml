@@ -1,26 +1,59 @@
-name: Deploy Cloudflare Worker
+name: Deploy API Worker (explicit, gated)
 
+# LOCAL PROPOSAL — not merged. The old automatic push-deploy on master
+# (site/frontend/backend/wrangler/build, no concurrency, no needs) is
+# REMOVED: it was a bypass around the staged gate. This workflow is the
+# separately explicit API lane: workflow_dispatch only, same
+# deploy-live-options-view concurrency group as deploy-staged.yml, and the
+# only deploy mechanism is scripts/deploy-staged-payload.mjs with
+# --target api (own authorization record, own dispatch). It deploys only
+# the Worker (wrangler.toml); it never touches a producer/collector.
+# B1 — The authorization record is EXTERNAL to the candidate tree (see
+# deploy-staged.yml): the authorize step uploads it as a workflow artifact
+# named authorization-<revision>; this job downloads it.
+# F1 — All inputs reach the script via env only; no ${{ }} expression is
+# interpolated into any run: step.
 on:
-  push:
-    branches: [master]
-    paths:
-      - "site/**"
-      - "backend/**"
-      - "wrangler.toml"
-      - "scripts/stamp-build.mjs"
-      - "tests/build_stamp.test.mjs"
-      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Full 40-hex revision to deploy'
+        required: true
+      web-check:
+        description: 'Web check evidence as <run-id>:<status>'
+        required: false
+        default: ''
+      api-check:
+        description: 'API check evidence as <run-id>:<status>'
+        required: false
+        default: ''
+      execute:
+        description: 'Execute the promotion (default is dry-run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-live-options-view
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Verify build packaging
-        run: node --test tests/build_stamp.test.mjs
-      - name: Stamp and verify build ID
-        run: node scripts/stamp-build.mjs
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+      - uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          node-version: '22'
+      - name: Download external authorization record (B1)
+        uses: actions/download-artifact@v4
+        with:
+          name: authorization-${{ inputs.revision }}
+          path: ${{ github.workspace }}/../.deploy-releases
+      - name: Deploy API Worker through the gate (B2)
+        env:
+          DEPLOY_RELEASES_DIR: ${{ github.workspace }}/../.deploy-releases
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          DEPLOY_WEB_CHECK: ${{ inputs.web-check }}
+          DEPLOY_API_CHECK: ${{ inputs.api-check }}
+          DEPLOY_EXECUTE: ${{ inputs.execute }}
+        run: node scripts/deploy-staged-payload.mjs --deploy --target api

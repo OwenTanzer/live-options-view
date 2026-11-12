@@ -9,8 +9,17 @@ on:
     paths:
       - "backend/**"
       - "site/**"
+      - "frontend/**"
       - "tests/**"
       - "wrangler.toml"
+      - "wrangler.assets.toml"
+      - "wrangler.api.toml"
+      - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/build-assets.mjs"
+      - "scripts/prepare-asset-release.mjs"
+      - "scripts/preview-local.mjs"
+      - "scripts/deploy-staged-payload.mjs"
+      - ".github/workflows/deploy-staged.yml"
       - "scripts/stamp-build.mjs"
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
@@ -20,8 +29,17 @@ on:
     paths:
       - "backend/**"
       - "site/**"
+      - "frontend/**"
       - "tests/**"
       - "wrangler.toml"
+      - "wrangler.assets.toml"
+      - "wrangler.api.toml"
+      - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/build-assets.mjs"
+      - "scripts/prepare-asset-release.mjs"
+      - "scripts/preview-local.mjs"
+      - "scripts/deploy-staged-payload.mjs"
+      - ".github/workflows/deploy-staged.yml"
       - "scripts/stamp-build.mjs"
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
@@ -39,6 +57,8 @@ jobs:
         run: node --test tests/build_stamp.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
+      - name: bounded legacy r2-proxy (#225, G4b)
+        run: node --test tests/r2_proxy_bounded.test.js
       - name: historical archive loading
         run: node tests/historical_archive.test.js
       - name: worker logic
@@ -68,8 +88,16 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/no_runtime_kv.test.mjs
+      - name: Independent asset, preview and rollback contracts (#225)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node --test tests/asset_boundary.test.mjs tests/asset_rollback.test.mjs tests/preview_isolation.test.mjs tests/preview_transport.test.mjs tests/preview_storage_boundary.test.mjs tests/deploy_sequencing.test.mjs
+      - name: Changed-path boundaries (#225, Brian)
+        run: python tests/test_changed_paths.py
       - name: bot registration probe contract
         run: node tests/preflight_worker_contract.test.js
+      - name: capture-prefix R2 write boundary (G4a)
+        run: node tests/capture_write_boundary.test.js
       - name: bot account closure and identity compatibility
         run: node tests/account_closure.test.js
       - name: automated tab panel
@@ -106,6 +134,10 @@ jobs:
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: Disposable preview rendered workflow (#225)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/preview_browser.test.mjs
       - name: Historical rendered browser workflow
         run: node tests/historical_browser.test.js
       # Catches syntax errors in the inline <script> that the panel test would

@@ -1,0 +1,26 @@
+# PROPOSED ONLY. Nova applies after C2/provider topology verification.
+# Staging directory contains separately verified artifact under payload/.
+name = "live-options-view"
+main = "payload/frontend/worker.mjs"
+compatibility_date = "2026-06-23"
+
+[vars]
+ENVIRONMENT = "production"
+# Supply exact artifact release.json revision through --var ASSET_REVISION:<SHA>.
+
+[assets]
+directory = "payload/site"
+binding = "ASSETS"
+# Reserved API/data requests must execute gateway code, not asset fallback.
+run_worker_first = true
+
+[[services]]
+binding = "API"
+service = "live-options-api"
+
+# Explicitly clear the old combined Worker's schedule; omission may retain it.
+[triggers]
+crons = []
+
+# No D1, R2, KV, secrets, active cron, producer or recovery binding.
+# Nova verifies live asset triggers empty and API sole cron ownership at cutover.

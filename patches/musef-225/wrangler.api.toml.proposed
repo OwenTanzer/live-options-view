@@ -1,0 +1,25 @@
+# PROPOSED ONLY. Nova verifies IDs, secrets and cron under C2 before applying.
+# One-time independent API service; NOT part of ordinary asset releases.
+name = "live-options-api"
+main = "backend/index.js"
+compatibility_date = "2026-06-23"
+account_id = "413bc8abe4485cf2a2e0d9f534436ade"
+
+[vars]
+BOT_INDEX_READS = "r2"
+
+[[r2_buckets]]
+binding = "PAPER_TRADES"
+bucket_name = "qqq-options-chain-data"
+# This existing production bucket is intentional only for API G4a/G4b integration.
+# Never copy this config into preview; code wrapper is not provider IAM.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "live-options"
+database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"
+
+[triggers]
+crons = ["*/15 12-23 * * 1-5"]
+# Transfer exact settlement trigger ownership once; never run both crons.
+# No asset binding, legacy KV or migration entry. Secrets remain operator-managed.

@@ -8,9 +8,9 @@ import { R2_ORIGIN, jsonResponse } from './common.js';
 
 // Only these public artifacts are exposed to the browser through this route.
 // Never use the private bucket binding or a caller-provided destination.
-const BROWSER_DATA_ORIGIN = 'https://live-options-view.otmooper12.workers.dev';
+export const BROWSER_DATA_ORIGIN = 'https://live-options-view.otmooper12.workers.dev';
 export const BROWSER_DATA_PREFIX = '/browser-data/';
-const BROWSER_DATA_KEYS = new Set([
+export const BROWSER_DATA_KEYS = new Set([
   'intraday/latest.json',
   'intraday/spy/latest.json',
   'intraday/ibit/latest.json',
@@ -25,12 +25,24 @@ const BROWSER_DATA_KEYS = new Set([
 ]);
 // Only the three QQQ archive filename families consumed by Historical.
 // Validate calendar dates, not just eight arbitrary digits. No prefix proxying.
-function isPublicArchiveKey(key) {
+export function isPublicArchiveKey(key) {
   const match = /^(?:raw\/(?:opex\/)?qqq_chain_|prices\/qqq_intraday_)([0-9]{4})([0-9]{2})([0-9]{2})\.csv$/.exec(key);
   if (!match) return false;
   const date = `${match[1]}-${match[2]}-${match[3]}`;
   const parsed = new Date(`${date}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+// Traversal guard (was the %2e check inside the removed news prefix rule):
+// literal and percent-encoded dot traversal (%2e normalizes to a dot
+// segment in URL parsing, so the raw form must be refused here too),
+// backslash and NUL are refused for every key shape, before the allowlist.
+// The prospective news/v1/views/** grant was removed 2026-11-11: no
+// accepted MediaFlow source/key corpus exists (9063cd4 is not a git
+// identifier in this baseline); absence of the object does not justify
+// inventing future public access.
+export function isPublicBrowserDataKey(key) {
+  if (key.includes('..') || /%2e/i.test(key) || key.includes('\\') || key.includes('\0')) return false;
+  return BROWSER_DATA_KEYS.has(key) || isPublicArchiveKey(key);
 }
 const MAX_LIVE_QUOTE_SYMBOLS = 100;
 export async function handleBrowserData(request, url) {
@@ -43,7 +55,7 @@ export async function handleBrowserData(request, url) {
     return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
   }
   const key = url.pathname.slice(BROWSER_DATA_PREFIX.length);
-  if (!BROWSER_DATA_KEYS.has(key) && !isPublicArchiveKey(key)) return new Response('Not found', { status: 404 });
+  if (!isPublicBrowserDataKey(key)) return new Response('Not found', { status: 404 });
   // Accept only the existing numeric cache-buster, never arbitrary query data.
   if (url.search && !/^\?_=[0-9]{1,20}$/.test(url.search)) {
     return new Response('Invalid query', { status: 400 });
@@ -71,6 +83,18 @@ export async function handleBrowserData(request, url) {
   } catch {
     return new Response('Public data upstream unavailable', { status: 502 });
   }
+}
+export const LEGACY_R2_PROXY_PREFIX = '/r2-proxy/';
+// Bounded legacy route (G4b): the same public-key/read policy as
+// /browser-data/, nothing wider. Rewrites the URL onto /browser-data/ and
+// delegates to handleBrowserData so the origin/method/key/query/upstream
+// discipline cannot drift between the two routes. Bare /r2-proxy and
+// /r2-proxy/ map to the empty key and return 404, matching /browser-data.
+export async function handleLegacyR2Proxy(request, url) {
+  const key = url.pathname === '/r2-proxy' ? '' : url.pathname.slice(LEGACY_R2_PROXY_PREFIX.length);
+  const rewritten = new URL(url);
+  rewritten.pathname = BROWSER_DATA_PREFIX + key;
+  return handleBrowserData(request, rewritten);
 }
 export async function handleLiveQuotes(url, env) {
   const symbols = parseRequestedSymbols(url.searchParams.get('symbols'));
