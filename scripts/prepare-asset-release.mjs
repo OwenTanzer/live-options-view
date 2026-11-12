@@ -11,12 +11,12 @@ export function validateAssetConfig(config, manifest) {
   const fields=new Map(), tables=new Set(); let table='root';
   for(const raw of config.split(/\r?\n/)) {
     const line=raw.trim(); if(!line || line.startsWith('#'))continue;
-    if(['[vars]','[assets]','[[services]]'].includes(line)) {
+    if(['[vars]','[assets]','[[services]]','[triggers]'].includes(line)) {
       table=line.replace(/\[|\]/g,'');
       if(tables.has(table))throw new Error('Asset config duplicate table: '+table);
       tables.add(table); continue;
     }
-    const item=line.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|true|false)\s*(?:#.*)?$/);
+    const item=line.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|true|false|\[\s*\])\s*(?:#.*)?$/);
     if(!item)throw new Error('Unsupported asset config; explicit review required');
     const key=table+'.'+item[1], value=item[2];
     if(fields.has(key))throw new Error('Asset config duplicate key: '+key);
@@ -31,13 +31,16 @@ export function validateAssetConfig(config, manifest) {
   for(const [key,value] of Object.entries(expected)) {
     if(fields.get(key)!==value)throw new Error('Asset config contract mismatch: '+key);
   }
+  // Omission can preserve an old combined Worker's cron during cutover.
+  const crons=fields.get('triggers.crons');
+  if(!Array.isArray(crons)||crons.length!==0)throw new Error('Asset config requires explicit empty triggers.crons');
   const date=fields.get('root.compatibility_date');
   if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)||
       Number.isNaN(new Date(date).getTime())||new Date(date).toISOString().slice(0,10)!==date) {
     throw new Error('Asset config compatibility_date must be a real ISO date');
   }
   for(const key of fields.keys()) {
-    if(key in expected || key==='root.compatibility_date')continue;
+    if(key in expected || key==='root.compatibility_date' || key==='triggers.crons')continue;
     if(key==='vars.ASSET_REVISION'&&fields.get(key)===manifest.revision)continue;
     throw new Error('Unexpected asset config field; explicit review required: '+key);
   }

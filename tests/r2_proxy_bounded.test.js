@@ -17,13 +17,19 @@ const POSITIVE_KEYS = [
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
-  'news/v1/views/today.json', 'news/v1/views/2026-11-11.json',
 ];
 const NEGATIVE_KEYS = [
   '', 'system/bot-membership-v1.json', 'paper-trades/requests/x.json',
   'intraday/other.json', 'raw/qqq_chain_20260229.csv', 'raw/qqq_chain_20261301.csv',
   'raw/qqq_chain_20260431.csv', 'manifest.json.png', 'manifest.json/',
-  'news/v1/views/', 'news/v1/views/../manifest.json', 'news/v1/views/%2e%2e/manifest.json',
+  // news/v1/views/today.json: the prospective grant was removed 2026-11-11
+  // (no accepted MediaFlow source); it must stay 404. The traversal keys
+  // pin the hoisted %2e/.. guard in both allowlists. Note: a literal `..`
+  // segment is resolved by URL parsing before either predicate sees it, so
+  // HTTP-level traversal cases use %2e embedded in a segment (which
+  // survives parsing); raw `..` is pinned by the predicate test below.
+  'news/v1/views/today.json', 'intraday/%2e%2e/latest.json',
+  'intraday%2e/latest.json', 'manifest.json%2e',
 ];
 const BAD_QUERIES = [
   '?url=x', '?_=abc', '?_=', '?_=1&_=2', '?_=' + '1'.repeat(21),
@@ -179,10 +185,26 @@ test('bounded proxy matches /browser-data/ status for the same keys', async () =
 test('backend allowlist agrees with gateway preview-policy', async () => {
   const { isPublicBrowserDataKey } = await import('../backend/browser-data.js');
   const { publicReadAllowed } = await import('../frontend/preview-policy.mjs');
-  const keys = [...POSITIVE_KEYS, ...NEGATIVE_KEYS, 'raw/qqq_chain_20240229.csv', 'news/v1/views/a/b/c.json'];
+  const keys = [...POSITIVE_KEYS, ...NEGATIVE_KEYS, 'raw/qqq_chain_20240229.csv'];
   for (const key of keys) {
-    const backend = isPublicBrowserDataKey(key);
-    const gateway = publicReadAllowed(new URL(APP + '/browser-data/' + key));
+    // Both sides evaluate the URL-parsed path: new URL() resolves `..` and
+    // %2e dot segments before either predicate sees them, so compare the
+    // normalized key the production Worker actually routes.
+    const url = new URL(APP + '/browser-data/' + key);
+    const normalized = url.pathname.slice('/browser-data/'.length);
+    const backend = isPublicBrowserDataKey(normalized);
+    const gateway = publicReadAllowed(url);
     assert.equal(gateway, backend, key);
+  }
+});
+
+test('raw traversal strings are refused by the backend predicate', async () => {
+  const { isPublicBrowserDataKey } = await import('../backend/browser-data.js');
+  for (const key of ['intraday/../manifest.json', 'intraday/%2e%2e/latest.json',
+      'manifest.json%2e', '..\\manifest.json', 'manifest.json\0']) {
+    assert.equal(isPublicBrowserDataKey(key), false, JSON.stringify(key));
+  }
+  for (const key of ['manifest.json', 'intraday/latest.json', 'raw/qqq_chain_20240229.csv']) {
+    assert.equal(isPublicBrowserDataKey(key), true, key);
   }
 });

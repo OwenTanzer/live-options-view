@@ -32,22 +32,17 @@ export function isPublicArchiveKey(key) {
   const parsed = new Date(`${date}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
 }
-// MediaFlow news views are a prospective public prefix (no producer in this
-// repo writes news/v1/* yet; M4b9063cd4 is not a git identifier — see the
-// #225 record). The same prefix rule must exist in
-// frontend/preview-policy.mjs or preview and production diverge. The
-// remainder must be non-empty and contain no traversal, backslash or NUL.
-const NEWS_VIEWS_PREFIX = 'news/v1/views/';
-export function isNewsViewsKey(key) {
-  if (!key.startsWith(NEWS_VIEWS_PREFIX)) return false;
-  const rest = key.slice(NEWS_VIEWS_PREFIX.length);
-  // Reject literal and percent-encoded dot traversal (%2e normalizes to a
-  // dot segment in URL parsing, so the raw form must be refused here too).
-  return rest.length > 0 && !rest.includes('..') && !/%2e/i.test(rest) &&
-    !rest.includes('\\') && !rest.includes('\0');
-}
+// Traversal guard (was the %2e check inside the removed news prefix rule):
+// literal and percent-encoded dot traversal (%2e normalizes to a dot
+// segment in URL parsing, so the raw form must be refused here too),
+// backslash and NUL are refused for every key shape, before the allowlist.
+// The prospective news/v1/views/** grant was removed 2026-11-11: no
+// accepted MediaFlow source/key corpus exists (9063cd4 is not a git
+// identifier in this baseline); absence of the object does not justify
+// inventing future public access.
 export function isPublicBrowserDataKey(key) {
-  return BROWSER_DATA_KEYS.has(key) || isPublicArchiveKey(key) || isNewsViewsKey(key);
+  if (key.includes('..') || /%2e/i.test(key) || key.includes('\\') || key.includes('\0')) return false;
+  return BROWSER_DATA_KEYS.has(key) || isPublicArchiveKey(key);
 }
 const MAX_LIVE_QUOTE_SYMBOLS = 100;
 export async function handleBrowserData(request, url) {
