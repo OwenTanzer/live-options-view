@@ -2,9 +2,23 @@ name: Deploy staged asset payload (G3b)
 
 # LOCAL PROPOSAL — not merged. Promotion stays manual until the C2 packet is
 # approved; this workflow only runs the staged-payload gate, which refuses
-# without a checked-in authorization record for the exact revision. It
-# serializes promotion with the deploy-live-options-view concurrency group so
-# an old candidate A cannot overwrite a newer authorized candidate B.
+# without an authorization record for the exact revision. It serializes
+# promotion with the deploy-live-options-view concurrency group so an old
+# candidate A cannot overwrite a newer authorized candidate B. This is the
+# asset lane; the API lane is deploy.yml (separate explicit dispatch, same
+# gate, same concurrency group). No workflow here deploys except through
+# scripts/deploy-staged-payload.mjs.
+#
+# B1 — The authorization record is EXTERNAL to the candidate tree: the
+# authorize step writes it outside the checkout and uploads it as a
+# workflow artifact named authorization-<revision>; this job downloads it
+# into DEPLOY_RELEASES_DIR. Authorizing therefore never moves HEAD.
+# B2 — One authoritative release lane: this workflow and deploy.yml share
+# the concurrency group and the gate is the only deploy mechanism.
+# F1 — All inputs reach the script via env only. No ${{ }} expression is
+# interpolated into any run: step; the script reads env as a fallback for
+# its flags, and double-quoted "$VAR" expansion is never re-scanned for
+# command substitution.
 on:
   workflow_dispatch:
     inputs:
@@ -39,11 +53,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Download external authorization record (B1)
+        uses: actions/download-artifact@v4
+        with:
+          name: authorization-${{ inputs.revision }}
+          path: ${{ github.workspace }}/../.deploy-releases
       - name: Deploy staged payload (G3b gate)
-        run: |
-          node scripts/deploy-staged-payload.mjs --deploy \
-            --stage "${{ inputs.stage }}" \
-            --revision "${{ inputs.revision }}" \
-            ${{ inputs.web-check != '' && format('--web-check {0}', inputs.web-check) || '' }} \
-            ${{ inputs.api-check != '' && format('--api-check {0}', inputs.api-check) || '' }} \
-            ${{ inputs.execute && '--execute' || '' }}
+        env:
+          DEPLOY_RELEASES_DIR: ${{ github.workspace }}/../.deploy-releases
+          DEPLOY_STAGE: ${{ inputs.stage }}
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          DEPLOY_WEB_CHECK: ${{ inputs.web-check }}
+          DEPLOY_API_CHECK: ${{ inputs.api-check }}
+          DEPLOY_EXECUTE: ${{ inputs.execute }}
+        run: node scripts/deploy-staged-payload.mjs --deploy --target asset

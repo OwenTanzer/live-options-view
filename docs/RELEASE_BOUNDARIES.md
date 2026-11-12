@@ -92,15 +92,18 @@ four files rather than trusting the argument. The candidate scope in #225
 
 ## Routes
 
-**Automatic.** A push to `master` matching `deploy.yml`'s filter runs the
-Cloudflare promotion. A push matching the main collector's or Crassus's watch
-scope becomes a Railway deployment candidate gated on check suites. Both
-provider gates are readback claims, not repository guarantees: `deploy.yml` has
-no `concurrency` group and no `needs:` edge, so two pushes can promote out of
-order and neither waits for `web_ci`. What the repository *does* guarantee is
-that every path which can promote is also a path that runs `web_ci` — that
-subset invariant is asserted by the suite and fails if `deploy.yml` grows a path
-`web-ci.yml` does not select.
+**Automatic.** A push to `master` matching the main collector's or
+Crassus's watch scope becomes a Railway deployment candidate gated on check
+suites. The website does NOT auto-promote on push any more (B2, #225):
+`deploy.yml` is manual-only (`workflow_dispatch`, no push trigger) and
+shares the `deploy-live-options-view` concurrency group with
+`deploy-staged.yml`; the only deploy mechanism is the staged-payload gate
+(`scripts/deploy-staged-payload.mjs`), which refuses without an external
+authorization record for the exact revision. Both provider gates are
+readback claims, not repository guarantees. What the repository *does*
+guarantee is that every path which can reach the gate is also a path that
+runs `web_ci` — that subset invariant is asserted by the suite (input
+coverage) and fails if a gate input is not selected by `web-ci.yml`.
 
 **Manual.** `wrangler deploy` from a workstation; Railway redeploy, restart and
 rollback; Railway staged changes committed without redeploy; a manual rebuild of
@@ -138,9 +141,15 @@ promotion it documents. This document is the reconciliation, placed outside
 every watch scope. Replacing the old file with a pointer should travel with
 Nova's next site change rather than being its own release.
 
-**Ordering.** The subset invariant holds; the dependency edge and the
-`concurrency` group do not exist. A patch that adds either belongs in the
-integration review, not in this record.
+**Ordering.** The subset invariant holds; the `concurrency` group now
+exists (`deploy-live-options-view`, shared by `deploy.yml` and
+`deploy-staged.yml`, B2 #225), so two promotions cannot run out of order.
+There is still no `needs:` edge: ordering is enforced by the shared
+concurrency group plus the gate's shared release lock and
+recheck-before-execute, not by a workflow dependency edge. The API lane
+(`deploy.yml`, `--target api`) is a separate explicit dispatch under the
+same gate and group; it deploys only the Worker and never touches a
+producer.
 
 **Banana.** No trigger restoration is proposed here. The closure evidence
 supports #225's candidate scope and refutes a scanner-only one.

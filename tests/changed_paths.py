@@ -149,8 +149,19 @@ ASSET_INPUTS = (
     "frontend/**",
 ) + ASSET_TOOLING_INPUTS
 
+#: The promotion gate itself: the staged-deploy script and the workflow that
+#: calls it. Neither produces artifact bytes, so neither is an asset input, but a
+#: change to either decides whether anything reaches production at all — which is
+#: exactly why the test workflow has to run for them.
+PROMOTION_INPUTS = (
+    "scripts/deploy-staged-payload.mjs",
+    ".github/workflows/deploy-staged.yml",
+)
+
 #: Everything that must be exercised by the test workflow when it changes.
-COVERAGE_INPUTS = ASSET_INPUTS + SELECTED_CONFIG_INPUTS + PREVIEW_ACCEPTANCE_INPUTS
+COVERAGE_INPUTS = (
+    ASSET_INPUTS + SELECTED_CONFIG_INPUTS + PREVIEW_ACCEPTANCE_INPUTS + PROMOTION_INPUTS
+)
 
 #: Trees where a Markdown file is prose rather than shipped content. The design
 #: requires this be classified explicitly "rather than assume glob exclusion":
@@ -1047,9 +1058,20 @@ def promotion_coverage_problems(repo_root, triggers: dict) -> list[str]:
     """Every tracked file that can promote must also be selected by the tests.
 
     This is the executable form of #225's "Audit CI ordering as well as
-    filtering". deploy.yml fires straight at production, so every file its filter
-    selects must also be selected by web-ci's filter; otherwise a change can be
-    promoted while the suite for that commit was never asked to run.
+    filtering". While deploy.yml fired straight at production, every file its
+    filter selected had to also be selected by web-ci's filter; otherwise a
+    change could be promoted while the suite for that commit was never asked
+    to run.
+
+    B2 (#225): deploy.yml is now manual-only (workflow_dispatch, no push
+    trigger), so there is no automatic promotion for this function to
+    cover — it returns no problems in that case. The coverage obligation
+    moves to input_coverage_problems (every COVERAGE_INPUT must be selected
+    by web-ci) and to the gate itself, which refuses without an
+    authorization record. A deploy.yml with no push filter AND no
+    workflow_dispatch would be a broken workflow, not a covered one; that
+    state is caught by test_promotion_lane_is_serialised, which requires
+    the dispatch trigger and the shared concurrency group.
 
     Exhaustive over real files rather than one synthetic sample per pattern: a
     narrowed test filter that still matches `site/x` would satisfy a sample check
@@ -1058,7 +1080,7 @@ def promotion_coverage_problems(repo_root, triggers: dict) -> list[str]:
     """
     deploy = _event(triggers, "deploy.yml", "push", "paths")
     if not deploy:
-        return ["deploy.yml has no push path filter"]
+        return []
     tested = _event(triggers, "web-ci.yml", "push", "paths")
     if not tested:
         return ["web-ci.yml has no push path filter"]

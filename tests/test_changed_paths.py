@@ -33,20 +33,26 @@ class LaneExpectation(unittest.TestCase):
         )
         return result
 
-    def test_site_only_change_promotes_the_worker(self):
-        self.check(["site/index.html"], {"cloudflare_deploy", "web_ci"})
+    # B2 (#225): deploy.yml is manual-only (workflow_dispatch, no push
+    # trigger), so no change promotes the worker automatically any more.
+    # web-ci still runs for these paths; promotion requires a separate
+    # explicit dispatch through the staged gate. The old names said
+    # "promotes_the_worker"; they are renamed because that is no longer
+    # what a push does.
+    def test_site_only_change_runs_ci_without_promoting(self):
+        self.check(["site/index.html"], {"web_ci"})
 
-    def test_backend_only_change_promotes_the_worker(self):
-        self.check(["backend/index.js"], {"cloudflare_deploy", "web_ci"})
+    def test_backend_only_change_runs_ci_without_promoting(self):
+        self.check(["backend/index.js"], {"web_ci"})
 
-    def test_wrangler_configuration_change_promotes_the_worker(self):
-        self.check(["wrangler.toml"], {"cloudflare_deploy", "web_ci"})
+    def test_wrangler_configuration_change_runs_ci_without_promoting(self):
+        self.check(["wrangler.toml"], {"web_ci"})
 
     def test_application_test_change_runs_ci_without_promoting(self):
         self.check(["tests/worker_logic.test.js"], {"web_ci"})
 
-    def test_build_stamp_test_is_the_one_test_that_promotes(self):
-        result = self.check(["tests/build_stamp.test.mjs"], {"cloudflare_deploy", "web_ci"})
+    def test_build_stamp_test_runs_ci_without_promoting(self):
+        result = self.check(["tests/build_stamp.test.mjs"], {"web_ci"})
         self.assertEqual(result.auto_promoting, ())
 
     def test_root_documentation_runs_nothing(self):
@@ -54,8 +60,8 @@ class LaneExpectation(unittest.TestCase):
         self.check(["README.md"], set())
         self.check(["docs/specs/ADAPTIVE_QUOTE_PANEL.md"], set())
 
-    def test_deploy_workflow_edit_promotes_itself(self):
-        self.check([".github/workflows/deploy.yml"], {"cloudflare_deploy", "web_ci"})
+    def test_deploy_workflow_edit_runs_ci_without_promoting(self):
+        self.check([".github/workflows/deploy.yml"], {"web_ci"})
 
     def test_web_ci_workflow_edit_does_not_promote(self):
         self.check([".github/workflows/web-ci.yml"], {"web_ci"})
@@ -172,8 +178,9 @@ class MixedExpectation(unittest.TestCase):
         result = cp.effects(
             ["site/index.html", "market_data/live_market/state.py"], REPO, TRIGGERS
         )
+        # B2: no automatic promotion; web-ci and collector-ci run.
         self.assertEqual(
-            set(result.triggered), {"cloudflare_deploy", "web_ci", "collector_ci"}
+            set(result.triggered), {"web_ci", "collector_ci"}
         )
         self.assertEqual(set(result.auto_promoting), {"main-collector"})
         self.assertEqual(set(result.requiring_promotion), set())
@@ -182,14 +189,15 @@ class MixedExpectation(unittest.TestCase):
         result = cp.effects(
             ["site/index.html", "market_data/options_scanner/active.py"], REPO, TRIGGERS
         )
-        self.assertIn("cloudflare_deploy", result.triggered)
+        # B2: the worker does not promote automatically at all now.
+        self.assertNotIn("cloudflare_deploy", result.triggered)
         self.assertEqual(set(result.auto_promoting), set())
         self.assertEqual(set(result.requiring_promotion), {"banana-options-scanner"})
 
     def test_site_plus_crassus(self):
         result = cp.effects(["site/index.html", "crassus/runner.py"], REPO, TRIGGERS)
         self.assertEqual(
-            set(result.triggered), {"cloudflare_deploy", "web_ci", "crassus_ci"}
+            set(result.triggered), {"web_ci", "crassus_ci"}
         )
         self.assertEqual(set(result.auto_promoting), {"crassus-runner"})
 
@@ -208,19 +216,48 @@ class PromotionOrdering(unittest.TestCase):
         problems = cp.promotion_coverage_problems(REPO, TRIGGERS)
         self.assertEqual(problems, [], msg="\n".join(problems))
 
-    def test_promotion_lane_has_no_serialisation_yet(self):
-        """Locks known state so a fix forces this record to be revisited.
+    def test_promotion_lane_is_serialised(self):
+        """B2 (#225): the promotion lane gained serialisation, so this
+        record is revisited — as its predecessor prescribed.
 
-        deploy.yml has no `concurrency` group and no `needs:` edge, so two
-        pushes can promote out of order and neither waits on web-ci. If this
-        fails, the workflow gained serialisation: update
-        docs/RELEASE_BOUNDARIES.md and the #225 finding register instead of
-        deleting the test.
+        deploy.yml is manual-only (workflow_dispatch, no push trigger) and
+        shares the deploy-live-options-view concurrency group with
+        deploy-staged.yml; the gate script is the only deploy mechanism, so
+        two promotions cannot run out of order and neither bypasses the
+        gate. There is still no `needs:` edge: ordering is enforced by the
+        shared concurrency group plus the gate's shared release lock and
+        recheck-before-execute, not by a workflow dependency edge.
+        docs/RELEASE_BOUNDARIES.md records the new topology.
         """
-        text = (REPO / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-        self.assertNotIn("concurrency:", text)
-        self.assertNotIn("needs:", text)
+        for workflow in ("deploy.yml", "deploy-staged.yml"):
+            text = (REPO / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow):
+                self.assertIn("concurrency:", text)
+                self.assertIn("group: deploy-live-options-view", text)
+                self.assertIn("workflow_dispatch:", text)
+                self.assertNotIn("cloudflare/wrangler-action", text)
+        deploy = (REPO / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+        self.assertNotIn("  push:", deploy)
         self.assertIn("concurrency", DOC.read_text(encoding="utf-8"))
+
+    def test_no_change_triggers_cloudflare_deploy_automatically(self):
+        """B2 (#225): the positive proof — no change set, of any kind,
+        fires the deploy lane on its own. Promotion requires a separate
+        explicit dispatch through the gate."""
+        for changed in (
+            ["site/index.html"],
+            ["backend/index.js"],
+            ["wrangler.toml"],
+            ["scripts/build-assets.mjs"],
+            ["frontend/worker.mjs"],
+            [".github/workflows/deploy.yml"],
+            ["site/index.html", "backend/index.js", "wrangler.toml"],
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotIn(
+                    "cloudflare_deploy",
+                    cp.effects(changed, REPO, TRIGGERS).triggered,
+                )
 
     def test_cloudflare_builds_cannot_silently_become_a_second_lane(self):
         """The provider-native build path is read-only and manual by design."""
@@ -388,9 +425,11 @@ class AssetApiSplit(unittest.TestCase):
             view.asset,
             "a Markdown file inside site/ is a document, not a shipped asset",
         )
-        # The current combined workflow still fires on it; that coupling is the
-        # thing the split removes, and the test states both halves.
-        self.assertIn("cloudflare_deploy", cp.effects(["site/DEPLOYMENTS.md"], REPO, TRIGGERS).triggered)
+        # B2 (#225): the split has removed the coupling — deploy.yml is
+        # manual-only now, so the combined workflow no longer fires on
+        # this file (or any file). The prose classification above is
+        # unchanged; only the promotion coupling is gone.
+        self.assertNotIn("cloudflare_deploy", cp.effects(["site/DEPLOYMENTS.md"], REPO, TRIGGERS).triggered)
 
     def test_gateway_and_build_script_belong_to_the_asset_artifact(self):
         for path in (
