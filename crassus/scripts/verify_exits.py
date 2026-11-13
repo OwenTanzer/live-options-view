@@ -171,6 +171,97 @@ class BoundaryTests(unittest.TestCase):
             pnl_pct(0.0, 1.0, 1)
 
 
+class PremiumStop35Tests(unittest.TestCase):
+    """Skew + Direction step 2: the selected 35% entry-premium stop.
+
+    Full-position exit at the first eligible executable bid at or below 65% of
+    the position's OWN entry basis, including after each re-entry.
+    """
+    POLICY = ExitPolicy(stop_loss_pct=-0.35)
+
+    def test_exactly_65_percent_triggers_for_every_cent_basis(self):
+        # Integer ground truth: bid_cents * 100 <= basis_cents * 65.
+        misses = []
+        for basis_c in range(5, 2001):
+            for bid_c in (basis_c * 65 // 100 - 1, basis_c * 65 // 100,
+                          basis_c * 65 // 100 + 1):
+                if bid_c <= 0:
+                    continue
+                want = bid_c * 100 <= basis_c * 65
+                got = exits._threshold_reached(basis_c / 100, bid_c / 100, 1, -0.35)
+                if got != want:
+                    misses.append((basis_c, bid_c))
+        self.assertEqual(misses, [])
+
+    def test_float_trap_case_now_fires(self):
+        # (0.91 - 1.40) / 1.40 == -0.3499999999999999 in binary floats.
+        self.assertGreater(pnl_pct(1.40, 0.91, 1), -0.35)
+        decision = evaluate(ctx(book(long_trade(1.40)), {SYMBOL: quote(0.91, 0.95)}), self.POLICY)
+        self.assertEqual(decision.metadata["exit_trigger"], "protective_stop")
+        self.assertEqual(decision.metadata["exit_threshold_price"], 0.91)
+
+    def test_one_cent_above_the_level_holds(self):
+        self.assertIsNone(evaluate(ctx(book(long_trade(1.40)), {SYMBOL: quote(0.92, 0.95)}),
+                                   self.POLICY))
+
+    def test_reentry_uses_its_own_entry_basis(self):
+        # First lot 2.00 closed at 1.00; re-entry at 1.00. The stop level is
+        # 0.65 (65% of 1.00), not 65% of any blend with the closed lot.
+        reentered = book(long_trade(2.00, ts="2024-01-01T10:00:00Z"),
+                         {"sym": SYMBOL, "side": "sell", "qty": 1, "price": 1.00,
+                          "ts": "2024-01-01T10:20:00Z"},
+                         long_trade(1.00, ts="2024-01-01T10:40:00Z"))
+        self.assertEqual(reentered.position(SYMBOL).average_cost, 1.00)
+        fires = evaluate(ctx(reentered, {SYMBOL: quote(0.65, 0.70)}), self.POLICY)
+        self.assertEqual(fires.metadata["exit_cost_basis"], 1.0)
+        self.assertEqual(fires.metadata["exit_threshold_price"], 0.65)
+        self.assertIsNone(evaluate(ctx(reentered, {SYMBOL: quote(0.66, 0.70)}), self.POLICY))
+        # And the other way: cheap first lot, dearer re-entry.
+        dearer = book(long_trade(1.00, ts="2024-01-01T10:00:00Z"),
+                      {"sym": SYMBOL, "side": "sell", "qty": 1, "price": 1.10,
+                       "ts": "2024-01-01T10:20:00Z"},
+                      long_trade(2.00, ts="2024-01-01T10:40:00Z"))
+        self.assertEqual(evaluate(ctx(dearer, {SYMBOL: quote(1.30, 1.40)}), self.POLICY)
+                         .metadata["exit_threshold_price"], 1.3)
+        self.assertIsNone(evaluate(ctx(dearer, {SYMBOL: quote(1.31, 1.40)}), self.POLICY))
+
+    def test_exit_is_the_full_position(self):
+        two = book(long_trade(1.00), long_trade(1.00, ts="2024-01-01T10:01:00Z"))
+        decision = evaluate(ctx(two, {SYMBOL: quote(0.60, 0.65)}), self.POLICY)
+        self.assertEqual((decision.action, decision.quantity), ("sell", 2))
+
+    def test_overshoot_is_auditable(self):
+        decision = evaluate(ctx(book(long_trade(1.00)), {SYMBOL: quote(0.40, 0.45)}), self.POLICY)
+        meta = decision.metadata
+        self.assertEqual(meta["exit_threshold_price"], 0.65)
+        self.assertEqual(meta["exit_liquidation_price"], 0.40)  # 0.25 past the level
+
+    def test_first_eligible_bid_waits_for_an_executable_quote(self):
+        held = book(long_trade(1.00))
+        stale = evaluate(ctx(held, {SYMBOL: quote(0.60, 0.65, age_s=40.0)}), self.POLICY)
+        self.assertEqual(stale.action, "no_trade")
+        self.assertEqual(stale.metadata["exit_pending"][0]["reason"], "stale_quote")
+        missing = evaluate(ctx(held, {}), self.POLICY)
+        self.assertEqual(missing.metadata["exit_pending"][0]["reason"], "missing_liquidation_quote")
+        fresh = evaluate(ctx(held, {SYMBOL: quote(0.60, 0.65)}), self.POLICY)
+        self.assertEqual(fresh.action, "sell")
+
+    def test_oi_skew_config_is_inert_until_activation(self):
+        params = {"exits": {"stop_loss_pct": -0.35}}
+        self.assertFalse(resolve_policy("oi_skew_qqq", params, activated=False).enabled)
+        live = resolve_policy("oi_skew_qqq", params, activated=True)
+        self.assertTrue(live.enabled)
+        self.assertEqual((live.stop_loss_pct, live.profit_target_pct), (-0.35, None))
+
+    def test_existing_default_boundaries_unchanged(self):
+        # -50% default and +50% target still inclusive exactly at the level.
+        self.assertTrue(exits._threshold_reached(1.00, 0.50, 1, -0.50))
+        self.assertFalse(exits._threshold_reached(1.00, 0.51, 1, -0.50))
+        self.assertTrue(exits._threshold_reached(1.00, 1.50, 1, 0.50))
+        self.assertTrue(exits._threshold_reached(1.00, 1.50, -1, -0.50))   # short stop at ask
+        self.assertFalse(exits._threshold_reached(1.00, 1.49, -1, -0.50))
+
+
 class QuoteTests(unittest.TestCase):
     def test_stale_quote_blocks_the_exit_and_holds_the_cycle(self):
         stale = quote(0.40, 0.45, age_s=30.0)
@@ -874,7 +965,7 @@ class RunnerWiringTests(unittest.TestCase):
 if __name__ == "__main__":
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
-    for case in (BoundaryTests, QuoteTests, PrecedenceTests, PolicyTests,
+    for case in (BoundaryTests, PremiumStop35Tests, QuoteTests, PrecedenceTests, PolicyTests,
                  ReentryTests, DurableStateTests, RunnerWiringTests):
         suite.addTests(loader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
