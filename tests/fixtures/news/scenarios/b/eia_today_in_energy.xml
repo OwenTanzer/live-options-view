@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>EIA Today in Energy (SYNTHETIC TEST FIXTURE B)</title>
+<link>https://www.eia.gov/todayinenergy/</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>AI data center power demand lifts natural gas and oil use at peaking plants</title>
+<link>https://www.eia.gov/todayinenergy/detail.php?id=99950</link>
+<guid>https://www.eia.gov/todayinenergy/detail.php?id=99950</guid>
+<description>Synthetic: electricity demand from new data centers raised peaking-plant fuel use.</description>
+<pubDate>Mon, 09 Nov 2026 09:55:00 GMT</pubDate>
+</item>
+</channel>
+</rss>

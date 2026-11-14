@@ -1,0 +1,290 @@
+{
+ "as_of": "2026-11-09T11:15:00Z",
+ "build_as_of": "2026-11-09T11:15:00Z",
+ "complete": true,
+ "coverage": {
+  "after_cutoff_hindsight": [],
+  "corrupt_runs": 0,
+  "coverage_complete": true,
+  "note": "coverage is for the view's stream and is not narrowed by the panel's source filter",
+  "pending_availability_runs": 0,
+  "price": {
+   "missing": [
+    {
+     "end": "2026-11-09T10:00:02Z",
+     "seconds": 36002,
+     "start": "2026-11-09T00:00:00Z"
+    }
+   ],
+   "stale": [
+    {
+     "end": "2026-11-09T10:20:02Z",
+     "last_price_time": "2026-11-09T10:09:00Z",
+     "seconds": 542,
+     "start": "2026-11-09T10:11:00Z"
+    }
+   ]
+  },
+  "quiet_blocked_by": [
+   "publication_mode_hindsight"
+  ],
+  "quiet_rule": "observed, no items only for a covered segment between two observed runs with no new observations and no row events in its span, both counted before pagination and filtering; otherwise no items on this page",
+  "segments": [
+   {
+    "before_first_run": true,
+    "clipped_to_window_start": true,
+    "end": "2026-11-09T10:05:00Z",
+    "events_in_span": 1,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 1,
+    "quiet": false,
+    "run_id": "20261109T100500Z-fx",
+    "sources": {
+     "attempted": [
+      "eia_today_in_energy"
+     ],
+     "disabled_count": 27,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "techcrunch",
+      "ars_technica"
+     ],
+     "ok": [
+      "eia_today_in_energy"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T00:00:00Z",
+    "state": "partial"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:10:00Z",
+    "events_in_span": 0,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T101000Z-fx",
+    "sources": {
+     "attempted": [],
+     "disabled_count": 27,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy",
+      "techcrunch",
+      "ars_technica"
+     ],
+     "ok": [],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:05:00Z",
+    "state": "unknown"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:15:00Z",
+    "events_in_span": 0,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T101500Z-fx",
+    "sources": {
+     "attempted": [],
+     "disabled_count": 27,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy",
+      "techcrunch",
+      "ars_technica"
+     ],
+     "ok": [],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:10:00Z",
+    "state": "unknown"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:25:00Z",
+    "events_in_span": 0,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T102500Z-fx",
+    "sources": {
+     "attempted": [],
+     "disabled_count": 27,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy",
+      "techcrunch",
+      "ars_technica"
+     ],
+     "ok": [],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:15:00Z",
+    "state": "unknown"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T11:10:00Z",
+    "events_in_span": 0,
+    "gap_seconds": 2700,
+    "missed_interval": true,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T111000Z-fx",
+    "sources": {
+     "attempted": [],
+     "disabled_count": 27,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy",
+      "techcrunch",
+      "ars_technica"
+     ],
+     "ok": [],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:25:00Z",
+    "state": "unknown"
+   }
+  ],
+  "stream_scope": "sources of the requested stream",
+  "tail": {
+   "end": "2026-11-09T11:15:00Z",
+   "seconds": 300,
+   "start": "2026-11-09T11:10:00Z"
+  },
+  "uncommitted_runs": 0
+ },
+ "data_label": "SYNTHETIC fixture data (not real news or market data)",
+ "date": "2026-11-09",
+ "excluded": {
+  "before_window": 0,
+  "no_publication_time": 0,
+  "not_in_stream": 3,
+  "unclassified_for_stream": 0
+ },
+ "hindsight": true,
+ "limits": {
+  "hindsight_per_page": 50,
+  "index_bytes": 262144,
+  "index_views": 500,
+  "page_bytes": 262144,
+  "pages_per_view": 20,
+  "price_intervals_per_page": 200,
+  "rows_per_page": 50,
+  "segments_per_page": 200,
+  "source_ids_per_segment": 100
+ },
+ "mode": "publication",
+ "mode_label": "RETROSPECTIVE publication-time join: news chosen with everything known now (hindsight)",
+ "next_page": null,
+ "omitted": {
+  "hindsight_omitted": 0,
+  "intervals_omitted": 0,
+  "rows_omitted": 0,
+  "segments_omitted": 0,
+  "source_ids_omitted": 0
+ },
+ "overflow_reasons": [],
+ "page_count": 1,
+ "page_number": 1,
+ "prev_page": null,
+ "price_series": {
+  "instrument_id": "etf.qqq",
+  "series": "underlying_quote",
+  "sha256": "4172e8f3cb087e0a962b61ba33da41c7a1a1f5cb8af3c8220d3d2117795310e2",
+  "synthetic": true,
+  "tolerance_s": 120
+ },
+ "rows": [
+  {
+   "archived_at": "2026-11-09T10:06:00Z",
+   "canonical_url": "https://eia.gov/todayinenergy/detail.php?id=99950",
+   "classification_at_event": {
+    "classification_id": "4f6363059c83d681e19f42a206e3fc709e110c500c51fb467f3171edbc1a00d7",
+    "classified_at": "2026-11-09T10:12:00Z",
+    "instrument_mapping": "unknown",
+    "known_at": null,
+    "stream_memberships": [
+     "ai_buildout",
+     "oil"
+    ],
+    "timing": "retrospective",
+    "version": "rules-v1"
+   },
+   "event_at": "2026-11-09T09:55:00Z",
+   "event_basis": "published_at (hindsight)",
+   "instruments": {
+    "linked": [],
+    "mapping": "unknown",
+    "note": "unmapped: no instrument is linked to this item; the price is the page's series"
+   },
+   "item_id": "66d8847de8e694e3d0255396953b7e6cde29d30a74116ca059f43b975086d33f",
+   "later_context": {
+    "classifications_after_event": [],
+    "classifications_after_event_omitted": 0,
+    "revisions_after_event": [],
+    "revisions_after_event_omitted": 0,
+    "revisions_known_by_cutoff": 1
+   },
+   "observed_at": "2026-11-09T10:05:00Z",
+   "outlet": "",
+   "price": {
+    "age_seconds": null,
+    "record": null,
+    "status": "missing"
+   },
+   "published_at": "2026-11-09T09:55:00Z",
+   "revision_id": "26b26fc7ba829b8492aa9ab73b91f4da35514b9a31112d07fa0525f7fba90963",
+   "revision_number": 1,
+   "revisions_known_at_event": null,
+   "run_id": "20261109T100500Z-fx",
+   "source_id": "eia_today_in_energy",
+   "time_quality": {
+    "published": "explicit",
+    "updated": "missing"
+   },
+   "title": "AI data center power demand lifts natural gas and oil use at peaking plants",
+   "title_truncated": false,
+   "url_rejected": null
+  }
+ ],
+ "rows_offset": 0,
+ "rows_on_page": 1,
+ "schema_version": "news-view/v1",
+ "stream": "ai_buildout",
+ "synthetic_prices": true,
+ "view": {
+  "complete": true,
+  "pages_omitted": 0,
+  "rows_omitted": 0,
+  "rows_total": 1
+ },
+ "window": {
+  "applies_to": "rows (event_at), price_coverage and news_coverage",
+  "end": "2026-11-09T11:15:00Z",
+  "start": "2026-11-09T00:00:00Z"
+ }
+}

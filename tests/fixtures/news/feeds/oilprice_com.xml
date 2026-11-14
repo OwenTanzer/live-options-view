@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+<title>OilPrice.com (SYNTHETIC TEST FIXTURE)</title>
+<link>https://oilprice.com</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>Brent climbs as tanker traffic through Hormuz slows</title>
+<link>https://oilprice.com/Energy/Crude-Oil/Brent-Climbs-As-Tanker-Traffic-Slows.html?utm_source=rss&amp;utm_medium=feed</link>
+<guid isPermaLink="false">oilprice-fixture-1001</guid>
+<description><![CDATA[<p>Synthetic: insurers raised war-risk premiums as vessel transits fell.</p>]]></description>
+<pubDate>Mon, 09 Nov 2026 09:40:00 GMT</pubDate>
+<category>Crude Oil</category>
+</item>
+<item>
+<title>OPEC+ delegates weigh a pause in output increases</title>
+<link>https://oilprice.com/Energy/Energy-General/OPEC-Delegates-Weigh-Pause.html</link>
+<guid isPermaLink="false">oilprice-fixture-1002</guid>
+<description>Synthetic: talks continue ahead of the ministerial meeting.</description>
+<pubDate>Mon, 09 Nov 2026 09:30:00</pubDate>
+</item>
+<item>
+<title>Refinery margins narrow across Asia</title>
+<link>https://oilprice.com/Energy/Energy-General/Refinery-Margins-Narrow.html</link>
+<guid isPermaLink="false">oilprice-fixture-1003</guid>
+<description>Synthetic: diesel cracks fell for a third week.</description>
+</item>
+</channel>
+</rss>

@@ -1,0 +1,150 @@
+{
+ "build_as_of": "2026-11-09T11:15:00Z",
+ "complete": true,
+ "data_label": "SYNTHETIC fixture data (not real news or market data)",
+ "limits": {
+  "hindsight_per_page": 50,
+  "index_bytes": 262144,
+  "index_views": 500,
+  "page_bytes": 262144,
+  "pages_per_view": 20,
+  "price_intervals_per_page": 200,
+  "rows_per_page": 50,
+  "segments_per_page": 200,
+  "source_ids_per_segment": 100
+ },
+ "modes": [
+  "collector",
+  "archive",
+  "publication"
+ ],
+ "overflow_reasons": [],
+ "root": "news/v1/views",
+ "schema_version": "news-view-index/v1",
+ "streams": [
+  "all",
+  "ai_buildout",
+  "oil"
+ ],
+ "views": [
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/collector/all/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "collector",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "all"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/collector/ai_buildout/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "collector",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 1,
+   "stream": "ai_buildout"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/collector/oil/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "collector",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "oil"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/archive/all/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "archive",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "all"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/archive/ai_buildout/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "archive",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 1,
+   "stream": "ai_buildout"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/archive/oil/2026-11-09/page-0001.json",
+   "hindsight": false,
+   "mode": "archive",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "oil"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/publication/all/2026-11-09/page-0001.json",
+   "hindsight": true,
+   "mode": "publication",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "all"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/publication/ai_buildout/2026-11-09/page-0001.json",
+   "hindsight": true,
+   "mode": "publication",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 1,
+   "stream": "ai_buildout"
+  },
+  {
+   "complete": true,
+   "coverage_complete": true,
+   "date": "2026-11-09",
+   "first_page": "news/v1/views/publication/oil/2026-11-09/page-0001.json",
+   "hindsight": true,
+   "mode": "publication",
+   "page_count": 1,
+   "pages_omitted": 0,
+   "rows_omitted": 0,
+   "rows_total": 4,
+   "stream": "oil"
+  }
+ ],
+ "views_omitted": 0,
+ "views_total": 9
+}

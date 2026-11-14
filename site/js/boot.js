@@ -60,6 +60,7 @@
   document.getElementById('tab-history').onclick = () => showTab('history');
   document.getElementById('tab-bots').onclick    = () => showTab('bots');
   document.getElementById('tab-squeeze').onclick = () => showTab('squeeze');
+  document.getElementById('tab-news').onclick    = () => showTab('news');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
 
   setStatus('', 'Loading calibration data…');

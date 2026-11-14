@@ -17,6 +17,13 @@ const POSITIVE_KEYS = [
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
+  // MediaFlow News views (G3): the fixed index and exact generation-qualified pages, not a prefix.
+  'news/v2/views/index.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/archive/ai_buildout/2024-02-29/page-0020.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/publication/all/2026-11-09/page-0002.json',
+  // MediaFlow R1: one incarnation's research page.
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/research/view.json',
 ];
 const NEGATIVE_KEYS = [
   '', 'system/bot-membership-v1.json', 'paper-trades/requests/x.json',
@@ -30,6 +37,35 @@ const NEGATIVE_KEYS = [
   // survives parsing); raw `..` is pinned by the predicate test below.
   'news/v1/views/today.json', 'intraday/%2e%2e/latest.json',
   'intraday%2e/latest.json', 'manifest.json%2e',
+  // The News grant is exact keys only: every other shape stays 404.
+  'news/v1/views/', 'news/v1/views/index.json', 'news/v1/views/index.json/', 'news/v1/views/index.json.bak',
+  'news/v2/views/', 'news/v2/views/index.json/', 'news/v2/views/index.json.bak',
+  'news/v1/research/runs/2026-11-13/20261113T180000Z-0123abcd/annotations.jsonl.gz',
+  'news/v1/research/_writer/lease.json', 'news/v2/research/', 'news/v2/research/other.json',
+  'news/v2/research/view.json/', 'news/v2/research/view.json.bak',
+  'news/v2/research/view.json',   // R1: the retired mutable research key
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.0/research/view.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/research/other.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/research/view.json.bak',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.0/collector/oil/2026-11-09/page-0001.json',
+  'news/v1/views/collector/oil/2026-11-09/page-0000.json',
+  'news/v1/views/collector/oil/2026-11-09/page-0021.json',
+  'news/v1/views/collector/oil/2026-02-30/page-0001.json',
+  'news/v1/views/collector/fed/2026-11-09/page-0001.json',
+  'news/v1/views/live/oil/2026-11-09/page-0001.json',
+  'news/v1/views/collector/oil/2026-11-09/page-1.json',
+  'news/v1/views/collector/oil/2026-11-09/',
+  'news/v1/views/collector/oil/2026-11-09/%2e%2e/index.json',
+  'news/v1/runs/2026-11-09/run/manifest.json', 'news/v1/latest.json',
+  // G3: unqualified pages are refused; the generation segment is exact (16 lowercase hex, real instant).
+  'news/v1/views/publication/all/2026-11-09/page-0002.json',
+  'news/v2/views/p/20261109T100500Z-0123456789ABCDEF.1/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcde.1/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20260230T100500Z-0123456789abcdef.1/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20261109T246000Z-0123456789abcdef.1/collector/oil/2026-11-09/page-0001.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/collector/oil/2026-11-09/page-0021.json',
+  'news/v2/views/p/20261109T100500Z-0123456789abcdef.1/', 'news/v2/views/p/',
 ];
 const BAD_QUERIES = [
   '?url=x', '?_=abc', '?_=', '?_=1&_=2', '?_=' + '1'.repeat(21),
@@ -207,4 +243,24 @@ test('raw traversal strings are refused by the backend predicate', async () => {
   for (const key of ['manifest.json', 'intraday/latest.json', 'raw/qqq_chain_20240229.csv']) {
     assert.equal(isPublicBrowserDataKey(key), true, key);
   }
+});
+
+test('OI skew projection key is enabled identically on both allowlists, and only that key', async () => {
+  const b = await import('../backend/browser-data.js');
+  const g = await import('../frontend/preview-policy.mjs');
+  assert.equal(b.OI_SKEW_PROJECTION_KEY, 'crassus/oi-skew/v1/latest.json');
+  assert.equal(g.OI_SKEW_PROJECTION_KEY, b.OI_SKEW_PROJECTION_KEY);
+  assert.equal(b.OI_SKEW_PROJECTION_PUBLIC, true);
+  assert.equal(g.OI_SKEW_PROJECTION_PUBLIC, true);
+  assert.equal(b.BROWSER_DATA_KEYS.has(b.OI_SKEW_PROJECTION_KEY), true);
+  assert.equal(b.isPublicBrowserDataKey(b.OI_SKEW_PROJECTION_KEY), true);
+  assert.equal(g.publicReadAllowed(new URL(APP + '/browser-data/' + g.OI_SKEW_PROJECTION_KEY)), true);
+  // Only the exact key: siblings, prefixes and the private ledger stay refused.
+  for (const k of ['crassus/oi-skew/v1/', 'crassus/oi-skew/v1/latest.json.bak', 'crassus/oi-skew/v1/latest.jsonx',
+                   'crassus/ledger.jsonl', 'crassus/oi-skew/', 'crassus/oi-skew/v2/latest.json']) {
+    assert.equal(b.isPublicBrowserDataKey(k), false, k);
+    assert.equal(g.publicReadAllowed(new URL(APP + '/browser-data/' + k)), false, k);
+  }
+  // Query strings other than the numeric cache-buster stay refused.
+  assert.equal(g.publicReadAllowed(new URL(APP + '/browser-data/' + g.OI_SKEW_PROJECTION_KEY + '?x=1')), false);
 });

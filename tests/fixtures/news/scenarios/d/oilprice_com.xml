@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>OilPrice.com (SYNTHETIC TEST FIXTURE D, recovery run)</title>
+<link>https://oilprice.com</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>Tanker attacked near the Strait of Hormuz; crew evacuated</title>
+<link>https://oilprice.com/Geopolitics/Middle-East/Tanker-Attacked-Near-Hormuz.html</link>
+<guid isPermaLink="false">oilprice-fixture-a</guid>
+<description>Synthetic: updated report, the crew was evacuated.</description>
+<pubDate>Mon, 09 Nov 2026 10:00:00 GMT</pubDate>
+</item>
+<item>
+<title>OPEC+ delegates signal an extra output cut</title>
+<link>https://oilprice.com/Energy/Crude-Oil/OPEC-Delegates-Signal-Extra-Cut.html</link>
+<guid isPermaLink="false">oilprice-fixture-c</guid>
+<description>Synthetic: invented report for the commit-record crash case.</description>
+<pubDate>Mon, 09 Nov 2026 10:13:00 GMT</pubDate>
+</item>
+<item>
+<title>Refinery outage reported (normalization fails in the test)</title>
+<link>https://oilprice.com/Energy/Refinery-Outage-Reported.html</link>
+<guid isPermaLink="false">oilprice-fixture-normalize-fails</guid>
+<description>Synthetic: the M3 tests make normalization of this entry fail.</description>
+<pubDate>Mon, 09 Nov 2026 10:20:00 GMT</pubDate>
+</item>
+</channel>
+</rss>

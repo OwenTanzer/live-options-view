@@ -1,0 +1,57 @@
+{
+ "schema_version": "news-pilot-config/v1",
+ "active": false,
+ "note": "INACTIVE. Nothing reads this file except `python -m market_data.news pilot-cycle`, which refuses live sources and bucket stores while active is false. Activation is a reviewed change by Owen, together with the storage choices below.",
+ "schedule": {
+  "cron": "*/15 * * * *",
+  "timezone": "UTC",
+  "interval_s": 900,
+  "restart_policy": "NEVER",
+  "overlap": "a cycle that finds the writer or publish lease held exits non-zero without writing; the next tick retries",
+  "command": "python -m market_data.news pilot-cycle --config market_data/news/deploy/news-pilot.json --live"
+ },
+ "cycle_budget_s": 180,
+ "sources": ["ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch"],
+ "streams": ["ai_buildout", "oil"],
+ "views": {
+  "days": 7,
+  "tolerance_s": 120,
+  "data_label": "PILOT news: prices unavailable (no price input connected)"
+ },
+ "research": {
+  "mode": "research",
+  "cutoff": "build_as_of",
+  "data_label": "PREPARED research records (positioning / institutional pressure): not live collection",
+  "note": "FIXED VIEW. Each cycle publishes one research page, built from the private research ledger (news/v1/research/, private store only), in research mode at that cycle's build cutoff, as a page of the same generation as the news views. The loader accepts no other mode or cutoff; more modes, a cutoff picker, adapters or live research sources are separate decisions."
+ },
+ "prices": {"input": "unavailable"},
+ "storage": {
+  "private": {
+   "env_prefix": "NEWS_PRIVATE_",
+   "holds": "raw archive news/v1/runs/, news/v1/index/, news/v1/latest.json, leases, news/v1/publish/ state, head (news/v1/publish/head.json), commit records (news/v1/publish/commits/), snapshots and receipts",
+   "bucket": null,
+   "requirement": "not publicly readable (no r2.dev or custom-domain access)"
+  },
+  "public": {
+   "env_prefix": "NEWS_PUBLIC_",
+   "prefix": "news/v2/views/",
+   "holds": "sanitized view pages and index.json only",
+   "bucket": null,
+   "requirement": "the bucket the site already reads through /browser-data and the public R2 origin; credentials scoped to writes under news/v2/views/ if the provider allows"
+  }
+ },
+ "retention": {
+  "raw_archive": "keep (immutable history); review at the end of the pilot",
+  "snapshots": 3,
+  "receipts": "keep for the pilot",
+  "public_views": "the last views.days UTC dates, as immutable incarnations under news/v2/views/p/<gen>.<n>/; an incarnation's pages are deleted only once it has been out of the index for the reader grace (see generations), and never while a page upload into it is unanswered"
+ },
+ "generations": {
+  "note": "Owner-approved defaults (2026-11-12, G2 v2). A replaced generation stays public for at least reader_grace_s; deletion needs both the producer clock and the store clock to show reader_grace_s + clock_epsilon_s + clock_skew_s (49 min), agreeing within clock_skew_s. clock_epsilon_s is an ASSUMED store-clock bound that has not been verified for any provider, so clock_bound_verified stays false and expiry deletion is refused (reported by publish-status) until a deployment verifies it.",
+  "reader_grace_s": 2700,
+  "clock_epsilon_s": 120,
+  "clock_skew_s": 120,
+  "page_cap": 6300,
+  "clock_bound_verified": false
+ }
+}

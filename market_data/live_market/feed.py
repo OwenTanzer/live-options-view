@@ -61,6 +61,7 @@ class DXLinkFeed:
         self._reconnect_count     = 0
         self._first_connect_seen  = False
         self._auth_fail_count     = 0
+        self._stopped             = False
         self._last_error: Optional[str]  = None
         self._last_close_code: Optional[int] = None
         self._last_event_time: Optional[datetime] = None
@@ -152,9 +153,39 @@ class DXLinkFeed:
                 },
             }
 
+    # Three rejected AUTHs on fresh connections mean the streamer token is bad.
+    _AUTH_FAIL_THRESHOLD = 3
+
     def needs_reauth(self) -> bool:
         with self._lock:
-            return self._auth_fail_count >= 3
+            return self._auth_fail_count >= self._AUTH_FAIL_THRESHOLD
+
+    def _record_auth_rejection(self, message: str) -> None:
+        """Count a DXLink AUTH rejection (an ERROR frame on channel 0).
+
+        websocket-client's ``run_forever(reconnect=...)`` redials on a dropped
+        or server-closed connection WITHOUT calling ``on_close`` or
+        ``on_error``. Counting auth failures only in ``_on_close`` therefore
+        never fired in production: on November 13 the price lane's streamer
+        token expired at 00:23:29Z and the lane redialled every ~5 s with the
+        same expired token (11,579 reconnects, ``needs_reauth()`` False) while
+        publishing the last pre-expiry prices. The provider's own rejection is
+        the reliable signal, so it is counted here. An explicit expiry needs a
+        new token immediately; a bare rejection still waits for the threshold.
+        """
+        expired = "expired" in message.lower()
+        with self._lock:
+            self._authorized = False
+            self._channel_open = False
+            self._last_error = f"dxlink_auth_rejected: {message}"[:200]
+            if expired:
+                self._auth_fail_count = max(self._auth_fail_count + 1,
+                                            self._AUTH_FAIL_THRESHOLD)
+            else:
+                self._auth_fail_count += 1
+            count = self._auth_fail_count
+        log.error(f"DXLink AUTH rejected (count {count}"
+                  f"{', token expired' if expired else ''}): {message}")
 
     def update_token(self, new_token: str):
         """Replace the streamer token. The next reconnect will use it automatically."""
@@ -197,6 +228,8 @@ class DXLinkFeed:
         self._start_thread()
 
     def stop(self):
+        with self._lock:
+            self._stopped = True
         if self._ws:
             self._ws.close()
 
@@ -206,7 +239,21 @@ class DXLinkFeed:
 
     def _on_open(self, ws):
         with self._lock:
+            stopped = self._stopped
+        if stopped:
+            # A redial already scheduled by run_forever can land after stop();
+            # never authenticate a connection nobody owns any more.
+            try:
+                ws.close()
+            except Exception:
+                pass
+            return
+        with self._lock:
             self._connected = True
+            # A silent redial skips _on_close, so clear the previous connection's
+            # auth/channel state here; health must not report a dead login.
+            self._authorized = False
+            self._channel_open = False
             self._subscribed  = False  # reset so FEED_CONFIG re-subscribes after reconnect
             self._ts_subscribed = False
             self._ts_error = None
@@ -349,7 +396,9 @@ class DXLinkFeed:
 
         elif mtype == "ERROR":
             log.error(f"DXLink server error: {msg}")
-            if msg.get("channel") == self._TIMESALE_CHANNEL:
+            if msg.get("channel", 0) == 0 and str(msg.get("error") or "").upper() == "UNAUTHORIZED":
+                self._record_auth_rejection(str(msg.get("message") or "UNAUTHORIZED"))
+            elif msg.get("channel") == self._TIMESALE_CHANNEL:
                 with self._lock:
                     self._ts_error = str(msg.get("error") or msg.get("message")
                                          or "timesale_channel_error")[:200]
