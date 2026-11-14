@@ -962,11 +962,86 @@ class RunnerWiringTests(unittest.TestCase):
         self.assertIn("Invalid exit configuration", record["reason"])
 
 
+class OiSkewStop35RunnerTests(unittest.TestCase):
+    """D2: the selected 35% stop through the real runner path, for oi_skew_qqq.
+
+    Precedence is the existing one: mandatory flatten > protective stop >
+    the strategy's own signal (reversal) > re-entry cooldown. The trigger is
+    the executable bid against the entry's own premium; fees never enter it.
+    """
+    PARAMS = {"exits": {"stop_loss_pct": -0.35}}
+
+    def setUp(self):
+        import crassus.clock as clock_module
+        self._clock = clock_module
+        self._original_now_et = clock_module.now_et
+        self._set_clock(12, 0)
+
+    def tearDown(self):
+        self._clock.now_et = self._original_now_et
+
+    def _set_clock(self, hour, minute):
+        self._clock.now_et = lambda: datetime(2024, 1, 2, hour, minute,
+                                              tzinfo=timezone(timedelta(hours=-5)))
+
+    def _run(self, *, bid, ask, trades=None, activated=True, strategy=None):
+        directory = _tmpdir()
+        runner, account, submitted = RunnerWiringTests._runner(
+            self, directory, params=self.PARAMS,
+            trades=trades if trades is not None else [long_trade(1.40)])
+        account.strategy_id = "oi_skew_qqq"
+        runner.exits_activated = activated
+        runner.quotes = SimpleNamespace(quotes=lambda symbols: {s: quote(bid, ask) for s in symbols},
+                                        last_retry_note=None)
+        hold = Decision.no_trade(reason="signal unchanged", strategy_id="oi_skew_qqq",
+                                 strategy_version="1")
+        with mock.patch("crassus.runner.get_strategy",
+                        return_value=strategy or (lambda ctx: hold)):
+            runner._run_account(account, RunnerWiringTests._snapshot(self), "open")
+        return runner, submitted
+
+    def test_bid_at_65_percent_exits_the_full_position_as_the_exit_policy(self):
+        runner, submitted = self._run(bid=0.91, ask=0.95)
+        self.assertEqual(len(submitted), 1)
+        meta = submitted[0]["decision"]["metadata"]
+        self.assertEqual((submitted[0]["side"], submitted[0]["strategy_id"]), ("sell", "exit_policy"))
+        self.assertEqual((meta["exit_trigger"], meta["exit_threshold_price"],
+                          meta["exit_cost_basis"], meta["exit_held_quantity"]),
+                         ("protective_stop", 0.91, 1.4, 1))
+        self.assertGreater(runner.exit_state.cooldown_remaining_s("crassus_luigi", SYMBOL, 15.0), 0)
+
+    def test_one_cent_above_leaves_the_signal_reversal_to_the_strategy(self):
+        reversal = Decision(action="sell", symbol=SYMBOL, quantity=1, reason="skew flipped",
+                            strategy_id="oi_skew_qqq", strategy_version="1")
+        _, submitted = self._run(bid=0.92, ask=0.95, strategy=lambda ctx: reversal)
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0]["strategy_id"], "oi_skew_qqq")
+
+    def test_mandatory_flatten_wins_over_the_stop(self):
+        self._set_clock(15, 50)
+        runner, submitted = self._run(bid=0.50, ask=0.55)
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0]["strategy_id"], "eod_flatten")
+        self.assertEqual(runner.exit_state.cooldown_remaining_s("crassus_luigi", SYMBOL, 15.0), 0.0)
+
+    def test_fees_are_not_part_of_the_trigger(self):
+        with_fees = [dict(long_trade(1.40), fee=0.65, fees=0.65, commission=1.0)]
+        _, submitted = self._run(bid=0.91, ask=0.95, trades=with_fees)
+        meta = submitted[0]["decision"]["metadata"]
+        self.assertEqual((meta["exit_cost_basis"], meta["exit_threshold_price"]), (1.4, 0.91))
+        _, held = self._run(bid=0.92, ask=0.95, trades=with_fees)
+        self.assertEqual(held, [])
+
+    def test_inactive_without_the_activation_switch(self):
+        _, submitted = self._run(bid=0.50, ask=0.55, activated=False)
+        self.assertEqual(submitted, [])
+
+
 if __name__ == "__main__":
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
     for case in (BoundaryTests, PremiumStop35Tests, QuoteTests, PrecedenceTests, PolicyTests,
-                 ReentryTests, DurableStateTests, RunnerWiringTests):
+                 ReentryTests, DurableStateTests, RunnerWiringTests, OiSkewStop35RunnerTests):
         suite.addTests(loader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print("=" * 66)

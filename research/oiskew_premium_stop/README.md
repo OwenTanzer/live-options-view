@@ -17,7 +17,9 @@ The OI Skew policy is a per-account `exits` block. It changes nothing until an o
 - **Exact boundary.** The thresholds are now decided in exact decimal arithmetic (`_threshold_reached`). With the previous binary-float comparison, a bid of exactly 65% of a cent basis missed a −35% stop in **16 of the 100** exact-cent cases up to $20.00. For example, basis 1.40 with bid 0.91 computes to −0.3499999999999999. The spec says "at or below", so this is a correctness fix. It also applies to the −50% default and to targets, and is equally inert.
 - **Audit field.** Every exit row now records `exit_threshold_price` (for example 0.65 on a 1.00 basis), so overshoot past the level is auditable.
 
-**Tests:** `scripts/verify_exits.py` has 60 tests, 9 of them new (`PremiumStop35Tests`):
+**Tests:** `scripts/verify_exits.py` has 65 tests, 14 of them for this stop.
+
+`PremiumStop35Tests` (9, decision level):
 
 - an exhaustive cent grid at the 65% level, including the float-trap case;
 - one cent above the level holds;
@@ -28,7 +30,15 @@ The OI Skew policy is a per-account `exits` block. It changes nothing until an o
 - the OI Skew config is inert until activation;
 - the default boundaries are unchanged.
 
-Restoring the old float comparison fails the grid test.
+`OiSkewStop35RunnerTests` (5, through the real `Runner._run_account` for `oi_skew_qqq`):
+
+- a bid at exactly 65% submits a full-position sell attributed to `exit_policy`, records the cooldown and carries the threshold, basis and held quantity;
+- one cent above, the strategy's own signal reversal is submitted unchanged;
+- in the flatten window the mandatory `eod_flatten` wins, and no exit cooldown is written;
+- fee and commission fields on the fill change neither the basis nor the threshold;
+- without `CRASSUS_EXITS_ENABLED` nothing fires.
+
+Two mutation checks: restoring the old float comparison fails 3 tests (the grid and two runner tests), and evaluating the stop before the flatten fails the flatten-precedence test.
 
 ## Boundaries and reasons
 
@@ -53,6 +63,20 @@ Restoring the old float comparison fails the grid test.
 
 The stop runs before the strategy. When the stop and an OI Skew signal sell trigger on the same cycle, the stop is the recorded exit, at the same full quantity and quote. The stop is evaluated only at runner cycles, so a dip below 65% between cycles that recovers by the next cycle does not fire.
 
+## Fill overshoot and latency
+
+The trigger is a decision, not a fill. Each exit row records `exit_threshold_price` (the 65% level for the position's own basis), `exit_liquidation_price` (the executable bid it decided on) and `exit_quote_age_s`. The overshoot is `threshold - liquidation price`. The bid can be below the level when the first eligible quote arrives after a gap, or when a cycle lands after the cross. The Worker fill can differ again: the price can move between the decision and the order, and the fill price is in the execution record, not in the trigger. Fees never enter the trigger. They are reported separately on the trade, and the paper Worker charges none.
+
+## Evidence status of the replay
+
+The replay below predates this reconciliation and is kept as **research context only**. It is **not** executable-quote evidence and **not** portfolio evidence:
+
+- its bids are per-minute collector snapshot quotes used as proxies (age ≤ 90 s against the live 15 s rule; 9 of the 14 stop snapshots are older than 15 s), not quotes the Worker would have accepted;
+- 61 trips use the ledger's real cycles and 14 use synthetic 300 s cycles;
+- entries are held fixed: no re-entry after a stop, no portfolio path, no fills.
+
+Executable-quote and portfolio evaluation belong to D4.
+
 ## Offline replay (`simulate.py`, entries held fixed)
 
 - **Trips:** 75 actual OI Skew round trips, Aug 12 – Nov 9 (`round_trips.csv` from the ledger export).
@@ -75,7 +99,7 @@ Missing or absent snapshots are pending cycles (74, all on trip 75). The snapsho
 - **Losers ≤ −35% that did not fire (11):** every one breached the level only at its actual exit cycle, so a stop would have produced the same outcome there.
 - **Fees:** zero in paper. The stop replaces an exit rather than adding one, so fees are unchanged per trip.
 
-**Reading:** with entries held fixed, the stop truncates the tail of large losses and costs little elsewhere. This is not yet a portfolio result. What the bot would do after a stop (re-entry after the cooldown, a different strike), and the comparison against the other exit families, belong to step 4 on untouched data.
+**Reading (research context only, see above):** with entries held fixed, the stop truncates the tail of large losses and costs little elsewhere. This is not yet a portfolio result. What the bot would do after a stop (re-entry after the cooldown, a different strike), and the comparison against the other exit families, belong to step 4 on untouched data.
 
 ## Reproduce
 
