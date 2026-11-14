@@ -226,9 +226,30 @@ export async function fetchSpotMarkForDate(dateStr, underlying = 'QQQ') {
 // Cron entry point (see the `scheduled` handler above). Settles every bot
 // account's expired positions against end-of-day spot marks pulled from the
 // archived chain data, independent of whether anyone's dashboard is open.
+//
+// Returns a counts-only summary of what the sweep did (E2: the scheduled
+// handler logs it as the run's outcome). The summary never carries usernames,
+// balances, trades or prices -- only counts and the as-of date -- and building
+// it does not change what is read, written or settled.
 export async function settleAllBots(env, now = new Date()) {
   const asOf = settlementAsOfNY(now);
   const usernames = await botUsernames(env);
+  const summary = {
+    as_of: asOf,
+    accounts_indexed: usernames.length,
+    accounts_ineligible: 0,          // not a bot, or already closed
+    accounts_with_expired: 0,
+    expirations_needed: 0,
+    marks_resolved: 0,
+    marks_missing: 0,                // source answered without a usable mark
+    mark_errors: 0,                  // source threw; obligations stay pending
+    accounts_settled: 0,
+    positions_settled: 0,
+    accounts_unchanged: 0,           // nothing settleable yet (e.g. short awaiting a mark)
+    accounts_liquidated: 0,
+    accounts_retry: 0,               // not_found / conflict: left for the next run
+    no_op_reason: null,
+  };
 
   const pendingByUsername = new Map();
   const neededExpirations = new Set();
@@ -236,7 +257,7 @@ export async function settleAllBots(env, now = new Date()) {
   for (const username of usernames) {
     const record = await createStorage(env).users.get(username);
     if (!record) throw new Error('Indexed settlement account unavailable');
-    if (!record.is_bot || record.account_closed) continue;
+    if (!record.is_bot || record.account_closed) { summary.accounts_ineligible++; continue; }
     const book = computeBookFromTrades(record.trades);
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < asOf);
@@ -244,27 +265,45 @@ export async function settleAllBots(env, now = new Date()) {
     pendingByUsername.set(username, true);
     for (const [, b] of expired) neededExpirations.add(`${b.underlying}:${b.exp}`);
   }
+  summary.accounts_with_expired = pendingByUsername.size;
+  summary.expirations_needed = neededExpirations.size;
 
-  if (!pendingByUsername.size) return;
+  if (!pendingByUsername.size) {
+    summary.no_op_reason = usernames.length ? 'no_expired_positions' : 'no_bot_accounts';
+    return summary;
+  }
 
   const spotMarks = {};
   for (const identity of neededExpirations) {
     const [underlying, exp] = identity.split(':');
     try {
       const spot = await fetchSpotMarkForDate(exp, underlying);
-      if (spot != null) spotMarks[identity] = spot;
-    } catch { /* A failed source leaves only its own obligations pending. */ }
+      if (spot != null) { spotMarks[identity] = spot; summary.marks_resolved++; }
+      else summary.marks_missing++;
+    } catch { summary.mark_errors++; /* A failed source leaves only its own obligations pending. */ }
   }
 
   for (const username of pendingByUsername.keys()) {
     const outcome = await settleAccount(env, username, asOf, spotMarks);
     if (outcome.error === 'insolvent') {
       await liquidateAccount(env, username, null);
+      summary.accounts_liquidated++;
+    } else if (outcome.error) {
+      summary.accounts_retry++;
+    } else if (outcome.result?.settled?.length) {
+      summary.accounts_settled++;
+      summary.positions_settled += outcome.result.settled.length;
+    } else {
+      summary.accounts_unchanged++;
     }
     // Any other error (not_found, conflict) is left for the next cron run --
     // settlement is idempotent (see the alreadySettled check in
     // settleAccount), so a transient miss here just gets retried.
   }
+  if (!summary.accounts_settled && !summary.accounts_liquidated) {
+    summary.no_op_reason = summary.accounts_retry ? 'retry_pending' : 'nothing_settleable';
+  }
+  return summary;
 }
 export async function handleSettle(request, env) {
   const session = await requireSession(request, env);

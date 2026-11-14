@@ -9,11 +9,13 @@ artifacts, and that a fresh half-quote cannot rejuvenate an older one.
 """
 
 import csv
+import dataclasses
 import io
 import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,6 +26,7 @@ for path in (ROOT, ROOT / "research" / "synthetic_days"):
 
 import market_data.live_market as collector  # noqa: E402
 
+from market_data.live_market import market  # noqa: E402
 from market_data.live_market.market import _select_underlying_quote  # noqa: E402
 
 UTC = timezone.utc
@@ -231,6 +234,134 @@ class SavedArtifacts(unittest.TestCase):
         self.assertEqual(provenance["price_basis"], "remembered_spot")
         self.assertIsNone(provenance["collector_received_at"])
         self.assertEqual(provenance["freshness"], "stale")
+
+
+def _legacy_contributing(qqq: dict) -> dict:
+    """`_quote_contributing` exactly as it was before `last_price` existed."""
+    return {key: qqq.get(key) for key in (
+        "bid_ts", "ask_ts", "last_ts", "bid_observed_at", "ask_observed_at", "last_observed_at")}
+
+
+def _without_last_price(selection):
+    contributing = dict(selection.contributing)
+    contributing.pop("last_price", None)
+    return dataclasses.replace(selection, contributing=contributing)
+
+
+LAST_OBS = (NOW - timedelta(minutes=3)).isoformat()
+LAST_RCV = (NOW - timedelta(minutes=3) + timedelta(milliseconds=40)).isoformat()
+TRADE = {"last": 599.87, "last_ts": LAST_RCV, "last_observed_at": LAST_OBS,
+         "last_session": "regular"}
+
+
+class LastTradePriceEvidence(unittest.TestCase):
+    """The last trade's own price is recorded beside its contributing times.
+
+    Additive evidence only: the selected spot, its basis, receipt, provider
+    time, session and rule, the CSV and settlement inputs are unchanged.
+    """
+
+    QUOTES = {
+        "midpoint": {"bid": 600.02, "ask": 600.2, "bid_ts": OLD, "ask_ts": FRESH,
+                     "bid_observed_at": OLD, "ask_observed_at": FRESH, **TRADE},
+        "unstamped_midpoint": {"bid": 600.0, "ask": 600.2, "ask_ts": FRESH, **TRADE},
+        "last_trade": dict(TRADE),
+    }
+
+    def test_every_basis_records_the_last_trade_price(self):
+        for name, quote in self.QUOTES.items():
+            with self.subTest(name):
+                c = _select_underlying_quote(quote, None, None).contributing
+                self.assertEqual(c["last_price"], 599.87)
+                self.assertEqual((c["last_ts"], c["last_observed_at"]), (LAST_RCV, LAST_OBS))
+
+    def test_midpoint_selection_is_unchanged(self):
+        selection = _select_underlying_quote(self.QUOTES["midpoint"], None, None)
+        self.assertEqual((selection.price, selection.basis, selection.receipt_ts,
+                          selection.provider_observed_at, selection.session,
+                          selection.selection_rule),
+                         (600.11, "bid_ask_midpoint", OLD, OLD, None,
+                          "both_sides_required_older_receipt"))
+
+    def test_selection_matches_the_pre_change_record_except_the_new_field(self):
+        cases = dict(self.QUOTES, remembered={}, unavailable={})
+        for name, quote in cases.items():
+            with self.subTest(name):
+                spot = (605.5, OLD) if name == "remembered" else (None, None)
+                new = _select_underlying_quote(quote, *spot)
+                with mock.patch.object(market, "_quote_contributing", _legacy_contributing):
+                    old = _select_underlying_quote(quote, *spot)
+                self.assertEqual(_without_last_price(new), old)
+                self.assertEqual(set(new.contributing) - set(old.contributing), {"last_price"})
+
+    def test_missing_or_unusable_price_stays_unknown(self):
+        for value in (None, float("nan"), float("inf"), -float("inf"), "599.87", True):
+            with self.subTest(value=value):
+                quote = dict(self.QUOTES["midpoint"], last=value)
+                self.assertIsNone(_select_underlying_quote(quote, None, None)
+                                  .contributing["last_price"])
+        no_trade = {k: v for k, v in self.QUOTES["midpoint"].items() if not k.startswith("last")}
+        c = _select_underlying_quote(no_trade, None, None).contributing
+        self.assertEqual((c["last_price"], c["last_ts"], c["last_observed_at"]), (None, None, None))
+
+    def test_integer_price_is_recorded_as_a_number(self):
+        quote = dict(self.QUOTES["midpoint"], last=600)
+        price = _select_underlying_quote(quote, None, None).contributing["last_price"]
+        self.assertEqual(price, 600.0)
+        self.assertIsInstance(price, float)
+
+    def test_midpoint_sidecar_carries_a_complete_last_trade_record(self):
+        s3 = FakeS3()
+        us = snapshot(s3, dict(self.QUOTES["midpoint"], volume=1000))
+        latest = s3.json(us.latest_key)
+        provenance = s3.json(sidecar_key(latest["snapshot_key"]))
+        u = provenance["underlying"]
+        self.assertEqual((u["price"], u["price_basis"], u["collector_received_at"]),
+                         (600.11, "bid_ask_midpoint", OLD))
+        self.assertEqual((u["contributing"]["last_price"], u["contributing"]["last_ts"],
+                          u["contributing"]["last_observed_at"]), (599.87, LAST_RCV, LAST_OBS))
+        self.assertEqual(latest["underlying_market"]["provenance"], u)
+        rows = list(csv.DictReader(io.StringIO(s3.store[latest["snapshot_key"]].decode())))
+        self.assertEqual(float(rows[0]["UnderlyingPrice"]), 600.11)
+
+    def test_non_finite_state_price_never_costs_the_sidecar(self):
+        # The sidecar is written with allow_nan=False; a NaN last price
+        # restored into state must be recorded as unknown, not drop the record.
+        s3 = FakeS3()
+        us = snapshot(s3, dict(self.QUOTES["midpoint"], last=float("nan"), volume=1000))
+        latest = s3.json(us.latest_key)
+        provenance = s3.json(sidecar_key(latest["snapshot_key"]))
+        self.assertIsNone(provenance["underlying"]["contributing"]["last_price"])
+        self.assertEqual(provenance["underlying"]["price"], 600.11)
+
+    def test_spy_sidecar_records_it_and_settlement_inputs_are_unchanged(self):
+        state = {
+            "SPY": {"bid": 670.0, "ask": 670.4, "bid_ts": OLD, "ask_ts": FRESH,
+                    "bid_observed_at": OLD, "ask_observed_at": FRESH, "volume": 9,
+                    "last": 670.1, "last_ts": LAST_RCV, "last_observed_at": LAST_OBS},
+            ".SPY261109C670": {"bid": 2.0, "ask": 2.2, "oi": 20, "volume": 5},
+            ".SPY261109P670": {"bid": 2.1, "ask": 2.3, "oi": 21, "volume": 5},
+        }
+
+        def run(contributing_fn):
+            s3, calls = FakeS3(), []
+            spy = collector.UnderlyingSession("SPY")
+            with mock.patch.object(market, "_quote_contributing", contributing_fn), \
+                 mock.patch("market_data.live_market.settlement_marks.publish_settlement_mark",
+                            side_effect=lambda *a: calls.append(a[1:4] + a[4:5])):
+                collector.take_snapshot(
+                    s3, FakeFeed(state), [strike("SPY", 670)], EXP, "0DTE_Regular",
+                    TODAY, collector.Counters(), collector.SnapshotTracker(), spy)
+            latest = s3.json(spy.latest_key)
+            return calls, s3.json(sidecar_key(latest["snapshot_key"]))["underlying"]
+
+        new_calls, new_u = run(market._quote_contributing)
+        old_calls, old_u = run(_legacy_contributing)
+        self.assertEqual(new_u["contributing"]["last_price"], 670.1)
+        self.assertEqual(new_calls, old_calls)
+        self.assertTrue(new_calls)
+        new_u["contributing"].pop("last_price")
+        self.assertEqual(new_u, old_u)
 
 
 if __name__ == "__main__":

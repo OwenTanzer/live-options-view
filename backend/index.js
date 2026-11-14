@@ -4,6 +4,7 @@ import { handleBotIndexReconcile, handleBotMetadata, handleBots } from './bots.j
 import { handleLogin, handleLogout, handleMe, handleRegister } from './auth.js';
 import { handlePaperTrade } from './paper-trade.js';
 import { cutoverFenceActive } from './fence.js';
+import { createCronOutcomeLog } from './cron_outcome.js';
 
 // Re-exported from backend/common.js so the Worker's public API (the 31
 // exports pinned by tests/worker_logic.test.js) stays on backend/index.js.
@@ -110,13 +111,30 @@ export default {
   // but a bot nobody is watching never opens a dashboard, so its expired
   // positions just piled up unsettled (issue #42). This sweeps every bot
   // account server-side on a schedule instead of relying on a viewer.
+  //
+  // E2: every invocation logs a structured outcome (backend/cron_outcome.js):
+  // "invoked", then exactly one of "completed" (settled / no_op + reason) or
+  // "error" (re-thrown, so failure behavior is unchanged). Counts only.
   async scheduled(event, env, ctx) {
+    const outcome = createCronOutcomeLog(event);
+    outcome.invoked();
     // A settlement sweep during the cutover window would be a second writer
     // racing the copy; skip it, loudly, and let the next cron pick it up.
-    if (await cutoverFenceActive(env)) {
+    let fenced;
+    try {
+      fenced = await cutoverFenceActive(env);
+    } catch (error) {
+      outcome.error('cutover_fence', error);
+      throw error;
+    }
+    if (fenced) {
       console.log(JSON.stringify({ event: 'settlement_skipped_cutover_fence' }));
+      outcome.completed({ no_op_reason: 'cutover_fence' });
       return;
     }
-    ctx.waitUntil(settleAllBots(env));
+    ctx.waitUntil(settleAllBots(env).then(
+      summary => { outcome.completed(summary); },
+      error => { outcome.error('settle_all_bots', error); throw error; },
+    ));
   },
 }

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Optional
@@ -226,7 +227,19 @@ def _older_observed(*pairs: tuple[str | None, str | None]) -> str | None:
     return min(parsed, key=lambda item: item[0])[1]
 
 
+def _finite_price(value: Any) -> float | None:
+    """A recorded price only when it is a real finite number; else unknown."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
 def _quote_contributing(qqq: dict) -> dict[str, Any]:
+    # `last_price` is the last trade's own price, recorded beside the receipt
+    # (`last_ts`) and provider event time (`last_observed_at`) that the feed
+    # writes with it in the same Trade/TradeETH event. It is evidence only:
+    # selection never reads it, so it cannot change the selected spot, and a
+    # missing or non-finite price stays None rather than being inferred.
     return {
         "bid_ts": qqq.get("bid_ts"),
         "ask_ts": qqq.get("ask_ts"),
@@ -234,6 +247,7 @@ def _quote_contributing(qqq: dict) -> dict[str, Any]:
         "bid_observed_at": qqq.get("bid_observed_at"),
         "ask_observed_at": qqq.get("ask_observed_at"),
         "last_observed_at": qqq.get("last_observed_at"),
+        "last_price": _finite_price(qqq.get("last")),
     }
 
 
