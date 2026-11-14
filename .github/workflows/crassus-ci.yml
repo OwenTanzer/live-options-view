@@ -37,6 +37,9 @@ jobs:
       - name: Run OI-skew per-account tracker suite (#107)
         working-directory: crassus
         run: python scripts/verify_oi_skew_accounts.py
+      - name: OA-236 profit protection / re-entry family (inactive)
+        working-directory: crassus
+        run: python scripts/verify_profit_protection.py
       # The site OI skew meter (site/shared/oi-skew.js) is pinned to the real
       # bot gates and collector reading by this fixture; a strategy or reading
       # change that alters any case fails here until the fixture (and, if the
