@@ -120,12 +120,18 @@ def run(a):
                    "actual_exit_price": float(t["exit_price"]), "actual_return_pct": float(t["return_pct"]),
                    "actual_exit_by": t["exit_by"] or "unattributed", "bars_in_hold": 0, "phases": {},
                    "armed": False, "protect_exit": None, "pending": 0, "reentry_opportunities": 0}
-            pre = [b for b in bars if b.available_at <= entry]
-            if not bars or not pre:
-                rec["skipped"] = "no underlying bars before entry"
+            if not bars:
+                rec["skipped"] = "no underlying bars for the session"
                 rows.append(rec)
                 continue
-            pos = Position(side, entry, pre[-1].close, day)
+            # Entry reference: the last spot sample at/before the fill; an
+            # entry in the first five minutes has no completed bar yet, and
+            # the challenger then reports `unknown` until its scale warms up
+            # (the price floor still applies). Never a later sample.
+            prior = [x for x in samples if ts(x["t"]) <= entry]
+            ref = prior[-1]["spot"] if prior else bars[0].open
+            rec["entry_reference"] = "spot_sample_at_or_before_fill" if prior else "first_bar_open_after_fill"
+            pos = Position(side, entry, ref, day)
             ch = ChallengerDirection(pos, ChallengerConfig())
             imb0 = skew_at(cycles, entry)
             sign0 = (1 if (imb0 or 0) > 0 else -1) if imb0 else (1 if side == "call" else -1)
