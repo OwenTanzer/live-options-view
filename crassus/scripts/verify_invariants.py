@@ -701,8 +701,11 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
     # Activation flips the same catalog entry to a real account once its
     # credential exists -- via the ignored accounts.json override, exactly
     # like any other private field override above.
-    activated_username = inactive_entries[0]["username"]
-    activated_password_env = inactive_entries[0]["password_env"]
+    # Worker-backed entries only: a tastytrade-routed entry has no
+    # password_env (its credentials are CRASSUS_TASTY_* env vars).
+    worker_inactive = [e for e in inactive_entries if e.get("password_env")]
+    activated_username = worker_inactive[0]["username"]
+    activated_password_env = worker_inactive[0]["password_env"]
     activation_override = tmp / "accounts.activated.json"
     activation_override.write_text(json.dumps({
         "accounts": [{"username": activated_username, "active": True}]

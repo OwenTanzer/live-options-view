@@ -74,6 +74,26 @@
       "strategy_id": "oi_skew_qqq"
     },
     {
+      "_comment": "Real-brokerage route for oi_skew_qqq (crassus/tastytrade_broker.py). Inactive until the account owner provisions CRASSUS_TASTY_* secrets and, for live money, CRASSUS_TASTY_LIVE_APPROVAL. See docs/tastytrade-live-trading.md.",
+      "alias": "OI Skew (tastytrade)",
+      "username": "tasty_oiskew",
+      "broker": "tastytrade",
+      "active": false,
+      "strategy_id": "oi_skew_qqq",
+      "params": {
+        "tastytrade_limits": {
+          "max_contracts_per_order": 1,
+          "max_open_contracts": 1,
+          "max_premium_per_contract": 3.0,
+          "max_daily_loss_usd": 250.0,
+          "max_opens_per_day": 4
+        },
+        "eod_unquoted_exit": "retry",
+        "eod_unquoted_exit_minutes": 5,
+        "entry_stop_basis": "both"
+      }
+    },
+    {
       "alias": "Put-Call Ratio",
       "username": "crassus_putcall",
       "password_env": "CRASSUS_PW_PUT_CALL_RATIO",

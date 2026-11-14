@@ -52,6 +52,9 @@ REDDIT_USER_AGENT = os.environ.get("REDDIT_USER_AGENT")
 TRUMP_FEED_USER_AGENT = os.environ.get("TRUMP_FEED_USER_AGENT")
 
 
+BROKERS = frozenset({"worker", "tastytrade"})
+
+
 @dataclass
 class Account:
     """One bot account. An account *is* a login -- the server has no account_id,
@@ -64,6 +67,10 @@ class Account:
     params: dict[str, Any] = field(default_factory=dict)
     paper_margin_limit: float = 1.0
     paper_financing_rate: float = 0.0
+    # "worker" (paper trading on the Worker, the default) or "tastytrade"
+    # (real brokerage orders via crassus/tastytrade_broker.py; credentials and
+    # the owner's live approval come only from CRASSUS_TASTY_* env vars).
+    broker: str = "worker"
 
     def __repr__(self) -> str:  # keep passwords out of tracebacks and logs
         return f"Account(alias={self.alias!r}, username={self.username!r}, strategy_id={self.strategy_id!r})"
@@ -145,6 +152,25 @@ def account_gaps(
     for entry in _entries_for(path, catalog_path, override_path):
         if entry.get("active", True) is False:
             continue
+        if entry.get("broker", "worker") == "tastytrade":
+            # Brokerage-routed: no Worker password. Report which owner-set
+            # CRASSUS_TASTY_* variables are absent (names only, never values).
+            required = [
+                "CRASSUS_TASTY_MODE",
+                "CRASSUS_TASTY_ACCOUNT_NUMBER",
+                "CRASSUS_TASTY_CLIENT_SECRET",
+                "CRASSUS_TASTY_REFRESH_TOKEN",
+            ]
+            if environment.get("CRASSUS_TASTY_MODE") == "live":
+                required.append("CRASSUS_TASTY_LIVE_APPROVAL")
+            for env_name in required:
+                if not environment.get(env_name):
+                    gaps.append({
+                        "alias": str(entry.get("alias", "")),
+                        "username": str(entry.get("username", "")),
+                        "missing": env_name,
+                    })
+            continue
         if entry.get("password"):
             continue
         env_name = entry.get("password_env")
@@ -206,6 +232,26 @@ def load_accounts(
     missing: list[str] = []
     for entry in entries:
         if entry.get("active", True) is False:
+            continue
+        broker = entry.get("broker", "worker")
+        if broker not in BROKERS:
+            raise ValueError(f"Account {entry['alias']}: broker must be one of {sorted(BROKERS)}, got {broker!r}")
+        if broker == "tastytrade":
+            if entry.get("password") or entry.get("password_env"):
+                raise ValueError(
+                    f"Account {entry['alias']}: a tastytrade-routed account takes no Worker password; "
+                    "its credentials come only from CRASSUS_TASTY_* environment variables"
+                )
+            accounts.append(
+                Account(
+                    alias=entry["alias"],
+                    username=entry["username"],
+                    password="",
+                    strategy_id=entry["strategy_id"],
+                    params=entry.get("params", {}),
+                    broker=broker,
+                )
+            )
             continue
         password = entry.get("password")
         if not password and entry.get("password_env"):
