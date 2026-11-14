@@ -15,7 +15,9 @@ This is Skew + Direction **step 3**. The policy lives in `crassus/crassus/profit
 
 **Precedence:** EOD flatten > 35% stop > protection > strategy signal sell > re-entry. A position that isn't net-profitable belongs to the stop layer, never to this family.
 
-## Offline replay (`replay.py`, entries fixed, protection only)
+## Offline replay (`replay.py`): a zero-fee, protection-only counterfactual with entries fixed
+
+**What this is, and is not.** The replay config sets `fee_per_contract_per_side = 0`. Each row is a counterfactual: "had this protection rule closed the position at that snapshot bid instead of the actual exit", with entries held fixed. It is not fee-net realized performance, and it is not a causal profit estimate.
 
 **Inputs:**
 - The 75 actual paper round trips (Aug 12 – Nov 9).
@@ -30,13 +32,24 @@ The policy acts only on bars that complete strictly before the actual exit. The 
 | Fill at the decision bid | 27 | 21 (11 breakdown, 10 floor) | **−$1,862** | 14 / 7 | +$1,243 | −$3,105 |
 | One snapshot later (~64 s) | 27 | 21 | −$1,885 | 14 / 7 | +$1,199 | −$3,084 |
 
-**Largest-winner sensitivity:** four of the five largest winners were cut. #58 went from +506% to +74%, #63 from +298% to +4.5% (floor), #31 from +946% to +493%, and #75 from +338% to +206%. Those four cost $2,774; the other 17 exits net +$912. Only #53's exit (+286% to +136%) and the floor exits on fading trades look like what the family was meant to do.
+**Largest-winner sensitivity:** all five of the largest winners were cut.
 
-**Re-entry:** 11 qualifying opportunities appeared inside held windows (a confirmed recovery with the original skew still valid). Their economics need quotes for the *new* contract after an exit and full portfolio state, so they are left to step 4, not estimated here.
+| Trip | Actual | Protection exit | Change |
+|---|---|---|---|
+| #58 | +506% | +74% | −$933 |
+| #63 | +298% | +4.5% (floor) | −$918 |
+| #31 | +946% | +493% | −$534 |
+| #75 | +338% | +206% | −$389 |
+| #53 | +286% | +136% | −$295 |
 
-**Reading:** with entries fixed, protection without re-entry is **not supported** on this history. For a strategy whose results are concentrated in a few large 0DTE trends, intraday giveback protection removes more of the right tail than the giveback it avoids. The thresholds were declared before the replay and have not been tuned to it. Step 4 compares this family, with and without re-entry, against unchanged exits, stop-only, fixed take-profit and direction-free trailing, all frozen before any untouched evaluation.
+Those five cost **−$3,069**. The other 16 exits net +$1,207, mostly floor exits on fading trades.
+
+**Re-entry:** the 11 "re-entry opportunities" are **counts**, not re-entry economics. Each is a confirmed recovery with the original skew still valid inside an actual holding window, and the replay stops a trip at its first opportunity. Pricing a re-entry needs quotes for the *new* contract after an exit, plus full portfolio state, so that is left to step 4.
+
+**Reading:** in this zero-fee counterfactual with entries fixed, protection without re-entry is **not supported** on this history. For a strategy whose results are concentrated in a few large 0DTE trends, intraday giveback protection removes more of the right tail than the giveback it avoids. The thresholds were declared before the replay and have not been tuned to it. Step 4 compares this family, with and without re-entry, against unchanged exits, stop-only, fixed take-profit and direction-free trailing, all frozen before any untouched evaluation.
 
 **Caveats:**
+- CI at f919f2d: the 50 D3 checks pass, but crassus-ci then fails at the paper-harness handshake (fixed separately in #237) and skips the downstream steps, so that workflow is not all green.
 - Bar highs and lows come from about five spot samples per bar.
 - Snapshot bids up to 90 s old stand in for the live 15 s quote rule.
 - Availability is assumed at bar close.
