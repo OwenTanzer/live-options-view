@@ -31,6 +31,9 @@ jobs:
       - name: Run OI-skew per-account tracker suite (#107)
         working-directory: crassus
         run: python scripts/verify_oi_skew_accounts.py
+      - name: OA-236 profit protection / re-entry family (inactive)
+        working-directory: crassus
+        run: python scripts/verify_profit_protection.py
       - name: Run immutable market-readings join suite (#107)
         working-directory: crassus
         run: python scripts/verify_market_readings_join.py
