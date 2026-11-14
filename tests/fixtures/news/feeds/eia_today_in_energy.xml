@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>EIA Today in Energy (SYNTHETIC TEST FIXTURE)</title>
+<link>https://www.eia.gov/todayinenergy/</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>Data center electricity demand draws more natural gas and oil into power generation</title>
+<link>https://www.eia.gov/todayinenergy/detail.php?id=99901</link>
+<guid>https://www.eia.gov/todayinenergy/detail.php?id=99901</guid>
+<description>Synthetic: utilities serving new data center load ran oil-fired peaking units more often.</description>
+<pubDate>Mon, 09 Nov 2026 14:00:00 -0500</pubDate>
+</item>
+<item>
+<title>U.S. crude oil inventories rose last week</title>
+<link>https://www.eia.gov/todayinenergy/detail.php?id=99902</link>
+<guid>https://www.eia.gov/todayinenergy/detail.php?id=99902</guid>
+<description>Synthetic: commercial crude stocks increased.</description>
+<pubDate>Fri, 06 Nov 2026 10:30:00 -0500</pubDate>
+</item>
+</channel>
+</rss>

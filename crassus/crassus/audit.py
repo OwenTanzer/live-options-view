@@ -14,6 +14,7 @@ time rather than silently producing unusable evidence.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
@@ -54,6 +55,8 @@ class Outcome:
         }
     )
 
+
+log = logging.getLogger("crassus.audit")
 
 MANDATORY_FIELDS = (
     "schema_version",
@@ -100,6 +103,10 @@ class DecisionLedger:
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.paths = LedgerPaths.for_run(Path(ledger_dir), self.run_id)
         self._lock = threading.Lock()
+        #: Called with each record AFTER it is durably written (e.g. the
+        #: sanitized OI skew projection publisher). An observer can never
+        #: affect the write or the caller: exceptions are swallowed.
+        self.observers: list = []
 
     def new_decision_id(self) -> str:
         return str(uuid.uuid4())
@@ -204,4 +211,9 @@ class DecisionLedger:
                 fh.flush()
                 os.fsync(fh.fileno())
             sync_directory(self.paths.ledger.parent)
+        for observer in list(self.observers):
+            try:
+                observer(rec)
+            except Exception:  # an observer failure is never a ledger failure
+                log.warning("ledger observer failed: %s", getattr(observer, "__qualname__", observer))
         return rec

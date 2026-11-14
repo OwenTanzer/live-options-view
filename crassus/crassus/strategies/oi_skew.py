@@ -153,6 +153,18 @@ class SessionImbalanceTracker:
     def has_history(self) -> bool:
         return bool(self._observations)
 
+    @property
+    def session_start_observed_at(self) -> str | None:
+        """Snapshot timestamp of the session-start reading (the anchor)."""
+        if not self._observations:
+            return None
+        return self._observations[0][0]
+
+    @property
+    def session_key(self) -> str | None:
+        """The reset key (UTC calendar date) the current anchor belongs to."""
+        return self._session_key
+
 
 def _near_money_oi(snapshot: Any, near_money_pct: float) -> tuple[float, float, int]:
     """Sum call/put OpenInterest within `near_money_pct` of the underlying.
@@ -223,6 +235,18 @@ def _decide_core(ctx: StrategyContext, tracker: SessionImbalanceTracker) -> Deci
         session_start_imbalance=session_start,
         delta_from_session_start=delta,
         band_strikes=band_strikes,
+        # Provenance for the read-only meter projection (Skew + Direction H1).
+        # Additive only: no gate reads these. The anchor's identity is the
+        # reset key plus when the anchor reading was observed; together with
+        # the ledger's run_id that distinguishes a restart reset.
+        session_key=tracker.session_key,
+        anchor_observed_at=tracker.session_start_observed_at,
+        params={
+            "near_money_pct": near_money_pct,
+            "imbalance_threshold": imbalance_threshold,
+            "min_change_from_session_start": min_change,
+            "min_band_strikes": min_band_strikes,
+        },
     )
 
     if ctx.session_phase != "open":

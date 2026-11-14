@@ -26,6 +26,7 @@ from typing import Any
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
 from .archive import from_environment as archive_from_environment
+from .oi_skew_publisher import from_environment as oi_skew_publisher_from_environment
 from .bs_edge import annotate_buy_decision
 from .client import (
     AccountLiquidated,
@@ -144,6 +145,10 @@ def decision_base(*, decision_id: str, alias: str, strategy_id: str,
         "market_snapshot_lineage": (snapshot.lineage if snapshot
                                     else unavailable_lineage("unavailable")),
         "market_readings_join": join,
+        # Source revision of the running image (Railway sets this for git
+        # deploys; the scanner already records the same variable). Explicitly
+        # null when unknown -- never guessed.
+        "code_revision": os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 
@@ -823,6 +828,11 @@ def main(argv: list[str] | None = None) -> int:
     archive = archive_from_environment(runner.ledger.paths.ledger.parent, runner.state_dir)
     if archive:
         archive.start()
+    # Sanitized public OI skew meter projection (H1). Off unless its own
+    # CRASSUS_OI_SKEW_PUBLIC_* settings are complete; never affects trading.
+    oi_skew_publisher = oi_skew_publisher_from_environment()
+    if oi_skew_publisher:
+        runner.ledger.observers.append(oi_skew_publisher.offer)
     try:
         if args.once:
             runner.install_signal_handlers()
@@ -836,6 +846,8 @@ def main(argv: list[str] | None = None) -> int:
         runner.run()
         return 0
     finally:
+        if oi_skew_publisher:
+            oi_skew_publisher.close()
         if archive:
             archive.close()
 

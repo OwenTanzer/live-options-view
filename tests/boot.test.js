@@ -37,7 +37,7 @@ function makeEl(id) {
 }
 const EL_IDS = ['underlying-select', 'auth-form', 'auth-username', 'auth-password',
   'auth-error', 'auth-submit', 'auth-toggle', 'auth-logout', 'margin-call-continue',
-  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'hist-date'];
+  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'hist-date'];
 
 function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   const els = {};
@@ -152,7 +152,8 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   boot.els['tab-squeeze'].onclick();
   boot.els['tab-history'].onclick();
   boot.els['tab-live'].onclick();
-  assert.deepEqual(boot.calls.showTab, ['bots', 'squeeze', 'history', 'live'], 'tab buttons must route to their tabs');
+  boot.els['tab-news'].onclick();
+  assert.deepEqual(boot.calls.showTab, ['bots', 'squeeze', 'history', 'live', 'news'], 'tab buttons must route to their tabs');
   boot.els['hist-date'].value = '2026-09-18';
   boot.els['hist-date'].onchange({ target: boot.els['hist-date'] });
   assert.deepEqual(boot.calls.loadHistoryDate, ['2026-09-18'], 'history date picker must load the chosen date');

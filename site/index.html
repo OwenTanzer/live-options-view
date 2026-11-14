@@ -428,6 +428,61 @@
     .pin-candidate-name { display: none; }
   }
 
+  /* ── OI skew meter (Skew + Direction H1) ──────────────────────────────── */
+  #oi-skew-meter {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px 10px;
+    margin-bottom: 1rem;
+  }
+  #oi-skew-meter .oi-skew-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  }
+  #oi-skew-meter h2 { font-size: 0.85rem; font-weight: 600; color: var(--bright); }
+  #oi-skew-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--bright); }
+  #oi-skew-lean { font-size: 0.85rem; font-weight: 600; }
+  #oi-skew-meter[data-lean="put-heavy"] #oi-skew-lean { color: var(--put5); }
+  #oi-skew-meter[data-lean="call-heavy"] #oi-skew-lean { color: var(--call5); }
+  #oi-skew-meta { font-size: 0.72rem; color: var(--dim); }
+  #oi-skew-meter[data-state="stale"] #oi-skew-meta,
+  #oi-skew-meter[data-state="closed"] #oi-skew-meta { color: #d49a00; }
+  #oi-skew-meter[data-state="stale"] .oi-skew-scale,
+  #oi-skew-meter[data-state="closed"] .oi-skew-scale,
+  #oi-skew-meter[data-state="unavailable"] .oi-skew-scale,
+  #oi-skew-meter[data-state="no_data"] .oi-skew-scale { opacity: 0.55; }
+  .oi-skew-scale { margin: 8px 0 2px; }
+  #oi-skew-track {
+    position: relative; height: 14px; border-radius: 7px;
+    background: linear-gradient(to right, var(--put4) 0%, var(--put2) 35%, #21262d 50%, var(--call2) 65%, var(--call4) 100%);
+    border: 1px solid var(--border);
+  }
+  #oi-skew-track .oi-skew-tick {
+    position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--fg); opacity: 0.6;
+  }
+  #oi-skew-track .oi-skew-zero { border-left-style: solid; opacity: 0.35; }
+  #oi-skew-marker {
+    position: absolute; top: -5px; width: 4px; height: 22px; margin-left: -2px;
+    background: var(--bright); border-radius: 2px; box-shadow: 0 0 0 2px var(--bg);
+  }
+  .oi-skew-labels {
+    display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--dim); margin-top: 3px;
+  }
+  .oi-skew-bot-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
+  #oi-skew-bot {
+    font-size: 0.78rem; font-weight: 600; padding: 1px 8px; border-radius: 4px;
+    border: 1px solid var(--border); color: var(--fg);
+  }
+  #oi-skew-bot[data-state="bullish"] { color: var(--call5); border-color: var(--call3); }
+  #oi-skew-bot[data-state="bearish"] { color: var(--put5); border-color: var(--put3); }
+  #oi-skew-bot[data-availability="not_published"] { color: var(--dim); border-style: dashed; }
+  #oi-skew-bot-detail, #oi-skew-thresholds, .oi-skew-caveat { font-size: 0.72rem; color: var(--dim); }
+  #oi-skew-thresholds, .oi-skew-caveat { margin-top: 3px; white-space: normal; }
+  @media (max-width: 640px) {
+    #oi-skew-meter { padding: 8px 10px; }
+    .oi-skew-labels .oi-skew-label-gate { display: none; }
+  }
+
   /* ── crude calibration panel ─────────────────────────────────────────── */
   #steo-panel {
     display: flex;
@@ -724,7 +779,92 @@
   .analysis-link:hover { background: var(--panel); }
   .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
-  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden { display: none; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden,
+  #news-panel.hidden { display: none; }
+
+  /* ── news panel (MediaFlow M4b) ──────────────────────────────────────── */
+  /* Scoped to #news-panel; tests/news_panel/harness.html copies this block. */
+  #news-panel {
+    max-width: 1100px; display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem 1rem;
+    font-size: 0.85rem; line-height: 1.4;
+  }
+  #news-panel > div { display: flex; flex-direction: column; gap: 0.6rem; }
+  #news-panel .np-head, #news-panel .np-coverage, #news-panel .np-rows, #news-panel .np-picker {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;
+  }
+  #news-panel .np-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  #news-panel .np-header, #news-panel .np-meta, #news-panel .np-line, #news-panel .np-nav, #news-panel .np-filter {
+    display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: baseline;
+  }
+  #news-panel .np-meta { margin-top: 0.35rem; font-size: 0.75rem; }
+  #news-panel .np-badge {
+    font-size: 0.7rem; font-weight: 600; padding: 1px 7px; border-radius: 4px;
+    background: #1c2128; border: 1px solid var(--border); white-space: nowrap;
+  }
+  #news-panel .np-synthetic { color: #d29922; border-color: #d29922; }
+  #news-panel .np-hindsight { color: #ffaa88; border-color: #881100; }
+  #news-panel .np-mode { color: #4a90d9; }
+  #news-panel .np-bad { color: #ee3300; border-color: #ee3300; }
+  #news-panel .np-dim, #news-panel .np-note { color: var(--dim); }
+  #news-panel .np-missed { color: #d29922; margin-left: 0.4rem; }
+  #news-panel .np-note { font-size: 0.75rem; margin: 0.2rem 0; }
+  #news-panel .np-incomplete {
+    background: #2a0a0a; border: 1px solid #ee3300; color: #ffaa88; border-radius: 6px; padding: 0.5rem 0.75rem;
+  }
+  #news-panel .np-incomplete strong { color: var(--bright); }
+  #news-panel .np-nav { justify-content: space-between; }
+  #news-panel .np-btn, #news-panel .np-select {
+    font: inherit; font-size: 0.8rem; color: var(--bright); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; max-width: 100%;
+  }
+  #news-panel .np-btn:disabled { color: var(--dim); }
+  #news-panel .np-btn:focus-visible, #news-panel .np-select:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+  #news-panel h3 { font-size: 0.85rem; color: var(--bright); margin: 0 0 0.25rem; }
+  #news-panel .np-table-wrap { overflow-x: auto; max-width: 100%; }
+  #news-panel .np-table { border-collapse: collapse; width: 100%; min-width: 0; font-size: 0.75rem; }
+  /* Reset the heatmap's global table/th/td rules (fixed cell size, bold, uppercase, 420px minimum). */
+  #news-panel .np-table th, #news-panel .np-table td {
+    border-bottom: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top;
+    width: auto; height: auto; font-size: 0.75rem; font-weight: 400; line-height: 1.4;
+    position: static; text-transform: none; letter-spacing: normal;
+  }
+  #news-panel .np-table th { color: var(--dim); font-weight: 600; }
+  #news-panel .np-mono, #news-panel .np-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  #news-panel .np-src { min-width: 12rem; }
+  #news-panel .np-seg.np-quiet td:nth-child(2) { color: #00cc55; }
+  #news-panel .np-seg.np-covered td:nth-child(2) { color: var(--fg); }
+  #news-panel .np-seg.np-partial td:nth-child(2), #news-panel .np-unknown,
+  #news-panel .np-seg.np-unknown td:nth-child(2) { color: #d29922; }
+  #news-panel .np-seg.np-pending_availability td:nth-child(2) { color: #ffaa88; }
+  #news-panel .np-facts { list-style: none; margin: 0.4rem 0 0; padding: 0; font-size: 0.75rem; display: flex; flex-direction: column; gap: 2px; }
+  #news-panel .np-price-missing { color: #ee3300; }
+  #news-panel .np-price-stale { color: #d29922; }
+  #news-panel .np-price-matched { color: #00cc55; }
+  #news-panel .np-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+  #news-panel .np-count { color: var(--dim); font-size: 0.75rem; }
+  #news-panel .np-empty { color: var(--dim); font-style: italic; margin: 0; }
+  #news-panel .np-row {
+    border-top: 1px solid var(--border); padding-top: 0.45rem;
+    display: flex; flex-direction: column; gap: 0.2rem; overflow-wrap: anywhere;
+  }
+  #news-panel .np-title { color: var(--bright); font-weight: 600; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; }
+  #news-panel .np-title a { color: var(--bright); }
+  #news-panel .np-line { font-size: 0.75rem; }
+  #news-panel .np-row .np-mono { white-space: normal; }
+  #news-panel .np-later { font-size: 0.75rem; color: var(--dim); border-left: 2px solid var(--border); padding-left: 0.5rem; }
+  #news-panel .np-price { font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  @media (max-width: 600px) {
+    #news-panel { padding: 0.75rem 16px; }
+    /* Coverage rows stack into cards instead of scrolling sideways. */
+    #news-panel .np-table, #news-panel .np-table tbody, #news-panel .np-table tr, #news-panel .np-table td { display: block; width: 100%; }
+    #news-panel .np-table tr:first-child { display: none; }
+    #news-panel .np-table tr { border-bottom: 1px solid var(--border); padding: 4px 0; }
+    #news-panel .np-table td { border: 0; padding: 1px 0; }
+    #news-panel .np-src { min-width: 0; }
+  }
+  /* MediaFlow P1 research view (js/news-research.js styles its own content): shown with the News tab. */
+  #news-panel.hidden + #news-research { display: none; }
+  /* ── end news panel ── */
 
   /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
   #squeeze-header {
@@ -999,6 +1139,7 @@
   <button id="tab-history" class="tab-btn">Historical</button>
   <button id="tab-bots" class="tab-btn">Automated</button>
   <button id="tab-squeeze" class="tab-btn">Squeeze</button>
+  <button id="tab-news" class="tab-btn">News</button>
   <a id="directional-analysis-link" class="analysis-link"
      href="https://directional-analysis-production.up.railway.app/"
      target="_blank" rel="noopener noreferrer"
@@ -1032,6 +1173,33 @@
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
+
+<section id="oi-skew-meter" data-state="unavailable" aria-labelledby="oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="oi-skew-heading">QQQ near-money OI skew</h2>
+    <span id="oi-skew-value">—</span>
+    <span id="oi-skew-lean">Waiting for snapshot</span>
+    <span id="oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="oi-skew-track" role="meter" aria-labelledby="oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span class="oi-skew-label-gate">−0.3 bot gate</span><span>0</span><span class="oi-skew-label-gate">+0.3 bot gate</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <div class="oi-skew-bot-row">
+    <span id="oi-skew-bot" data-state="unknown" data-availability="not_published">Bot signal: not published</span>
+    <span id="oi-skew-bot-detail"></span>
+  </div>
+  <p id="oi-skew-thresholds"></p>
+  <p class="oi-skew-caveat">(call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+</section>
 
 <div id="price-strip" aria-label="Quote cards">
   <section class="quote-section" aria-labelledby="qp-core-heading">
@@ -1239,6 +1407,9 @@
 
 </div> <!-- /squeeze-panel -->
 
+<div id="news-panel" class="hidden" aria-live="polite"></div> <!-- MediaFlow news views (js/news-panel.js) -->
+<div id="news-research" aria-live="polite"></div> <!-- MediaFlow P1 research view (js/news-research.js); hidden with #news-panel -->
+
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
   Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a><br>
@@ -1253,6 +1424,7 @@
 <script src="shared/instruments.js?v=860821b9e03c4a08"></script>
 <script src="shared/quote-panel.js?v=3806793be069e8a7"></script>
 <script src="shared/chain.js?v=477ee1ce1d6f08f2"></script>
+<script src="shared/oi-skew.js?v=eaf1d6a0da079f08"></script>
 <script>// ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being// cached, but it can't evict a copy a device already cached before that header
 // existed, and it does nothing for iOS Safari's back-forward cache (bfcache),
@@ -1355,7 +1527,8 @@ let timerHandle = null;
 // loads the module instead of slicing up to the countdown banner; the banner
 // stays here as the section's marker.
 </script>
-<script src="js/data-fetch-cycle.js?v=61430ae31487fa9d"></script>
+<script src="js/data-fetch-cycle.js?v=edb39ff1eda795e1"></script>
+<script src="js/oi-skew-meter.js?v=f3f59e5c6aa2a119"></script>
 <script>
 
 // ── countdown timer ───────────────────────────────────────────────────────────
@@ -1391,12 +1564,20 @@ let timerHandle = null;
 <script src="js/squeeze-panel.js?v=29307f6a6d2645a7"></script>
 <script>
 
+// ── news panel (MediaFlow M4b) ──────────────────────────────────────────────
+// Lives in js/news-panel.js, loaded below; the News tab mounts it on first
+// open. The banner stays here as the section's marker.
+</script>
+<script src="js/news-research.js?v=aac117405484746a"></script>
+<script src="js/news-panel.js?v=97258fdf37938322"></script>
+<script>
+
 // ── tab switching ────────────────────────────────────────────────────────────
 // Moved to js/tab-switching.js (B2) — loaded below in the same position,
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/tab-switching.js?v=eb4da7c54f71b804"></script>
+<script src="js/tab-switching.js?v=ab265ee1ec344fe7"></script>
 <script>
 
 // ── automated (bot) panel ────────────────────────────────────────────────────
@@ -1436,4 +1617,4 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/boot.js?v=1a582324e77c6419"></script></body></html>
+<script src="js/boot.js?v=59d17023077a44e9"></script></body></html>

@@ -7,9 +7,12 @@
 // visible to the later section, same mechanism as `ranges` (slice 3) and
 // `lastTs`/`lastData` (slice 5). `loadHistoryManifest` and `setBotsPolling`
 // are defined by the later historical / bot sections and are only called
-// at runtime, after all scripts load. `showTab` is wired up by boot.
+// at runtime, after all scripts load. `loadNewsPanel` is defined by
+// js/news-panel.js, loaded just before this file. `showTab` is wired up by boot.
 // ── tab switching ────────────────────────────────────────────────────────────
 let historyLoaded = false;
+// The News panel (js/news-panel.js) mounts once, on first open, like history.
+let newsLoaded = false;
 
 // tab id -> [panel element id, tab button id]
 const TABS = {
@@ -17,6 +20,7 @@ const TABS = {
   history: ['history-panel', 'tab-history'],
   bots:    ['bots-panel',    'tab-bots'],
   squeeze: ['squeeze-panel', 'tab-squeeze'],
+  news:    ['news-panel',    'tab-news'],
 };
 
 function showTab(tab) {
@@ -29,6 +33,10 @@ function showTab(tab) {
   if (tab === 'history' && !historyLoaded) {
     historyLoaded = true;
     loadHistoryManifest();
+  }
+  if (tab === 'news' && !newsLoaded) {
+    newsLoaded = true;
+    loadNewsPanel();
   }
   // The bot roster is only polled while its tab is on screen -- no point
   // holding an extra request cycle open behind a hidden panel.

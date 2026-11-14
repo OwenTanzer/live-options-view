@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel rdf:about="https://example.org/"><title>RDF parser fixture (SYNTHETIC)</title><link>https://example.org/</link><description>SYNTHETIC</description></channel>
+<item rdf:about="https://example.org/rdf/1">
+<title>Synthetic RDF item</title>
+<link>https://example.org/rdf/1</link>
+<description>Synthetic RDF description.</description>
+<dc:date>2026-11-09T08:00:00+09:00</dc:date>
+<dc:subject>Diplomacy</dc:subject>
+</item>
+</rdf:RDF>

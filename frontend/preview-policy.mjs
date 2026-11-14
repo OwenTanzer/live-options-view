@@ -4,6 +4,10 @@ export const API_PATHS = new Set([
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/paper-trade',
   '/api/settle', '/api/live-quotes',
 ]);
+// OI skew meter projection key: prepared, DISABLED (mirrors
+// backend/browser-data.js; no backend import in the gateway).
+export const OI_SKEW_PROJECTION_KEY = 'crassus/oi-skew/v1/latest.json';
+export const OI_SKEW_PROJECTION_PUBLIC = true;
 const PUBLIC_KEYS = new Set([
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json',
   'intraday/prices.json', 'intraday/health.json', 'derived/OIranges.csv',
@@ -11,6 +15,7 @@ const PUBLIC_KEYS = new Set([
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
+  ...(OI_SKEW_PROJECTION_PUBLIC ? [OI_SKEW_PROJECTION_KEY] : []),
 ]);
 export function publicReadAllowed(url) {
   if (!url.pathname.startsWith('/browser-data/')) return false;
@@ -19,10 +24,39 @@ export function publicReadAllowed(url) {
   // Traversal guard, mirroring backend/browser-data.js: literal and
   // percent-encoded dot traversal, backslash and NUL are refused for every
   // key shape before the allowlist. tests/r2_proxy_bounded.test.js pins
-  // backend/gateway agreement. (The prospective news/v1/views/** grant was
-  // removed 2026-11-11: no accepted MediaFlow source exists.)
+  // backend/gateway agreement. (The prospective news/v1/views/** prefix grant
+  // removed 2026-11-11 stays removed; only the exact News view keys below.)
   if (key.includes('..') || /%2e/i.test(key) || key.includes('\\') || key.includes('\0')) return false;
   if (PUBLIC_KEYS.has(key)) return true;
+  // MediaFlow News views (G3; G6 fresh namespaces): exactly the index
+  // news/v2/views/index.json, or one immutable incarnation
+  // p/<YYYYMMDDTHHMMSSZ-16hex>.<n> (a real UTC instant; n = 1..9999, no leading
+  // zero) / mode / stream / real calendar date / page 0001-0020. Mirrors
+  // isPublicNewsViewKey in backend/browser-data.js and the News panel's own key
+  // check. Legacy news/v1/views keys are no longer allowed.
+  if (key === 'news/v2/views/index.json') return true;
+  // MediaFlow R1: one incarnation's research page (the retired mutable
+  // news/v2/research/view.json key stays refused); never the private research
+  // ledger (news/v1/research/**) or any other research key.
+  const r = /^news\/v2\/views\/p\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-[0-9a-f]{16}\.[1-9][0-9]{0,3}\/research\/view\.json$/.exec(key);
+  if (r) {
+    const day = `${r[1]}-${r[2]}-${r[3]}`;
+    const at = new Date(`${day}T00:00:00Z`);
+    return Number.isFinite(+at) && at.toISOString().slice(0, 10) === day &&
+      Number(r[4]) <= 23 && Number(r[5]) <= 59 && Number(r[6]) <= 59;
+  }
+  const n = /^news\/v2\/views\/p\/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-[0-9a-f]{16}\.[1-9][0-9]{0,3}\/(?:collector|archive|publication)\/(?:all|ai_buildout|oil)\/(\d{4})-(\d{2})-(\d{2})\/page-(\d{4})\.json$/.exec(key);
+  if (n) {
+    const real = (y, mo, d) => {
+      const day = `${y}-${mo}-${d}`;
+      const at = new Date(`${day}T00:00:00Z`);
+      return Number.isFinite(+at) && at.toISOString().slice(0, 10) === day;
+    };
+    if (!real(n[1], n[2], n[3]) || Number(n[4]) > 23 || Number(n[5]) > 59 || Number(n[6]) > 59) return false;
+    const page = Number(n[10]);
+    if (page < 1 || page > 20) return false;
+    return real(n[7], n[8], n[9]);
+  }
   const m = /^(?:raw\/(?:opex\/)?qqq_chain_|prices\/qqq_intraday_)(\d{4})(\d{2})(\d{2})\.csv$/.exec(key);
   if (!m) return false;
   const date = `${m[1]}-${m[2]}-${m[3]}`;
