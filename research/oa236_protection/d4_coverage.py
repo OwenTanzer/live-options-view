@@ -44,7 +44,7 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-SCHEMA = "d4_coverage.v1"
+SCHEMA = "d4_coverage.v2"
 FIXED_ELIGIBLE = 46
 FIXED_EXCLUDED = {"2026-08-31", "2026-11-04", "2026-11-05", "2026-11-06"}
 DOWNLOAD_WINDOW_ET = (time(9, 15), time(16, 15))   # covers the cycles' snapshots around the open/close
@@ -201,6 +201,7 @@ def main(argv=None):
             cycles.append({
                 "session": te.date().isoformat(), "decision_utc": t.isoformat(), "decision_id": r.get("decision_id"),
                 "run_id": r.get("run_id"), "outcome_class": r.get("outcome_class"),
+                "strategy_id": r.get("strategy_id"), "anchor": m.get("session_start_imbalance"),
                 "holding": "Already holding" in (r.get("reason") or ""),
                 "lineage_key": lin.get("snapshot_key") if lin.get("status") == "valid" else None,
                 "lineage_status": lin.get("status"),
@@ -323,6 +324,24 @@ def main(argv=None):
     for c in cycles:
         by_outcome_inputs[c["outcome_class"]][0] += 1
         by_outcome_inputs[c["outcome_class"]][1] += all(c["inputs_present"].values())
+    # Why inputs are absent: the strategy did not run (EOD flatten layer) or the cycle errored.
+    missing_inputs = collections.Counter(
+        ("eod_flatten_layer" if c["strategy_id"] == "eod_flatten" else
+         "error_" + str(c["outcome_class"]) if c["outcome_class"] in ("transport_error", "runner_error", "ambiguous")
+         else "strategy_ran_without_inputs:" + str(c["outcome_class"]))
+        for c in cycles if not all(c["inputs_present"].values()))
+    strategy_ran = [c for c in cycles if c["strategy_id"] == "oi_skew_qqq"
+                    and c["outcome_class"] not in ("transport_error", "runner_error", "ambiguous")]
+    # Recorded anchor changes inside market hours (resets), with the run that recorded them.
+    anchor_resets = {}
+    for s in sessions:
+        seq = [(c["decision_utc"], c["anchor"], c["run_id"]) for c in cycles if c["session"] == s and c["anchor"] is not None]
+        seg = seq[:1]
+        for x in seq[1:]:
+            if x[1] != seg[-1][1]:
+                seg.append(x)
+        if len(seg) > 1:
+            anchor_resets[s] = [{"from_utc": x[0], "run_id": x[2]} for x in seg]
     run_ids = collections.defaultdict(set)
     for c in cycles:
         run_ids[c["session"]].add(c["run_id"])
@@ -346,7 +365,11 @@ def main(argv=None):
                    "per_field_present": {k: sum(c["inputs_present"][k] for c in cycles) for k in INPUT_FIELDS},
                    "all_present_by_outcome_class": {k: {"cycles": v[0], "all_inputs": v[1]}
                                                     for k, v in sorted(by_outcome_inputs.items())},
+                   "missing_inputs_by_cause": dict(missing_inputs),
+                   "strategy_evaluated_cycles": len(strategy_ran),
+                   "strategy_evaluated_cycles_with_all_inputs": sum(all(c["inputs_present"].values()) for c in strategy_ran),
                    "anchor_field": "session_start_imbalance",
+                   "in_market_anchor_resets": anchor_resets,
                    "sessions_with_multiple_run_ids": {s: len(v) for s, v in sorted(run_ids.items()) if len(v) > 1}},
         "snapshots": {"listed": sum(len(v) for v in listing.values()), "requested": len(want),
                       "retrieved": sum(1 for f in fetched if f.get("sha256")),
