@@ -1,6 +1,6 @@
-# OA-236: profit protection / re-entry (`oa236-protect-v1`, inactive)
+# OA-236: profit protection / re-entry (`oa236-protect-v1.1`, inactive)
 
-This is Skew + Direction **step 3**. The policy lives in `crassus/crassus/profit_protection.py`, and its decision table is `crassus/scripts/verify_profit_protection.py` (50 checks, run in crassus-ci). Nothing calls it: there is no runner call site, no activation switch and no provider access. The rules are declared in the module docstring; this file holds the offline evidence.
+This is Skew + Direction **step 3**. The policy lives in `crassus/crassus/profit_protection.py`, and its decision table is `crassus/scripts/verify_profit_protection.py` (91 checks in v1.1, run in crassus-ci). Nothing calls it: there is no runner call site, no activation switch and no provider access. The rules are declared in the module docstring; this file holds the offline evidence.
 
 ## Family
 
@@ -14,6 +14,32 @@ This is Skew + Direction **step 3**. The policy lives in `crassus/crassus/profit
 | Ends the chain | — | Any stop-loss (e.g. the 35% stop), EOD flatten or signal exit |
 
 **Precedence:** EOD flatten > 35% stop > protection > strategy signal sell > re-entry. A position that isn't net-profitable belongs to the stop layer, never to this family.
+
+## v1.1: the D3 state-machine handoff
+
+v1.1 changes no v1 threshold or rule. It makes the integration explicit, and `verify_profit_protection.py` now has 91 checks (50 from v1, kept, plus 41 new).
+
+**States** (`STATES`): `held` → `armed` → `flat_protected` (after this family's own exit) or `ended` (after an external exit). `TRANSITIONS` lists every row as (from, condition, to, action). The checks fail if any evaluated transition is undeclared, or if any declared row is never reached.
+
+**Inputs** (all causal at the observation's `now`):
+
+| Input | Contract | Not fresh or unknown |
+|---|---|---|
+| Direction | D1 `direction_asof` for the held side: `direction_status`, `phase` (used only when `ok`), and the bar's `event_end` | D1 not `ok` → `stale`/`unknown`. **Event time**: `event_end` after `now`, missing, or older than `max_event_age_s = 360` → `stale`/`unknown`. D1's own age is receipt age, so a late-received old bar is caught here. Stale or unknown never triggers a direction exit; the price floor still applies. |
+| Skew | The bot's reading, threshold and **observation time** | A reading older than `max_skew_age_s = 360` (one 300 s cycle + 60 s), from the future, or missing is not a valid skew: re-entry is blocked, and it can't count as a signal reset. |
+| Quotes | Executable bid for the held contract; executable ask for `ask_symbol` | No bid while armed → `pending`. No ask → re-entry blocked. Never a guessed price. |
+
+**Contract selection:** `reentry_contract = "same_symbol"` is the only declared value. A re-entry buys the exited option symbol at the same contract count, from an executable ask quoted for that symbol, and records the symbol. A different strike or an unknown symbol blocks. No new contract-selection logic is introduced.
+
+**Entry and session limits** (v1, unchanged): no re-entry within 30 minutes of the close; at least 2 bars after the exit; at most 2 re-entries; fewer than 3 protection exits per session; each recovery event (D1 `row_id`) used once.
+
+**An unchanged signal can't undo an exit** (`strategy_entry_allowed`). After a protection exit or a 35% stop-loss exit, the strategy's own same-side buy stays blocked for the session until a **fresh** skew reading has been invalid (below threshold or opposite sign) at an observed bar since that exit, and the new signal is itself fresh and valid. A stale reading is not a reset. The opposite side is a new OI flip and is allowed. After an EOD flatten the session is over; after a signal sell the signal has already changed. D2's 15-minute cooldown still applies first, unchanged. After protection, the only same-side way back in is the confirmed-recovery path. **Review choice:** applying this guard after a D2 stop as well (not only after protection) is new behaviour proposed here, and it is inactive like the rest.
+
+**External exits** are explicit kinds (`stop_loss`, `eod_flatten`, `signal_exit`, `replay_end`). Each ends the chain; this family never re-enters after someone else's exit.
+
+**Precedence (unchanged):** EOD flatten > 35% stop (D2) > this protection > strategy signal sell > re-entry. Net ≤ 0 is the stop's domain.
+
+**Replay under v1.1:** `replay.py` now passes the v1.1 inputs: `now` = bar availability, `event_end`, the skew reading's own ledger time, and the trip's symbol as the re-entry contract. The output is identical to v1 apart from provenance fields: the same 21 exits, −$1,862 (−$1,885 at one snapshot of latency), and 11 opportunity counts. No exit or opportunity depended on a stale input. The caveats below are unchanged.
 
 ## Offline replay (`replay.py`): a zero-fee, protection-only counterfactual with entries fixed
 

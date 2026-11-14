@@ -86,6 +86,13 @@ def skew_at(cycles, t):
     return cycles[i][1] if i >= 0 else None
 
 
+def skew_reading_at(cycles, t):
+    """(imbalance, observed_at) of the bot's last ledger reading at/before t."""
+    keys = [c[0] for c in cycles]
+    i = bisect_right(keys, t) - 1
+    return (cycles[i][1], cycles[i][0]) if i >= 0 else (None, None)
+
+
 def run(a):
     sys.path.insert(0, str(Path(a.dml) / "research" / "oa229-direction-v1"))
     sys.path.insert(0, str(Path(a.dml) / "research" / "oa229-integrated"))
@@ -135,7 +142,8 @@ def run(a):
             ch = ChallengerDirection(pos, ChallengerConfig())
             imb0 = skew_at(cycles, entry)
             sign0 = (1 if (imb0 or 0) > 0 else -1) if imb0 else (1 if side == "call" else -1)
-            pc = ProtectionChain(side, 1, basis, 0, sign0, ProtectConfig(variant="protect_reentry"))
+            pc = ProtectionChain(side, 1, basis, 0, sign0, ProtectConfig(variant="protect_reentry"),
+                                 contract_symbol=t["symbol"])
             last = None
             for j, b in enumerate(bars):
                 if last is not None and b.available_at <= last.available_at:
@@ -149,16 +157,22 @@ def run(a):
                 rec["bars_in_hold"] += 1
                 rec["phases"][r["phase"]] = rec["phases"].get(r["phase"], 0) + 1
                 bid, idx = bid_at(path, b.available_at, a.max_quote_age)
-                imb = skew_at(cycles, b.available_at)
+                imb, imb_at = skew_reading_at(cycles, b.available_at)
                 mtc = (b.session_close - b.available_at).total_seconds() / 60
                 ev = r["row_id"] if r["phase"] == "recovery" else None
-                d = pc.evaluate(Observation(j, r["phase"], ev, bid, bid, imb, 0.3, mtc))
+                # v1.1 contract: decided at bar availability, from that bar's event_end,
+                # with the bot's last skew reading and its own observation time. The
+                # held contract's bid stands in for the same-symbol re-entry ask.
+                d = pc.evaluate(Observation(j, r["phase"], ev, bid, bid, imb, 0.3, mtc,
+                                            now=b.available_at, direction_status="ok",
+                                            direction_event_end=b.event_end, skew_observed_at=imb_at,
+                                            ask_symbol=t["symbol"]))
                 rec["armed"] = rec["armed"] or pc.armed or d.action == "exit"
                 if d.action == "pending":
                     rec["pending"] += 1
                 if d.action == "reenter":
                     rec["reentry_opportunities"] += 1
-                    pc.external_exit("replay_stops_after_first_reentry_opportunity")
+                    pc.external_exit("replay_end")  # the replay stops at the first opportunity
                 if d.action == "exit" and rec["protect_exit"] is None:
                     fill_i = idx
                     if latency:
