@@ -12,6 +12,33 @@
    },
    "name": "bullish_directional",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.6551724137931034,
+    "imbalance_ratio": 0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -49,6 +76,33 @@
    },
    "name": "bearish_directional",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": -0.6551724137931034,
+    "imbalance_ratio": -0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -86,6 +140,33 @@
    },
    "name": "neutral_below_threshold",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.09090909090909091,
+    "imbalance_ratio": 0.09090909090909091,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -123,6 +204,33 @@
    },
    "name": "neutral_skewed_since_open",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.011336797354747241,
+    "imbalance_ratio": 0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.6438356164383562,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -160,6 +268,33 @@
    },
    "name": "neutral_first_reading_is_anchor",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T17:30:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.0,
+    "imbalance_ratio": 0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.6551724137931034,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -197,6 +332,33 @@
    },
    "name": "boundary_exact_threshold_directional",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.3,
+    "imbalance_ratio": 0.3,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -234,6 +396,33 @@
    },
    "name": "boundary_threshold_just_below",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.2998,
+    "imbalance_ratio": 0.2998,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -271,6 +460,33 @@
    },
    "name": "boundary_session_change_float",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.09999999999999998,
+    "imbalance_ratio": 0.3,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.2,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -308,6 +524,33 @@
    },
    "name": "bearish_after_session_move",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": -0.19999999999999998,
+    "imbalance_ratio": -0.3,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": -0.1,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -345,6 +588,33 @@
    },
    "name": "boundary_session_change_float_passes",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.10000000000000003,
+    "imbalance_ratio": 0.4,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.3,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -382,6 +652,33 @@
    },
    "name": "neutral_thin_band",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 3,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.6551724137931034,
+    "imbalance_ratio": 0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -419,6 +716,33 @@
    },
    "name": "missing_no_open_interest",
    "params": {},
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 0,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": null,
+    "imbalance_ratio": null,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -459,6 +783,33 @@
     "imbalance_threshold": 0.5,
     "near_money_pct": 0.06
    },
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 7,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.09090909090909091,
+    "imbalance_ratio": 0.09090909090909091,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.5,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.1,
+     "near_money_pct": 0.06
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.0,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
+   },
    "reference": {
     "parameters": {
      "account_specific": false,
@@ -497,6 +848,33 @@
    "name": "override_stricter_change",
    "params": {
     "min_change_from_session_start": 0.5
+   },
+   "projection": {
+    "anchor_observed_at": "2026-11-13T11:00:00+00:00",
+    "band_strikes": 5,
+    "code_revision": "0000000000000000000000000000000000000000",
+    "decision_at": "2026-11-13T17:30:05+00:00",
+    "delta_from_session_start": 0.4551724137931034,
+    "imbalance_ratio": 0.6551724137931034,
+    "observed_snapshot_timestamp": "2026-11-13T17:30:00+00:00",
+    "params": {
+     "imbalance_threshold": 0.3,
+     "min_band_strikes": 4,
+     "min_change_from_session_start": 0.5,
+     "near_money_pct": 0.02
+    },
+    "published_at": "2026-11-13T17:30:06+00:00",
+    "run_identity": "run:d0e8b96c418c9fdf",
+    "schema_version": "oi_skew_meter.v1",
+    "session_key": "2026-11-13",
+    "session_phase": null,
+    "session_start_imbalance": 0.2,
+    "status": {
+     "code": "ok",
+     "reason": null
+    },
+    "strategy_id": "oi_skew_qqq",
+    "strategy_version": "1.0.0"
    },
    "reference": {
     "parameters": {

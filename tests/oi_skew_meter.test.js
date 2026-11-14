@@ -118,15 +118,48 @@ function live(overrides = {}, readingOverrides = {}) {
   assert.equal(d.availability, 'not_published');
   assert.equal(d.state, 'unknown');
   assert.equal(describeBotOiSkew({ schema_version: 'other' }, NOW).availability, 'not_published');
-  const p = { schema_version: 'oi_skew_meter.v1', account_alias: 'OI Skew', session_phase: 'open',
-    observed_snapshot_timestamp: '2026-11-13T17:33:59Z', imbalance_ratio: -0.45,
-    session_start_imbalance: -0.2, band_strikes: 27, params: { imbalance_threshold: 0.3 } };
+  const p = { schema_version: 'oi_skew_meter.v1', strategy_id: 'oi_skew_qqq', strategy_version: '1.0.0',
+    code_revision: 'abcdef0123456789abcdef0123456789abcdef01', run_identity: 'run:0123456789abcdef',
+    session_key: '2026-11-13', anchor_observed_at: '2026-11-13T11:00:00+00:00', session_phase: null,
+    observed_snapshot_timestamp: '2026-11-13T17:33:59Z', decision_at: '2026-11-13T17:34:05Z',
+    imbalance_ratio: -0.45, session_start_imbalance: -0.2, delta_from_session_start: -0.25, band_strikes: 27,
+    params: { near_money_pct: 0.02, imbalance_threshold: 0.3, min_change_from_session_start: 0.1,
+      min_band_strikes: 4 }, status: { code: 'ok', reason: null } };
   const b = describeBotOiSkew(p, NOW);
   assert.equal(b.state, 'bearish');
   assert.equal(b.availability, 'live');
   assert.equal(b.text, 'Bot signal: Bearish');
   assert.equal(describeBotOiSkew(p, Date.parse('2026-11-13T17:50:00Z')).text, 'Bot signal: Bearish (stale)');
-  checks += 7;
+  // Provenance travels to the display: anchor, reset identity, decision time, source.
+  assert.match(b.detail, /observed 2026-11-13T11:00:00\+00:00 \(session 2026-11-13, run:0123456789abcdef\)/);
+  assert.match(b.detail, /decided 2026-11-13T17:34:05Z; source abcdef0, oi_skew_qqq 1\.0\.0/);
+  // Incomplete evidence is unavailable, never classified from partial fields.
+  for (const bad of [{ ...p, status: { code: 'unavailable', reason: 'missing:anchor_observed_at' } },
+                     { ...p, status: undefined }, { ...p, params: null }]) {
+    const u = describeBotOiSkew(bad, NOW);
+    assert.equal(u.availability, 'unavailable');
+    assert.equal(u.state, 'unknown');
+    assert.equal(u.text, 'Bot signal: unavailable');
+  }
+  assert.match(describeBotOiSkew({ ...p, status: { code: 'unavailable', reason: 'missing:code_revision' } }, NOW)
+    .detail, /missing:code_revision/);
+  const { describeBotOiSkewFetchFailure } = require('../site/shared/oi-skew.js');
+  assert.equal(describeBotOiSkewFetchFailure('HTTP 503').availability, 'unavailable');
+  checks += 20;
+}
+
+// ── projection parity: the builder's output reaches the bot's own state ──────
+{
+  for (const c of fixture.cases) {
+    assert.equal(c.projection.status.code, 'ok', c.name);
+    const got = describeBotOiSkew(c.projection, Date.parse('2026-11-13T17:30:30Z'));
+    assert.equal(got.state, c.bot.state, `${c.name}: projection -> ${got.state} vs bot ${c.bot.state}`);
+    assert.equal(got.availability, 'live', c.name);
+    for (const k of ['account_alias', 'username', 'run_id', 'decision_id', 'symbol', 'quantity']) {
+      assert.ok(!(k in c.projection), `${c.name}: projection must not carry ${k}`);
+    }
+    checks += 3;
+  }
 }
 
 // ── scale ─────────────────────────────────────────────────────────────────────
@@ -251,4 +284,107 @@ checks += 3;
   checks += 4;
 }
 
-console.log(`oi_skew_meter: ${checks} checks passed (${fixture.cases.length} parity cases)`);
+// ── consumer re-checks provenance even when status says ok (review 5:42) ────
+{
+  const { oiSkewProjectionProblems } = require('../site/shared/oi-skew.js');
+  const good = fixture.cases.find(c => c.bot.state === 'bullish').projection;
+  const at = Date.parse('2026-11-13T17:30:30Z');
+  assert.deepEqual(oiSkewProjectionProblems(good), []);
+  assert.equal(describeBotOiSkew(good, at).availability, 'live');
+  const drop = k => { const c = { ...good }; delete c[k]; return c; };
+  const cases = [
+    ['code_revision', drop('code_revision')], ['code_revision', { ...good, code_revision: '' }],
+    ['code_revision', { ...good, code_revision: 'not-a-sha' }], ['code_revision', { ...good, code_revision: 'F'.repeat(40) }],
+    ['session_key', drop('session_key')], ['session_key', { ...good, session_key: '' }],
+    ['session_key', { ...good, session_key: '2026-02-30' }], ['session_key', { ...good, session_key: '2026-1-1' }],
+    ['anchor_observed_at', drop('anchor_observed_at')], ['anchor_observed_at', { ...good, anchor_observed_at: '' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: 'yesterday' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-11-13T11:00:00' }],   // naive
+    ['observed_snapshot_timestamp', { ...good, observed_snapshot_timestamp: '' }],
+    // Impossible calendar/clock components (Date.parse would normalize these).
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-02-30T17:30:00Z' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-11-13T24:00:00Z' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-11-13T11:60:00Z' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-11-13T11:00:61Z' }],
+    ['anchor_observed_at', { ...good, anchor_observed_at: '2026-11-13T11:00:00+25:00' }],
+    ['observed_snapshot_timestamp', { ...good, observed_snapshot_timestamp: '2026-02-29T17:30:00Z' }],
+    ['decision_at', { ...good, decision_at: '2026-04-31T17:30:05+00:00' }],
+    ['observed_snapshot_timestamp', { ...good, observed_snapshot_timestamp: '2026-13-01T00:00:00Z' }],
+    ['decision_at', { ...good, decision_at: 'not a time' }],
+    ['run_identity', { ...good, run_identity: 'parity-run' }],
+    ['strategy_version', { ...good, strategy_version: '  ' }],
+    ['session_start_imbalance', { ...good, session_start_imbalance: null }],
+    ['band_strikes', { ...good, band_strikes: -1 }],
+    ['params', { ...good, params: { ...good.params, min_band_strikes: undefined } }],
+    ['params', { ...good, params: {} }],
+  ];
+  for (const [field, doc] of cases) {
+    assert.equal(doc.status.code, 'ok', 'status left ok on purpose');
+    const r = describeBotOiSkew(doc, at);
+    assert.equal(r.availability, 'unavailable', `${field}: ${JSON.stringify(doc[field])}`);
+    assert.equal(r.state, 'unknown', field);
+    assert.deepEqual(r.problems, [field], field);
+    assert.doesNotMatch(r.detail, /undefined/, field);
+    checks += 4;
+  }
+  assert.equal(describeBotOiSkew({ ...good, decision_at: '2026-11-13T17:30:05.123+00:00' }, at).availability, 'live');
+  assert.equal(describeBotOiSkew({ ...good, code_revision: 'abc1234' }, at).availability, 'live');
+  // Real calendar edges stay valid.
+  for (const okTs of ['2028-02-29T17:30:00Z', '2026-11-13T23:59:59.999+00:00', '2026-11-13T11:00:00-05:00']) {
+    assert.deepEqual(oiSkewProjectionProblems({ ...good, anchor_observed_at: okTs }), [], okTs);
+    checks++;
+  }
+  checks += 4;
+}
+
+// ── projection fetch: disabled by default; when invoked, fails closed ────────
+(async () => {
+  const src = fs.readFileSync(path.join(root, 'site', 'js', 'oi-skew-meter.js'), 'utf8');
+  assert.ok(/const OI_SKEW_PROJECTION_ENABLED = false;/.test(src), 'projection fetch ships disabled');
+  assert.ok(src.includes("'crassus/oi-skew/v1/latest.json'"), 'fetches only the allowlisted key');
+  const backendSrc = fs.readFileSync(path.join(root, 'backend', 'browser-data.js'), 'utf8');
+  assert.ok(backendSrc.includes("OI_SKEW_PROJECTION_KEY = 'crassus/oi-skew/v1/latest.json'"), 'same key as the API');
+
+  const els = {};
+  const mk = id => (els[id] = { id, textContent: '', title: '', dataset: {}, style: {}, hidden: false,
+    attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); } });
+  for (const id of ['oi-skew-meter', 'oi-skew-marker', 'oi-skew-track', 'oi-skew-value', 'oi-skew-lean',
+    'oi-skew-meta', 'oi-skew-bot', 'oi-skew-bot-detail', 'oi-skew-thresholds']) mk(id);
+  const calls = [];
+  const shared = require('../site/shared/oi-skew.js');
+  const ctx = { document: { getElementById: id => els[id] || null }, ...shared, Date, Math, Number, Intl, String,
+    setInterval: () => 1, BROWSER_DATA: '/browser-data',
+    fetch: async (url) => { calls.push(url); return { ok: false, status: 404 }; } };
+  const vm = require('node:vm');
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  ctx.updateOiSkewMeter(live(), NOW);
+  ctx.updateOiSkewMeter(live(), NOW);
+  assert.equal(calls.length, 0, 'disabled flag: no projection request at all');
+  assert.equal(els['oi-skew-bot'].textContent, 'Bot signal: not published');
+
+  const doc = fixture.cases.find(c => c.bot.state === 'bearish').projection;
+  const ok = async () => ({ ok: true, status: 200, json: async () => doc });
+  await ctx.fetchOiSkewProjection(ok, '/browser-data');
+  assert.equal(els['oi-skew-bot'].dataset.state, 'bearish');
+  assert.match(els['oi-skew-bot-detail'].textContent, /run:[0-9a-f]{16}/);
+  await ctx.fetchOiSkewProjection(async () => ({ ok: false, status: 404 }), '/browser-data');
+  assert.equal(els['oi-skew-bot'].textContent, 'Bot signal: unavailable', '404 is unavailable, not last state');
+  assert.match(els['oi-skew-bot-detail'].textContent, /not published \(404\)/);
+  await ctx.fetchOiSkewProjection(ok, '/browser-data');
+  await ctx.fetchOiSkewProjection(async () => ({ ok: true, status: 200, json: async () => ({ schema_version: 'x' }) }),
+    '/browser-data');
+  assert.equal(els['oi-skew-bot'].textContent, 'Bot signal: unavailable', 'wrong document is unavailable');
+  await ctx.fetchOiSkewProjection(async () => { throw new Error('network down'); }, '/browser-data');
+  assert.match(els['oi-skew-bot-detail'].textContent, /network down/);
+  // A slower, older reply never overwrites a newer one.
+  let releaseSlow;
+  const slow = ctx.fetchOiSkewProjection(() => new Promise(r => { releaseSlow = () => r({ ok: true, status: 200,
+    json: async () => doc }); }), '/browser-data');
+  await ctx.fetchOiSkewProjection(async () => ({ ok: false, status: 503 }), '/browser-data');
+  releaseSlow(); await slow;
+  assert.equal(els['oi-skew-bot'].textContent, 'Bot signal: unavailable', 'stale reply discarded');
+  checks += 14;
+})().then(() => {
+  console.log(`oi_skew_meter: ${checks} checks passed (${fixture.cases.length} parity cases)`);
+}).catch((e) => { console.error(e); process.exit(1); });

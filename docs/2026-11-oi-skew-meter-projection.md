@@ -40,3 +40,25 @@ All four are additive metadata. They change no decision, but adding them is a `c
 
 - **Derive the anchor in the browser from the first page load:** rejected. It is wrong after any restart and is explicitly ruled out.
 - **Serve from the private archive bucket via the API:** batched ~1 MB uploads add minutes of lag, and the private bucket would gain a public reader. That is worse than one purpose-built key.
+
+## Implemented (inactive, local only) — branch `claude/oi-skew-projection`
+
+Built on `claude/oi-skew-meter` 7d123de (#233). One commit per release lane:
+
+| Lane | Commit | What | Live effect today |
+|---|---|---|---|
+| Runner (crassus) | f32116c | `oi_skew_qqq` metadata adds `session_key`, `anchor_observed_at` and `params`; `decision_base` adds `code_revision` (`RAILWAY_GIT_COMMIT_SHA`, else null). `scripts/verify_oi_skew_provenance.py` (13 checks). | None until deployed. Decisions are unchanged (the parity fixture from the real strategy is still current). |
+| Runner (crassus) | ba05729 | `crassus/oi_skew_projection.py`: a pure, sanitized `oi_skew_meter.v1` builder with a local-file CLI. No writer, no call site. `scripts/verify_oi_skew_projection.py` (36 checks). | None. |
+| API + gateway | 462f6ed, then relocated | `OI_SKEW_PROJECTION_KEY` with `OI_SKEW_PROJECTION_PUBLIC = false` in `backend/browser-data.js` and `frontend/preview-policy.mjs`. While disabled the key returns 404; a test pins both sides. | None. |
+| Asset (site) | 888a12c | The meter reads the projection's status and provenance. `OI_SKEW_PROJECTION_ENABLED = false`, so no request is made. A missing, 404, wrong or incomplete document shows unavailable. 184 checks, with 14/14 projection parity cases. | None. The page still shows "Bot signal: not published". |
+
+**Local evidence.** On the real private export (Sep 3 – Nov 9) the builder returns `status: unavailable`, `missing_or_invalid:code_revision,session_key,anchor_observed_at,params`. Those rows predate the additive fields, so nothing is guessed. No alias, username, raw run_id, cash or decision ID appears in the output.
+
+**MediaFlow coordination.** This branch changes only the two `oi-skew` `?v=` lines in `site/index.html` and the key-set lines of the two allowlists. Trial merges with `feat/news-g6` and `feat/news-g7` are conflict-free.
+
+## Release handoff (each separately approved, in this order)
+
+1. **Runner:** merge the crassus commits. This makes crassus-runner a deployment candidate: a Railway redeploy and restart, which means an observation gap and a fresh OI Skew anchor. Afterwards, verify that new ledger rows carry the four fields and that `code_revision` is non-null.
+2. **Projector (the new writer):** not built. It needs approval of the destination object and credentials, and a call site after each OI Skew decision that runs `build_projection(...)`, then `assert_sanitized(...)`, then writes `crassus/oi-skew/v1/latest.json`.
+3. **API:** flip `OI_SKEW_PROJECTION_PUBLIC` in `backend/browser-data.js` through the reviewed `deploy.yml` lane, only after (2) is writing.
+4. **Asset:** flip the gateway flag and `OI_SKEW_PROJECTION_ENABLED` through `deploy-staged.yml`. Verify the live meter shows the bot state with its anchor, reset identity and revision, and shows unavailable when the object is stale or missing.

@@ -37,14 +37,49 @@ const OI_SKEW_AVAILABILITY_LABEL = {
 // ticker re-evaluates age every OI_SKEW_AGE_TICK_MS so elapsed time alone
 // moves live -> stale -> session closed without any fetch.
 const OI_SKEW_AGE_TICK_MS = 15 * 1000;
-const _oiSkewState = { payload: null, bot: null, refreshError: null, timer: null };
+const _oiSkewState = { payload: null, bot: null, botError: null, refreshError: null, timer: null, botSeq: 0 };
 
-function updateOiSkewMeter(payload, nowMs = Date.now(), botProjection = null) {
+// Bot-state projection fetch (INACTIVE). Disabled until the approved release
+// that also enables the projector writer and both allowlist flags
+// (backend/browser-data.js, frontend/preview-policy.mjs). While false the
+// meter makes no extra request and shows "Bot signal: not published".
+const OI_SKEW_PROJECTION_ENABLED = false;
+const OI_SKEW_PROJECTION_PATH = 'crassus/oi-skew/v1/latest.json';
+
+function updateOiSkewMeter(payload, nowMs = Date.now(), botProjection = undefined) {
   _oiSkewState.payload = payload;
-  _oiSkewState.bot = botProjection;
   _oiSkewState.refreshError = null;
+  if (botProjection !== undefined) {         // explicit projection (tests / callers)
+    _oiSkewState.bot = botProjection;
+    _oiSkewState.botError = null;
+  } else if (OI_SKEW_PROJECTION_ENABLED) {
+    fetchOiSkewProjection();
+  }
   _ensureOiSkewAgeTicker();
   renderOiSkewMeter(nowMs);
+}
+
+// Same 60 s cadence as the QQQ payload (called from updateOiSkewMeter). A
+// failure, bad JSON or a non-v1 document leaves the bot signal unavailable;
+// a slower reply never overwrites a newer one.
+async function fetchOiSkewProjection(fetchImpl = (typeof fetch === 'function' ? fetch : null),
+                                     base = (typeof BROWSER_DATA === 'string' ? BROWSER_DATA : '')) {
+  if (!fetchImpl) return;
+  const seq = ++_oiSkewState.botSeq;
+  try {
+    const resp = await fetchImpl(`${base}/${OI_SKEW_PROJECTION_PATH}?_=${Date.now()}`);
+    if (!resp.ok) throw new Error(resp.status === 404 ? 'not published (404)' : `HTTP ${resp.status}`);
+    const doc = await resp.json();
+    if (seq !== _oiSkewState.botSeq) return;
+    if (!doc || doc.schema_version !== 'oi_skew_meter.v1') throw new Error('unrecognised document');
+    _oiSkewState.bot = doc;
+    _oiSkewState.botError = null;
+  } catch (e) {
+    if (seq !== _oiSkewState.botSeq) return;
+    _oiSkewState.bot = null;
+    _oiSkewState.botError = String(e && e.message || e);
+  }
+  renderOiSkewMeter(Date.now());
 }
 
 // Called by the fetch cycle when a QQQ refresh failed or returned no rows.
@@ -65,7 +100,9 @@ function renderOiSkewMeter(nowMs = Date.now()) {
   const $ = id => document.getElementById(id);
   const raw = degradeOiSkewForRefreshFailure(
     describeReferenceOiSkew(_oiSkewState.payload, nowMs), _oiSkewState.refreshError);
-  const bot = describeBotOiSkew(_oiSkewState.bot, nowMs);
+  const bot = _oiSkewState.botError
+    ? describeBotOiSkewFetchFailure(_oiSkewState.botError)
+    : describeBotOiSkew(_oiSkewState.bot, nowMs);
 
   root.dataset.state = raw.availability;
   root.dataset.lean = raw.lean || 'none';

@@ -43,6 +43,12 @@ jobs:
       # semantics moved, the meter) is updated. Web CI checks the JS side.
       - name: OI skew meter parity fixture is current
         run: python tests/oi_skew_meter_parity.py
+      - name: OI skew decision provenance for the meter projection
+        working-directory: crassus
+        run: python scripts/verify_oi_skew_provenance.py
+      - name: OI skew meter projection (inactive): provenance, privacy, unavailability
+        working-directory: crassus
+        run: python scripts/verify_oi_skew_projection.py
       - name: Run immutable market-readings join suite (#107)
         working-directory: crassus
         run: python scripts/verify_market_readings_join.py

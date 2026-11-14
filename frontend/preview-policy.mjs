@@ -4,6 +4,10 @@ export const API_PATHS = new Set([
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/paper-trade',
   '/api/settle', '/api/live-quotes',
 ]);
+// OI skew meter projection key: prepared, DISABLED (mirrors
+// backend/browser-data.js; no backend import in the gateway).
+export const OI_SKEW_PROJECTION_KEY = 'crassus/oi-skew/v1/latest.json';
+export const OI_SKEW_PROJECTION_PUBLIC = false;
 const PUBLIC_KEYS = new Set([
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json',
   'intraday/prices.json', 'intraday/health.json', 'derived/OIranges.csv',
@@ -11,6 +15,7 @@ const PUBLIC_KEYS = new Set([
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
   'squeeze-scanner/v1/scheduled/latest-schedule.json',
+  ...(OI_SKEW_PROJECTION_PUBLIC ? [OI_SKEW_PROJECTION_KEY] : []),
 ]);
 export function publicReadAllowed(url) {
   if (!url.pathname.startsWith('/browser-data/')) return false;

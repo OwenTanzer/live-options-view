@@ -155,6 +155,22 @@ function describeBotOiSkew(projection, nowMs = Date.now()) {
       detail: 'The OI Skew bot\'s session anchor lives only in the strategy runner; '
         + 'no read-only projection of it is published yet, so its effective state is not shown.' };
   }
+  // The projection says when its own evidence is incomplete (legacy ledger
+  // rows, unknown source revision...). That is shown as unavailable, never
+  // classified from whatever fields happen to be present.
+  // Review 5:42 PM: a status of ok is not trusted on its own -- every field
+  // the display relies on is re-checked here with the builder's own rules
+  // (crassus/crassus/oi_skew_projection.py), so a document missing or
+  // mangling provenance can never produce a live signal.
+  const problems = projection.status?.code !== 'ok'
+    ? [projection.status?.reason || 'status not ok']
+    : oiSkewProjectionProblems(projection);
+  if (problems.length) {
+    return { availability: 'unavailable', state: 'unknown', text: 'Bot signal: unavailable',
+      problems,
+      detail: `The published bot state is incomplete (${problems.join('; ')}); `
+        + 'its effective signal is not shown.' };
+  }
   const obsMs = Date.parse(projection.observed_snapshot_timestamp || '');
   const ageMs = Number.isFinite(obsMs) ? nowMs - obsMs : null;
   const cls = classifyOiSkewSignal(projection, projection.params);
@@ -162,11 +178,59 @@ function describeBotOiSkew(projection, nowMs = Date.now()) {
   if (ageMs == null || ageMs > OI_SKEW_CLOSED_AFTER_MS) availability = 'closed';
   else if (ageMs > OI_SKEW_STALE_AFTER_MS) availability = 'stale';
   const label = { bullish: 'Bullish', bearish: 'Bearish', neutral: 'Neutral' }[cls.state];
+  const rev = typeof projection.code_revision === 'string' ? projection.code_revision.slice(0, 7) : 'unknown';
+  const provenance = `Anchor ${projection.session_start_imbalance} observed ${projection.anchor_observed_at} `
+    + `(session ${projection.session_key}, ${projection.run_identity}); decided ${projection.decision_at}; `
+    + `source ${rev}, ${projection.strategy_id} ${projection.strategy_version}.`;
   return { ...cls, availability, age_ms: ageMs,
-    account_alias: projection.account_alias || null,
     session_phase: projection.session_phase || null,
+    anchor_observed_at: projection.anchor_observed_at, session_key: projection.session_key,
+    run_identity: projection.run_identity, code_revision: projection.code_revision,
+    decision_at: projection.decision_at,
     text: `Bot signal: ${label}${availability === 'live' ? '' : ` (${availability})`}`,
-    detail: cls.reason };
+    detail: `${cls.reason} ${provenance}` };
+}
+
+// Field rules mirrored from the builder: an aware ISO instant, a real UTC
+// calendar date, a lowercase git SHA, the digest run identity, finite
+// numbers and complete params. Returns the offending field names.
+// Date.parse normalizes impossible components (2026-02-30 -> Mar 2), so
+// each calendar/clock component is validated explicitly, matching the
+// Python builder's datetime.fromisoformat (review 7:04 PM).
+function _awareInstant(v) {
+  if (typeof v !== 'string') return false;
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|([+-])(\d{2}):(\d{2}))$/.exec(v);
+  if (!m || !_calendarDate(m[1])) return false;
+  if (Number(m[2]) > 23 || Number(m[3]) > 59 || (m[4] !== undefined && Number(m[4]) > 59)) return false;
+  if (m[5] !== 'Z' && (Number(m[7]) > 23 || Number(m[8]) > 59)) return false;
+  return Number.isFinite(Date.parse(v));
+}
+function _calendarDate(v) {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+function oiSkewProjectionProblems(p) {
+  const bad = [];
+  if (typeof p.strategy_version !== 'string' || !p.strategy_version.trim()) bad.push('strategy_version');
+  if (typeof p.code_revision !== 'string' || !/^[0-9a-f]{7,40}$/.test(p.code_revision)) bad.push('code_revision');
+  if (typeof p.run_identity !== 'string' || !/^run:[0-9a-f]{16}$/.test(p.run_identity)) bad.push('run_identity');
+  if (!_calendarDate(p.session_key)) bad.push('session_key');
+  if (!_awareInstant(p.anchor_observed_at)) bad.push('anchor_observed_at');
+  if (!_finite(p.session_start_imbalance)) bad.push('session_start_imbalance');
+  if (!(Number.isInteger(p.band_strikes) && p.band_strikes >= 0)) bad.push('band_strikes');
+  const prm = p.params;
+  if (!prm || !_finite(prm.near_money_pct) || !_finite(prm.imbalance_threshold)
+      || !_finite(prm.min_change_from_session_start) || !Number.isInteger(prm.min_band_strikes)) bad.push('params');
+  if (!_awareInstant(p.observed_snapshot_timestamp)) bad.push('observed_snapshot_timestamp');
+  if (!_awareInstant(p.decision_at)) bad.push('decision_at');
+  return bad;
+}
+
+// A projection fetch that failed: unavailable, never the last state as live.
+function describeBotOiSkewFetchFailure(reason) {
+  return { availability: 'unavailable', state: 'unknown', text: 'Bot signal: unavailable',
+    detail: `The bot state could not be loaded (${reason}).` };
 }
 
 // Marker position on a −1…+1 diverging scale, as a 0…100 percentage.
@@ -179,5 +243,6 @@ function oiSkewMeterPercent(value) {
 if (typeof module !== 'undefined') {
   module.exports = { OI_SKEW_DEFAULTS, OI_SKEW_STALE_AFTER_MS, OI_SKEW_CLOSED_AFTER_MS,
     classifyOiSkewSignal, describeReferenceOiSkew, degradeOiSkewForRefreshFailure, describeBotOiSkew,
+    describeBotOiSkewFetchFailure, oiSkewProjectionProblems,
     oiSkewMeterPercent };
 }

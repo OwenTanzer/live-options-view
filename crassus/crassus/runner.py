@@ -144,6 +144,10 @@ def decision_base(*, decision_id: str, alias: str, strategy_id: str,
         "market_snapshot_lineage": (snapshot.lineage if snapshot
                                     else unavailable_lineage("unavailable")),
         "market_readings_join": join,
+        # Source revision of the running image (Railway sets this for git
+        # deploys; the scanner already records the same variable). Explicitly
+        # null when unknown -- never guessed.
+        "code_revision": os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 

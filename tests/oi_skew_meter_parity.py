@@ -36,6 +36,8 @@ from crassus.market import MarketSnapshot, Quote  # noqa: E402
 from crassus.strategies import oi_skew as oisk  # noqa: E402
 from crassus.strategy import StrategyContext  # noqa: E402
 from market_data.overview.readings import compute_reference_oi_skew  # noqa: E402
+from crassus.oi_skew_projection import build_projection  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "oi_skew_parity.json"
 UNDERLYING = 400.0
@@ -116,7 +118,16 @@ def run_case(name, rows, anchor_rows, params) -> dict:
     else:
         state = "neutral"
     reference = compute_reference_oi_skew(rows, UNDERLYING)
+    # The inactive public projection, built by the real builder from a
+    # ledger-shaped record of this exact decision. The browser must reach the
+    # same state from it as the bot did.
+    record = {"strategy_id": oisk.STRATEGY_ID, "strategy_version": oisk.STRATEGY_VERSION,
+              "run_id": "parity-run", "code_revision": "0" * 40,
+              "timestamp_utc": "2026-11-13T17:30:05+00:00", "market_snapshot_timestamp": TS_NOW,
+              "decision": {"action": decision.action, "metadata": meta}}
+    projection = build_projection(record, published_at=datetime(2026, 11, 13, 17, 30, 6, tzinfo=timezone.utc))
     return {
+        "projection": projection,
         "name": name,
         "params": params,
         "bot": {

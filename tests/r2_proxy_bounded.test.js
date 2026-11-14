@@ -208,3 +208,23 @@ test('raw traversal strings are refused by the backend predicate', async () => {
     assert.equal(isPublicBrowserDataKey(key), true, key);
   }
 });
+
+test('OI skew projection key is prepared, identical and disabled on both allowlists', async () => {
+  const b = await import('../backend/browser-data.js');
+  const g = await import('../frontend/preview-policy.mjs');
+  assert.equal(b.OI_SKEW_PROJECTION_KEY, 'crassus/oi-skew/v1/latest.json');
+  assert.equal(g.OI_SKEW_PROJECTION_KEY, b.OI_SKEW_PROJECTION_KEY);
+  assert.equal(b.OI_SKEW_PROJECTION_PUBLIC, false);
+  assert.equal(g.OI_SKEW_PROJECTION_PUBLIC, false);
+  assert.equal(b.BROWSER_DATA_KEYS.has(b.OI_SKEW_PROJECTION_KEY), false);
+  // Disabled means refused by both predicates and 404 at HTTP, exactly like
+  // any unlisted key; siblings of the key stay private either way.
+  for (const k of [b.OI_SKEW_PROJECTION_KEY, 'crassus/oi-skew/v1/', 'crassus/oi-skew/v1/latest.json.bak',
+                   'crassus/ledger.jsonl']) {
+    assert.equal(b.isPublicBrowserDataKey(k), false, k);
+    assert.equal(g.publicReadAllowed(new URL(APP + '/browser-data/' + k)), false, k);
+  }
+  const res = await b.handleBrowserData(new Request(APP + '/browser-data/' + b.OI_SKEW_PROJECTION_KEY),
+    new URL(APP + '/browser-data/' + b.OI_SKEW_PROJECTION_KEY));
+  assert.equal(res.status, 404);
+});
