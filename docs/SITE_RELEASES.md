@@ -154,6 +154,71 @@ execution adds `--execute` under that specific restoration authority. Prevent
 duplicate settlement ownership and restore writes only after verification.
 Ordinary site release does not repeat this one-time cutover procedure.
 
+#### Reverse cron handoff: settlement weekdays must be MON-FRI
+
+This section documents the procedure only. It authorizes no restoration and no
+provider action; both still need the specific restoration authority above.
+
+- **Preserved historical artifact (do not edit).** The pinned combined build
+  6c1051a's `wrangler.toml` (SHA256 `213c2e56…eea72`) declares
+  `crons = ["*/15 12-23 * * 1-5"]`. It stays byte-identical, because the gate
+  refuses any restoration checkout whose hash differs. Likewise leave
+  `patches/musef-225/*.proposed` and every recorded hash as history.
+- **Why the pinned value is wrong live.** Cloudflare interpreted the numeric
+  day-of-week `1-5` as Sunday–Thursday. The live API trigger was corrected to
+  `*/15 12-23 * * MON-FRI` on 2026-11-14, and `wrangler.api.toml` matches it.
+  Deploying the pinned config therefore installs the wrong weekdays unless the
+  trigger is corrected as part of the handoff.
+- **Intended restored live schedule.** Exactly one settlement cron in the
+  account, `*/15 12-23 * * MON-FRI` (same UTC window and frequency), owned by
+  the restored combined Worker `live-options-view`. The API Worker
+  `live-options-api` then holds no cron.
+
+Ownership rule: **at most one** settlement cron owner at every point of the
+transition, and **exactly one** at completion. The existing restoration/write
+fence stays in place from before step 2 through the final readback in step 4.
+
+During the reverse handoff:
+
+1. Before executing, read back the triggers of both Workers and record them.
+   Expected: `live-options-api` holds only `*/15 12-23 * * MON-FRI`, and
+   `live-options-view` holds none.
+2. With the fence in place, clear the API Worker's trigger, then read back and
+   confirm that it is actually absent. Do not run the combined deploy until
+   that readback shows no API cron. Record the time the API trigger was
+   cleared: the no-owner interval starts here, and it lasts until step 4
+   passes. A failed deploy or correction can make it long.
+3. After the combined deploy, read back `live-options-view`'s triggers. They
+   will show the pinned numeric `1-5`. Still fenced, correct them with a
+   trigger-only change to exactly `*/15 12-23 * * MON-FRI`, under the same
+   restoration authority. Do not change the restoration checkout to do this.
+4. Final readback, still fenced: exactly one settlement cron across both
+   Workers, on `live-options-view`, with the named-weekday expression
+   `*/15 12-23 * * MON-FRI`, and none on `live-options-api`. Record it in the
+   dated release record together with the actual missed interval (from the
+   step 2 clear time to this readback) and the scheduled sweeps that fell
+   inside it. Lift the fence only after this readback passes.
+
+If any step fails (the API trigger does not clear, the deploy fails or is
+partial, the correction fails, or a readback disagrees):
+
+- Stay fenced. Do not lift the fence and do not leave a numeric day-of-week
+  cron active, including after escalation.
+- Reconcile the actual state first: read back which Worker versions are
+  deployed and the triggers on both Workers, and record them.
+- Recover a verified single-owner schedule under the specific restoration
+  authority. That owner is either the restored `live-options-view` corrected to
+  `*/15 12-23 * * MON-FRI`, or, if the restoration is abandoned, the API Worker
+  with `*/15 12-23 * * MON-FRI`. Do not restore the API trigger while
+  `live-options-view` still holds any cron; remove or confirm the absence of
+  the combined Worker's trigger first.
+- Confirm exactly one owner by readback, record the actual missed interval, and
+  only then lift the fence.
+
+Forward re-separation reverses this: the API Worker again becomes the only owner
+of `*/15 12-23 * * MON-FRI` from `wrangler.api.toml`, and the asset Worker keeps
+its explicit `crons = []`.
+
 ## Related operating records
 
 - [Release boundaries](RELEASE_BOUNDARIES.md): changed-path matrix and dated provider baseline.
