@@ -1130,6 +1130,15 @@
     }
     select.paper-btn { font-size: 1rem; }
   }
+#qqq-iv {display:inline-flex;align-items:baseline;gap:.65rem;position:relative;flex-wrap:wrap}
+#qqq-iv[hidden],#qqq-iv [hidden]{display:none}
+#qqq-iv button{font:inherit;font-size:.76rem;border:0;background:none;padding:3px 0;color:var(--dim);cursor:pointer}
+#qqq-iv button b{color:var(--bright);font-variant-numeric:tabular-nums}
+#qqq-iv button[data-band=standard] b{color:#79c0ff}#qqq-iv button[data-band=low] b{color:#7ee787}#qqq-iv button[data-band=elevated] b{color:#ff8985}
+#qqq-iv time{font-size:.68rem;color:var(--dim)}
+.iv-pop{position:absolute;top:100%;left:0;z-index:50;width:min(285px,88vw);padding:10px;background:var(--panel,#161b22);border:1px solid var(--border,#30363d);border-radius:6px;box-shadow:0 5px 18px #0009}
+.iv-pop canvas{display:block;width:100%;height:78px}.iv-pop small{color:var(--dim);line-height:1.4}
+@media(max-width:650px){#qqq-iv{flex-basis:100%}}
 </style>
 </head>
 <body>
@@ -1162,7 +1171,8 @@
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
   <span id="momentum" class="momentum"></span>
-  <span id="chain-note" class="chain-note"></span>
+  <span id="qqq-iv"><button type="button" aria-controls="iv-pop" aria-expanded="false">IV <b>&#8212;</b></button><button type="button" aria-controls="iv-pop" aria-expanded="false">Put IV premium <b>&#8212;</b></button><time></time><span class="iv-pop" id="iv-pop" hidden><canvas width="285" height="80" aria-label="Intraday volatility history"></canvas><small></small></span></span>
+    <span id="chain-note" class="chain-note"></span>
 </div>
 
 <div id="status-bar">
@@ -1533,7 +1543,8 @@ let timerHandle = null;
 // loads the module instead of slicing up to the countdown banner; the banner
 // stays here as the section's marker.
 </script>
-<script src="js/data-fetch-cycle.js?v=edb39ff1eda795e1"></script>
+<script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
+<script src="js/data-fetch-cycle.js?v=d8b0bb7385cf9ba6"></script>
 <script src="js/oi-skew-meter.js?v=f3f59e5c6aa2a119"></script>
 <script>
 
