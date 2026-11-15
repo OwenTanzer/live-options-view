@@ -57,6 +57,7 @@
     },
     {
       "alias": "Newton Confirmed",
+      "active": false,
       "username": "crassus_newton_confirmed",
       "password_env": "CRASSUS_PW_NEWTON_CONFIRMED",
       "strategy_id": "momentum_qqq",
