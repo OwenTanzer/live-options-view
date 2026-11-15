@@ -737,6 +737,7 @@ class Runner:
                 side=decision.action,
                 quantity=decision.quantity,
                 instrument_type=decision.instrument_type,
+                **({"limit_price": decision.limit_price} if decision.limit_price is not None else {}),
                 decision_id=decision_id,
                 strategy_id=decision.strategy_id,
                 strategy_version=decision.strategy_version,

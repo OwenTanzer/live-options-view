@@ -28,9 +28,20 @@ def clean(q):
             (0.05 if (q.bid+q.ask)/2 < 0.5 else 0.05*(q.ask+q.bid)) + 1e-9)
 
 
+def fresh_spot(snapshot, now):
+    market = snapshot.underlying_market
+    if not market or market.freshness != "live" or not market.spot_ts:
+        return False
+    try:
+        stamps = (datetime.fromisoformat(s) for s in (snapshot.timestamp, market.spot_ts))
+        return all(0 <= (now - stamp).total_seconds() <= 120 for stamp in stamps)
+    except (TypeError, ValueError):
+        return False
+
+
 def decide(ctx):
-    def intent(action, reason, symbol=None, **metadata):
-        return Decision(action, reason, ID, "1", symbol, 1 if symbol else None, metadata=metadata)
+    def intent(action, reason, symbol=None, limit_price=None, **metadata):
+        return Decision(action, reason, ID, "1", symbol, 1 if symbol else None, metadata=metadata, limit_price=limit_price)
     now = ctx.now_et
     positions = ctx.book.positions
     if ctx.session_phase != "open":
@@ -52,9 +63,11 @@ def decide(ctx):
         cost = 100*(positions[call].average_cost + quote.ask)+2.60
         if cost > min(250, budget(ctx, exclude=call)):
             return intent("sell", "Paired debit exceeds budget", call)
-        return intent("buy", "Complete strangle at original lower strike", put)
+        return intent("buy", "Complete strangle at original lower strike", put, limit_price=math.floor(quote.ask*100+1e-8)/100)
     if _traded_today(ctx) or not ctx.snapshot or ctx.snapshot.expiration != now.date().isoformat():
         return intent("no_trade", "Already traded or no same-day chain")
+    if not fresh_spot(ctx.snapshot, now):
+        return intent("no_trade", "Waiting for a fresh underlying price")
     for h, m in CUTOFFS:
         cutoff = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if timedelta(minutes=1) <= now-cutoff < timedelta(minutes=6):
@@ -73,7 +86,7 @@ def decide(ctx):
     cost = 100*(quotes[call].ask+quotes[put].ask)+2.60
     if cost > min(250, budget(ctx)):
         return intent("no_trade", "Pair exceeds paper budget", quoted_cost=cost)
-    return intent("buy", "Volatility gate open", call, forecast_bp=score, put=put, quoted_cost=cost)
+    return intent("buy", "Volatility gate open", call, limit_price=math.floor(quotes[call].ask*100+1e-8)/100, forecast_bp=score, put=put, quoted_cost=cost)
 
 
 def budget(ctx, exclude=None):
