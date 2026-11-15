@@ -69,6 +69,11 @@ class OiSkewPublisher:
         try:
             if not isinstance(record, dict) or record.get("strategy_id") != STRATEGY_ID:
                 return
+            # Several forward paper twins use the same OI strategy. Only
+            # the original account owns the public bot-anchored meter.
+            before = record.get("account_state_before")
+            if not isinstance(before, dict) or before.get("username") != "crassus_oiskew":
+                return
             decision = record.get("decision")
             if not isinstance(decision, dict) or not isinstance(decision.get("metadata"), dict):
                 return  # e.g. a reconcile failure: keep the last object; it ages to stale
