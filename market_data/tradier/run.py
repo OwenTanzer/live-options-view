@@ -24,6 +24,7 @@ from ._probe import DEFAULT_UNDERLYING, Tradier, r2_client, utc_now
 from .artifacts import json_artifact, write_health
 from .archive import lease_key
 from . import config
+from .recent import RecentPrints
 from .capture import CaptureResult, capture_session
 from .config import (
     ET,
@@ -303,6 +304,9 @@ def main(
     health_thread = threading.Thread(target=health_publisher, daemon=True)
     health_thread.start()
 
+    recent = RecentPrints()
+    threading.Thread(target=recent.publish, args=(r2, bucket, lease_stop, lease_lost_event),
+                     daemon=True).start()
     capture_started_at = clock_et()
     try:
         if datetime.now(timezone.utc) >= lease_confirmed_until_ref["value"]:
@@ -311,7 +315,7 @@ def main(
         capture_result = capture_session(
             client, router.symbols, stream_spool, stream_stats, session_close, settings.max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
-            result=capture_result,
+            result=capture_result, recent=recent,
             session_open=session_open,
         )
     except Exception as exc:
