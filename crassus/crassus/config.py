@@ -119,7 +119,16 @@ def _entries_for(
     if configured_path is not None:
         if not configured_path.exists():
             raise FileNotFoundError(f"No accounts file at {configured_path}.")
-        return _read_entries(configured_path)
+        entries = _read_entries(configured_path)
+        # The forward cohort is an explicitly activated experiment. Preserve
+        # every private runtime setting while admitting newly cataloged arms.
+        if catalog_path.exists():
+            cohort = [entry for entry in _read_entries(catalog_path)
+                      if entry.get("username") in {
+                          "crassus_oif_baseline", "crassus_oif_stop35",
+                          "crassus_oif_protect", "crassus_oif_recover"}]
+            return _merge_entries(cohort, entries)
+        return entries
     if not catalog_path.exists():
         raise FileNotFoundError(f"No bot catalog at {catalog_path}.")
     catalog = _read_entries(catalog_path)
