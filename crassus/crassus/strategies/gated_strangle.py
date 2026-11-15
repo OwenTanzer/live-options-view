@@ -39,7 +39,7 @@ def decide(ctx):
         first = min(filter(None, (_leg_fill_time(ctx, s) for s in positions)), default=None)
         calls = [s for s in positions if s[-9] == "C"]
         if not first or not calls or now-first >= timedelta(minutes=30):
-            return intent("sell", "Close timed strangle", next(iter(positions)))
+            return intent("sell", "Close timed strangle", calls[0] if calls else next(iter(positions)))
         if len(positions) == 2:
             return intent("no_trade", "Holding pair until timed exit")
         call = calls[0]
@@ -89,5 +89,6 @@ def budget(ctx, exclude=None):
 
 
 decide.strategy_id = ID
+decide.requires_snapshot = False  # A held pair can exit during a chain outage.
 decide.strategy_version = "1"
 register(decide)
