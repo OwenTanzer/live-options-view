@@ -418,8 +418,6 @@ class Runner:
                 log.error("Snapshot read failed: %s", exc)
                 snapshot = None
 
-            if getattr(self, "forward_accounts", None) and phase == "open":
-                self.forward_bars.read(self.cycle_count, clock.now_et())
             for account in self.accounts:
                 if self.should_stop:
                     event(
@@ -497,6 +495,8 @@ class Runner:
 
         arm = forward_skew.arm_for(account)
         if arm:
+            if phase == "open":
+                self.forward_bars.read(self.cycle_count, clock.now_et())
             base.update(comparison_version=forward_skew.VERSION, comparison_arm=arm,
                         comparison_cycle=self.cycle_count, source_revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
         # Reconcile first: the server's view of cash and trades is the only

@@ -80,21 +80,27 @@ def reconcile(state, ctx, arm):
         if fill:
             state.update(pending["after"])
             if pending["action"] == "buy":
-                pos = ctx.book.position(pending["symbol"])
-                if pos.quantity != pending["quantity"] or pos.average_cost <= 0:
+                symbol = pending["symbol"]
+                qty, price = int(fill["qty"]), float(fill["price"])
+                if (
+                    fill["sym"] != symbol
+                    or fill["side"] != "buy"
+                    or qty != pending["quantity"]
+                    or price <= 0
+                ):
                     raise ValueError("forward buy disagrees with reconciled book")
                 chain = thaw(state.get("chain"), arm)
                 if chain is None:
-                    side = _option_type_from_symbol(pos.symbol)
+                    side = _option_type_from_symbol(symbol)
                     chain = ProtectionChain(
                         side,
-                        pos.quantity,
-                        pos.average_cost,
+                        qty,
+                        price,
                         pending["bar"],
                         1 if side == "call" else -1,
-                        contract_symbol=pos.symbol,
+                        contract_symbol=symbol,
                     )
-                chain.basis = pos.average_cost
+                chain.basis = price
                 state["chain"] = freeze(chain)
     chain = thaw(state.get("chain"), arm)
     actual = ctx.book.positions

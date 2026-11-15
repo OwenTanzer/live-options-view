@@ -26,6 +26,8 @@ def ingest(payload, received, existing):
     q = chart["indicators"]["quote"][0]
     day = received.astimezone(ET).date()
     for i in reversed(range(len(stamps) - 1)):
+        if stamps[i + 1] > received.timestamp():
+            continue
         start = datetime.fromtimestamp(stamps[i], timezone.utc)
         end = start + timedelta(minutes=5)
         local = start.astimezone(ET)
@@ -76,9 +78,10 @@ class ForwardBars:
             return self.rows
         self.cycle = cycle
         path = self.directory / ("bars-" + now.date().isoformat() + ".json")
-        self.rows = json.loads(path.read_text()) if path.exists() else []
+        self.rows = []
         self.error = None
         try:
+            self.rows = json.loads(path.read_text()) if path.exists() else []
             response = requests.get(
                 SOURCE,
                 params={"range": "1d", "interval": "5m", "includePrePost": "false"},
@@ -92,12 +95,14 @@ class ForwardBars:
             if len(self.rows) != before:
                 atomic_json(path, self.rows)
         except (
+            OSError,
             requests.RequestException,
             ValueError,
             KeyError,
             TypeError,
             IndexError,
         ) as exc:
+            self.rows = []
             self.error = type(exc).__name__
         return self.rows
 
