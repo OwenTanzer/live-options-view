@@ -258,6 +258,7 @@ export async function handleBots(request, env) {
       const record = await store.users.get(name);
       if (!record) throw new Error('Indexed bot account unavailable');
       if (!record.is_bot) continue;    // index and record disagree -- trust the record
+      if (record.strategy_id?.startsWith('reddit_sentiment_qqq')) continue;
       const trades = Array.isArray(record.trades) ? record.trades : [];
       bots.push({
         username: record.username,

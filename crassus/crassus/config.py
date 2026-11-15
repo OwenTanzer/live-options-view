@@ -139,6 +139,11 @@ def _entries_for(
     return _merge_entries(catalog, overrides)
 
 
+def _inactive(entry: dict[str, Any]) -> bool:
+    # Private roster overrides may still include retired Reddit strategies.
+    return entry.get("active", True) is False or str(entry.get("strategy_id", "")).startswith("reddit_sentiment_qqq")
+
+
 def account_gaps(
     path: Path | None = None,
     *,
@@ -155,7 +160,7 @@ def account_gaps(
     environment = os.environ if environ is None else environ
     gaps: list[dict[str, str]] = []
     for entry in _entries_for(path, catalog_path, override_path):
-        if entry.get("active", True) is False:
+        if _inactive(entry):
             continue
         if entry.get("password"):
             continue
@@ -217,7 +222,7 @@ def load_accounts(
     accounts = []
     missing: list[str] = []
     for entry in entries:
-        if entry.get("active", True) is False:
+        if _inactive(entry):
             continue
         password = entry.get("password")
         if not password and entry.get("password_env"):
