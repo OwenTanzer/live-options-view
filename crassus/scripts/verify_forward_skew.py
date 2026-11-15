@@ -158,6 +158,14 @@ class Comparison(unittest.TestCase):
         late = []
         ingest(data, received + timedelta(minutes=8), late)
         self.assertFalse(late)
+        data["chart"]["result"][0]["timestamp"][1] = t + 240
+        partial = []
+        ingest(data, received, partial)
+        self.assertEqual(partial, [])
+
+    def test_unusable_snapshot_times(self):
+        for bad in ("broken", 42, "2026-11-16T14:00:00"):
+            self.assertIsNone(f.snap_time(bad))
 
 
 if __name__ == "__main__":

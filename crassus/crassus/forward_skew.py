@@ -36,7 +36,10 @@ def arm_for(account):
 def snap_time(value):
     if not value:
         return None
-    value = datetime.fromisoformat(value)
+    try:
+        value = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
     return value if value.tzinfo else None
 
 
