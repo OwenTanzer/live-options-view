@@ -152,6 +152,8 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/settlement_cron_outcome.test.mjs
+      - name: API settlement cron schedule (MON-FRI)
+        run: node --test tests/api_cron_schedule.test.mjs
       - name: Install browser test dependencies
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1

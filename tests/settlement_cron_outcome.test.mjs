@@ -16,7 +16,7 @@ import { createStorage } from '../backend/storage.js';
 import { withD1 } from './helpers/test_env.mjs';
 
 const BOT = 'crassus_private_name';
-const CRON = '*/15 12-23 * * 1-5';
+const CRON = '*/15 12-23 * * MON-FRI';
 const SCHEDULED_MS = Date.parse('2026-11-13T21:15:00Z');
 
 function indexBucket(members, ready = true) {

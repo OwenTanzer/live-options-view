@@ -31,6 +31,7 @@ database_name = "live-options"
 database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"
 
 [triggers]
-crons = ["*/15 12-23 * * 1-5"]
+crons = ["*/15 12-23 * * MON-FRI"]
+# Named weekdays: the provider read numeric 1-5 as Sunday-Thursday (fixed live 11-14).
 # Transfer exact settlement trigger ownership once; never run both crons.
 # No asset binding, legacy KV or migration entry. Secrets remain operator-managed.
