@@ -105,7 +105,7 @@ def _merge_entries(
     return [by_username[username] for username in order]
 
 
-def _entries_for(
+def _base_entries_for(
     path: Path | None,
     catalog_path: Path,
     override_path: Path,
@@ -137,6 +137,19 @@ def _entries_for(
     catalog = _read_entries(catalog_path)
     overrides = _read_entries(override_path) if override_path.exists() else []
     return _merge_entries(catalog, overrides)
+
+
+def _entries_for(path: Path | None, catalog_path: Path, override_path: Path) -> list[dict[str, Any]]:
+    entries = _base_entries_for(path, catalog_path, override_path)
+    if os.environ.get("CRASSUS_NEWTON_CONFIRMED") != "1":
+        return entries
+    control = next(entry for entry in entries if entry["username"] == "crassus_newton")
+    twin = next(entry for entry in _read_entries(catalog_path)
+                if entry["username"] == "crassus_newton_confirmed")
+    challenger = {**control, **twin, "active": control.get("active", True),
+                  "params": {**control.get("params", {}), **twin["params"]}}
+    challenger.pop("password", None)
+    return [entry for entry in entries if entry["username"] != twin["username"]] + [challenger]
 
 
 def _inactive(entry: dict[str, Any]) -> bool:

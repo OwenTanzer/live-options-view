@@ -295,7 +295,8 @@ def _decide_core(
 
     vwap_confirmation_required = params.get("vwap_confirmation_required", False)
     rvol_floor = params.get("rvol_floor", None)
-    if vwap_confirmation_required or rvol_floor is not None:
+    apply_confirmation = held_symbol is None or not params.get("confirmation_entry_only", False)
+    if apply_confirmation and (vwap_confirmation_required or rvol_floor is not None):
         gate = evaluate_gate(
             ctx.snapshot.underlying_market, direction,
             rvol_floor=rvol_floor, require_vwap_agreement=vwap_confirmation_required,

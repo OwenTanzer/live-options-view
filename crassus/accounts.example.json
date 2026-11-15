@@ -56,6 +56,18 @@
       "strategy_id": "trump_whisperer_qqq"
     },
     {
+      "alias": "Newton Confirmed",
+      "active": false,
+      "username": "crassus_newton_confirmed",
+      "password_env": "CRASSUS_PW_NEWTON_CONFIRMED",
+      "strategy_id": "momentum_qqq",
+      "params": {
+        "vwap_confirmation_required": true,
+        "rvol_floor": 1.0,
+        "confirmation_entry_only": true
+      }
+    },
+    {
       "alias": "Newton",
       "username": "crassus_newton",
       "password_env": "CRASSUS_PW_NEWTON",
