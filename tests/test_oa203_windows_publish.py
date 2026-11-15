@@ -334,6 +334,14 @@ class Refusals(unittest.TestCase):
                                self.backend, now=NOW)
         self.assertEqual(self.backend.objects, {})
 
+    def test_weekly_paths_stream_past_regular_limit_and_enforce_weekly_limit(self):
+        directory = weekly_fixture(self.root)
+        with mock.patch.object(pub, "MAX_PATHS_EXPANDED_BYTES", 1024):
+            self.assertEqual(pub.load_window(directory).kind, "weekly_cheapest")
+        with mock.patch.object(pub, "MAX_DETAIL_QUERY_BYTES", 1024):
+            with self.assertRaisesRegex(ValueError, "expanded size ceiling"):
+                pub.load_window(directory)
+
     def test_paths_expanded_ceiling_fails_closed(self):
         with mock.patch.object(pub, "MAX_PATHS_EXPANDED_BYTES", 1024):
             with self.assertRaisesRegex(ValueError, "expanded size ceiling"):
