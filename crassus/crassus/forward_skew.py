@@ -14,6 +14,7 @@ from .skew_direction import Position
 from .strategies.oi_skew import _option_type_from_symbol, oi_skew_qqq
 from .strategy import Decision
 
+PAPER_ORIGIN = "https://options.moopertonic.net"
 VERSION = "oi-forward-v1"
 ARMS = dict(
     crassus_oif_baseline="baseline",
@@ -35,7 +36,10 @@ def arm_for(account):
 def snap_time(value):
     if not value:
         return None
-    value = datetime.fromisoformat(value)
+    try:
+        value = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
     return value if value.tzinfo else None
 
 
@@ -78,6 +82,7 @@ def reconcile(state, ctx, arm):
             None,
         )
         if fill:
+            previous = state.get("chain")
             state.update(pending["after"])
             if pending["action"] == "buy":
                 symbol = pending["symbol"]
@@ -100,6 +105,14 @@ def reconcile(state, ctx, arm):
                         1 if side == "call" else -1,
                         contract_symbol=symbol,
                     )
+                    if previous:
+                        # Exposure and arming reset on a new OI entry. Recovery
+                        # budgets and consumed events belong to the account-day.
+                        chain.protect_exits = previous["protect_exits"]
+                        chain.reentries = previous["reentries"]
+                        chain.used_recovery_events = set(
+                            previous["used_recovery_events"]
+                        )
                 chain.basis = price
                 state["chain"] = freeze(chain)
     chain = thaw(state.get("chain"), arm)
@@ -132,12 +145,13 @@ def decide(ctx, account, arm, bars, directory, decision_id):
             action, reason, "oi_skew_qqq", VERSION, symbol, quantity, metadata=metadata
         )
 
-    if ctx.session_phase != "open":
-        atomic_json(path, state)
-        return result("no_trade", "Exchange closed")
     signal = oi_skew_qqq(ctx) if ctx.snapshot else result("no_trade", "No OI snapshot")
     meta = signal.metadata or {}
     metadata["oi_signal"] = signal.to_dict() if ctx.snapshot else None
+    if ctx.session_phase != "open":
+        if state or not path.exists():
+            atomic_json(path, state)
+        return result("no_trade", signal.reason)
     metadata["bar_input_error"] = bars.error
     reading = snap_time(ctx.snapshot.timestamp) if ctx.snapshot else None
     imbalance = meta.get("imbalance_ratio")

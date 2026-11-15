@@ -182,7 +182,7 @@ class Runner:
         if self.forward_accounts:
             if {a.username for a in self.forward_accounts} != set(forward_skew.ARMS):
                 raise ValueError("activate all four comparison accounts together")
-            if base_url.rstrip("/") != "https://options.moopertonic.net":
+            if base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
                 raise ValueError("forward comparison requires the Options View paper API")
         self.stop_file = Path(state_dir) / "STOP"
         # Periodic registration-key health (#41). Constructed by `main()` and

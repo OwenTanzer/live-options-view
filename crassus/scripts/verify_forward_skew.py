@@ -158,6 +158,86 @@ class Comparison(unittest.TestCase):
         late = []
         ingest(data, received + timedelta(minutes=8), late)
         self.assertFalse(late)
+        data["chart"]["result"][0]["timestamp"][1] = t + 240
+        partial = []
+        ingest(data, received, partial)
+        self.assertEqual(partial, [])
+
+    def test_premarket_anchor_matches_baseline(self):
+        from verify_oi_skew import make_ctx, FLAT_ROWS, fresh_quote
+
+        symbol = "QQQ240101C00400000"
+        with TemporaryDirectory() as folder:
+            proposals = []
+            for user, arm in f.ARMS.items():
+                account = SimpleNamespace(username=user)
+                for phase, instant, rows in [
+                    ("pre", START - timedelta(hours=2), FLAT_ROWS),
+                    ("open", START, None),
+                ]:
+                    ctx = make_ctx(
+                        session_phase=phase,
+                        timestamp=instant.isoformat(),
+                        rows=rows,
+                        quote_map={symbol: fresh_quote(symbol)},
+                    )
+                    ctx.now_et, ctx.account_alias = instant, user + "-match"
+                    if arm == "baseline":
+                        decision = f.oi_skew_qqq(ctx)
+                        meta = decision.metadata
+                    else:
+                        decision = f.decide(
+                            ctx,
+                            account,
+                            arm,
+                            SimpleNamespace(rows=[], error=None),
+                            Path(folder),
+                            phase,
+                        )
+                        meta = decision.metadata["oi_signal"]["metadata"]
+                    if phase == "open":
+                        proposals.append(
+                            (
+                                decision.action,
+                                decision.symbol,
+                                meta["anchor_observed_at"],
+                            )
+                        )
+            self.assertEqual(len(set(proposals)), 1)
+            self.assertEqual(
+                proposals[0], ("buy", symbol, (START - timedelta(hours=2)).isoformat())
+            )
+
+    def test_new_signal_keeps_session_budget(self):
+        previous = f.ProtectionChain("put", 1, 1.4, 0, -1)
+        previous.reentries = 2
+        previous.protect_exits = 3
+        previous.used_recovery_events.add("old-recovery")
+        previous.external_exit("signal_exit")
+        state = {
+            "chain": f.freeze(previous),
+            "pending": {
+                "id": "new",
+                "after": {"chain": None},
+                "action": "buy",
+                "quantity": 1,
+                "symbol": SYM,
+                "bar": 9,
+            },
+        }
+        book = Book(
+            [dict(execution_request_id="new", sym=SYM, side="buy", qty=1, price=1.2)]
+        )
+        chain = f.reconcile(state, SimpleNamespace(book=book), "protect_reentry")
+        self.assertEqual((chain.side, chain.basis, chain.armed), ("call", 1.2, False))
+        self.assertEqual(
+            (chain.reentries, chain.protect_exits, chain.used_recovery_events),
+            (2, 3, {"old-recovery"}),
+        )
+
+    def test_unusable_snapshot_times(self):
+        for bad in ("broken", 42, "2026-11-16T14:00:00"):
+            self.assertIsNone(f.snap_time(bad))
 
 
 if __name__ == "__main__":

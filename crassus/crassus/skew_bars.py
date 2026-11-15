@@ -26,7 +26,7 @@ def ingest(payload, received, existing):
     q = chart["indicators"]["quote"][0]
     day = received.astimezone(ET).date()
     for i in reversed(range(len(stamps) - 1)):
-        if stamps[i + 1] > received.timestamp():
+        if not stamps[i] + 300 <= stamps[i + 1] <= received.timestamp():
             continue
         start = datetime.fromtimestamp(stamps[i], timezone.utc)
         end = start + timedelta(minutes=5)

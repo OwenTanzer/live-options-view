@@ -277,7 +277,7 @@
       "username": "crassus_oif_baseline",
       "password_env": "CRASSUS_PW_OIF_BASELINE",
       "strategy_id": "oi_skew_qqq",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "baseline"
       }
@@ -287,7 +287,7 @@
       "username": "crassus_oif_stop35",
       "password_env": "CRASSUS_PW_OIF_STOP35",
       "strategy_id": "oi_skew_qqq",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "stop"
       }
@@ -297,7 +297,7 @@
       "username": "crassus_oif_protect",
       "password_env": "CRASSUS_PW_OIF_PROTECT",
       "strategy_id": "oi_skew_qqq",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "protect_only"
       }
@@ -307,7 +307,7 @@
       "username": "crassus_oif_recover",
       "password_env": "CRASSUS_PW_OIF_RECOVER",
       "strategy_id": "oi_skew_qqq",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "protect_reentry"
       }
