@@ -19,7 +19,7 @@ Weekly publication validates every contract path from the gzip stream. Weekly de
 | module | responsibility |
 | --- | --- |
 | `runtime.py` | the event log, wall clock, stop flag and run settings |
-| `occ.py` | OCC daily contract volume â†’ the day's underlyings |
+| `occ.py` | OCC daily contract volume → the day's underlyings |
 | `tradier.py` | the market-data client: retries, rate limits, per-sweep budget |
 | `archive.py` | the day directory: journal, manifest, row iteration |
 | `sweep.py` | universe selection and one sweep across it |
@@ -34,10 +34,10 @@ Weekly publication validates every contract path from the gzip stream. Weekly de
 
 ## The path a session takes
 
-`run` (`cli.py`) â†’ `run_day` (`session.py`) â†’ `build_universe_for` (OCC volume,
-then `sweep.select_universe`) â†’ repeated `sweep.run_sweep` writing
-`sweeps/sweep_<n>.jsonl.gz` and one `sweeps/manifest.jsonl` line per sweep â†’
-`active.build_active_snapshot` on its cadence â†’ after the close, `finalize`
+`run` (`cli.py`) → `run_day` (`session.py`) → `build_universe_for` (OCC volume,
+then `sweep.select_universe`) → repeated `sweep.run_sweep` writing
+`sweeps/sweep_<n>.jsonl.gz` and one `sweeps/manifest.jsonl` line per sweep →
+`active.build_active_snapshot` on its cadence → after the close, `finalize`
 (`session.py`) builds `build_contract_rows` (`outputs.py`), writes the
 leaderboard, uploads through `DayArchive` and records the assessment.
 
@@ -51,8 +51,8 @@ leaderboard, uploads through `DayArchive` and records the assessment.
 ## The stop flag
 
 `runtime.STOP` is the one owner. Modules read it through the module
-(`runtime.STOP`) rather than importing a copy, so setting it â€” from a signal
-handler or a test â€” actually stops the scan.
+(`runtime.STOP`) rather than importing a copy, so setting it — from a signal
+handler or a test — actually stops the scan.
 
 ## Component tools
 
