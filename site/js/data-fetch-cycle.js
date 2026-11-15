@@ -41,6 +41,7 @@ async function fetchLatest() {
     lastTs = qqq.data.timestamp;
     lastData = qqq.data;
     chainState.QQQ = { data: qqq.data, error: null };
+    if (typeof qqqIv !== "undefined") qqqIv.update(qqq.data);
     ingestSnapshotQuotes(qqq.data);
     updateQqqVwapRvolLine(qqq.data.underlying_market);
     updateQqqMomentumLine(qqq.data.underlying_market);
@@ -115,6 +116,7 @@ function renderChainTitle(symbol) {
 // validated snapshot only. Each symbol's stale/unavailable state is its own.
 function renderSelectedChain() {
   const symbol = chainSelection.symbol;
+  if (typeof qqqIv !== "undefined") qqqIv.select(symbol);
   renderChainTitle(symbol);
   const state = chainState[symbol];
   const data = state?.data;
