@@ -655,7 +655,12 @@
         container.setAttribute('data-state', index.complete ? 'empty' : 'failed');
         return null;
       }
-      return show(index.views[0].first_page);
+      // Retained days are oldest first. Open on the newest populated collector day.
+      var collectorDays = index.views.filter(function (view) {
+        return view.mode === 'collector' && view.stream === 'all';
+      }).sort(function (a, b) { return b.date.localeCompare(a.date); });
+      var initial = collectorDays.find(function (view) { return view.rows_total > 0; });
+      return show((initial || collectorDays[0] || index.views[0]).first_page);
     }).catch(function (e) {
       clear(pageSlot);
       tell({ state: e && e.newsKind === 'absent' ? 'absent' : 'failed' });
