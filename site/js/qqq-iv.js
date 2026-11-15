@@ -42,7 +42,7 @@ const qqqIv = (() => {
   function render() {
     if (!points.length) return;
     const last=points.at(-1);
-    stamp.textContent=(day.format(last[0])===day.format(Date.now())?'':'Archive ? ')+et.format(last[0])+' ET';
+    stamp.textContent=(day.format(last[0])===day.format(Date.now())?'':'Archive \u00b7 ')+et.format(last[0])+' ET';
     buttons.forEach((b,i)=>{
       const v=last[i+1];
       b.querySelector('b').textContent=Number.isFinite(v)?(i===1 && v>=0?'+':'')+v.toFixed(2)+(i===0?'%':' pts'):'\u2014';
