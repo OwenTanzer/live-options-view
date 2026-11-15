@@ -44,6 +44,8 @@ from .config import (
     SNAPSHOT_URL,
     load_accounts,
 )
+from . import forward_skew
+from .skew_bars import ForwardBars
 from .flatten import maybe_flatten
 from .exits import (
     ExitConfigError,
@@ -174,6 +176,14 @@ class Runner:
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)
+        self.forward_directory = self.state_dir / forward_skew.VERSION
+        self.forward_bars = ForwardBars(self.forward_directory)
+        self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
+        if self.forward_accounts:
+            if {a.username for a in self.forward_accounts} != set(forward_skew.ARMS):
+                raise ValueError("activate all four comparison accounts together")
+            if base_url.rstrip("/") != "https://options.moopertonic.net":
+                raise ValueError("forward comparison requires the Options View paper API")
         self.stop_file = Path(state_dir) / "STOP"
         # Periodic registration-key health (#41). Constructed by `main()` and
         # injected, not built here: tests and one-off Runner constructions must
@@ -483,6 +493,12 @@ class Runner:
             snapshot=snapshot,
         )
 
+        arm = forward_skew.arm_for(account)
+        if arm:
+            if phase == "open":
+                self.forward_bars.read(self.cycle_count, clock.now_et())
+            base.update(comparison_version=forward_skew.VERSION, comparison_arm=arm,
+                        comparison_cycle=self.cycle_count, source_revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
         # Reconcile first: the server's view of cash and trades is the only
         # authority, and both the mandatory EOD flatten and the account's own
         # strategy should decide against current reality. This only needs
@@ -517,8 +533,12 @@ class Runner:
         observed_quotes: dict[str, Any] = {}
 
         def quotes_for_decision(symbols: list[str]) -> dict[str, Any]:
-            result = self.quotes.quotes(symbols)
+            missing = [s for s in symbols if s not in observed_quotes] if arm else symbols
+            result = self.quotes.quotes(missing) if missing else {}
             observed_quotes.update(result)
+            if arm:
+                return {s:observed_quotes[s] for s in symbols if s in observed_quotes
+                        and observed_quotes[s].age_seconds is not None and observed_quotes[s].age_seconds >= 0}
             return result
 
         ctx = StrategyContext(
@@ -537,6 +557,9 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
+            elif arm and arm != "baseline":
+                decision = forward_skew.decide(ctx, account, arm, self.forward_bars,
+                                               self.forward_directory, decision_id)
             else:
                 # Configurable profit/protective exits (#86) sit between the
                 # mandatory flatten and the account's own strategy: session
@@ -612,6 +635,20 @@ class Runner:
             )
             return
 
+        if arm:
+            if arm == "baseline" and decision.action == "buy":
+                observed = forward_skew.snap_time(snapshot.timestamp) if snapshot else None
+                if not observed or not 0 <= (ctx.now_et-observed).total_seconds() <= 360:
+                    decision = Decision.no_trade("OI reading outside causal freshness window",
+                                                 account.strategy_id, forward_skew.VERSION)
+            # Retain a liquidation mark for every held symbol, including no-trades.
+            try:
+                quotes_for_decision(list(book.positions))
+            except Exception as exc:
+                base["comparison_mark_error"] = type(exc).__name__
+            base["comparison_quotes"] = {sym:vars(q) for sym,q in observed_quotes.items()}
+            base["comparison_positions"] = {sym:vars(pos) for sym,pos in book.positions.items()}
+            base["comparison_decided_at"] = ctx.now_et.isoformat()
         # Annotate the proposal before it enters either the durable intent
         # or the ledger. The strategy's own quote is reused without I/O.
         annotate_buy_decision(decision, snapshot, observed_quotes.get(decision.symbol),
@@ -692,6 +729,7 @@ class Runner:
 
         try:
             result = executor.submit(
+                **({"execution_request_id": decision_id} if arm else {}),
                 symbol=decision.symbol,
                 side=decision.action,
                 quantity=decision.quantity,

@@ -28,6 +28,11 @@ jobs:
       - name: Install dependencies
         working-directory: crassus
         run: pip install -r requirements.txt
+      - name: Verify forward paper overlays and matched policies
+        working-directory: crassus
+        run: |
+          python scripts/verify_profit_protection.py
+          python scripts/verify_forward_skew.py
       - name: Run integrity invariant suite
         working-directory: crassus
         run: python scripts/verify_invariants.py

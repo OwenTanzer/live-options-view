@@ -17,6 +17,8 @@ record of what the bot saw, decided, and did.
 
 ---
 
+[Four-arm forward paper comparison](docs/forward-skew.md)
+
 ## Status
 
 | Phase | | |
