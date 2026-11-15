@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  /><title>QQQ · Order flow</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #091115;
+      color: #e8f0ed;
+      font:
+        15px system-ui,
+        sans-serif;
+    }
+    main {
+      max-width: 1160px;
+      margin: auto;
+      padding: clamp(14px, 4vw, 54px);
+    }
+    header,
+    nav,
+    footer,
+    .legend {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header {
+      border-bottom: 1px solid #314047;
+      padding-bottom: 18px;
+    }
+    small,
+    label,
+    .axis {
+      color: #aabbbf;
+    }
+    h1 {
+      font-size: clamp(30px, 5vw, 54px);
+      letter-spacing: -0.05em;
+      margin: 4px 0;
+    }
+    button,
+    select {
+      background: #18262c;
+      color: #eff7f4;
+      border: 1px solid #405359;
+      border-radius: 5px;
+      padding: 8px;
+      font: inherit;
+    }
+    nav,
+    .legend,
+    footer {
+      padding: 14px 0;
+    }
+    .legend {
+      justify-content: flex-start;
+      color: #c1cdd0;
+      font-size: 13px;
+    }
+    .buy {
+      color: #62e3bd;
+    }
+    .sell {
+      color: #ff967c;
+    }
+    .unknown {
+      color: #b7bbd5;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: clamp(310px, 53vh, 560px);
+      touch-action: manipulation;
+    }
+    output {
+      display: block;
+      min-height: 42px;
+      padding: 10px 0;
+      color: #dae5e2;
+    }
+    input {
+      max-width: 40vw;
+      accent-color: #62e3bd;
+    }
+    footer {
+      border-top: 1px solid #314047;
+    }
+    #state {
+      font-family: monospace;
+    }
+    button:focus-visible,
+    select:focus-visible {
+      outline: 2px solid #62e3bd;
+    }
+  </style>
+  <main>
+    <header>
+      <div>
+        <small>OPTIONS VIEW</small>
+        <h1>QQQ order flow</h1>
+      </div>
+      <strong id="mode">QQQ · Live feed</strong>
+    </header>
+    <nav>
+      <label
+        >Source
+        <select id="source">
+          <option value="live">Live</option>
+          <option value="replay">Archive replay</option>
+        </select></label
+      ><span id="state" role="status"></span
+      ><label
+        >Contracts
+        <select id="filter">
+          <option>All</option>
+          <option>Calls</option>
+          <option>Puts</option>
+        </select></label
+      >
+    </nav>
+    <div class="legend">
+      <b class="buy">+ Inferred buy</b><b class="sell">− Inferred sell</b
+      ><b class="unknown">· Unknown</b><span>○ Call　◇ Put</span
+      ><span>Area = contracts</span>
+    </div>
+    <canvas
+      aria-label="Rolling time by strike. Select a print to inspect it."
+    ></canvas
+    ><output id="details" aria-live="polite"
+      >Tap a print to inspect price, size and inferred side.</output
+    >
+    <footer>
+      <button id="play">Pause</button
+      ><label
+        >Position
+        <input id="seek" type="range" min="0" max="1000" value="450" /></label
+      ><label
+        >Speed
+        <select id="speed">
+          <option>1</option>
+          <option selected>4</option>
+          <option>12</option>
+        </select>
+        ×</label
+      >
+    </footer>
+  </main>
+  <script>
+    const canvas = document.querySelector("canvas"),
+      ctx = canvas.getContext("2d"),
+      el = (id) => document.getElementById(id);
+    let data = [],
+      end = Date.now(),
+      playing = true,
+      last = performance.now(),
+      hits = [];
+    let status = "",
+      generation = 0,
+      timer = 0,
+      controller = null,
+      dirty = true;
+    const live = () => el("source").value === "live";
+    const clock = (t) =>
+      new Date(t).toLocaleTimeString("en-US", {
+        timeZone: "America/New_York",
+        hour12: false,
+      });
+    function draw() {
+      const w = canvas.clientWidth,
+        h = canvas.clientHeight,
+        d = devicePixelRatio || 1;
+      if (
+        canvas.width !== Math.round(w * d) ||
+        canvas.height !== Math.round(h * d)
+      ) {
+        canvas.width = Math.round(w * d);
+        canvas.height = Math.round(h * d);
+      }
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      hits = [];
+      const left = 48,
+        right = w - 17,
+        top = 30,
+        bottom = h - 36,
+        start = end - 60000,
+        visible = data.filter(
+          (p) =>
+            p.t >= start &&
+            p.t <= end &&
+            (el("filter").value === "All" || p.type === el("filter").value[0]),
+        );
+      let low = Math.min(...visible.map((p) => p.strike)),
+        high = Math.max(...visible.map((p) => p.strike));
+      if (!visible.length) {
+        low = 0;
+        high = 1;
+      }
+      if (low === high) {
+        low--;
+        high++;
+      }
+      ctx.font = "11px monospace";
+      ctx.fillStyle = "#adbdc1";
+      ctx.fillText("STRIKE $", 2, 13);
+      ctx.fillText("TIME ET", left, h - 1);
+      for (let i = 0; i <= 4; i++) {
+        let y = top + ((bottom - top) * i) / 4;
+        ctx.strokeStyle = "#25353c";
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+        ctx.fillStyle = "#adbdc1";
+        if (visible.length)
+          ctx.fillText(
+            String(+(high - ((high - low) * i) / 4).toFixed(2)),
+            1,
+            y + 3,
+          );
+      }
+      for (let i = 0; i <= 3; i++) {
+        let x = left + ((right - left) * i) / 3;
+        ctx.fillText(
+          clock(start + i * 20000).slice(0, 8),
+          Math.min(w - 55, Math.max(left, x - 24)),
+          h - 16,
+        );
+      }
+      for (const p of visible) {
+        let x = left + ((right - left) * (p.t - start)) / 60000,
+          y = bottom - ((bottom - top) * (p.strike - low)) / (high - low),
+          a = 8 * p.size,
+          r = Math.sqrt(a / Math.PI),
+          k = Math.sqrt(a / 2);
+        ctx.strokeStyle = {
+          buy: "#62e3bd",
+          sell: "#ff967c",
+          unknown: "#b7bbd5",
+        }[p.side];
+        ctx.fillStyle = ctx.strokeStyle + "65";
+        ctx.beginPath();
+        if (p.type === "C") ctx.arc(x, y, r, 0, Math.PI * 2);
+        else {
+          ctx.moveTo(x, y - k);
+          ctx.lineTo(x + k, y);
+          ctx.lineTo(x, y + k);
+          ctx.lineTo(x - k, y);
+          ctx.closePath();
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#f6fffc";
+        ctx.textAlign = "center";
+        ctx.fillText({ buy: "+", sell: "−", unknown: "·" }[p.side], x, y + 3);
+        ctx.textAlign = "left";
+        hits.push({ x, y, p, r: Math.max(8, p.type === "C" ? r : k) });
+      }
+      el("state").textContent = status + " · " + visible.length + " visible";
+    }
+    canvas.onclick = (e) => {
+      let b = canvas.getBoundingClientRect(),
+        hit = [...hits]
+          .reverse()
+          .find(
+            (v) =>
+              Math.hypot(v.x - e.clientX + b.left, v.y - e.clientY + b.top) <=
+              v.r,
+          );
+      if (hit) {
+        const p = hit.p;
+        el("details").textContent =
+          clock(p.t) +
+          " ET　 $" +
+          p.strike +
+          " " +
+          (p.type === "C" ? "call" : "put") +
+          "　 " +
+          p.size +
+          " contracts @ $" +
+          p.price +
+          "　 " +
+          (p.side === "unknown" ? "Unknown side" : "Inferred " + p.side);
+      }
+    };
+    el("play").onclick = () => {
+      playing = !playing;
+      el("play").textContent = playing ? "Pause" : "Play";
+    };
+    el("seek").oninput = () => {
+      if (!data.length) return;
+      end = data[0].t + ((data.at(-1).t - data[0].t) * el("seek").value) / 1000;
+      draw();
+    };
+    el("filter").onchange = draw;
+    function frame(now) {
+      if (!live() && playing && data.length) {
+        end += (now - last) * Number(el("speed").value);
+        if (end > data.at(-1).t) end = data[0].t;
+        el("seek").value =
+          (1000 * (end - data[0].t)) / (data.at(-1).t - data[0].t);
+        dirty = true;
+      }
+      last = now;
+      if (dirty) {
+        draw();
+        dirty = false;
+      }
+      setTimeout(() => requestAnimationFrame(frame), 180);
+    }
+    async function changeSource() {
+      const gen = ++generation;
+      clearTimeout(timer);
+      controller?.abort();
+      data = [];
+      end = Date.now();
+      dirty = true;
+      const isLive = live();
+      document.querySelector("footer").hidden = isLive;
+      document.querySelector("footer").style.display = isLive ? "none" : "flex";
+      el("mode").textContent = isLive
+        ? "QQQ · Live feed"
+        : "Archive replay · September 25, 2026";
+      status = isLive ? "Waiting for feed" : "Loading archive";
+      el("details").textContent =
+        "Tap a print to inspect price, size and inferred side.";
+      history.replaceState(
+        null,
+        "",
+        isLive ? "?source=live" : "?source=replay",
+      );
+      let received = null;
+      async function read() {
+        if (gen !== generation) return;
+        controller = new AbortController();
+        const active = controller;
+        const timeout = setTimeout(() => active.abort(), 8000);
+        try {
+          const url = isLive
+            ? "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/order-flow/qqq/v1/recent.json?_=" +
+              Date.now()
+            : "./order-flow-replay.json";
+          const res = await fetch(url, {
+            cache: "no-store",
+            signal: active.signal,
+            credentials: "omit",
+          });
+          if (gen !== generation) return;
+          if (res.status === 404 && isLive) {
+            data = [];
+            received = null;
+            status = "Waiting · no published print";
+          } else {
+            if (!res.ok) throw Error("HTTP " + res.status);
+            const payload = await res.json();
+            if (gen !== generation) return;
+            if (
+              !Array.isArray(payload.rows) ||
+              (!isLive && !payload.rows.length)
+            )
+              throw Error("Invalid feed");
+            data = payload.rows.sort((a, b) => a.t - b.t);
+            if (isLive) {
+              received = payload.lastReceived;
+              const age = Date.now() - received;
+              status =
+                (age > 15000 ? "Stale" : "Receiving") +
+                " · last print " +
+                new Date(received).toLocaleString("en-US", {
+                  timeZone: "America/New_York",
+                }) +
+                " ET";
+            } else {
+              end =
+                data[0].t + Math.min(15000, (data.at(-1).t - data[0].t) / 2);
+              status = "Archive · 09:30 ET";
+            }
+          }
+        } catch (e) {
+          if (gen === generation)
+            status =
+              (isLive ? "Disconnected" : "Archive unavailable") +
+              (received ? " · last print " + clock(received) + " ET" : "");
+        } finally {
+          clearTimeout(timeout);
+          if (gen === generation) {
+            if (isLive) end = Date.now();
+            dirty = true;
+            if (isLive) timer = setTimeout(read, 3000);
+          }
+        }
+      }
+      await read();
+    }
+    el("source").value =
+      new URLSearchParams(location.search).get("source") === "replay"
+        ? "replay"
+        : "live";
+    el("source").onchange = changeSource;
+    window.addEventListener("resize", () => (dirty = true));
+    changeSource();
+    requestAnimationFrame(frame);
+  </script>
+</html>
