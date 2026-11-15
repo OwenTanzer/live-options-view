@@ -877,7 +877,7 @@ class Consumer {
       // paths row fails closed.
       let pathsRow=null, pathsRead=false;
       try {
-        const pathsText=await q.get(v.prefix+'paths.csv.gz');
+        const pathsText=await q.get(v.prefix+'paths.csv.gz',v.row.symbol);
         pathsRead=true;
         const pathsEvidence=q.evidence.at(-1);
         pathsRow=windowPathsRow(pathsText,v.row.symbol);

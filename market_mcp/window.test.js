@@ -13,6 +13,18 @@ const SESSIONS3 = { window_id: 'sessions3-2026-10-05_2026-10-07', kind: 'session
 const OVERNIGHT_PARTIAL = { window_id: 'overnight-2026-10-07_2026-10-08', kind: 'overnight' };
 const WEEKLY = { window_id: 'weekly-2026-W41-cheapest', kind: 'weekly_cheapest' };
 const UNSUPPORTED = { window_id: 'overnight-2026-10-06_2026-10-07', kind: 'overnight' };
+test('weekly detail scans past the ordinary expansion limit and validates the gzip trailer', async () => {
+  const key = 'oa203/windows/oa203-windows-v1/weekly_fixed/weekly-2026-W46-fixed/paths.csv.gz';
+  const line = 'OTHER,' + 'x'.repeat(1016) + '\n';
+  const text = 'symbol,value\n' + line.repeat(50000) + 'TARGET,123\n';
+  assert.ok(Buffer.byteLength(text) > LIMITS.expanded_artifact_bytes);
+  const data = gzipSync(text);
+  const query = new Source({read: async () => data}).query();
+  assert.equal(await query.get(key, 'TARGET'), 'symbol,value\nTARGET,123\n');
+  const damaged = new Source({read: async () => data.subarray(0, -4)}).query();
+  await assert.rejects(damaged.get(key, 'TARGET'), {code: 'excessive_or_malformed_artifact'});
+});
+
 function setup() {
   const { files, windows } = windowFixtures(), calls = [];
   // Base fixtures too, so discover_sources probes for the other datasets

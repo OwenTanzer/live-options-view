@@ -12,6 +12,8 @@ with repository-root context, restart policy `NEVER` and cron `45 12 * * 1-5`
 UTC. Its empty watch list covers all source paths. Build/start/cron settings
 are service-managed; activation and readiness are separate runtime settings.
 
+Weekly publication validates every contract path from the gzip stream. Weekly detail readers scan the same member to its end before returning the selected row and checking the pointer digest. Each weekly scan has a 128 MiB expanded limit and a 64 KiB line limit.
+
 ## Where a job lives
 
 | module | responsibility |

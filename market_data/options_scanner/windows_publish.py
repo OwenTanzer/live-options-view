@@ -60,7 +60,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 from zoneinfo import ZoneInfo
 
 import market_data.options_scanner.windows as w
@@ -75,7 +75,7 @@ RANKING_COLUMNS = ["basis", "rank", "symbol", "underlying", "option_type", "stri
 PATH_COLUMNS = outputs.PATH_COLUMNS
 BASIS_COLUMNS = outputs.BASIS_COLUMNS
 
-# Consumer byte ceilings (market_mcp/source.js LIMITS): a single artifact is
+# Ordinary consumer byte ceilings (market_mcp/source.js LIMITS): a single artifact is
 # at most 4 MiB, a decompressed artifact at most 48 MiB. The publisher
 # enforces them before upload so a published window is always consumable.
 # Measured full-universe members (real producer, 14-batch combine,
@@ -91,6 +91,8 @@ MAX_SUMMARY_BYTES = 1 * 1024 * 1024
 MAX_RANKINGS_BYTES = 4 * 1024 * 1024
 MAX_PATHS_BYTES = 4 * 1024 * 1024
 MAX_PATHS_EXPANDED_BYTES = 48 * 1024 * 1024
+MAX_WEEKLY_PATHS_EXPANDED_BYTES = 128 * 1024 * 1024
+MAX_PATH_LINE_BYTES = 64 * 1024
 MEMBER_MAX_BYTES = {"summary.json": MAX_SUMMARY_BYTES, "rankings.csv": MAX_RANKINGS_BYTES,
                     "paths.csv.gz": MAX_PATHS_BYTES}
 WINDOW_MEMBERS = ("summary.json", "rankings.csv", "paths.csv.gz")
@@ -395,8 +397,24 @@ def _decompress_bounded(data: bytes, limit: int) -> str:
         raise ValueError("paths.csv.gz is not UTF-8") from None
 
 
+def _weekly_path_lines(data: bytes) -> Iterator[str]:
+    """Validate the entire gzip stream while keeping only one path line in memory."""
+    total = 0
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as raw:
+            while line := raw.readline(MAX_PATH_LINE_BYTES + 1):
+                total += len(line)
+                if total > MAX_WEEKLY_PATHS_EXPANDED_BYTES:
+                    raise ValueError("weekly paths.csv.gz exceeds the expanded size ceiling")
+                if len(line) > MAX_PATH_LINE_BYTES:
+                    raise ValueError("weekly path line exceeds its byte ceiling")
+                yield line.decode("utf-8")
+    except (EOFError, OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"weekly paths.csv.gz is damaged: {exc}") from None
+
+
 def _validate_paths(data: bytes, summary: dict[str, Any],
-                    ranked: dict[str, list[dict[str, Any]]]) -> None:
+                    ranked: dict[str, list[dict[str, Any]]], *, weekly: bool) -> None:
     """Full-universe paths must prove the summary counts and the shortlist.
 
     Streams rows (only ranked symbols are retained): symbols unique
@@ -406,9 +424,10 @@ def _validate_paths(data: bytes, summary: dict[str, Any],
     summary exactly, and every ranked row matches its paths row on basis
     status, pct, entry, exit and sessions.
     """
-    text = _decompress_bounded(data, MAX_PATHS_EXPANDED_BYTES)
+    lines = (_weekly_path_lines(data) if weekly
+             else io.StringIO(_decompress_bounded(data, MAX_PATHS_EXPANDED_BYTES)))
     try:
-        reader = csv.DictReader(io.StringIO(text))
+        reader = csv.DictReader(lines)
         header = reader.fieldnames
     except csv.Error:
         raise ValueError("paths.csv.gz is not parseable CSV") from None
@@ -566,7 +585,10 @@ def load_window(window_dir: Path) -> ValidatedWindow:
         raise ValueError("summary.json is not valid JSON") from None
     summary = _validate_summary(summary, kind, window_id)
     ranked = _validate_rankings(member_bytes["rankings.csv"], summary)
-    _validate_paths(member_bytes["paths.csv.gz"], summary, ranked)
+    try:
+        _validate_paths(member_bytes["paths.csv.gz"], summary, ranked, weekly=kind.startswith("weekly_"))
+    except ValueError as exc:
+        raise ValueError(f"{kind}/{window_id}: {exc}") from exc
     revision = "rev_" + _sha256(member_bytes["summary.json"])
     return ValidatedWindow(kind=kind, window_id=window_id, state=summary["state"], summary=summary,
                            summary_bytes=member_bytes["summary.json"], member_bytes=member_bytes,
