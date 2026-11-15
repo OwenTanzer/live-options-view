@@ -127,7 +127,8 @@ def _entries_for(
                       if entry.get("username") in {
                           "crassus_oif_baseline", "crassus_oif_stop35",
                           "crassus_oif_protect", "crassus_oif_recover"}]
-            return _merge_entries(cohort, entries)
+            existing = {entry.get("username") for entry in entries}
+            return entries + [entry for entry in cohort if entry["username"] not in existing]
         return entries
     if not catalog_path.exists():
         raise FileNotFoundError(f"No bot catalog at {catalog_path}.")
