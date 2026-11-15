@@ -120,7 +120,7 @@ def _entries_for(
         if not configured_path.exists():
             raise FileNotFoundError(f"No accounts file at {configured_path}.")
         entries = _read_entries(configured_path)
-        if path is not None:
+        if path is not None or os.environ.get("CRASSUS_FORWARD_COHORT") != "oi-forward-v1":
             return entries
         # The forward cohort is an explicitly activated experiment. Preserve
         # every private runtime setting while admitting newly cataloged arms.
