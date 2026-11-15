@@ -31,13 +31,16 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import archive as A  # noqa: E402
-from engine import DEFAULT_FEE, ReplayError, ReplaySession  # noqa: E402
+from engine import DEFAULT_FEE, DwellError, ReplayError, ReplaySession  # noqa: E402
 
 MAX_BODY = 4096
 
 
 class Games:
-    def __init__(self, arc: A.Archive, pool: list[str], fee: float, seed: int | None):
+    def __init__(self, arc: A.Archive, pool: list[str], fee: float, seed: int | None,
+                 force_day: str | None = None, force_start: int | None = None):
+        self.force_day = force_day
+        self.force_start = force_start
         self.arc = arc
         self.pool = list(pool)
         self.fee = fee
@@ -55,6 +58,11 @@ class Games:
         return self.index.get(yyyymmdd, [])
 
     def _pick_pack(self) -> dict:
+        if self.force_day:
+            pack = self._load(self.force_day)
+            if pack is None:
+                raise ReplayError("the forced day does not qualify")
+            return pack
         for _ in range(8):
             with self.lock:
                 if self._prefetched:
@@ -82,6 +90,8 @@ class Games:
         return pack
 
     def prefetch(self):
+        if self.force_day:
+            return
         with self.lock:
             if self._prefetched or self._prefetching:
                 return
@@ -103,7 +113,9 @@ class Games:
     def new(self) -> ReplaySession:
         pack = self._pick_pack()
         session = ReplaySession(pack, rng=self.rng, fee_per_contract_side=self.fee,
-                                journal_dir=self.arc.cache_dir / "journals")
+                                start_s=self.force_start,
+                                journal_dir=self.arc.cache_dir / "journals",
+                                raw_lookup=lambda key, c: A.raw_quote(self.arc, key, c))
         with self.lock:
             self.sessions[session.id] = session
         self.prefetch()
@@ -177,7 +189,13 @@ def make_handler(games: Games):
                     return self._send(200, games.new().view())
                 s = games.get(str(data.get("s", "")))
                 if url.path == "/api/advance":
-                    return self._send(200, s.advance(data.get("seconds", 60)))
+                    bars = data.get("max_bars", 1)
+                    return self._send(200, s.advance(data.get("seconds", 60),
+                                                     None if bars is None else int(bars)))
+                if url.path == "/api/step":
+                    return self._send(200, s.step_bar())
+                if url.path == "/api/reset":
+                    return self._send(200, s.reset())
                 if url.path == "/api/order":
                     return self._send(200, s.order(str(data.get("side")), str(data.get("contract")),
                                                    data.get("qty", 1)))
@@ -185,7 +203,9 @@ def make_handler(games: Games):
                     return self._send(200, s.reveal())
                 return self._send(404, {"error": "not found"})
             except ReplayError as e:
-                return self._send(HTTPStatus.CONFLICT, {"error": str(e)})
+                return self._send(e.status, {"error": str(e), "dwell": isinstance(e, DwellError)})
+            except (TypeError, ValueError) as e:
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": f"bad request: {e}"})
 
     return Handler
 
@@ -198,6 +218,9 @@ def main() -> int:
     ap.add_argument("--fee", type=float, default=DEFAULT_FEE,
                     help="USD per contract per side (default %(default)s)")
     ap.add_argument("--seed", type=int, default=None, help="fix day/start choice (testing)")
+    ap.add_argument("--day", default=None,
+                    help="operator reproduction only: play this YYYY-MM-DD (the operator then knows the date)")
+    ap.add_argument("--start", default=None, help="operator reproduction only: landing time HH:MM (ET)")
     args = ap.parse_args()
     arc = A.Archive(args.cache)
     pool_file = Path(args.cache) / "qualified_days.json"
@@ -205,7 +228,11 @@ def main() -> int:
         print("No day pool yet: run research/options_replay/qualify.py first.", file=sys.stderr)
         return 2
     pool = json.loads(pool_file.read_text())["qualified"]
-    games = Games(arc, pool, args.fee, args.seed)
+    start = None
+    if args.start:
+        hh, mm = (int(x) for x in args.start.split(":"))
+        start = hh * 3600 + mm * 60
+    games = Games(arc, pool, args.fee, args.seed, args.day, start)
     games.prefetch()
     httpd = ThreadingHTTPServer((args.host, args.port), make_handler(games))
     print(f"Options Replay: http://{args.host}:{args.port}/  ({len(pool)} qualified days, "

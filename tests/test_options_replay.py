@@ -12,7 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "research" / "options_replay"))
 
 import archive as A  # noqa: E402
-from engine import MULTIPLIER, ReplayError, ReplaySession  # noqa: E402
+from engine import MIN_DWELL_S, MULTIPLIER, DwellError, ReplayError, ReplaySession  # noqa: E402
+
+
+class FakeClock:
+    """Wall clock that moves 1 s per read, so dwell never blocks unless a test says so."""
+    def __init__(self, step=1.0):
+        self.t, self.step = 1000.0, step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+def RS(pack, **kw):
+    kw.setdefault("now", FakeClock())
+    return ReplaySession(pack, **kw)
 
 DAY = "2026-09-01"
 OPEN, CLOSE = 9 * 3600 + 30 * 60, 16 * 3600
@@ -53,9 +68,9 @@ DATE_PATTERNS = [r"2026", r"20260901", r"260901", r"09-01", r"Tuesday", r"\bSep"
 
 class HiddenDateAndClock(unittest.TestCase):
     def test_view_has_no_date_bearing_values(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 3600)
+        s = RS(minute_pack(), start_s=OPEN + 3600)
         s.order("buy", "C700", 1)
-        s.advance(600)
+        s.advance(600, max_bars=None)
         blob = json.dumps(s.view())
         for pat in DATE_PATTERNS:
             self.assertIsNone(re.search(pat, blob), pat)
@@ -63,46 +78,46 @@ class HiddenDateAndClock(unittest.TestCase):
         self.assertNotIn("source_key", blob)
 
     def test_reveal_discloses_date_and_sources(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 3600)
+        s = RS(minute_pack(), start_s=OPEN + 3600)
         s.order("buy", "C700", 1)
         r = s.reveal()["reveal"]
         self.assertEqual(r["date"], DAY)
         self.assertEqual(r["weekday"], "Tuesday")
-        self.assertTrue(r["fills_with_sources"][0]["source_key"].startswith("intraday/20260901/"))
+        self.assertTrue(r["reconciliation"]["lines"][0]["source_key"].startswith("intraday/20260901/"))
         with self.assertRaises(ReplayError):
             s.order("buy", "C700", 1)
 
     def test_no_future_data_before_reveal(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 1800 + 30)
+        s = RS(minute_pack(), start_s=OPEN + 1800 + 30)
         v = s.view()
         self.assertTrue(all(t <= s.clock for t, _ in v["spot"]["series"]))
         self.assertEqual(v["quotes"]["snapshot_time"], "10:00:00")
         self.assertNotIn("full_day_spot", json.dumps(v))
 
     def test_clock_only_moves_forward_and_stops_at_close(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 600)
+        s = RS(minute_pack(), start_s=OPEN + 600)
         for bad in (0, -60):
             with self.assertRaises(ReplayError):
                 s.advance(bad)
-        s.advance(7 * 3600)
+        s.advance(7 * 3600, max_bars=None)
         self.assertEqual(s.clock, CLOSE)
         self.assertTrue(s.view()["session"]["closed"])
         self.assertEqual(s.view()["session"]["seconds_to_close"], 0)
 
     def test_random_start_inside_session(self):
         for seed in range(20):
-            s = ReplaySession(minute_pack(), rng=random.Random(seed))
+            s = RS(minute_pack(), rng=random.Random(seed))
             self.assertTrue(OPEN + 900 <= s.clock < CLOSE - 3600 + 60)
 
 
 class Fills(unittest.TestCase):
     def test_buy_at_ask_sell_at_bid_with_fees(self):
-        s = ReplaySession(minute_pack(drift=0.05), start_s=OPEN + 3600, fee_per_contract_side=0.65)
+        s = RS(minute_pack(drift=0.05), start_s=OPEN + 3600, fee_per_contract_side=0.65)
         snap_in = s.board_state()[0]
         bid0, ask0 = snap_in["q"]["C703"]
         s.order("buy", "C703", 2)
         self.assertEqual(s.fills[0]["price"], ask0)
-        s.advance(1800)
+        s.advance(1800, max_bars=None)
         snap_out = s.board_state()[0]
         bid1, _ = snap_out["q"]["C703"]
         s.order("sell", "C703", 2)
@@ -114,7 +129,7 @@ class Fills(unittest.TestCase):
         self.assertEqual(s.view()["positions"], [])
 
     def test_cannot_oversell_or_short(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 3600)
+        s = RS(minute_pack(), start_s=OPEN + 3600)
         with self.assertRaises(ReplayError):
             s.order("sell", "C700", 1)
         s.order("buy", "P700", 1)
@@ -122,16 +137,16 @@ class Fills(unittest.TestCase):
             s.order("sell", "P700", 2)
 
     def test_unrealized_marks_at_bid_net_of_both_fees(self):
-        s = ReplaySession(minute_pack(), start_s=OPEN + 3600, fee_per_contract_side=1.0)
+        s = RS(minute_pack(), start_s=OPEN + 3600, fee_per_contract_side=1.0)
         s.order("buy", "C700", 1)
         p = s.view()["positions"][0]
         bid, ask = s.board_state()[0]["q"]["C700"]
         self.assertAlmostEqual(p["unrealized_net"], round((bid - ask) * 100 - 2.0, 2))
 
     def test_expiry_settles_at_intrinsic_and_is_labelled(self):
-        s = ReplaySession(minute_pack(drift=0.02), start_s=OPEN + 3600, fee_per_contract_side=0)
+        s = RS(minute_pack(drift=0.02), start_s=OPEN + 3600, fee_per_contract_side=0)
         s.order("buy", "C700", 1)
-        s.advance(7 * 3600)
+        s.advance(7 * 3600, max_bars=None)
         exp = s.fills[-1]
         self.assertEqual(exp["kind"], "expiry")
         last_spot = 700 + 0.02 * (CLOSE - OPEN) / 60
@@ -142,10 +157,11 @@ class Fills(unittest.TestCase):
 class DisabledQuotes(unittest.TestCase):
     def test_gap_older_than_limit_disables(self):
         spots = {t: 700.0 for t in range(OPEN - 60, CLOSE + 1, 60) if not (OPEN + 3600 < t < OPEN + 4200)}
-        s = ReplaySession(make_pack(spots), start_s=OPEN + 3600 + A.MAX_QUOTE_AGE_S + 30)
+        s = RS(make_pack(spots), start_s=OPEN + 3600 + A.MAX_QUOTE_AGE_S + 30)
         v = s.view()
         self.assertEqual(v["quotes"]["status"], "disabled")
-        self.assertIn("old", v["quotes"]["reason"])
+        self.assertEqual(v["quotes"]["code"], "gap")
+        self.assertIn("old", v["quotes"]["detail"])
         self.assertFalse(any(r["call"]["buy"] for r in v["board"]))
         with self.assertRaises(ReplayError):
             s.order("buy", "C700", 1)
@@ -154,18 +170,21 @@ class DisabledQuotes(unittest.TestCase):
         spots = {t: 700.0 + (0 if OPEN + 3600 <= t <= OPEN + 4200 else (t - OPEN) * 1e-4)
                  for t in range(OPEN - 60, CLOSE + 1, 60)}
         pack = make_pack(spots)
-        s = ReplaySession(pack, start_s=OPEN + 3600 + A.MAX_QUOTE_AGE_S + 60)
-        self.assertIn("frozen", s.view()["quotes"]["reason"])
+        s = RS(pack, start_s=OPEN + 3600 + A.MAX_QUOTE_AGE_S + 60)
+        self.assertEqual(s.view()["quotes"]["code"], "frozen")
+        self.assertIn("frozen", s.view()["quotes"]["detail"])
 
     def test_unsynchronized_underlying_disables(self):
         def skew(snaps):
             for sn in snaps:
                 if sn["t"] == OPEN + 3600:
                     sn["spot"] += 1.5   # recorded underlying off its own quotes
-        s = ReplaySession(make_pack({t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)},
+        s = RS(make_pack({t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)},
                                     [skew]), start_s=OPEN + 3600 + 5)
         v = s.view()
-        self.assertEqual(v["quotes"]["reason"], "underlying not synchronized with quotes")
+        self.assertEqual(v["quotes"]["code"], "parity")
+        self.assertIn("Consistency check failed", v["quotes"]["detail"])
+        self.assertIn("does not prove when they were observed", v["quotes"]["detail"])
         self.assertIsNone(v["spot"]["now"])
         self.assertTrue(all(t != OPEN + 3600 for t, _ in v["spot"]["series"]))
 
@@ -175,7 +194,7 @@ class DisabledQuotes(unittest.TestCase):
                 sn["q"]["C703"] = [0.0, 0.02]     # no bid: can buy, cannot sell
                 sn["q"]["C697"] = [3.0, None]      # no ask: cannot buy
                 sn["q"]["P697"] = [0.5, 0.4]       # crossed
-        s = ReplaySession(make_pack({t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)}, [holes]),
+        s = RS(make_pack({t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)}, [holes]),
                           start_s=OPEN + 3600)
         s.order("buy", "C703", 1)
         with self.assertRaises(ReplayError):
@@ -185,6 +204,91 @@ class DisabledQuotes(unittest.TestCase):
         with self.assertRaises(ReplayError):
             s.order("buy", "P697", 1)
         self.assertIsNone(s.view()["positions"][0]["unrealized_net"])
+
+
+class PacingAndControls(unittest.TestCase):
+    def test_dwell_enforced_between_moves(self):
+        t = [0.0]
+        s = ReplaySession(minute_pack(), start_s=OPEN + 3600, now=lambda: t[0])
+        s.step_bar()
+        t[0] += MIN_DWELL_S - 0.01
+        with self.assertRaises(DwellError):
+            s.step_bar()
+        t[0] += 0.02
+        s.step_bar()
+        with self.assertRaises(DwellError):
+            s.advance(60)
+
+    def test_advance_crosses_at_most_one_bar_by_default(self):
+        s = RS(minute_pack(), start_s=OPEN + 3600 + 10)
+        s.advance(3600)
+        self.assertEqual(s.clock, OPEN + 3600 + 119)   # next bar at +60, capped before the one at +120
+        self.assertEqual(s.view()["quotes"]["snapshot_time"], "10:31:00")
+
+    def test_step_lands_exactly_on_next_bar(self):
+        s = RS(minute_pack(), start_s=OPEN + 3600 + 10)
+        s.step_bar()
+        self.assertEqual(s.clock, OPEN + 3660)
+        self.assertEqual(s.view()["quotes"]["age_s"], 0)
+
+    def test_reset_returns_to_landing_with_fresh_ledger_and_keeps_attempt(self):
+        s = RS(minute_pack(drift=0.05), start_s=OPEN + 3600)
+        s.order("buy", "C703", 1)
+        s.advance(1800, max_bars=None)
+        s.order("sell", "C703", 1)
+        first = s.realized
+        s.advance(600, max_bars=None)
+        v = s.reset()
+        self.assertEqual(s.clock, OPEN + 3600)
+        self.assertEqual((s.realized, s.fills, s.cash), (0.0, [], 10_000.0))
+        self.assertEqual(v["session"]["attempt"], 2)
+        self.assertEqual(v["attempts"][0]["realized_net"], round(first, 2))
+        self.assertEqual(v["attempts"][0]["seen_until"], "11:10:00")
+        self.assertNotIn("intraday/", json.dumps(v))
+        r = s.reveal()["reveal"]
+        self.assertAlmostEqual(r["earlier_attempts"][0]["reconciliation"]["net"], round(first, 2))
+
+    def test_dark_stretches_are_past_only_and_explained(self):
+        def skew(snaps):
+            for sn in snaps:
+                if OPEN + 600 <= sn["t"] < OPEN + 900:
+                    sn["spot"] += 2.0
+        s = RS(make_pack({t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)}, [skew]),
+               start_s=OPEN + 3600)
+        d = s.view()["dark"]
+        self.assertEqual([(x["start"], x["end"], x["code"]) for x in d], [(OPEN + 600, OPEN + 900, "parity")])
+        s2 = RS(s.pack, start_s=OPEN + 700)
+        d2 = s2.view()["dark"]
+        self.assertEqual(d2[-1]["end"], OPEN + 700)       # never shows how long the stretch will last
+        self.assertEqual(s2.view()["quotes"]["since"], "09:40:00")
+
+
+class Reconciliation(unittest.TestCase):
+    def test_reconciliation_matches_ledger_and_raw_rows(self):
+        pack = minute_pack(drift=0.05)
+        by_key = {sn["key"]: sn for sn in pack["snapshots"]}
+
+        def raw(key, c):
+            b, a = by_key[key]["q"][c]
+            return {"key": key, "Bid": b, "Ask": a, "UnderlyingPrice": by_key[key]["spot"], "OptionSymbol": "x"}
+        s = RS(pack, start_s=OPEN + 3600, fee_per_contract_side=0.65, raw_lookup=raw)
+        s.order("buy", "C703", 2)
+        s.advance(1800, max_bars=None)
+        s.order("sell", "C703", 2)
+        rc = s.reveal()["reveal"]["reconciliation"]
+        self.assertTrue(rc["reconciles"])
+        self.assertAlmostEqual(rc["net"], s.realized, places=2)
+        self.assertEqual(rc["fees"], 2.60)
+        self.assertTrue(all(l["raw_matches"] for l in rc["lines"]))
+        self.assertEqual([l["decision_time"] for l in rc["lines"]], ["10:30:00 ET", "11:00:00 ET"])
+        self.assertAlmostEqual(sum(l["cash_flow"] for l in rc["lines"]), rc["net"], places=2)
+
+    def test_reconciliation_flags_a_mismatching_raw_row(self):
+        pack = minute_pack()
+        s = RS(pack, start_s=OPEN + 3600,
+               raw_lookup=lambda k, c: {"key": k, "Bid": 9.0, "Ask": 9.5, "UnderlyingPrice": 1, "OptionSymbol": "x"})
+        s.order("buy", "C700", 1)
+        self.assertFalse(s.reveal()["reveal"]["reconciliation"]["lines"][0]["raw_matches"])
 
 
 class ArchiveHelpers(unittest.TestCase):
@@ -221,7 +325,7 @@ class ArchiveHelpers(unittest.TestCase):
         spots = {t: 700.0 + (t - OPEN) * 1e-4 for t in range(OPEN - 60, CLOSE + 1, 60)
                  if not (OPEN + 7200 < t < OPEN + 7800)}
         pack = make_pack(spots, [skew])
-        s = ReplaySession(pack, start_s=OPEN)
+        s = RS(pack, start_s=OPEN)
         live = sum(1 for t in range(OPEN, CLOSE) if s.board_state(t)[1] is None)
         cov = pack["coverage_usable"]
         self.assertEqual(cov["live_s"], live)

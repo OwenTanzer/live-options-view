@@ -44,13 +44,13 @@ except Exception:  # pragma: no cover - degrade to a plain 16:00 close
     def session_close(_d: date) -> time:  # type: ignore[no-redef]
         return time(16, 0)
 
-PACK_VERSION = 2
+PACK_VERSION = 3
 SESSION_OPEN_S = 9 * 3600 + 30 * 60
 # A snapshot older than this, at the replay clock, no longer quotes anything.
 MAX_QUOTE_AGE_S = 150
 # Parity tolerance: |K + Cmid - Pmid - UnderlyingPrice| must be within this
 # many dollars plus half the two legs' combined spread for the snapshot's
-# underlying to count as synchronized with its option quotes.
+# underlying to count as parity-consistent with its option quotes.
 PARITY_TOL_USD = 0.15
 DEFAULT_CACHE = Path(os.environ.get("OPTIONS_REPLAY_CACHE",
                                     REPO_ROOT / "research" / "options_replay" / ".cache"))
@@ -244,8 +244,13 @@ def parity_spot(board: dict[str, list], spot: float | None) -> tuple[float | Non
 def assess(snapshots: list[dict]) -> list[dict]:
     """Annotate chronological snapshots with `ok`/`reason`/`content_t`.
 
-    - no recorded underlying -> unusable
-    - underlying not confirmed by put-call parity -> unusable ("unsynchronized")
+    - no recorded underlying -> unusable (reason "no_underlying")
+    - no two-sided call/put pair near the money -> unusable ("no_pair")
+    - recorded underlying inconsistent with the parity-implied price of the
+      snapshot's own option mids -> unusable ("parity"). This is a
+      consistency check on the recorded values; the archive has no per-quote
+      timestamps, so it is not proof that spot and quotes were observed at
+      the same instant.
     - board + underlying byte-identical to the previous snapshot -> its
       content is as old as the first snapshot of that identical run
       (`content_t`); the engine treats it as stale once that age passes
@@ -261,12 +266,13 @@ def assess(snapshots: list[dict]) -> list[dict]:
         snap["content_t"] = content_t
         implied, tol = parity_spot(snap["q"], snap["spot"])
         snap["parity_spot"] = None if implied is None else round(implied, 4)
+        snap["parity_tol"] = None if tol is None else round(tol, 4)
         if snap["spot"] is None:
-            snap["ok"], snap["reason"] = False, "no underlying"
+            snap["ok"], snap["reason"] = False, "no_underlying"
         elif implied is None:
-            snap["ok"], snap["reason"] = False, "no two-sided pair near the money"
+            snap["ok"], snap["reason"] = False, "no_pair"
         elif abs(implied - snap["spot"]) > tol:
-            snap["ok"], snap["reason"] = False, "underlying not synchronized with quotes"
+            snap["ok"], snap["reason"] = False, "parity"
         else:
             snap["ok"], snap["reason"] = True, None
     return snapshots
@@ -378,3 +384,19 @@ def pack_qualifies(pack: dict, min_ratio: float = 0.85, max_dark_s: int = 900) -
     if cov["longest_dark_s"] > max_dark_s:
         return False, f"longest disabled stretch {cov['longest_dark_s']}s > {max_dark_s}s"
     return True, None
+
+
+def raw_quote(archive: Archive, key: str, contract: str) -> dict | None:
+    """Re-read one contract's row straight from the archived csv (for reconciliation)."""
+    parsed = parse_snapshot_key(key)
+    if not parsed:
+        return None
+    day = datetime.strptime(parsed[0], "%Y%m%d").date().isoformat()
+    side = "call" if contract[0] == "C" else "put"
+    strike = float(contract[1:])
+    for row in csv.DictReader(io.StringIO(archive.get(key).decode("utf-8", errors="replace"))):
+        if (row.get("TradeDate") == day and row.get("Expiration") == day
+                and (row.get("Type") or "").lower() == side and _num(row.get("Strike")) == strike):
+            return {"key": key, "OptionSymbol": row.get("OptionSymbol"), "Bid": _num(row.get("Bid")),
+                    "Ask": _num(row.get("Ask")), "UnderlyingPrice": _num(row.get("UnderlyingPrice"))}
+    return None

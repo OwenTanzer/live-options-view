@@ -7,52 +7,67 @@
 <style>
 :root {
   --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #dedcd4;
-  --accent: #2456c9; --up: #13804a; --down: #c0392b; --off: #b9b7ae; --warn: #a15c00;
-  --chip: #eceae3;
+  --accent: #2456c9; --up: #13804a; --down: #c0392b; --off: #b9b7ae; --warn: #8a4f00;
+  --warn-bg: #fff3dc; --warn-line: #e8c27a; --dark-band: rgba(214, 140, 20, .16);
+  --chip: #eceae3; --held: #e8efff;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9c9a92; --line: #33322f;
-    --accent: #7aa2ff; --up: #4cc38a; --down: #ff7b6e; --off: #55534d; --warn: #e3a94a; --chip: #2a2a27; }
+    --accent: #7aa2ff; --up: #4cc38a; --down: #ff7b6e; --off: #55534d; --warn: #f0b85a;
+    --warn-bg: #2d2416; --warn-line: #6b5124; --dark-band: rgba(240, 184, 90, .14);
+    --chip: #2a2a27; --held: #1f2a44; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; margin-bottom: 12px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 10px; }
 h1 { font-size: 18px; margin: 0; font-weight: 650; }
-.clock { font: 600 28px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.clock { font: 600 30px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
 .muted { color: var(--muted); }
 .chip { display: inline-block; padding: 2px 8px; border-radius: 99px; background: var(--chip); font-size: 12px; }
 .chip.live { color: var(--up); } .chip.disabled { color: var(--warn); }
 .grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
-@media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+@media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
-.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
-.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 0; }
-button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+.panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+button, select { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
   border-radius: 7px; padding: 5px 10px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button:disabled { color: var(--off); cursor: not-allowed; }
-svg { width: 100%; height: 220px; display: block; }
+button.danger { border-color: var(--down); color: var(--down); }
+button:disabled, select:disabled { color: var(--off); cursor: not-allowed; }
+kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); }
+svg { width: 100%; height: 210px; display: block; }
+.banner { display: none; margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg);
+  border: 1px solid var(--warn-line); color: var(--ink); }
+.banner.on { display: block; }
+.banner b { color: var(--warn); }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th, td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th, td { padding: 4px 5px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { font-weight: 600; color: var(--muted); font-size: 12px; }
 td.k { text-align: center; font-weight: 650; }
 tr.atm td.k { color: var(--accent); }
+tr.atm td.k::after { content: " ◂ spot"; font-size: 10px; font-weight: 500; }
 td.off { color: var(--off); }
-.board-wrap { overflow-x: auto; }
-.buy { padding: 1px 7px; font-size: 12px; }
+td.held { background: var(--held); }
+.strip-wrap { overflow-x: auto; }
+.sm { padding: 1px 7px; font-size: 12px; }
+.why { font-size: 11px; color: var(--warn); }
 .pos { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .up { color: var(--up); } .down { color: var(--down); }
-.fills { font-size: 12px; max-height: 220px; overflow: auto; }
+.fills { font-size: 12px; max-height: 200px; overflow: auto; }
 .fills div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
-#msg { min-height: 20px; margin: 6px 0; color: var(--warn); }
+#msg { min-height: 20px; margin: 4px 0; color: var(--warn); }
 #reveal-box { display: none; }
 #reveal-box.on { display: block; margin-top: 12px; }
 .big { font-size: 22px; font-weight: 650; }
-label.qty input { width: 52px; font: inherit; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+input[type=number] { width: 56px; font: inherit; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .loading { padding: 40px; text-align: center; }
+.recon td, .recon th { font-size: 12px; text-align: left; }
+.legend { font-size: 11px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; background: var(--dark-band); border: 1px solid var(--warn-line); vertical-align: -1px; }
 </style>
 </head>
 <body>
@@ -62,86 +77,148 @@ label.qty input { width: 52px; font: inherit; padding: 3px; border: 1px solid va
     <span class="clock" id="clock">--:--:--</span>
     <span class="muted" id="remaining"></span>
     <span class="chip" id="qstatus">no session</span>
+    <span class="muted" id="attempt"></span>
     <span style="flex:1"></span>
     <button id="new" class="primary">New random day</button>
   </header>
-  <div id="msg"></div>
+  <div id="msg" role="status" aria-live="polite"></div>
   <div id="game" style="display:none">
+    <div class="banner" id="banner" role="alert"></div>
     <div class="grid">
       <section class="panel">
-        <h2>QQQ, date hidden <span class="muted" id="spotnow"></span></h2>
-        <svg id="chart" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="QQQ path so far"></svg>
-        <div class="controls">
-          <span class="muted">Advance:</span>
-          <button data-adv="60">+1 min</button>
-          <button data-adv="300">+5 min</button>
-          <button data-adv="900">+15 min</button>
-          <button id="play">Play ▶</button>
+        <h2>QQQ · date hidden <span class="muted" id="spotnow"></span></h2>
+        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="QQQ path so far"></svg>
+        <div class="legend"><i></i> past stretches where trading was disabled (hover for the reason)</div>
+        <div class="controls" style="margin-top:8px">
+          <button id="play" title="Play / pause (space)">▶ Play</button>
+          <select id="speed" aria-label="Playback speed">
+            <option value="1" selected>1x (real time)</option>
+            <option value="5">5x</option>
+            <option value="15">15x</option>
+            <option value="60">60x</option>
+          </select>
+          <button id="step" title="Next recorded bar (→)">Step 1 bar ▸</button>
+          <button id="skip5" title="Skip 5 minutes, one bar at a time">+5 min</button>
           <span style="flex:1"></span>
+          <button id="reset" title="Back to the landing time with a fresh ledger">↺ Reset</button>
           <button id="reveal">Reveal day</button>
         </div>
+        <div class="muted" style="font-size:12px;margin-top:6px" id="pace"></div>
       </section>
       <section class="panel">
         <h2>Position</h2>
-        <div id="positions"><span class="muted">Flat. Buy a contract from the board.</span></div>
+        <div id="positions"></div>
         <div style="margin-top:10px" id="account"></div>
         <h2 style="margin-top:12px">Fills</h2>
-        <div class="fills" id="fills"><span class="muted">None yet.</span></div>
+        <div class="fills" id="fills"></div>
       </section>
     </div>
     <section class="panel" style="margin-top:12px">
-      <h2>0DTE board at the replay clock <span class="muted" id="qinfo"></span></h2>
-      <div class="controls" style="margin:0 0 8px"><label class="qty">Contracts <input id="qty" type="number" min="1" max="20" value="1"></label>
-        <span class="muted" id="rules"></span></div>
-      <div class="board-wrap"><table id="board"></table></div>
+      <h2>0DTE contract strip <span class="muted" id="qinfo"></span></h2>
+      <div class="controls" style="margin:0 0 8px">
+        <label>Contracts <input id="qty" type="number" min="1" max="20" value="1"></label>
+        <label>Strikes <select id="width"><option value="4">±4</option><option value="6" selected>±6</option><option value="10">±10</option></select></label>
+        <button id="center" class="sm" title="Re-center the strip on the current spot (c)">Center on spot</button>
+        <span class="muted" id="rules" style="font-size:12px"></span>
+      </div>
+      <div class="strip-wrap"><table id="strip"></table></div>
     </section>
     <section class="panel" id="reveal-box"></section>
   </div>
-  <div id="idle" class="loading muted">Press <b>New random day</b> to land in a random historical session.</div>
+  <div id="idle" class="loading muted">Press <b>New random day</b> to land in a random historical session.
+    <br><span style="font-size:12px">Keys: <kbd>space</kbd> play/pause · <kbd>→</kbd> step one bar · <kbd>c</kbd> center strip</span></div>
 </main>
 <script>
 "use strict";
-let S = null, V = null, playing = null;
+let S = null, V = null, playing = false, timer = null, busy = false, lastMove = 0, anchor = null, resetArm = 0;
 const $ = (id) => document.getElementById(id);
 const money = (x) => (x == null ? "--" : (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(2));
 const px = (x) => (x == null ? "--" : Number(x).toFixed(2));
 const cls = (x) => (x == null ? "" : x >= 0 ? "up" : "down");
-const tod = (t) => { const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60); return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0"); };
+const hms = (t) => [Math.floor(t / 3600), Math.floor(t % 3600 / 60), t % 60].map((n) => String(n).padStart(2, "0")).join(":");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const DWELL = 500;
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({ error: "bad response" }));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.dwell = !!j.dwell; throw e; }
   return j;
 }
 function say(text) { $("msg").textContent = text || ""; }
 
 async function newDay() {
-  stopPlay(); say("Loading a random qualified day… (first load of a day downloads its snapshots)");
+  pause(); say("Loading a random qualified day… (a day's first load downloads its snapshots)");
   $("new").disabled = true;
-  try { V = await api("/api/new", {}); S = V.session.id; say(""); render(); }
+  try { V = await api("/api/new", {}); S = V.session.id; anchor = null; lastMove = 0; say(""); render(); }
   catch (e) { say("Could not start: " + e.message); }
   finally { $("new").disabled = false; }
 }
-async function advance(sec) {
-  if (!S) return;
-  try { V = await api("/api/advance", { s: S, seconds: sec }); render(); }
-  catch (e) { say(e.message); stopPlay(); }
+
+// Every clock move goes through here: one request in flight, >= DWELL ms between moves.
+async function move(path, body) {
+  if (!S || busy) return false;
+  const wait = lastMove + DWELL - performance.now();
+  if (wait > 0) return false;
+  busy = true;
+  try { V = await api(path, { s: S, ...body }); lastMove = performance.now(); render(); return true; }
+  catch (e) { if (!e.dwell) { say(e.message); pause(); } return false; }
+  finally { busy = false; refreshButtons(); }
 }
-async function order(side, contract) {
-  const qty = Math.max(1, Math.min(20, parseInt($("qty").value || "1", 10)));
+const step = () => move("/api/step", {});
+const skip = (sec) => move("/api/advance", { seconds: sec, max_bars: 1 }).then(() => {});
+
+// Playback: speed x real time, but never more than one new bar per tick and never faster than DWELL.
+function tickMs() { const sp = Number($("speed").value); return Math.max(DWELL, Math.round(1000 / Math.min(sp, 2))); }
+async function tick() {
+  if (!playing) return;
+  if (!V || V.session.closed || V.session.revealed) return pause();
+  const sp = Number($("speed").value), ms = tickMs();
+  await move("/api/advance", { seconds: Math.max(1, Math.round(sp * ms / 1000)), max_bars: 1 });
+  if (playing) timer = setTimeout(tick, Math.max(0, lastMove + ms - performance.now()));
+}
+function play() { if (playing || !V || V.session.closed || V.session.revealed) return; playing = true; $("play").textContent = "❚❚ Pause"; tick(); }
+function pause() { playing = false; clearTimeout(timer); $("play").textContent = "▶ Play"; }
+function togglePlay() { playing ? pause() : play(); }
+
+// Multi-minute skip walks bar by bar so the dwell rule still holds.
+async function skipMinutes(min) {
+  if (!V) return; pause();
+  const target = V.session.clock_s + min * 60;
+  $("skip5").disabled = true;
+  while (V && !V.session.closed && V.session.clock_s < target) {
+    const ok = await move("/api/advance", { seconds: target - V.session.clock_s, max_bars: 1 });
+    if (!ok) await new Promise((r) => setTimeout(r, 60));
+    else await new Promise((r) => setTimeout(r, DWELL));
+  }
+  refreshButtons();
+}
+
+async function order(side, contract, qty) {
+  qty = qty || Math.max(1, Math.min(20, parseInt($("qty").value || "1", 10)));
   try { V = await api("/api/order", { s: S, side, contract, qty }); say(""); render(); }
   catch (e) { say("Order refused: " + e.message); }
 }
+async function reset() {
+  if (!V || V.session.revealed) return;
+  if (Date.now() - resetArm > 3000) { resetArm = Date.now(); $("reset").textContent = "Confirm reset?"; $("reset").classList.add("danger");
+    setTimeout(() => { $("reset").textContent = "↺ Reset"; $("reset").classList.remove("danger"); }, 3000); return; }
+  resetArm = 0; pause();
+  try { V = await api("/api/reset", { s: S }); lastMove = 0; anchor = null; render(); say("Reset to the landing time with a fresh ledger. The earlier attempt is kept for the reveal."); }
+  catch (e) { say(e.message); }
+  $("reset").textContent = "↺ Reset"; $("reset").classList.remove("danger");
+}
 async function reveal() {
-  stopPlay();
+  pause();
   try { V = await api("/api/reveal", { s: S }); render(); } catch (e) { say(e.message); }
 }
-function stopPlay() { if (playing) { clearInterval(playing); playing = null; $("play").textContent = "Play ▶"; } }
-function togglePlay() {
-  if (playing) return stopPlay();
-  $("play").textContent = "Pause ❚❚";
-  playing = setInterval(() => { if (V && V.session.closed) stopPlay(); else advance(60); }, 1000);
+
+function refreshButtons() {
+  if (!V) return;
+  const s = V.session, done = s.closed || s.revealed;
+  $("step").disabled = done || busy; $("skip5").disabled = done || busy;
+  $("play").disabled = done; $("speed").disabled = done;
+  $("reset").disabled = s.revealed; $("reveal").disabled = s.revealed;
 }
 
 function render() {
@@ -150,86 +227,129 @@ function render() {
   $("clock").textContent = s.time_of_day;
   const rem = s.seconds_to_close;
   $("remaining").textContent = s.closed ? "market closed" : `${Math.floor(rem / 3600)}h ${String(Math.floor(rem % 3600 / 60)).padStart(2, "0")}m to close`;
-  $("qstatus").textContent = q.status === "live" ? "quotes live" : "quotes disabled";
-  $("qstatus").className = "chip " + q.status;
-  $("qinfo").textContent = q.snapshot_time ? `· recorded ${q.snapshot_time} ET (${q.age_s}s old)` + (q.reason ? ` · disabled: ${q.reason}` : "") : "";
-  $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : "";
+  $("qstatus").textContent = s.revealed ? "revealed" : q.status === "live" ? "quotes live" : "trading disabled";
+  $("qstatus").className = "chip " + (s.revealed ? "" : q.status);
+  $("attempt").textContent = s.attempt > 1 ? `attempt ${s.attempt}` : "";
+  $("qinfo").textContent = q.snapshot_time ? `· recorded ${q.snapshot_time} ET, ${q.age_s}s before the clock` : "";
+  $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : V.spot.last != null ? `· last consistent ${px(V.spot.last)}` : "";
   const r = V.rules;
-  $("rules").textContent = `Buy at recorded ask · sell at recorded bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier} · quotes older than ${r.quote_max_age_s}s disabled`;
-  document.querySelectorAll("[data-adv]").forEach((b) => (b.disabled = done));
-  $("play").disabled = done; $("reveal").disabled = s.revealed;
-  drawChart(V.spot.series, s, V.reveal ? V.reveal.full_day_spot : null);
-  renderBoard(done);
+  $("rules").textContent = `Buy at recorded ask · sell at recorded bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier}`;
+  $("pace").textContent = `Each step shows the next recorded bar (about a minute apart). Playback never skips a bar and holds each for at least ${s.min_dwell_ms} ms.`;
+  const b = $("banner");
+  if (q.status === "disabled" && !s.revealed) {
+    b.className = "banner on";
+    b.innerHTML = `<b>Trading disabled${q.since ? " since " + esc(q.since) + " ET" : ""}: ${esc(q.reason)}.</b> ${esc(q.detail)}
+      <br><span class="muted">Positions can't be bought or sold until a recorded snapshot passes the checks again. Keep stepping; nothing is estimated in the meantime.</span>`;
+  } else b.className = "banner";
+  drawChart();
+  renderStrip(done);
   renderPositions(done);
   renderReveal();
+  refreshButtons();
 }
 
-function drawChart(series, s, full) {
-  const svg = $("chart"), W = 600, H = 220, pad = 22;
-  const all = (full || series);
-  if (!all.length) { svg.innerHTML = `<text x="300" y="110" text-anchor="middle" fill="currentColor" opacity=".5">no synchronized spot yet</text>`; return; }
+function drawChart() {
+  const svg = $("chart"), W = 600, H = 210, pad = 22, s = V.session;
+  const full = V.reveal ? V.reveal.full_day_spot : null, series = V.spot.series;
+  const all = full || series;
+  if (!all.length) { svg.innerHTML = `<text x="300" y="105" text-anchor="middle" fill="currentColor" opacity=".5">no parity-consistent spot yet</text>`; return; }
   const ys = all.map((p) => p[1]); let lo = Math.min(...ys), hi = Math.max(...ys);
   if (hi - lo < 0.5) { lo -= 0.25; hi += 0.25; }
-  const x = (t) => pad + (W - 2 * pad) * (t - s.open_s) / (s.close_s - s.open_s);
+  const x = (t) => pad + (W - 2 * pad) * (Math.min(Math.max(t, s.open_s), s.close_s) - s.open_s) / (s.close_s - s.open_s);
   const y = (v) => H - pad - (H - 2 * pad) * (v - lo) / (hi - lo);
-  const path = (pts) => pts.map((p, i) => (i ? "L" : "M") + x(Math.max(p[0], s.open_s)).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
+  const path = (pts) => pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
   let g = "";
+  const dark = V.reveal ? V.reveal.full_day_dark : V.dark;
+  for (const d of dark) g += `<rect x="${x(d.start)}" y="${pad}" width="${Math.max(1.5, x(d.end) - x(d.start))}" height="${H - 2 * pad}" fill="var(--dark-band)"><title>${hms(d.start)}–${hms(d.end)} disabled: ${esc(d.label)}</title></rect>`;
   for (let h = 10; h <= 16; h++) { const t = h * 3600; if (t > s.close_s) break;
     g += `<line x1="${x(t)}" x2="${x(t)}" y1="${pad}" y2="${H - pad}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${h}:00</text>`; }
   g += `<text x="${pad}" y="${pad - 6}" font-size="10" fill="var(--muted)">${hi.toFixed(2)}</text><text x="${pad}" y="${H - pad + 12}" font-size="10" fill="var(--muted)">${lo.toFixed(2)}</text>`;
   if (full) g += `<path d="${path(full)}" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="3 3"/>`;
-  g += `<path d="${path(series)}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
+  if (series.length) g += `<path d="${path(series)}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
   g += `<line x1="${x(s.clock_s)}" x2="${x(s.clock_s)}" y1="${pad}" y2="${H - pad}" stroke="var(--warn)" stroke-dasharray="2 2"/>`;
+  if (s.start_s !== s.open_s) g += `<line x1="${x(s.start_s)}" x2="${x(s.start_s)}" y1="${pad}" y2="${H - pad}" stroke="var(--muted)" stroke-width=".6"><title>landing time</title></line>`;
   for (const f of V.fills) { if (f.kind !== "fill") continue;
     const [hh, mm, ss] = f.time_of_day.split(":").map(Number), t = hh * 3600 + mm * 60 + ss;
     const near = series.reduce((a, p) => (Math.abs(p[0] - t) < Math.abs(a[0] - t) ? p : a), series[0] || [t, lo]);
-    g += `<circle cx="${x(t)}" cy="${y(near[1])}" r="4" fill="${f.side === "buy" ? "var(--up)" : "var(--down)"}"><title>${f.side} ${f.label} @ ${f.price}</title></circle>`; }
+    g += `<circle cx="${x(t)}" cy="${y(near[1])}" r="4" fill="${f.side === "buy" ? "var(--up)" : "var(--down)"}"><title>${f.side} ${esc(f.label)} @ ${f.price}</title></circle>`; }
   svg.innerHTML = g;
 }
 
-function cell(o, done) {
-  const can = !done && o.buy;
-  const t = o.reason ? ` title="${o.reason}"` : "";
-  const off = o.buy ? "" : " off";
-  return `<td class="${off}"${t}>${px(o.bid)}</td><td class="${off}"${t}>${px(o.ask)}</td><td><button class="buy" ${can ? "" : "disabled"} data-buy="${o.contract}"${t}>Buy</button></td>`;
-}
-function renderBoard(done) {
-  const rows = V.board, spot = V.spot.now;
-  let atm = null; if (spot != null && rows.length) atm = rows.reduce((a, r) => (Math.abs(r.strike - spot) < Math.abs(a.strike - spot) ? r : a)).strike;
-  let h = `<tr><th>Bid</th><th>Ask</th><th></th><th style="text-align:center">Calls · Strike · Puts</th><th>Bid</th><th>Ask</th><th></th></tr>`;
-  for (const r of rows) h += `<tr class="${r.strike === atm ? "atm" : ""}">${cell(r.call, done)}<td class="k">${r.strike}</td>${cell(r.put, done)}</tr>`;
-  $("board").innerHTML = rows.length ? h : `<tr><td class="muted">No board at this time.</td></tr>`;
+// Strip: anchored so rows don't jump under the cursor; re-centers only when spot leaves the middle half.
+function renderStrip(done) {
+  const rows = V.board, ref = V.spot.now ?? V.spot.last, half = Number($("width").value);
+  if (!rows.length) { $("strip").innerHTML = `<tr><td class="muted">No board at this time.</td></tr>`; return; }
+  const strikes = rows.map((r) => r.strike);
+  const nearest = (v) => strikes.reduce((a, k) => (Math.abs(k - v) < Math.abs(a - v) ? k : a), strikes[0]);
+  if (anchor == null || (ref != null && Math.abs(strikes.indexOf(nearest(ref)) - strikes.indexOf(anchor)) > Math.ceil(half / 2))) anchor = ref != null ? nearest(ref) : strikes[Math.floor(strikes.length / 2)];
+  const ai = strikes.indexOf(anchor);
+  const held = new Map(V.positions.map((p) => [p.contract, p]));
+  const shown = rows.filter((r, i) => Math.abs(i - ai) <= half || held.has(r.call.contract) || held.has(r.put.contract));
+  const atm = ref != null ? nearest(ref) : null;
+  const cell = (o) => {
+    const h = held.get(o.contract), t = o.reason ? ` title="${esc(o.reason)}"` : "";
+    const off = o.buy || o.sell ? "" : " off", hc = h ? " held" : "";
+    const mid = o.bid != null && o.ask != null ? `<span class="muted" style="font-size:11px">${(o.ask - o.bid).toFixed(2)}</span>` : "";
+    const act = h ? `<button class="sm" data-sell="${o.contract}" data-q="${h.qty}" ${done || !o.sell ? "disabled" : ""}${t}>Sell ${h.qty}</button>`
+      : `<button class="sm" data-buy="${o.contract}" ${done || !o.buy ? "disabled" : ""}${t}>Buy</button>`;
+    const why = !done && o.reason && !V.quotes.code ? `<div class="why">${esc(o.reason)}</div>` : "";
+    return `<td class="${off}${hc}"${t}>${px(o.bid)}</td><td class="${off}${hc}"${t}>${px(o.ask)}</td><td class="${hc}">${mid}</td><td class="${hc}">${act}${why}</td>`;
+  };
+  let h = `<tr><th>Call bid</th><th>ask</th><th>spr</th><th></th><th style="text-align:center">Strike</th><th>Put bid</th><th>ask</th><th>spr</th><th></th></tr>`;
+  for (const r of shown) h += `<tr class="${r.strike === atm ? "atm" : ""}">${cell(r.call)}<td class="k">${r.strike}</td>${cell(r.put)}</tr>`;
+  $("strip").innerHTML = h;
   document.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => order("buy", b.dataset.buy)));
+  document.querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
 }
 function renderPositions(done) {
   const ps = V.positions;
-  $("positions").innerHTML = ps.length ? ps.map((p) => `<div class="pos"><div><b>${p.qty}× ${p.label}</b><br><span class="muted">avg ${px(p.avg_price)} incl. entry fee · bid ${px(p.bid)}</span></div>
-      <div style="text-align:right"><span class="${cls(p.unrealized_net)}">${p.unrealized_net == null ? "no usable bid" : money(p.unrealized_net) + " if sold now"}</span><br>
+  $("positions").innerHTML = ps.length ? ps.map((p) => `<div class="pos"><div><b>${p.qty}× ${esc(p.label)}</b><br><span class="muted">avg ${px(p.avg_price)} incl. entry fee · bid ${px(p.bid)}</span></div>
+      <div style="text-align:right"><span class="${cls(p.unrealized_net)}">${p.unrealized_net == null ? "no usable bid now" : money(p.unrealized_net) + " if sold now"}</span><br>
       <button data-sell="${p.contract}" data-q="${p.qty}" ${done || p.bid == null ? "disabled" : ""}>Sell ${p.qty} at bid</button></div></div>`).join("")
-    : `<span class="muted">Flat. Buy a contract from the board.</span>`;
-  document.querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => { $("qty").value = b.dataset.q; order("sell", b.dataset.sell); }));
+    : `<span class="muted">Flat. Buy a contract from the strip.</span>`;
+  document.querySelectorAll("#positions [data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
   const a = V.account;
   $("account").innerHTML = `Realized net profit <span class="big ${cls(a.realized_net)}">${money(a.realized_net)}</span><br><span class="muted">cash ${money(a.cash)} of ${money(a.cash_start)} · fees paid ${money(a.fees_paid)}</span>`;
-  $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${f.label} @ ${px(f.price)}` +
-      (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)}, quote ${f.quote_age_s}s old, fee ${money(f.fee)})</span>` : ` <span class="muted">${f.note}</span>`) +
+  $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${esc(f.label)} @ ${px(f.price)}` +
+      (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)} recorded ${f.quote_time}, fee ${money(f.fee)})</span>` : ` <span class="muted">${esc(f.note)}</span>`) +
       (f.net_pnl != null ? ` → <span class="${cls(f.net_pnl)}">${money(f.net_pnl)} net</span>` : "") + `</div>`).join("") : `<span class="muted">None yet.</span>`;
+}
+function reconTable(rc) {
+  const rows = rc.lines.map((l) => `<tr><td>#${l.n} ${l.side}</td><td>${l.qty}× ${esc(l.contract)}</td><td>${esc(l.decision_time)}</td>
+    <td>${esc(l.source_key || "—")}</td><td>${px(l.recorded_bid)} / ${px(l.recorded_ask)}</td>
+    <td>${l.raw_row ? `${px(l.raw_row.Bid)} / ${px(l.raw_row.Ask)} <span class="muted">${esc(l.raw_row.OptionSymbol || "")}</span>` : "—"}</td>
+    <td>${px(l.fill_price)} ${l.raw_matches === true ? "✓" : l.raw_matches === false ? "✗" : ""}</td><td>${money(l.premium_cash)}</td><td>${money(-l.fee)}</td></tr>`).join("");
+  return `<table class="recon"><tr><th>Fill</th><th>Contract</th><th>Decision clock</th><th>Raw source</th><th>Recorded bid/ask</th><th>Raw row bid/ask</th><th>Price</th><th>Premium</th><th>Fee</th></tr>${rows}</table>
+    <p>Gross premium ${money(rc.gross_premium)} − fees ${money(rc.fees)} = <b class="${cls(rc.net)}">${money(rc.net)}</b>${rc.reconciles === true ? " ✓ matches the ledger" : rc.reconciles === false ? " ✗ differs from the ledger" : ""}</p>`;
 }
 function renderReveal() {
   const box = $("reveal-box");
   if (!V.reveal) { box.className = "panel"; box.innerHTML = ""; return; }
   const r = V.reveal;
   box.className = "panel on";
-  box.innerHTML = `<h2>Revealed</h2><div class="big">${r.weekday}, ${r.date}</div>
-    <p>You landed at ${r.start_time}. Net profit after fees: <b class="${cls(r.net_profit)}">${money(r.net_profit)}</b>.
-    The dashed line on the chart is the rest of the day.</p>
-    <p class="muted">Synchronized quote coverage this session: ${(r.coverage_usable.ratio * 100).toFixed(1)}% of the regular session.
-    Fill sources: ${r.fills_with_sources.filter((f) => f.source_key).map((f) => `#${f.n} ${f.source_key}`).join(", ") || "none"}.</p>`;
+  box.innerHTML = `<h2>Revealed</h2><div class="big">${esc(r.weekday)}, ${esc(r.date)}</div>
+    <p>You landed at ${esc(r.start_time)}. Net profit after fees: <b class="${cls(r.net_profit)}">${money(r.net_profit)}</b>.
+    The dashed line is the rest of the day; shaded bands are every stretch where trading was disabled.</p>
+    <h2>Reconciliation</h2>${reconTable(r.reconciliation)}
+    ${r.earlier_attempts.map((a) => `<h2>Earlier attempt ${a.attempt} (reset after seeing up to ${esc(a.seen_until)} ET)</h2>${reconTable(a.reconciliation)}`).join("")}
+    <p class="muted">Quotes were tradable for ${(r.coverage_usable.ratio * 100).toFixed(1)}% of this session. Parity is a consistency check on recorded values, not proof of their timestamps.</p>`;
 }
 
 $("new").addEventListener("click", newDay);
-document.querySelectorAll("[data-adv]").forEach((b) => b.addEventListener("click", () => advance(Number(b.dataset.adv))));
 $("play").addEventListener("click", togglePlay);
+$("step").addEventListener("click", () => { pause(); step(); });
+$("skip5").addEventListener("click", () => skipMinutes(5));
+$("speed").addEventListener("change", () => { if (playing) { pause(); play(); } });
+$("width").addEventListener("change", () => V && render());
+$("center").addEventListener("click", () => { anchor = null; V && render(); });
+$("reset").addEventListener("click", reset);
 $("reveal").addEventListener("click", reveal);
+document.addEventListener("keydown", (e) => {
+  if (!V || e.target.matches("input, select")) return;
+  if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); pause(); step(); }
+  else if (e.key === "c") { anchor = null; render(); }
+});
 </script>
 </body>
 </html>

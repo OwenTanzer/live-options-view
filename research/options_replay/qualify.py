@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Choose the Replay day pool: sessions with synchronized spot and option coverage.
+"""Choose the Replay day pool: sessions with parity-consistent spot and option coverage.
 
 Two stages, both read-only against R2:
 
@@ -73,7 +73,7 @@ def qualify(arc: A.Archive, refresh: bool, samples: int, min_coverage: float,
         rec["sample_failures"] = reasons
         if not snaps or ok / len(snaps) < min_synced:
             rec["verdict"] = "excluded"
-            rec["reason"] = f"synchronized in {ok}/{len(snaps)} sampled snapshots"
+            rec["reason"] = f"parity-consistent in {ok}/{len(snaps)} sampled snapshots"
         else:
             rec["verdict"] = "qualified"
     qualified = [d["day"] for d in days if d["verdict"] == "qualified"]
