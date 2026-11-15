@@ -703,12 +703,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     });
 
     // Moving a bot to a new strategy re-attributes its future performance.
-    const moved = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'reddit_sentiment_qqq' }), env);
+    const moved = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'momentum_qqq' }), env);
     assert.equal(moved.status, 200);
-    assert.equal((await moved.json()).strategy_id, 'reddit_sentiment_qqq');
+    assert.equal((await moved.json()).strategy_id, 'momentum_qqq');
     const roster = await (await handleBots({}, env)).json();
-    assert.equal(roster.bots[0].strategy_id, 'reddit_sentiment_qqq',
+    assert.equal(roster.bots[0].strategy_id, 'momentum_qqq',
       'the roster reflects the re-synced strategy, not the one captured at registration');
+
+    for (const suffix of ['', '_phelps', '_fixed_window']) {
+      await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'reddit_sentiment_qqq' + suffix }), env);
+      const retired = await (await handleBots({}, env)).json();
+      assert.ok(!retired.bots.some(bot => bot.username === 'crassus_bob'));
+    }
 
     // Without the operator key it is not reachable at all.
     assert.equal((await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'x' }, 'wrong'), env)).status, 403);
@@ -762,7 +768,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     };
 
     const botRecord = {
-      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'reddit_sentiment_qqq',
+      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'momentum_qqq',
       salt: 'SALT', hash: 'HASH',
       iterations: 100000, balance_cash: 9500, starting_balance: 10000,
       trades: [{ sym: 'A', side: 'buy', qty: 1, price: 5, strike: 600, type: 'call', exp: '2026-07-17', ts: '2026-07-27T12:00:00Z' }],
@@ -783,7 +789,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const [bot] = body.bots;
     assert.equal(bot.username, 'crassus_bob');
     assert.equal(bot.alias, 'Bob');
-    assert.equal(bot.strategy_id, 'reddit_sentiment_qqq', 'the roster reports which strategy a bot runs');
+    assert.equal(bot.strategy_id, 'momentum_qqq', 'the roster reports which strategy a bot runs');
     assert.equal(bot.balance_cash, 9500);
     assert.equal(bot.trade_count, 1);
     assert.equal(bot.positions.length, 1);
