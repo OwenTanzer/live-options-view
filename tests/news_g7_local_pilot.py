@@ -127,9 +127,14 @@ def main_run(out_dir: Path) -> list[dict]:
         dest = stages_dir / name
         shutil.copytree(public, dest)
         idx = live()
+        populated = [v for v in (idx or {}).get("views", []) if v["mode"] == "collector"
+                     and v["stream"] == "all" and v["rows_total"] > 0]
+        if expect == "ready":
+            assert populated, "the first screen must offer actual headlines"
+        initial = max(populated, key=lambda v: v["date"]) if populated else None
         stages.append({"stage": name, "expect": expect, "note": note,
                        "live_state": idx.get("state") if idx else None, "live_gen": (idx or {}).get("gen"),
-                       "first_page": (idx or {}).get("views", [{}])[0].get("first_page") if idx and idx.get("views") else None,
+                       "first_page": initial["first_page"] if initial else None,
                        "forbidden_prefixes": sorted(forbidden),
                        "problems": (st or {}).get("problems"),
                        "reserved_pages": (st or {}).get("reserved_pages"), "public_pages": (st or {}).get("public_pages")})
