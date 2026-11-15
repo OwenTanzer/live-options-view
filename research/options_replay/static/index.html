@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options Replay</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #dedcd4;
+  --accent: #2456c9; --up: #13804a; --down: #c0392b; --off: #b9b7ae; --warn: #a15c00;
+  --chip: #eceae3;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9c9a92; --line: #33322f;
+    --accent: #7aa2ff; --up: #4cc38a; --down: #ff7b6e; --off: #55534d; --warn: #e3a94a; --chip: #2a2a27; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 650; }
+.clock { font: 600 28px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.muted { color: var(--muted); }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 99px; background: var(--chip); font-size: 12px; }
+.chip.live { color: var(--up); } .chip.disabled { color: var(--warn); }
+.grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 0; }
+button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 7px; padding: 5px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { color: var(--off); cursor: not-allowed; }
+svg { width: 100%; height: 220px; display: block; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+td.k { text-align: center; font-weight: 650; }
+tr.atm td.k { color: var(--accent); }
+td.off { color: var(--off); }
+.board-wrap { overflow-x: auto; }
+.buy { padding: 1px 7px; font-size: 12px; }
+.pos { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.up { color: var(--up); } .down { color: var(--down); }
+.fills { font-size: 12px; max-height: 220px; overflow: auto; }
+.fills div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+#msg { min-height: 20px; margin: 6px 0; color: var(--warn); }
+#reveal-box { display: none; }
+#reveal-box.on { display: block; margin-top: 12px; }
+.big { font-size: 22px; font-weight: 650; }
+label.qty input { width: 52px; font: inherit; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.loading { padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Options Replay</h1>
+    <span class="clock" id="clock">--:--:--</span>
+    <span class="muted" id="remaining"></span>
+    <span class="chip" id="qstatus">no session</span>
+    <span style="flex:1"></span>
+    <button id="new" class="primary">New random day</button>
+  </header>
+  <div id="msg"></div>
+  <div id="game" style="display:none">
+    <div class="grid">
+      <section class="panel">
+        <h2>QQQ, date hidden <span class="muted" id="spotnow"></span></h2>
+        <svg id="chart" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="QQQ path so far"></svg>
+        <div class="controls">
+          <span class="muted">Advance:</span>
+          <button data-adv="60">+1 min</button>
+          <button data-adv="300">+5 min</button>
+          <button data-adv="900">+15 min</button>
+          <button id="play">Play ▶</button>
+          <span style="flex:1"></span>
+          <button id="reveal">Reveal day</button>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Position</h2>
+        <div id="positions"><span class="muted">Flat. Buy a contract from the board.</span></div>
+        <div style="margin-top:10px" id="account"></div>
+        <h2 style="margin-top:12px">Fills</h2>
+        <div class="fills" id="fills"><span class="muted">None yet.</span></div>
+      </section>
+    </div>
+    <section class="panel" style="margin-top:12px">
+      <h2>0DTE board at the replay clock <span class="muted" id="qinfo"></span></h2>
+      <div class="controls" style="margin:0 0 8px"><label class="qty">Contracts <input id="qty" type="number" min="1" max="20" value="1"></label>
+        <span class="muted" id="rules"></span></div>
+      <div class="board-wrap"><table id="board"></table></div>
+    </section>
+    <section class="panel" id="reveal-box"></section>
+  </div>
+  <div id="idle" class="loading muted">Press <b>New random day</b> to land in a random historical session.</div>
+</main>
+<script>
+"use strict";
+let S = null, V = null, playing = null;
+const $ = (id) => document.getElementById(id);
+const money = (x) => (x == null ? "--" : (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(2));
+const px = (x) => (x == null ? "--" : Number(x).toFixed(2));
+const cls = (x) => (x == null ? "" : x >= 0 ? "up" : "down");
+const tod = (t) => { const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60); return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0"); };
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: "bad response" }));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function say(text) { $("msg").textContent = text || ""; }
+
+async function newDay() {
+  stopPlay(); say("Loading a random qualified day… (first load of a day downloads its snapshots)");
+  $("new").disabled = true;
+  try { V = await api("/api/new", {}); S = V.session.id; say(""); render(); }
+  catch (e) { say("Could not start: " + e.message); }
+  finally { $("new").disabled = false; }
+}
+async function advance(sec) {
+  if (!S) return;
+  try { V = await api("/api/advance", { s: S, seconds: sec }); render(); }
+  catch (e) { say(e.message); stopPlay(); }
+}
+async function order(side, contract) {
+  const qty = Math.max(1, Math.min(20, parseInt($("qty").value || "1", 10)));
+  try { V = await api("/api/order", { s: S, side, contract, qty }); say(""); render(); }
+  catch (e) { say("Order refused: " + e.message); }
+}
+async function reveal() {
+  stopPlay();
+  try { V = await api("/api/reveal", { s: S }); render(); } catch (e) { say(e.message); }
+}
+function stopPlay() { if (playing) { clearInterval(playing); playing = null; $("play").textContent = "Play ▶"; } }
+function togglePlay() {
+  if (playing) return stopPlay();
+  $("play").textContent = "Pause ❚❚";
+  playing = setInterval(() => { if (V && V.session.closed) stopPlay(); else advance(60); }, 1000);
+}
+
+function render() {
+  $("idle").style.display = "none"; $("game").style.display = "";
+  const s = V.session, q = V.quotes, done = s.closed || s.revealed;
+  $("clock").textContent = s.time_of_day;
+  const rem = s.seconds_to_close;
+  $("remaining").textContent = s.closed ? "market closed" : `${Math.floor(rem / 3600)}h ${String(Math.floor(rem % 3600 / 60)).padStart(2, "0")}m to close`;
+  $("qstatus").textContent = q.status === "live" ? "quotes live" : "quotes disabled";
+  $("qstatus").className = "chip " + q.status;
+  $("qinfo").textContent = q.snapshot_time ? `· recorded ${q.snapshot_time} ET (${q.age_s}s old)` + (q.reason ? ` · disabled: ${q.reason}` : "") : "";
+  $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : "";
+  const r = V.rules;
+  $("rules").textContent = `Buy at recorded ask · sell at recorded bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier} · quotes older than ${r.quote_max_age_s}s disabled`;
+  document.querySelectorAll("[data-adv]").forEach((b) => (b.disabled = done));
+  $("play").disabled = done; $("reveal").disabled = s.revealed;
+  drawChart(V.spot.series, s, V.reveal ? V.reveal.full_day_spot : null);
+  renderBoard(done);
+  renderPositions(done);
+  renderReveal();
+}
+
+function drawChart(series, s, full) {
+  const svg = $("chart"), W = 600, H = 220, pad = 22;
+  const all = (full || series);
+  if (!all.length) { svg.innerHTML = `<text x="300" y="110" text-anchor="middle" fill="currentColor" opacity=".5">no synchronized spot yet</text>`; return; }
+  const ys = all.map((p) => p[1]); let lo = Math.min(...ys), hi = Math.max(...ys);
+  if (hi - lo < 0.5) { lo -= 0.25; hi += 0.25; }
+  const x = (t) => pad + (W - 2 * pad) * (t - s.open_s) / (s.close_s - s.open_s);
+  const y = (v) => H - pad - (H - 2 * pad) * (v - lo) / (hi - lo);
+  const path = (pts) => pts.map((p, i) => (i ? "L" : "M") + x(Math.max(p[0], s.open_s)).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
+  let g = "";
+  for (let h = 10; h <= 16; h++) { const t = h * 3600; if (t > s.close_s) break;
+    g += `<line x1="${x(t)}" x2="${x(t)}" y1="${pad}" y2="${H - pad}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${h}:00</text>`; }
+  g += `<text x="${pad}" y="${pad - 6}" font-size="10" fill="var(--muted)">${hi.toFixed(2)}</text><text x="${pad}" y="${H - pad + 12}" font-size="10" fill="var(--muted)">${lo.toFixed(2)}</text>`;
+  if (full) g += `<path d="${path(full)}" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="3 3"/>`;
+  g += `<path d="${path(series)}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
+  g += `<line x1="${x(s.clock_s)}" x2="${x(s.clock_s)}" y1="${pad}" y2="${H - pad}" stroke="var(--warn)" stroke-dasharray="2 2"/>`;
+  for (const f of V.fills) { if (f.kind !== "fill") continue;
+    const [hh, mm, ss] = f.time_of_day.split(":").map(Number), t = hh * 3600 + mm * 60 + ss;
+    const near = series.reduce((a, p) => (Math.abs(p[0] - t) < Math.abs(a[0] - t) ? p : a), series[0] || [t, lo]);
+    g += `<circle cx="${x(t)}" cy="${y(near[1])}" r="4" fill="${f.side === "buy" ? "var(--up)" : "var(--down)"}"><title>${f.side} ${f.label} @ ${f.price}</title></circle>`; }
+  svg.innerHTML = g;
+}
+
+function cell(o, done) {
+  const can = !done && o.buy;
+  const t = o.reason ? ` title="${o.reason}"` : "";
+  const off = o.buy ? "" : " off";
+  return `<td class="${off}"${t}>${px(o.bid)}</td><td class="${off}"${t}>${px(o.ask)}</td><td><button class="buy" ${can ? "" : "disabled"} data-buy="${o.contract}"${t}>Buy</button></td>`;
+}
+function renderBoard(done) {
+  const rows = V.board, spot = V.spot.now;
+  let atm = null; if (spot != null && rows.length) atm = rows.reduce((a, r) => (Math.abs(r.strike - spot) < Math.abs(a.strike - spot) ? r : a)).strike;
+  let h = `<tr><th>Bid</th><th>Ask</th><th></th><th style="text-align:center">Calls · Strike · Puts</th><th>Bid</th><th>Ask</th><th></th></tr>`;
+  for (const r of rows) h += `<tr class="${r.strike === atm ? "atm" : ""}">${cell(r.call, done)}<td class="k">${r.strike}</td>${cell(r.put, done)}</tr>`;
+  $("board").innerHTML = rows.length ? h : `<tr><td class="muted">No board at this time.</td></tr>`;
+  document.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => order("buy", b.dataset.buy)));
+}
+function renderPositions(done) {
+  const ps = V.positions;
+  $("positions").innerHTML = ps.length ? ps.map((p) => `<div class="pos"><div><b>${p.qty}× ${p.label}</b><br><span class="muted">avg ${px(p.avg_price)} incl. entry fee · bid ${px(p.bid)}</span></div>
+      <div style="text-align:right"><span class="${cls(p.unrealized_net)}">${p.unrealized_net == null ? "no usable bid" : money(p.unrealized_net) + " if sold now"}</span><br>
+      <button data-sell="${p.contract}" data-q="${p.qty}" ${done || p.bid == null ? "disabled" : ""}>Sell ${p.qty} at bid</button></div></div>`).join("")
+    : `<span class="muted">Flat. Buy a contract from the board.</span>`;
+  document.querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => { $("qty").value = b.dataset.q; order("sell", b.dataset.sell); }));
+  const a = V.account;
+  $("account").innerHTML = `Realized net profit <span class="big ${cls(a.realized_net)}">${money(a.realized_net)}</span><br><span class="muted">cash ${money(a.cash)} of ${money(a.cash_start)} · fees paid ${money(a.fees_paid)}</span>`;
+  $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${f.label} @ ${px(f.price)}` +
+      (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)}, quote ${f.quote_age_s}s old, fee ${money(f.fee)})</span>` : ` <span class="muted">${f.note}</span>`) +
+      (f.net_pnl != null ? ` → <span class="${cls(f.net_pnl)}">${money(f.net_pnl)} net</span>` : "") + `</div>`).join("") : `<span class="muted">None yet.</span>`;
+}
+function renderReveal() {
+  const box = $("reveal-box");
+  if (!V.reveal) { box.className = "panel"; box.innerHTML = ""; return; }
+  const r = V.reveal;
+  box.className = "panel on";
+  box.innerHTML = `<h2>Revealed</h2><div class="big">${r.weekday}, ${r.date}</div>
+    <p>You landed at ${r.start_time}. Net profit after fees: <b class="${cls(r.net_profit)}">${money(r.net_profit)}</b>.
+    The dashed line on the chart is the rest of the day.</p>
+    <p class="muted">Synchronized quote coverage this session: ${(r.coverage_usable.ratio * 100).toFixed(1)}% of the regular session.
+    Fill sources: ${r.fills_with_sources.filter((f) => f.source_key).map((f) => `#${f.n} ${f.source_key}`).join(", ") || "none"}.</p>`;
+}
+
+$("new").addEventListener("click", newDay);
+document.querySelectorAll("[data-adv]").forEach((b) => b.addEventListener("click", () => advance(Number(b.dataset.adv))));
+$("play").addEventListener("click", togglePlay);
+$("reveal").addEventListener("click", reveal);
+</script>
+</body>
+</html>
