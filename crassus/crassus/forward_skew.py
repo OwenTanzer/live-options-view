@@ -14,6 +14,7 @@ from .skew_direction import Position
 from .strategies.oi_skew import _option_type_from_symbol, oi_skew_qqq
 from .strategy import Decision
 
+PAPER_ORIGIN = "https://options.moopertonic.net"
 VERSION = "oi-forward-v1"
 ARMS = dict(
     crassus_oif_baseline="baseline",
