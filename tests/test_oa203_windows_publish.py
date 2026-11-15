@@ -338,7 +338,7 @@ class Refusals(unittest.TestCase):
         directory = weekly_fixture(self.root)
         with mock.patch.object(pub, "MAX_PATHS_EXPANDED_BYTES", 1024):
             self.assertEqual(pub.load_window(directory).kind, "weekly_cheapest")
-        with mock.patch.object(pub, "MAX_WEEKLY_PATHS_EXPANDED_BYTES", 1024):
+        with mock.patch.object(pub, "MAX_DETAIL_QUERY_BYTES", 1024):
             with self.assertRaisesRegex(ValueError, "expanded size ceiling"):
                 pub.load_window(directory)
 

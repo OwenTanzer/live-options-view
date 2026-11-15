@@ -14,7 +14,6 @@ const LIMITS = Object.freeze({ artifact_bytes: 4 * 1024 * 1024, expanded_artifac
   input_bytes: 16384, references: 64, reference_bytes: 16 * 1024 * 1024, reference_ttl_ms: 15 * 60 * 1000,
   jsonl_lines: 100000, jsonl_rows: 10000, jsonl_line_bytes: 256 * 1024, quote_line_bytes: 16384,
   csv_rows: 10000, csv_columns: 192, csv_cell_chars: 4096 });
-const WEEKLY_PATH_EXPANDED_BYTES = 128 * 1024 * 1024;
 const PATH_LINE_BYTES = 64 * 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const KEY = new RegExp('^(?:intraday/(?:spy/)?latest\\.json|intraday/prices\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)|inprogress/(?:latest(?:-attempt)?\\.json|sweep_\\d{4}(?:\\.json|/rev_[0-9a-f]{64}/(?:summary\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|manifest\\.jsonl))))|oa203/windows/oa203-windows-v1/(?:weekly_cheapest/weekly-\\d{4}-W\\d{2}-cheapest|weekly_fixed/weekly-\\d{4}-W\\d{2}-fixed|weekly_cheapest_best_exit/weekly-\\d{4}-W\\d{2}-cheapest_best_exit|overnight/overnight-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2}|sessions_2/sessions2-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2}|sessions_3/sessions3-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2})/(?:summary\\.json|rankings\\.csv|paths\\.csv\\.gz|latest\\.json))$');
@@ -55,7 +54,7 @@ function publicRead(key, remaining, timeout, request = https.get) {
 
 // A weekly detail read verifies the whole compressed member, but returns only
 // the header and matching row to the ordinary CSV and pinned-detail checks.
-async function selectWeeklyPath(raw, symbol, key, deadline) {
+async function selectWeeklyPath(raw, symbol, key, deadline, remainingBytes) {
   const gunzip = zlib.createGunzip();
   gunzip.end(raw);
   const selected = [];
@@ -72,7 +71,7 @@ async function selectWeeklyPath(raw, symbol, key, deadline) {
   try {
     for await (const chunk of gunzip) {
       expanded += chunk.length;
-      if (expanded > WEEKLY_PATH_EXPANDED_BYTES) throw new DataError('excessive_or_malformed_artifact', 'Weekly path expansion exceeds its limit.', key);
+      if (expanded > remainingBytes) throw new DataError('excessive_or_malformed_artifact', 'Weekly path expansion exceeds its limit.', key);
       if (Date.now() >= deadline) throw new DataError('upstream_timeout', 'Weekly path scan deadline exceeded.', key);
       const block = tail.length ? Buffer.concat([tail, chunk]) : chunk;
       let start = 0, end;
@@ -90,7 +89,7 @@ async function selectWeeklyPath(raw, symbol, key, deadline) {
   } finally {
     gunzip.destroy();
   }
-  return selected.join('\n') + '\n';
+  return {text: selected.join('\n') + '\n', expanded};
 }
 
 class Source {
@@ -136,7 +135,9 @@ class Source {
         checksum_verification: 'not_verified_against_producer' };
       evidence.push(entry);
       if (pathSymbol !== null && key.startsWith('oa203/windows/oa203-windows-v1/weekly_') && key.endsWith('/paths.csv.gz')) {
-        return selectWeeklyPath(raw, pathSymbol, key, started + LIMITS.timeout_ms);
+        const path = await selectWeeklyPath(raw, pathSymbol, key, started + LIMITS.timeout_ms, LIMITS.query_bytes - bytes);
+        bytes += path.expanded;
+        return path.text;
       }
       if (key.endsWith('.gz')) {
         try { raw = zlib.gunzipSync(raw, { maxOutputLength: Math.min(LIMITS.expanded_artifact_bytes, LIMITS.query_bytes - bytes) }); }

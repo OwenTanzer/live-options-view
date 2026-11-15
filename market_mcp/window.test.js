@@ -21,6 +21,7 @@ test('weekly detail scans past the ordinary expansion limit and validates the gz
   const data = gzipSync(text);
   const query = new Source({read: async () => data}).query();
   assert.equal(await query.get(key, 'TARGET'), 'symbol,value\nTARGET,123\n');
+  await assert.rejects(query.get(key, 'TARGET'), {code: 'excessive_or_malformed_artifact'});
   const damaged = new Source({read: async () => data.subarray(0, -4)}).query();
   await assert.rejects(damaged.get(key, 'TARGET'), {code: 'excessive_or_malformed_artifact'});
 });

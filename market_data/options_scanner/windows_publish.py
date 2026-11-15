@@ -91,7 +91,8 @@ MAX_SUMMARY_BYTES = 1 * 1024 * 1024
 MAX_RANKINGS_BYTES = 4 * 1024 * 1024
 MAX_PATHS_BYTES = 4 * 1024 * 1024
 MAX_PATHS_EXPANDED_BYTES = 48 * 1024 * 1024
-MAX_WEEKLY_PATHS_EXPANDED_BYTES = 128 * 1024 * 1024
+MAX_DETAIL_QUERY_BYTES = 64 * 1024 * 1024
+MAX_POINTER_BYTES = 64 * 1024
 MAX_PATH_LINE_BYTES = 64 * 1024
 MEMBER_MAX_BYTES = {"summary.json": MAX_SUMMARY_BYTES, "rankings.csv": MAX_RANKINGS_BYTES,
                     "paths.csv.gz": MAX_PATHS_BYTES}
@@ -397,14 +398,14 @@ def _decompress_bounded(data: bytes, limit: int) -> str:
         raise ValueError("paths.csv.gz is not UTF-8") from None
 
 
-def _weekly_path_lines(data: bytes) -> Iterator[str]:
+def _weekly_path_lines(data: bytes, expanded_limit: int) -> Iterator[str]:
     """Validate the entire gzip stream while keeping only one path line in memory."""
     total = 0
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(data)) as raw:
             while line := raw.readline(MAX_PATH_LINE_BYTES + 1):
                 total += len(line)
-                if total > MAX_WEEKLY_PATHS_EXPANDED_BYTES:
+                if total > expanded_limit:
                     raise ValueError("weekly paths.csv.gz exceeds the expanded size ceiling")
                 if len(line) > MAX_PATH_LINE_BYTES:
                     raise ValueError("weekly path line exceeds its byte ceiling")
@@ -414,7 +415,7 @@ def _weekly_path_lines(data: bytes) -> Iterator[str]:
 
 
 def _validate_paths(data: bytes, summary: dict[str, Any],
-                    ranked: dict[str, list[dict[str, Any]]], *, weekly: bool) -> None:
+                    ranked: dict[str, list[dict[str, Any]]], *, weekly_limit: int | None) -> None:
     """Full-universe paths must prove the summary counts and the shortlist.
 
     Streams rows (only ranked symbols are retained): symbols unique
@@ -424,7 +425,7 @@ def _validate_paths(data: bytes, summary: dict[str, Any],
     summary exactly, and every ranked row matches its paths row on basis
     status, pct, entry, exit and sessions.
     """
-    lines = (_weekly_path_lines(data) if weekly
+    lines = (_weekly_path_lines(data, weekly_limit) if weekly_limit is not None
              else io.StringIO(_decompress_bounded(data, MAX_PATHS_EXPANDED_BYTES)))
     try:
         reader = csv.DictReader(lines)
@@ -585,8 +586,12 @@ def load_window(window_dir: Path) -> ValidatedWindow:
         raise ValueError("summary.json is not valid JSON") from None
     summary = _validate_summary(summary, kind, window_id)
     ranked = _validate_rankings(member_bytes["rankings.csv"], summary)
+    weekly_limit = None
+    if kind.startswith("weekly_"):
+        # Detail reads the three members and latest.json before expanding paths.
+        weekly_limit = MAX_DETAIL_QUERY_BYTES - sum(map(len, member_bytes.values())) - MAX_POINTER_BYTES
     try:
-        _validate_paths(member_bytes["paths.csv.gz"], summary, ranked, weekly=kind.startswith("weekly_"))
+        _validate_paths(member_bytes["paths.csv.gz"], summary, ranked, weekly_limit=weekly_limit)
     except ValueError as exc:
         raise ValueError(f"{kind}/{window_id}: {exc}") from exc
     revision = "rev_" + _sha256(member_bytes["summary.json"])
@@ -995,17 +1000,6 @@ def publish_window(source_root: Path, kind: str, window_id: str, backend: Storag
     reservation = clean_and_reserve(backend, kind, window_id, validated.revision, budget, now)
     attempt = reservation["attempt"]
     try:
-        # Immutable revision members first, then the flat consumer keys
-        # (paths, rankings, summary last), then the pointer last.
-        for name in WINDOW_MEMBERS:
-            data = validated.member_bytes[name]
-            key = f"{prefix}/{validated.revision}/{name}"
-            backend.put(key, data, _content_type(name))
-            _verify_readback(backend, key, validated.member_sha256[name])
-        for name in FLAT_PUBLISH_ORDER:
-            key = f"{prefix}/{name}"
-            backend.put(key, validated.member_bytes[name], _content_type(name))
-            _verify_readback(backend, key, validated.member_sha256[name])
         published_at = now.isoformat()
         new_pointer = {"schema_version": 1, "publisher": "windows_publish/1",
                        "policy": POLICY, "kind": kind, "window_id": window_id,
@@ -1018,6 +1012,19 @@ def publish_window(source_root: Path, kind: str, window_id: str, backend: Storag
                                   "retention_days": budget.retention_days,
                                   "max_bytes": budget.max_bytes}}
         body = (json.dumps(new_pointer, indent=2, sort_keys=True) + "\n").encode()
+        if kind.startswith("weekly_") and len(body) > MAX_POINTER_BYTES:
+            raise ValueError("window pointer exceeds its reserved byte budget")
+        # Immutable revision members first, then the flat consumer keys
+        # (paths, rankings, summary last), then the pointer last.
+        for name in WINDOW_MEMBERS:
+            data = validated.member_bytes[name]
+            key = f"{prefix}/{validated.revision}/{name}"
+            backend.put(key, data, _content_type(name))
+            _verify_readback(backend, key, validated.member_sha256[name])
+        for name in FLAT_PUBLISH_ORDER:
+            key = f"{prefix}/{name}"
+            backend.put(key, validated.member_bytes[name], _content_type(name))
+            _verify_readback(backend, key, validated.member_sha256[name])
         backend.put(f"{prefix}/latest.json", body, "application/json")
         _verify_readback(backend, f"{prefix}/latest.json", _sha256(body))
     except Exception as exc:
