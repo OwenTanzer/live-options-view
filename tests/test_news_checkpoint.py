@@ -229,7 +229,7 @@ class Fallbacks(Case):
         self.assertEqual((early["mode"], early["listing"]), ("checkpoint", "after_frontier"))
         read = ck.read_history(self.store, Clock(later)).checkpoint
         # A full LISTING compared run by run with the checkpoint, not a content replay of every object.
-        self.assertEqual((read["mode"], read["listing"], read["runs_read"]), ("checkpoint", "full", 0), read)
+        self.assertEqual((read["mode"], read["listing"], read["runs_read"]), ("checkpoint", "full", self.head["runs"]), read)
         self.assertTrue(read["reason"].startswith("full listing verification"), read)
         self.assertEqual(ck.read_history(self.store).checkpoint["listing"], "after_frontier", "readers do not age it")
         report = self.collect(later)
@@ -444,7 +444,7 @@ class ReadCounts(Case):
                   f"{body:7d}{note}", flush=True)
         self.assertEqual([r[2][0] for r in rows], [2] * len(rows), "a history read is the head and body only")
         self.assertEqual([r[1][0] for r in rows], [4 * r[0] for r in rows], "full replay reads 4 objects per run")
-        steady = [r[4] for r in rows if r[6] == "checkpoint"]
+        steady = [r[4] for r in rows if r[6] == "checkpoint" and not r[7]]
         self.assertEqual(len(set(steady)), 1, f"a cycle's reads do not grow with history: {steady}")
         self.assertTrue(all(r[3] > 3 * 4 * r[0] for r in rows), "the M5.2 cycle replays history three times")
         # Over 24 h (98 runs) the writer lists everything once more, as scheduled: a listing, not a replay.
@@ -660,16 +660,15 @@ class BoundedListing(unittest.TestCase):
         self.assertEqual(counts[0], cycle_requests)
         self.assert_complete()
 
-    def test_the_scheduled_full_verification_is_a_listing_not_a_content_replay(self):
+    def test_the_scheduled_full_verification_reads_raw_bytes(self):
         self.collect(15)
         self.store.reset()
         steady = self.collect(30)
-        steady_gets = self.store.gets
         self.store.reset()
         due = self.collect(24 * 60 + 60)     # past FULL_VERIFY_S since the rebuild
-        self.assertEqual((due.checkpoint["listing"], due.checkpoint["runs_read"]), ("full", 0), due.checkpoint)
+        self.assertEqual((due.checkpoint["listing"], due.checkpoint["runs_read"]), ("full", self.HISTORY + 2), due.checkpoint)
         self.assertEqual(self.store.run_keys_listed() >= 4 * self.HISTORY, True)
-        self.assertLess(self.store.gets, steady_gets + 50, "no object read per old run")
+        self.assertGreaterEqual(self.store.gets, 4 * due.checkpoint["runs_read"])
         self.assertEqual(steady.checkpoint["listing"], "after_frontier")
         self.assert_complete()
 

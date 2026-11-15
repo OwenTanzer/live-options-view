@@ -42,7 +42,8 @@ it from the body. Three tiers keep this correct:
   every FULL_VERIFY_S (writers)
                   list all of news/v1/runs/ and compare every run's listing tags (size, ETag) with the
                   body: a changed run is re-read and verified, a missing one fails visibly. This is
-                  listings only (no blanket object reads), so it does not grow into a content replay.
+                  a daily metadata check. Writers also replay raw bytes in quarter-hour cohorts,
+                  verifying each settled run daily while spreading GETs across scheduled cycles.
   full replay     reading every object again only when the checkpoint is missing, corrupt or
                   incompatible, when disabled, and for `checkpoint rebuild` / `compare`.
 
@@ -246,17 +247,39 @@ def read_history(store, clock=None, *, use_checkpoint: bool = True, max_age_s: i
 
     entries = {e["prefix"]: e for e in body["runs"]}
     scan, reverified, read, matched, carried = HistoryScan(), [], 0, 0, 0
+    # Spread one daily byte replay over the 96 ticks. Catch up missed slots after a
+    # restart. An audit position is advanced only by saving a successful writer scan.
+    prior_audit = parse_iso(body.get("audit_at") or body["full_verified_at"])
+    audit_now = now if max_age_s is not None else None
+    due = set()
+    if audit_now is not None:
+        tick = config.INTERVAL_S
+        first = int(prior_audit.timestamp()) // tick
+        last = int(audit_now.timestamp()) // tick
+        slots = FULL_VERIFY_S // tick
+        elapsed_slots = last - first
+        for prefix, entry in entries.items():
+            started = parse_iso(entry["manifest"]["started_at"])
+            start_tick = int(started.timestamp()) // tick
+            latest_due = last - (last - start_tick) % slots
+            if elapsed_slots < 0 or latest_due > max(first, start_tick):
+                due.add(prefix)
     if frontier is not None:
         # Runs at or before the frontier: settled and immutable, taken from the body unlisted.
         for prefix in sorted(p for p in entries if p <= frontier):
             e = entries[prefix]
+            if prefix in due:
+                scan_one(store, scan, prefix, e["listing"])
+                scan.listing[prefix] = e["listing"]
+                read += 1
+                continue
             scan.runs.append(CommittedRun(dict(e["manifest"]), e["manifest_key"], e["manifest_sha256"],
                                           e["observations"], e["classifications"]))
             scan.listing[prefix] = e["listing"]
             carried += 1
     for prefix in sorted(listing):
         e = entries.get(prefix)
-        if e is not None and e["listing"] == listing[prefix]:
+        if prefix not in due and e is not None and e["listing"] == listing[prefix]:
             scan.runs.append(CommittedRun(dict(e["manifest"]), e["manifest_key"], e["manifest_sha256"],
                                           e["observations"], e["classifications"]))
             scan.listing[prefix] = listing[prefix]
@@ -273,6 +296,7 @@ def read_history(store, clock=None, *, use_checkpoint: bool = True, max_age_s: i
                               "detail": "checkpointed run is missing from the store"})
     scan.checkpoint = {"mode": "checkpoint", "reason": "", "checkpoint_key": head["key"],
                        "listing": "after_frontier" if frontier is not None else "full",
+                       "audit_at": iso(audit_now) if audit_now else iso(prior_audit),
                        "frontier": frontier, "runs_carried": carried, "runs_listed": len(listing),
                        "runs_from_checkpoint": matched + carried, "runs_read": read, "reverified": reverified,
                        "full_verified_at": iso(now) if full_due else body["full_verified_at"]}
@@ -322,7 +346,7 @@ def save_checkpoint(store, scan: HistoryScan, clock) -> dict:
                         "observations": run.observations, "classifications": run.classifications})
     full_verified_at = scan.checkpoint.get("full_verified_at") or iso(clock())
     body = {"schema_version": SCHEMA, "compatibility": compatibility(), "full_verified_at": full_verified_at,
-            "runs": entries}
+            "audit_at": scan.checkpoint.get("audit_at") or full_verified_at, "runs": entries}
     checkpointed = {e["prefix"] for e in entries}
     new_frontier = frontier_of(listing, checkpointed)
     # The first listed run the frontier could not pass (unsettled, corrupt, or with a stray object): it is

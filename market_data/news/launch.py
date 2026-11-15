@@ -49,6 +49,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 
 LAUNCH_SCHEMA = "news-launch/v1"
@@ -146,6 +147,21 @@ UNCONFIRMED_NOTE = ("termination of the cycle's process group could NOT be confi
                     "are held. Confirm no writer runs before any --break-stale-lease")
 
 
+FENCE_KEY = "news/v1/_launcher/fence.json"
+
+
+def _claim_fence(store):
+    current = store.get_versioned(FENCE_KEY)
+    if current is not None and json.loads(current[0])["state"] != "idle":
+        return None
+    token = uuid.uuid4().hex
+    body = json.dumps({"state": "running", "owner": token, "at": _now()}).encode()
+    claim = store.put_if_match(FENCE_KEY, body, current[1] if current else None)
+    if claim.status != "applied" or not claim.etag:
+        return None
+    return claim.etag, token
+
+
 def launch(config_path: str, cycle_args: list[str], *, monotonic=time.monotonic, cmd_prefix=None) -> dict:
     """Run one bounded cycle; return the terminal record (its exit_code is the process exit code).
 
@@ -173,6 +189,24 @@ def launch(config_path: str, cycle_args: list[str], *, monotonic=time.monotonic,
     deadline, grace, kill_wait = bounds["deadline_s"], bounds["interrupt_grace_s"], bounds["kill_wait_s"]
     record.update(deadline_s=deadline, interrupt_grace_s=grace, kill_wait_s=kill_wait)
 
+    from .archive import LocalObjectStore
+    from .publish import bucket_store_from_env
+    options = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    options.add_argument("--private", default="./news-private-local")
+    options.add_argument("--live", action="store_true")
+    opts, _ = options.parse_known_args(cycle_args)
+    if opts.live and (not cfg.active or os.environ.get("NEWS_ALLOW_BUCKET_WRITES") != "1"):
+        return finish("cycle_failed", 2, child_exit=None)
+    try:
+        store = (bucket_store_from_env(os.environ, cfg["storage"]["private"]["env_prefix"])
+                 if opts.live else LocalObjectStore(opts.private))
+        claim = _claim_fence(store)
+    except Exception as exc:
+        return finish("fence_unavailable", 126, error=type(exc).__name__)
+    if claim is None:
+        return finish("fence_held", 126)
+    fence_etag, token = claim
+    record["fence_owner"] = token
     stop = {"signal": None}
     previous = {}
 
@@ -235,6 +269,15 @@ def launch(config_path: str, cycle_args: list[str], *, monotonic=time.monotonic,
         return finish("termination_unconfirmed", 126, group_terminated=False, cause=reason,
                       lease_note=UNCONFIRMED_NOTE)
     finally:
+        if record.get("group_terminated") or record.get("outcome") == "spawn_failed":
+            idle = json.dumps({"state": "idle", "previous_owner": token}).encode()
+            try:
+                released = store.put_if_match(FENCE_KEY, idle, fence_etag)
+                cleared = released.status == "applied"
+            except Exception:
+                cleared = False
+            if not cleared:
+                record.update(outcome="fence_release_unconfirmed", exit_code=126)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 

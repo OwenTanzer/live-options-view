@@ -156,7 +156,7 @@ class RealCycle(unittest.TestCase):
     def test_live_mode_stays_refused_through_the_launcher(self):
         tmp = Path(tempfile.mkdtemp())
         record = launch.launch(str(CONFIG), ["--live", "--private", str(tmp / "p"), "--public", str(tmp / "q")])
-        self.assertEqual((record["outcome"], record["exit_code"], record["child_exit"]), ("cycle_failed", 2, 2))
+        self.assertEqual((record["outcome"], record["exit_code"], record["child_exit"]), ("cycle_failed", 2, None))
         self.assertFalse((tmp / "p").exists())
 
     def test_invalid_config_starts_nothing(self):
@@ -204,7 +204,7 @@ class Deadline(unittest.TestCase):
         try:
             with mock.patch.dict(os.environ, env), \
                     mock.patch.object(pub, "load_pilot_config", return_value=b):
-                return launch.launch("unused.json", [], cmd_prefix=[sys.executable, str(self.script)])
+                return launch.launch("unused.json", ["--private", str(self.store)], cmd_prefix=[sys.executable, str(self.script)])
         finally:
             if timer is not None:
                 timer.cancel()
@@ -322,6 +322,20 @@ class Deadline(unittest.TestCase):
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(record["child_pid"])], capture_output=True)
             else:
                 os.killpg(record["child_pid"], signal.SIGKILL)
+
+    @unittest.skipIf(os.name == "nt", "scheduler uses POSIX process groups")
+    def test_surviving_descendant_fences_the_next_tick_after_lease_release(self):
+        with mock.patch.object(launch, "_kill", lambda proc: None):
+            record = self.run_launch("interrupt_desc", bounds(deadline=3, grace=1, kill_wait=1))
+        try:
+            self.assertEqual(record["outcome"], "termination_unconfirmed", record)
+            self.assertFalse((self.store / LEASE).exists())
+            os.kill(self.desc_pid(), 0)
+            with mock.patch.object(launch, "_spawn", side_effect=AssertionError("overlap")):
+                blocked = self.run_launch("0", bounds())
+            self.assertEqual(blocked["outcome"], "fence_held")
+        finally:
+            os.killpg(record["child_pid"], signal.SIGKILL)
 
     def test_launcher_restores_its_signal_handlers(self):
         before = signal.getsignal(signal.SIGTERM)
