@@ -19,7 +19,14 @@ def install(client, path):
         op = event_name.rsplit(".", 1)[-1]
         # Integer nanodollars. Unrecognized operations take the higher rate.
         cost = {"GetObject": 360, "HeadObject": 360, "DeleteObject": 0}.get(op, 4500)
-        size = int(request.headers["Content-Length"]) if op == "PutObject" else 0
+        size = 0
+        if op == "PutObject":
+            # The SDK uses aws-chunked framing for checksummed bodies. The
+            # decoded length is the number of bytes R2 retains.
+            length = request.headers.get("x-amz-decoded-content-length")
+            if length is None:
+                length = request.headers["Content-Length"]
+            size = int(length)
         month = datetime.now(timezone.utc).strftime("%Y-%m")
         db.execute("BEGIN IMMEDIATE")
         try:
