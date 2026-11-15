@@ -1809,6 +1809,38 @@ class PilotConfig:
         return self.raw[key]
 
 
+LAUNCH_COMMAND = "python -m market_data.news.launch --config "
+
+
+def _launcher_problems(cfg: dict) -> list[str]:
+    """The whole-process bound (launch.py). The scheduled command must be the launcher; its deadline must
+    leave room for the collection budget; its interrupt grace must outlast one source's worst fetch (so an
+    interrupted cycle can unwind and release its leases); and deadline + grace + kill wait must end before
+    the next tick and within the lease TTL (no self-overlap; a live cycle never outlives its lease)."""
+    problems = []
+    if not str((cfg.get("schedule") or {}).get("command") or "").startswith(LAUNCH_COMMAND):
+        problems.append(f"schedule.command must run the bounded launcher ({LAUNCH_COMMAND}...)")
+    bounds = cfg.get("launcher")
+    if not isinstance(bounds, dict):
+        return problems + ["launcher block (deadline_s, interrupt_grace_s, kill_wait_s) is required"]
+    names = ("deadline_s", "interrupt_grace_s", "kill_wait_s")
+    bad = [n for n in names if not isinstance(bounds.get(n), int) or isinstance(bounds.get(n), bool) or bounds[n] <= 0]
+    if bad:
+        return problems + [f"launcher.{n} must be a positive integer" for n in bad]
+    deadline, grace, kill_wait = (bounds[n] for n in names)
+    budget = cfg.get("cycle_budget_s") or 0
+    if deadline <= budget:
+        problems.append(f"launcher.deadline_s must exceed cycle_budget_s ({budget}): it covers collection and publication")
+    worst_fetch = config.REQUEST_TIMEOUT_S * (config.MAX_RETRIES + 1) + sum(config.RETRY_BACKOFF_S)
+    if grace < worst_fetch:
+        problems.append(f"launcher.interrupt_grace_s must be >= {worst_fetch:g} (one source's worst fetch)")
+    interval = (cfg.get("schedule") or {}).get("interval_s") or config.INTERVAL_S
+    if deadline + grace + kill_wait >= min(interval, config.LEASE_TTL_S + 1):
+        problems.append(f"launcher.deadline_s + interrupt_grace_s + kill_wait_s must be < interval_s ({interval}) "
+                        f"and <= the lease TTL ({config.LEASE_TTL_S})")
+    return problems
+
+
 def load_pilot_config(path) -> PilotConfig:
     cfg = json.loads(Path(path).read_bytes())
     problems = []
@@ -1825,6 +1857,7 @@ def load_pilot_config(path) -> PilotConfig:
         problems.append("schedule.restart_policy must be NEVER (one-shot cycles)")
     if not 0 < (cfg.get("cycle_budget_s") or 0) <= config.CYCLE_BUDGET_S:
         problems.append(f"cycle_budget_s must be 1..{config.CYCLE_BUDGET_S}")
+    problems += _launcher_problems(cfg)
     enabled = sorted(s.id for s in config.SOURCES.values() if s.enabled)
     if sorted(cfg.get("sources") or []) != enabled:
         problems.append(f"sources must be exactly the four enabled sources {enabled}")

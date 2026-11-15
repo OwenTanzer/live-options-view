@@ -511,12 +511,13 @@ test('site wiring: one hashed script between squeeze and tab switching, a hidden
   assert.ok(!/\.np-/.test(html.replace(block[0], '')), 'no panel rules outside the block');
 });
 
-test('loadNewsPanel mounts from BROWSER_DATA on the proxy and the public R2 base', async () => {
-  for (const base of ['/browser-data', 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev']) {
+test('loadNewsPanel mounts from NEWS_DATA on the proxy and a dedicated public News base', async () => {
+  for (const base of ['/browser-data', 'https://pub-0123456789abcdef0123456789abcdef.r2.dev']) {
     const calls = [];
     const container = new Node('div');
     const sandbox = {
-      BROWSER_DATA: base, console, setImmediate, setTimeout, clearTimeout,
+      // The market base is a different origin: News must never read it.
+      NEWS_DATA: base, BROWSER_DATA: 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev', console, setImmediate, setTimeout, clearTimeout,
       document: Object.assign({ getElementById: id => (id === 'news-panel' ? container : null) }, doc),
       fetch: fixtureFetch(calls),
       URL, Date: class extends Date { static now() { return 1762686900000; } },
@@ -531,6 +532,28 @@ test('loadNewsPanel mounts from BROWSER_DATA on the proxy and the public R2 base
     assert.equal(container.getAttribute('data-state'), 'ready');
     assert.ok(container.textContent.includes('SYNTHETIC fixture data'));
   }
+});
+
+test('loadNewsPanel with no News origin requests nothing and fails visibly (never a false empty state)', async () => {
+  for (const sandboxBase of [{ NEWS_DATA: null }, { NEWS_DATA: '' }, {}]) {
+    const calls = [];
+    const container = new Node('div');
+    const sandbox = Object.assign({
+      BROWSER_DATA: 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev', console, setImmediate, setTimeout, clearTimeout,
+      document: Object.assign({ getElementById: id => (id === 'news-panel' ? container : null) }, doc),
+      fetch: fixtureFetch(calls),
+      URL, Date: class extends Date { static now() { return 1762686900000; } },
+    }, sandboxBase);
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(PANEL_FILE, 'utf8'), sandbox, { filename: 'site/js/news-panel.js' });
+    await vm.runInContext('loadNewsPanel()', sandbox);
+    assert.deepEqual(calls, [], JSON.stringify(sandboxBase));
+    assert.equal(container.getAttribute('data-state'), 'failed');
+    assert.ok(container.textContent.includes('no public News origin is configured'), container.textContent);
+    assert.ok(!container.textContent.includes('No news views published yet'));
+  }
+  const fetchJson = panel.makeFetcher(null, () => { throw new Error('must not fetch'); }, () => 0);
+  await assert.rejects(fetchJson(INDEX_KEY), e => e.newsKind === 'unconfigured');
 });
 
 // M4b.1: a malformed page after a valid one is a visible failure, not a blank "ready" panel.

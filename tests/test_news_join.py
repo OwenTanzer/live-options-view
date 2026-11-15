@@ -498,8 +498,10 @@ class StreamFilteredRoster(unittest.TestCase):
             store.put(prefix + "commit.json", encode_json(dict(record, manifest_sha256=sha256_hex(body))))
             scan = scan_history(store)
             self.assertEqual((len(scan.runs), scan.problems), (1, []))
-            [seg] = join(load_archive(store), self.prices, T("10:11:00"), "collector", tolerance_s=120,
-                         stream="oil")["news_coverage"]["segments"]
+            # The manifest is rewritten in place behind the checkpoint (a legacy-schema fixture), so it is
+            # read by full replay, as an archive written before the checkpoint would be.
+            [seg] = join(load_archive(store, use_checkpoint=False), self.prices, T("10:11:00"), "collector",
+                         tolerance_s=120, stream="oil")["news_coverage"]["segments"]
             self.assertEqual((seg["state"], seg["sources"]["roster_complete"]), ("partial", False))
 
 

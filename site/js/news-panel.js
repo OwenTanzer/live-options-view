@@ -111,7 +111,7 @@
 
   function newsError(kind, message) {
     var e = new Error(message);
-    e.newsKind = kind;  // refused | absent | gone | deadline | http | network | json | invalid | render
+    e.newsKind = kind;  // refused | unconfigured | absent | gone | deadline | http | network | json | invalid | render
     return e;
   }
 
@@ -120,12 +120,20 @@
     return JSON.stringify(s.length > 120 ? s.slice(0, 120) + '…' : s);
   }
 
-  // base: BROWSER_DATA ('/browser-data' on the production origin, the public R2 origin otherwise).
+  // base: NEWS_DATA ('/browser-data' wherever the page uses the bounded route, otherwise the dedicated
+  // public News origin, or null while none is provisioned). A null or empty base requests nothing: every
+  // call fails visibly with kind 'unconfigured' (never a false empty state, never a relative URL).
   // Returns fetchJson(key) -> Promise<object>. The key check runs before any request is made. Every
   // request (headers and body) must finish within deadlineMs (default DEADLINE_MS) or it fails with
   // kind 'deadline' and its late body is discarded; it is aborted when AbortController exists. Requests
   // ask for no cached copy (cache: 'no-store'); the existing ?_= query stays.
   function makeFetcher(base, fetchImpl, now, deadlineMs, timers) {
+    if (base === null || base === undefined || String(base) === '') {
+      return function fetchJson() {
+        return Promise.reject(newsError('unconfigured',
+          'no public News origin is configured for this site, so nothing was requested'));
+      };
+    }
     var root = String(base).replace(/\/+$/, '');
     var limit = deadlineMs || DEADLINE_MS;
     var T = timers || { set: function (f, ms) { return setTimeout(f, ms); }, clear: function (h) { clearTimeout(h); } };
@@ -671,14 +679,16 @@
 })(typeof window !== 'undefined' ? window : this);
 
 // Site wiring: the News tab calls this once, on first open (tab-switching.js).
-// BROWSER_DATA is the page's shared data base (index.html): the bounded
-// /browser-data proxy on the production origin, the public R2 origin otherwise.
+// NEWS_DATA is the page's News base (index.html): the bounded /browser-data proxy wherever the page
+// uses it, otherwise the dedicated public News origin (null until provisioned; never the shared
+// market origin).
 function loadNewsPanel() {
   // MediaFlow R1: the research view (js/news-research.js) follows this mount's index: it shows the
   // research page that index names, from the same generation, under the same lease.
   var box = document.getElementById('news-research');
   var onIndex = box && typeof NewsResearch !== 'undefined' ? NewsResearch.follow(document, box) : null;
   return NewsPanel.mount(document, document.getElementById('news-panel'),
-    NewsPanel.makeFetcher(BROWSER_DATA, function (url, opts) { return fetch(url, opts); }, Date.now),
+    NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,
+      function (url, opts) { return fetch(url, opts); }, Date.now),
     NewsPanel.INDEX_KEY, { events: typeof window !== 'undefined' ? window : null, onIndex: onIndex });
 }

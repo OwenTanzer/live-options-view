@@ -184,9 +184,22 @@ test('backend: the index is never cacheable, News upstream has a deadline, other
     }
     return new Response('{}', { status: 200, headers: { 'Cache-Control': 'public, max-age=600', 'Content-Type': 'application/json' } });
   };
-  const request = key => worker.fetch(new Request(APP + '/browser-data/' + key), env);
+  // News keys: the same handler with a configured dedicated News origin (the Worker ships with none,
+  // which answers 404 without any upstream request); other keys: the Worker as deployed.
+  const { handleBrowserData } = await import('../backend/browser-data.js');
+  const NEWS_ORIGIN = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
+  const request = key => key.startsWith('news/')
+    ? handleBrowserData(new Request(APP + '/browser-data/' + key), new URL(APP + '/browser-data/' + key),
+      { market: 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev', news: NEWS_ORIGIN })
+    : worker.fetch(new Request(APP + '/browser-data/' + key), env);
   try {
+    const url = new URL(APP + '/browser-data/news/v2/views/index.json');
+    const unconfigured = await handleBrowserData(new Request(url), url, { market: APP, news: null });
+    assert.equal(unconfigured.status, 404, 'no News origin shipped: 404, the panel empty state');
+    assert.equal(unconfigured.headers.get('cache-control'), 'no-store');
+    assert.equal(calls.length, 0, 'and no upstream request');
     const index = await request('news/v2/views/index.json');
+    assert.ok(calls.at(-1).url.startsWith(NEWS_ORIGIN + '/'), 'News keys read the News origin');
     assert.equal(index.headers.get('cache-control'), 'no-store');
     const page = await request(FIRST);
     assert.equal(page.headers.get('cache-control'), 'public, max-age=600', 'immutable pages keep their caching');

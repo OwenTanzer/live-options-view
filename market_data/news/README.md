@@ -254,6 +254,15 @@ python -m market_data.news build-views --as-of 2026-11-09T11:15:00Z --tolerance-
   `ready`, `empty`, `absent` or `failed`.
 - Nothing is published yet. The panel and proxy are deployed (2026-11-14, `55db036`), the producer
   is inactive, and the deployed tab shows "No news views published yet".
+- **Dedicated News origin.** News keys are read only from the dedicated public News bucket's origin
+  (`NEWS_R2_ORIGIN` in `backend/browser-data.js`, `NEWS_R2` in `site/index.html`), never from the
+  shared market origin. Both are `null` until that bucket is provisioned. While they are `null`, the
+  proxy answers every News key with 404 and makes no upstream request (the tab shows "No news views
+  published yet"). Off the production origin, the panel requests nothing and shows "Could not load
+  news views: no public News origin is configured".
+- **Scheduled command.** The scheduled command is the bounded launcher
+  (`python -m market_data.news.launch`, see `launch.py`). It gives the whole cycle process one
+  deadline and a clean terminal failure path. The cost and sizing evidence is in `deploy/COSTS.md`.
 
 Tests: `python -m unittest discover -s tests -p "test_news*.py" -v`,
 `node tests/news_panel_view.test.js`, `node tests/browser_data.test.js`,
@@ -299,20 +308,36 @@ verifies every committed run. It stays the reference. The checkpoint
   `news/v1/checkpoint/head.json` points at it, with its size and digest.
   The body is written and read back before the head. The current and previous
   bodies are kept, so a reader holding the old head still finds its body.
-- A read lists `news/v1/runs/` once (the listing's size and ETag; locally,
-  size and mtime), reads the head and the body, and fully reads only the tail:
+- **Frontier (bounded listing).** The head records a frontier: the last run
+  prefix, in key order, before which every run is settled and checkpointed.
+  A read lists `news/v1/runs/` only **after** the frontier (ListObjectsV2
+  StartAfter; the listing's size and ETag, locally size and mtime), takes the
+  runs at or before it from the body, reads the head and the body, and fully
+  reads only the tail:
   - runs not in the checkpoint: new, availability pending, uncommitted or
-    corrupt;
-  - checkpointed runs whose listing changed: an object was added, removed or
-    rewritten. These are re-verified, so tampering is still found as before.
+    corrupt. The frontier never passes such a run, so it is listed and read
+    on every cycle until it settles (the head's `frontier_stopped_at` names it);
+  - listed checkpointed runs whose listing changed (object added, removed or
+    rewritten): re-verified.
+  The run listing therefore costs one request per read however long the raw
+  history grows (`tests/test_news_checkpoint.py`, `BoundedListing`: 1,500 runs).
+- **Writes behind the frontier.** Before uploading a run whose prefix is at or
+  before the frontier (a spool recovered under its original, older run_id, or a
+  clock that went backwards), a writer clears the frontier durably. A crash
+  after the upload cannot hide the run: the next read lists everything.
 - **Missing, corrupt or incompatible** checkpoints (a different checkpoint,
   manifest, commit or object schema) make the read a full replay. The next
   writer saves a fresh checkpoint.
-- **Stale:** writers replay everything once its last full verification is over
-  24 h old (`FULL_VERIFY_S`). A checkpointed run that is **missing** from the
-  store is reported as corrupt history, and the cycle fails (`HistoryCorrupt`).
-  A full replay alone could not tell that the run had disappeared.
-  `checkpoint rebuild` re-baselines from the runs and refuses corrupt history.
+- **Scheduled full listing:** once its last full verification is over 24 h old
+  (`FULL_VERIFY_S`), a writer lists all of `news/v1/runs/` and compares every
+  run's listing with the checkpoint. A changed run is re-read and verified; a
+  checkpointed run that is **missing** is reported as corrupt history, and the
+  cycle fails (`HistoryCorrupt`). A full replay alone could not tell that the
+  run had disappeared. This is listings only: it does not read every object
+  again. So a change to a run at or before the frontier is found at most 24 h
+  later (or at once by `checkpoint compare`), not on every read.
+  `checkpoint rebuild` re-baselines from the runs (a full content replay) and
+  refuses corrupt history.
 - Only writers (`collect-once`, `enrich`, `checkpoint rebuild`) save it, under
   the lease, after the commit. A failed save never fails a committed cycle: it
   is reported in the cycle output's `history`, and the next cycle reads a

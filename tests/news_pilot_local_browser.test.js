@@ -28,6 +28,15 @@ const SITE = path.join(REPO, 'site');
 const APP = 'https://live-options-view.otmooper12.workers.dev';
 const OTHER = 'http://news-site.test';
 const R2 = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
+// MediaFlow dedicated News origin (a test value): the page reads News from it off the production origin,
+// and the proxy reads News keys from it; neither ever reads News from the shared market origin R2.
+const NEWS = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
+// site/index.html ships NEWS_R2 = null (no News bucket provisioned yet); the test serves it configured.
+function withNewsOrigin(html) {
+  const shipped = "const NEWS_R2 = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';";
+  assert.equal(html.split(shipped).length, 2, 'site/index.html declares NEWS_R2 once');
+  return html.replace(shipped, `const NEWS_R2 = '${NEWS}';`);
+}
 const EVIDENCE = process.env.NEWS_G7_EVIDENCE || null;
 const VIEWPORTS = { desktop: { width: 1280, height: 900 }, narrow: { width: 390, height: 844 } };
 const INDEX_KEY = 'news/v2/views/index.json';
@@ -50,13 +59,20 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
     }
     return { status: 200, body: fs.readFileSync(file), type: 'application/json' };
   };
-  const { default: worker } = await import('../backend/index.js');
+  const { default: realWorker } = await import('../backend/index.js');
+  const { handleBrowserData } = await import('../backend/browser-data.js');
+  // News keys: the proxy with the configured News origin (the shipped Worker has none and answers 404).
+  const worker = { fetch: (req, env) => {
+    const u = new URL(req.url);
+    return u.pathname.startsWith('/browser-data/news/') ? handleBrowserData(req, u, { market: R2, news: NEWS })
+      : realWorker.fetch(req, env);
+  } };
   const env = new Proxy({}, { get() { throw new Error('No bindings may be accessed'); } });
   const originalFetch = global.fetch;
   const upstreamCalls = [];
   global.fetch = async (url, options) => {
     const u = new URL(url);
-    assert.equal(u.origin, R2, 'the Worker only fetches the public R2 origin');
+    assert.equal(u.origin, u.pathname.startsWith('/news/') ? NEWS : R2, 'the Worker reads News only from the News origin, everything else from R2');
     assert.equal(options.credentials, 'omit');
     const key = u.pathname.slice(1);
     upstreamCalls.push(key);
@@ -88,7 +104,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
               return route.fulfill({ status: res.status, body: Buffer.from(await res.arrayBuffer()),
                 headers: Object.fromEntries(res.headers) });
             }
-            if (url.origin === R2) {
+            if (url.origin === R2 && url.pathname.startsWith('/news/')) { foreign.push(url.href); return route.abort(); }
+            if (url.origin === R2 || url.origin === NEWS) {
               const key = url.pathname.slice(1);
               if (key.includes('research')) researchReqs.push({ base: 'r2', key });
               else if (key.startsWith('news/')) news.push({ base: 'r2', key });
@@ -99,7 +116,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
             if (url.origin === pageOrigin) {
               const file = path.join(SITE, url.pathname === '/' ? 'index.html' : url.pathname);
               if (file.startsWith(SITE + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile()) {
-                return route.fulfill({ path: file, contentType: TYPES[path.extname(file)] || 'application/octet-stream' });
+                return (file.endsWith(path.sep + 'index.html') ? route.fulfill({ body: withNewsOrigin(fs.readFileSync(file, 'utf8')), contentType: 'text/html' }) : route.fulfill({ path: file, contentType: TYPES[path.extname(file)] || 'application/octet-stream' }));
               }
               return route.fulfill({ status: 404, body: '{}', contentType: 'application/json' });
             }

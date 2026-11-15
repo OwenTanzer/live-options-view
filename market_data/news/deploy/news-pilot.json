@@ -8,9 +8,15 @@
   "interval_s": 900,
   "restart_policy": "NEVER",
   "overlap": "a cycle that finds the writer or publish lease held exits non-zero without writing; the next tick retries",
-  "command": "python -m market_data.news pilot-cycle --config market_data/news/deploy/news-pilot.json --live"
+  "command": "python -m market_data.news.launch --config market_data/news/deploy/news-pilot.json --live"
  },
  "cycle_budget_s": 180,
+ "launcher": {
+  "deadline_s": 600,
+  "interrupt_grace_s": 90,
+  "kill_wait_s": 10,
+  "note": "The scheduled command is the bounded launcher (market_data/news/launch.py), not pilot-cycle directly: cycle_budget_s bounds collection only. deadline_s bounds the whole cycle process from the launcher's start (every phase, store call, SDK retry and subprocess). At the deadline the cycle is interrupted so its own failure handling releases its leases; after interrupt_grace_s it is killed (leases may then stay held until an operator breaks them). deadline_s + interrupt_grace_s + kill_wait_s (700 s) stays below interval_s and the 900 s lease TTL, so a launcher always ends before the next tick and never overlaps itself."
+ },
  "sources": ["ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch"],
  "streams": ["ai_buildout", "oil"],
  "views": {
@@ -37,7 +43,7 @@
    "prefix": "news/v2/views/",
    "holds": "sanitized view pages and index.json only",
    "bucket": null,
-   "requirement": "the bucket the site already reads through /browser-data and the public R2 origin; credentials scoped to writes under news/v2/views/ if the provider allows"
+   "requirement": "a dedicated public News bucket (never the shared market bucket), whose public origin is NEWS_R2_ORIGIN in backend/browser-data.js and NEWS_R2 in site/index.html (both null until provisioned); write credentials for this bucket only"
   }
  },
  "retention": {

@@ -52,11 +52,11 @@ class CountingStore(LocalObjectStore):
             self.listings += 1
         return super().list(prefix)
 
-    def list_meta(self, prefix):
+    def list_meta(self, prefix, start_after=None):
         self.listings += 1
         self._inner = True
         try:
-            return super().list_meta(prefix)
+            return super().list_meta(prefix, start_after)
         finally:
             self._inner = False
 
@@ -223,65 +223,84 @@ class Fallbacks(Case):
         with mock.patch.object(config, "READABLE_MANIFEST_SCHEMAS", config.READABLE_MANIFEST_SCHEMAS + ("x/v9",)):
             self.assert_falls_back_then_rebuilds("incompatible")
 
-    def test_stale_for_writers_after_the_full_verification_interval(self):
+    def test_writers_list_everything_after_the_full_verification_interval(self):
         later = "2026-11-10T15:15:01Z"    # 24 h after the 15:15 full verification
-        self.assertEqual(ck.read_history(self.store, Clock("2026-11-10T15:00:00Z")).checkpoint["mode"], "checkpoint")
+        early = ck.read_history(self.store, Clock("2026-11-10T15:00:00Z")).checkpoint
+        self.assertEqual((early["mode"], early["listing"]), ("checkpoint", "after_frontier"))
         read = ck.read_history(self.store, Clock(later)).checkpoint
-        self.assertEqual(read["mode"], "full_replay")
-        self.assertTrue(read["reason"].startswith("stale"), read)
-        self.assertEqual(ck.read_history(self.store).checkpoint["mode"], "checkpoint", "readers do not age it")
+        # A full LISTING compared run by run with the checkpoint, not a content replay of every object.
+        self.assertEqual((read["mode"], read["listing"], read["runs_read"]), ("checkpoint", "full", self.head["runs"]), read)
+        self.assertTrue(read["reason"].startswith("full listing verification"), read)
+        self.assertEqual(ck.read_history(self.store).checkpoint["listing"], "after_frontier", "readers do not age it")
         report = self.collect(later)
-        self.assertEqual(report.checkpoint["mode"], "full_replay")
+        self.assertEqual((report.checkpoint["mode"], report.checkpoint["listing"]), ("checkpoint", "full"))
         self.assertEqual(json.loads(self.store.get(ck.HEAD_KEY))["full_verified_at"], later)
 
 
 class ChangedHistoryIsReverifiedOrFailsVisibly(Case):
+    """A run at or before the frontier is not listed on every read (bounded listing). A change to it is
+    found by the next full listing: a writer's, at most FULL_VERIFY_S after the last one, or an
+    operator's (bounded=False, `checkpoint compare`). It is then re-read and fails visibly."""
+
+    LATER = "2026-11-10T15:30:00Z"   # past FULL_VERIFY_S since the 15:00 full verification
+
     def setUp(self):
         super().setUp()
         self.first = self.collect("2026-11-09T15:00:00Z").manifest
         self.collect("2026-11-09T15:15:00Z", fetch=feeds("scenarios/a_v1"), only_sources=["oilprice_com"])
         self.prefix = self.first["objects"]["observations"]["key"].rsplit("/", 1)[0] + "/"
+        head = json.loads(self.store.get(ck.HEAD_KEY))
+        self.assertGreaterEqual(head["frontier"], self.prefix, "the first run is behind the frontier")
+
+    def assert_bounded_read_does_not_list_it(self):
+        read = ck.read_history(self.store)
+        self.assertEqual((read.checkpoint["listing"], read.checkpoint["reverified"], read.problems),
+                         ("after_frontier", [], []))
 
     def test_tampered_commit_record_is_reverified_and_corrupt(self):
         rec = json.loads(self.store.get(self.prefix + "commit.json"))
         self.store.put(self.prefix + "commit.json",
                        json.dumps(dict(rec, committed_at="2026-11-09T09:00:00Z", manifest_sha256="0" * 64)).encode())
-        read = ck.read_history(self.store)
+        self.assert_bounded_read_does_not_list_it()
+        read = ck.read_history(self.store, bounded=False)
         self.assertEqual(read.checkpoint["reverified"], [self.first["run_id"]])
         self.assertEqual(shape(read), shape(scan_history(self.store)))
         self.assertEqual([p["run_id"] for p in read.problems], [self.first["run_id"]])
         with self.assertRaises(HistoryCorrupt):
-            self.collect("2026-11-09T15:30:00Z")
+            self.collect(self.LATER)
 
     def test_rewritten_object_is_reverified_and_corrupt(self):
         key = self.prefix + "observations.jsonl.gz"
         self.store.put(key, gzip.compress(b'{"forged": true}\n', mtime=0))
-        read = ck.read_history(self.store)
+        self.assert_bounded_read_does_not_list_it()
+        read = ck.read_history(self.store, bounded=False)
         self.assertEqual(read.checkpoint["reverified"], [self.first["run_id"]])
         self.assertEqual(read.problems[0]["detail"], "observations: size/digest mismatch")
         with self.assertRaises(HistoryCorrupt):
-            self.collect("2026-11-09T15:30:00Z")
+            self.collect(self.LATER)
 
     def test_identical_rewrite_is_reverified_and_still_clean(self):
         key = self.prefix + "classifications.jsonl.gz"
         self.store.put(key, self.store.get(key))
-        read = ck.read_history(self.store)
+        read = ck.read_history(self.store, bounded=False)
         self.assertEqual((read.checkpoint["reverified"], read.problems), ([self.first["run_id"]], []))
-        self.collect("2026-11-09T15:30:00Z")
-        self.assertEqual(ck.read_history(self.store).checkpoint["reverified"], [], "re-checkpointed")
+        report = self.collect(self.LATER)
+        self.assertEqual(report.checkpoint["listing"], "full", "the writer's scheduled full listing")
+        self.assertEqual(ck.read_history(self.store, bounded=False).checkpoint["reverified"], [], "re-checkpointed")
 
     def test_checkpointed_run_that_disappears_fails_visibly(self):
-        """Full replay alone would silently lose the run; the checkpoint makes the loss visible."""
+        """Full replay alone would silently lose the run; a full listing against the checkpoint shows it."""
         for name in ck.RUN_NAMES:
             self.store.delete(self.prefix + name)
         full = scan_history(self.store)
         self.assertEqual(full.problems, [], "full replay cannot tell a run is gone")
-        read = ck.read_history(self.store)
+        self.assert_bounded_read_does_not_list_it()
+        read = ck.read_history(self.store, bounded=False)
         self.assertEqual(read.problems, [{"run_id": self.first["run_id"], "prefix": self.prefix,
                                           "detail": "checkpointed run is missing from the store"}])
         with self.assertRaises(HistoryCorrupt):
-            self.collect("2026-11-09T15:30:00Z")
-        self.assertTrue(load_archive(self.store).problems, "readers report it as corrupt coverage")
+            self.collect(self.LATER)
+        self.assertEqual(ck.compare(self.store)["equal"], False, "the operator check shows it too")
 
 
 class Interruption(Case):
@@ -330,7 +349,16 @@ class Interruption(Case):
         self.store.put(prefix + "notes.txt", b"operator note")
         self.collect("2026-11-09T15:15:00Z")
         read = self.assert_equal_to_full_replay(derived=False)
-        self.assertEqual((read["mode"], read["runs_read"], read["runs_from_checkpoint"]), ("checkpoint", 1, 1))
+        # Behind the frontier it is not listed, so the bounded read does not see the stray object.
+        self.assertEqual((read["mode"], read["listing"], read["runs_read"]), ("checkpoint", "after_frontier", 0))
+        # The next full listing does: that run is read in full and kept out of the checkpoint, and the
+        # frontier stops before it, visibly.
+        self.collect("2026-11-10T15:30:00Z")
+        head = json.loads(self.store.get(ck.HEAD_KEY))
+        self.assertEqual(head["frontier_stopped_at"], prefix)
+        self.assertIsNone(head["frontier"])
+        read = self.assert_equal_to_full_replay(derived=False)
+        self.assertEqual((read["listing"], read["runs_read"]), ("full", 1))
 
     def test_a_reader_holding_the_previous_head_still_finds_its_body(self):
         self.collect("2026-11-09T15:15:00Z", fetch=feeds("scenarios/a_v1"), only_sources=["oilprice_com"])
@@ -416,12 +444,12 @@ class ReadCounts(Case):
                   f"{body:7d}{note}", flush=True)
         self.assertEqual([r[2][0] for r in rows], [2] * len(rows), "a history read is the head and body only")
         self.assertEqual([r[1][0] for r in rows], [4 * r[0] for r in rows], "full replay reads 4 objects per run")
-        steady = [r[4] for r in rows if r[6] == "checkpoint"]
+        steady = [r[4] for r in rows if r[6] == "checkpoint" and not r[7]]
         self.assertEqual(len(set(steady)), 1, f"a cycle's reads do not grow with history: {steady}")
         self.assertTrue(all(r[3] > 3 * 4 * r[0] for r in rows), "the M5.2 cycle replays history three times")
-        # Over 24 h (98 runs) the writer replays everything once more, as scheduled.
-        self.assertEqual([r[7].split(":")[0] for r in rows if r[6] != "checkpoint"], ["stale"])
-        self.assertEqual(cycle_modes.count("full_replay"), 1, "the very first cycle has no checkpoint yet")
+        # Over 24 h (98 runs) the writer lists everything once more, as scheduled: a listing, not a replay.
+        self.assertEqual([r[7].split(":")[0] for r in rows if r[7]], ["full listing verification"])
+        self.assertEqual(cycle_modes.count("full_replay"), 1, "only the very first cycle (no checkpoint yet)")
 
 
 class Cli(Case):
@@ -463,3 +491,250 @@ class Cli(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Bounded listing (the frontier): long history, recovery and restart -----------------------------
+
+import math  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+from market_data.news import archive as arc  # noqa: E402
+from market_data.news.archive import CasOutcome, content_etag  # noqa: E402
+from market_data.news.normalize import iso, parse_iso  # noqa: E402
+
+
+class MemoryStore(LocalObjectStore):
+    """The LocalObjectStore contract in memory (fast enough for thousands of runs), recording every
+    listing as the ListObjectsV2 requests it would cost: one per 1,000 keys returned."""
+
+    def __init__(self):
+        super().__init__("unused-memory-store")
+        self.objects, self.tags, self.n = {}, {}, 0
+        self.listings = []   # (prefix, start_after, keys returned)
+        self.gets = 0
+
+    def _tag(self, key):
+        self.n += 1
+        self.tags[key] = f"{len(self.objects[key])}:{self.n}"
+
+    def put(self, key, data, content_type="application/octet-stream", cache_control=None):
+        self.objects[arc.check_key(key)] = bytes(data)
+        self._tag(key)
+
+    def put_if_absent(self, key, data, content_type="application/octet-stream", cache_control=None):
+        if key in self.objects:
+            return False
+        self.put(key, data)
+        return True
+
+    def get(self, key):
+        self.gets += 1
+        return self.objects.get(key)
+
+    def get_versioned(self, key):
+        body = self.objects.get(key)
+        return None if body is None else (body, content_etag(body))
+
+    def put_if_match(self, key, data, etag, content_type="application/octet-stream", cache_control=None, write_id=None):
+        current = self.objects.get(key)
+        if (etag is None and current is not None) or (etag is not None and (current is None or content_etag(current) != etag)):
+            return CasOutcome("rejected", detail="condition")
+        self.put(key, data)
+        return CasOutcome("applied", content_etag(data))
+
+    def delete(self, key):
+        self.objects.pop(key, None)
+        self.tags.pop(key, None)
+
+    def last_modified(self, key):
+        return None
+
+    def list(self, prefix):
+        keys = sorted(k for k in self.objects if k.startswith(prefix))
+        self.listings.append((prefix, None, len(keys)))
+        return keys
+
+    def list_meta(self, prefix, start_after=None):
+        keys = sorted(k for k in self.objects if k.startswith(prefix)
+                      and (start_after is None or k.encode() > start_after.encode()))
+        self.listings.append((prefix, start_after, len(keys)))
+        return {k: self.tags[k] for k in keys}
+
+    def run_list_requests(self):
+        """ListObjectsV2 requests spent on news/v1/runs/ since the last reset."""
+        return sum(max(1, math.ceil(n / 1000)) for p, _, n in self.listings if p == arc.RUNS_PREFIX)
+
+    def run_keys_listed(self):
+        return sum(n for p, _, n in self.listings if p == arc.RUNS_PREFIX)
+
+    def reset(self):
+        self.listings, self.gets = [], 0
+
+
+def synthetic_run(store, spool, at, *, commit=True):
+    """One committed (empty) run started at `at`, written through the real spool/commit path."""
+    started = parse_iso(at)
+    run_id = arc.new_run_id(started)
+    draft, blobs = arc._draft(run_id, "collect", started, started, [], {}, {"status": "complete"}, [], [], "complete")
+    arc.spool_run(spool, draft, blobs)
+    if commit:
+        arc.commit_spooled(store, spool, run_id, lambda: started + timedelta(seconds=1))
+    return arc.run_prefix(draft["observation_date"], run_id)
+
+
+class BoundedListing(unittest.TestCase):
+    """The run listing stays bounded as raw history grows, and nothing unprocessed is ever skipped."""
+
+    HISTORY = 1500    # runs (6,000 objects): about 16 days at */15
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.base = Path(cls._tmp.name)
+        cls.t0 = parse_iso("2026-10-24T00:00:00Z")
+        built = MemoryStore()
+        spool = Path(tempfile.mkdtemp(dir=cls.base))
+        cls.prefixes = [synthetic_run(built, spool, iso(cls.t0 + timedelta(minutes=15 * i)))
+                        for i in range(cls.HISTORY)]
+        ck.rebuild(built, Clock(iso(cls.t0 + timedelta(minutes=15 * cls.HISTORY))))   # full replay once
+        cls.built = built
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        self.store = MemoryStore()
+        self.store.objects, self.store.tags, self.store.n = dict(self.built.objects), dict(self.built.tags), self.built.n
+        self.spool = Path(tempfile.mkdtemp(dir=self.base))
+        self.clock = Clock(iso(self.t0 + timedelta(minutes=15 * self.HISTORY)))
+        self.head = json.loads(self.store.get(ck.HEAD_KEY))
+        self.store.reset()
+
+    def run_prefixes(self):
+        return set(arc.group_run_keys(k for k in self.store.objects if k.startswith(arc.RUNS_PREFIX)))
+
+    def collect(self, minutes_after_history=0, **kw):
+        self.clock.set(iso(self.t0 + timedelta(minutes=15 * self.HISTORY + minutes_after_history)))
+        kw.setdefault("sleep", no_sleep)
+        kw.setdefault("fetch", feeds())
+        return collect_once(self.store, self.spool, kw.pop("fetch"), self.clock, **kw)
+
+    def assert_complete(self):
+        """Bounded, operator full-listing and full-replay reads all agree, and nothing was skipped."""
+        full = scan_history(self.store)
+        self.assertEqual(shape(ck.read_history(self.store)), shape(full))
+        self.assertEqual(shape(ck.read_history(self.store, bounded=False)), shape(full))
+        self.assertTrue(ck.compare(self.store)["equal"])
+        listed = self.run_prefixes()
+        self.assertEqual({r.manifest_key[:-len("manifest.json")] for r in full.runs} | {u["prefix"] for u in full.uncommitted},
+                         listed, "every run in the store is in history")
+
+    def test_long_history_cycle_lists_only_after_the_frontier(self):
+        self.assertEqual(self.head["frontier"], self.prefixes[-1])
+        self.store.reset()
+        report = self.collect(15)
+        cycle_requests, cycle_keys = self.store.run_list_requests(), self.store.run_keys_listed()
+        self.assertEqual(report.checkpoint["listing"], "after_frontier")
+        self.assertTrue(all(a is not None for p, a, _ in self.store.listings if p == arc.RUNS_PREFIX),
+                        "no listing of the whole run prefix")
+        self.assertLessEqual(cycle_keys, 4 * 4, "a cycle lists only the runs after the frontier")
+        # The same cycle on the same history without a frontier lists all 6,000+ run objects each time.
+        self.assertEqual(json.loads(self.store.get(ck.HEAD_KEY))["frontier"],
+                         sorted(self.run_prefixes())[-1], "the frontier moved to the new run")
+        head = json.loads(self.store.get(ck.HEAD_KEY))
+        self.store.put(ck.HEAD_KEY, arc.encode_json(dict(head, frontier=None)))
+        self.store.reset()
+        self.collect(30)
+        unbounded = self.store.run_list_requests()
+        self.assertGreaterEqual(unbounded, 2 * math.ceil(4 * self.HISTORY / 1000), unbounded)
+        self.assertLess(cycle_requests * 3, unbounded,
+                        f"bounded {cycle_requests} vs unbounded {unbounded} ListObjectsV2 requests per cycle")
+        # Ten more cycles: the bounded request count does not grow with history.
+        counts = []
+        for i in range(10):
+            self.store.reset()
+            self.collect(45 + 15 * i)
+            counts.append(self.store.run_list_requests())
+        self.assertEqual(len(set(counts)), 1, counts)
+        self.assertEqual(counts[0], cycle_requests)
+        self.assert_complete()
+
+    def test_the_scheduled_full_verification_reads_raw_bytes(self):
+        self.collect(15)
+        self.store.reset()
+        steady = self.collect(30)
+        self.store.reset()
+        due = self.collect(24 * 60 + 60)     # past FULL_VERIFY_S since the rebuild
+        self.assertEqual((due.checkpoint["listing"], due.checkpoint["runs_read"]), ("full", self.HISTORY + 2), due.checkpoint)
+        self.assertEqual(self.store.run_keys_listed() >= 4 * self.HISTORY, True)
+        self.assertGreaterEqual(self.store.gets, 4 * due.checkpoint["runs_read"])
+        self.assertEqual(steady.checkpoint["listing"], "after_frontier")
+        self.assert_complete()
+
+    def test_a_recovered_spool_behind_the_frontier_is_never_skipped(self):
+        # A run spooled long ago (older run_id than the frontier) whose upload never happened.
+        old = synthetic_run(self.store, self.spool, iso(self.t0 + timedelta(minutes=15 * 7, seconds=1)), commit=False)
+        self.assertLess(old, self.head["frontier"])
+        report = self.collect(15)
+        self.assertEqual(len(report.recovered), 1)
+        self.assertEqual(report.checkpoint["frontier_cleared"][0]["for"], [old])
+        self.assertEqual(report.checkpoint["listing"], "full", "the read after a cleared frontier lists all")
+        self.assertIn(old, {r.manifest_key[:-len("manifest.json")] for r in ck.read_history(self.store).runs})
+        self.assertGreater(json.loads(self.store.get(ck.HEAD_KEY))["frontier"], old, "a new frontier past it")
+        self.assert_complete()
+
+    def test_a_crash_after_the_recovered_upload_and_before_the_save_skips_nothing(self):
+        old = synthetic_run(self.store, self.spool, iso(self.t0 + timedelta(minutes=15 * 3, seconds=1)), commit=False)
+        # The writer clears the frontier, uploads the recovered run, then dies before reading or saving.
+        cleared = arc._guard_frontier(self.store, arc.spooled_prefixes(self.spool))
+        self.assertEqual(cleared["for"], [old])
+        arc.recover_spools(self.store, self.spool, self.clock)
+        read = ck.read_history(self.store)                 # a reader, before any writer runs again
+        self.assertEqual(read.checkpoint["listing"], "full")
+        self.assertIn(old, {r.manifest_key[:-len("manifest.json")] for r in read.runs})
+        self.assert_complete()
+        report = self.collect(15)                          # the next writer restores a frontier
+        self.assertIsNotNone(json.loads(self.store.get(ck.HEAD_KEY))["frontier"])
+        self.assertEqual(report.checkpoint["listing"], "full")
+        self.assert_complete()
+
+    def test_a_crash_between_clearing_and_uploading_is_harmless(self):
+        synthetic_run(self.store, self.spool, iso(self.t0 + timedelta(minutes=15 * 3, seconds=1)), commit=False)
+        arc._guard_frontier(self.store, arc.spooled_prefixes(self.spool))
+        self.assertEqual(ck.read_history(self.store).checkpoint["listing"], "full")
+        self.assert_complete()
+        self.collect(15)                                    # recovery then uploads it
+        self.assert_complete()
+
+    def test_a_clock_that_went_backwards_cannot_hide_the_new_run(self):
+        report = self.collect(-15 * 100)                    # this run's id sorts before the frontier
+        prefix = report.manifest["objects"]["observations"]["key"].rsplit("/", 1)[0] + "/"
+        self.assertLess(prefix, self.head["frontier"])
+        self.assertEqual(report.checkpoint["frontier_cleared"][0]["for"], [prefix])
+        self.assertIn(prefix, {r.manifest_key[:-len("manifest.json")] for r in ck.read_history(self.store).runs})
+        self.assert_complete()
+
+    def test_an_unsettled_run_holds_the_frontier_and_is_listed_every_cycle(self):
+        # Objects of a run whose manifest never landed (an interrupted upload), between old runs.
+        orphan = arc.run_prefix("2026-10-25", "20261025T000001Z-0badc0de")
+        self.store.put(orphan + "observations.jsonl.gz", b"partial")
+        self.collect(24 * 60 + 60)                          # the scheduled full listing finds it
+        head = json.loads(self.store.get(ck.HEAD_KEY))
+        self.assertEqual(head["frontier_stopped_at"], orphan)
+        self.assertLess(head["frontier"], orphan)
+        for minutes in (24 * 60 + 75, 24 * 60 + 90):
+            read = ck.read_history(self.store)
+            self.assertIn(orphan, [u["prefix"] for u in read.uncommitted], "still listed, still reported")
+            self.collect(minutes)
+        self.assert_complete()
+
+    def test_a_restart_without_a_checkpoint_lists_everything_then_bounds_again(self):
+        self.store.delete(ck.HEAD_KEY)
+        first = self.collect(15)
+        self.assertEqual(first.checkpoint["mode"], "full_replay")
+        self.store.reset()
+        second = self.collect(30)
+        self.assertEqual(second.checkpoint["listing"], "after_frontier")
+        self.assertLessEqual(self.store.run_keys_listed(), 4 * 4)
+        self.assert_complete()

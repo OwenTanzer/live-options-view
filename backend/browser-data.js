@@ -56,6 +56,23 @@ export const NEWS_VIEW_INDEX_KEY = 'news/v2/views/index.json';
 // deadline). It bounds the wait for the upstream response; the panel's own
 // deadline also covers the body.
 export const NEWS_PROXY_DEADLINE_MS = 15000;
+// MediaFlow dedicated News origin (Chej, 2026-11-14): News view keys are read ONLY from the public
+// origin of the dedicated News bucket, never from the shared market origin (R2_ORIGIN), so the News
+// producer never needs write access to the shared market bucket. null until that bucket and its
+// public origin are provisioned; while it is null (or not a usable origin) every News key answers
+// 404 without contacting any upstream, which the panel shows as its existing empty state. Setting it
+// is a reviewed change made together with NEWS_R2 in site/index.html (tests/browser_data.test.js pins
+// the two together). Market keys keep R2_ORIGIN.
+export const NEWS_R2_ORIGIN = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';
+// A usable News origin is exactly an https origin (no path, query, credentials or trailing slash)
+// that is neither the shared market origin nor this site's own origin.
+export function isUsableNewsOrigin(origin, marketOrigin = R2_ORIGIN) {
+  if (typeof origin !== 'string' || !origin) return false;
+  let parsed;
+  try { parsed = new URL(origin); } catch { return false; }
+  return parsed.protocol === 'https:' && parsed.origin === origin && origin !== marketOrigin &&
+    origin !== BROWSER_DATA_ORIGIN;
+}
 // MediaFlow R1: the sanitized research projection is one immutable page of a
 // generation, p/<gen>.<n>/research/view.json, named by the index (the
 // retired mutable news/v2/research/view.json grant stays removed). The private
@@ -90,7 +107,9 @@ export function isPublicBrowserDataKey(key) {
   return BROWSER_DATA_KEYS.has(key) || isPublicArchiveKey(key) || isPublicNewsViewKey(key);
 }
 const MAX_LIVE_QUOTE_SYMBOLS = 100;
-export async function handleBrowserData(request, url) {
+// routes: the upstream origins (tests inject a configured News origin; the Worker uses the defaults).
+export async function handleBrowserData(request, url,
+  routes = { market: R2_ORIGIN, news: NEWS_R2_ORIGIN }) {
   const origin = request.headers.get('Origin');
   if (url.origin !== BROWSER_DATA_ORIGIN ||
       (origin !== null && origin !== BROWSER_DATA_ORIGIN)) {
@@ -108,10 +127,15 @@ export async function handleBrowserData(request, url) {
   // News keys (G3) get a finite upstream deadline and, for the index, no-store.
   // Every other key keeps its existing behaviour.
   const news = isPublicNewsViewKey(key);
+  // News keys never fall back to the shared market origin.
+  if (news && !isUsableNewsOrigin(routes.news, routes.market)) {
+    return new Response('Not found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  }
+  const upstreamOrigin = news ? routes.news : routes.market;
   const ctrl = news && typeof AbortController === 'function' ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), NEWS_PROXY_DEADLINE_MS) : null;
   try {
-    const upstream = await fetch(`${R2_ORIGIN}/${key}${url.search}`, {
+    const upstream = await fetch(`${upstreamOrigin}/${key}${url.search}`, {
       method: 'GET',
       headers: {},
       credentials: 'omit',
@@ -146,11 +170,11 @@ export const LEGACY_R2_PROXY_PREFIX = '/r2-proxy/';
 // delegates to handleBrowserData so the origin/method/key/query/upstream
 // discipline cannot drift between the two routes. Bare /r2-proxy and
 // /r2-proxy/ map to the empty key and return 404, matching /browser-data.
-export async function handleLegacyR2Proxy(request, url) {
+export async function handleLegacyR2Proxy(request, url, routes) {
   const key = url.pathname === '/r2-proxy' ? '' : url.pathname.slice(LEGACY_R2_PROXY_PREFIX.length);
   const rewritten = new URL(url);
   rewritten.pathname = BROWSER_DATA_PREFIX + key;
-  return handleBrowserData(request, rewritten);
+  return routes ? handleBrowserData(request, rewritten, routes) : handleBrowserData(request, rewritten);
 }
 export async function handleLiveQuotes(url, env) {
   const symbols = parseRequestedSymbols(url.searchParams.get('symbols'));

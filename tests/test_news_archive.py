@@ -172,9 +172,11 @@ class Failures(ArchiveCase):
         scan = scan_history(self.store)
         self.assertEqual(len(scan.runs), 0)
         self.assertIn("digest", scan.problems[0]["detail"])
-        self.assertEqual(as_of(load_archive(self.store), "2026-11-09T16:00:00Z")["coverage"]["corrupt_runs"],
-                         [m["run_id"]])
-        self.clock.set("2026-11-09T15:15:00Z")
+        self.assertEqual(as_of(load_archive(self.store, use_checkpoint=False), "2026-11-09T16:00:00Z")
+                         ["coverage"]["corrupt_runs"], [m["run_id"]])
+        # A settled run behind the checkpoint frontier is not listed on every read (bounded listing): the
+        # writer's scheduled full listing, at most FULL_VERIFY_S later, finds the change and stops collection.
+        self.clock.set("2026-11-10T15:15:00Z")
         with self.assertRaises(HistoryCorrupt):
             self.collect()
 

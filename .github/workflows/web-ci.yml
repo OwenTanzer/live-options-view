@@ -23,6 +23,7 @@ on:
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
+      - "market_data/news/**"
   push:
     branches: [master]
     paths:
@@ -43,6 +44,7 @@ on:
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
+      - "market_data/news/**"
 
 jobs:
   test:
@@ -100,6 +102,14 @@ jobs:
         run: node --test tests/asset_boundary.test.mjs tests/asset_rollback.test.mjs tests/preview_isolation.test.mjs tests/preview_transport.test.mjs tests/preview_storage_boundary.test.mjs tests/deploy_sequencing.test.mjs
       - name: Changed-path boundaries (#225, Brian)
         run: python tests/test_changed_paths.py
+      - name: News bounded launcher and pilot config (MediaFlow)
+        run: python -m unittest discover -s tests -p test_news_launcher.py -v
+      - name: News history checkpoint and bounded run listing (MediaFlow)
+        run: python -m unittest discover -s tests -p test_news_checkpoint.py -v
+      - name: News panel dedicated origin and generation contract (MediaFlow)
+        run: |
+          node tests/news_panel_view.test.js
+          node tests/news_generation_contract.test.js
       - name: bot registration probe contract
         run: node tests/preflight_worker_contract.test.js
       - name: capture-prefix R2 write boundary (G4a)

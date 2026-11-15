@@ -102,10 +102,15 @@ D7 (shared-file and landing coordination) is Chej's to reconcile. D3 is settled:
 
 - A **private bucket** for `news/v1/runs/**`, `news/v1/index/**`, `news/v1/latest.json`, leases,
   `news/v1/publish/**` and `news/v1/research/**`, with its credentials.
-- The **public bucket** the site already reads (behind `/browser-data/` and the public R2 origin),
-  with credentials scoped as narrowly as the provider allows.
-- A **scheduler service** (for example a new Railway cron service).
-  - Cron `*/15 * * * *` UTC, one-shot, restart policy NEVER.
+- A **dedicated public News bucket** with its own public origin (Chej, 2026-11-14), holding only
+  `news/v2/views/**`. The News producer gets write credentials for this bucket only, never for the
+  shared market bucket. The proxy (`NEWS_R2_ORIGIN` in `backend/browser-data.js`) and the page
+  (`NEWS_R2` in `site/index.html`) read News keys only from this origin; both ship as `null`, which
+  serves the existing "No news views published yet" state on production without any upstream request.
+- A **scheduler service** (for example a new Railway cron service), Chej provisioning, within Owen's
+  $5/month incremental News budget (see `deploy/COSTS.md`).
+  - Cron `*/15 * * * *` UTC, one-shot, restart policy NEVER, paused until activation.
+  - Command: the bounded launcher (`market_data/news/launch.py`), never `pilot-cycle` directly.
   - Watch paths must not overlap the collectors' (#225).
 
 ### Research in a live pilot
@@ -130,9 +135,10 @@ as one reviewed commit, with release coordinated by Chej:
 | --- | --- | --- |
 | `active` | `false` | `true`. This is the only field that unlocks `--live`. |
 | `storage.private.bucket` / `storage.public.bucket` | `null` | The bucket names. These are **descriptive**: the code reads the buckets from the environment, not from these fields. |
-| `generations.clock_bound_verified` | `false` | Stays `false` until the clock-bound check passes, then `true` in a separate reviewed change. |
+| `generations.clock_bound_verified` | `false` | Stays `false` until the clock-bound check passes, then `true` in a separate reviewed change. Until then nothing expires: the public page count reaches the 6,300 cap after about 100 cycles (about 25 hours) and publication pauses (measured, `deploy/COSTS.md`). |
+| `NEWS_R2_ORIGIN` (`backend/browser-data.js`) and `NEWS_R2` (`site/index.html`) | `null` | The dedicated News bucket's public origin, the same value in both. Released API first, then assets. `tests/browser_data.test.js` pins the two together. |
 | `research.*` | mode `research`, cutoff `build_as_of`, PREPARED label | Unchanged. The loader refuses any other mode or cutoff. Revisit the label if live research sources are added (D2). |
-| everything else (schedule, sources, streams, views, prices `unavailable`, `storage.public.prefix` `news/v2/views/`, retention, cap 6,300) | as shipped | unchanged |
+| everything else (schedule, launcher bounds, sources, streams, views, prices `unavailable`, `storage.public.prefix` `news/v2/views/`, retention, cap 6,300) | as shipped | unchanged |
 
 Environment of the scheduler service:
 - `NEWS_ALLOW_BUCKET_WRITES=1`;
@@ -141,9 +147,15 @@ Environment of the scheduler service:
 - the same four with `NEWS_PUBLIC_R2_`;
 - optionally `NEWS_GIT_REVISION`.
 
-The command is the config's `schedule.command`:
-`python -m market_data.news pilot-cycle --config market_data/news/deploy/news-pilot.json --live`.
-`--live` is refused unless `active` is `true` **and** `NEWS_ALLOW_BUCKET_WRITES=1` is set.
+The command is the config's `schedule.command`, the bounded launcher:
+`python -m market_data.news.launch --config market_data/news/deploy/news-pilot.json --live`.
+It runs one `pilot-cycle` under one overall deadline (`launcher.deadline_s` 600 s, from the launcher's
+start, covering every phase, retry and subprocess). At the deadline it interrupts the cycle, so the
+cycle's own failure handling releases its leases. After `interrupt_grace_s` (90 s) it kills it, and
+the terminal record says leases may stay held. It always ends with one JSON terminal record and a
+definite exit code (0, the cycle's own 1/2, 124 deadline, 137 killed, 143 stopped, 2 invalid config).
+Deadline + grace + kill wait (700 s) is below the 900 s interval and lease TTL, so runs cannot
+overlap. `--live` is still refused unless `active` is `true` **and** `NEWS_ALLOW_BUCKET_WRITES=1` is set.
 
 ## 5. Activation order
 
@@ -234,3 +246,7 @@ Readers see `build_as_of`, the coverage gaps and "prices unavailable" on every p
 | Production environment approvals; new paid services or extra spending | Owen |
 | Code and corrections, the price adapter, verification evidence, `publish-status` checks, stop/restore/withdraw when asked | Jayden |
 | Review before activation and after the first live day | Chej |
+
+## Isolated Linux deployment
+
+The deployed systemd user timer runs once per quarter hour, with no catch-up burst and no automatic restart. It uses its own service, checkout, spool, private environment, and budget database. The checked-in pilot template stays inactive. Its installed copy identifies the two dedicated buckets and enables the verified store-clock policy. Stop the timer before any launcher-fence recovery. Confirm the entire service cgroup has ended and there is no other scheduler or operator. Read the private `news/v1/_launcher/fence.json` with its ETag. Only after confirmation, conditionally replace that exact running version with a unique idle record. A stale or ambiguous response requires readback. Clearing a cycle lease alone cannot release this fence. Preserve raw history on rollback.

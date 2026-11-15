@@ -1473,6 +1473,11 @@ const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 // Only the production website uses the bounded same-origin route.
 const BROWSER_DATA = location.origin === 'https://live-options-view.otmooper12.workers.dev'
   ? '/browser-data' : R2;
+// MediaFlow News views live in a dedicated public News bucket, never at the shared market origin
+// above. null until that bucket's public origin is provisioned (mirrors NEWS_R2_ORIGIN in
+// backend/browser-data.js). The bounded same-origin route serves both wherever BROWSER_DATA uses it.
+const NEWS_R2 = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';
+const NEWS_DATA = BROWSER_DATA === '/browser-data' ? '/browser-data' : NEWS_R2;
 const REFRESH  = 60;  // seconds between data refreshes
 let liveQuotePoller = null;
 
@@ -1569,7 +1574,7 @@ let timerHandle = null;
 // open. The banner stays here as the section's marker.
 </script>
 <script src="js/news-research.js?v=aac117405484746a"></script>
-<script src="js/news-panel.js?v=97258fdf37938322"></script>
+<script src="js/news-panel.js?v=236f1b71a7e69321"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────

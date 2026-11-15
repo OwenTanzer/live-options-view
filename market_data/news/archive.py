@@ -119,6 +119,9 @@ def check_key(key: str) -> str:
 class LocalObjectStore:
     """Directory-backed store with the same semantics the bucket store provides."""
 
+    # list_meta(prefix, start_after=key) lists only keys after key (S3 ListObjectsV2 StartAfter).
+    supports_start_after = True
+
     def __init__(self, root):
         self.root = Path(root)
 
@@ -191,10 +194,13 @@ class LocalObjectStore:
                 out.append(path.relative_to(self.root).as_posix())
         return sorted(out)
 
-    def list_meta(self, prefix: str) -> dict[str, str]:
-        """key -> a change tag from the listing alone (size and modification time; no object reads)."""
+    def list_meta(self, prefix: str, start_after: str | None = None) -> dict[str, str]:
+        """key -> a change tag from the listing alone (size and modification time; no object reads).
+        start_after: only keys strictly after it (byte order), as S3 StartAfter."""
         out = {}
         for key in self.list(prefix):
+            if start_after is not None and key.encode() <= start_after.encode():
+                continue
             st = self._path(key).stat()
             out[key] = f"{st.st_size}:{st.st_mtime_ns}"
         return out
@@ -202,6 +208,8 @@ class LocalObjectStore:
 
 class R2ObjectStore:
     """Cloudflare R2 through the S3 API. Only constructed by an explicit CLI opt-in."""
+
+    supports_start_after = True
 
     def __init__(self, client, bucket: str, cas_client=None):
         self.client = client
@@ -226,6 +234,10 @@ class R2ObjectStore:
         client = boto3.client("s3", **kwargs)
         # ASSUMPTION (SDK, not verified here): total_max_attempts=1 means one HTTP request and no retry.
         cas_client = boto3.client("s3", config=Config(retries={"total_max_attempts": 1}), **kwargs)
+        if budget_path := os.environ.get("NEWS_BUDGET_DB"):
+            from .budget import install
+            install(client, budget_path)
+            install(cas_client, budget_path)
         return cls(client, env["R2_BUCKET_NAME"], cas_client=cas_client)
 
     @staticmethod
@@ -313,10 +325,12 @@ class R2ObjectStore:
             keys.extend(o["Key"] for o in page.get("Contents", []))
         return sorted(keys)
 
-    def list_meta(self, prefix):
-        """key -> size and ETag from list_objects_v2 (no object reads). A rewrite changes the ETag."""
+    def list_meta(self, prefix, start_after=None):
+        """key -> size and ETag from list_objects_v2 (no object reads). A rewrite changes the ETag.
+        start_after: only keys after it (ListObjectsV2 StartAfter), so a bounded read lists only the tail."""
         out = {}
-        for page in self.client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix):
+        extra = {"StartAfter": start_after} if start_after else {}
+        for page in self.client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix, **extra):
             out.update({o["Key"]: f"{o['Size']}:{o['ETag']}" for o in page.get("Contents", [])})
         return dict(sorted(out.items()))
 
@@ -626,6 +640,25 @@ def pending_spools(spool_root) -> list[str]:
     return sorted(p.name for p in root.iterdir() if (p / "manifest.draft.json").is_file())
 
 
+def spooled_prefixes(spool_root) -> list[str]:
+    """Run prefixes of the runs left spooled (their uploads have not been confirmed)."""
+    out = []
+    for run_id in pending_spools(spool_root):
+        try:
+            draft = json.loads((_spool_dir(spool_root, run_id) / "manifest.draft.json").read_bytes())
+            out.append(run_prefix(draft["observation_date"], run_id))
+        except (OSError, ValueError, KeyError):
+            continue   # an unreadable draft fails in commit_spooled, before any upload
+    return out
+
+
+def _guard_frontier(store, prefixes) -> dict | None:
+    """Clear the history checkpoint's frontier before uploading runs at or before it (checkpoint.py)."""
+    from .checkpoint import guard_frontier
+
+    return guard_frontier(store, prefixes)
+
+
 def recover_spools(store, spool_root, commit_clock) -> list[str]:
     """Commit any run left spooled by an interrupted process, reusing its run_id."""
     recovered = []
@@ -697,6 +730,7 @@ def collect_once(store, spool_root, fetch, clock, *, streams=None, extra_sources
     """One bounded collection cycle: recover, replay history, fetch, normalize, classify, spool, commit."""
     commit_clock = commit_clock or clock
     with WriterLease(store, clock, lease_holder, break_stale=break_stale_lease):
+        cleared = [c for c in [_guard_frontier(store, spooled_prefixes(spool_root))] if c]
         recovered = recover_spools(store, spool_root, commit_clock)
         scan = _writer_history(store, commit_clock, use_checkpoint)
         if scan.problems:
@@ -769,10 +803,13 @@ def collect_once(store, spool_root, fetch, clock, *, streams=None, extra_sources
         draft, blobs = _draft(run_id, "collect", started, finished, source_rows, totals,
                               _enrichment_summary(classifications, failed, error),
                               observations, classifications, status, source_scope)
+        cleared += [c for c in [_guard_frontier(store, [run_prefix(draft["observation_date"], run_id)])] if c]
         spool_run(spool_root, draft, blobs)
         manifest = commit_spooled(store, spool_root, run_id, commit_clock)
         report = RunReport(run_id, manifest, recovered, settled=settled,
                            checkpoint=_save_checkpoint(store, scan, commit_clock, use_checkpoint))
+        if cleared:
+            report.checkpoint["frontier_cleared"] = cleared
         if rebuild_index:
             report.index_error = _try_rebuild(store, commit_clock)
         return report
@@ -788,6 +825,7 @@ def enrich_pending(store, spool_root, clock, *, classifier=classify_rules, commi
     """
     commit_clock = commit_clock or clock
     with WriterLease(store, clock, lease_holder, break_stale=break_stale_lease):
+        cleared = [c for c in [_guard_frontier(store, spooled_prefixes(spool_root))] if c]
         recovered = recover_spools(store, spool_root, commit_clock)
         scan = _writer_history(store, commit_clock, use_checkpoint)
         if scan.problems:
@@ -805,10 +843,13 @@ def enrich_pending(store, spool_root, clock, *, classifier=classify_rules, commi
         status = "complete" if not failed else ("failed" if not classifications else "partial")
         draft, blobs = _draft(run_id, "enrich", started, clock(), [], {"pending": len(pending)},
                               _enrichment_summary(classifications, failed, error), [], classifications, status)
+        cleared += [c for c in [_guard_frontier(store, [run_prefix(draft["observation_date"], run_id)])] if c]
         spool_run(spool_root, draft, blobs)
         manifest = commit_spooled(store, spool_root, run_id, commit_clock)
         report = RunReport(run_id, manifest, recovered,
                            checkpoint=_save_checkpoint(store, scan, commit_clock, use_checkpoint))
+        if cleared:
+            report.checkpoint["frontier_cleared"] = cleared
         if rebuild_index:
             report.index_error = _try_rebuild(store, commit_clock)
         return report

@@ -254,6 +254,8 @@ class CommitBoundary(ArchiveCase):
         rec["committed_at"] = "2026-11-09T09:00:00Z"
         rec["manifest_sha256"] = "0" * 64
         self.store.put(key, json.dumps(rec).encode())
+        # Behind the checkpoint frontier: found by the writer's scheduled full listing (FULL_VERIFY_S).
+        self.clock.set("2026-11-10T15:30:00Z")
         with self.assertRaises(HistoryCorrupt):
             self.collect()
 

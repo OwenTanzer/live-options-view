@@ -67,8 +67,11 @@ const NEWS_REJECTED = [
 ];
 const ORIGIN = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
 const APP = 'https://live-options-view.otmooper12.workers.dev';
+// MediaFlow dedicated News origin (a test value): News keys are read only from it, never from ORIGIN.
+const NEWS_ORIGIN = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
 (async () => {
   const { default: worker } = await import('../backend/index.js');
+  const { handleBrowserData, NEWS_R2_ORIGIN, isUsableNewsOrigin } = await import('../backend/browser-data.js');
   const originalFetch = global.fetch;
   const env = new Proxy({}, { get() { throw new Error('No bindings may be accessed'); } });
   let calls = [];
@@ -87,8 +90,34 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
         'Access-Control-Allow-Origin': '*' },
     });
   };
-  const request = (suffix, options = {}) => worker.fetch(new Request(APP + suffix, options), env);
+  // News keys go through the same handler with a configured News origin (the Worker ships with none);
+  // every other key goes through the Worker exactly as before.
+  const routes = { market: ORIGIN, news: NEWS_ORIGIN };
+  const request = (suffix, options = {}) => suffix.startsWith('/browser-data/news/')
+    ? handleBrowserData(new Request(APP + suffix, options), new URL(APP + suffix), routes)
+    : worker.fetch(new Request(APP + suffix, options), env);
   try {
+    // Shipped default: no News origin, so every News key is 404 with no upstream request at all
+    // (never a fallback to the shared market origin).
+    assert.ok(isUsableNewsOrigin(NEWS_R2_ORIGIN, ORIGIN));
+    for (const key of KEYS.filter(k => k.startsWith('news/'))) {
+      for (const query of ['', '?_=1791506273571']) {
+        const url = new URL(APP + '/browser-data/' + key + query);
+        const res = await handleBrowserData(new Request(url, { headers: { Origin: APP } }), url, { market: ORIGIN, news: null });
+        assert.equal(res.status, 404, key + query);
+        assert.equal(res.headers.get('cache-control'), 'no-store');
+      }
+    }
+    assert.equal(calls.length, 0, 'News keys never reach an upstream without a News origin');
+    for (const bad of [null, '', 'http://news.example', ORIGIN, APP, NEWS_ORIGIN + '/', NEWS_ORIGIN + '/news',
+      NEWS_ORIGIN + '?x=1', 'https://user:pw@news.example', 'not a url', 42]) {
+      assert.equal(isUsableNewsOrigin(bad, ORIGIN), false, String(bad));
+      const res = await handleBrowserData(new Request(APP + '/browser-data/' + KEYS.find(k => k.startsWith('news/'))),
+        new URL(APP + '/browser-data/' + KEYS.find(k => k.startsWith('news/'))), { market: ORIGIN, news: bad });
+      assert.equal(res.status, 404, 'unusable News origin ' + String(bad));
+    }
+    assert.equal(isUsableNewsOrigin(NEWS_ORIGIN, ORIGIN), true);
+    assert.equal(calls.length, 0, 'an unusable News origin is never contacted');
     for (const key of KEYS) {
       for (const query of ['', '?_=1791506273571']) {
         const res = await request('/browser-data/' + key + query, { headers: {
@@ -98,7 +127,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
         assert.equal(res.status, 200);
         assert.deepEqual(new Uint8Array(await res.arrayBuffer()), body);
         const call = calls.at(-1);
-        assert.equal(call.url, ORIGIN + '/' + key + query);
+        assert.equal(call.url, (key.startsWith('news/') ? NEWS_ORIGIN : ORIGIN) + '/' + key + query);
         assert.deepEqual(call.options.headers, {});
         assert.equal(call.options.credentials, 'omit');
         assert.equal(call.options.redirect, 'manual');
@@ -210,7 +239,8 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
   assert.ok(frontend.includes('fetch(`${BROWSER_DATA}/raw/opex/qqq_chain_'));
   assert.ok(frontend.includes('fetch(`${BROWSER_DATA}/manifest.json'));
   assert.ok(frontend.includes('fetch(`${BROWSER_DATA}/prices/qqq_intraday_'));
-  assert.ok(frontend.includes('NewsPanel.makeFetcher(BROWSER_DATA, '));
+  assert.ok(frontend.includes("NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,"));
+  assert.ok(!frontend.includes('NewsPanel.makeFetcher(BROWSER_DATA'), 'News never reads the market base');
   assert.ok(!frontend.includes('/r2-proxy/'));
   const routing = frontend.slice(frontend.indexOf('const R2 ='), frontend.indexOf('const REFRESH'));
   assert.ok(routing.includes('location.origin'));
@@ -221,6 +251,11 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
     for (const key of KEYS) {
       assert.equal(base + '/' + key, (origin === APP ? '/browser-data' : ORIGIN) + '/' + key);
     }
+    // News: the bounded route where the page uses it, else the dedicated News origin (null until
+    // provisioned), and never the shared market origin.
+    const news = new Function('location', routing + '; return NEWS_DATA;')({ origin });
+    assert.equal(news, origin === APP ? '/browser-data' : NEWS_R2_ORIGIN, origin);
+    assert.notEqual(news, ORIGIN);
   }
   console.log('browser data: live keys and bounded QQQ archives, strict paths/queries/methods, no bindings/credentials/redirects, byte/status preservation and frontend scope passed (including news views)');
 })().catch(error => { console.error(error); process.exitCode = 1; });
