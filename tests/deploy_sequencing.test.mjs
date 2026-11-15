@@ -289,7 +289,7 @@ test('B1: in-tree authorization record is a paradox (old behavior)', () => {
     deployApi({ revision: HEAD, execute: true, executor: stubExecutor().fn });
     authorizeStage({ stage: s.stage, revision: HEAD, webCheck: WEB, apiCheck: API, authorizer: 'test' });
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', wt, 'add', 'docs/releases']);
-    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', wt, 'commit', '-q', '-m', 'authorize']);
+    execFileSync('git', ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-c', 'user.name=t', '-c', 'user.email=t@t', '-C', wt, 'commit', '-q', '-m', 'authorize']);
     const newHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wt, encoding: 'utf8' }).trim();
     assert.notEqual(newHead, HEAD);
     assert.throws(() => deployStaged({ stage: s.stage, revision: HEAD }), /Revision mismatch/);
@@ -299,7 +299,7 @@ test('B1: in-tree authorization record is a paradox (old behavior)', () => {
     process.env.DEPLOY_RELEASES_DIR = prevReleases;
     if (prevRoot === undefined) delete process.env.DEPLOY_REPO_ROOT;
     else process.env.DEPLOY_REPO_ROOT = prevRoot;
-    rmSync(wt, { recursive: true, force: true });
+    rmSync(wt, { recursive: true, force: true, maxRetries: 4 });
   }
 });
 
