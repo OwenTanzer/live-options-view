@@ -82,6 +82,7 @@ def reconcile(state, ctx, arm):
             None,
         )
         if fill:
+            previous = state.get("chain")
             state.update(pending["after"])
             if pending["action"] == "buy":
                 symbol = pending["symbol"]
@@ -104,6 +105,14 @@ def reconcile(state, ctx, arm):
                         1 if side == "call" else -1,
                         contract_symbol=symbol,
                     )
+                    if previous:
+                        # Exposure and arming reset on a new OI entry. Recovery
+                        # budgets and consumed events belong to the account-day.
+                        chain.protect_exits = previous["protect_exits"]
+                        chain.reentries = previous["reentries"]
+                        chain.used_recovery_events = set(
+                            previous["used_recovery_events"]
+                        )
                 chain.basis = price
                 state["chain"] = freeze(chain)
     chain = thaw(state.get("chain"), arm)

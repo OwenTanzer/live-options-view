@@ -163,6 +163,33 @@ class Comparison(unittest.TestCase):
         ingest(data, received, partial)
         self.assertEqual(partial, [])
 
+    def test_new_signal_keeps_session_budget(self):
+        previous = f.ProtectionChain("put", 1, 1.4, 0, -1)
+        previous.reentries = 2
+        previous.protect_exits = 3
+        previous.used_recovery_events.add("old-recovery")
+        previous.external_exit("signal_exit")
+        state = {
+            "chain": f.freeze(previous),
+            "pending": {
+                "id": "new",
+                "after": {"chain": None},
+                "action": "buy",
+                "quantity": 1,
+                "symbol": SYM,
+                "bar": 9,
+            },
+        }
+        book = Book(
+            [dict(execution_request_id="new", sym=SYM, side="buy", qty=1, price=1.2)]
+        )
+        chain = f.reconcile(state, SimpleNamespace(book=book), "protect_reentry")
+        self.assertEqual((chain.side, chain.basis, chain.armed), ("call", 1.2, False))
+        self.assertEqual(
+            (chain.reentries, chain.protect_exits, chain.used_recovery_events),
+            (2, 3, {"old-recovery"}),
+        )
+
     def test_unusable_snapshot_times(self):
         for bad in ("broken", 42, "2026-11-16T14:00:00"):
             self.assertIsNone(f.snap_time(bad))
