@@ -145,12 +145,13 @@ def decide(ctx, account, arm, bars, directory, decision_id):
             action, reason, "oi_skew_qqq", VERSION, symbol, quantity, metadata=metadata
         )
 
-    if ctx.session_phase != "open":
-        atomic_json(path, state)
-        return result("no_trade", "Exchange closed")
     signal = oi_skew_qqq(ctx) if ctx.snapshot else result("no_trade", "No OI snapshot")
     meta = signal.metadata or {}
     metadata["oi_signal"] = signal.to_dict() if ctx.snapshot else None
+    if ctx.session_phase != "open":
+        if state or not path.exists():
+            atomic_json(path, state)
+        return result("no_trade", signal.reason)
     metadata["bar_input_error"] = bars.error
     reading = snap_time(ctx.snapshot.timestamp) if ctx.snapshot else None
     imbalance = meta.get("imbalance_ratio")

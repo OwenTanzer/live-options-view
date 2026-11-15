@@ -163,6 +163,51 @@ class Comparison(unittest.TestCase):
         ingest(data, received, partial)
         self.assertEqual(partial, [])
 
+    def test_premarket_anchor_matches_baseline(self):
+        from verify_oi_skew import make_ctx, FLAT_ROWS, fresh_quote
+
+        symbol = "QQQ240101C00400000"
+        with TemporaryDirectory() as folder:
+            proposals = []
+            for user, arm in f.ARMS.items():
+                account = SimpleNamespace(username=user)
+                for phase, instant, rows in [
+                    ("pre", START - timedelta(hours=2), FLAT_ROWS),
+                    ("open", START, None),
+                ]:
+                    ctx = make_ctx(
+                        session_phase=phase,
+                        timestamp=instant.isoformat(),
+                        rows=rows,
+                        quote_map={symbol: fresh_quote(symbol)},
+                    )
+                    ctx.now_et, ctx.account_alias = instant, user + "-match"
+                    if arm == "baseline":
+                        decision = f.oi_skew_qqq(ctx)
+                        meta = decision.metadata
+                    else:
+                        decision = f.decide(
+                            ctx,
+                            account,
+                            arm,
+                            SimpleNamespace(rows=[], error=None),
+                            Path(folder),
+                            phase,
+                        )
+                        meta = decision.metadata["oi_signal"]["metadata"]
+                    if phase == "open":
+                        proposals.append(
+                            (
+                                decision.action,
+                                decision.symbol,
+                                meta["anchor_observed_at"],
+                            )
+                        )
+            self.assertEqual(len(set(proposals)), 1)
+            self.assertEqual(
+                proposals[0], ("buy", symbol, (START - timedelta(hours=2)).isoformat())
+            )
+
     def test_new_signal_keeps_session_budget(self):
         previous = f.ProtectionChain("put", 1, 1.4, 0, -1)
         previous.reentries = 2
