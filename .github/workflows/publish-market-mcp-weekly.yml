@@ -111,7 +111,7 @@ jobs:
           node market_mcp/smoke.js --out market-mcp-fixture-smoke.json
           node market_mcp/production-smoke.js --out market-mcp-production-smoke.json
           node --max-old-space-size=256 market_mcp/load.js --out market-mcp-production-load.json
-          python3 -m pytest tests -q -k oa203_windows
+          python3 -m unittest discover -s tests -p 'test_oa203_windows*.py' -v
           python3 -m pytest tests/test_market_readings.py -q
       - name: Build commit-tagged image
         shell: bash
