@@ -552,6 +552,9 @@ class Runner:
             account_alias=alias,
         )
 
+        if account.strategy_id == "qqq_gated_strangle" and phase == "open":
+            ctx.params = {**ctx.params, "_completed_bars": self.forward_bars.read(self.cycle_count, ctx.now_et)}
+
         try:
             exit_policy = None
             flatten_decision = maybe_flatten(ctx, account.params)
