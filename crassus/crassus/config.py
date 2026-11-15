@@ -141,6 +141,8 @@ def _base_entries_for(
 
 def _entries_for(path: Path | None, catalog_path: Path, override_path: Path) -> list[dict[str, Any]]:
     entries = _base_entries_for(path, catalog_path, override_path)
+    if path is None and os.getenv("CRASSUS_PW_OA233") and not any(e["username"] == "crassus_oa233" for e in entries):
+        entries.extend(e for e in _read_entries(catalog_path) if e["username"] == "crassus_oa233")
     if os.environ.get("CRASSUS_NEWTON_CONFIRMED") != "1":
         return entries
     control = next(entry for entry in entries if entry["username"] == "crassus_newton")

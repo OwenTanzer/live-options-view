@@ -24,6 +24,12 @@
       "by": "Steve",
       "ticket": "OA-236",
       "note": "Runner variable provisioned with deploy skipped and presence read back. Exact non-mutating Worker registration preflight passed."
+    },
+    "CRASSUS_PW_OA233": {
+      "by": "Chej",
+      "ticket": "OA-233",
+      "provisioned_at": "2026-11-15",
+      "note": "Verified variable present on production crassus-runner."
     }
   }
 }

@@ -154,7 +154,7 @@ class CoverageAndParameters(unittest.TestCase):
         built = build()
         self.assertEqual([r["reading_id"] for r in built], [
             "reference_vwap", "reference_rvol", "reference_momentum",
-            "reference_pcr", "reference_max_pain", "reference_oi_skew"])
+            "reference_pcr", "reference_max_pain", "reference_oi_skew", "qqq_iv_header"])
         by_id = {r["reading_id"]: r for r in built}
         # VWAP/RVOL/reference momentum describe the published underlying_market
         # values; they are not recomputed differently here.
@@ -380,7 +380,7 @@ class PublishedWithTheSnapshot(unittest.TestCase):
         sidecar = s3.json(csv_key[:-4] + ".provenance.json")
         ids = [r["reading_id"] for r in latest["market_readings"]]
         self.assertEqual(ids, ["reference_vwap", "reference_rvol", "reference_momentum",
-                               "reference_pcr", "reference_max_pain", "reference_oi_skew"])
+                               "reference_pcr", "reference_max_pain", "reference_oi_skew", "qqq_iv_header"])
         self.assertEqual(latest["market_readings_digest"], readings_digest(latest["market_readings"]))
         self.assertEqual(sidecar["market_readings_digest"], latest["market_readings_digest"])
         self.assertIn("market", sidecar)

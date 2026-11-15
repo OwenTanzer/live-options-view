@@ -746,6 +746,7 @@ class ExecutionClient:
             side=intent["side"],
             quantity=intent["quantity"],
             instrument_type=intent.get("instrument_type"),
+            limit_price=intent.get("limit_price"),
             execution_request_id=request_id,
             decision_id=intent.get("decision_id"),
             strategy_id=intent.get("strategy_id"),
@@ -770,6 +771,7 @@ class ExecutionClient:
         side: str,
         quantity: int,
         instrument_type: str | None = None,
+        limit_price: float | None = None,
         execution_request_id: str | None = None,
         decision_id: str | None = None,
         strategy_id: str | None = None,
@@ -805,6 +807,7 @@ class ExecutionClient:
                 "side": side,
                 "quantity": quantity,
                 "instrument_type": instrument_type,
+                "limit_price": limit_price,
                 "decision_id": decision_id,
                 "strategy_id": strategy_id,
                 "strategy_version": strategy_version,
@@ -825,6 +828,8 @@ class ExecutionClient:
                 "side": side,
                 "qty": quantity,
             }
+            if limit_price is not None:
+                body.update(order_type="limit", limit_price=limit_price)
             if instrument_type is not None:
                 body["instrument_type"] = instrument_type
 

@@ -37,6 +37,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from math import isfinite
+from statistics import median
+from zoneinfo import ZoneInfo
 from datetime import datetime
 from typing import Any
 
@@ -45,6 +48,7 @@ READING_JOIN_SCHEMA = "market_readings_join.v1"
 REFERENCE_OI_SKEW_BAND = 0.02
 
 CALCULATION_VERSIONS = {
+    "qqq_iv_header": "qqq_iv_header.v1",
     "reference_vwap": "reference_vwap.v1",
     "reference_rvol": "reference_rvol.v1",
     "reference_momentum": "reference_momentum.v1",
@@ -325,6 +329,28 @@ def _market_reading(
     )
 
 
+def qqq_header_values(rows, stamp):
+    local = stamp.astimezone(ZoneInfo("America/New_York"))
+    day = local.date().isoformat()
+    bands = {}
+    for row in rows:
+        if row.get("Expiration") != day or not (570 <= local.hour*60+local.minute < 960):
+            continue
+        iv, delta, bid, ask = (row.get(k) for k in ("IV", "Delta", "Bid", "Ask"))
+        if not all(type(v) in (int, float) and isfinite(v) for v in (iv, delta, bid, ask)):
+            continue
+        if iv <= 0 or bid <= 0 or ask < bid or 2*(ask-bid)/(ask+bid) > 0.25:
+            continue
+        for band, lo, hi in (("near", .35, .65), ("wing", .15, .35)):
+            if lo <= abs(delta) <= hi:
+                bands.setdefault((band, row.get("Type")), []).append(100*iv)
+    def pair(band, combine):
+        calls, puts = (bands.get((band, side)) for side in ("call", "put"))
+        return combine(median(calls), median(puts)) if calls and puts else None
+    return {"near_money_iv_pct": pair("near", lambda c, p: (c+p)/2),
+            "put_premium_iv_points": pair("wing", lambda c, p: p-c)}
+
+
 def build_snapshot_readings(
     *,
     rows: list[dict[str, Any]],
@@ -396,6 +422,19 @@ def build_snapshot_readings(
             coverage=coverage,
         ),
     ]
+    if symbol == "QQQ":
+        values = qqq_header_values(rows, calculated_at)
+        count = sum(v is not None for v in values.values())
+        readings.append(_envelope(
+            reading_id="qqq_iv_header", symbol=symbol, snapshot_key=snapshot_key,
+            snapshot_timestamp=snapshot_timestamp, calculated_at=calculated_at,
+            values=values, units={"near_money_iv_pct": "percent", "put_premium_iv_points": "percentage_points"},
+            status={"code": ("no_data", "partial", "ok")[count],
+                    "reason": None if count == 2 else "missing_eligible_pairs"},
+            calculation_parameters={"near_absolute_delta": [.35, .65], "wing_absolute_delta": [.15, .35],
+                                    "max_relative_spread": .25, "expiration": "same_day"},
+            freshness=freshness, observed_at=None, caveats=["snapshot_greeks_without_per_leg_event_time"],
+            coverage=coverage))
     return readings
 
 

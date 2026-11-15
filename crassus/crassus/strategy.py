@@ -30,6 +30,7 @@ class Decision:
     confidence: float | None = None
     metadata: dict[str, Any] | None = None
     instrument_type: str | None = None
+    limit_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.action not in ACTIONS:
@@ -55,6 +56,7 @@ class Decision:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            **({"limit_price": self.limit_price} if self.limit_price is not None else {}),
             "action": self.action,
             "symbol": self.symbol,
             "quantity": self.quantity,

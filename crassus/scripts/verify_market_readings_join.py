@@ -91,10 +91,10 @@ payload = {
 }
 
 snapshot = MarketSnapshot.from_payload("https://example.test/intraday/latest.json", payload, b"{}")
-check("reading ids cover the six shared reference series",
+check("reading ids cover all dashboard reference readings",
       [r["reading_id"] for r in snapshot.readings] == [
           "reference_vwap", "reference_rvol", "reference_momentum",
-          "reference_pcr", "reference_max_pain", "reference_oi_skew"])
+          "reference_pcr", "reference_max_pain", "reference_oi_skew", "qqq_iv_header"])
 check("cross-boundary digest matches", snapshot.readings_digest == digest)
 check("join carries key, timestamp, digest and ids",
       snapshot.readings_join["snapshot_key"] == KEY
