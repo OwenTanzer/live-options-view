@@ -119,3 +119,9 @@ The full listing's share of Class A is 0.1% in month 1 and 1.6% in month 12. Sto
 3. Railway cron metering for a one-shot service, and its SIGTERM-to-SIGKILL grace on stop. The
    launcher's interrupt grace is 90 s.
 4. The store-clock bound (`clock_bound_verified`).
+
+## November 15 deployment revision
+
+The earlier $4.31 listing-only Railway estimate is historical. The Linux Box scheduler has no incremental host subscription. Every settled raw run is byte-verified daily across 96 quarter-hour slots. Missed slots are checked together on the next writer cycle. At 96 runs/day, month 12 averages roughly 33,100 retained runs, or 3.97 million additional monthly GETs. At the stated 1.25 retry factor and list prices that adds about $1.79 to monthly R2 costs. The launcher adds two conditional writes and one read per successful run, about $0.034/month with headroom. Using the earlier fixture operation mix gives about $4.96/month in month 12 at gross rates. Public reads, actual publication sizes, retries and feed growth vary.
+
+The scheduler uses a private SQLite ledger (NEWS_BUDGET_DB). It conservatively reserves each outgoing datastore request before transmission, including retries. It limits monthly writer requests to $4.40 and total PUT bytes since baseline to 20 GB ($0.30/month). It credits no deletes or overwritten bytes automatically. The remaining $0.30 covers other traffic. Direct public readership is outside the writer's meter. The shared account free tier is excluded from these estimates. Inspect actual R2 usage and reconcile stored bytes with both bucket listings under a stopped scheduler before changing the baseline. A budget refusal requires investigation before restoring operation.

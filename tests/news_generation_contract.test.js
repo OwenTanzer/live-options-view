@@ -193,7 +193,8 @@ test('backend: the index is never cacheable, News upstream has a deadline, other
       { market: 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev', news: NEWS_ORIGIN })
     : worker.fetch(new Request(APP + '/browser-data/' + key), env);
   try {
-    const unconfigured = await worker.fetch(new Request(APP + '/browser-data/news/v2/views/index.json'), env);
+    const url = new URL(APP + '/browser-data/news/v2/views/index.json');
+    const unconfigured = await handleBrowserData(new Request(url), url, { market: APP, news: null });
     assert.equal(unconfigured.status, 404, 'no News origin shipped: 404, the panel empty state');
     assert.equal(unconfigured.headers.get('cache-control'), 'no-store');
     assert.equal(calls.length, 0, 'and no upstream request');

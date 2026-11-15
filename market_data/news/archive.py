@@ -234,6 +234,10 @@ class R2ObjectStore:
         client = boto3.client("s3", **kwargs)
         # ASSUMPTION (SDK, not verified here): total_max_attempts=1 means one HTTP request and no retry.
         cas_client = boto3.client("s3", config=Config(retries={"total_max_attempts": 1}), **kwargs)
+        if budget_path := os.environ.get("NEWS_BUDGET_DB"):
+            from .budget import install
+            install(client, budget_path)
+            install(cas_client, budget_path)
         return cls(client, env["R2_BUCKET_NAME"], cas_client=cas_client)
 
     @staticmethod

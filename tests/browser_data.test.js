@@ -99,10 +99,11 @@ const NEWS_ORIGIN = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
   try {
     // Shipped default: no News origin, so every News key is 404 with no upstream request at all
     // (never a fallback to the shared market origin).
-    assert.equal(NEWS_R2_ORIGIN, null);
+    assert.ok(isUsableNewsOrigin(NEWS_R2_ORIGIN, ORIGIN));
     for (const key of KEYS.filter(k => k.startsWith('news/'))) {
       for (const query of ['', '?_=1791506273571']) {
-        const res = await worker.fetch(new Request(APP + '/browser-data/' + key + query, { headers: { Origin: APP } }), env);
+        const url = new URL(APP + '/browser-data/' + key + query);
+        const res = await handleBrowserData(new Request(url, { headers: { Origin: APP } }), url, { market: ORIGIN, news: null });
         assert.equal(res.status, 404, key + query);
         assert.equal(res.headers.get('cache-control'), 'no-store');
       }

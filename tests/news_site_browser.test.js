@@ -38,7 +38,7 @@ const R2 = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
 const NEWS = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
 // site/index.html ships NEWS_R2 = null (no News bucket provisioned yet); the test serves it configured.
 function withNewsOrigin(html) {
-  const shipped = 'const NEWS_R2 = null;';
+  const shipped = "const NEWS_R2 = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';";
   assert.equal(html.split(shipped).length, 2, 'site/index.html declares NEWS_R2 once');
   return html.replace(shipped, `const NEWS_R2 = '${NEWS}';`);
 }

@@ -114,7 +114,8 @@ test('positive keys return 200 with upstream discipline', async () => {
       calls.length = 0;
       if (isNewsKey(key)) {
         // Shipped default: no News origin, so no upstream request and never the market origin.
-        const refused = await request('/r2-proxy/' + key + query, { headers: { Origin: APP } });
+        const url = new URL(APP + '/r2-proxy/' + key + query);
+        const refused = await handleLegacyR2Proxy(new Request(url, { headers: { Origin: APP } }), url, { market: ORIGIN, news: null });
         assert.equal(refused.status, 404, key + query);
         assert.equal(refused.headers.get('cache-control'), 'no-store');
         assert.equal(calls.length, 0, key + ' must not reach any upstream without a News origin');
@@ -222,7 +223,7 @@ test("diag consumer URLs keep working through the bounded route", async () => {
 test('bounded proxy matches /browser-data/ status for the same keys', async () => {
   const cases = [
     // News keys are 404 on both routes while no News origin is configured.
-    ...POSITIVE_KEYS.map(k => ['/r2-proxy/' + k, '/browser-data/' + k, isNewsKey(k) ? 404 : 200]),
+    ...POSITIVE_KEYS.map(k => ['/r2-proxy/' + k, '/browser-data/' + k, 200]),
     ...NEGATIVE_KEYS.map(k => ['/r2-proxy/' + k, '/browser-data/' + k, 404]),
   ];
   for (const [proxy, browser, expected] of cases) {

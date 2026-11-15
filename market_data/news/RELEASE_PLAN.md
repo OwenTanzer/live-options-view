@@ -246,3 +246,7 @@ Readers see `build_as_of`, the coverage gaps and "prices unavailable" on every p
 | Production environment approvals; new paid services or extra spending | Owen |
 | Code and corrections, the price adapter, verification evidence, `publish-status` checks, stop/restore/withdraw when asked | Jayden |
 | Review before activation and after the first live day | Chej |
+
+## Isolated Linux deployment
+
+The deployed systemd user timer runs once per quarter hour, with no catch-up burst and no automatic restart. It uses its own service, checkout, spool, private environment, and budget database. The checked-in pilot template stays inactive. Its installed copy identifies the two dedicated buckets and enables the verified store-clock policy. Stop the timer before any launcher-fence recovery. Confirm the entire service cgroup has ended and there is no other scheduler or operator. Read the private `news/v1/_launcher/fence.json` with its ETag. Only after confirmation, conditionally replace that exact running version with a unique idle record. A stale or ambiguous response requires readback. Clearing a cycle lease alone cannot release this fence. Preserve raw history on rollback.

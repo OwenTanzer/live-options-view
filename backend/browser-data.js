@@ -63,7 +63,7 @@ export const NEWS_PROXY_DEADLINE_MS = 15000;
 // 404 without contacting any upstream, which the panel shows as its existing empty state. Setting it
 // is a reviewed change made together with NEWS_R2 in site/index.html (tests/browser_data.test.js pins
 // the two together). Market keys keep R2_ORIGIN.
-export const NEWS_R2_ORIGIN = null;
+export const NEWS_R2_ORIGIN = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';
 // A usable News origin is exactly an https origin (no path, query, credentials or trailing slash)
 // that is neither the shared market origin nor this site's own origin.
 export function isUsableNewsOrigin(origin, marketOrigin = R2_ORIGIN) {

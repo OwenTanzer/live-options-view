@@ -1476,7 +1476,7 @@ const BROWSER_DATA = location.origin === 'https://live-options-view.otmooper12.w
 // MediaFlow News views live in a dedicated public News bucket, never at the shared market origin
 // above. null until that bucket's public origin is provisioned (mirrors NEWS_R2_ORIGIN in
 // backend/browser-data.js). The bounded same-origin route serves both wherever BROWSER_DATA uses it.
-const NEWS_R2 = null;
+const NEWS_R2 = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';
 const NEWS_DATA = BROWSER_DATA === '/browser-data' ? '/browser-data' : NEWS_R2;
 const REFRESH  = 60;  // seconds between data refreshes
 let liveQuotePoller = null;
