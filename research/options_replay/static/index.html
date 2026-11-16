@@ -49,9 +49,18 @@ th, td { padding: 4px 5px; text-align: right; border-bottom: 1px solid var(--lin
 th { font-weight: 600; color: var(--muted); font-size: 12px; }
 td.k { text-align: center; font-weight: 650; }
 tr.atm td.k { color: var(--accent); }
-tr.atm td.k::after { content: " ◂ spot"; font-size: 10px; font-weight: 500; }
+tr.atm td.k::after { content: " ◂ nearest"; font-size: 10px; font-weight: 500; }
 td.off { color: var(--off); }
 td.held { background: var(--held); }
+#strip-info { margin: 6px 0; }
+#records { overflow-wrap: anywhere; }
+@media (max-width: 540px) {
+  #strip { font-size: 12px; }
+  #strip td, #strip th { padding: 5px 2px; }
+  #strip :is(td, th):nth-child(3), #strip :is(td, th):nth-child(8) { display: none; }
+  #strip .sm { padding: 4px; }
+  #strip tr.atm td.k::after { display: none; }
+}
 .strip-wrap { overflow-x: auto; }
 .sm { padding: 1px 7px; font-size: 12px; }
 .why { font-size: 11px; color: var(--warn); }
@@ -151,10 +160,12 @@ details summary { cursor: pointer; }
       <h2>0DTE contract strip <span class="muted" id="qinfo"></span></h2>
       <div class="controls" style="margin:0 0 8px">
         <label>Contracts <input id="qty" type="number" min="1" max="20" value="1"></label>
-        <label>Strikes <select id="width"><option value="4">±4</option><option value="6" selected>±6</option><option value="10">±10</option></select></label>
+        <label>Strikes <select id="width"><option value="4">±4</option><option value="6" selected>±6</option><option value="10">±10</option><option value="all">All quoted</option></select></label>
         <button id="center" class="sm" title="Re-center the strip on the current spot (c)">Center on spot</button>
         <span class="muted" id="rules" style="font-size:12px"></span>
       </div>
+      <div id="strip-info" class="muted"></div>
+      <button id="wide-replay" class="sm" hidden>New wider-chain replay · minute snapshots</button>
       <div class="strip-wrap"><table id="strip"></table></div>
     </section>
     <section class="panel" id="reveal-box"></section>
@@ -426,15 +437,24 @@ function drawChart() {
 
 // Strip: anchored so rows don't jump under the cursor; re-centers only when spot leaves the middle half.
 function renderStrip(done) {
-  const rows = V.board, ref = V.spot.now ?? V.spot.last, half = Number($("width").value);
-  if (!rows.length) { $("strip").innerHTML = `<tr><td class="muted">No board at this time.</td></tr>`; return; }
-  const strikes = rows.map((r) => r.strike);
-  const nearest = (v) => strikes.reduce((a, k) => (Math.abs(k - v) < Math.abs(a - v) ? k : a), strikes[0]);
-  if (anchor == null || (ref != null && Math.abs(strikes.indexOf(nearest(ref)) - strikes.indexOf(anchor)) > Math.ceil(half / 2))) anchor = ref != null ? nearest(ref) : strikes[Math.floor(strikes.length / 2)];
-  const ai = strikes.indexOf(anchor);
-  const held = new Map(V.positions.map((p) => [p.contract, p]));
-  const shown = rows.filter((r, i) => Math.abs(i - ai) <= half || held.has(r.call.contract) || held.has(r.put.contract));
-  const atm = ref != null ? nearest(ref) : null;
+  const rows = V.board, ref = V.spot.now ?? V.spot.last;
+  const all = $("width").value === "all", half = all ? rows.length : Number($("width").value);
+  $("wide-replay").hidden = true;
+  $("strip-info").textContent = "";
+  if (!rows.length) { $("strip").innerHTML = '<tr><td class="muted">No board at this time.</td></tr>'; return; }
+  const strikes = rows.map(r => r.strike);
+  const nearest = v => strikes.reduce((a, k) => Math.abs(k - v) < Math.abs(a - v) ? k : a);
+  const target = ref == null ? strikes[Math.floor(rows.length / 2)] : nearest(ref);
+  if (!strikes.includes(anchor) || Math.abs(strikes.indexOf(target) - strikes.indexOf(anchor)) > Math.ceil(half / 2)) anchor = target;
+  const first = Math.max(0, Math.min(rows.length - (2 * half + 1), strikes.indexOf(anchor) - half));
+  const held = new Map(V.positions.map(p => [p.contract, p]));
+  const shown = rows.filter((r, i) => (i >= first && i < first + 2 * half + 1) || held.has(r.call.contract) || held.has(r.put.contract));
+  const low = strikes[0], high = strikes[strikes.length - 1], outside = ref != null && (ref < low || ref > high);
+  const atm = ref != null && !outside ? target : null;
+  const range = V.session.mode === "simulation" ? "Generated strikes" : "Recorded strikes";
+  $("strip-info").textContent = (ref == null ? "" : V.symbol + " $" + px(ref) + " · ") + range + " $" + low + "–$" + high
+    + (outside ? ". No quote at the underlying price." : atm != null ? " · Nearest $" + atm : "");
+  $("wide-replay").hidden = !(outside && V.session.event_tape);
   const cell = (o) => {
     const h = held.get(o.contract), t = o.reason ? ` title="${esc(o.reason)}"` : "";
     const off = o.buy || o.sell ? "" : " off", hc = h ? " held" : "";
@@ -448,7 +468,7 @@ function renderStrip(done) {
   for (const r of shown) h += `<tr class="${r.strike === atm ? "atm" : ""}">${cell(r.call)}<td class="k">${r.strike}</td>${cell(r.put)}</tr>`;
   $("strip").innerHTML = h;
   document.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => order("buy", b.dataset.buy)));
-  document.querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
+  $("strip").querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
 }
 function renderPositions(done) {
   const ps = V.positions;
@@ -608,6 +628,12 @@ $("skip5").addEventListener("click", () => skipMinutes(5));
 $("speed").addEventListener("change", () => { if (playing) { pause(); play(); } });
 for (const id of ["candle-size", "chart-span"]) $(id).addEventListener("change", () => V && drawChart());
 $("width").addEventListener("change", () => V && render());
+$("wide-replay").addEventListener("click", async () => {
+  if ($("new").disabled) return;
+  $("wide-replay").disabled = true;
+  $("mode").value = "replay";
+  try { await newDay(); } finally { $("wide-replay").disabled = false; }
+});
 $("center").addEventListener("click", () => { anchor = null; V && render(); });
 $("reset").addEventListener("click", reset);
 $("reveal").addEventListener("click", reveal);
