@@ -63,7 +63,7 @@ function computeAdaptiveOiSkew(rows, spot, params = ADAPTIVE_OI_SKEW_PARAMS) {
   for (const r of rows) {
     const k = r ? r.Strike : null;
     const oi = r ? r.OpenInterest : null;
-    if (typeof k !== 'number' || !Number.isFinite(k) || !(typeof oi === 'number' && oi > 0)) continue;
+    if (typeof k !== 'number' || !Number.isFinite(k) || !(typeof oi === 'number' && Number.isFinite(oi) && oi > 0) || !['call', 'put'].includes(r.Type)) continue;
     distance.set(k, Math.abs(k - spot) / spot);
   }
   const sorted = [...distance.values()].sort((a, b) => a - b);
@@ -71,16 +71,16 @@ function computeAdaptiveOiSkew(rows, spot, params = ADAPTIVE_OI_SKEW_PARAMS) {
     return { ...base, ok: false, reason: 'insufficient_strikes', strikes_with_oi: sorted.length };
   }
   const nth = sorted[p.min_strikes - 1];
-  if (nth > p.cap_pct) {
+  if (nth > p.cap_pct + ADAPTIVE_OI_SKEW_TIE_EPS) {
     return { ...base, ok: false, reason: 'beyond_cap', strikes_with_oi: sorted.length, nth_distance: nth };
   }
-  const halfWidth = Math.max(p.floor_pct, nth);
+  const halfWidth = Math.min(p.cap_pct, Math.max(p.floor_pct, nth));
   let callOi = 0, putOi = 0;
   const inBand = new Set();
   for (const r of rows) {
     const k = r ? r.Strike : null;
     const oi = r ? r.OpenInterest : null;
-    if (typeof k !== 'number' || !Number.isFinite(k) || !(typeof oi === 'number' && oi > 0)) continue;
+    if (typeof k !== 'number' || !Number.isFinite(k) || !(typeof oi === 'number' && Number.isFinite(oi) && oi > 0) || !['call', 'put'].includes(r.Type)) continue;
     if (Math.abs(k - spot) / spot > halfWidth + ADAPTIVE_OI_SKEW_TIE_EPS) continue;
     inBand.add(k);
     if (r.Type === 'call') callOi += oi;
@@ -120,6 +120,7 @@ function createReferenceOiSkewMeter(symbol) {
           && chainSelection && chainSelection.symbol === symbol) {
         state.seq++;                                 // supersede any in-flight own fetch
         update(selected.data);
+        if (selected.error) noteFailure(selected.error);
         return;
       }
     } catch (_) { /* fall through to our own fetch */ }
@@ -170,12 +171,22 @@ function createReferenceOiSkewMeter(symbol) {
       + `snapshot ${_refSkewEtTime(raw.snapshot_ms)} · ${status}`;
     el('detail').textContent = raw.detail || '';
     root.title = raw.detail || '';
-    if (ADAPTIVE_OI_SKEW_SYMBOLS.includes(symbol)) renderAdaptive(raw, label);
+    if (ADAPTIVE_OI_SKEW_SYMBOLS.includes(symbol)) renderAdaptive(raw, label, nowMs);
   }
 
   // Adaptive block: same payload, same live/stale/closed/refresh-failed
   // availability as the published reading above it, never merged into it.
-  function renderAdaptive(raw, label) {
+  function renderAdaptive(raw, label, nowMs) {
+    // A published empty ±2% band can still have enough OI in the wider
+    // window. Its no_data status says nothing about the snapshot's age.
+    if (raw.availability === 'no_data') {
+      const age = raw.snapshot_ms == null ? null : nowMs - raw.snapshot_ms;
+      const freshness = state.payload?.market_readings?.find(r => r?.reading_id === 'reference_oi_skew')?.freshness?.status;
+      const availability = age == null || age > OI_SKEW_CLOSED_AFTER_MS ? 'closed'
+        : age > OI_SKEW_STALE_AFTER_MS || freshness !== 'live' || raw.refresh_failed ? 'stale' : 'live';
+      raw = { ...raw, availability };
+      label = REFERENCE_OI_SKEW_LABEL[availability];
+    }
     const box = document.getElementById(`${prefix}-adaptive-oi-skew`);
     if (!box) return;
     const a = (id) => document.getElementById(`${prefix}-adaptive-oi-skew-${id}`);

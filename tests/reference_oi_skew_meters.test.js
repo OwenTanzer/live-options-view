@@ -188,6 +188,16 @@ const near = (a, b) => Math.abs(a - b) < 1e-12;
   assert.equal(r.call_oi, 6); assert.equal(r.put_oi, 6);
   checks += 7;
 }
+{ // Decimal cap boundary must not reject an exactly 10% strike through float noise.
+  const r = computeAdaptiveOiSkew(chain([[30, 1, 1], [31, 1, 1], [32, 1, 1], [33.011, 1, 1]]), 30.01);
+  assert.equal(r.ok, true); assert.equal(r.half_width, 0.10); assert.equal(r.band_strikes, 4);
+  const invalid = chain([[39, 1, 1], [40, 1, 1], [41, 1, 1]]).concat([
+    { Strike: 42, Type: 'unknown', OpenInterest: 10 },
+    { Strike: 43, Type: 'call', OpenInterest: Infinity },
+  ]);
+  assert.equal(computeAdaptiveOiSkew(invalid, 40).ok, false);
+  checks += 4;
+}
 { // zero-OI strikes neither count toward coverage nor enter the band
   const rows = chain([[100, 0, 0], [100.5, 0, 0], [99, 5, 5], [101, 5, 5], [102, 5, 5], [106, 1, 7], [101.5, 0, 0]]);
   const r = computeAdaptiveOiSkew(rows, 100);
@@ -269,6 +279,17 @@ function ibitPayload(over = {}) {
   assert.equal(ad('value').textContent, '—');
   checks += 3;
 }
+{ // An empty published band must not hide the wider reading's snapshot age.
+  const { m, ad, e } = harness();
+  const p = ibitPayload();
+  p.market_readings[0].status.code = 'no_data';
+  p.market_readings[0].values = { ...p.market_readings[0].values, imbalance_ratio: null };
+  m.IBIT.update(p, NOW + 86400000);
+  assert.equal(e('IBIT', 'value').textContent, '—');
+  assert.equal(ad().dataset.state, 'closed');
+  assert.match(ad('meta').textContent, /session closed/);
+  checks += 3;
+}
 { // SPY never gets an adaptive reading, even with a thin chain
   const { m, ad } = harness();
   m.SPY.update({ ...payload('SPY', spyVals), rows: chain([[750, 1, 1], [751, 1, 1], [752, 1, 1], [800, 1, 0]]), underlying_price: 752 }, NOW);
@@ -310,6 +331,17 @@ function ibitPayload(over = {}) {
     assert.deepEqual(asked, ['IBIT']);
     assert.equal(e('SPY', 'value').textContent, '−0.307');
     checks += 2;
+  }
+  { // A selected chain's failed refresh must not relabel its cached snapshot live.
+    const selected = { data: payload('IBIT', ibitVals, { ts: new Date().toISOString() }), error: 'offline' };
+    const { m, e } = harness({ chainState: { IBIT: selected }, chainSelection: { symbol: 'IBIT' } });
+    await m.IBIT.refresh(async () => { throw new Error('must reuse selected cache'); });
+    assert.equal(e('IBIT', 'meter').dataset.state, 'stale');
+    assert.match(e('IBIT', 'meta').textContent, /refresh failed/);
+    selected.error = null;
+    await m.IBIT.refresh();
+    assert.equal(e('IBIT', 'meter').dataset.state, 'live');
+    checks += 3;
   }
   console.log(`reference_oi_skew_meters: ${checks} checks passed`);
 })().catch(e => { console.error(e); process.exit(1); });
