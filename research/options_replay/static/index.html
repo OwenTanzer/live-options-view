@@ -106,8 +106,18 @@ details summary { cursor: pointer; }
     <div class="grid">
       <section class="panel">
         <h2>QQQ · date hidden <span class="muted" id="spotnow"></span></h2>
-        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Five-minute candlesticks from observed spot prices"></svg>
-        <svg id="volume" style="height:50px" aria-label="Five-minute volume"></svg><small id="volume-label"></small>
+        <div class="controls">
+          <label>Candles <select id="candle-size">
+            <option value="auto">Auto</option><option value="1">1 min</option><option value="3">3 min</option>
+            <option value="5">5 min</option><option value="9">9 min</option>
+          </select></label>
+          <label>Show <select id="chart-span">
+            <option value="auto">Auto</option><option value="30">30 min</option><option value="60">1 hour</option>
+            <option value="120">2 hours</option><option value="all">Since open</option>
+          </select></label>
+        </div>
+        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Candlesticks from observed spot prices"></svg>
+        <svg id="volume" style="height:50px" aria-label="Volume by candle"></svg><small id="volume-label"></small>
         <div class="legend"><i></i> past stretches where trading was disabled (hover for the reason)</div>
         <div class="controls" style="margin-top:8px">
           <button id="play" title="Play / pause (space)">▶ Play</button>
@@ -344,16 +354,21 @@ function drawChart() {
   const svg = $("chart"), s = V.session;
   const width = Math.max(280, Math.round(svg.getBoundingClientRect().width)), height = 210;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  const bar = s.event_tape ? 60 : 300, points = V.reveal ? V.reveal.full_day_spot : V.spot.series;
+  const size = $("candle-size").value, span = $("chart-span").value;
+  const bar = 60 * (size === "auto" ? (s.event_tape ? 1 : 5) : Number(size));
+  const bucket = t => s.open_s + Math.floor((Math.max(t, s.open_s) - s.open_s) / bar) * bar;
+  const points = V.reveal ? V.reveal.full_day_spot : V.spot.series;
   const until = V.reveal ? s.close_s : s.clock_s;
-  const right = Math.floor(until / bar) * bar + bar;
-  const left = V.reveal ? s.open_s : Math.max(s.open_s, right - 24 * bar);
+  const right = bucket(until === s.close_s ? until - 1 : until) + bar;
+  const fromOpen = span === "all" || (span === "auto" && V.reveal);
+  const count = span === "auto" ? 24 : Math.ceil(Number(span) * 60 / bar);
+  const left = fromOpen ? s.open_s : Math.max(s.open_s, right - count * bar);
   const candles = new Map();
   const sampled = s.event_tape && V.sample_candles?.length;
   for (const row of (sampled ? V.sample_candles : points)) {
     const [t, price] = row;
     if (t < left || (!V.reveal && t > until) || !Number.isFinite(price)) continue;
-    const key = Math.floor((sampled ? Math.max(s.open_s,t-1) : t) / bar) * bar;
+    const key = bucket(sampled || t === s.close_s ? t - 1 : t);
     if (key < left) continue;
     const c = candles.get(key) || {open: price, high: price, low: price, close: price};
     c.high = Math.max(c.high, sampled ? row[2] : price); c.low = Math.min(c.low, sampled ? row[3] : price); c.close = sampled ? row[4] : price;
@@ -366,7 +381,7 @@ function drawChart() {
   const plotW = width - 54, plotH = height - 36;
   const x = t => 4 + plotW * (t - left) / Math.max(bar, right - left);
   const y = p => 10 + plotH * (top - p) / (top - bottom);
-  const candleW = Math.min(16, Math.max(1.5, (x(left + bar) - x(left)) * .68));
+  const candleW = Math.min(16, Math.max(.5, (x(left + bar) - x(left)) * .68));
   let g = "";
   for (const d of V.reveal ? V.reveal.full_day_dark : V.dark) {
     const a = Math.max(left, d.start), b = Math.min(right, d.end);
@@ -376,7 +391,8 @@ function drawChart() {
     const p = bottom + (top-bottom)*i/3;
     g += `<path d="M4 ${y(p)}h${plotW}" stroke="var(--line)"/><text x="${plotW+8}" y="${y(p)+4}" font-size="11" fill="var(--muted)">${p.toFixed(2)}</text>`;
   }
-  const interval = right-left > 7200 ? 3600 : (bar === 60 && !V.reveal ? 300 : 1800);
+  const minInterval = (right - left) * 55 / plotW;
+  const interval = [60, 300, 600, 900, 1800, 3600, 7200].find(n => n >= minInterval) || 10800;
   for (let t = Math.ceil(left/interval)*interval; t < right; t += interval)
     g += `<text x="${Math.max(18,x(t))}" y="205" text-anchor="middle" font-size="11" fill="var(--muted)">${hms(t).slice(0,5)}</text>`;
   for (const [t,c] of candles) {
@@ -396,7 +412,7 @@ function drawChart() {
   svg.innerHTML = g;
   const totals = new Map();
   for (const [time, qty] of (V.reveal?.full_day_volume || V.volume || [])) {
-    const t = Math.floor((s.mode === "simulation" || s.event_tape ? time - 1 : time) / bar) * bar;
+    const t = bucket(s.mode === "simulation" || s.event_tape || time === s.close_s ? time - 1 : time);
     if (t >= left && t < right) totals.set(t, (totals.get(t) || 0) + qty);
   }
   const maxVolume = Math.max(1, ...totals.values());
@@ -590,6 +606,7 @@ $("play").addEventListener("click", togglePlay);
 $("step").addEventListener("click", () => { pause(); step(); });
 $("skip5").addEventListener("click", () => skipMinutes(5));
 $("speed").addEventListener("change", () => { if (playing) { pause(); play(); } });
+for (const id of ["candle-size", "chart-span"]) $(id).addEventListener("change", () => V && drawChart());
 $("width").addEventListener("change", () => V && render());
 $("center").addEventListener("click", () => { anchor = null; V && render(); });
 $("reset").addEventListener("click", reset);
