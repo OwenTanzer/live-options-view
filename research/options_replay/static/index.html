@@ -355,7 +355,7 @@ function render() {
   $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : V.spot.last != null ? `· last consistent ${px(V.spot.last)}` : "";
   const r = V.rules;
   $("rules").textContent = `Buy at ${sim ? "generated" : "archived"} ask · sell at ${sim ? "generated" : "archived"} bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier}`;
-  $("pace").textContent = s.event_tape ? "1-minute candles from 5-second QQQ tape observations. Quotes refresh from archived bid/ask events. Playback starts at real time." : `5-minute candles from ${sim ? "generated" : "recorded"} spot samples. Playback starts at real time.`;
+  $("pace").textContent = s.event_tape ? "Five-second QQQ tape observations. Quotes refresh from archived bid/ask events. Playback starts at real time." : `${sim ? "Generated" : "Recorded"} spot samples. Playback starts at real time.`;
   const b = $("banner");
   if (q.status === "disabled" && !s.revealed) {
     b.className = "banner on";
@@ -438,18 +438,20 @@ function drawChart() {
     <rect x="${plotW+4}" y="${priceY-9}" width="49" height="18" rx="3" fill="#302b1d"/>
     <text x="${plotW+28.5}" y="${priceY+4}" text-anchor="middle" font-size="12" font-weight="700" fill="#ffdf60">${px(lastPrice)}</text></g>`;
   svg.innerHTML = g;
+  const volumeBar = s.mode === "simulation" ? 300 : bar;
+  const volumeWidth = Math.min(16, Math.max(.5, (x(left + volumeBar) - x(left)) * .68));
   const totals = new Map();
   for (const [time, qty] of (V.reveal?.full_day_volume || V.volume || [])) {
-    const t = bucket(s.mode === "simulation" || s.event_tape || time === s.close_s ? time - 1 : time);
+    const t = s.mode === "simulation" ? time - volumeBar : bucket(s.event_tape || time === s.close_s ? time - 1 : time);
     if (t >= left && t < right) totals.set(t, (totals.get(t) || 0) + qty);
   }
   const maxVolume = Math.max(1, ...totals.values());
   $("volume").setAttribute("viewBox", `0 0 ${width} 50`);
   $("volume").innerHTML = [...totals].map(([t, qty]) => {
     const h = 46 * qty / maxVolume;
-    return `<rect x="${x(t+bar/2)-candleW/2}" y="${49-h}" width="${candleW}" height="${h}" fill="var(--accent)"><title>${hms(t)} · ${qty.toLocaleString()} ${V.volume_unit}</title></rect>`;
+    return `<rect x="${x(t+volumeBar/2)-volumeWidth/2}" y="${49-h}" width="${volumeWidth}" height="${h}" fill="var(--accent)"><title>${hms(t)} · ${qty.toLocaleString()} ${V.volume_unit}</title></rect>`;
   }).join("");
-  $("volume-label").textContent = totals.size ? (bar / 60) + "-minute volume · " + V.volume_unit : "Volume unavailable for this interval";
+  $("volume-label").textContent = totals.size ? (volumeBar / 60) + "-minute volume · " + V.volume_unit : "Volume unavailable for this interval";
 }
 
 // Strip: anchored so rows don't jump under the cursor; re-centers only when spot leaves the middle half.

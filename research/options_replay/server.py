@@ -295,7 +295,7 @@ def make_handler(games: Games, allow_faults: bool = False):
     warm = OrderedDict()
     workspace_lock = threading.Lock()
 
-    def workspace(key):
+    def workspace(key, create=False):
         if key is None:
             return games
         if not re.fullmatch(r"[0-9a-f]{64}", key):
@@ -304,6 +304,8 @@ def make_handler(games: Games, allow_faults: bool = False):
             selected = active.get(key)
             if selected is None:
                 path = games.store.path.parent / "browsers" / (key + ".sqlite3")
+                if not create and not path.is_file():
+                    return None
                 selected = Games(games.arc, games.pool, games.fee, None, store=TrainerStore(path))
                 selected.sim, selected.sim_lock = games.sim, games.sim_lock
                 selected._pick_pack, selected.prefetch = games._pick_pack, games.prefetch
@@ -313,6 +315,8 @@ def make_handler(games: Games, allow_faults: bool = False):
             if len(warm) > 32:
                 warm.popitem(last=False)
             return selected
+
+    root_games = games
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "OptionsReplay/1"
@@ -376,7 +380,16 @@ def make_handler(games: Games, allow_faults: bool = False):
                     return self._send(200, (HERE.parents[1] / "site/shared/format.js").read_bytes(), "text/javascript")
                 if url.path in ("/", "/index.html"):
                     return self._send(200, page, "text/html; charset=utf-8")
+                if url.path == "/api/health":
+                    return self._send(200, {"event_days": len(list((root_games.arc.cache_dir / "event_tape").glob("*.json.gz"))), "ok": True, "pool": len(root_games.pool),
+                                            "refused": len(root_games.refused), "faults": allow_faults})
                 games = workspace(self.headers.get("X-Practice-Workspace"))
+                if games is None:
+                    if url.path == "/api/sessions":
+                        return self._send(200, {"sessions": []})
+                    if url.path == "/api/records":
+                        return self._send(200, {"store": "this browser", "trades": []})
+                    return self._send(404, {"error": "unknown session or record"})
                 if url.path == "/api/view":
                     return self._send(200, games.get(qs.get("s", [""])[0]).view())
                 if url.path in ("/api/records", "/api/trade", "/api/sessions") and games.store is None:
@@ -394,9 +407,6 @@ def make_handler(games: Games, allow_faults: bool = False):
                         live = set(games.sessions)
                     return self._send(200, {"sessions": [{**x, "in_memory": x["session_id"] in live}
                                                          for x in games.store.sessions()]})
-                if url.path == "/api/health":
-                    return self._send(200, {"event_days": len(list((games.arc.cache_dir / "event_tape").glob("*.json.gz"))), "ok": True, "pool": len(games.pool),
-                                            "refused": len(games.refused), "faults": allow_faults})
                 return self._send(404, {"error": "not found"})
             except ReplayError as e:
                 return self._send(404, {"error": str(e)})
@@ -411,8 +421,10 @@ def make_handler(games: Games, allow_faults: bool = False):
             s = None
             fault = self._fault()
             try:
-                self.workspace = games = workspace(self.headers.get("X-Practice-Workspace"))
                 data = self._body()
+                self.workspace = games = workspace(self.headers.get("X-Practice-Workspace"), create=url.path == "/api/new")
+                if games is None:
+                    raise ReplayError("unknown practice session")
                 if url.path == "/api/note":
                     if games.store is None:
                         return self._send(503, {"error": "no trainer store"})

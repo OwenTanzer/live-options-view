@@ -1,5 +1,7 @@
 import http.client
 import hashlib
+import hmac
+import os
 import re
 import secrets
 from http.cookies import SimpleCookie
@@ -9,6 +11,19 @@ from urllib.parse import urlsplit
 
 token = Path("release-invite").read_text().strip()
 cookie = Path("release-cookie").read_text().strip()
+keyfile = Path("browser-signing-key")
+if not keyfile.exists():
+    with os.fdopen(os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
+        out.write(secrets.token_bytes(32))
+signing_key = keyfile.read_bytes()
+if len(signing_key) != 32:
+    raise RuntimeError("Invalid browser signing key")
+legacy_file = Path("legacy-workspaces")
+legacy_workspaces = set(legacy_file.read_text().splitlines()) if legacy_file.exists() else set()
+
+def signed_browser(identity):
+    return identity + "." + hmac.digest(signing_key, identity.encode(), "sha256").hex()
+
 landing = b"""<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Options Trainer</title><p id="status">Opening Options Trainer...</p><script>
 const token=location.hash.slice(1);
 history.replaceState(null,"","/open");
@@ -59,10 +74,16 @@ class Gateway(BaseHTTPRequestHandler):
         legacy = c.get("__Host-trainer")
         if not legacy or not secrets.compare_digest(legacy.value, cookie):
             browser = c.get("__Host-practice")
-            if browser and re.fullmatch(r"[0-9a-f]{64}", browser.value):
-                identity = browser.value
+            value = browser.value if browser else ""
+            identity = value.split(".", 1)[0]
+            valid_id = re.fullmatch(r"[0-9a-f]{64}", identity)
+            if valid_id and re.fullmatch(r"[0-9a-f]{64}\.[0-9a-f]{64}", value) and secrets.compare_digest(value, signed_browser(identity)):
+                pass
+            elif valid_id and value == identity and hashlib.sha256(identity.encode()).hexdigest() in legacy_workspaces:
+                self.new_browser = signed_browser(identity)
             elif not post and self.path in ("/", "/spy/"):
-                self.new_browser = identity = secrets.token_hex(32)
+                identity = secrets.token_hex(32)
+                self.new_browser = signed_browser(identity)
             else:
                 return self.reply(403)
             headers["X-Practice-Workspace"] = hashlib.sha256(identity.encode()).hexdigest()
