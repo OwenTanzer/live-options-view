@@ -22,6 +22,7 @@ import argparse
 import json
 import random
 import re
+import secrets
 import sys
 import threading
 from http import HTTPStatus
@@ -35,6 +36,7 @@ import archive as A  # noqa: E402
 from engine import (DEFAULT_FEE, DwellError, NotSavedError, ReplayError, ReplaySession,  # noqa: E402
                     StaleError, hhmmss, label)
 from store import ConflictError, StoreError, TrainerStore, body_digest  # noqa: E402
+import simulate  # noqa: E402
 
 MAX_BODY = 4096
 
@@ -57,6 +59,8 @@ class Games:
         self._prefetched: tuple[str, dict] | None = None
         self._prefetching = False
         self.locks: dict[str, threading.RLock] = {}
+        self.sim = simulate.Simulator(arc.cache_dir)
+        self.sim_lock = threading.Lock()
 
     def _keys(self, yyyymmdd: str) -> list[str]:
         if self.index is None:
@@ -118,6 +122,20 @@ class Games:
 
     # -- session wiring -----------------------------------------------------
 
+    def _raw_lookup(self, pack: dict):
+        if pack.get("mode") == "simulation":
+            seed = pack["sim"]["seed"]
+            return lambda key, c: self._sim_raw(seed, key, c)
+        return lambda key, c: A.raw_quote(self.arc, key, c)
+
+    def _sim_raw(self, seed, key, c):
+        with self.sim_lock:
+            return self.sim.raw_quote(seed, key, c)
+
+    def _sim_pack(self, seed: int) -> dict:
+        with self.sim_lock:
+            return self.sim.generate(seed)
+
     def _make(self, pack: dict, *, start_s=None, session_id=None, fee=None) -> ReplaySession:
         store = self.store
 
@@ -139,15 +157,25 @@ class Games:
         return ReplaySession(pack, rng=self.rng, fee_per_contract_side=self.fee if fee is None else fee,
                              start_s=start_s, session_id=session_id,
                              journal_dir=self.arc.cache_dir / "journals",
-                             raw_lookup=lambda key, c: A.raw_quote(self.arc, key, c),
+                             raw_lookup=self._raw_lookup(pack),
                              on_fill=on_fill if store else None,
                              on_reveal=(lambda sess: store.mark_revealed(sess.id)) if store else None,
                              on_state=on_state if store else None,
                              on_void=on_void if store else None)
 
-    def new(self) -> ReplaySession:
-        pack = self._pick_pack()
-        session = self._make(pack, start_s=self.force_start)
+    def new(self, mode: str = "replay", seed=None) -> ReplaySession:
+        if mode == "simulation":
+            if seed is None:
+                seed = secrets.randbelow(2 ** 31)
+            pack = self._sim_pack(int(seed))
+            start = self.force_start if self.force_start is not None else pack["open_s"] + 900 + \
+                (int(seed) % ((pack["close_s"] - 3600 - pack["open_s"] - 900) // 60)) * 60
+        elif mode == "replay":
+            pack = self._pick_pack()
+            start = self.force_start
+        else:
+            raise ReplayError("mode must be replay or simulation")
+        session = self._make(pack, start_s=start)
         if self.store:
             self.store.add_session(session.id, pack["day"], session.start_s, session.fee)
         with self.lock:
@@ -161,7 +189,16 @@ class Games:
         row = self.store.session_row(sid) if self.store else None
         if row is None:
             raise ReplayError("unknown session")
-        pack = self._load(row["day"])
+        label = simulate.parse_sim_label(row["day"])
+        if label:
+            if label["generator_version"] != simulate.GENERATOR_VERSION:
+                raise ReplayError(f"generated with {label['generator_version']}; this server runs "
+                                  f"{simulate.GENERATOR_VERSION}")
+            pack = self._sim_pack(label["seed"])
+            if not pack["day"].endswith(label["inputs_digest_prefix"]):
+                raise ReplayError("simulation inputs changed since this session was generated")
+        else:
+            pack = self._load(row["day"])
         if pack is None:
             raise ReplayError("this session's day can no longer be loaded")
         session = self._make(pack, start_s=row["start_s"], session_id=sid, fee=row["fee"])
@@ -353,7 +390,14 @@ def make_handler(games: Games, allow_faults: bool = False):
                         return
                     return self._send(200, ack)
                 if url.path == "/api/new":
-                    return self._send(200, games.new().view())
+                    seed = data.get("seed")
+                    if seed not in (None, ""):
+                        seed = int(seed)
+                        if not 0 <= seed < 2 ** 63:
+                            raise ReplayError("seed out of range")
+                    else:
+                        seed = None
+                    return self._send(200, games.new(str(data.get("mode") or "replay"), seed).view())
                 sid = str(data.get("s", ""))
                 s = games.get(sid)
                 with games.lock_for(sid):

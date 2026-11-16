@@ -89,10 +89,16 @@ details summary { cursor: pointer; }
     <span class="chip" id="qstatus">no session</span>
     <span class="muted" id="attempt"></span>
     <span style="flex:1"></span>
-    <button id="new" class="primary">New random day</button>
+    <select id="mode" aria-label="Mode">
+      <option value="replay" selected>Replay: historical day, date hidden</option>
+      <option value="simulation">Simulation: generated day</option>
+    </select>
+    <input id="seed" placeholder="seed (optional)" inputmode="numeric" style="width:120px;font:inherit;padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)" hidden>
+    <button id="new" class="primary">New session</button>
   </header>
   <div id="msg" role="status" aria-live="polite"></div>
   <div id="saves" aria-live="polite"></div>
+  <div id="simbanner" class="banner"></div>
   <div id="game" style="display:none">
     <div class="banner" id="banner" role="alert"></div>
     <div class="grid">
@@ -143,7 +149,7 @@ details summary { cursor: pointer; }
     <div id="sesslist" style="margin-bottom:8px"></div>
     <div id="reclist" class="muted">Loading from storage…</div>
   </section>
-  <div id="idle" class="loading muted">Press <b>New random day</b> to land in a random historical session.
+  <div id="idle" class="loading muted">Choose <b>Replay</b> (a random historical day, date hidden) or <b>Simulation</b> (a generated day from a recorded seed), then press <b>New session</b>.
     <br><span style="font-size:12px">Keys: <kbd>space</kbd> play/pause · <kbd>→</kbd> step one bar · <kbd>c</kbd> center strip</span></div>
 </main>
 <script>
@@ -208,7 +214,8 @@ function say(text) { $("msg").textContent = text || ""; }
 async function newDay() {
   pause(); say("Loading a random qualified day… (a day's first load downloads its snapshots)");
   $("new").disabled = true;
-  try { V = await api("/api/new", {}); S = V.session.id; remember(S); anchor = null; lastMove = 0; lastFillCount = -1; openNotes = new Set(); say(""); render(); }
+  const mode = $("mode").value, seed = $("seed").value.trim();
+  try { V = await api("/api/new", { mode, seed: mode === "simulation" && seed ? seed : null }); S = V.session.id; remember(S); anchor = null; lastMove = 0; lastFillCount = -1; openNotes = new Set(); say(""); render(); }
   catch (e) { say("Could not start: " + e.message); }
   finally { $("new").disabled = false; }
 }
@@ -289,6 +296,11 @@ function render() {
   $("idle").style.display = "none"; $("game").style.display = "";
   const s = V.session, q = V.quotes, done = s.closed || s.revealed;
   $("clock").textContent = s.time_of_day;
+  const sim = s.mode === "simulation" ? s.simulation : null, sb = $("simbanner");
+  if (sim) { sb.className = "banner on"; sb.innerHTML = `<b>SIMULATION: a generated session, not a historical day.</b> Seed ${sim.seed} · generator ${esc(sim.generator_version)} · inputs ${esc(sim.inputs_digest)} ·
+      <b>provisional quotes</b> (model output, not recorded market quotes; calibration is S3b, pricing checks S3c). The same seed regenerates the same path and quotes.`; }
+  else sb.className = "banner";
+  document.querySelector("section.panel h2").firstChild.textContent = sim ? "Generated QQQ path (simulation) " : "QQQ · date hidden ";
   const rem = s.seconds_to_close;
   $("remaining").textContent = s.closed ? "market closed" : `${Math.floor(rem / 3600)}h ${String(Math.floor(rem % 3600 / 60)).padStart(2, "0")}m to close`;
   $("qstatus").textContent = s.revealed ? "revealed" : q.status === "live" ? "quotes live" : "trading disabled";
@@ -397,7 +409,13 @@ function renderReveal() {
   if (!V.reveal) { box.className = "panel"; box.innerHTML = ""; return; }
   const r = V.reveal;
   box.className = "panel on";
-  box.innerHTML = `<h2>Revealed</h2><div class="big">${esc(r.weekday)}, ${esc(r.date)}</div>
+  const simInfo = r.mode === "simulation" ? r.simulation : null;
+  box.innerHTML = (simInfo ? `<h2>Revealed: simulation</h2><div class="big">Generated session · seed ${simInfo.seed} · ${esc(simInfo.generator_version)}</div>
+    <p class="muted">Not a historical day. Mechanism: ${esc(simInfo.mechanism)}. Calibration: ${simInfo.calibration.historical_sessions} real 5-minute sessions,
+    ${simInfo.calibration.donor_days} EOD donor chains (this day's donor: ${esc(simInfo.donor_day)}), ${simInfo.calibration.r2_objects} R2 objects; inputs digest ${esc(simInfo.inputs_digest.slice(0, 16))}…, pack sha256 ${esc(simInfo.pack_sha256.slice(0, 16))}….
+    Parity residual of the generated quotes: median $${(simInfo.parity_residual_usd.median ?? 0).toFixed(3)}, p95 $${(simInfo.parity_residual_usd.p95 ?? 0).toFixed(3)}.</p>
+    <p class="muted">Known limitations: ${simInfo.limitations.map(esc).join(" ")}</p>`
+    : `<h2>Revealed</h2><div class="big">${esc(r.weekday)}, ${esc(r.date)}</div>`) + `
     <p>You landed at ${esc(r.start_time)}. Net profit after fees: <b class="${cls(r.net_profit)}">${money(r.net_profit)}</b>.
     The dashed line is the rest of the day; shaded bands are every stretch where trading was disabled.</p>
     <h2>Reconciliation</h2>${reconTable(r.reconciliation)}
@@ -482,7 +500,7 @@ async function loadSessions() {
     let last = null; try { last = localStorage.getItem("optionsReplay.lastSession"); } catch (e) { /* none */ }
     const open = r.sessions.filter((x) => !x.revealed && x.session_id !== S);
     $("sesslist").innerHTML = open.length ? `<b>Unfinished sessions</b> (date hidden; resume to finish or reveal):` + open.slice().reverse().map((x) =>
-      `<div class="rec"><code>${esc(x.session_id)}</code>${x.session_id === last ? " · <b>last played here</b>" : ""} · clock ${esc(x.clock)} ET · attempt ${x.attempt} · ${x.trades} trade${x.trades === 1 ? "" : "s"}
+      `<div class="rec"><code>${esc(x.session_id)}</code> · ${x.mode === "simulation" ? `simulation seed ${x.simulation.seed}` : "replay"}${x.session_id === last ? " · <b>last played here</b>" : ""} · clock ${esc(x.clock)} ET · attempt ${x.attempt} · ${x.trades} trade${x.trades === 1 ? "" : "s"}
        <button class="sm" data-resume="${esc(x.session_id)}">Resume</button></div>`).join("") : "";
     $("sesslist").querySelectorAll("[data-resume]").forEach((b) => b.addEventListener("click", () => resume(b.dataset.resume)));
   } catch (e) { $("sesslist").textContent = "Could not list saved sessions: " + e.message; }
@@ -493,7 +511,7 @@ async function loadRecords() {
     const r = await api("/api/records");
     $("recwhere").textContent = "· " + r.store;
     $("reclist").innerHTML = r.trades.length ? r.trades.slice().reverse().map((t) => `<div class="rec">
-      <code>${esc(t.trade_id)}</code> · ${esc(t.contract)} · ${t.status} · ${t.revealed ? `${esc(t.weekday)} ${esc(t.day)}` : "date hidden until reveal"}
+      <code>${esc(t.trade_id)}</code> · ${esc(t.contract)} · ${t.status} · ${t.mode === "simulation" ? `simulation seed ${t.simulation.seed} (${esc(t.simulation.generator_version)})` : t.revealed ? `${esc(t.weekday)} ${esc(t.day)}` : "date hidden until reveal"}
       · gross ${money(t.gross_premium)} · fees ${money(t.fees)} · net ${t.net == null ? "open" : money(t.net)}
       ${t.note && t.note.current ? `<br><span class="muted">note rev ${t.note.current.rev}: ${esc(t.note.current.text.slice(0, 140))}</span>` : ""}
       <details><summary class="muted">fills and decision-time state</summary>${t.fills.map((f) => `<div style="margin:4px 0">
@@ -506,6 +524,7 @@ $("reload-recs").addEventListener("click", loadRecords);
 loadRecords();
 
 $("new").addEventListener("click", newDay);
+$("mode").addEventListener("change", () => { $("seed").hidden = $("mode").value !== "simulation"; });
 $("play").addEventListener("click", togglePlay);
 $("step").addEventListener("click", () => { pause(); step(); });
 $("skip5").addEventListener("click", () => skipMinutes(5));

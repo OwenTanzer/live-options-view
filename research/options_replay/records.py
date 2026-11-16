@@ -45,7 +45,9 @@ def main() -> int:
         return 0
     if args.cmd == "sessions":
         for x in store.sessions():
-            print(f"{x['session_id']}  {'revealed ' + x['day'] if x['revealed'] else 'UNREVEALED (date hidden)'}  "
+            kind = (f"simulation seed {x['simulation']['seed']}" if x["simulation"] else
+                    ("revealed " + x["day"] if x["revealed"] else "UNREVEALED (date hidden)"))
+            print(f"{x['session_id']}  {kind}{' (revealed)' if x['simulation'] and x['revealed'] else ''}  "
                   f"clock {x['clock']}  attempt {x['attempt']}  trades {x['trades']}  fills {x['fills']}")
         return 0
     if args.cmd == "requests":
@@ -62,7 +64,8 @@ def main() -> int:
         note = r["note"]["current"] if r["note"] else None
         print(f"{r['trade_id']}  session {r['session_id']}  attempt {r['attempt']}  {r['contract']}  "
               f"{r['status']}  fills {len(r['fills'])}  gross {r['gross_premium']}  fees {r['fees']}  "
-              f"net {r['net']}  day {r['day'] or '(hidden)'}  "
+              f"net {r['net']}  "
+              f"{'simulation seed ' + str(r['simulation']['seed']) + ' ' + r['simulation']['generator_version'] if r['simulation'] else 'day ' + (r['day'] or '(hidden)')}  "
               f"note {'rev ' + str(note['rev']) if note else '-'}  "
               f"voided fills {sum(1 for f in r['fills'] if f['voided'])}")
     return 0

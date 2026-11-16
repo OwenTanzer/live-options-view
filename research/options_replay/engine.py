@@ -249,6 +249,11 @@ class ReplaySession:
                 "attempt": len(self.attempts) + 1,
                 "has_next_bar": nxt is not None or self.clock < self.close_s,
                 "min_dwell_ms": int(MIN_DWELL_S * 1000),
+                "mode": self.pack.get("mode", "replay"),
+                "simulation": ({"seed": self.pack["sim"]["seed"],
+                                "generator_version": self.pack["sim"]["generator_version"],
+                                "inputs_digest": self.pack["sim"]["inputs_digest"][:12],
+                                "pricing": "provisional"} if self.pack.get("mode") == "simulation" else None),
             },
             "quotes": {"status": "disabled" if code else "live", "code": code, "reason": short,
                        "detail": detail, "age_s": age,
@@ -604,9 +609,12 @@ class ReplaySession:
         v = self.view()
         full = [[s["t"], s["spot"]] for s in self.snaps
                 if s["ok"] and self.open_s - 300 <= s["t"] <= self.close_s]
+        sim = self.pack.get("mode") == "simulation"
         v["reveal"] = {
-            "date": self.pack["day"],
-            "weekday": _date.fromisoformat(self.pack["day"]).strftime("%A"),
+            "mode": "simulation" if sim else "replay",
+            "simulation": self.pack.get("sim") if sim else None,
+            "date": None if sim else self.pack["day"],
+            "weekday": None if sim else _date.fromisoformat(self.pack["day"]).strftime("%A"),
             "start_time": hhmmss(self.start_s) + " ET",
             "full_day_spot": full,
             "full_day_dark": self.dark_stretches(self.close_s),

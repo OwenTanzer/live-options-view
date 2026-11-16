@@ -744,5 +744,108 @@ class S2cRecovery(unittest.TestCase):
         self.assertEqual(w["fills"], [])
 
 
+class SimulationMode(unittest.TestCase):
+    """S3a: a generated day is tradable, labelled as simulation, reproducible by seed, recoverable."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.servers = []
+
+    def tearDown(self):
+        for h, g in self.servers:
+            h.shutdown(); h.server_close(); g.store.close()
+
+    class FakeSim:
+        """Deterministic stand-in for simulate.Simulator (no R2): seed -> drift."""
+        digest = "f" * 64
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, seed):
+            self.calls += 1
+            p = minute_pack(drift=0.01 * (seed % 7 + 1))
+            for sn in p["snapshots"]:
+                sn["key"] = f"sim/sim-v1/{seed}/{sn['t'] // 3600:02d}{sn['t'] % 3600 // 60:02d}"
+            p.update({"mode": "simulation", "day": f"SIM:sim-v1:{seed}:{self.digest[:12]}",
+                      "sim": {"seed": seed, "generator_version": "sim-v1", "inputs_digest": self.digest,
+                              "pack_sha256": "a" * 64, "donor_day": "2025-10-09", "mechanism": "test",
+                              "limitations": ["provisional"], "calibration": {"historical_sessions": 1,
+                              "donor_days": 1, "r2_objects": 1}, "parity_residual_usd": {"median": 0, "p95": 0}}})
+            return p
+
+        def raw_quote(self, seed, key, c):
+            for sn in self.generate(seed)["snapshots"]:
+                if sn["key"] == key:
+                    b, a = sn["q"][c]
+                    return {"key": key, "OptionSymbol": "SIM " + c, "Bid": b, "Ask": a, "UnderlyingPrice": sn["spot"]}
+
+    def boot(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        import server as srv
+        from store import TrainerStore
+        g = srv.Games(A.Archive(self.tmp / "cache"), [DAY], 0.65, 1, force_start=OPEN + 3600,
+                      store=TrainerStore(self.tmp / "t.sqlite3"))
+        g.sim = self.FakeSim()
+        g._load = lambda day: minute_pack(drift=0.05)
+        h = ThreadingHTTPServer(("127.0.0.1", 0), srv.make_handler(g))
+        threading.Thread(target=h.serve_forever, daemon=True).start()
+        self.servers.append((h, g))
+        return g, f"http://127.0.0.1:{h.server_address[1]}"
+
+    def test_simulated_trade_is_labelled_reproducible_and_recoverable(self):
+        call = S2cRecovery.call
+        g, base = self.boot()
+        _, v = call(base, "/api/new", {"mode": "simulation", "seed": 42})
+        sid = v["session"]["id"]
+        g.sessions[sid].now = FakeClock()
+        self.assertEqual(v["session"]["mode"], "simulation")
+        self.assertEqual(v["session"]["simulation"]["seed"], 42)
+        self.assertEqual(v["session"]["simulation"]["pricing"], "provisional")
+        _, b = call(base, "/api/order", {"s": sid, "side": "buy", "contract": "C700", "qty": 1,
+                                         "request_id": "sim-buy-0001", "expected_clock": v["session"]["clock_s"]})
+        _, a = call(base, "/api/advance", {"s": sid, "seconds": 600, "max_bars": None,
+                                           "expected_clock": b["session"]["clock_s"]})
+        _, sv = call(base, "/api/order", {"s": sid, "side": "sell", "contract": "C700", "qty": 1,
+                                          "request_id": "sim-sell-001", "expected_clock": a["session"]["clock_s"]})
+        rec = g.store.trades(session_id=sid)[0]
+        self.assertEqual((rec["mode"], rec["simulation"]["seed"], rec["status"]), ("simulation", 42, "closed"))
+        h, gg = self.servers.pop(); h.shutdown(); h.server_close(); gg.store.close()
+        g2, base2 = self.boot()                       # fresh server: resume regenerates from the seed
+        _, w = call(base2, "/api/resume", {"s": sid})
+        self.assertEqual(w["account"], sv["account"])
+        self.assertEqual(w["session"]["simulation"]["seed"], 42)
+        _, rv = call(base2, "/api/reveal", {"s": sid})
+        r = rv["reveal"]
+        self.assertEqual((r["mode"], r["date"], r["weekday"]), ("simulation", None, None))
+        self.assertEqual(r["simulation"]["seed"], 42)
+        rc = r["reconciliation"]
+        self.assertTrue(rc["reconciles"])
+        self.assertTrue(all(l["raw_matches"] for l in rc["lines"]))   # regenerated quotes match the fills
+
+    def test_resume_refuses_changed_simulation_inputs(self):
+        call = S2cRecovery.call
+        g, base = self.boot()
+        _, v = call(base, "/api/new", {"mode": "simulation", "seed": 7})
+        sid = v["session"]["id"]
+        h, gg = self.servers.pop(); h.shutdown(); h.server_close(); gg.store.close()
+        g2, base2 = self.boot()
+        g2.sim.digest = "0" * 64
+        code, r = call(base2, "/api/resume", {"s": sid})
+        self.assertEqual(code, 409)
+        self.assertIn("inputs changed", r["error"])
+
+    def test_replay_mode_unchanged_and_bad_mode_refused(self):
+        call = S2cRecovery.call
+        g, base = self.boot()
+        _, v = call(base, "/api/new", {})
+        self.assertEqual(v["session"]["mode"], "replay")
+        self.assertIsNone(v["session"]["simulation"])
+        code, r = call(base, "/api/new", {"mode": "fantasy"})
+        self.assertEqual(code, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -138,6 +138,39 @@ python research/options_replay/records.py list --store research/options_replay/.
 python research/options_replay/records.py requests --store research/options_replay/.cache/s2c_cases.sqlite3
 ```
 
+## Simulation mode (S3a)
+
+Choose **Simulation** (optionally with a seed) instead of **Replay**. The page shows a
+persistent *SIMULATION: a generated session, not a historical day* banner with the seed,
+generator version and inputs digest. Pacing, saving, recovery and resume behave exactly
+as in Replay; simulated sessions are stored as `SIM:<generator>:<seed>:<inputs>` and are
+never shown with a date.
+
+- **Mechanism** (`simulate.py`, reusing `research/synthetic_days`): moving block bootstrap
+  of real QQQ 5-minute returns (30-minute blocks from the same time-of-day position),
+  upsampled to 60 s with a range-scaled Brownian bridge. Option quotes are intrinsic plus a
+  donor end-of-day 0DTE chain's extrinsic value at the nearest moneyness, scaled by a
+  time-of-day × moneyness decay grid and a spread ramp measured from collector intraday
+  snapshots.
+- **Calibration source** (read-only R2): `history/QQQ/5/2023-2026` (830 sessions), 80 evenly
+  spaced `history/QQQ/options_0dte` donor days, and 15 intraday days × 30 snapshots. Every
+  object used is listed with its SHA-256 in `.cache/sim_inputs/inputs_manifest.json`, and the
+  inputs are frozen in `frozen_inputs.pkl` (hash-checked).
+- **Reproducibility:** seed + `GENERATOR_VERSION` (`sim-v1`) + inputs digest → the identical
+  path and quotes (`pack_sha256`). Resume regenerates from the seed and refuses if the
+  inputs or version changed. At reveal, every fill is checked against an independent
+  regeneration of its quote.
+- **Provisional pricing.** A comparison over 20 seeds and the cached recorded days
+  (`python research/options_replay/simulate.py --compare-recorded`) puts generated ATM
+  straddles at about 0.36-0.56× recorded levels with ~4-5× wider spreads. Calls and puts
+  are priced independently, so parity is not enforced, and one donor chain sets the
+  whole day's smile. Empirical decay calibration is S3b; pricing/spread checks are S3c.
+
+```sh
+python research/options_replay/simulate.py --seed 20261115     # identity of one generated day
+python research/options_replay/simulate.py --compare-recorded   # provisional-pricing gap
+```
+
 ## Tests
 
 ```sh
