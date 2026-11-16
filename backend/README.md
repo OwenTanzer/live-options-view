@@ -63,12 +63,30 @@ only marked as having left the source after a complete scan.
 | `GET /api/trade-journal?date=YYYY-MM-DD` | session + viewer | Positions with an execution on that America/New_York date, unsupported rows dated that day, totals, sync status |
 | `GET /api/trade-journal/row?page_id=` | session + viewer | One stored row, with `source_last_edited` (Notion) and `app_read_at` |
 | `POST /api/trade-journal/sync` | session + viewer + origin | Reads Notion and updates D1. Writes are paused by the cutover fence like the other mutating routes |
+| `GET /api/trade-journal/context?position_id=` | session + viewer | Underlying and exact-option series for one position's window, read from existing R2 archives ([`trade-journal-context.js`](trade-journal-context.js)) |
 
-Each sync makes at most 20 query pages, 35 body requests (+10 so the last body
-can finish its pages) and 5 removal checks. Rows left over are reported as
-`deferred` and finished by the next sync. Notion reports `last_edited_time` to
-the minute, so a row is re-read until one read lands a full minute past its
-edit minute.
+A scan pages through the whole data source in a stable order (creation
+time), reads the body of every new or changed row, and only then checks rows
+that were not listed. Each sync does at most 20 query pages, 35 body requests
+(+10 so the last body can finish its pages) and 5 removal checks. The query
+cursor and the listed-but-unread rows are saved (`trade_journal_sync`,
+`trade_journal_scan`), so the next sync resumes exactly where this one stopped.
+A cursor Notion refuses restarts the scan, and the summary says so. Rows whose
+removal could not be checked are flagged `missing_unverified` and re-checked on
+the next finished scan. Nested blocks are read down to 6 levels; a deeper body
+marks the row unsupported instead of being cut silently. Notion reports
+`last_edited_time` to the minute, so a row is re-read until one read lands a
+full minute past its edit minute.
+
+A position that is not flat reports `open_qty`, `open_cost_basis`, fees paid
+and `realized_gross_pnl` on any closed part. Its `gross_pnl`/`net_pnl` are
+null, and the day totals keep it out of realised gross and net.
+
+Market context: QQQ and SPY come from the intraday chain snapshots (listed from
+the window start, at most 40 read, 1-in-N sampled and labelled). IBIT comes
+from the Tradier archive parts uploaded in the window (at most 15). Other
+underlyings return explicit coverage gaps. Results for finished sessions are
+cached in `trade_journal_context`.
 
 Settings this needs before it can serve (names only; values are operator-managed):
 
@@ -76,8 +94,10 @@ Settings this needs before it can serve (names only; values are operator-managed
 |---|---|---|
 | `NOTION_TRADE_JOURNAL_TOKEN` | Worker secret on `live-options-api` | Token of a Notion internal integration with only the **Read content** capability, connected only to the Trade Retrospectives database |
 | `TRADE_JOURNAL_VIEWERS` | `[vars]` on `live-options-api` | Comma-separated usernames allowed to view. Unset means nobody |
-| `backend/migrations/0003_trade_journal.sql` | D1 migration on `live-options` | Additive: `trade_journal_rows` and `trade_journal_sync` |
+| `backend/migrations/0003_trade_journal.sql` | D1 migration on `live-options` | Additive: `trade_journal_rows`, `trade_journal_sync`, `trade_journal_scan`, `trade_journal_context` |
 
 The token is sent only in the `Authorization` header to `api.notion.com`. It is
 never logged, stored or returned. Receipt link destinations in page bodies are
-dropped before parsing. Tests: `node tests/trade_journal.test.mjs`.
+dropped before parsing. The context route only lists and reads the existing
+`PAPER_TRADES` archives. Tests: `node tests/trade_journal.test.mjs` and
+`node tests/trade_journal_context.test.mjs` (synthetic data only).

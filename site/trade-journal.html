@@ -5,26 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Trade Journal</title>
-<!-- OA-238: private retroactive trade display. This file carries no trade data;
-     everything comes from /api/trade-journal*, which requires a signed-in
-     session listed in TRADE_JOURNAL_VIEWERS. -->
+<!-- OA-238: private retroactive trade display. This file carries no trade or
+     market data; everything comes from /api/trade-journal*, which requires a
+     signed-in session listed in TRADE_JOURNAL_VIEWERS. -->
 <style>
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1f21;--muted:#62666b;--line:#dcdcd8;--grid:#ececea;--buy:#1f7a4d;--sell:#b2342a;
-  --accent:#3668b2;--sel:#eef3fb;--warn:#8a5a00;--warnbg:#fff4dc;--ok:#1f7a4d;--bad:#b2342a}
+  --accent:#3668b2;--band:rgba(54,104,178,.20);--und:#5a4fa3;--sel:#eef3fb;--warn:#8a5a00;--warnbg:#fff4dc;--ok:#1f7a4d;--bad:#b2342a;--mark:#9aa0a6}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;
-  --line:#33363a;--grid:#26282b;--buy:#4cc38a;--sell:#f07167;--accent:#7fa8f0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167}}
+  --line:#33363a;--grid:#26282b;--buy:#4cc38a;--sell:#f07167;--accent:#7fa8f0;--band:rgba(110,160,240,.22);--und:#a99cf0;--sel:#1f2a3a;
+  --warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167;--mark:#6b7075}}
 :root[data-theme="dark"]{--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;--line:#33363a;--grid:#26282b;--buy:#4cc38a;
-  --sell:#f07167;--accent:#7fa8f0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167}
+  --sell:#f07167;--accent:#7fa8f0;--band:rgba(110,160,240,.22);--und:#a99cf0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167;--mark:#6b7075}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 header{padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
 h1{font-size:17px;margin:0} h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-main{display:grid;grid-template-columns:minmax(280px,380px) 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+main{display:grid;grid-template-columns:minmax(280px,380px) 1fr;gap:16px;padding:16px;max-width:1500px;margin:0 auto}
 @media (max-width:860px){main{grid-template-columns:1fr}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:16px;min-width:0}
 .note{color:var(--muted);font-size:12px} .ok{color:var(--ok)} .bad{color:var(--bad)}
 button,input{font:inherit;font-size:13px;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
-button{cursor:pointer} button:disabled{opacity:.5;cursor:default}
+button{cursor:pointer} button:disabled{opacity:.5;cursor:default} button.on{background:var(--accent);border-color:var(--accent);color:#fff}
 table{border-collapse:collapse;width:100%;font-size:13px} th,td{padding:4px 6px;border-bottom:1px solid var(--grid);text-align:left;vertical-align:top}
 td.n{text-align:right;font-variant-numeric:tabular-nums} th{color:var(--muted);font-weight:600}
 .pos{display:grid;grid-template-columns:auto 1fr auto;gap:2px 8px;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer}
@@ -32,7 +33,13 @@ td.n{text-align:right;font-variant-numeric:tabular-nums} th{color:var(--muted);f
 .badge{font-size:11px;padding:0 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
 .badge.warn{color:var(--warn);background:var(--warnbg);border-color:var(--warn)}
 .banner{padding:10px;border:1px solid var(--warn);background:var(--warnbg);color:var(--warn);border-radius:6px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.lane{position:relative;border-top:1px solid var(--grid)} .lane:first-child{border-top:0}
+.lane .lt{position:absolute;left:8px;top:4px;font-size:12px;font-weight:600;pointer-events:none}
+.lane .ls{position:absolute;right:8px;top:4px;font-size:11px;color:var(--muted);pointer-events:none;max-width:62%;text-align:right}
+.gapbox{margin:22px 8px 8px;padding:10px;border:1px dashed var(--warn);background:var(--warnbg);color:var(--warn);border-radius:6px;font-size:12px}
 svg{display:block;width:100%}
+#tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;display:none;z-index:9;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 </style>
 </head>
 <body>
@@ -49,37 +56,46 @@ svg{display:block;width:100%}
     <div class="card"><h2>Totals for the day</h2><table id="totals"></table><div class="note" id="totnote"></div></div>
     <div class="card">
       <h2>Positions with an execution that day</h2>
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><button id="restore">Restore all</button><span class="note" id="selcount"></span></div>
+      <div class="row"><button id="restore">Restore all</button><span class="note" id="selcount"></span></div>
       <div id="plist"></div>
     </div>
     <div class="card" id="unsupcard" hidden><h2>Rows that could not be read</h2><div id="unsup" class="note"></div></div>
   </section>
   <section>
-    <div class="card"><h2>Fills on a shared clock (each lane has its own price scale)</h2><div id="lanes"></div></div>
+    <div class="card">
+      <div class="row"><b style="font-size:13px">Window</b>
+        <button data-w="session" class="on">Session 09:30–16:15</button><button data-w="fills">All fills</button><button data-w="sel">Selected ±10 min</button></div>
+      <div id="lanes"></div>
+      <div class="note" style="margin-top:6px">One clock (New York) for every lane; each underlying and each option has its own price scale. Archived quotes are sampled, separate observations from the journal's fills.</div>
+    </div>
     <div class="card"><h2>Fills</h2><div style="overflow-x:auto"><table id="fills"></table></div>
       <div class="note" style="margin-top:6px">Times are the journal's execution-alert or broker order-initiation times, not exchange fill times. Fees are estimated until actual charges are recorded.</div></div>
   </section>
 </main>
+<div id="tip"></div>
 <script>
 (() => {
   const TZ = 'America/New_York';
   const fT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const fHM = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
   const fDT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fH = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const usd = v => (v < 0 ? '−' : '+') + '$' + Math.abs(v).toFixed(2);
   const T = s => Date.parse(s);
-  let data = null, selected = new Set();
+  let data = null, selected = new Set(), win = 'session', laneData = [];
+  const contexts = new Map();          // position_id -> context | {loading} | {error}
 
-  function label(p) { const c = p.contract; return `${c.underlying} $${+c.strike} ${c.option_type}`; }
-  function orders(p) { return [...new Set(p.executions.map(e => e.order_ref))].join('→'); }
+  const label = p => { const c = p.contract; return `${c.underlying} $${+c.strike} ${c.option_type}`; };
+  const orders = p => [...new Set(p.executions.map(e => e.order_ref))].join('→');
+  const etMs = (h, m) => { const day = $('day').value, noon = Date.parse(day + 'T12:00:00Z');
+    const off = (12 - +fH.format(noon)) * 3600e3; return Date.parse(day + 'T00:00:00Z') + (h * 60 + m) * 60e3 + off; };
 
   function showSync(sync) {
-    const parts = [];
-    parts.push(sync.last_success_at ? `Last successful sync ${fDT.format(T(sync.last_success_at))} ET` : 'Never synced');
+    const parts = [sync.last_success_at ? `Last successful sync ${fDT.format(T(sync.last_success_at))} ET` : 'Never synced'];
+    if (sync.scan_in_progress) parts.push(`<span class="bad">Scan in progress since ${fDT.format(T(sync.scan_in_progress.started_at))} ET (${sync.scan_in_progress.query_complete ? 'listing done, bodies pending' : 'listing not finished'}); sync again to continue</span>`);
     if (sync.last_error) parts.push(`<span class="bad">Last read failed ${fDT.format(T(sync.last_error.at))} ET: ${esc(sync.last_error.message)}</span>`);
-    if (sync.running) parts.push('sync running…');
     $('syncinfo').innerHTML = parts.join(' · ');
   }
 
@@ -101,69 +117,152 @@ svg{display:block;width:100%}
       const res = await fetch('/api/trade-journal/sync', { method: 'POST', credentials: 'same-origin' });
       const body = await res.json().catch(() => ({}));
       if (body.sync) showSync(body.sync);
-      if (!res.ok) $('msg').innerHTML = `<div class="banner">Sync did not complete: ${esc(body.error?.message || body.error || res.status)}</div>`;
-      else {
-        const s = body.summary;
-        await load();
-        $('msg').innerHTML = `<div class="note">Synced ${s.rows_in_source} rows: ${s.inserted.length} new, ${s.refreshed.length} refreshed, ${s.unchanged} unchanged` +
-          `${s.deferred.length ? `, ${s.deferred.length} deferred to the next sync` : ''}${s.status_changes.length ? `, ${s.status_changes.length} status changes` : ''}.</div>`;
-      }
+      if (!res.ok) { $('msg').innerHTML = `<div class="banner">Sync did not complete: ${esc(body.error?.message || body.error || res.status)}</div>`; return; }
+      const s = body.summary;
+      contexts.clear();
+      await load();
+      $('msg').innerHTML = `<div class="note">Synced: ${s.rows_listed} rows listed, ${s.inserted.length} new, ${s.refreshed.length} refreshed, ${s.unchanged} unchanged` +
+        `${s.pending_rows ? `, <b>${s.pending_rows} still pending</b>` : ''}${s.status_changes.length ? `, ${s.status_changes.length} status changes` : ''}` +
+        `${s.unverified_missing.length ? `, ${s.unverified_missing.length} missing rows not yet verified` : ''}. Scan ${s.scan.finished ? 'finished' : 'continues on the next sync'}.</div>`;
     } finally { $('sync').disabled = false; }
+  }
+
+  function loadContexts(ps) {
+    for (const p of ps) {
+      if (contexts.has(p.position_id)) continue;
+      contexts.set(p.position_id, { loading: true });
+      fetch(`/api/trade-journal/context?position_id=${encodeURIComponent(p.position_id)}`, { credentials: 'same-origin', cache: 'no-store' })
+        .then(r => r.json().then(b => (r.ok ? b : { error: b.error || `HTTP ${r.status}` })))
+        .catch(() => ({ error: 'network error' }))
+        .then(ctx => { contexts.set(p.position_id, ctx); renderLanes(); });
+    }
   }
 
   function render() {
     const ps = data.positions;
     const sel = ps.filter(p => selected.has(p.position_id));
-    const active = sel.filter(p => p.source_status === 'active');
+    const act = sel.filter(p => p.source_status === 'active');
+    const closed = act.filter(p => p.closed), open = act.filter(p => !p.closed);
     const t = data.totals;
-    $('totals').innerHTML = '<tr><th></th><th class="n">Day</th><th class="n">Selected</th></tr>' + [
-      ['Positions', t.positions, active.length, 0], ['Fills', t.fills, active.reduce((a, p) => a + p.n_fills, 0), 0],
-      ['Gross', t.gross, active.reduce((a, p) => a + p.gross_pnl, 0), 2], ['Fees', t.fees, active.reduce((a, p) => a + p.fees, 0), 2],
-      ['Net', t.net, active.reduce((a, p) => a + p.net_pnl, 0), 2],
-    ].map(([k, a, b, d]) => `<tr><td>${k}</td><td class="n">${d ? a.toFixed(d) : a}</td><td class="n">${d ? b.toFixed(d) : b}</td></tr>`).join('');
-    $('totnote').textContent = t.excluded_not_active ? `${t.excluded_not_active} position(s) no longer active in the journal are shown but not counted.` : '';
+    const rows = [
+      ['Positions', t.positions, act.length, 0], ['Fills', t.fills, act.reduce((a, p) => a + p.n_fills, 0), 0],
+      ['Realised gross (closed)', t.gross, closed.reduce((a, p) => a + p.gross_pnl, 0), 2],
+      ['Fees (closed)', t.fees, closed.reduce((a, p) => a + p.fees, 0), 2],
+      ['Realised net (closed)', t.net, closed.reduce((a, p) => a + p.net_pnl, 0), 2],
+    ];
+    if (t.open_positions) rows.push(['Open positions', t.open_positions, open.length, 0],
+      ['Open cost basis', t.open_cost_basis, open.reduce((a, p) => a + p.open_cost_basis, 0), 2],
+      ['Fees paid on open', t.open_fees_paid, open.reduce((a, p) => a + p.fees, 0), 2]);
+    $('totals').innerHTML = '<tr><th></th><th class="n">Day</th><th class="n">Selected</th></tr>' +
+      rows.map(([k, a, b, d]) => `<tr><td>${k}</td><td class="n">${d ? a.toFixed(d) : a}</td><td class="n">${d ? b.toFixed(d) : b}</td></tr>`).join('');
+    $('totnote').textContent = [t.open_positions ? 'Open positions are not counted as realised gains or losses.' : '',
+      t.excluded_not_active ? `${t.excluded_not_active} position(s) no longer active in the journal are shown but not counted.` : ''].filter(Boolean).join(' ');
     $('selcount').textContent = `${selected.size} of ${ps.length} selected`;
     $('plist').innerHTML = ps.length ? ps.map(p => {
       const on = selected.has(p.position_id);
       const flags = [p.source_status !== 'active' ? `<span class="badge warn">${esc(p.source_status.replaceAll('_', ' '))}</span>` : '',
-        p.revision > 1 ? `<span class="badge">rev ${p.revision}</span>` : '',
-        p.closed ? '' : '<span class="badge warn">open</span>'].join(' ');
+        p.revision > 1 ? `<span class="badge">rev ${p.revision}</span>` : '', p.closed ? '' : '<span class="badge warn">open</span>'].join(' ');
+      const pnl = p.closed ? `gross ${usd(p.gross_pnl)} · fees $${p.fees.toFixed(2)} ${esc(p.fee_basis.join('+'))} · net ${usd(p.net_pnl)}`
+        : `open ${Math.abs(p.open_qty)} ${p.open_side} · cost basis $${p.open_cost_basis.toFixed(2)} · fees paid $${p.fees.toFixed(2)}${p.realized_gross_pnl ? ` · realised so far ${usd(p.realized_gross_pnl)}` : ''}`;
       return `<div class="pos ${on ? 'on' : ''}" data-id="${esc(p.position_id)}"><input type="checkbox" ${on ? 'checked' : ''} aria-label="select ${esc(label(p))}">
         <span><b>${esc(label(p))}</b> <span class="note">· ${esc(orders(p))}</span> ${flags}</span><span><button data-only="${esc(p.position_id)}">Only</button></span>
-        <span class="m">${fT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fT.format(T(p.closed_ts)) : ''} · ${p.n_fills} fills · gross ${usd(p.gross_pnl)} · fees $${p.fees.toFixed(2)} ${esc(p.fee_basis.join('+'))} · net ${usd(p.net_pnl)}
+        <span class="m">${fT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fT.format(T(p.closed_ts)) : ''} · ${p.n_fills} fills · ${pnl}
         · journal edited ${fDT.format(T(p.source_last_edited))} · read ${fDT.format(T(p.app_read_at))} · <a href="${esc(p.journal_url)}" target="_blank" rel="noopener">row</a></span></div>`;
     }).join('') : '<div class="note">No journal positions have an execution on this date.</div>';
     $('unsupcard').hidden = !data.unsupported.length;
     $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
-    renderLanes(sel);
     $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
       sel.flatMap(p => p.executions.map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
         `<tr><td>${esc(label(p))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
          <td>${fT.format(T(e.ts))}</td><td class="note">${esc(e.ts_kind)}</td><td class="n">$${e.fee.toFixed(2)} <span class="note">${esc(e.fee_basis)}</span></td>
          <td class="note"><code>${esc(e.execution_id.replace(/^notion:[0-9a-f]+:/, ''))}</code></td></tr>`).join('');
+    loadContexts(sel);
+    renderLanes();
   }
 
-  function renderLanes(sel) {
-    if (!sel.length) { $('lanes').innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
-    const ts = sel.flatMap(p => p.executions.map(e => T(e.ts)));
-    const pad = 10 * 60e3, x0 = Math.min(...ts) - pad, x1 = Math.max(...ts) + pad;
-    const W = 900, H = 74, L = 150, R = 16;
-    const X = t => L + (t - x0) / (x1 - x0) * (W - L - R);
-    const step = x1 - x0 > 3 * 3600e3 ? 3600e3 : x1 - x0 > 3600e3 ? 15 * 60e3 : 5 * 60e3;
-    let axis = '';
-    for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step) axis += `<line x1="${X(t)}" x2="${X(t)}" y1="0" y2="${H - 14}" stroke="var(--grid)"/><text x="${X(t)}" y="${H - 2}" font-size="10" text-anchor="middle" fill="var(--muted)">${fHM.format(t)}</text>`;
-    $('lanes').innerHTML = sel.map(p => {
-      const px = p.executions.map(e => e.price); let lo = Math.min(...px), hi = Math.max(...px);
-      if (hi - lo < 1e-9) { lo -= 0.05; hi += 0.05; } const pd = (hi - lo) * 0.25; lo -= pd; hi += pd;
-      const Y = v => 8 + (hi - v) / (hi - lo) * (H - 30);
-      const pts = p.executions.map(e => `${X(T(e.ts)).toFixed(1)},${Y(e.price).toFixed(1)}`).join(' ');
-      const marks = p.executions.map(e => { const x = X(T(e.ts)), y = Y(e.price), c = e.side === 'buy' ? 'var(--buy)' : 'var(--sell)';
-        return `<circle cx="${x}" cy="${y}" r="4" fill="${c}"/><text x="${x + 6}" y="${y + 4}" font-size="11" fill="${c}">${e.side} ${e.price}</text>`; }).join('');
-      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px;border-top:1px solid var(--grid)">${axis}
-        <text x="4" y="20" font-size="12" font-weight="600" fill="var(--ink)">${esc(label(p))}</text><text x="4" y="36" font-size="10" fill="var(--muted)">${esc(orders(p))} · ${lo.toFixed(2)}–${hi.toFixed(2)}</text>
-        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>${marks}</svg>`;
-    }).join('') + '<div class="note" style="margin-top:6px">Exact-option and underlying price paths are a follow-on step; these lanes show the journal fills only.</div>';
+  // ------------------------------------------------------------- lanes
+  const W = 900, H = 120, PADL = 56, PADR = 12, PADT = 22, PADB = 18;
+  function domain() {
+    const sel = data.positions.filter(p => selected.has(p.position_id));
+    if (win === 'session' || !sel.length) return [etMs(9, 30), etMs(16, 15)];
+    const ts = (win === 'fills' ? data.positions : sel).flatMap(p => p.executions.map(e => T(e.ts)));
+    const pad = win === 'fills' ? 8 * 60e3 : 10 * 60e3;
+    return [Math.min(...ts) - pad, Math.max(...ts) + pad];
   }
+  function lane(title, source, series, fills, kind) {
+    const [x0, x1] = domain(); const X = t => PADL + (t - x0) / (x1 - x0) * (W - PADL - PADR);
+    const pts = (series || []).filter(r => { const t = T(r[0]); return t >= x0 - 120e3 && t <= x1 + 120e3; });
+    let vals = pts.flatMap(r => (kind === 'band' ? [r[1], r[2]] : [r[1]])).concat(fills.map(f => f.price).filter(Number.isFinite));
+    if (!vals.length) vals = [0, 1];
+    let lo = Math.min(...vals), hi = Math.max(...vals); if (hi - lo < 1e-9) { hi += 0.01; lo -= 0.01; }
+    const pd = (hi - lo) * 0.08; lo -= pd; hi += pd;
+    const Y = v => PADT + (hi - v) / (hi - lo) * (H - PADT - PADB);
+    let g = '';
+    for (let i = 0; i <= 3; i++) { const v = lo + (hi - lo) * i / 3;
+      g += `<line x1="${PADL}" x2="${W - PADR}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${PADL - 4}" y="${Y(v) + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${v.toFixed(2)}</text>`; }
+    const step = x1 - x0 > 3 * 3600e3 ? 3600e3 : x1 - x0 > 3600e3 ? 15 * 60e3 : 5 * 60e3;
+    for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step)
+      g += `<line x1="${X(t)}" x2="${X(t)}" y1="${PADT}" y2="${H - PADB}" stroke="var(--grid)"/><text x="${X(t)}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">${fHM.format(t)}</text>`;
+    if (kind === 'band' && pts.length) {
+      const up = pts.map(r => `${X(T(r[0])).toFixed(1)},${Y(r[2]).toFixed(1)}`), dn = pts.slice().reverse().map(r => `${X(T(r[0])).toFixed(1)},${Y(r[1]).toFixed(1)}`);
+      g += `<polygon points="${up.concat(dn).join(' ')}" fill="var(--band)"/>`;
+      g += `<polyline points="${pts.map(r => `${X(T(r[0])).toFixed(1)},${Y((r[1] + r[2]) / 2).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1"/>`;
+    } else if (pts.length) {
+      g += `<polyline points="${pts.map(r => `${X(T(r[0])).toFixed(1)},${Y(r[1]).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--und)" stroke-width="1.3"/>`;
+    }
+    for (const f of fills) { const x = X(T(f.ts)), c = f.side === 'buy' ? 'var(--buy)' : 'var(--sell)';
+      g += `<line x1="${x}" x2="${x}" y1="${PADT}" y2="${H - PADB}" stroke="${c}" stroke-dasharray="3 3" opacity=".6"/>`;
+      if (Number.isFinite(f.price)) { const y = Y(f.price);
+        g += f.side === 'buy' ? `<path d="M${x - 6},${y + 8}L${x + 6},${y + 8}L${x},${y - 2}Z" fill="${c}"/>` : `<path d="M${x - 6},${y - 8}L${x + 6},${y - 8}L${x},${y + 2}Z" fill="${c}"/>`;
+        g += `<text x="${x + 8}" y="${y + (f.side === 'buy' ? 12 : -6)}" font-size="11" fill="${c}">${f.side} ${f.price}</text>`; } }
+    return { html: `<div class="lane"><div class="lt">${esc(title)}</div><div class="ls">${esc(source)}</div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}<line class="xh" x1="-10" x2="-10" y1="${PADT}" y2="${H - PADB}" stroke="var(--mark)"/></svg></div>`, pts, kind };
+  }
+  const gapLane = (title, text) => `<div class="lane"><div class="lt">${esc(title)}</div><div class="gapbox">${esc(text)}</div></div>`;
+
+  function renderLanes() {
+    const el = $('lanes'); laneData = [];
+    if (!data) return;
+    const sel = data.positions.filter(p => selected.has(p.position_id));
+    if (!sel.length) { el.innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
+    let html = '';
+    const unds = [...new Set(sel.map(p => p.contract.underlying))];
+    for (const u of unds) {
+      const ps = sel.filter(p => p.contract.underlying === u);
+      const ctxs = ps.map(p => contexts.get(p.position_id) || { loading: true });
+      const fills = ps.flatMap(p => p.executions.map(e => ({ ts: e.ts, side: e.side, price: NaN })));
+      const withSeries = ctxs.filter(c => c.underlying);
+      if (withSeries.length) {
+        const pts = [...new Map(withSeries.flatMap(c => c.underlying.points).map(r => [r[0], r])).values()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+        const L = lane(`${u} underlying`, withSeries[0].underlying.source.replace(/ \(.*\)$/, '') + ' · sampled', pts, fills, 'line');
+        laneData.push({ name: u, L }); html += L.html;
+      } else if (ctxs.some(c => c.loading)) html += gapLane(`${u} underlying`, 'loading archived prices…');
+      else html += gapLane(`${u} underlying`, `Coverage gap: ${ctxs.map(c => c.error || (c.gaps || []).find(g => g.startsWith(u)) || 'no archived series').filter(Boolean)[0]}`);
+    }
+    for (const p of sel) {
+      const c = contexts.get(p.position_id) || { loading: true };
+      const fills = p.executions.map(e => ({ ts: e.ts, side: e.side, price: e.price }));
+      const title = `${label(p)} · ${orders(p)}`;
+      if (c.option) { const L = lane(title, c.option.source, c.option.points, fills, 'band'); laneData.push({ name: label(p), L }); html += L.html; }
+      else if (c.loading) html += gapLane(title, 'loading archived quotes…');
+      else html += gapLane(title, `Coverage gap: ${c.error || (c.gaps || []).filter(g => !g.includes(' underlying')).join(' ') || 'no archived quotes'} Fills: ${p.executions.map(e => `${e.side} ${e.qty} @ ${e.price} at ${fT.format(T(e.ts))} ET`).join(', ')}.`);
+    }
+    el.innerHTML = html;
+  }
+
+  $('lanes').addEventListener('mousemove', ev => {
+    const svg = ev.target.closest('svg'), tip = $('tip');
+    if (!svg) { tip.style.display = 'none'; return; }
+    const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W, [x0, x1] = domain();
+    if (vx < PADL) { tip.style.display = 'none'; return; }
+    const t = x0 + (vx - PADL) / (W - PADL - PADR) * (x1 - x0);
+    document.querySelectorAll('#lanes svg .xh').forEach(l => { l.setAttribute('x1', vx); l.setAttribute('x2', vx); });
+    const lines = laneData.map(({ name, L }) => { let best = null; for (const p of L.pts) { if (T(p[0]) <= t) best = p; else break; }
+      if (!best || t - T(best[0]) > 300e3) return `${esc(name)}: —`;
+      return `${esc(name)}: ${L.kind === 'band' ? `${best[1]}/${best[2]}` : best[1]} <span class="note">(${fT.format(T(best[0]))})</span>`; });
+    tip.innerHTML = `<b>${fT.format(t)} ET</b><br>${lines.join('<br>')}`; tip.style.display = 'block';
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - 280) + 'px'; tip.style.top = (ev.clientY + 14) + 'px';
+  });
+  $('lanes').addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
 
   $('plist').addEventListener('click', ev => {
     const only = ev.target.closest('[data-only]');
@@ -173,7 +272,8 @@ svg{display:block;width:100%}
     selected.has(row.dataset.id) ? selected.delete(row.dataset.id) : selected.add(row.dataset.id); render();
   });
   $('restore').onclick = () => { if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
-  $('load').onclick = load;
+  document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { win = b.dataset.w; document.querySelectorAll('[data-w]').forEach(x => x.classList.toggle('on', x === b)); renderLanes(); });
+  $('load').onclick = () => { contexts.clear(); load(); };
   $('sync').onclick = sync;
   load();
 })();

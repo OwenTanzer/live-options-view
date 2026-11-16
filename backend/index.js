@@ -6,6 +6,7 @@ import { handlePaperTrade } from './paper-trade.js';
 import { cutoverFenceActive } from './fence.js';
 import { createCronOutcomeLog } from './cron_outcome.js';
 import { handleTradeJournalDay, handleTradeJournalRow, handleTradeJournalSync } from './trade-journal.js';
+import { handleTradeJournalContext } from './trade-journal-context.js';
 
 // Re-exported from backend/common.js so the Worker's public API (the 31
 // exports pinned by tests/worker_logic.test.js) stays on backend/index.js.
@@ -94,6 +95,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/api/trade-journal/row') {
       return handleTradeJournalRow(request, env, url);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/trade-journal/context') {
+      return handleTradeJournalContext(request, env, url);
     }
 
     if (request.method === 'POST' && url.pathname === '/api/trade-journal/sync') {

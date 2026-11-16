@@ -14,7 +14,8 @@ import { FakeD1 } from './helpers/d1_shim.mjs';
 import { seedAccounts, seedSession } from './helpers/test_env.mjs';
 import worker from '../backend/index.js';
 import {
-  TRADE_JOURNAL_DATA_SOURCE_ID, TOKEN_SECRET_NAME, VIEWERS_VAR_NAME, MAX_BODY_REQUESTS,
+  TRADE_JOURNAL_DATA_SOURCE_ID, TOKEN_SECRET_NAME, VIEWERS_VAR_NAME, MAX_BODY_REQUESTS, MAX_QUERY_PAGES,
+  MAX_MISSING_CHECKS, MAX_BODY_DEPTH, pagePosition,
   etDate, handleTradeJournalSync, journalDay, syncTradeJournal,
 } from '../backend/trade-journal.js';
 
@@ -42,6 +43,8 @@ class FakeNotion {
     this.blockPageSize = blockPageSize;
     this.calls = [];
     this.failQueryCall = null;
+    this.children = new Map();        // block id -> nested child blocks
+    this.rejectCursors = false;       // simulate Notion refusing a saved cursor
     this.fetch = this.fetch.bind(this);
   }
   json(status, body) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }); }
@@ -56,6 +59,10 @@ class FakeNotion {
       const n = this.calls.filter(c => c.path.endsWith('/query')).length;
       if (this.failQueryCall === n) return this.json(500, { object: 'error', code: 'internal_server_error', message: 'boom' });
       const body = JSON.parse(init.body);
+      assert.deepEqual(body.sorts, [{ timestamp: 'created_time', direction: 'ascending' }]);
+      if (body.start_cursor && (this.rejectCursors || !this.pages.has(body.start_cursor))) {
+        return this.json(400, { object: 'error', code: 'validation_error', message: 'bad cursor' });
+      }
       const live = [...this.pages.values()].filter(p => !this.archived.has(p.id) && !this.deleted.has(p.id))
         .sort((a, b) => (a.id < b.id ? -1 : 1));
       const start = body.start_cursor ? live.findIndex(p => p.id === body.start_cursor) : 0;
@@ -64,7 +71,7 @@ class FakeNotion {
       return this.json(200, { object: 'list', results: slice.map(({ _blocks, ...p }) => p), has_more: Boolean(next), next_cursor: next?.id ?? null });
     }
     if (init.method === 'GET' && (m = /^\/v1\/blocks\/([^/]+)\/children$/.exec(u.pathname))) {
-      const page = this.pages.get(m[1]);
+      const page = this.pages.get(m[1]) ?? (this.children.has(m[1]) ? { _blocks: this.children.get(m[1]) } : null);
       if (!page) return this.json(404, { object: 'error', code: 'object_not_found' });
       const start = Number(u.searchParams.get('start_cursor') ?? 0);
       const slice = page._blocks.slice(start, start + this.blockPageSize);
@@ -106,9 +113,11 @@ test('full sync paginates the data source and every page body', async () => {
   const notion = new FakeNotion(FIXTURE.pages);
   const r = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now: clock('2026-11-16T15:00:00Z') });
   assert.equal(r.ok, true, JSON.stringify(r.error));
-  assert.equal(r.summary.rows_in_source, 11);
+  assert.equal(r.summary.rows_listed, 11);
   assert.equal(r.summary.inserted.length, 11);
-  assert.equal(r.summary.complete_scan, true);
+  assert.equal(r.summary.scan.finished, true);
+  assert.equal(r.summary.pending_rows, 0);
+  assert.equal(DB.raw('SELECT COUNT(*) AS n FROM trade_journal_scan')[0].n, 0, 'scan state cleared once finished');
   assert.equal(notion.count('/query'), 3);                         // 11 rows at 4 per page
   assert.ok(notion.count('/children') > 11, 'block children were paginated');
   assert.equal(r.summary.unsupported, 0);
@@ -265,11 +274,14 @@ test('the per-sync request budget defers rows and the next sync finishes them', 
   const notion = new FakeNotion([...FIXTURE.pages, ...copies], { blockPageSize: 1 });
   const now = clock('2026-11-16T15:00:00Z');
   const first = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
-  assert.ok(first.summary.deferred.length > 0);
+  assert.ok(first.summary.pending_rows > 0);
+  assert.equal(first.summary.scan.finished, false);
   assert.ok(notion.count('/children') <= MAX_BODY_REQUESTS + 10, 'body reads stop at the cap (+ one page finishing)');
   now.advance(5 * 60_000);
   const second = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
-  assert.equal(second.summary.deferred.length, 0);
+  assert.equal(second.summary.scan.resumed, true);
+  assert.equal(second.summary.pending_rows, 0);
+  assert.equal(second.summary.scan.finished, true);
   assert.equal(DB.raw('SELECT COUNT(*) AS n FROM trade_journal_rows')[0].n, 22);
 });
 
@@ -278,6 +290,159 @@ test('overlapping syncs do not race', async () => {
   DB.db.exec(`INSERT INTO trade_journal_sync (id, running_since) VALUES (1, '2026-11-16T14:59:00.000Z')`);
   const r = await syncTradeJournal(env(DB), { fetchImpl: new FakeNotion(FIXTURE.pages).fetch, now: clock('2026-11-16T15:00:00Z') });
   assert.equal(r.error.code, 'busy');
+});
+
+// ------------------------------------------------- review fixes (Chej, 11-16)
+function syntheticPage(id, body, props = {}) {
+  const base = clone(FIXTURE.pages.find(x => x.id === P673));
+  base.id = id;
+  base._blocks = body.map((text, i) => ({ object: 'block', id: `${id}-b${i}`, type: 'paragraph', has_children: false,
+    paragraph: { rich_text: [{ type: 'text', plain_text: text, href: null }] } }));
+  for (const [k, v] of Object.entries(props)) base.properties[k] = v;
+  return base;
+}
+const num = n => ({ type: 'number', number: n });
+const txt = v => ({ type: 'rich_text', rich_text: [{ type: 'text', plain_text: v, href: null }] });
+
+test('an open position reports remaining cost and fees, not a realised loss', async () => {
+  const p = await pagePosition({
+    page_id: 'b0000000-0000-4000-8000-000000000001', page_url: 'u', last_edited_time: '2026-11-13T21:00:00.000Z',
+    properties: { Contract: "QQQ Nov 13 '26 $777 Put", Quantity: 1, 'Gross P&L': null, Fees: 'USD 0.50 estimated', Report: 'open' },
+    body: 'Entry order 7300: 2026-11-13T11:37:25.000-05:00, 1 contracts at USD 1.83; entry receipt.',
+  });
+  assert.equal(p.closed, false);
+  assert.equal(p.gross_pnl, null);
+  assert.equal(p.net_pnl, null);
+  assert.equal(p.open_qty, 1);
+  assert.equal(p.open_side, 'long');
+  assert.equal(p.open_cost_basis, 183);
+  assert.equal(p.fees, 0.5);
+  assert.equal(p.realized_gross_pnl, 0);
+  assert.equal(p.row_checks.gross_matches_row, null);
+});
+
+test('a partial close realises only the closed quantity', async () => {
+  const p = await pagePosition({
+    page_id: 'b0000000-0000-4000-8000-000000000002', page_url: 'u', last_edited_time: '2026-11-13T21:00:00.000Z',
+    properties: { Contract: "QQQ Nov 13 '26 $777 Put", Quantity: 2, Fees: 'USD 1.50 estimated', Report: 'partial' },
+    body: 'Entry order 7301: 2026-11-13T10:00:00.000-05:00, 2 contracts at USD 1.00; x. Exit order 7302: 2026-11-13T10:30:00.000-05:00, 1 contracts at USD 1.50; y.',
+  });
+  assert.equal(p.closed, false);
+  assert.equal(p.realized_gross_pnl, 50);
+  assert.equal(p.open_qty, 1);
+  assert.equal(p.open_cost_basis, 100);
+  assert.equal(p.gross_pnl, null);
+});
+
+test('day totals keep open positions out of realised gross and net', async () => {
+  const DB = freshDb();
+  const open = syntheticPage('b0000000-0000-4000-8000-000000000003',
+    ['E*TRADE ending 0000. [Entry receipt 7400](link) at 2026-11-13T12:00:00.000-05:00: USD 1.83.'],
+    { Quantity: num(1), Fees: txt('USD 0.50 estimated'), 'Gross P&L': num(null) });
+  await syncTradeJournal(env(DB), { fetchImpl: new FakeNotion([...FIXTURE.pages, open]).fetch, now: clock('2026-11-16T15:00:00Z') });
+  const day = await journalDay(DB, '2026-11-13');
+  const j = FIXTURE.journal_day_totals;
+  assert.equal(day.totals.positions, 6);
+  assert.equal(day.totals.closed_positions, 5);
+  assert.equal(day.totals.gross, j.gross);
+  assert.equal(day.totals.net, j.net_estimated);
+  assert.equal(day.totals.open_positions, 1);
+  assert.equal(day.totals.open_cost_basis, 183);
+  assert.equal(day.totals.open_fees_paid, 0.5);
+});
+
+test('a data source larger than one sync resumes from its saved cursor', async () => {
+  const DB = freshDb();
+  const many = [...FIXTURE.pages, ...FIXTURE.pages.map(p => ({ ...clone(p), id: p.id.replace(/^.{4}/, 'eeee') }))];   // 22 rows
+  const notion = new FakeNotion(many, { queryPageSize: 1 });                                                        // 22 query pages
+  const now = clock('2026-11-16T15:00:00Z');
+  const first = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  assert.equal(first.ok, true);
+  assert.equal(notion.count('/query'), MAX_QUERY_PAGES);
+  assert.equal(first.summary.scan.query_complete, false);
+  assert.equal(first.summary.scan.finished, false);
+  assert.equal(first.summary.status_changes.length, 0, 'an unfinished scan flags nothing');
+  const saved = DB.raw('SELECT scan_cursor, scan_started_at FROM trade_journal_sync')[0];
+  assert.ok(saved.scan_cursor);
+  notion.calls = [];
+  now.advance(5 * 60_000);
+  const second = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  const firstQuery = notion.calls.find(c => c.path.endsWith('/query'));
+  assert.equal(JSON.parse(firstQuery.body).start_cursor, saved.scan_cursor, 'resumed from the saved cursor, not from the start');
+  assert.equal(second.summary.scan.resumed, true);
+  assert.equal(second.summary.scan.started_at, saved.scan_started_at);
+  assert.equal(second.summary.scan.finished, true);
+  assert.equal(DB.raw('SELECT COUNT(*) AS n FROM trade_journal_rows')[0].n, 22);
+  assert.equal(DB.raw('SELECT scan_cursor FROM trade_journal_sync')[0].scan_cursor, null);
+});
+
+test('a saved cursor Notion refuses restarts the scan visibly', async () => {
+  const DB = freshDb();
+  const many = [...FIXTURE.pages, ...FIXTURE.pages.map(p => ({ ...clone(p), id: p.id.replace(/^.{4}/, 'eeee') }))];
+  const notion = new FakeNotion(many, { queryPageSize: 1 });
+  const now = clock('2026-11-16T15:00:00Z');
+  await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  notion.rejectCursors = true;
+  now.advance(5 * 60_000);
+  const r = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  assert.equal(r.ok, true);
+  assert.equal(r.summary.scan.restarted_after, 'validation_error');
+  assert.equal(r.summary.scan.finished, false);
+});
+
+test('nested blocks are read within the depth limit; deeper bodies are marked, not silently cut', async () => {
+  const DB = freshDb();
+  // Fill lines nested two levels down (e.g. inside toggles) are read.
+  const nested = syntheticPage('b0000000-0000-4000-8000-000000000004', ['E*TRADE ending 0000. Fills below.']);
+  nested._blocks[0].has_children = true;
+  const fills = { object: 'block', id: 'nest-2', type: 'paragraph', has_children: false, paragraph: { rich_text: [
+    { type: 'text', plain_text: 'Entry receipt 7500', href: 'https://example.invalid/receipt' },
+    { type: 'text', plain_text: ' at 2026-11-13T10:00:00.000-05:00: USD 1.00. ', href: null },
+    { type: 'text', plain_text: 'Exit receipt 7501', href: 'https://example.invalid/receipt' },
+    { type: 'text', plain_text: ' at 2026-11-13T10:05:00.000-05:00: USD 1.20.', href: null }] } };
+  const toggle = { object: 'block', id: 'nest-1', type: 'paragraph', has_children: true, paragraph: { rich_text: [{ type: 'text', plain_text: 'Details', href: null }] } };
+  // A page nested past the limit.
+  const deep = syntheticPage('b0000000-0000-4000-8000-000000000005', ['E*TRADE ending 0000.']);
+  deep._blocks[0].has_children = true;
+  const notion = new FakeNotion([nested, deep]);
+  notion.children.set(nested._blocks[0].id, [toggle]);
+  notion.children.set('nest-1', [fills]);
+  let parent = deep._blocks[0].id;
+  for (let d = 1; d <= MAX_BODY_DEPTH + 1; d++) {
+    const b = { object: 'block', id: `deep-${d}`, type: 'paragraph', has_children: d <= MAX_BODY_DEPTH, paragraph: { rich_text: [{ type: 'text', plain_text: `level ${d}`, href: null }] } };
+    notion.children.set(parent, [b]);
+    parent = b.id;
+  }
+  const r = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now: clock('2026-11-16T15:00:00Z') });
+  assert.equal(r.ok, true);
+  const rows = Object.fromEntries(DB.raw('SELECT page_id, position_json FROM trade_journal_rows').map(x => [x.page_id, JSON.parse(x.position_json)]));
+  const n = rows['b0000000-0000-4000-8000-000000000004'];
+  assert.equal(n.supported, true);
+  assert.equal(n.n_fills, 2);
+  const d = rows['b0000000-0000-4000-8000-000000000005'];
+  assert.equal(d.supported, false);
+  assert.match(d.unsupported_reason, /page body not fully read: blocks nested deeper than/);
+});
+
+test('removal checks are capped per sync and the rest stay flagged for the next scan', async () => {
+  const DB = freshDb();
+  const notion = new FakeNotion(FIXTURE.pages);
+  const now = clock('2026-11-16T15:00:00Z');
+  await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  const gone = FIXTURE.pages.slice(0, MAX_MISSING_CHECKS + 2).map(p => p.id);
+  for (const id of gone) notion.deleted.add(id);
+  now.advance(5 * 60_000);
+  notion.calls = [];
+  const r = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  assert.equal(notion.count('/pages/'), MAX_MISSING_CHECKS);
+  assert.equal(r.summary.status_changes.filter(s => s.to === 'removed').length, MAX_MISSING_CHECKS);
+  assert.equal(r.summary.unverified_missing.length, 2);
+  const statuses = () => DB.raw('SELECT source_status FROM trade_journal_rows').map(x => x.source_status);
+  assert.equal(statuses().filter(s => s === 'missing_unverified').length, 2, 'unchecked rows are visibly flagged');
+  now.advance(5 * 60_000);
+  const next = await syncTradeJournal(env(DB), { fetchImpl: notion.fetch, now });
+  assert.equal(next.summary.status_changes.filter(s => s.from === 'missing_unverified' && s.to === 'removed').length, 2);
+  assert.equal(statuses().filter(s => s === 'removed').length, MAX_MISSING_CHECKS + 2);
 });
 
 // ---------------------------------------------------------------- routes

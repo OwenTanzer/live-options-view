@@ -35,7 +35,9 @@ export const JOURNAL_TZ = 'America/New_York';
 // limit; anything left over is reported as deferred and picked up next sync.
 export const MAX_BODY_REQUESTS = 35;
 export const MAX_MISSING_CHECKS = 5;
-const MAX_QUERY_PAGES = 20;
+export const MAX_QUERY_PAGES = 20;
+// Nested blocks are read down to this depth; deeper content marks the row unsupported (not silently dropped).
+export const MAX_BODY_DEPTH = 6;
 // Headroom for the last body started under the cap to finish its own pages.
 const BODY_OVERSHOOT = 10;
 const SYNC_LEASE_MS = 5 * 60_000;
@@ -155,34 +157,67 @@ export async function positionIdForPage(pageId) {
   return 'pos:' + (await sha256Hex(`notion:${String(pageId).replaceAll('-', '')}`)).slice(0, 16);
 }
 
-/** One journal row -> one position (or an unsupported placeholder that stays visible). */
-export async function pagePosition(page) {
-  const { executions, gaps } = pageExecutions(page);
+
+/**
+ * One journal row -> one position (or an unsupported placeholder that stays visible).
+ *
+ * Realised P&L is computed on closed quantity only (average cost). A position
+ * that is not flat reports its open quantity and remaining cost basis instead;
+ * its purchase is never shown as a realised loss, and gross/net stay null.
+ */
+export async function pagePosition(page, { bodyIncomplete = null } = {}) {
   const base = {
     position_id: await positionIdForPage(page.page_id), journal_page_id: page.page_id, journal_url: page.page_url,
     journal_last_edited: page.last_edited_time, report: page.properties.Report ?? null,
     trade_date: page.properties['Trade Date'] ?? null, actor_kind: 'human', owner: 'Owen',
   };
+  if (bodyIncomplete) {
+    // Fills could sit in the part that was not read; parsing the rest would under-count.
+    return { ...base, supported: false, unsupported_reason: `page body not fully read: ${bodyIncomplete}`,
+      contract_text: page.properties.Contract ?? null, executions: [], gaps: [] };
+  }
+  const { executions, gaps } = pageExecutions(page);
   if (!executions.length) {
     return { ...base, supported: false, unsupported_reason: gaps[0], contract_text: page.properties.Contract ?? null, executions: [], gaps };
   }
   executions.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.execution_id < b.execution_id ? -1 : 1));
   const m = executions[0].instrument.multiplier;
-  let q = 0, maxQty = 0;
-  for (const e of executions) { q += e.side === 'buy' ? e.qty : -e.qty; maxQty = Math.max(maxQty, Math.abs(q)); }
-  const gross = executions.reduce((s, e) => s + (e.side === 'buy' ? -1 : 1) * e.price * e.qty * m, 0);
-  const fees = round(executions.reduce((s, e) => s + e.fee, 0), 6);
+  let pos = 0, avg = 0, realized = 0, maxQty = 0;
+  for (const e of executions) {
+    const q = e.side === 'buy' ? e.qty : -e.qty;
+    if (pos === 0 || Math.sign(pos) === Math.sign(q)) {
+      avg = (avg * Math.abs(pos) + e.price * Math.abs(q)) / (Math.abs(pos) + Math.abs(q));
+      pos += q;
+    } else {
+      const closing = Math.min(Math.abs(q), Math.abs(pos));
+      realized += (e.price - avg) * closing * m * Math.sign(pos);
+      pos += q;
+      if (pos === 0) avg = 0;
+      else if (Math.sign(pos) === Math.sign(q)) avg = e.price;   // flipped through flat
+    }
+    maxQty = Math.max(maxQty, Math.abs(pos));
+  }
+  const closed = pos === 0;
+  const feesPaid = round(executions.reduce((s, e) => s + e.fee, 0), 6);
+  const realizedGross = round(realized, 2);
   return {
     ...base, supported: true, account: executions[0].account, mode: 'live', strategy_id: null,
-    contract: executions[0].instrument, opened_ts: executions[0].ts, closed_ts: q === 0 ? executions.at(-1).ts : null,
-    closed: q === 0, max_qty: maxQty, n_fills: executions.length, gross_pnl: round(gross, 2), fees,
-    fee_basis: [...new Set(executions.map(e => e.fee_basis))].sort(), net_pnl: round(gross - fees, 6),
+    contract: executions[0].instrument, opened_ts: executions[0].ts, closed_ts: closed ? executions.at(-1).ts : null,
+    closed, max_qty: maxQty, n_fills: executions.length,
+    // Closed: realised gross and net after every fee. Open: null -- see the open_* fields.
+    gross_pnl: closed ? realizedGross : null,
+    net_pnl: closed ? round(realized - feesPaid, 6) : null,
+    fees: feesPaid, fee_basis: [...new Set(executions.map(e => e.fee_basis))].sort(),
+    realized_gross_pnl: realizedGross,                         // closed quantity only (partial closes on open positions)
+    open_qty: pos, open_side: pos > 0 ? 'long' : pos < 0 ? 'short' : null,
+    open_cost_basis: closed ? 0 : round(avg * Math.abs(pos) * m, 2),
     row_checks: {
-      gross_matches_row: Math.abs(gross - (firstNumber(page.properties['Gross P&L']) ?? NaN)) < 0.005,
-      fees_match_row: Math.abs(fees - (firstNumber(page.properties.Fees) ?? NaN)) < 0.005,
-      flat: q === 0,
+      gross_matches_row: closed ? Math.abs(realized - (firstNumber(page.properties['Gross P&L']) ?? NaN)) < 0.005 : null,
+      fees_match_row: Math.abs(feesPaid - (firstNumber(page.properties.Fees) ?? NaN)) < 0.005,
+      flat: closed,
     },
-    gaps, executions,
+    gaps: closed ? gaps : [...gaps, `open: ${Math.abs(pos)} contract(s) ${pos > 0 ? 'long' : 'short'}, remaining cost basis reported, no realised P&L claimed`],
+    executions,
   };
 }
 
@@ -223,12 +258,17 @@ export class JournalReadError extends Error {
   }
 }
 
+/** Per-sync request budget, enforced per kind of call. */
+export function newBudget() {
+  return { query: 0, blocks: 0, page: 0 };
+}
+const BUDGET_LIMIT = { query: MAX_QUERY_PAGES, blocks: MAX_BODY_REQUESTS + BODY_OVERSHOOT, page: MAX_MISSING_CHECKS };
+
 function notionClient(env, fetchImpl, budget) {
   const token = env[TOKEN_SECRET_NAME];
   async function call(step, method, path, body) {
-    if (budget.requests <= 0) throw new JournalReadError('subrequest budget exhausted', { step, code: 'budget' });
-    budget.requests -= 1;
-    if (step === 'blocks') budget.bodyRequests += 1;
+    if (budget[step] >= BUDGET_LIMIT[step]) throw new JournalReadError(`${step} request budget for this sync is used up`, { step, code: 'budget' });
+    budget[step] += 1;
     let res;
     try {
       res = await fetchImpl(`${NOTION_API}${path}`, {
@@ -247,32 +287,36 @@ function notionClient(env, fetchImpl, budget) {
     return res.json();
   }
   return {
-    async queryAll() {
-      const rows = [];
-      let cursor;
-      for (let i = 0; i < MAX_QUERY_PAGES; i++) {
-        const r = await call('query', 'POST', `/data_sources/${TRADE_JOURNAL_DATA_SOURCE_ID}/query`,
-          { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
-        rows.push(...(r.results ?? []).filter(x => x.object === 'page'));
-        if (!r.has_more) return { rows, complete: true };
-        cursor = r.next_cursor;
-      }
-      return { rows, complete: false };
+    /** One page of the data source in a stable order (creation time), so a saved cursor resumes correctly. */
+    async queryPage(cursor) {
+      const r = await call('query', 'POST', `/data_sources/${TRADE_JOURNAL_DATA_SOURCE_ID}/query`, {
+        page_size: 100, sorts: [{ timestamp: 'created_time', direction: 'ascending' }],
+        ...(cursor ? { start_cursor: cursor } : {}),
+      });
+      return { rows: (r.results ?? []).filter(x => x.object === 'page'), next: r.has_more ? r.next_cursor : null };
     },
-    async bodyText(blockId, depth = 0) {
+    /** Whole body, nested children included, down to MAX_BODY_DEPTH; deeper content is reported, not dropped silently. */
+    async body(pageId) {
       const lines = [];
-      let cursor;
-      do {
-        const qs = new URLSearchParams({ page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) });
-        const r = await call('blocks', 'GET', `/blocks/${blockId}/children?${qs}`);
-        for (const b of r.results ?? []) {
-          const line = blockLine(b);
-          if (line != null) lines.push(line);
-          if (b.has_children && depth < 2) lines.push(...(await this.bodyText(b.id, depth + 1)).split('\n').filter(Boolean));
-        }
-        cursor = r.has_more ? r.next_cursor : null;
-      } while (cursor);
-      return lines.join('\n');
+      let incomplete = null;
+      const walk = async (blockId, depth) => {
+        let cursor;
+        do {
+          const qs = new URLSearchParams({ page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) });
+          const r = await call('blocks', 'GET', `/blocks/${blockId}/children?${qs}`);
+          for (const b of r.results ?? []) {
+            const line = blockLine(b);
+            if (line != null) lines.push(line);
+            if (b.has_children) {
+              if (depth + 1 >= MAX_BODY_DEPTH) incomplete ??= `blocks nested deeper than ${MAX_BODY_DEPTH} levels were not read`;
+              else await walk(b.id, depth + 1);
+            }
+          }
+          cursor = r.has_more ? r.next_cursor : null;
+        } while (cursor);
+      };
+      await walk(pageId, 0);
+      return { text: lines.join('\n'), incomplete };
     },
     async pageStatus(pageId) {
       try {
@@ -298,19 +342,60 @@ async function loadSync(db) {
   return (await db.prepare('SELECT * FROM trade_journal_sync WHERE id = 1').first()) ?? null;
 }
 
-function contentKey(position) {
-  return JSON.stringify(position);
-}
-
 function changedFields(a, b) {
   return [...new Set([...Object.keys(a), ...Object.keys(b)])]
     .filter(k => JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort();
 }
 
+async function saveScan(db, scan) {
+  await db.prepare('UPDATE trade_journal_sync SET scan_started_at = ?, scan_cursor = ?, scan_query_complete = ? WHERE id = 1')
+    .bind(scan.started_at, scan.cursor, scan.query_complete ? 1 : 0).run();
+}
+
+async function upsertPosition(db, page, position, stored, fetchedAt, summary) {
+  const key = JSON.stringify(position);
+  const hash = await sha256Hex(key);
+  const s = stored.get(page.id);
+  if (!s) {
+    await db.prepare(
+      `INSERT INTO trade_journal_rows (page_id, position_id, source_status, supported, source_last_edited, body_fetched_at,
+         content_hash, revision, position_json, revisions_json, first_seen_at, status_changed_at)
+       VALUES (?, ?, 'active', ?, ?, ?, ?, 1, ?, ?, ?, NULL)`,
+    ).bind(page.id, position.position_id, position.supported ? 1 : 0, page.last_edited_time, fetchedAt, hash, key,
+      JSON.stringify([{ rev: 1, hash, source_last_edited: page.last_edited_time, read_at: fetchedAt }]), fetchedAt).run();
+    summary.inserted.push(position.position_id);
+  } else if (s.content_hash === hash) {
+    await db.prepare(
+      `UPDATE trade_journal_rows SET source_last_edited = ?, body_fetched_at = ?, source_status = 'active',
+         status_changed_at = CASE WHEN source_status = 'active' THEN status_changed_at ELSE ? END WHERE page_id = ?`,
+    ).bind(page.last_edited_time, fetchedAt, fetchedAt, page.id).run();
+    if (s.source_status !== 'active') summary.status_changes.push({ position_id: s.position_id, from: s.source_status, to: 'active' });
+    summary.unchanged += 1;
+  } else {
+    const rev = s.revision + 1;
+    const changed = changedFields(JSON.parse(s.position_json), position);
+    const revisions = [...JSON.parse(s.revisions_json),
+      { rev, hash, source_last_edited: page.last_edited_time, read_at: fetchedAt, changed_fields: changed }];
+    await db.prepare(
+      `UPDATE trade_journal_rows SET supported = ?, source_last_edited = ?, body_fetched_at = ?, content_hash = ?, revision = ?,
+         position_json = ?, revisions_json = ?, source_status = 'active',
+         status_changed_at = CASE WHEN source_status = 'active' THEN status_changed_at ELSE ? END
+       WHERE page_id = ? AND revision = ?`,
+    ).bind(position.supported ? 1 : 0, page.last_edited_time, fetchedAt, hash, rev, key, JSON.stringify(revisions),
+      fetchedAt, page.id, s.revision).run();
+    if (s.source_status !== 'active') summary.status_changes.push({ position_id: s.position_id, from: s.source_status, to: 'active' });
+    summary.refreshed.push({ position_id: position.position_id, revision: rev, changed_fields: changed });
+  }
+}
+
 /**
- * Pull the whole data source, refresh changed rows in place, flag rows that
- * left the source, and record the outcome. Never throws for a Notion error:
- * the error is stored as last_error and the previous rows keep serving.
+ * One bounded step of a journal scan. A scan is: page through the whole data
+ * source (cursor saved between syncs), read the body of every new or changed
+ * row (rows not reached stay pending in trade_journal_scan), and only when both
+ * are finished, check rows that were not returned. Each sync does as much as
+ * its request budget allows and says exactly where the scan stands; the next
+ * sync resumes from there. Never throws for a Notion error: the error is
+ * stored as last_error and the previous rows keep serving.
  */
 export async function syncTradeJournal(env, { fetchImpl = fetch, now = () => new Date() } = {}) {
   const db = env.DB;
@@ -327,72 +412,101 @@ export async function syncTradeJournal(env, { fetchImpl = fetch, now = () => new
   ).bind(startedAt, startedAt, new Date(Date.parse(startedAt) - SYNC_LEASE_MS).toISOString()).run();
   if (!lease.meta?.changes) return { ok: false, error: { code: 'busy', message: 'another sync is running' } };
 
-  const budget = { requests: MAX_QUERY_PAGES + MAX_BODY_REQUESTS + BODY_OVERSHOOT + MAX_MISSING_CHECKS, bodyRequests: 0 };
+  const budget = newBudget();
   const notion = notionClient(env, fetchImpl, budget);
-  const summary = { started_at: startedAt, rows_in_source: 0, inserted: [], refreshed: [], unchanged: 0, deferred: [],
-    status_changes: [], unsupported: 0, complete_scan: false };
+  const state = await loadSync(db);
+  const scan = state?.scan_started_at
+    ? { started_at: state.scan_started_at, cursor: state.scan_cursor, query_complete: Boolean(state.scan_query_complete), resumed: true }
+    : { started_at: startedAt, cursor: null, query_complete: false, resumed: false };
+  const summary = { started_at: startedAt, scan: null, rows_listed: 0, inserted: [], refreshed: [], unchanged: 0,
+    unsupported: 0, status_changes: [], pending_rows: 0, unverified_missing: [], present_but_not_listed: [] };
   try {
-    const { rows, complete } = await notion.queryAll();
-    summary.rows_in_source = rows.length;
-    summary.complete_scan = complete;
+    if (!scan.resumed) {
+      await db.prepare('DELETE FROM trade_journal_scan').run();
+      await saveScan(db, scan);
+    }
+    // 1. Page through the data source, saving the cursor after every page.
+    while (!scan.query_complete && budget.query < MAX_QUERY_PAGES) {
+      let page;
+      try {
+        page = await notion.queryPage(scan.cursor);
+      } catch (e) {
+        // A saved cursor Notion no longer accepts: restart the scan, visibly.
+        if (scan.cursor && e instanceof JournalReadError && e.status === 400) {
+          await db.prepare('DELETE FROM trade_journal_scan').run();
+          Object.assign(scan, { started_at: now().toISOString(), cursor: null, restarted_after: e.code ?? 'HTTP 400' });
+          await saveScan(db, scan);
+          continue;
+        }
+        throw e;
+      }
+      for (const row of page.rows) {
+        const json = JSON.stringify({ id: row.id, url: row.url, last_edited_time: row.last_edited_time, properties: row.properties });
+        await db.prepare(
+          `INSERT INTO trade_journal_scan (page_id, page_json, processed) VALUES (?, ?, 0)
+           ON CONFLICT(page_id) DO UPDATE SET page_json = excluded.page_json,
+             processed = CASE WHEN trade_journal_scan.page_json = excluded.page_json THEN trade_journal_scan.processed ELSE 0 END`,
+        ).bind(row.id, json).run();
+      }
+      summary.rows_listed += page.rows.length;
+      scan.cursor = page.next;
+      scan.query_complete = !page.next;
+      await saveScan(db, scan);
+    }
+
+    // 2. Read bodies for listed rows not yet processed in this scan, newest edits first.
     const stored = await loadRows(db);
-    rows.sort((a, b) => (a.last_edited_time < b.last_edited_time ? 1 : -1)); // newest edits first
-    for (const page of rows) {
+    const { results: pending } = await db.prepare('SELECT page_json FROM trade_journal_scan WHERE processed = 0').all();
+    const queue = pending.map(r => JSON.parse(r.page_json)).sort((a, b) => (a.last_edited_time < b.last_edited_time ? 1 : -1));
+    for (const page of queue) {
       const s = stored.get(page.id);
       // Notion reports last_edited_time to the minute, so an edit in the same
       // minute as our previous body read would keep the same value. Re-read
       // until our read is a full minute past the reported edit minute.
       const sameMinuteRisk = s && Date.parse(page.last_edited_time) + 60_000 > Date.parse(s.body_fetched_at);
       const need = !s || s.source_last_edited !== page.last_edited_time || sameMinuteRisk || s.source_status !== 'active';
-      if (!need) { summary.unchanged += 1; continue; }
-      if (budget.bodyRequests >= MAX_BODY_REQUESTS) { summary.deferred.push(page.id); continue; }
-      const fetchedAt = now().toISOString();
-      const body = await notion.bodyText(page.id);
-      const position = await pagePosition({
-        page_id: page.id, page_url: page.url, last_edited_time: page.last_edited_time,
-        properties: propertyValues(page.properties), body,
-      });
-      if (!position.supported) summary.unsupported += 1;
-      const key = contentKey(position);
-      const hash = await sha256Hex(key);
-      if (!s) {
-        await db.prepare(
-          `INSERT INTO trade_journal_rows (page_id, position_id, source_status, supported, source_last_edited, body_fetched_at,
-             content_hash, revision, position_json, revisions_json, first_seen_at, status_changed_at)
-           VALUES (?, ?, 'active', ?, ?, ?, ?, 1, ?, ?, ?, NULL)`,
-        ).bind(page.id, position.position_id, position.supported ? 1 : 0, page.last_edited_time, fetchedAt, hash, key,
-          JSON.stringify([{ rev: 1, hash, source_last_edited: page.last_edited_time, read_at: fetchedAt }]), fetchedAt).run();
-        summary.inserted.push(position.position_id);
-      } else if (s.content_hash === hash) {
-        await db.prepare(
-          `UPDATE trade_journal_rows SET source_last_edited = ?, body_fetched_at = ?, source_status = 'active',
-             status_changed_at = CASE WHEN source_status = 'active' THEN status_changed_at ELSE ? END WHERE page_id = ?`,
-        ).bind(page.last_edited_time, fetchedAt, fetchedAt, page.id).run();
-        if (s.source_status !== 'active') summary.status_changes.push({ position_id: s.position_id, from: s.source_status, to: 'active' });
-        summary.unchanged += 1;
+      if (need) {
+        if (budget.blocks >= MAX_BODY_REQUESTS) break;               // the rest stay pending for the next sync
+        const fetchedAt = now().toISOString();
+        let body;
+        try {
+          body = await notion.body(page.id);
+        } catch (e) {
+          if (e instanceof JournalReadError && e.code === 'budget') break;   // this row stays pending, not half-read
+          throw e;
+        }
+        const position = await pagePosition({
+          page_id: page.id, page_url: page.url, last_edited_time: page.last_edited_time,
+          properties: propertyValues(page.properties), body: body.text,
+        }, { bodyIncomplete: body.incomplete });
+        if (!position.supported) summary.unsupported += 1;
+        await upsertPosition(db, page, position, stored, fetchedAt, summary);
       } else {
-        const rev = s.revision + 1;
-        const changed = changedFields(JSON.parse(s.position_json), position);
-        const revisions = [...JSON.parse(s.revisions_json),
-          { rev, hash, source_last_edited: page.last_edited_time, read_at: fetchedAt, changed_fields: changed }];
-        await db.prepare(
-          `UPDATE trade_journal_rows SET supported = ?, source_last_edited = ?, body_fetched_at = ?, content_hash = ?, revision = ?,
-             position_json = ?, revisions_json = ?, source_status = 'active',
-             status_changed_at = CASE WHEN source_status = 'active' THEN status_changed_at ELSE ? END
-           WHERE page_id = ? AND revision = ?`,
-        ).bind(position.supported ? 1 : 0, page.last_edited_time, fetchedAt, hash, rev, key, JSON.stringify(revisions),
-          fetchedAt, page.id, s.revision).run();
-        summary.refreshed.push({ position_id: position.position_id, revision: rev, changed_fields: changed });
+        summary.unchanged += 1;
       }
+      await db.prepare('UPDATE trade_journal_scan SET processed = 1 WHERE page_id = ?').bind(page.id).run();
     }
-    // Only a complete scan can say a row has left the source.
-    if (complete) {
-      const seen = new Set(rows.map(r => r.id));
+    summary.pending_rows = (await db.prepare('SELECT COUNT(*) AS n FROM trade_journal_scan WHERE processed = 0').first()).n;
+
+    // 3. Only a finished scan (every page listed, every listed row processed) can say a row left the source.
+    const finished = scan.query_complete && summary.pending_rows === 0;
+    if (finished) {
+      const { results: listed } = await db.prepare('SELECT page_id FROM trade_journal_scan').all();
+      const seen = new Set(listed.map(r => r.page_id));
       for (const s of stored.values()) {
         if (seen.has(s.page_id) || ['archived', 'removed', 'removed_from_source'].includes(s.source_status)) continue;
-        let status = 'missing_unverified';
-        if (budget.requests > 0) status = await notion.pageStatus(s.page_id);
-        if (status === 'active') status = 'missing_unverified'; // retrievable yet not returned by the query
+        let status;
+        if (budget.page < MAX_MISSING_CHECKS) {
+          status = await notion.pageStatus(s.page_id);
+          if (status === 'active') {
+            // Retrievable and still in the data source, just not listed (e.g. created/edited during paging).
+            summary.present_but_not_listed.push(s.position_id);
+            if (s.source_status === 'active') continue;
+          }
+        } else {
+          status = 'missing_unverified';     // check budget used up: flagged, re-checked on the next finished scan
+          summary.unverified_missing.push(s.position_id);
+        }
         if (status !== s.source_status) {
           await db.prepare('UPDATE trade_journal_rows SET source_status = ?, status_changed_at = ? WHERE page_id = ?')
             .bind(status, now().toISOString(), s.page_id).run();
@@ -400,17 +514,23 @@ export async function syncTradeJournal(env, { fetchImpl = fetch, now = () => new
         }
       }
     }
+    summary.scan = { started_at: scan.started_at, resumed: scan.resumed, query_complete: scan.query_complete,
+      finished, ...(scan.restarted_after ? { restarted_after: scan.restarted_after } : {}) };
     const finishedAt = now().toISOString();
-    await db.prepare(
-      `UPDATE trade_journal_sync SET running_since = NULL, last_success_at = ?, last_error_json = NULL,
-         last_complete_scan_at = CASE WHEN ? THEN ? ELSE last_complete_scan_at END, last_summary_json = ? WHERE id = 1`,
-    ).bind(finishedAt, complete ? 1 : 0, finishedAt, JSON.stringify(summary)).run();
+    if (finished) {
+      await db.prepare('DELETE FROM trade_journal_scan').run();
+      await db.prepare('UPDATE trade_journal_sync SET scan_started_at = NULL, scan_cursor = NULL, scan_query_complete = 0, last_complete_scan_at = ? WHERE id = 1')
+        .bind(finishedAt).run();
+    }
+    await db.prepare('UPDATE trade_journal_sync SET running_since = NULL, last_success_at = ?, last_error_json = NULL, last_summary_json = ? WHERE id = 1')
+      .bind(finishedAt, JSON.stringify(summary)).run();
     return { ok: true, summary: { ...summary, finished_at: finishedAt } };
   } catch (e) {
     const error = e instanceof JournalReadError
       ? { code: e.code ?? 'notion_error', status: e.status, step: e.step, message: e.message }
       : { code: 'internal', message: 'unexpected error while reading the journal' };
     error.at = now().toISOString();
+    summary.scan = { started_at: scan.started_at, resumed: scan.resumed, query_complete: scan.query_complete, finished: false };
     await db.prepare('UPDATE trade_journal_sync SET running_since = NULL, last_error_json = ?, last_summary_json = ? WHERE id = 1')
       .bind(JSON.stringify(error), JSON.stringify(summary)).run();
     if (!(e instanceof JournalReadError)) console.error(JSON.stringify({ event: 'trade_journal_sync_internal_error', name: e?.name }));
@@ -427,13 +547,19 @@ function rowView(r) {
   };
 }
 
-function syncView(s) {
-  if (!s) return { last_success_at: null, last_attempt_at: null, last_complete_scan_at: null, last_error: null, running: false };
+export function syncView(s) {
+  if (!s) return { last_success_at: null, last_attempt_at: null, last_complete_scan_at: null, last_error: null, running: false, scan_in_progress: null };
   return {
     last_success_at: s.last_success_at, last_attempt_at: s.last_attempt_at, last_complete_scan_at: s.last_complete_scan_at,
     last_error: s.last_error_json ? JSON.parse(s.last_error_json) : null, running: Boolean(s.running_since),
+    scan_in_progress: s.scan_started_at ? { started_at: s.scan_started_at, query_complete: Boolean(s.scan_query_complete) } : null,
     last_summary: s.last_summary_json ? JSON.parse(s.last_summary_json) : null,
   };
+}
+
+export async function loadPosition(db, positionId) {
+  const r = await db.prepare('SELECT * FROM trade_journal_rows WHERE position_id = ?').bind(positionId).first();
+  return r ? rowView(r) : null;
 }
 
 /** Every stored position with an execution on `day` (America/New_York), plus unsupported rows dated that day. */
@@ -450,13 +576,21 @@ export async function journalDay(db, day) {
   }
   positions.sort((a, b) => (a.opened_ts < b.opened_ts ? -1 : 1));
   const counted = positions.filter(p => p.source_status === 'active');
+  const closed = counted.filter(p => p.closed), open = counted.filter(p => !p.closed);
   return {
     date: day, tz: JOURNAL_TZ, positions, unsupported,
     totals: {
       positions: counted.length, fills: counted.reduce((s, p) => s + p.n_fills, 0),
-      gross: round(counted.reduce((s, p) => s + p.gross_pnl, 0), 2),
-      fees: round(counted.reduce((s, p) => s + p.fees, 0), 6),
-      net: round(counted.reduce((s, p) => s + p.net_pnl, 0), 6),
+      closed_positions: closed.length,
+      // Realised results of closed positions only.
+      gross: round(closed.reduce((s, p) => s + p.gross_pnl, 0), 2),
+      fees: round(closed.reduce((s, p) => s + p.fees, 0), 6),
+      net: round(closed.reduce((s, p) => s + p.net_pnl, 0), 6),
+      // Open positions are carried separately: cost still at risk, fees already paid, partial realised P&L.
+      open_positions: open.length,
+      open_cost_basis: round(open.reduce((s, p) => s + p.open_cost_basis, 0), 2),
+      open_fees_paid: round(open.reduce((s, p) => s + p.fees, 0), 6),
+      open_realized_gross: round(open.reduce((s, p) => s + p.realized_gross_pnl, 0), 2),
       excluded_not_active: positions.length - counted.length,
     },
     sync: syncView(await loadSync(db)),
@@ -464,7 +598,7 @@ export async function journalDay(db, day) {
 }
 
 // ------------------------------------------------------------------- routes
-async function authorize(request, env) {
+export async function authorizeJournalViewer(request, env) {
   const session = await requireSession(request, env);
   if (!session) return { response: jsonResponse({ error: 'Not signed in' }, 401) };
   const allowed = String(env[VIEWERS_VAR_NAME] ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -477,7 +611,7 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PAGE_ID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 
 export async function handleTradeJournalDay(request, env, url) {
-  const auth = await authorize(request, env);
+  const auth = await authorizeJournalViewer(request, env);
   if (auth.response) return auth.response;
   const day = url.searchParams.get('date') ?? '';
   if (!ISO_DAY.test(day)) return jsonResponse({ error: 'date must be YYYY-MM-DD' }, 400);
@@ -485,7 +619,7 @@ export async function handleTradeJournalDay(request, env, url) {
 }
 
 export async function handleTradeJournalRow(request, env, url) {
-  const auth = await authorize(request, env);
+  const auth = await authorizeJournalViewer(request, env);
   if (auth.response) return auth.response;
   const raw = url.searchParams.get('page_id') ?? '';
   if (!PAGE_ID.test(raw)) return jsonResponse({ error: 'page_id must be a Notion page id' }, 400);
@@ -499,7 +633,7 @@ export async function handleTradeJournalRow(request, env, url) {
 export async function handleTradeJournalSync(request, env, { fetchImpl = fetch } = {}) {
   const forbidden = checkOrigin(request);
   if (forbidden) return forbidden;
-  const auth = await authorize(request, env);
+  const auth = await authorizeJournalViewer(request, env);
   if (auth.response) return auth.response;
   const result = await syncTradeJournal(env, { fetchImpl });
   const status = result.ok ? 200 : result.error?.code === 'busy' ? 409 : result.error?.code === 'not_configured' ? 503 : 502;

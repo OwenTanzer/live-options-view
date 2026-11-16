@@ -9,7 +9,14 @@
 --   history. source_status: active | archived | removed | removed_from_source |
 --   missing_unverified -- rows that leave the source stay visible, flagged.
 -- trade_journal_sync: single row (id = 1) with the sync lease, the last
---   successful sync, the last complete scan and the last read error.
+--   successful sync, the last complete scan, the last read error and the
+--   in-progress scan (its start, saved query cursor and whether listing is done).
+-- trade_journal_scan: rows listed by the scan in progress (page metadata and
+--   whether its body has been processed), so a scan larger than one sync's
+--   request budget resumes where it stopped instead of restarting.
+-- trade_journal_context: cached market context (underlying + exact-option
+--   series read from the existing R2 archives) for positions whose session is
+--   over; archived market data does not change, so repeat views cost no reads.
 
 CREATE TABLE IF NOT EXISTS trade_journal_rows (
   page_id            TEXT PRIMARY KEY,
@@ -33,5 +40,21 @@ CREATE TABLE IF NOT EXISTS trade_journal_sync (
   last_success_at       TEXT,
   last_complete_scan_at TEXT,
   last_error_json       TEXT,
-  last_summary_json     TEXT
+  last_summary_json     TEXT,
+  scan_started_at       TEXT,
+  scan_cursor           TEXT,
+  scan_query_complete   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS trade_journal_scan (
+  page_id    TEXT PRIMARY KEY,
+  page_json  TEXT NOT NULL,
+  processed  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS trade_journal_context (
+  cache_key     TEXT PRIMARY KEY,
+  position_id   TEXT NOT NULL,
+  built_at      TEXT NOT NULL,
+  context_json  TEXT NOT NULL
 );
