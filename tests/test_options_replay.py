@@ -80,6 +80,10 @@ class HiddenDateAndClock(unittest.TestCase):
     def test_reveal_discloses_date_and_sources(self):
         s = RS(minute_pack(), start_s=OPEN + 3600)
         s.order("buy", "C700", 1)
+        with self.assertRaisesRegex(ReplayError, "Sell open positions"):
+            s.reveal()
+        self.assertFalse(s.revealed)
+        s.order("sell", "C700", 1)
         r = s.reveal()["reveal"]
         self.assertEqual(r["date"], DAY)
         self.assertEqual(r["weekday"], "Tuesday")
@@ -288,6 +292,7 @@ class Reconciliation(unittest.TestCase):
         s = RS(pack, start_s=OPEN + 3600,
                raw_lookup=lambda k, c: {"key": k, "Bid": 9.0, "Ask": 9.5, "UnderlyingPrice": 1, "OptionSymbol": "x"})
         s.order("buy", "C700", 1)
+        s.order("sell", "C700", 1)
         self.assertFalse(s.reveal()["reveal"]["reconciliation"]["lines"][0]["raw_matches"])
 
 
@@ -423,6 +428,7 @@ class TrainerStorage(unittest.TestCase):
         for pat in DATE_PATTERNS:
             self.assertIsNone(re.search(pat, blob.replace(st.trades()[0]["created_at"], "")), pat)
         self.assertNotIn("intraday/", blob)
+        s.order("sell", "C700", 1)
         s.reveal()
         st.close()
         fresh = TrainerStore(self.db)              # new connection, nothing in memory

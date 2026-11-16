@@ -36,7 +36,7 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Callable
 
-from archive import MAX_QUOTE_AGE_S, contract_strike, quote_usable
+from archive import SYMBOL, MAX_QUOTE_AGE_S, contract_strike, quote_usable
 
 MULTIPLIER = 100
 DEFAULT_FEE = 0.65          # USD per contract per side; shown everywhere it applies
@@ -51,7 +51,7 @@ def hhmmss(t: int) -> str:
 
 def label(contract: str) -> str:
     kind = "call" if contract[0] == "C" else "put"
-    return f"QQQ {contract[1:]} {kind}, 0DTE"
+    return f"{SYMBOL} {contract[1:]} {kind}, 0DTE"
 
 
 def new_trade_id() -> str:
@@ -259,6 +259,9 @@ class ReplaySession:
                        "detail": detail, "age_s": age,
                        "since": hhmmss(current_dark["start"]) if current_dark else None,
                        "snapshot_time": hhmmss(snap["t"]) if snap else None},
+            "symbol": SYMBOL,
+            "volume": [[s["t"], s["volume"]] for s in self.snaps if s["t"] <= self.clock and s.get("volume") is not None],
+            "volume_unit": self.pack.get("volume_unit", "option contracts"),
             "spot": {"now": spot, "last": self._last_consistent_spot(self.clock), "series": series},
             "dark": dark,
             "board": rows,
@@ -600,8 +603,53 @@ class ReplaySession:
                 "reconciles": abs(net - self.realized) < 0.005 if own else None,
                 "formula": "net = sum(sell bid x 100 x qty) - sum(buy ask x 100 x qty) - fee x contracts x sides"}
 
+    def _attribution(self, reconciliation):
+        """Match closed quantities and estimate premium changes at entry sensitivities."""
+        from collections import defaultdict, deque
+        lots = defaultdict(deque)
+        results = []
+        for line in reconciliation["lines"]:
+            if line["kind"] != "fill":
+                continue
+            contract = line["contract"]
+            if line["side"] == "buy":
+                lots[contract].append([line, line["qty"]])
+                continue
+            remaining = line["qty"]
+            while remaining and lots[contract]:
+                entry, available = lots[contract][0]
+                qty = min(remaining, available)
+                mult = qty * MULTIPLIER
+                fees = qty * (entry["fee"] / entry["qty"] + line["fee"] / line["qty"])
+                net = (line["fill_price"] - entry["fill_price"]) * mult - fees
+                prices = [entry["recorded_bid"], entry["recorded_ask"], line["recorded_bid"], line["recorded_ask"]]
+                if None not in prices:
+                    friction = -mult * ((prices[1]-prices[0]) + (prices[3]-prices[2])) / 2 - fees
+                    start, end = entry["raw_row"] or {}, line["raw_row"] or {}
+                    def effect(sensitivity, field, scale=1):
+                        vals = start.get(sensitivity), start.get(field), end.get(field)
+                        return None if None in vals else vals[0] * (vals[2]-vals[1]) * scale * mult
+                    spot = effect("Delta", "UnderlyingPrice")
+                    volatility = effect("Vega", "IV", 100)
+                    def seconds(clock):
+                        h, m, s = map(int, clock[:8].split(":"))
+                        return h*3600 + m*60 + s
+                    elapsed = seconds(line["decision_time"]) - seconds(entry["decision_time"])
+                    time = None if start.get("Theta") is None else start["Theta"] * elapsed / 86400 * mult
+                    residual = net - friction - sum(x for x in (spot,time,volatility) if x is not None)
+                    results.append(dict(contract=contract, qty=qty, net=net, friction=friction,
+                                        spot=spot, time=time, volatility=volatility, residual=residual))
+                remaining -= qty
+                if qty == available:
+                    lots[contract].popleft()
+                else:
+                    lots[contract][0][1] -= qty
+        return results
+
     def reveal(self) -> dict:
         """End the session and disclose the day, its full path, sources and reconciliation."""
+        if not self.revealed and any(lot['qty'] > 0 for lot in self.lots.values()):
+            raise ReplayError('Sell open positions before Reveal, or continue to expiry for settlement.')
         if self.on_reveal is not None:
             self.on_reveal(self)          # persist the unmask before showing anything
         self.revealed = True
@@ -610,6 +658,7 @@ class ReplaySession:
         full = [[s["t"], s["spot"]] for s in self.snaps
                 if s["ok"] and self.open_s - 300 <= s["t"] <= self.close_s]
         sim = self.pack.get("mode") == "simulation"
+        reconciled = self.reconciliation()
         v["reveal"] = {
             "mode": "simulation" if sim else "replay",
             "simulation": self.pack.get("sim") if sim else None,
@@ -617,11 +666,13 @@ class ReplaySession:
             "weekday": None if sim else _date.fromisoformat(self.pack["day"]).strftime("%A"),
             "start_time": hhmmss(self.start_s) + " ET",
             "full_day_spot": full,
+            "full_day_volume": [[s["t"], s["volume"]] for s in self.snaps if s.get("volume") is not None],
             "full_day_dark": self.dark_stretches(self.close_s),
             "coverage_usable": self.pack["coverage_usable"],
-            "net_profit": round(self.realized, 2),
+            "net_profit": None if v["positions"] else round(self.realized, 2),
             "open_positions_unsettled": v["positions"],
-            "reconciliation": self.reconciliation(),
+            "reconciliation": reconciled,
+            "attribution": self._attribution(reconciled),
             "earlier_attempts": [{**{k: x for k, x in a.items() if k != "fills"},
                                   "reconciliation": self.reconciliation(a["fills"])} for a in self.attempts],
         }

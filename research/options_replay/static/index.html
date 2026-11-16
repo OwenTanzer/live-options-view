@@ -83,12 +83,13 @@ details summary { cursor: pointer; }
 <body>
 <main>
   <header>
-    <h1>Options Replay</h1>
+    <a href="https://options.moopertonic.net/">← Options View</a><h1>Options Trainer</h1>
     <span class="clock" id="clock">--:--:--</span>
     <span class="muted" id="remaining"></span>
     <span class="chip" id="qstatus">no session</span>
     <span class="muted" id="attempt"></span>
     <span style="flex:1"></span>
+    <label>Underlying <select id="ticker"><option>QQQ</option><option>SPY</option></select></label>
     <select id="mode" aria-label="Mode">
       <option value="replay" selected>Replay: historical day, date hidden</option>
       <option value="simulation">Simulation: generated day</option>
@@ -104,7 +105,8 @@ details summary { cursor: pointer; }
     <div class="grid">
       <section class="panel">
         <h2>QQQ · date hidden <span class="muted" id="spotnow"></span></h2>
-        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Five-minute QQQ candlesticks from observed spot prices"></svg>
+        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Five-minute candlesticks from observed spot prices"></svg>
+        <svg id="volume" style="height:50px" aria-label="Five-minute volume"></svg><small id="volume-label"></small>
         <div class="legend"><i></i> past stretches where trading was disabled (hover for the reason)</div>
         <div class="controls" style="margin-top:8px">
           <button id="play" title="Play / pause (space)">▶ Play</button>
@@ -153,9 +155,11 @@ details summary { cursor: pointer; }
   <div id="idle" class="loading muted">Choose <b>Replay</b> (a random historical day, date hidden) or <b>Simulation</b> (a generated day from a recorded seed), then press <b>New session</b>.
     <br><span style="font-size:12px">Keys: <kbd>space</kbd> play/pause · <kbd>→</kbd> step one bar · <kbd>c</kbd> center strip</span></div>
 </main>
+<script src="shared/format.js"></script>
 <script>
 "use strict";
 let S = null, V = null, playing = false, timer = null, busy = false, lastMove = 0, anchor = null, resetArm = 0;
+const symbolPath = location.pathname.startsWith("/spy/") ? "/spy" : "";
 const $ = (id) => document.getElementById(id);
 const money = (x) => (x == null ? "--" : (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(2));
 const px = (x) => (x == null ? "--" : Number(x).toFixed(2));
@@ -166,7 +170,7 @@ const DWELL = 500;
 
 async function api(path, body) {
   let r;
-  try { r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  try { r = await fetch(symbolPath + path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
   catch (x) { const e = new Error("no response from the server"); e.network = true; throw e; }
   const j = await r.json().catch(() => null);
   if (j === null) { const e = new Error("no usable response from the server"); e.network = true; throw e; }
@@ -175,7 +179,7 @@ async function api(path, body) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const newRid = () => ((crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2))).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
-function remember(sid) { try { localStorage.setItem("optionsReplay.lastSession", sid); } catch (e) { /* convenience only */ } }
+function remember(sid) { try { localStorage.setItem("optionsReplay.lastSession" + symbolPath, sid); } catch (e) { /* convenience only */ } }
 
 // ---- S2c: every write has a request id; the status shown is only what storage confirmed ----
 const saves = [];
@@ -265,7 +269,10 @@ async function skipMinutes(min) {
 }
 
 async function order(side, contract, qty) {
-  qty = qty || Math.max(1, Math.min(20, parseInt($("qty").value || "1", 10)));
+  const normalized = normalizePaperOrder({side, quantity: qty ?? $("qty").value});
+  if (normalized.error) return say(normalized.error);
+  qty = normalized.value.qty;
+  if (qty > 20) return say("Choose up to 20 practice contracts.");
   say(""); await submit("/api/order", { side, contract, qty }, `${side} ${qty}× ${contract}`);
 }
 async function undo(fillId) { await submit("/api/undo", { fill_id: fillId }, `undo ${fillId}`); }
@@ -302,19 +309,19 @@ function render() {
   const sim = s.mode === "simulation" ? s.simulation : null, sb = $("simbanner");
   if (sim) { sb.className = "banner on"; sb.innerHTML = `<b>SIMULATION: a generated session, not a historical day.</b> Seed ${sim.seed} · generator ${esc(sim.generator_version)} · inputs ${esc(sim.inputs_digest)} ·
       <b>provisional quotes</b> (model output, not recorded market quotes; ${sim.generator_version === "sim-v2"
-        ? "S3c combined model fitted on development days only, held-out validation pending"
+        ? "pricing fitted on historical examples"
         : "S3a donor pricing; measured 0.36-0.56x recorded premium levels"}). The same seed and version regenerate the same path and quotes.`; }
   else sb.className = "banner";
-  document.querySelector("section.panel h2").firstChild.textContent = sim ? "Generated QQQ path (simulation) " : "QQQ · date hidden ";
+  document.querySelector("section.panel h2").firstChild.textContent = sim ? `Generated ${V.symbol} · same-day expiry ` : `${V.symbol} · same-day expiry · date hidden `;
   const rem = s.seconds_to_close;
   $("remaining").textContent = s.closed ? "market closed" : `${Math.floor(rem / 3600)}h ${String(Math.floor(rem % 3600 / 60)).padStart(2, "0")}m to close`;
   $("qstatus").textContent = s.revealed ? "revealed" : q.status === "live" ? "quotes live" : "trading disabled";
   $("qstatus").className = "chip " + (s.revealed ? "" : q.status);
   $("attempt").textContent = s.attempt > 1 ? `attempt ${s.attempt}` : "";
-  $("qinfo").textContent = q.snapshot_time ? `· recorded ${q.snapshot_time} ET, ${q.age_s}s before the clock` : "";
+  $("qinfo").textContent = q.snapshot_time ? `· ${sim ? "generated" : "recorded"} ${q.snapshot_time} ET, ${q.age_s}s before the clock` : "";
   $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : V.spot.last != null ? `· last consistent ${px(V.spot.last)}` : "";
   const r = V.rules;
-  $("rules").textContent = `Buy at recorded ask · sell at recorded bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier}`;
+  $("rules").textContent = `Buy at ${sim ? "generated" : "archived"} ask · sell at ${sim ? "generated" : "archived"} bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier}`;
   $("pace").textContent = `5-minute candles from ${sim ? "generated" : "recorded"} spot samples. Fast Play advances one quote per update (minimum ${(s.min_dwell_ms / 1000).toFixed(1)} s).`;
   const b = $("banner");
   if (q.status === "disabled" && !s.revealed) {
@@ -347,7 +354,7 @@ function drawChart() {
     c.high = Math.max(c.high, price); c.low = Math.min(c.low, price); c.close = price;
     candles.set(key, c);
   }
-  if (!candles.size) { svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable spot price</text>'; return; }
+  if (!candles.size) { $("volume").innerHTML = ""; $("volume-label").textContent = ""; svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable spot price</text>'; return; }
   const values = [...candles.values()];
   const high = Math.max(...values.map(c => c.high)), low = Math.min(...values.map(c => c.low));
   const margin = Math.max(.04, (high - low) * .1), top = high + margin, bottom = low - margin;
@@ -382,6 +389,18 @@ function drawChart() {
     if(sample) g += `<circle cx="${x(t)}" cy="${y(sample[1])}" r="3.5" stroke="var(--ink)" fill="${f.side==="buy"?"var(--up)":"var(--down)"}"><title>${esc(f.side)} ${esc(f.label)} @ ${f.price}</title></circle>`;
   }
   svg.innerHTML = g;
+  const totals = new Map();
+  for (const [time, qty] of (V.reveal?.full_day_volume || V.volume || [])) {
+    const t = Math.floor((s.mode === "simulation" ? time - 1 : time) / bar) * bar;
+    if (t >= left && t < right) totals.set(t, (totals.get(t) || 0) + qty);
+  }
+  const maxVolume = Math.max(1, ...totals.values());
+  $("volume").setAttribute("viewBox", `0 0 ${width} 50`);
+  $("volume").innerHTML = [...totals].map(([t, qty]) => {
+    const h = 46 * qty / maxVolume;
+    return `<rect x="${x(t+bar/2)-candleW/2}" y="${49-h}" width="${candleW}" height="${h}" fill="var(--accent)"><title>${hms(t)} · ${qty.toLocaleString()} ${V.volume_unit}</title></rect>`;
+  }).join("");
+  $("volume-label").textContent = totals.size ? "5-minute volume · " + V.volume_unit : "Volume unavailable for this interval";
 }
 
 // Strip: anchored so rows don't jump under the cursor; re-centers only when spot leaves the middle half.
@@ -420,7 +439,7 @@ function renderPositions(done) {
   const a = V.account;
   $("account").innerHTML = `Realized net profit <span class="big ${cls(a.realized_net)}">${money(a.realized_net)}</span><br><span class="muted">cash ${money(a.cash)} of ${money(a.cash_start)} · fees paid ${money(a.fees_paid)}</span>`;
   $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div${f.voided ? ' style="text-decoration:line-through;opacity:.6"' : ""}>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${esc(f.label)} @ ${px(f.price)}` +
-      (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)} recorded ${f.quote_time}, fee ${money(f.fee)})</span>` : ` <span class="muted">${esc(f.note)}</span>`) +
+      (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)} quoted ${f.quote_time}, fee ${money(f.fee)})</span>` : ` <span class="muted">${esc(f.note)}</span>`) +
       (f.net_pnl != null ? ` → <span class="${cls(f.net_pnl)}">${money(f.net_pnl)} net</span>` : "") +
       (f.saved ? ` <span class="saved">saved ✓ ${esc(f.saved.fill_id)}</span>` : ` <span class="unsaved">${esc(f.save_error || "not saved")}</span>`) +
       (f.voided ? ` <span class="muted" style="text-decoration:none">undone ${esc(f.void ? f.void.void_id : "")} (kept on record)</span>` : "") +
@@ -432,7 +451,7 @@ function reconTable(rc) {
     <td>${esc(l.source_key || "—")}</td><td>${px(l.recorded_bid)} / ${px(l.recorded_ask)}</td>
     <td>${l.raw_row ? `${px(l.raw_row.Bid)} / ${px(l.raw_row.Ask)} <span class="muted">${esc(l.raw_row.OptionSymbol || "")}</span>` : "—"}</td>
     <td>${px(l.fill_price)} ${l.raw_matches === true ? "✓" : l.raw_matches === false ? "✗" : ""}</td><td>${money(l.premium_cash)}</td><td>${money(-l.fee)}</td></tr>`).join("");
-  return `<table class="recon"><tr><th>Fill</th><th>Contract</th><th>Decision clock</th><th>Raw source</th><th>Recorded bid/ask</th><th>Raw row bid/ask</th><th>Price</th><th>Premium</th><th>Fee</th></tr>${rows}</table>
+  return `<table class="recon"><tr><th>Fill</th><th>Contract</th><th>Decision clock</th><th>Raw source</th><th>Decision bid/ask</th><th>Source bid/ask</th><th>Price</th><th>Premium</th><th>Fee</th></tr>${rows}</table>
     <p>Gross premium ${money(rc.gross_premium)} − fees ${money(rc.fees)} = <b class="${cls(rc.net)}">${money(rc.net)}</b>${rc.reconciles === true ? " ✓ matches the ledger" : rc.reconciles === false ? " ✗ differs from the ledger" : ""}</p>`;
 }
 function renderReveal() {
@@ -442,16 +461,17 @@ function renderReveal() {
   box.className = "panel on";
   const simInfo = r.mode === "simulation" ? r.simulation : null;
   box.innerHTML = (simInfo ? `<h2>Revealed: simulation</h2><div class="big">Generated session · seed ${simInfo.seed} · ${esc(simInfo.generator_version)}</div>
-    <p class="muted">Not a historical day. Mechanism: ${esc(simInfo.mechanism)}. Calibration: ${simInfo.calibration.historical_sessions} real 5-minute sessions,
-    ${simInfo.calibration.donor_days} EOD donor chains (this day's donor: ${esc(simInfo.donor_day)}), ${simInfo.calibration.r2_objects} R2 objects; inputs digest ${esc(simInfo.inputs_digest.slice(0, 16))}…, pack sha256 ${esc(simInfo.pack_sha256.slice(0, 16))}….
+    <p class="muted">Not a historical day. Mechanism: ${esc(simInfo.mechanism)}. Calibration: ${simInfo.calibration.historical_sessions} historical path sessions,
+    source digest ${esc(simInfo.path_inputs_digest?.slice(0, 12) || simInfo.inputs_digest.slice(0,12))}; inputs digest ${esc(simInfo.inputs_digest.slice(0, 16))}…, pack sha256 ${esc(simInfo.pack_sha256.slice(0, 16))}….
     Parity residual of the generated quotes: median $${(simInfo.parity_residual_usd.median ?? 0).toFixed(3)}, p95 $${(simInfo.parity_residual_usd.p95 ?? 0).toFixed(3)}.</p>
     <p class="muted">Known limitations: ${simInfo.limitations.map(esc).join(" ")}</p>`
     : `<h2>Revealed</h2><div class="big">${esc(r.weekday)}, ${esc(r.date)}</div>`) + `
-    <p>You landed at ${esc(r.start_time)}. Net profit after fees: <b class="${cls(r.net_profit)}">${money(r.net_profit)}</b>.
-    The dashed line is the rest of the day; shaded bands are every stretch where trading was disabled.</p>
+    <p>You landed at ${esc(r.start_time)}. Net profit after fees: <b class="${cls(r.net_profit)}">${r.net_profit == null ? "Unscored · position was still open" : money(r.net_profit)}</b>.
+    Candles show the full session. The vertical clock marker shows where you revealed it.</p>
     <h2>Reconciliation</h2>${reconTable(r.reconciliation)}
+    <h2>What moved the trade</h2><p class="muted">Estimates use entry sensitivities where available. The residual includes repricing the available inputs cannot explain.</p>${(r.attribution || []).map(a => `<p>${esc(a.contract)} × ${a.qty} · Net ${money(a.net)} · Spread and fees ${money(a.friction)}${a.spot == null ? "" : " · Estimated spot " + money(a.spot)}${a.time == null ? "" : " · Estimated time " + money(a.time)}${a.volatility == null ? "" : " · Estimated volatility " + money(a.volatility)} · Unattributed premium change ${money(a.residual)}</p>`).join("") || "No matched buy and sell fills."}
     ${r.earlier_attempts.map((a) => `<h2>Earlier attempt ${a.attempt} (reset after seeing up to ${esc(a.seen_until)} ET)</h2>${reconTable(a.reconciliation)}`).join("")}
-    <p class="muted">Quotes were tradable for ${(r.coverage_usable.ratio * 100).toFixed(1)}% of this session. Parity is a consistency check on recorded values, not proof of their timestamps.</p>`;
+    <p class="muted">Quotes were tradable for ${(r.coverage_usable.ratio * 100).toFixed(1)}% of this session. ${simInfo ? "Quotes regenerate from the seed and pricing version." : "Parity checks consistency of the archived prices; individual quote timestamps are unavailable."}</p>`;
 }
 
 // ---- S2b: saved trades and notes -------------------------------------------
@@ -528,7 +548,7 @@ async function flushNote(tid) {
 async function loadSessions() {
   try {
     const r = await api("/api/sessions");
-    let last = null; try { last = localStorage.getItem("optionsReplay.lastSession"); } catch (e) { /* none */ }
+    let last = null; try { last = localStorage.getItem("optionsReplay.lastSession" + symbolPath); } catch (e) { /* none */ }
     const open = r.sessions.filter((x) => !x.revealed && x.session_id !== S);
     $("sesslist").innerHTML = open.length ? `<b>Unfinished sessions</b> (date hidden; resume to finish or reveal):` + open.slice().reverse().map((x) =>
       `<div class="rec"><code>${esc(x.session_id)}</code> · ${x.mode === "simulation" ? `simulation seed ${x.simulation.seed}` : "replay"}${x.session_id === last ? " · <b>last played here</b>" : ""} · clock ${esc(x.clock)} ET · attempt ${x.attempt} · ${x.trades} trade${x.trades === 1 ? "" : "s"}
@@ -546,7 +566,7 @@ async function loadRecords() {
       · gross ${money(t.gross_premium)} · fees ${money(t.fees)} · net ${t.net == null ? "open" : money(t.net)}
       ${t.note && t.note.current ? `<br><span class="muted">note rev ${t.note.current.rev}: ${esc(t.note.current.text.slice(0, 140))}</span>` : ""}
       <details><summary class="muted">fills and decision-time state</summary>${t.fills.map((f) => `<div style="margin:4px 0">
-        <code>${esc(f.fill_id)}</code>${f.voided ? ` <b>undone</b> (${esc(f.void_id)}, kept on record)` : ""} ${f.side} ${f.qty}× @ ${px(f.price)} · decision ${esc(f.decision_clock)} ET · recorded ${esc(f.quote_time || "-")} (bid ${px(f.bid)} / ask ${px(f.ask)}) · fee ${money(f.fee)} · cash ${money(f.cash_flow)}
+        <code>${esc(f.fill_id)}</code>${f.voided ? ` <b>undone</b> (${esc(f.void_id)}, kept on record)` : ""} ${f.side} ${f.qty}× @ ${px(f.price)} · decision ${esc(f.decision_clock)} ET · quoted ${esc(f.quote_time || "-")} (bid ${px(f.bid)} / ask ${px(f.ask)}) · fee ${money(f.fee)} · cash ${money(f.cash_flow)}
         · source ${esc(f.source_key || "-")} · state sha256 ${esc(f.decision_state_sha256.slice(0, 12))}… ${f.decision_state_verified ? "✓" : "✗"}</div>`).join("")}</details></div>`).join("")
       : "No saved trades yet.";
   } catch (e) { $("reclist").textContent = "Could not read storage: " + e.message; }
@@ -554,6 +574,8 @@ async function loadRecords() {
 $("reload-recs").addEventListener("click", loadRecords);
 loadRecords();
 
+$("ticker").value = symbolPath ? "SPY" : "QQQ";
+$("ticker").onchange = () => location.assign($("ticker").value === "SPY" ? "/spy/" : "/");
 $("new").addEventListener("click", newDay);
 $("mode").addEventListener("change", () => { $("seed").hidden = $("mode").value !== "simulation"; });
 $("play").addEventListener("click", togglePlay);

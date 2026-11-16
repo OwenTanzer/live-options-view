@@ -48,12 +48,12 @@ SUPPORTED_VERSIONS = (GENERATOR_VERSION, SIM_V2)
 DEFAULT_VERSION = SIM_V2
 LIMITATIONS_V2 = [
     "Quotes come from the S3c combined model fitted on development days only; no held-out validation "
-    "exists yet (held-out = collector sessions from 2026-11-16, first 10 per symbol).",
+    "exists yet for this provisional practice model.",
     "On development days it still misses absolute level error (about $9-12/contract at midday/close), "
     "30-minute hold profit (about $4-6) and opening decay; see calibration/S3C_RESULTS.md.",
     "The volatility level comes from the generated path's realized volatility times a fitted ratio; a real day's "
     "implied level is not knowable from a path, so day-to-day level dispersion is not reproduced.",
-    "The generated session ends at 16:00; real expiring QQQ options trade until 16:15 (SEC Rel. 34-105153). "
+    f"The generated session ends at 16:00; real expiring {A.SYMBOL} options trade until 16:15 (SEC Rel. 34-105153). "
     "The post-close variance term (decaying to 17:30, the FINRA 2360 exercise-decision deadline) is a modelling "
     "assumption fitted to development quotes, not a settlement rule.",
     "The path is resampled from real 5-minute returns; intrabar moves are a Brownian bridge, not ticks.",
@@ -201,6 +201,14 @@ class Simulator:
         env_file = os.environ.get("OPTIONS_REPLAY_ENV_FILE")
         if env_file:
             A._load_env_file(Path(env_file))
+        if A.SYMBOL == "SPY":
+            from price_path import DayBars
+            import numpy as np
+            blob = (self.cache / "spy_donors.json").read_bytes()
+            sessions = [DayBars(date.fromisoformat(d["day"]), *(np.asarray(d[k]) for k in ("t","o","h","l","c","v"))) for d in json.loads(blob)]
+            self.manifest = {"inputs_digest": _sha(blob), "historical_sessions": len(sessions), "r2_objects": {}}
+            self._inputs = sessions, [], None
+            return self._inputs
         frozen = self.cache / "frozen_inputs.pkl"
         man_path = self.cache / "inputs_manifest.json"
         if frozen.exists() and man_path.exists():
@@ -283,9 +291,10 @@ class Simulator:
         sessions, _, _ = self._load_inputs()
         params_bytes = PR.PARAMS_PATH.read_bytes()
         params = json.loads(params_bytes)
-        model = PR.SymbolModel(params["symbols"]["QQQ"])
+        model = PR.SymbolModel(params["symbols"][A.SYMBOL])
         rng = np.random.default_rng(int(seed))
-        closes, ranges = bootstrap_day(sessions, rng, mode="block", block_size=BLOCK_SIZE)
+        volume = []
+        closes, ranges = bootstrap_day(sessions, rng, mode="block", block_size=BLOCK_SIZE, sampled_volume=volume)
         timestamps, path = upsample_to_seconds(LABEL_DATE, closes, ranges, rng, step_s=60)
         series = []
         for ts, spot in zip(timestamps, path):
@@ -313,21 +322,27 @@ class Simulator:
             snaps.append({"t": t, "key": f"sim/{SIM_V2}/{int(seed)}/{t // 3600:02d}{t % 3600 // 60:02d}",
                           "spot": spot, "q": q, "ok": True, "reason": None, "content_t": t,
                           "parity_spot": None})
+        # Show each donor volume only after its five-minute interval is complete.
+        for snapshot in snaps:
+            elapsed = snapshot["t"] - OPEN_S
+            if elapsed > 0 and elapsed % 300 == 0:
+                snapshot["volume"] = volume[elapsed // 300 - 1]
         digest = _sha((self.manifest["inputs_digest"] + _sha(params_bytes)).encode())
         body = json.dumps([[x["t"], x["spot"], x["q"]] for x in snaps], sort_keys=True, separators=(",", ":")).encode()
         sim = {"seed": int(seed), "generator_version": SIM_V2, "inputs_digest": digest,
                "path_inputs_digest": self.manifest["inputs_digest"], "pricing_params_sha256": _sha(params_bytes),
                "pack_sha256": _sha(body), "donor_day": None, "sigma0": round(sigma0, 6), "path_realized_vol": round(rv, 6),
-               "mechanism": ("path: moving block bootstrap of real QQQ 5-minute returns (as sim-v1); quotes: S3c combined "
+               "mechanism": (f"path: moving block bootstrap of {A.SYMBOL} five-minute returns; quotes: combined "
                              "model -- business-time variance clock with post-close term, sigma0 = k x the path's realized "
                              "vol, spot response beta and time-of-day drift, saturated skew surface shared by calls and "
                              "puts (parity exact), symbol-specific spreads rounded to $0.01"),
                "limitations": LIMITATIONS_V2,
                "calibration": {"historical_sessions": self.manifest["historical_sessions"],
                                "donor_days": 0, "r2_objects": len(self.manifest["r2_objects"]),
-                               "pricing_development_days": params["symbols"]["QQQ"]["development_days"]},
+                               "pricing_development_days": params["symbols"][A.SYMBOL]["development_days"]},
                "parity_residual_usd": {"median": 0.0, "p95": 0.0, "max": 0.0}}
         return {"version": A.PACK_VERSION, "mode": "simulation",
+                "volume_unit": "resampled shares" if A.SYMBOL == "QQQ" else "resampled option contracts",
                 "day": f"SIM:{SIM_V2}:{int(seed)}:{digest[:12]}",
                 "open_s": OPEN_S, "close_s": CLOSE_S, "coverage_all": {"ratio": 1.0},
                 "coverage_usable": A.playable_coverage(snaps, OPEN_S, CLOSE_S), "snapshots": snaps, "sim": sim}

@@ -44,7 +44,11 @@ except Exception:  # pragma: no cover - degrade to a plain 16:00 close
     def session_close(_d: date) -> time:  # type: ignore[no-redef]
         return time(16, 0)
 
-PACK_VERSION = 3
+SYMBOL = os.environ.get('OPTIONS_TRAINER_SYMBOL', 'QQQ')
+if SYMBOL not in {'SPY', 'QQQ'}:
+    raise ValueError('Unsupported trainer symbol')
+PREFIX = 'intraday/spy/' if SYMBOL == 'SPY' else 'intraday/'
+PACK_VERSION = 4
 SESSION_OPEN_S = 9 * 3600 + 30 * 60
 # A snapshot older than this, at the replay clock, no longer quotes anything.
 MAX_QUOTE_AGE_S = 150
@@ -53,7 +57,7 @@ MAX_QUOTE_AGE_S = 150
 # underlying to count as parity-consistent with its option quotes.
 PARITY_TOL_USD = 0.15
 DEFAULT_CACHE = Path(os.environ.get("OPTIONS_REPLAY_CACHE",
-                                    REPO_ROOT / "research" / "options_replay" / ".cache"))
+                                    REPO_ROOT / "research" / "options_replay" / (".cache/spy" if SYMBOL == "SPY" else ".cache")))
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +138,7 @@ class Archive:
     def snapshot_index(self, refresh: bool = False) -> dict[str, list[str]]:
         """{YYYYMMDD: [snapshot csv keys, chronological]} for QQQ days."""
         out: dict[str, list[str]] = {}
-        for key in self.list_keys("intraday/", refresh=refresh):
+        for key in self.list_keys(PREFIX, refresh=refresh):
             parsed = parse_snapshot_key(key)
             if parsed:
                 out.setdefault(parsed[0], []).append(key)
@@ -149,6 +153,10 @@ class Archive:
 
 def parse_snapshot_key(key: str) -> tuple[str, int] | None:
     """(YYYYMMDD, seconds since ET midnight) for a QQQ snapshot csv key."""
+    if SYMBOL == "SPY":
+        if not key.startswith(PREFIX):
+            return None
+        key = "intraday/" + key[len(PREFIX):]
     parts = key.split("/")
     if len(parts) != 3 or parts[0] != "intraday" or not (parts[1].isdigit() and len(parts[1]) == 8):
         return None
@@ -182,6 +190,7 @@ def parse_snapshot(body: bytes, trade_day: str) -> dict:
     text = body.decode("utf-8", errors="replace")
     spots: list[float] = []
     board: dict[str, list] = {}
+    volume = []
     for row in csv.DictReader(io.StringIO(text)):
         if row.get("TradeDate") != trade_day or row.get("Expiration") != trade_day:
             continue
@@ -190,12 +199,15 @@ def parse_snapshot(body: bytes, trade_day: str) -> dict:
         if side not in ("call", "put") or strike is None:
             continue
         key = ("C" if side == "call" else "P") + _fmt_strike(strike)
+        delta = _num(row.get("VolDelta"))
+        if delta is not None and delta >= 0:
+            volume.append(delta)
         board[key] = [_num(row.get("Bid")), _num(row.get("Ask"))]
         spot = _num(row.get("UnderlyingPrice"))
         if spot is not None and spot > 0:
             spots.append(spot)
     spot = median(spots) if spots else None
-    return {"spot": spot, "q": board}
+    return {"spot": spot, "q": board, "volume": sum(volume) if volume else None}
 
 
 def _fmt_strike(strike: float) -> str:
@@ -398,5 +410,6 @@ def raw_quote(archive: Archive, key: str, contract: str) -> dict | None:
         if (row.get("TradeDate") == day and row.get("Expiration") == day
                 and (row.get("Type") or "").lower() == side and _num(row.get("Strike")) == strike):
             return {"key": key, "OptionSymbol": row.get("OptionSymbol"), "Bid": _num(row.get("Bid")),
-                    "Ask": _num(row.get("Ask")), "UnderlyingPrice": _num(row.get("UnderlyingPrice"))}
+                    "Ask": _num(row.get("Ask")), "UnderlyingPrice": _num(row.get("UnderlyingPrice")),
+                    **{k: _num(row.get(k)) for k in ("Delta", "Theta", "Vega", "IV")}}
     return None

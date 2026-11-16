@@ -333,6 +333,8 @@ def make_handler(games: Games, allow_faults: bool = False):
             url = urlparse(self.path)
             qs = parse_qs(url.query)
             try:
+                if url.path == "/shared/format.js":
+                    return self._send(200, (HERE.parents[1] / "site/shared/format.js").read_bytes(), "text/javascript")
                 if url.path in ("/", "/index.html"):
                     return self._send(200, page, "text/html; charset=utf-8")
                 if url.path == "/api/view":
