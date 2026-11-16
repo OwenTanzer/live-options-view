@@ -101,7 +101,7 @@ details summary { cursor: pointer; }
     <label>Underlying <select id="ticker"><option>QQQ</option><option>SPY</option></select></label>
     <select id="mode" aria-label="Mode">
       <option value="tape" hidden>Replay · 5-second QQQ tape</option>
-      <option value="replay" selected>Replay · minute snapshots</option>
+      <option value="replay" selected>Replay · wider chain (minute snapshots)</option>
       <option value="simulation">Simulation: generated day</option>
     </select>
     <input id="seed" placeholder="seed (optional)" inputmode="numeric" style="width:120px;font:inherit;padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)" hidden>
@@ -145,6 +145,16 @@ details summary { cursor: pointer; }
           <button id="reveal">Reveal day</button>
         </div>
         <div class="muted" style="font-size:12px;margin-top:6px" id="pace"></div>
+        <section id="ticket" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+          <h2>Paper trade · same-day expiry</h2>
+          <div class="controls">
+            <label>Contract <select id="ticket-side"><option value="call">Call</option><option value="put">Put</option></select></label>
+            <label>Strike <select id="ticket-strike"></select></label>
+            <label>Qty <input id="qty" type="number" min="1" max="20" step="1" value="1"></label>
+          </div>
+          <p id="ticket-quote"></p>
+          <div class="controls"><button id="ticket-buy" class="primary">Buy</button><button id="ticket-sell">Sell</button></div>
+        </section>
       </section>
       <section class="panel">
         <h2>Position</h2>
@@ -159,7 +169,7 @@ details summary { cursor: pointer; }
     <section class="panel" style="margin-top:12px">
       <h2>0DTE contract strip <span class="muted" id="qinfo"></span></h2>
       <div class="controls" style="margin:0 0 8px">
-        <label>Contracts <input id="qty" type="number" min="1" max="20" value="1"></label>
+
         <label>Strikes <select id="width"><option value="4">±4</option><option value="6" selected>±6</option><option value="10">±10</option><option value="all">All quoted</option></select></label>
         <button id="center" class="sm" title="Re-center the strip on the current spot (c)">Center on spot</button>
         <span class="muted" id="rules" style="font-size:12px"></span>
@@ -353,6 +363,7 @@ function render() {
       <br><span class="muted">Positions can't be bought or sold until a recorded snapshot passes the checks again. Keep stepping; nothing is estimated in the meantime.</span>`;
   } else b.className = "banner";
   drawChart();
+  renderTicket();
   renderStrip(done);
   renderPositions(done);
   renderReveal();
@@ -460,22 +471,68 @@ function renderStrip(done) {
   const range = V.session.mode === "simulation" ? "Generated strikes" : "Recorded strikes";
   $("strip-info").textContent = (ref == null ? "" : V.symbol + " $" + px(ref) + " · ") + range + " $" + low + "–$" + high
     + (outside ? ". No quote at the underlying price." : atm != null ? " · Nearest $" + atm : "");
-  $("wide-replay").hidden = !(outside && V.session.event_tape);
+  $("wide-replay").hidden = !V.session.event_tape;
   const cell = (o) => {
     const h = held.get(o.contract), t = o.reason ? ` title="${esc(o.reason)}"` : "";
     const off = o.buy || o.sell ? "" : " off", hc = h ? " held" : "";
     const mid = o.bid != null && o.ask != null ? `<span class="muted" style="font-size:11px">${(o.ask - o.bid).toFixed(2)}</span>` : "";
-    const act = h ? `<button class="sm" data-sell="${o.contract}" data-q="${h.qty}" ${done || !o.sell ? "disabled" : ""}${t}>Sell ${h.qty}</button>`
-      : `<button class="sm" data-buy="${o.contract}" ${done || !o.buy ? "disabled" : ""}${t}>Buy</button>`;
+    const act = `<button class="sm" data-ticket="${o.contract}" aria-label="Open ticket for ${o.contract}"${t}>Trade</button>`;
     const why = !done && o.reason && !V.quotes.code ? `<div class="why">${esc(o.reason)}</div>` : "";
     return `<td class="${off}${hc}"${t}>${px(o.bid)}</td><td class="${off}${hc}"${t}>${px(o.ask)}</td><td class="${hc}">${mid}</td><td class="${hc}">${act}${why}</td>`;
   };
   let h = `<tr><th>Call bid</th><th>ask</th><th>spr</th><th></th><th style="text-align:center">Strike</th><th>Put bid</th><th>ask</th><th>spr</th><th></th></tr>`;
   for (const r of shown) h += `<tr class="${r.strike === atm ? "atm" : ""}">${cell(r.call)}<td class="k">${r.strike}</td>${cell(r.put)}</tr>`;
   $("strip").innerHTML = h;
-  document.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => order("buy", b.dataset.buy)));
-  $("strip").querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
+  $("strip").querySelectorAll("[data-ticket]").forEach(b => b.onclick = () => {
+    const contract = b.dataset.ticket;
+    $("ticket-side").value = contract[0] === "C" ? "call" : "put";
+    $("ticket-strike").value = contract.slice(1);
+    renderTicket();
+    $("ticket").scrollIntoView({block:"center"});
+  });
 }
+
+let ticketSession, ticketBusy = false;
+function renderTicket() {
+  const select = $("ticket-strike"), rows = V.board;
+  if (ticketSession !== V.session.id) {
+    ticketSession = V.session.id;
+    select.replaceChildren();
+    $("qty").value = 1;
+  }
+  const previous = select.value, strikes = rows.map(r => String(r.strike));
+  if (previous && !strikes.includes(previous)) strikes.push(previous);
+  const signature = strikes.join(",");
+  if (select.dataset.strikes !== signature || !select.options.length) {
+    select.replaceChildren(...strikes.map(k => new Option("$" + k, k)));
+    select.dataset.strikes = signature;
+    if (previous) select.value = previous;
+    else if (rows.length) {
+      const spot = V.spot.now ?? V.spot.last ?? rows[0].strike;
+      select.value = String(rows.reduce((a,b) => Math.abs(a.strike-spot) <= Math.abs(b.strike-spot) ? a : b).strike);
+    }
+  }
+  const q = rows.find(r => String(r.strike) === select.value)?.[$("ticket-side").value];
+  const qty = Number($("qty").value), valid = Number.isInteger(qty) && qty > 0 && qty <= 20;
+  const held = V.positions.find(p => p.contract === q?.contract)?.qty || 0;
+  const fee = V.rules.fee_per_contract_side, multiplier = V.rules.multiplier;
+  const closed = ticketBusy || V.session.closed || V.session.revealed;
+  const debit = valid && q?.buy ? qty * (q.ask * multiplier + fee) : null;
+  const source = V.session.mode === "simulation" ? "Provisional simulated quote" : "Recorded quote";
+  $("ticket-quote").textContent = q ? source + " · Bid " + px(q.bid) + " × Ask " + px(q.ask) + (debit == null ? "" : " · Cost incl. fee " + money(debit)) : "No quote for this strike at the replay clock.";
+  $("ticket-buy").textContent = "Buy @ " + px(q?.ask);
+  $("ticket-sell").textContent = "Sell @ " + px(q?.bid);
+  $("ticket-buy").disabled = closed || !valid || !q?.buy || debit > V.account.cash;
+  $("ticket-sell").disabled = closed || !valid || !q?.sell || qty > held;
+}
+for (const id of ["ticket-side","ticket-strike","qty"]) $(id).addEventListener("input", renderTicket);
+for (const side of ["buy","sell"]) $("ticket-" + side).onclick = async () => {
+  if (ticketBusy) return;
+  const contract = ($("ticket-side").value === "call" ? "C" : "P") + $("ticket-strike").value;
+  ticketBusy = true; renderTicket();
+  try { await order(side, contract, $("qty").value); }
+  finally { ticketBusy = false; renderTicket(); }
+};
 function renderPositions(done) {
   const ps = V.positions;
   $("positions").innerHTML = ps.length ? ps.map((p) => `<div class="pos"><div><b>${p.qty}× ${esc(p.label)}</b><br><span class="muted">avg ${px(p.avg_price)} incl. entry fee · bid ${px(p.bid)}</span></div>
@@ -621,7 +678,7 @@ async function loadRecords() {
 $("reload-recs").addEventListener("click", loadRecords);
 loadRecords();
 if (!symbolPath) api("/api/health").then(h => {
-  if (h.event_days && !S) { const option = $("mode").querySelector('[value="tape"]'); option.hidden = false; option.selected = true; }
+  if (h.event_days && !S) { const option = $("mode").querySelector('[value="tape"]'); option.hidden = false; }
 }).catch(() => {});
 
 $("ticker").value = symbolPath ? "SPY" : "QQQ";
