@@ -134,6 +134,8 @@ jobs:
         run: node tests/momentum_display.test.js
       - name: OI skew meter (parity with the bot, display states, wiring)
         run: node tests/oi_skew_meter.test.js
+      - name: SPY + IBIT reference OI skew meters (states, thin band, wiring)
+        run: node tests/reference_oi_skew_meters.test.js
       - name: chain underlying (QQQ/SPY)
         run: node tests/chain_underlying.test.js
       - name: eia steo calibration display
@@ -162,6 +164,10 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/preview_browser.test.mjs
+      - name: Reference OI skew desktop and mobile browser workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/reference_oi_skew_browser.test.mjs
       - name: Historical rendered browser workflow
         run: node tests/historical_browser.test.js
       # Catches syntax errors in the inline <script> that the panel test would
