@@ -42,7 +42,21 @@ sys.path.insert(0, str(HERE))
 
 import archive as A  # noqa: E402
 
-GENERATOR_VERSION = "sim-v1"
+GENERATOR_VERSION = "sim-v1"          # S3a donor pricing (kept regenerable for existing seeds)
+SIM_V2 = "sim-v2"                     # S3c combined model (pricing.py + calibration/s3c_params.json)
+SUPPORTED_VERSIONS = (GENERATOR_VERSION, SIM_V2)
+DEFAULT_VERSION = SIM_V2
+LIMITATIONS_V2 = [
+    "Quotes come from the S3c combined model fitted on development days only; no held-out validation "
+    "exists yet (held-out = collector sessions from 2026-11-16, first 10 per symbol).",
+    "On development days it still misses absolute level error (about $9-12/contract at midday/close), "
+    "30-minute hold profit (about $4-6) and opening decay; see calibration/S3C_RESULTS.md.",
+    "The volatility level comes from the generated path's realized volatility times a fitted ratio; a real day's "
+    "implied level is not knowable from a path, so day-to-day level dispersion is not reproduced.",
+    "The generated session ends at 16:00; real expiring QQQ options trade until 16:15 and keep post-close "
+    "exercise value, which the model prices but the simulated clock does not reach.",
+    "The path is resampled from real 5-minute returns; intrabar moves are a Brownian bridge, not ticks.",
+]
 # Generated sessions are labelled with a fixed, obviously synthetic calendar date that only
 # serves the generator's timestamp arithmetic (an EST weekday); it is never shown as a date.
 LABEL_DATE = date(2000, 1, 3)
@@ -134,8 +148,12 @@ class Simulator:
         self._load_inputs()
         return self.manifest["inputs_digest"]
 
-    def generate(self, seed: int) -> dict:
+    def generate(self, seed: int, version: str = GENERATOR_VERSION) -> dict:
         """A Replay-format pack for one generated session. Same seed + inputs + version -> same pack."""
+        if version == SIM_V2:
+            return self._generate_v2(seed)
+        if version != GENERATOR_VERSION:
+            raise ValueError(f"unknown generator version {version}")
         import numpy as np
         import day_generator as G
         sessions, donors, curve = self._load_inputs()
@@ -184,9 +202,66 @@ class Simulator:
                 "coverage_all": {"ratio": 1.0}, "coverage_usable": A.playable_coverage(snaps, OPEN_S, CLOSE_S),
                 "snapshots": snaps, "sim": sim}
 
-    def raw_quote(self, seed: int, key: str, contract: str) -> dict | None:
+    def _generate_v2(self, seed: int) -> dict:
+        """sim-v2: the sim-v1 path machinery, priced by the S3c combined model."""
+        import numpy as np
+        import pricing as PR
+        from price_path import bootstrap_day, upsample_to_seconds
+        sessions, _, _ = self._load_inputs()
+        params_bytes = PR.PARAMS_PATH.read_bytes()
+        params = json.loads(params_bytes)
+        model = PR.SymbolModel(params["symbols"]["QQQ"])
+        rng = np.random.default_rng(int(seed))
+        closes, ranges = bootstrap_day(sessions, rng, mode="block", block_size=BLOCK_SIZE)
+        timestamps, path = upsample_to_seconds(LABEL_DATE, closes, ranges, rng, step_s=60)
+        series = []
+        for ts, spot in zip(timestamps, path):
+            t = ts.hour * 3600 + ts.minute * 60
+            if OPEN_S <= t <= CLOSE_S:
+                series.append((t, round(float(spot), 4)))
+        by_t = dict(series)
+        ss = cov = 0.0
+        for t, spot in series:                       # realized vol of the generated path, model clock
+            nxt = by_t.get(t + 300)
+            if nxt and t % 300 == 0:
+                ss += float(np.log(nxt / spot)) ** 2
+                cov += model.covered(t, t + 300)
+        rv = (ss / cov * PR.YEAR_DAYS) ** 0.5 if cov > 0 else None
+        sigma0 = model.k * rv
+        s_ref = by_t.get(9 * 3600 + 45 * 60, series[0][1])
+        snaps = []
+        for t, spot in series:
+            q = {}
+            centre = round(spot)
+            for K in range(centre - STRIKE_WINDOW, centre + STRIKE_WINDOW + 1):
+                for side in ("C", "P"):
+                    b, a, _ = model.quote(spot, float(K), side, t, sigma0, s_ref)
+                    q[f"{side}{K}"] = [b, a]
+            snaps.append({"t": t, "key": f"sim/{SIM_V2}/{int(seed)}/{t // 3600:02d}{t % 3600 // 60:02d}",
+                          "spot": spot, "q": q, "ok": True, "reason": None, "content_t": t,
+                          "parity_spot": None})
+        digest = _sha((self.manifest["inputs_digest"] + _sha(params_bytes)).encode())
+        body = json.dumps([[x["t"], x["spot"], x["q"]] for x in snaps], sort_keys=True, separators=(",", ":")).encode()
+        sim = {"seed": int(seed), "generator_version": SIM_V2, "inputs_digest": digest,
+               "path_inputs_digest": self.manifest["inputs_digest"], "pricing_params_sha256": _sha(params_bytes),
+               "pack_sha256": _sha(body), "donor_day": None, "sigma0": round(sigma0, 6), "path_realized_vol": round(rv, 6),
+               "mechanism": ("path: moving block bootstrap of real QQQ 5-minute returns (as sim-v1); quotes: S3c combined "
+                             "model -- business-time variance clock with post-close term, sigma0 = k x the path's realized "
+                             "vol, spot response beta and time-of-day drift, saturated skew surface shared by calls and "
+                             "puts (parity exact), symbol-specific spreads rounded to $0.01"),
+               "limitations": LIMITATIONS_V2,
+               "calibration": {"historical_sessions": self.manifest["historical_sessions"],
+                               "donor_days": 0, "r2_objects": len(self.manifest["r2_objects"]),
+                               "pricing_development_days": params["symbols"]["QQQ"]["development_days"]},
+               "parity_residual_usd": {"median": 0.0, "p95": 0.0, "max": 0.0}}
+        return {"version": A.PACK_VERSION, "mode": "simulation",
+                "day": f"SIM:{SIM_V2}:{int(seed)}:{digest[:12]}",
+                "open_s": OPEN_S, "close_s": CLOSE_S, "coverage_all": {"ratio": 1.0},
+                "coverage_usable": A.playable_coverage(snaps, OPEN_S, CLOSE_S), "snapshots": snaps, "sim": sim}
+
+    def raw_quote(self, seed: int, key: str, contract: str, version: str = GENERATOR_VERSION) -> dict | None:
         """Independent regeneration of one quote, for reconciliation of simulated fills."""
-        pack = self.generate(seed)
+        pack = self.generate(seed, version)
         for sn in pack["snapshots"]:
             if sn["key"] == key:
                 b, a = sn["q"].get(contract, [None, None])
@@ -203,7 +278,7 @@ def parse_sim_label(day: str) -> dict | None:
     return {"generator_version": ver, "seed": int(seed), "inputs_digest_prefix": digest}
 
 
-def compare_with_recorded(sim: Simulator, cache: Path, seeds=range(1, 21)) -> list[dict]:
+def compare_with_recorded(sim: Simulator, cache: Path, seeds=range(1, 21), version: str = GENERATOR_VERSION) -> list[dict]:
     """ATM straddle mid (% of spot) and half-spread, generated vs recorded Replay packs."""
     import bisect
     import gzip
@@ -230,7 +305,7 @@ def compare_with_recorded(sim: Simulator, cache: Path, seeds=range(1, 21)) -> li
             if r:
                 rec[k].append(r)
     for seed in seeds:
-        pk = sim.generate(seed)
+        pk = sim.generate(seed, version)
         for k, t in times.items():
             r = straddle(pk, t)
             if r:
@@ -251,14 +326,16 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Generate a simulated session by seed, or compare pricing.")
     ap.add_argument("--cache", default=str(A.DEFAULT_CACHE))
     ap.add_argument("--seed", type=int, help="generate this seed and print its identity")
+    ap.add_argument("--version", default=GENERATOR_VERSION, choices=list(SUPPORTED_VERSIONS))
     ap.add_argument("--compare-recorded", action="store_true",
                     help="ATM straddle level/spread: 20 generated seeds vs cached recorded Replay days")
     args = ap.parse_args()
     sim = Simulator(args.cache)
     if args.seed is not None:
-        pk = sim.generate(args.seed)
-        print(json.dumps({k: pk["sim"][k] for k in ("seed", "generator_version", "inputs_digest", "pack_sha256",
-                                                    "donor_day", "calibration", "parity_residual_usd")}, indent=1))
+        pk = sim.generate(args.seed, args.version)
+        print(json.dumps({k: pk["sim"].get(k) for k in ("seed", "generator_version", "inputs_digest", "pack_sha256",
+                                                        "pricing_params_sha256", "sigma0", "donor_day", "calibration",
+                                                        "parity_residual_usd")}, indent=1))
     if args.compare_recorded:
-        for row in compare_with_recorded(sim, Path(args.cache)):
+        for row in compare_with_recorded(sim, Path(args.cache), version=args.version):
             print(row)

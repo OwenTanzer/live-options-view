@@ -26,7 +26,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import archive as A  # noqa: E402
 
-GRID = [9 * 3600 + 45 * 60 + 300 * i for i in range(75)]          # 09:45 .. 15:55
+GRID_S3B = [9 * 3600 + 45 * 60 + 300 * i for i in range(75)]      # 09:45 .. 15:55 (S3b dataset)
+GRID_S3C = [9 * 3600 + 45 * 60 + 300 * i for i in range(78)]      # 09:45 .. 16:10 (S3c: endpoint window)
+GRID = GRID_S3B
 PROTOCOL = json.loads((HERE / "protocol.json").read_text())
 
 
@@ -43,14 +45,15 @@ def day_keys(arc: A.Archive, symbol: str, yyyymmdd: str) -> list[tuple[int, str]
     return sorted(out)
 
 
-def build_day(arc: A.Archive, symbol: str, yyyymmdd: str) -> dict:
+def build_day(arc: A.Archive, symbol: str, yyyymmdd: str, grid: list[int] | None = None) -> dict:
+    grid = grid or GRID
     iso = f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:]}"
     keys = day_keys(arc, symbol, yyyymmdd)
     times = [t for t, _ in keys]
     need: dict[str, None] = {}
     plan = []
     import bisect
-    for g in GRID:
+    for g in grid:
         i = bisect.bisect_right(times, g) - 1
         if i < 0:
             plan.append((g, None, None))
@@ -88,7 +91,7 @@ def build_day(arc: A.Archive, symbol: str, yyyymmdd: str) -> dict:
                     "q": {c: snap["q"][c] for k in sorted(strikes) for c in ("C" + A._fmt_strike(k), "P" + A._fmt_strike(k))
                           if c in snap["q"]}})
         points.append(rec)
-    return {"symbol": symbol, "day": iso, "grid_points": len(GRID),
+    return {"symbol": symbol, "day": iso, "grid_points": len(grid),
             "kept": sum(1 for p in points if "drop" not in p), "points": points}
 
 
@@ -96,9 +99,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbol", choices=["QQQ", "SPY", "both"], default="both")
     ap.add_argument("--cache", default=str(A.DEFAULT_CACHE))
+    ap.add_argument("--grid", choices=["s3b", "s3c"], default="s3b",
+                    help="s3b: 09:45-15:55 into calibration/; s3c: 09:45-16:10 into calibration_s3c/")
     args = ap.parse_args()
     arc = A.Archive(args.cache)
-    out = Path(args.cache) / "calibration"
+    grid = GRID_S3C if args.grid == "s3c" else GRID_S3B
+    out = Path(args.cache) / ("calibration_s3c" if args.grid == "s3c" else "calibration")
     out.mkdir(parents=True, exist_ok=True)
     jobs = []
     if args.symbol in ("QQQ", "both"):
@@ -114,12 +120,12 @@ def main() -> int:
 
     def run(job):
         s, d = job
-        rec = build_day(arc, s, d)
+        rec = build_day(arc, s, d, grid)
         (out / f"{s}_{d}.json").write_text(json.dumps(rec))
         return s, d, rec["kept"]
     with ThreadPoolExecutor(max_workers=3) as pool:
         for n, (s, d, kept) in enumerate(pool.map(run, todo), 1):
-            print(f"[{n}/{len(todo)}] {s} {d}: {kept}/75 grid points kept", flush=True)
+            print(f"[{n}/{len(todo)}] {s} {d}: {kept}/{len(grid)} grid points kept", flush=True)
     return 0
 
 

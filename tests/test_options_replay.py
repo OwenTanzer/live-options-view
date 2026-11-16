@@ -763,7 +763,7 @@ class SimulationMode(unittest.TestCase):
         def __init__(self):
             self.calls = 0
 
-        def generate(self, seed):
+        def generate(self, seed, version=None):
             self.calls += 1
             p = minute_pack(drift=0.01 * (seed % 7 + 1))
             for sn in p["snapshots"]:
@@ -775,7 +775,7 @@ class SimulationMode(unittest.TestCase):
                               "donor_days": 1, "r2_objects": 1}, "parity_residual_usd": {"median": 0, "p95": 0}}})
             return p
 
-        def raw_quote(self, seed, key, c):
+        def raw_quote(self, seed, key, c, version=None):
             for sn in self.generate(seed)["snapshots"]:
                 if sn["key"] == key:
                     b, a = sn["q"][c]

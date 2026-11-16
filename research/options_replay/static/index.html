@@ -298,7 +298,9 @@ function render() {
   $("clock").textContent = s.time_of_day;
   const sim = s.mode === "simulation" ? s.simulation : null, sb = $("simbanner");
   if (sim) { sb.className = "banner on"; sb.innerHTML = `<b>SIMULATION: a generated session, not a historical day.</b> Seed ${sim.seed} · generator ${esc(sim.generator_version)} · inputs ${esc(sim.inputs_digest)} ·
-      <b>provisional quotes</b> (model output, not recorded market quotes; calibration is S3b, pricing checks S3c). The same seed regenerates the same path and quotes.`; }
+      <b>provisional quotes</b> (model output, not recorded market quotes; ${sim.generator_version === "sim-v2"
+        ? "S3c combined model fitted on development days only, held-out validation pending"
+        : "S3a donor pricing; measured 0.36-0.56x recorded premium levels"}). The same seed and version regenerate the same path and quotes.`; }
   else sb.className = "banner";
   document.querySelector("section.panel h2").firstChild.textContent = sim ? "Generated QQQ path (simulation) " : "QQQ · date hidden ";
   const rem = s.seconds_to_close;

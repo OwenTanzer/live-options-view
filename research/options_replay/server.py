@@ -124,17 +124,17 @@ class Games:
 
     def _raw_lookup(self, pack: dict):
         if pack.get("mode") == "simulation":
-            seed = pack["sim"]["seed"]
-            return lambda key, c: self._sim_raw(seed, key, c)
+            seed, ver = pack["sim"]["seed"], pack["sim"]["generator_version"]
+            return lambda key, c: self._sim_raw(seed, key, c, ver)
         return lambda key, c: A.raw_quote(self.arc, key, c)
 
-    def _sim_raw(self, seed, key, c):
+    def _sim_raw(self, seed, key, c, version=simulate.GENERATOR_VERSION):
         with self.sim_lock:
-            return self.sim.raw_quote(seed, key, c)
+            return self.sim.raw_quote(seed, key, c, version)
 
-    def _sim_pack(self, seed: int) -> dict:
+    def _sim_pack(self, seed: int, version: str = simulate.DEFAULT_VERSION) -> dict:
         with self.sim_lock:
-            return self.sim.generate(seed)
+            return self.sim.generate(seed, version)
 
     def _make(self, pack: dict, *, start_s=None, session_id=None, fee=None) -> ReplaySession:
         store = self.store
@@ -191,10 +191,10 @@ class Games:
             raise ReplayError("unknown session")
         label = simulate.parse_sim_label(row["day"])
         if label:
-            if label["generator_version"] != simulate.GENERATOR_VERSION:
-                raise ReplayError(f"generated with {label['generator_version']}; this server runs "
-                                  f"{simulate.GENERATOR_VERSION}")
-            pack = self._sim_pack(label["seed"])
+            if label["generator_version"] not in simulate.SUPPORTED_VERSIONS:
+                raise ReplayError(f"generated with {label['generator_version']}; this server supports "
+                                  f"{', '.join(simulate.SUPPORTED_VERSIONS)}")
+            pack = self._sim_pack(label["seed"], label["generator_version"])
             if not pack["day"].endswith(label["inputs_digest_prefix"]):
                 raise ReplayError("simulation inputs changed since this session was generated")
         else:
