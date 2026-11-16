@@ -25,6 +25,7 @@ def build(arc, day):
     symbol_re = re.compile("QQQ"+day.replace("-","")[2:]+r"([CP])(\d{8})$")
     events = defaultdict(dict)
     prints = defaultdict(list)
+    volumes = defaultdict(int)
     parts = report["event_parts"]
     def read(part):
         body = arc.get(part["key"])
@@ -52,13 +53,20 @@ def build(arc, day):
                     t=5*math.ceil(observed/5)
                     trade_time = int(r["date"])/1000-midnight
                     if start <= trade_time <= end and start <= t <= end and observed-trade_time <= 5:
-                        prints[t].append((observed,float(r["last"]),int(r["size"])))
+                        # UTP specification 3.14.2. Live candles use trades eligible to
+                        # set both consolidated last and range. A restrictive modifier
+                        # still applies when combined with the regular-sale marker.
+                        flags = set((r.get("flag") or "").strip())
+                        if not flags.intersection("MQ9"):
+                            volumes[t] += int(r["size"])
+                        if flags and flags <= set("@ABDFKLOSXY156 "):
+                            prints[t].append((observed,line,float(r["last"])))
     snaps=[]
     for t in range(start,end+1,5):
         trades=sorted(prints[t]); board=events[t]
-        prices = [trade[1] for trade in trades]
+        prices = [trade[2] for trade in trades]
         spot=prices[-1] if prices else None
-        snaps.append(dict(t=t,key=f"tape/{day}/{t}",spot=spot,ohlc=[prices[0],max(prices),min(prices),prices[-1]] if prices else None,volume=sum(x[2] for x in trades),
+        snaps.append(dict(t=t,key=f"tape/{day}/{t}",spot=spot,ohlc=[prices[0],max(prices),min(prices),prices[-1]] if prices else None,volume=volumes[t],
                           q={c:e[1:3] for c,e in board.items()},refs={c:e[3:] for c,e in board.items()},
                           ok=bool(spot and board),reason=None if spot and board else "gap",content_t=t))
     pack=dict(day=day,snapshots=snaps,event_tape=True,open_s=start,close_s=end,volume_unit="QQQ shares",
