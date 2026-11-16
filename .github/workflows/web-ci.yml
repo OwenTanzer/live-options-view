@@ -104,6 +104,8 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/trade_journal_context.test.mjs
+      - name: Trade journal page load ordering (OA-238)
+        run: node tests/trade_journal_loads.test.mjs
       - name: Independent asset, preview and rollback contracts (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
