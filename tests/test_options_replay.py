@@ -847,5 +847,47 @@ class SimulationMode(unittest.TestCase):
         self.assertEqual(code, 409)
 
 
+class CalibrationMath(unittest.TestCase):
+    """S3b evaluator primitives: pricing, inversion, variance clock, split discipline."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "research" / "options_replay" / "calibration"))
+        import evaluate as E
+        self.E = E
+
+    def test_put_call_parity_and_inversion(self):
+        E = self.E
+        for S, K, sig, tau in ((700, 698, 0.2, 0.002), (700, 703, 0.35, 0.0005), (500, 500, 0.15, 1 / 252)):
+            c, p = E.bs(S, K, sig, tau, "C"), E.bs(S, K, sig, tau, "P")
+            self.assertAlmostEqual(c - p, S - K, places=6)
+            self.assertAlmostEqual(E.implied_sigma(c, S, K, tau, "C"), sig, places=4)
+        self.assertEqual(E.bs(700, 690, 0.2, 0.0, "C"), 10.0)
+
+    def test_clock_monotonic_and_tail(self):
+        E = self.E
+        clk = E.Clock([3.0] * 6 + [1.0] * 66 + [2.0] * 6)
+        taus = [clk.tau(t) for t in range(E.OPEN, E.CLOSE + 1, 60)]
+        self.assertTrue(all(a >= b for a, b in zip(taus, taus[1:])))
+        self.assertAlmostEqual(clk.tau(E.OPEN) * E.YEAR_DAYS, 1.0, places=9)
+        self.assertEqual(clk.tau(E.CLOSE), 0.0)
+        tail = clk.with_tail(0.05)
+        self.assertAlmostEqual(tail.tau(E.CLOSE) * E.YEAR_DAYS, 0.05, places=9)
+        self.assertAlmostEqual(E.UNIFORM.covered(E.OPEN, E.OPEN + 3900), 13 / 78, places=9)
+
+    def test_split_never_puts_exploratory_days_in_held_out(self):
+        E = self.E
+        days = ["2026-09-30", "2026-10-02", "2026-10-22", "2026-11-02", "2026-11-04"]
+        dev, held, expl = E.split("QQQ", days)
+        self.assertEqual(dev, ["2026-09-30"])
+        self.assertEqual(held, ["2026-10-02", "2026-11-04"])
+        self.assertEqual(expl, ["2026-10-22", "2026-11-02"])
+
+    def test_protocol_tolerances_are_the_declared_ones(self):
+        tol = self.E.TOL
+        self.assertEqual((tol["A1_median_abs_level_usd"], tol["A2_abs_median_bias_usd"], tol["A3_median_abs_hold_pnl_usd"],
+                          tol["A4_median_abs_quiet_change_usd"], tol["B1_median_ratio_band"], tol["B2_median_abs_hold_pnl_usd"]),
+                         (8.0, 4.0, 4.0, 3.0, [0.85, 1.15], 6.0))
+
+
 if __name__ == "__main__":
     unittest.main()

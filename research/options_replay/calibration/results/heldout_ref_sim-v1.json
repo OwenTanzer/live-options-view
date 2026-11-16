@@ -1,0 +1,752 @@
+{
+ "model": "sim-v1",
+ "label": "reference: S3a sim-v1 donor pricing at actual spot",
+ "set": "held_out",
+ "run_at": "2026-11-16T03:24:28+00:00",
+ "symbols": {
+  "QQQ": {
+   "development_days": 65,
+   "evaluated_days": [
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-19",
+    "2026-10-20",
+    "2026-10-21",
+    "2026-10-23",
+    "2026-10-26",
+    "2026-10-27",
+    "2026-10-28",
+    "2026-10-29",
+    "2026-10-30",
+    "2026-11-04",
+    "2026-11-06",
+    "2026-11-09",
+    "2026-11-10",
+    "2026-11-11",
+    "2026-11-12",
+    "2026-11-13"
+   ],
+   "fitted_on_development": {},
+   "cells": {
+    "1-OTM|call|close": {
+     "n": 444,
+     "n_hold": 307,
+     "n_quiet": 72,
+     "recorded_mid_usd_median": 41.0,
+     "A1": 34.75,
+     "A2": 17.0,
+     "A2_signed": -17.0,
+     "A3": 19.000000000000007,
+     "A4": 12.499999999999998,
+     "B1": 0.3400117566376017,
+     "B2": 19.000000000000007,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|call|midday": {
+     "n": 698,
+     "n_hold": 592,
+     "n_quiet": 96,
+     "recorded_mid_usd_median": 96.5,
+     "A1": 75.5,
+     "A2": 60.74999999999999,
+     "A2_signed": -60.74999999999999,
+     "A3": 29.000000000000004,
+     "A4": 14.749999999999986,
+     "B1": 0.22128060263653482,
+     "B2": 29.000000000000004,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|call|open": {
+     "n": 276,
+     "n_hold": 200,
+     "n_quiet": 33,
+     "recorded_mid_usd_median": 174.5,
+     "A1": 137.75,
+     "A2": 122.25,
+     "A2_signed": -122.25,
+     "A3": 48.50000000000002,
+     "A4": 15.499999999999947,
+     "B1": 0.21122118228596898,
+     "B2": 48.50000000000002,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|close": {
+     "n": 444,
+     "n_hold": 289,
+     "n_quiet": 72,
+     "recorded_mid_usd_median": 44.5,
+     "A1": 37.0,
+     "A2": 13.0,
+     "A2_signed": -13.0,
+     "A3": 23.500000000000004,
+     "A4": 14.75,
+     "B1": 0.5223848238482385,
+     "B2": 23.500000000000004,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|midday": {
+     "n": 698,
+     "n_hold": 615,
+     "n_quiet": 96,
+     "recorded_mid_usd_median": 102.5,
+     "A1": 75.49999999999999,
+     "A2": 48.0,
+     "A2_signed": -48.0,
+     "A3": 28.99999999999997,
+     "A4": 16.750000000000007,
+     "B1": 0.3612867610157583,
+     "B2": 28.99999999999997,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|open": {
+     "n": 276,
+     "n_hold": 168,
+     "n_quiet": 33,
+     "recorded_mid_usd_median": 184.0,
+     "A1": 126.0,
+     "A2": 100.24999999999999,
+     "A2_signed": -100.24999999999999,
+     "A3": 48.74999999999998,
+     "A4": 19.999999999999996,
+     "B1": 0.36037385844748854,
+     "B2": 48.74999999999998,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|close": {
+     "n": 444,
+     "n_hold": 312,
+     "n_quiet": 72,
+     "recorded_mid_usd_median": 83.25,
+     "A1": 49.5,
+     "A2": 28.750000000000007,
+     "A2_signed": -28.750000000000007,
+     "A3": 32.74999999999999,
+     "A4": 25.5,
+     "B1": 0.5977355930286796,
+     "B2": 32.74999999999999,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|midday": {
+     "n": 698,
+     "n_hold": 647,
+     "n_quiet": 96,
+     "recorded_mid_usd_median": 141.5,
+     "A1": 92.0,
+     "A2": 65.25,
+     "A2_signed": -65.25,
+     "A3": 40.49999999999999,
+     "A4": 17.999999999999993,
+     "B1": 0.518601707756208,
+     "B2": 40.49999999999999,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|open": {
+     "n": 276,
+     "n_hold": 190,
+     "n_quiet": 33,
+     "recorded_mid_usd_median": 225.0,
+     "A1": 168.99999999999997,
+     "A2": 103.0,
+     "A2_signed": -103.0,
+     "A3": 62.24999999999997,
+     "A4": 17.499999999999982,
+     "B1": 0.5337035150280183,
+     "B2": 62.24999999999997,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|close": {
+     "n": 444,
+     "n_hold": 312,
+     "n_quiet": 72,
+     "recorded_mid_usd_median": 83.5,
+     "A1": 47.24999999999999,
+     "A2": 20.74999999999998,
+     "A2_signed": -20.74999999999998,
+     "A3": 31.500000000000004,
+     "A4": 29.750000000000007,
+     "B1": 0.7061871969643735,
+     "B2": 31.500000000000004,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|midday": {
+     "n": 698,
+     "n_hold": 647,
+     "n_quiet": 96,
+     "recorded_mid_usd_median": 143.25,
+     "A1": 84.5,
+     "A2": 48.000000000000014,
+     "A2_signed": -48.000000000000014,
+     "A3": 39.99999999999998,
+     "A4": 40.0,
+     "B1": 0.6423406200648325,
+     "B2": 39.99999999999998,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|open": {
+     "n": 276,
+     "n_hold": 190,
+     "n_quiet": 33,
+     "recorded_mid_usd_median": 227.24999999999997,
+     "A1": 124.25,
+     "A2": 74.0,
+     "A2_signed": -74.0,
+     "A3": 53.24999999999997,
+     "A4": 26.000000000000036,
+     "B1": 0.6520373292005107,
+     "B2": 53.24999999999997,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    }
+   },
+   "quiet_spot": {
+    "1-OTM|close": {
+     "n": 144,
+     "recorded_dx_median": -5.0,
+     "model_dx_median": -3.75,
+     "fixed_spot_less_time_dx_median": -3.5,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.05555555555555555
+    },
+    "1-OTM|midday": {
+     "n": 192,
+     "recorded_dx_median": -5.499999999999982,
+     "model_dx_median": 0.0,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.020833333333333332
+    },
+    "1-OTM|open": {
+     "n": 66,
+     "recorded_dx_median": -12.249999999999995,
+     "model_dx_median": 0.24999999999997247,
+     "fixed_spot_less_time_dx_median": 0.49999999999994493,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.030303030303030304
+    },
+    "ATM|close": {
+     "n": 144,
+     "recorded_dx_median": -6.000000000007278,
+     "model_dx_median": -13.5,
+     "fixed_spot_less_time_dx_median": -13.5,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.06944444444444445
+    },
+    "ATM|midday": {
+     "n": 192,
+     "recorded_dx_median": -6.999999999997719,
+     "model_dx_median": 0.0,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.046875
+    },
+    "ATM|open": {
+     "n": 66,
+     "recorded_dx_median": -12.500000000000444,
+     "model_dx_median": 0.4999999999999949,
+     "fixed_spot_less_time_dx_median": 0.2500000000000058,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.030303030303030304
+    }
+   },
+   "expiration_convergence": {
+    "15:45|call": {
+     "n": 28,
+     "recorded_extrinsic_median": 47.24999999999727,
+     "model_extrinsic_median": 16.500000000002505
+    },
+    "15:45|put": {
+     "n": 28,
+     "recorded_extrinsic_median": 50.25000000000182,
+     "model_extrinsic_median": 31.750000000000227
+    },
+    "15:55|call": {
+     "n": 28,
+     "recorded_extrinsic_median": 47.5,
+     "model_extrinsic_median": 17.25
+    },
+    "15:55|put": {
+     "n": 28,
+     "recorded_extrinsic_median": 47.749999999997726,
+     "model_extrinsic_median": 32.0
+    }
+   },
+   "unsupported": [
+    "next-session expiry: no non-0DTE expiry in either intraday archive"
+   ],
+   "summary": {
+    "pass": 0,
+    "miss": 12,
+    "insufficient": 0
+   }
+  },
+  "SPY": {
+   "development_days": 12,
+   "evaluated_days": [
+    "2026-10-26",
+    "2026-10-27",
+    "2026-10-28",
+    "2026-10-29",
+    "2026-10-30",
+    "2026-11-04",
+    "2026-11-06",
+    "2026-11-09",
+    "2026-11-10",
+    "2026-11-11",
+    "2026-11-12",
+    "2026-11-13"
+   ],
+   "fitted_on_development": {},
+   "cells": {
+    "1-OTM|call|close": {
+     "n": 192,
+     "n_hold": 137,
+     "n_quiet": 39,
+     "recorded_mid_usd_median": 36.5,
+     "A1": 27.25,
+     "A2": 21.0,
+     "A2_signed": -21.0,
+     "A3": 19.499999999999996,
+     "A4": 6.000000000000003,
+     "B1": 0.17477931904161412,
+     "B2": 19.499999999999996,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|call|midday": {
+     "n": 300,
+     "n_hold": 276,
+     "n_quiet": 63,
+     "recorded_mid_usd_median": 82.5,
+     "A1": 60.0,
+     "A2": 56.74999999999999,
+     "A2_signed": -56.74999999999999,
+     "A3": 26.000000000000007,
+     "A4": 8.999999999999996,
+     "B1": 0.17474782879619896,
+     "B2": 26.000000000000007,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|call|open": {
+     "n": 120,
+     "n_hold": 97,
+     "n_quiet": 11,
+     "recorded_mid_usd_median": 144.0,
+     "A1": 117.75000000000003,
+     "A2": 112.00000000000001,
+     "A2_signed": -112.00000000000001,
+     "A3": 48.00000000000001,
+     "A4": 7.9999999999999964,
+     "B1": 0.16867578807787356,
+     "B2": 48.00000000000001,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|close": {
+     "n": 192,
+     "n_hold": 136,
+     "n_quiet": 39,
+     "recorded_mid_usd_median": 39.5,
+     "A1": 22.0,
+     "A2": 20.5,
+     "A2_signed": -20.5,
+     "A3": 13.75,
+     "A4": 8.499999999999996,
+     "B1": 0.23098039215686275,
+     "B2": 13.75,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|midday": {
+     "n": 300,
+     "n_hold": 277,
+     "n_quiet": 63,
+     "recorded_mid_usd_median": 86.5,
+     "A1": 60.5,
+     "A2": 58.99999999999999,
+     "A2_signed": -58.99999999999999,
+     "A3": 18.0,
+     "A4": 7.9999999999999964,
+     "B1": 0.18565652548551734,
+     "B2": 18.0,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "1-OTM|put|open": {
+     "n": 120,
+     "n_hold": 81,
+     "n_quiet": 11,
+     "recorded_mid_usd_median": 150.5,
+     "A1": 119.49999999999999,
+     "A2": 119.49999999999999,
+     "A2_signed": -119.49999999999999,
+     "A3": 34.50000000000003,
+     "A4": 7.500000000000028,
+     "B1": 0.18795518207282913,
+     "B2": 34.50000000000003,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|close": {
+     "n": 192,
+     "n_hold": 141,
+     "n_quiet": 39,
+     "recorded_mid_usd_median": 79.5,
+     "A1": 49.0,
+     "A2": 33.75000000000003,
+     "A2_signed": -33.75000000000003,
+     "A3": 31.500000000000007,
+     "A4": 16.499999999999982,
+     "B1": 0.5858503401360544,
+     "B2": 31.500000000000007,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|midday": {
+     "n": 300,
+     "n_hold": 292,
+     "n_quiet": 63,
+     "recorded_mid_usd_median": 126.50000000000001,
+     "A1": 77.5,
+     "A2": 51.5,
+     "A2_signed": -51.5,
+     "A3": 41.249999999999986,
+     "A4": 16.999999999999993,
+     "B1": 0.6412719298245613,
+     "B2": 41.249999999999986,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|call|open": {
+     "n": 119,
+     "n_hold": 102,
+     "n_quiet": 11,
+     "recorded_mid_usd_median": 192.49999999999997,
+     "A1": 119.99999999999997,
+     "A2": 70.5,
+     "A2_signed": -70.5,
+     "A3": 46.75000000000002,
+     "A4": 11.499999999999984,
+     "B1": 0.6268656716417912,
+     "B2": 46.75000000000002,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|close": {
+     "n": 192,
+     "n_hold": 141,
+     "n_quiet": 39,
+     "recorded_mid_usd_median": 80.25,
+     "A1": 43.75,
+     "A2": 36.0,
+     "A2_signed": -36.0,
+     "A3": 26.0,
+     "A4": 10.500000000000005,
+     "B1": 0.42917917917917914,
+     "B2": 26.0,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|midday": {
+     "n": 300,
+     "n_hold": 292,
+     "n_quiet": 63,
+     "recorded_mid_usd_median": 126.50000000000001,
+     "A1": 77.5,
+     "A2": 73.75,
+     "A2_signed": -73.75,
+     "A3": 27.24999999999997,
+     "A4": 16.000000000000007,
+     "B1": 0.34325351498411244,
+     "B2": 27.24999999999997,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    },
+    "ATM|put|open": {
+     "n": 120,
+     "n_hold": 103,
+     "n_quiet": 11,
+     "recorded_mid_usd_median": 193.5,
+     "A1": 116.00000000000001,
+     "A2": 116.00000000000001,
+     "A2_signed": -116.00000000000001,
+     "A3": 41.5,
+     "A4": 6.000000000000005,
+     "B1": 0.35055067960309194,
+     "B2": 41.5,
+     "checks": {
+      "A1": false,
+      "A2": false,
+      "A3": false,
+      "A4": false,
+      "B1": false,
+      "B2": false
+     },
+     "verdict": "miss"
+    }
+   },
+   "quiet_spot": {
+    "1-OTM|close": {
+     "n": 78,
+     "recorded_dx_median": -6.0,
+     "model_dx_median": -3.75,
+     "fixed_spot_less_time_dx_median": -3.25,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.038461538461538464
+    },
+    "1-OTM|midday": {
+     "n": 126,
+     "recorded_dx_median": -5.499999999999994,
+     "model_dx_median": 0.0,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.047619047619047616
+    },
+    "1-OTM|open": {
+     "n": 22,
+     "recorded_dx_median": -4.499999999999993,
+     "model_dx_median": 0.0,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.0
+    },
+    "ATM|close": {
+     "n": 78,
+     "recorded_dx_median": -6.250000000004086,
+     "model_dx_median": -4.500000000001817,
+     "fixed_spot_less_time_dx_median": -4.499999999999999,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.07692307692307693
+    },
+    "ATM|midday": {
+     "n": 126,
+     "recorded_dx_median": -6.000000000000227,
+     "model_dx_median": 0.0,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.023809523809523808
+    },
+    "ATM|open": {
+     "n": 22,
+     "recorded_dx_median": -3.499999999999992,
+     "model_dx_median": 0.7500000000022748,
+     "fixed_spot_less_time_dx_median": 0.0,
+     "vol_part_median": null,
+     "share_within_half_spread": 0.045454545454545456
+    }
+   },
+   "expiration_convergence": {
+    "15:45|call": {
+     "n": 12,
+     "recorded_extrinsic_median": 44.750000000001364,
+     "model_extrinsic_median": 25.25000000000182
+    },
+    "15:45|put": {
+     "n": 12,
+     "recorded_extrinsic_median": 45.0,
+     "model_extrinsic_median": 7.75
+    },
+    "15:55|call": {
+     "n": 12,
+     "recorded_extrinsic_median": 34.25000000000182,
+     "model_extrinsic_median": 28.50000000000182
+    },
+    "15:55|put": {
+     "n": 12,
+     "recorded_extrinsic_median": 32.5,
+     "model_extrinsic_median": 12.5
+    }
+   },
+   "unsupported": [
+    "next-session expiry: no non-0DTE expiry in either intraday archive"
+   ],
+   "summary": {
+    "pass": 0,
+    "miss": 12,
+    "insufficient": 0
+   }
+  }
+ }
+}

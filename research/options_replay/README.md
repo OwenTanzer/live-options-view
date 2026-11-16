@@ -171,6 +171,30 @@ python research/options_replay/simulate.py --seed 20261115     # identity of one
 python research/options_replay/simulate.py --compare-recorded   # provisional-pricing gap
 ```
 
+## Calibrating the waiting experience (S3b)
+
+`calibration/` holds a predeclared, held-out evaluation of how 0DTE premium decays while the
+trainee waits:
+
+- `PROTOCOL.md` / `protocol.json`: committed before any fitting. They fix the dates, the
+  chronological development/held-out split, the exploratory days, the cells, the error in USD
+  per contract, and the tolerances A1-A4/B1-B2 with their rationale.
+- `dataset.py`: builds a 5-minute grid of gated QQQ/SPY snapshots (read-only R2).
+- `evaluate.py`: fits on development only and appends every held-out run to `attempts.jsonl`.
+- `report.py`: writes `manifest.json` and `RESULTS.md`.
+
+```sh
+python research/options_replay/calibration/dataset.py
+python research/options_replay/calibration/evaluate.py --model candidate --label "..."     --out research/options_replay/calibration/results/heldout_1_candidate.json
+python research/options_replay/calibration/report.py
+```
+
+Result: no cell passes all six checks. The business-time candidate cuts the S3a errors
+roughly 5-10× and puts levels at 0.86-1.09× of recorded for QQQ. Level error, 30-minute
+hold-profit error and opening quiet-spot decay still miss. Two bounded corrections were made
+(post-close tail, then skew), with tolerances unchanged; both are recorded as misses.
+Simulation pricing is still `sim-v1`; the calibrated model is not wired in.
+
 ## Tests
 
 ```sh
