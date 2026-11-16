@@ -66,7 +66,7 @@ svg{display:block;width:100%}
       <div class="row"><b style="font-size:13px">Window</b>
         <button data-w="session" class="on">Session 09:30–16:15</button><button data-w="fills">All fills</button><button data-w="sel">Selected ±10 min</button></div>
       <div id="lanes"></div>
-      <div class="note" style="margin-top:6px">One clock (New York) for every lane; each underlying and each option has its own price scale. Archived quotes are sampled, separate observations from the journal's fills.</div>
+      <div class="note" style="margin-top:6px">One clock (New York) for every lane; each underlying and each option has its own price scale. Archived quotes are separate observations from the journal's fills: lines and bands are continuous archived coverage around the fills; dots and ticks are sparse samples of the holding period; blank stretches were not read.</div>
     </div>
     <div class="card"><h2>Fills</h2><div style="overflow-x:auto"><table id="fills"></table></div>
       <div class="note" style="margin-top:6px">Times are the journal's execution-alert or broker order-initiation times, not exchange fill times. Fees are estimated until actual charges are recorded.</div></div>
@@ -131,7 +131,7 @@ svg{display:block;width:100%}
     for (const p of ps) {
       if (contexts.has(p.position_id)) continue;
       contexts.set(p.position_id, { loading: true });
-      fetch(`/api/trade-journal/context?position_id=${encodeURIComponent(p.position_id)}`, { credentials: 'same-origin', cache: 'no-store' })
+      fetch(`/api/trade-journal/context?position_id=${encodeURIComponent(p.position_id)}&date=${encodeURIComponent($('day').value)}`, { credentials: 'same-origin', cache: 'no-store' })
         .then(r => r.json().then(b => (r.ok ? b : { error: b.error || `HTTP ${r.status}` })))
         .catch(() => ({ error: 'network error' }))
         .then(ctx => { contexts.set(p.position_id, ctx); renderLanes(); });
@@ -189,10 +189,13 @@ svg{display:block;width:100%}
     const pad = win === 'fills' ? 8 * 60e3 : 10 * 60e3;
     return [Math.min(...ts) - pad, Math.max(...ts) + pad];
   }
-  function lane(title, source, series, fills, kind) {
+  // `segments`: [{kind: 'line'|'band'|'points', points}]. Each segment is drawn on its own;
+  // nothing is ever joined across the gap between two segments. 'points' are sparse samples.
+  function lane(title, source, segments, fills, isOption) {
     const [x0, x1] = domain(); const X = t => PADL + (t - x0) / (x1 - x0) * (W - PADL - PADR);
-    const pts = (series || []).filter(r => { const t = T(r[0]); return t >= x0 - 120e3 && t <= x1 + 120e3; });
-    let vals = pts.flatMap(r => (kind === 'band' ? [r[1], r[2]] : [r[1]])).concat(fills.map(f => f.price).filter(Number.isFinite));
+    const visible = r => { const t = T(r[0]); return t >= x0 - 120e3 && t <= x1 + 120e3; };
+    const segs = (segments || []).map(s => ({ ...s, points: s.points.filter(visible) })).filter(s => s.points.length);
+    let vals = segs.flatMap(s => s.points.flatMap(r => (isOption ? [r[1], r[2]] : [r[1]]))).concat(fills.map(f => f.price).filter(Number.isFinite));
     if (!vals.length) vals = [0, 1];
     let lo = Math.min(...vals), hi = Math.max(...vals); if (hi - lo < 1e-9) { hi += 0.01; lo -= 0.01; }
     const pd = (hi - lo) * 0.08; lo -= pd; hi += pd;
@@ -203,19 +206,26 @@ svg{display:block;width:100%}
     const step = x1 - x0 > 3 * 3600e3 ? 3600e3 : x1 - x0 > 3600e3 ? 15 * 60e3 : 5 * 60e3;
     for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step)
       g += `<line x1="${X(t)}" x2="${X(t)}" y1="${PADT}" y2="${H - PADB}" stroke="var(--grid)"/><text x="${X(t)}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">${fHM.format(t)}</text>`;
-    if (kind === 'band' && pts.length) {
-      const up = pts.map(r => `${X(T(r[0])).toFixed(1)},${Y(r[2]).toFixed(1)}`), dn = pts.slice().reverse().map(r => `${X(T(r[0])).toFixed(1)},${Y(r[1]).toFixed(1)}`);
-      g += `<polygon points="${up.concat(dn).join(' ')}" fill="var(--band)"/>`;
-      g += `<polyline points="${pts.map(r => `${X(T(r[0])).toFixed(1)},${Y((r[1] + r[2]) / 2).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1"/>`;
-    } else if (pts.length) {
-      g += `<polyline points="${pts.map(r => `${X(T(r[0])).toFixed(1)},${Y(r[1]).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--und)" stroke-width="1.3"/>`;
+    const xy = (r, v) => `${X(T(r[0])).toFixed(1)},${Y(v).toFixed(1)}`;
+    for (const s of segs) {
+      if (s.kind === 'points') {
+        for (const r of s.points) g += isOption
+          ? `<line x1="${X(T(r[0]))}" x2="${X(T(r[0]))}" y1="${Y(r[2])}" y2="${Y(r[1])}" stroke="var(--accent)" stroke-width="2"/>`
+          : `<circle cx="${X(T(r[0]))}" cy="${Y(r[1])}" r="1.8" fill="var(--und)"/>`;
+      } else if (isOption) {
+        g += `<polygon points="${s.points.map(r => xy(r, r[2])).concat(s.points.slice().reverse().map(r => xy(r, r[1]))).join(' ')}" fill="var(--band)"/>`;
+        g += `<polyline points="${s.points.map(r => xy(r, (r[1] + r[2]) / 2)).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1"/>`;
+      } else {
+        g += `<polyline points="${s.points.map(r => xy(r, r[1])).join(' ')}" fill="none" stroke="var(--und)" stroke-width="1.3"/>`;
+      }
     }
     for (const f of fills) { const x = X(T(f.ts)), c = f.side === 'buy' ? 'var(--buy)' : 'var(--sell)';
       g += `<line x1="${x}" x2="${x}" y1="${PADT}" y2="${H - PADB}" stroke="${c}" stroke-dasharray="3 3" opacity=".6"/>`;
       if (Number.isFinite(f.price)) { const y = Y(f.price);
         g += f.side === 'buy' ? `<path d="M${x - 6},${y + 8}L${x + 6},${y + 8}L${x},${y - 2}Z" fill="${c}"/>` : `<path d="M${x - 6},${y - 8}L${x + 6},${y - 8}L${x},${y + 2}Z" fill="${c}"/>`;
         g += `<text x="${x + 8}" y="${y + (f.side === 'buy' ? 12 : -6)}" font-size="11" fill="${c}">${f.side} ${f.price}</text>`; } }
-    return { html: `<div class="lane"><div class="lt">${esc(title)}</div><div class="ls">${esc(source)}</div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}<line class="xh" x1="-10" x2="-10" y1="${PADT}" y2="${H - PADB}" stroke="var(--mark)"/></svg></div>`, pts, kind };
+    const pts = segs.flatMap(s => s.points).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    return { html: `<div class="lane"><div class="lt">${esc(title)}</div><div class="ls">${esc(source)}</div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}<line class="xh" x1="-10" x2="-10" y1="${PADT}" y2="${H - PADB}" stroke="var(--mark)"/></svg></div>`, pts, kind: isOption ? 'band' : 'line' };
   }
   const gapLane = (title, text) => `<div class="lane"><div class="lt">${esc(title)}</div><div class="gapbox">${esc(text)}</div></div>`;
 
@@ -232,8 +242,8 @@ svg{display:block;width:100%}
       const fills = ps.flatMap(p => p.executions.map(e => ({ ts: e.ts, side: e.side, price: NaN })));
       const withSeries = ctxs.filter(c => c.underlying);
       if (withSeries.length) {
-        const pts = [...new Map(withSeries.flatMap(c => c.underlying.points).map(r => [r[0], r])).values()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
-        const L = lane(`${u} underlying`, withSeries[0].underlying.source.replace(/ \(.*\)$/, '') + ' · sampled', pts, fills, 'line');
+        // Each position contributes its own segments; windows of different positions are never joined.
+        const L = lane(`${u} underlying`, withSeries[0].underlying.source, withSeries.flatMap(c => c.underlying.segments), fills, false);
         laneData.push({ name: u, L }); html += L.html;
       } else if (ctxs.some(c => c.loading)) html += gapLane(`${u} underlying`, 'loading archived prices…');
       else html += gapLane(`${u} underlying`, `Coverage gap: ${ctxs.map(c => c.error || (c.gaps || []).find(g => g.startsWith(u)) || 'no archived series').filter(Boolean)[0]}`);
@@ -242,7 +252,11 @@ svg{display:block;width:100%}
       const c = contexts.get(p.position_id) || { loading: true };
       const fills = p.executions.map(e => ({ ts: e.ts, side: e.side, price: e.price }));
       const title = `${label(p)} · ${orders(p)}`;
-      if (c.option) { const L = lane(title, c.option.source, c.option.points, fills, 'band'); laneData.push({ name: label(p), L }); html += L.html; }
+      if (c.option) {
+        const notes = [...(c.notes || []), ...(c.coverage || [])].join(' · ');
+        const L = lane(title, c.option.source + (notes ? ` — ${notes}` : ''), c.option.segments, fills, true);
+        laneData.push({ name: label(p), L }); html += L.html;
+      }
       else if (c.loading) html += gapLane(title, 'loading archived quotes…');
       else html += gapLane(title, `Coverage gap: ${c.error || (c.gaps || []).filter(g => !g.includes(' underlying')).join(' ') || 'no archived quotes'} Fills: ${p.executions.map(e => `${e.side} ${e.qty} @ ${e.price} at ${fT.format(T(e.ts))} ET`).join(', ')}.`);
     }

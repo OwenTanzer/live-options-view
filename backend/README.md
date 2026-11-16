@@ -63,7 +63,7 @@ only marked as having left the source after a complete scan.
 | `GET /api/trade-journal?date=YYYY-MM-DD` | session + viewer | Positions with an execution on that America/New_York date, unsupported rows dated that day, totals, sync status |
 | `GET /api/trade-journal/row?page_id=` | session + viewer | One stored row, with `source_last_edited` (Notion) and `app_read_at` |
 | `POST /api/trade-journal/sync` | session + viewer + origin | Reads Notion and updates D1. Writes are paused by the cutover fence like the other mutating routes |
-| `GET /api/trade-journal/context?position_id=` | session + viewer | Underlying and exact-option series for one position's window, read from existing R2 archives ([`trade-journal-context.js`](trade-journal-context.js)) |
+| `GET /api/trade-journal/context?position_id=&date=` | session + viewer | Underlying and exact-option series for one position's window, read from existing R2 archives ([`trade-journal-context.js`](trade-journal-context.js)) |
 
 A scan pages through the whole data source in a stable order (creation
 time), reads the body of every new or changed row, and only then checks rows
@@ -82,11 +82,17 @@ A position that is not flat reports `open_qty`, `open_cost_basis`, fees paid
 and `realized_gross_pnl` on any closed part. Its `gross_pnl`/`net_pnl` are
 null, and the day totals keep it out of realised gross and net.
 
-Market context: QQQ and SPY come from the intraday chain snapshots (listed from
-the window start, at most 40 read, 1-in-N sampled and labelled). IBIT comes
-from the Tradier archive parts uploaded in the window (at most 15). Other
-underlyings return explicit coverage gaps. Results for finished sessions are
-cached in `trade_journal_context`.
+Market context is computed for one position on one New York day
+(`&date=`, default the entry day). It reads densely within 5 minutes of each
+fill that day, and samples the rest of the position's life inside that day's
+09:30-16:15 session with the remaining budget: at most 40 snapshots (QQQ, SPY)
+or 15 Tradier parts (IBIT). A position entered on an earlier day or exiting on
+a later one is noted, and each day reads its own archive. Series come back as
+segments. The page draws each one on its own and never joins across a gap:
+sparse samples appear as points or ticks, unread stretches stay blank, and the
+coverage is labelled. Other underlyings return explicit coverage gaps. Results
+for finished sessions are cached in `trade_journal_context`. While the cutover
+fence is armed the route still serves, but does not write that cache.
 
 Settings this needs before it can serve (names only; values are operator-managed):
 
