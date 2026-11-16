@@ -889,5 +889,46 @@ class CalibrationMath(unittest.TestCase):
                          (8.0, 4.0, 4.0, 3.0, [0.85, 1.15], 6.0))
 
 
+class HeldOutCoverage(unittest.TestCase):
+    """coverage_s3c counts reserved sessions from listings only, never bodies."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "research" / "options_replay" / "calibration"))
+        import coverage_s3c as C
+        self.C = C
+
+    def test_classify(self):
+        C, mon = self.C, date(2026, 11, 16)
+        full = list(range(OPEN - 60, CLOSE, 65))
+        self.assertEqual(C.classify(date(2026, 11, 21), full, mon, 0)[0], "not_session")
+        self.assertEqual(C.classify(mon, [], date(2026, 11, 17), 0)[0], "missing")
+        self.assertEqual(C.classify(mon, full, mon, 12 * 3600)[0], "pending")
+        self.assertEqual(C.classify(mon, [], mon, 3600)[0], "pending")
+        self.assertEqual(C.classify(mon, full, date(2026, 11, 17), 0)[0], "eligible")
+        holed = [t for t in full if not (12 * 3600 <= t < 12 * 3600 + 1200)]
+        self.assertEqual(C.classify(mon, holed, date(2026, 11, 17), 0)[0], "excluded")
+
+    def test_counts_listings_without_downloading(self):
+        C = self.C
+        day = "20261116"
+        keys = [f"intraday/{day}/snapshot_{t // 3600:02d}{t % 3600 // 60:02d}{t % 60:02d}000000.csv"
+                for t in range(OPEN - 60, CLOSE, 65)]
+
+        class Arc:
+            def list_keys(self, prefix, refresh=False):
+                return keys if prefix == f"intraday/{day}/" else []
+
+            def get(self, key):
+                raise AssertionError("coverage must not download snapshot bodies")
+            get_many = get
+
+        r = C.count(Arc(), date(2026, 11, 17), 0)
+        self.assertEqual(r["symbols"]["QQQ"]["eligible"], 1)
+        self.assertEqual(r["symbols"]["SPY"]["eligible"], 0)
+        self.assertFalse(r["ready"])
+        self.assertEqual(C.HELD_FROM.isoformat(), "2026-11-16")
+        self.assertEqual(C.MIN_SESSIONS, 10)
+
+
 if __name__ == "__main__":
     unittest.main()
