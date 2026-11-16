@@ -54,6 +54,10 @@ def label(contract: str) -> str:
     return f"QQQ {contract[1:]} {kind}, 0DTE"
 
 
+def new_trade_id() -> str:
+    return f"tr_{secrets.token_hex(6)}"
+
+
 class ReplayError(ValueError):
     status = 409
 
@@ -96,7 +100,8 @@ class ReplaySession:
                  fee_per_contract_side: float = DEFAULT_FEE, cash: float = DEFAULT_CASH,
                  start_s: int | None = None, journal_dir: Path | None = None,
                  now: Callable[[], float] = _time.monotonic,
-                 raw_lookup: Callable[[str, str], dict | None] | None = None):
+                 raw_lookup: Callable[[str, str], dict | None] | None = None,
+                 on_fill: Callable | None = None, on_reveal: Callable | None = None):
         self.id = secrets.token_urlsafe(9)
         self.pack = pack
         self.snaps = pack["snapshots"]
@@ -111,6 +116,8 @@ class ReplaySession:
         self.cash_start = float(cash)
         self.now = now
         self.raw_lookup = raw_lookup
+        self.on_fill = on_fill
+        self.on_reveal = on_reveal
         self.revealed = False
         self.attempts: list[dict] = []
         self.journal = None
@@ -125,6 +132,7 @@ class ReplaySession:
         self.furthest = self.start_s
         self.cash = self.cash_start
         self.lots: dict[str, dict] = {}          # contract -> {"qty", "cost"} (cost = premium + entry fees, USD)
+        self.open_trades: dict[str, str] = {}    # contract -> trade_id of the open round trip
         self.fills: list[dict] = []
         self.realized = 0.0                      # net of fees, USD
         self.fees = 0.0
@@ -347,17 +355,16 @@ class ReplaySession:
         bid, ask = snap["q"][contract]
         can_buy, can_sell, why = quote_usable(bid, ask)
         fee = self.fee * qty
-        lot = self.lots.setdefault(contract, {"qty": 0, "cost": 0.0})
+        lot = self.lots.get(contract, {"qty": 0, "cost": 0.0})
+        decision_state = self.view()          # exactly what was visible when the order was placed
         if side == "buy":
             if not can_buy:
                 raise ReplayError(f"no usable ask: {why or 'ask unavailable'}")
             premium = ask * MULTIPLIER * qty
             if premium + fee > self.cash + 1e-9:
                 raise ReplayError("insufficient paper cash")
-            self.cash -= premium + fee
-            lot["qty"] += qty
-            lot["cost"] += premium + fee          # entry fee carried in basis
             price, pnl, cash_flow = ask, None, -(premium + fee)
+            new_lot = {"qty": lot["qty"] + qty, "cost": lot["cost"] + premium + fee}   # entry fee in basis
         else:
             if lot["qty"] < qty:
                 raise ReplayError("cannot sell more than held (no short positions)")
@@ -365,23 +372,41 @@ class ReplaySession:
                 raise ReplayError(f"no usable bid: {why or 'bid unavailable'}")
             proceeds = bid * MULTIPLIER * qty
             basis = lot["cost"] * qty / lot["qty"]
-            lot["cost"] -= basis
-            lot["qty"] -= qty
-            self.cash += proceeds - fee
             pnl = proceeds - fee - basis
-            self.realized += pnl
             price, cash_flow = bid, proceeds - fee
-        self.fees += fee
+            new_lot = {"qty": lot["qty"] - qty, "cost": lot["cost"] - basis}
+        new_trade = contract not in self.open_trades
+        trade_id = self.open_trades.get(contract) or new_trade_id()
         fill = {"n": len(self.fills) + 1, "kind": "fill", "side": side, "contract": contract,
                 "label": label(contract), "qty": qty, "price": price, "fee": round(fee, 2),
                 "time_of_day": hhmmss(self.clock), "quote_time": hhmmss(snap["t"]),
                 "quote_age_s": age, "bid": bid, "ask": ask,
                 "cash_flow": round(cash_flow, 2),
                 "net_pnl": None if pnl is None else round(pnl, 2),
-                "source_key": snap["key"]}
+                "trade_id": trade_id, "source_key": snap["key"]}
+        # Persist first: if storage does not acknowledge, the order fails and nothing changes.
+        saved = self._persist(fill, decision_state, new_trade)
+        self.cash += cash_flow
+        self.lots[contract] = new_lot
+        if pnl is not None:
+            self.realized += pnl
+        self.fees += fee
+        if new_lot["qty"] > 0:
+            self.open_trades[contract] = trade_id
+        else:
+            self.open_trades.pop(contract, None)
+        fill["saved"] = saved
         self.fills.append(fill)
         self._log("fill", fill)
         return self.view()
+
+    def _persist(self, fill: dict, decision_state: dict, new_trade: bool) -> dict | None:
+        if self.on_fill is None:
+            return None
+        try:
+            return self.on_fill(self, fill, decision_state, new_trade)
+        except Exception as e:  # storage did not acknowledge
+            raise ReplayError(f"not saved, order not placed: {e}") from e
 
     def _expire(self):
         if self.expired:
@@ -395,16 +420,23 @@ class ReplaySession:
             intrinsic = None if spot is None else max(0.0, (spot - k) if c[0] == "C" else (k - spot))
             value = 0.0 if intrinsic is None else intrinsic * MULTIPLIER * lot["qty"]
             pnl = value - lot["cost"]
-            self.cash += value
-            self.realized += pnl
-            self.fills.append({"n": len(self.fills) + 1, "kind": "expiry", "side": "expire",
+            exp = {"n": len(self.fills) + 1, "kind": "expiry", "side": "expire",
                                "contract": c, "label": label(c), "qty": lot["qty"],
                                "price": None if intrinsic is None else round(intrinsic, 4),
                                "fee": 0.0, "time_of_day": hhmmss(self.close_s),
                                "note": "expired at the close; settled at intrinsic value vs the last "
                                        "parity-consistent recorded underlying (not a market fill)",
                                "cash_flow": round(value, 2),
-                               "net_pnl": round(pnl, 2), "source_key": None})
+                               "net_pnl": round(pnl, 2), "trade_id": self.open_trades.get(c), "source_key": None}
+            try:
+                exp["saved"] = self._persist(exp, self.view(), False)
+            except ReplayError as e:   # settlement still happens; the record says it was not saved
+                exp["saved"] = None
+                exp["save_error"] = str(e)
+            self.cash += value
+            self.realized += pnl
+            self.fills.append(exp)
+            self.open_trades.pop(c, None)
             lot["qty"], lot["cost"] = 0, 0.0
         self._log("expire", {})
 
@@ -439,6 +471,8 @@ class ReplaySession:
 
     def reveal(self) -> dict:
         """End the session and disclose the day, its full path, sources and reconciliation."""
+        if self.on_reveal is not None:
+            self.on_reveal(self)          # persist the unmask before showing anything
         self.revealed = True
         self._log("reveal", {})
         v = self.view()

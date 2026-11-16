@@ -342,5 +342,155 @@ class ArchiveHelpers(unittest.TestCase):
         self.assertIsNone(re.search(r"^s*(from|import) backend", src, re.M))
 
 
+class TrainerStorage(unittest.TestCase):
+    """S2b: fills, decision-time state, trade identity and note revisions persist and recover."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.db = self.tmp / "trainer.sqlite3"
+
+    def _session(self, store, pack=None, **kw):
+        pack = pack or minute_pack(drift=0.05)
+        holder = {}
+
+        def on_fill(sess, fill, state, new_trade):
+            return store.record_fill(session_id=sess.id, trade_id=fill["trade_id"], new_trade=new_trade,
+                                     attempt=len(sess.attempts) + 1, fill=fill, decision_state=state)
+        s = RS(pack, start_s=OPEN + 3600, on_fill=on_fill,
+               on_reveal=lambda sess: store.mark_revealed(sess.id), **kw)
+        store.add_session(s.id, pack["day"], s.start_s, s.fee)
+        return s
+
+    def test_trade_identity_spans_partial_fills_and_new_round_trip_gets_new_id(self):
+        from store import TrainerStore
+        st = TrainerStore(self.db)
+        s = self._session(st)
+        s.order("buy", "C703", 2)
+        s.order("buy", "C703", 1)
+        s.advance(600, max_bars=None)
+        s.order("sell", "C703", 2)
+        s.order("sell", "C703", 1)
+        s.order("buy", "C703", 1)
+        ids = [f["trade_id"] for f in s.fills]
+        self.assertEqual(len(set(ids[:4])), 1)
+        self.assertNotEqual(ids[4], ids[0])
+        recs = st.trades(session_id=s.id)
+        self.assertEqual([r["status"] for r in recs], ["closed", "open"])
+        self.assertEqual([f["seq"] for f in recs[0]["fills"]], [1, 2, 3, 4])
+        self.assertAlmostEqual(recs[0]["net"], round(s.realized, 2), places=2)
+
+    def test_notes_are_revisions_and_never_touch_decision_state(self):
+        from store import TrainerStore
+        st = TrainerStore(self.db)
+        s = self._session(st)
+        s.order("buy", "C700", 1)
+        tid = s.fills[0]["trade_id"]
+        before = st.trades(trade_id=tid)[0]["fills"][0]
+        a1 = st.add_note_revision(tid, "first idea")
+        a2 = st.add_note_revision(tid, "first idea, revised")
+        a3 = st.add_note_revision(tid, "first idea, revised")   # identical text: no new revision
+        self.assertEqual((a1["rev"], a2["rev"], a3["rev"], a3["changed"]), (1, 2, 2, False))
+        after = st.trades(trade_id=tid)[0]
+        self.assertEqual(after["fills"][0]["decision_state"], before["decision_state"])
+        self.assertEqual(after["fills"][0]["decision_state_sha256"], before["decision_state_sha256"])
+        self.assertTrue(after["fills"][0]["decision_state_verified"])
+        self.assertEqual([r["text"] for r in after["note"]["revisions"]], ["first idea", "first idea, revised"])
+        import sqlite3
+        with self.assertRaises(sqlite3.DatabaseError):
+            st._db.execute("UPDATE fill SET price = 0")
+        with self.assertRaises(sqlite3.DatabaseError):
+            st._db.execute("UPDATE note_revision SET text = 'x'")
+
+    def test_decision_state_is_what_was_visible_before_the_order(self):
+        from store import TrainerStore
+        st = TrainerStore(self.db)
+        s = self._session(st)
+        visible = s.view()
+        s.order("buy", "C700", 1)
+        rec = st.trades(session_id=s.id)[0]["fills"][0]
+        self.assertEqual(rec["decision_state"], json.loads(json.dumps(visible)))
+        self.assertEqual(rec["decision_state"]["positions"], [])
+        self.assertEqual(rec["decision_state"]["session"]["time_of_day"], "10:30:00 ET")
+
+    def test_masked_until_reveal_then_unmasked_and_recovered_by_fresh_connection(self):
+        from store import TrainerStore
+        st = TrainerStore(self.db)
+        s = self._session(st)
+        s.order("buy", "C700", 1)
+        blob = json.dumps(st.trades())
+        for pat in DATE_PATTERNS:
+            self.assertIsNone(re.search(pat, blob.replace(st.trades()[0]["created_at"], "")), pat)
+        self.assertNotIn("intraday/", blob)
+        s.reveal()
+        st.close()
+        fresh = TrainerStore(self.db)              # new connection, nothing in memory
+        rec = fresh.trades()[0]
+        self.assertEqual(rec["day"], DAY)
+        self.assertTrue(rec["fills"][0]["source_key"].startswith("intraday/20260901/"))
+
+    def test_storage_failure_means_order_not_placed(self):
+        def broken(*a, **k):
+            raise RuntimeError("disk full")
+        s = RS(minute_pack(), start_s=OPEN + 3600, on_fill=broken)
+        with self.assertRaises(ReplayError) as cm:
+            s.order("buy", "C700", 1)
+        self.assertIn("not saved", str(cm.exception))
+        self.assertEqual((s.fills, s.cash, s.lots.get("C700", {}).get("qty", 0)), ([], 10_000.0, 0))
+
+    def test_records_recovered_over_http_by_a_fresh_server(self):
+        import threading
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        import server as srv
+        from store import TrainerStore
+
+        def boot():
+            arc = A.Archive(self.tmp / "cache")
+            g = srv.Games(arc, [DAY], 0.65, 1, force_start=OPEN + 3600, store=TrainerStore(self.db))
+            g._load = lambda day: minute_pack(drift=0.05)
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.make_handler(g))
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            return httpd, g, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+        def call(base, path, body=None):
+            req = urllib.request.Request(base + path, None if body is None else json.dumps(body).encode(),
+                                         {"Content-Type": "application/json"})
+            return json.load(urllib.request.urlopen(req))
+
+        httpd, g, base = boot()
+        v = call(base, "/api/new", {})
+        sid = v["session"]["id"]
+        g.sessions[sid].now = FakeClock()
+        v = call(base, "/api/order", {"s": sid, "side": "buy", "contract": "C703", "qty": 1})
+        call(base, "/api/advance", {"s": sid, "seconds": 600, "max_bars": None})
+        v = call(base, "/api/order", {"s": sid, "side": "sell", "contract": "C703", "qty": 1})
+        plain = v["fills"][0]["trade_id"]
+        v = call(base, "/api/order", {"s": sid, "side": "buy", "contract": "P704", "qty": 1})
+        noted = v["fills"][-1]["trade_id"]
+        self.assertTrue(v["fills"][-1]["saved"]["fill_id"].startswith("fl_"))
+        call(base, "/api/note", {"trade_id": noted, "text": "fade the pop"})
+        call(base, "/api/note", {"trade_id": noted, "text": "fade the pop; out by 11"})
+        call(base, "/api/advance", {"s": sid, "seconds": 300, "max_bars": None})
+        call(base, "/api/order", {"s": sid, "side": "sell", "contract": "P704", "qty": 1})
+        httpd.shutdown(); httpd.server_close(); g.store.close()
+        del g
+
+        httpd2, g2, base2 = boot()                 # fresh server: new process state, same store file
+        self.assertEqual(g2.sessions, {})
+        recs = {t["trade_id"]: t for t in call(base2, "/api/records?state=1")["trades"]}
+        self.assertEqual(set(recs), {plain, noted})
+        self.assertIsNone(recs[plain]["note"])
+        self.assertEqual([r["text"] for r in recs[noted]["note"]["revisions"]],
+                         ["fade the pop", "fade the pop; out by 11"])
+        for t in recs.values():
+            self.assertEqual(t["status"], "closed")
+            self.assertIsNone(t["day"])
+            self.assertTrue(all(f["source_key"] == "(hidden until reveal)" for f in t["fills"]))
+            self.assertTrue(all(f["decision_state_verified"] for f in t["fills"]))
+            self.assertAlmostEqual(t["net"], round(t["gross_premium"] - t["fees"], 2), places=2)
+        httpd2.shutdown(); httpd2.server_close(); g2.store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

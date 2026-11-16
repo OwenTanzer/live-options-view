@@ -66,6 +66,41 @@ collectors.
   archived CSV (with a match check), premium and fee. It ends with gross − fees = net, checked against
   the ledger.
 
+## Saved trades and notes (S2b)
+
+The trainer store is a local SQLite file, `research/options_replay/.cache/trainer.sqlite3`
+(`--store` to move it). It is gitignored and isolated from live trading, paper accounts, the
+Worker, R2, KV and D1.
+
+- **Automatic, no Save/Export.** Each order is written in one transaction (WAL,
+  `synchronous=FULL`) *before* the in-memory ledger changes. If the write fails, the order is
+  refused and nothing changes. The page marks a fill "saved ✓ fl_…" only from the commit
+  acknowledgment.
+- **Trade identity.** A trade (`tr_…`) is one round trip on one contract. It opens on the buy
+  that takes the contract from flat to long and closes when the quantity returns to 0 (or at
+  expiry). Fills (`fl_…`) carry a per-trade `seq`.
+- **Decision-time state.** Each fill stores the exact masked view the player had when placing
+  the order, once, with its SHA-256. SQLite triggers make fills immutable (no UPDATE or
+  DELETE).
+- **Notes.** Notes are optional, one per trade (`nt_…`), and append-only (`rev` 1, 2, …;
+  identical text adds nothing). The notes window is closed by default and autosaves while you
+  type; buying and selling work with it closed. Editing a note never touches fills or decision
+  state, and the hash is re-verified on every read.
+- **Masking.** Until a session is revealed, retrieval through the page, `/api/records` and the
+  CLI shows no date, weekday or source key. A session that was never revealed before the
+  server restarted stays masked. Resuming it is reconnect territory (S2c).
+
+Retrieval:
+
+```sh
+python research/options_replay/records.py list                     # no server needed
+python research/options_replay/records.py show tr_… [--state]
+curl "http://127.0.0.1:8737/api/records?state=1"                   # all trades
+curl "http://127.0.0.1:8737/api/trade?id=tr_…"
+```
+
+The page's **Saved records** panel reads the store on load, so a fresh browser sees every trade.
+
 ## Tests
 
 ```sh

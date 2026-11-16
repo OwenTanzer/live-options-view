@@ -32,13 +32,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import archive as A  # noqa: E402
 from engine import DEFAULT_FEE, DwellError, ReplayError, ReplaySession  # noqa: E402
+from store import StoreError, TrainerStore  # noqa: E402
 
 MAX_BODY = 4096
 
 
 class Games:
     def __init__(self, arc: A.Archive, pool: list[str], fee: float, seed: int | None,
-                 force_day: str | None = None, force_start: int | None = None):
+                 force_day: str | None = None, force_start: int | None = None,
+                 store: TrainerStore | None = None):
+        self.store = store
         self.force_day = force_day
         self.force_start = force_start
         self.arc = arc
@@ -112,10 +115,20 @@ class Games:
 
     def new(self) -> ReplaySession:
         pack = self._pick_pack()
+        store = self.store
+
+        def on_fill(sess, fill, state, new_trade):
+            return store.record_fill(session_id=sess.id, trade_id=fill["trade_id"], new_trade=new_trade,
+                                     attempt=len(sess.attempts) + 1, fill=fill, decision_state=state)
+
         session = ReplaySession(pack, rng=self.rng, fee_per_contract_side=self.fee,
                                 start_s=self.force_start,
                                 journal_dir=self.arc.cache_dir / "journals",
-                                raw_lookup=lambda key, c: A.raw_quote(self.arc, key, c))
+                                raw_lookup=lambda key, c: A.raw_quote(self.arc, key, c),
+                                on_fill=on_fill if store else None,
+                                on_reveal=(lambda sess: store.mark_revealed(sess.id)) if store else None)
+        if store:
+            store.add_session(session.id, pack["day"], session.start_s, self.fee)
         with self.lock:
             self.sessions[session.id] = session
         self.prefetch()
@@ -171,6 +184,17 @@ def make_handler(games: Games):
                     return self._send(200, games.get(sid).view())
                 except ReplayError as e:
                     return self._send(404, {"error": str(e)})
+            if url.path in ("/api/records", "/api/trade"):
+                if games.store is None:
+                    return self._send(503, {"error": "no trainer store"})
+                qs = parse_qs(url.query)
+                state = qs.get("state", ["0"])[0] == "1"
+                if url.path == "/api/trade":
+                    recs = games.store.trades(trade_id=qs.get("id", [""])[0], include_state=True)
+                    return self._send(200 if recs else 404, recs[0] if recs else {"error": "unknown trade"})
+                sid = qs.get("s", [None])[0]
+                return self._send(200, {"store": str(games.store.path), "trades":
+                                        games.store.trades(session_id=sid, include_state=state)})
             if url.path == "/api/health":
                 return self._send(200, {"ok": True, "pool": len(games.pool),
                                         "refused": len(games.refused)})
@@ -185,6 +209,14 @@ def make_handler(games: Games):
                 return self._send(403, {"error": "cross-origin request refused"})
             try:
                 data = self._body()
+                if url.path == "/api/note":
+                    if games.store is None:
+                        return self._send(503, {"error": "no trainer store"})
+                    try:
+                        ack = games.store.add_note_revision(str(data.get("trade_id", "")), data.get("text"))
+                    except StoreError as e:
+                        return self._send(400, {"error": str(e)})
+                    return self._send(200, ack)
                 if url.path == "/api/new":
                     return self._send(200, games.new().view())
                 s = games.get(str(data.get("s", "")))
@@ -221,6 +253,8 @@ def main() -> int:
     ap.add_argument("--day", default=None,
                     help="operator reproduction only: play this YYYY-MM-DD (the operator then knows the date)")
     ap.add_argument("--start", default=None, help="operator reproduction only: landing time HH:MM (ET)")
+    ap.add_argument("--store", default=None,
+                    help="trainer SQLite file (default <cache>/trainer.sqlite3); isolated from live trading")
     args = ap.parse_args()
     arc = A.Archive(args.cache)
     pool_file = Path(args.cache) / "qualified_days.json"
@@ -232,11 +266,12 @@ def main() -> int:
     if args.start:
         hh, mm = (int(x) for x in args.start.split(":"))
         start = hh * 3600 + mm * 60
-    games = Games(arc, pool, args.fee, args.seed, args.day, start)
+    store = TrainerStore(args.store or Path(args.cache) / "trainer.sqlite3")
+    games = Games(arc, pool, args.fee, args.seed, args.day, start, store)
     games.prefetch()
     httpd = ThreadingHTTPServer((args.host, args.port), make_handler(games))
     print(f"Options Replay: http://{args.host}:{args.port}/  ({len(pool)} qualified days, "
-          f"fee ${args.fee:.2f}/contract/side)", flush=True)
+          f"fee ${args.fee:.2f}/contract/side, trainer store {store.path})", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
