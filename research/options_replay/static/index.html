@@ -104,12 +104,13 @@ details summary { cursor: pointer; }
     <div class="grid">
       <section class="panel">
         <h2>QQQ · date hidden <span class="muted" id="spotnow"></span></h2>
-        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="QQQ path so far"></svg>
+        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Five-minute QQQ candlesticks from observed spot prices"></svg>
         <div class="legend"><i></i> past stretches where trading was disabled (hover for the reason)</div>
         <div class="controls" style="margin-top:8px">
           <button id="play" title="Play / pause (space)">▶ Play</button>
           <select id="speed" aria-label="Playback speed">
-            <option value="1" selected>1x (real time)</option>
+            <option value="step" selected>Fast · next quote</option>
+            <option value="1">1x (real time)</option>
             <option value="5">5x</option>
             <option value="15">15x</option>
             <option value="60">60x</option>
@@ -236,16 +237,18 @@ const step = () => move("/api/step", {});
 const skip = (sec) => move("/api/advance", { seconds: sec, max_bars: 1 }).then(() => {});
 
 // Playback: speed x real time, but never more than one new bar per tick and never faster than DWELL.
-function tickMs() { const sp = Number($("speed").value); return Math.max(DWELL, Math.round(1000 / Math.min(sp, 2))); }
-async function tick() {
-  if (!playing) return;
+let playbackRun = 0;
+function tickMs() { if ($("speed").value === "step") return DWELL; const sp = Number($("speed").value); return Math.max(DWELL, Math.round(1000 / Math.min(sp, 2))); }
+async function tick(run) {
+  if (!playing || run !== playbackRun) return;
   if (!V || V.session.closed || V.session.revealed) return pause();
   const sp = Number($("speed").value), ms = tickMs();
-  await move("/api/advance", { seconds: Math.max(1, Math.round(sp * ms / 1000)), max_bars: 1 });
-  if (playing) timer = setTimeout(tick, Math.max(0, lastMove + ms - performance.now()));
+  if ($("speed").value === "step") await step();
+  else await move("/api/advance", { seconds: Math.max(1, Math.round(sp * ms / 1000)), max_bars: 1 });
+  if (playing && run === playbackRun) timer = setTimeout(() => tick(run), Math.max(50, lastMove + ms - performance.now()));
 }
-function play() { if (playing || !V || V.session.closed || V.session.revealed) return; playing = true; $("play").textContent = "❚❚ Pause"; tick(); }
-function pause() { playing = false; clearTimeout(timer); $("play").textContent = "▶ Play"; }
+function play() { if (playing || !V || V.session.closed || V.session.revealed) return; playing = true; $("play").textContent = "❚❚ Pause"; tick(++playbackRun); }
+function pause() { playbackRun++; playing = false; clearTimeout(timer); $("play").textContent = "▶ Play"; }
 function togglePlay() { playing ? pause() : play(); }
 
 // Multi-minute skip walks bar by bar so the dwell rule still holds.
@@ -312,7 +315,7 @@ function render() {
   $("spotnow").textContent = V.spot.now != null ? "· " + px(V.spot.now) : V.spot.last != null ? `· last consistent ${px(V.spot.last)}` : "";
   const r = V.rules;
   $("rules").textContent = `Buy at recorded ask · sell at recorded bid · fee $${r.fee_per_contract_side.toFixed(2)}/contract/side · ×${r.multiplier}`;
-  $("pace").textContent = `Each step shows the next recorded bar (about a minute apart). Playback never skips a bar and holds each for at least ${s.min_dwell_ms} ms.`;
+  $("pace").textContent = `5-minute candles from ${sim ? "generated" : "recorded"} spot samples. Fast Play advances one quote per update (minimum ${(s.min_dwell_ms / 1000).toFixed(1)} s).`;
   const b = $("banner");
   if (q.status === "disabled" && !s.revealed) {
     b.className = "banner on";
@@ -329,29 +332,55 @@ function render() {
 }
 
 function drawChart() {
-  const svg = $("chart"), W = 600, H = 210, pad = 22, s = V.session;
-  const full = V.reveal ? V.reveal.full_day_spot : null, series = V.spot.series;
-  const all = full || series;
-  if (!all.length) { svg.innerHTML = `<text x="300" y="105" text-anchor="middle" fill="currentColor" opacity=".5">no parity-consistent spot yet</text>`; return; }
-  const ys = all.map((p) => p[1]); let lo = Math.min(...ys), hi = Math.max(...ys);
-  if (hi - lo < 0.5) { lo -= 0.25; hi += 0.25; }
-  const x = (t) => pad + (W - 2 * pad) * (Math.min(Math.max(t, s.open_s), s.close_s) - s.open_s) / (s.close_s - s.open_s);
-  const y = (v) => H - pad - (H - 2 * pad) * (v - lo) / (hi - lo);
-  const path = (pts) => pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
+  const svg = $("chart"), s = V.session;
+  const width = Math.max(280, Math.round(svg.getBoundingClientRect().width)), height = 210;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const bar = 300, points = V.reveal ? V.reveal.full_day_spot : V.spot.series;
+  const until = V.reveal ? s.close_s : s.clock_s;
+  const right = Math.floor(until / bar) * bar + bar;
+  const left = V.reveal ? s.open_s : Math.max(s.open_s, right - 24 * bar);
+  const candles = new Map();
+  for (const [t, price] of points) {
+    if (t < left || t > until || !Number.isFinite(price)) continue;
+    const key = Math.floor(t / bar) * bar;
+    const c = candles.get(key) || {open: price, high: price, low: price, close: price};
+    c.high = Math.max(c.high, price); c.low = Math.min(c.low, price); c.close = price;
+    candles.set(key, c);
+  }
+  if (!candles.size) { svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable spot price</text>'; return; }
+  const values = [...candles.values()];
+  const high = Math.max(...values.map(c => c.high)), low = Math.min(...values.map(c => c.low));
+  const margin = Math.max(.04, (high - low) * .1), top = high + margin, bottom = low - margin;
+  const plotW = width - 54, plotH = height - 36;
+  const x = t => 4 + plotW * (t - left) / Math.max(bar, right - left);
+  const y = p => 10 + plotH * (top - p) / (top - bottom);
+  const candleW = Math.min(16, Math.max(1.5, (x(left + bar) - x(left)) * .68));
   let g = "";
-  const dark = V.reveal ? V.reveal.full_day_dark : V.dark;
-  for (const d of dark) g += `<rect x="${x(d.start)}" y="${pad}" width="${Math.max(1.5, x(d.end) - x(d.start))}" height="${H - 2 * pad}" fill="var(--dark-band)"><title>${hms(d.start)}–${hms(d.end)} disabled: ${esc(d.label)}</title></rect>`;
-  for (let h = 10; h <= 16; h++) { const t = h * 3600; if (t > s.close_s) break;
-    g += `<line x1="${x(t)}" x2="${x(t)}" y1="${pad}" y2="${H - pad}" stroke="var(--line)"/><text x="${x(t)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${h}:00</text>`; }
-  g += `<text x="${pad}" y="${pad - 6}" font-size="10" fill="var(--muted)">${hi.toFixed(2)}</text><text x="${pad}" y="${H - pad + 12}" font-size="10" fill="var(--muted)">${lo.toFixed(2)}</text>`;
-  if (full) g += `<path d="${path(full)}" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="3 3"/>`;
-  if (series.length) g += `<path d="${path(series)}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>`;
-  g += `<line x1="${x(s.clock_s)}" x2="${x(s.clock_s)}" y1="${pad}" y2="${H - pad}" stroke="var(--warn)" stroke-dasharray="2 2"/>`;
-  if (s.start_s !== s.open_s) g += `<line x1="${x(s.start_s)}" x2="${x(s.start_s)}" y1="${pad}" y2="${H - pad}" stroke="var(--muted)" stroke-width=".6"><title>landing time</title></line>`;
-  for (const f of V.fills) { if (f.kind !== "fill") continue;
-    const [hh, mm, ss] = f.time_of_day.split(":").map(Number), t = hh * 3600 + mm * 60 + ss;
-    const near = series.reduce((a, p) => (Math.abs(p[0] - t) < Math.abs(a[0] - t) ? p : a), series[0] || [t, lo]);
-    g += `<circle cx="${x(t)}" cy="${y(near[1])}" r="4" fill="${f.side === "buy" ? "var(--up)" : "var(--down)"}"><title>${f.side} ${esc(f.label)} @ ${f.price}</title></circle>`; }
+  for (const d of V.reveal ? V.reveal.full_day_dark : V.dark) {
+    const a = Math.max(left, d.start), b = Math.min(right, d.end);
+    if (a < b) g += `<rect x="${x(a)}" y="10" width="${x(b)-x(a)}" height="${plotH}" fill="var(--dark-band)"><title>${esc(d.label)}</title></rect>`;
+  }
+  for (let i = 0; i < 4; i++) {
+    const p = bottom + (top-bottom)*i/3;
+    g += `<path d="M4 ${y(p)}h${plotW}" stroke="var(--line)"/><text x="${plotW+8}" y="${y(p)+4}" font-size="11" fill="var(--muted)">${p.toFixed(2)}</text>`;
+  }
+  const interval = right-left > 7200 ? 3600 : 1800;
+  for (let t = Math.ceil(left/interval)*interval; t < right; t += interval)
+    g += `<text x="${Math.max(18,x(t))}" y="205" text-anchor="middle" font-size="11" fill="var(--muted)">${hms(t).slice(0,5)}</text>`;
+  for (const [t,c] of candles) {
+    const mid = x(t+bar/2), color = c.close >= c.open ? "var(--up)" : "var(--down)";
+    g += `<g class="candle"><title>${hms(t).slice(0,5)} · O ${px(c.open)} H ${px(c.high)} L ${px(c.low)} C ${px(c.close)}</title><line x1="${mid}" x2="${mid}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}" stroke-width="1.4"/><rect x="${mid-candleW/2}" width="${candleW}" y="${Math.min(y(c.open),y(c.close))-0.5}" height="${Math.max(1.5,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
+  }
+  for (const [t,label] of [[s.start_s,"Landing"],[s.clock_s,"Clock"]]) {
+    if (t>=left && t<right) g += `<path d="M${x(t)} 10v${plotH}" stroke="var(--warn)" stroke-dasharray="2 3"><title>${label}</title></path>`;
+  }
+  for (const f of V.fills) {
+    if (f.kind !== "fill") continue;
+    const [hh,mm,ss] = f.time_of_day.split(":").map(Number), t = hh*3600+mm*60+ss;
+    if(t<left || t>until) continue;
+    const sample = V.spot.series.filter(p => p[0]<=t).at(-1);
+    if(sample) g += `<circle cx="${x(t)}" cy="${y(sample[1])}" r="3.5" stroke="var(--ink)" fill="${f.side==="buy"?"var(--up)":"var(--down)"}"><title>${esc(f.side)} ${esc(f.label)} @ ${f.price}</title></circle>`;
+  }
   svg.innerHTML = g;
 }
 
