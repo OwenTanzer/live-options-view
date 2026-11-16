@@ -36,6 +36,7 @@ import archive as A  # noqa: E402
 from engine import (DEFAULT_FEE, DwellError, NotSavedError, ReplayError, ReplaySession,  # noqa: E402
                     StaleError, hhmmss, label)
 from store import ConflictError, StoreError, TrainerStore, body_digest  # noqa: E402
+import event_tape
 import simulate  # noqa: E402
 
 MAX_BODY = 4096
@@ -123,6 +124,8 @@ class Games:
     # -- session wiring -----------------------------------------------------
 
     def _raw_lookup(self, pack: dict):
+        if pack.get("event_tape"):
+            return event_tape.raw_lookup(self.arc, pack)
         if pack.get("mode") == "simulation":
             seed, ver = pack["sim"]["seed"], pack["sim"]["generator_version"]
             return lambda key, c: self._sim_raw(seed, key, c, ver)
@@ -170,6 +173,12 @@ class Games:
             pack = self._sim_pack(int(seed))
             start = self.force_start if self.force_start is not None else pack["open_s"] + 900 + \
                 (int(seed) % ((pack["close_s"] - 3600 - pack["open_s"] - 900) // 60)) * 60
+        elif mode == "tape" and A.SYMBOL == "QQQ":
+            days = sorted((self.arc.cache_dir / "event_tape").glob("*.json.gz"))
+            if not days:
+                raise ReplayError("No event-tape sessions installed")
+            pack = event_tape.load(self.rng.choice(days))
+            start = self.force_start
         elif mode == "replay":
             pack = self._pick_pack()
             start = self.force_start
@@ -177,7 +186,7 @@ class Games:
             raise ReplayError("mode must be replay or simulation")
         session = self._make(pack, start_s=start)
         if self.store:
-            self.store.add_session(session.id, pack["day"], session.start_s, session.fee)
+            self.store.add_session(session.id, ("TAPE:" if pack.get("event_tape") else "") + pack["day"], session.start_s, session.fee)
         with self.lock:
             self.sessions[session.id] = session
             self.locks[session.id] = threading.RLock()
@@ -197,6 +206,8 @@ class Games:
             pack = self._sim_pack(label["seed"], label["generator_version"])
             if not pack["day"].endswith(label["inputs_digest_prefix"]):
                 raise ReplayError("simulation inputs changed since this session was generated")
+        elif row["day"].startswith("TAPE:"):
+            pack = event_tape.load(self.arc.cache_dir / "event_tape" / (row["day"][5:] + ".json.gz"))
         else:
             pack = self._load(row["day"])
         if pack is None:
@@ -384,7 +395,7 @@ def make_handler(games: Games, allow_faults: bool = False):
                     return self._send(200, {"sessions": [{**x, "in_memory": x["session_id"] in live}
                                                          for x in games.store.sessions()]})
                 if url.path == "/api/health":
-                    return self._send(200, {"ok": True, "pool": len(games.pool),
+                    return self._send(200, {"event_days": len(list((games.arc.cache_dir / "event_tape").glob("*.json.gz"))), "ok": True, "pool": len(games.pool),
                                             "refused": len(games.refused), "faults": allow_faults})
                 return self._send(404, {"error": "not found"})
             except ReplayError as e:

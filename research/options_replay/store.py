@@ -162,7 +162,7 @@ def _sim_label(day: str) -> dict | None:
 
 def _weekday(day: str) -> str | None:
     try:
-        return datetime.fromisoformat(day).strftime("%A")
+        return datetime.fromisoformat(day.removeprefix("TAPE:")).strftime("%A")
     except ValueError:
         return None
 
@@ -296,7 +296,7 @@ class TrainerStore:
             out.append({"session_id": r["session_id"], "created_at": r["created_at"], "revealed": revealed,
                         "mode": "simulation" if r["day"].startswith("SIM:") else "replay",
                         "simulation": _sim_label(r["day"]),
-                        "day": (None if r["day"].startswith("SIM:") else r["day"]) if revealed else None,
+                        "day": (None if r["day"].startswith("SIM:") else r["day"].removeprefix("TAPE:")) if revealed else None,
                         "clock": f"{clock // 3600:02d}:{clock % 3600 // 60:02d}:{clock % 60:02d}",
                         "attempt": r["attempt"], "trades": r["trades"], "fills": r["fills"],
                         "updated_at": r["updated_at"]})
@@ -426,7 +426,7 @@ class TrainerStore:
                     "revealed": revealed,
                     "mode": "simulation" if t["day"].startswith("SIM:") else "replay",
                     "simulation": _sim_label(t["day"]),
-                    "day": (None if t["day"].startswith("SIM:") else t["day"]) if revealed else None,
+                    "day": (None if t["day"].startswith("SIM:") else t["day"].removeprefix("TAPE:")) if revealed else None,
                     "weekday": _weekday(t["day"]) if revealed else None,
                     "fills": [],
                     "note": None if note is None else {
