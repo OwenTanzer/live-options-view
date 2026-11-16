@@ -1,0 +1,33 @@
+{
+ "protocol": "OA-237 S3c combined pricing model",
+ "declared": "2026-11-15",
+ "generator_version": "sim-v2",
+ "split": {
+  "development": {"QQQ": ["2026-06-24", "2026-11-13"], "SPY": ["2026-10-08", "2026-11-13"]},
+  "held_out": {"from": "2026-11-16", "min_sessions_per_symbol": 10, "gates": "Replay gates"},
+  "informed_reuse_comparison_only": "S3b held-out days",
+  "coverage_gap": "no untouched intraday days exist on 2026-11-15; earliest held-out about 2026-11-30"
+ },
+ "unsupported": {"next-session": "no non-0DTE expiry in either intraday archive"},
+ "settlement_convention": {
+  "options_trading_close_et": "16:15",
+  "auto_exercise_reference": "underlying 16:00 close, OCC exercise-by-exception $0.01 ITM, physical",
+  "contrary_instruction_exchange_cutoff_et": "17:30 (4:30 PM CT, OCC education page; brokers earlier)",
+  "source_quality": "secondary sources plus an OCC education page; Cboe rulebook text not retrieved",
+  "model": "post-close variance term fitted on development 16:00-16:14 quotes"
+ },
+ "cells": {"moneyness": ["ATM", "1-OTM"], "side": ["call", "put"],
+           "windows": {"open": ["09:45", "10:30"], "midday": ["11:30", "13:30"], "close": ["14:30", "15:45"],
+                       "endpoint": ["15:50", "16:10"]}},
+ "tolerance": {
+  "A1_median_abs_level_usd": 8.0, "A2_abs_median_bias_usd": 4.0, "A3_median_abs_hold_pnl_usd": 4.0,
+  "A4_median_abs_quiet_change_usd": 3.0, "B1_median_ratio_band": [0.85, 1.15], "B2_median_abs_hold_pnl_usd": 6.0,
+  "S1_median_abs_half_spread_usd_per_share": 0.01, "S2_invalid_quotes": 0, "C1_convexity_violations": 0,
+  "P1_max_abs_parity_usd_per_share": 0.005, "U1_median_delta_ratio_band": [0.85, 1.15], "U1_min_move_pct": 0.05,
+  "Q1_median_abs_theta_only_change_usd": 3.0, "E1_median_abs_level_usd": 6.0, "E1_times": ["15:55", "16:05", "16:10"],
+  "N1_median_abs_net_profit_usd": 6.0, "N1_fee_per_contract_side": 0.65, "min_samples_per_cell_window": 30
+ },
+ "correction_budget": {"per_component": 1, "components": ["clock", "volatility_response", "skew_convexity", "spreads", "expiration"],
+                       "max_held_out_evaluations": 6, "tolerance_changes": "never"},
+ "carried_s3b_misses": ["A1 level", "A4 open-period decay", "A3/B2 hold profit"]
+}

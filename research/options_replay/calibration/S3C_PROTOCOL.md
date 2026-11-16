@@ -1,0 +1,107 @@
+# S3c protocol: combined pricing model (predeclared)
+
+This file and `s3c_protocol.json` were committed before any S3c fitting. The S3b protocol,
+thresholds, results and `attempts.jsonl` stay as they are, for comparison.
+
+## What S3c builds
+
+S3c builds one combined quote model, which becomes generator `sim-v2`. `sim-v1` stays regenerable:
+existing seeds and records are untouched. The model has these components:
+
+1. **Variance clock**: the S3b business-time weights through 16:00, plus a post-close
+   component (see *Expiration*).
+2. **Volatility state**: a level σ0, plus an intraday response to the underlying,
+   σ_t = σ0 · (S_t / S_ref)^β.
+3. **Skew/convexity**: σ(K) = σ_t · (1 + a·z + b·z²), with z = ln(K/S) / (σ_t √τ), on one surface
+   per symbol.
+4. **Call/put consistency**: calls and puts at a strike share σ(K). With r = 0 this makes model mids
+   satisfy C − P = S − K exactly.
+5. **Spreads**: a symbol-specific half-spread h = h0 + h1·mid per window. Bid and ask are mid ∓ h,
+   rounded outward to $0.01, with bid ≥ 0 and ask ≥ $0.01.
+
+Every parameter is fitted on development data only.
+
+## Expiration and settlement convention (stated, not assumed away)
+
+- Expiring SPY and QQQ options trade until **16:15 ET**, while Cboe's same-day index options stop at
+  16:00. Automatic exercise is decided from the underlying's **16:00 close** (OCC
+  exercise-by-exception at $0.01 in the money, physical delivery). Holders can still give contrary
+  exercise instructions after the close. An OCC education page gives the exchange cutoff as
+  4:30 PM CT (17:30 ET); brokers set earlier cutoffs.
+- These facts come from secondary sources plus that OCC education page. The Cboe rulebook text was
+  not retrieved; treat them as such.
+- Model convention: *remaining trading time* runs to 16:15. Premium after 16:00 is valued as
+  remaining variance from after-hours underlying moves until the exercise decision. This is a
+  post-close variance term, fitted per symbol on development quotes from 16:00-16:14 (the
+  collector records through ~16:14).
+- A 15:55 premium is not the endpoint. Expiration behaviour is checked at 15:45, 15:55, 16:05 and
+  16:10.
+
+## Evaluation split: forward, because nothing untouched remains
+
+Every existing intraday collector day has informed a model choice: the S3b development, held-out
+and exploratory days for QQQ (2026-06-24..2026-11-13) and SPY (2026-10-08..2026-11-13). None of them
+is held-out evidence in S3c.
+
+| Role | Days |
+|---|---|
+| Development (fit + development-only results) | all existing QQQ pool days and SPY days up to 2026-11-13 |
+| **Held-out** | QQQ and SPY collector sessions dated **2026-11-16 or later** that pass the Replay gates, evaluated once the **first 10 sessions per symbol** exist |
+| Informed re-use (comparison only, labelled) | the S3b held-out days, reported alongside development, never as held-out |
+
+**Coverage gap:** as of 2026-11-15 there are zero untouched intraday days. No held-out result is
+possible before about 2026-11-30, when 10 new sessions per symbol exist. Until then every S3c number
+is development or informed re-use and is labelled that way. **Next-session expiry stays
+unsupported**: neither archive records it intraday.
+
+## Cells
+
+Symbol {QQQ, SPY} × moneyness {ATM, 1-OTM} × side {call, put} × window
+{open 09:45-10:30, midday 11:30-13:30, close 14:30-15:45, **endpoint 15:50-16:10**}.
+
+## Tolerances (all held-out; per supported cell × window unless stated)
+
+S3b thresholds are carried over unchanged. They apply to the open, midday and close windows:
+
+| Id | Pass if |
+|---|---|
+| A1 | median \|mid error\| ≤ $8.00 / contract (anchored σ0) |
+| A2 | \|median mid error\| ≤ $4.00 |
+| A3 | median \|30-min mid-to-mid hold profit error\| ≤ $4.00 |
+| A4 | median \|quiet-spot 15-min extrinsic change error\| ≤ $3.00 |
+| B1 | median model/recorded mid ratio in [0.85, 1.15] (simulation-equivalent σ0) |
+| B2 | median \|30-min hold profit error\| ≤ $6.00 (simulation-equivalent) |
+
+New S3c checks:
+
+| Id | Check | Pass if | Rationale |
+|---|---|---|---|
+| S1 | half-spread | median \|model − recorded half-spread\| ≤ $0.01 (one tick) per contract-share | a tick is the quote resolution |
+| S2 | quote validity | 0 crossed quotes, 0 negative bids, 100 % of prices on the $0.01 grid (all quotes generated over the cells) | hard invariant |
+| C1 | strike convexity | 0 violations of call/put monotonicity or butterfly ≥ 0 in model mids (every evaluated snapshot, all strikes) | no-arbitrage invariant |
+| P1 | call/put consistency | model \|C − P − (S − K)\| ≤ $0.005 per share at every strike | r = 0 parity, rounding only |
+| U1 | underlying response | median ratio of model to recorded 5-min Δmid/ΔS (on moves ≥ 0.05 %) in [0.85, 1.15] | delta/gamma experience |
+| Q1 | quiet-spot drift net of IV | median \|model Δextrinsic − (recorded Δextrinsic − IV-movement part)\| ≤ $3.00 | the theta part only, after removing the change in recorded ATM IV between the two times; the half-spread test alone does not identify pure theta |
+| E1 | expiration path (endpoint window) | median \|mid error\| ≤ $6.00 at each of 15:55, 16:05, 16:10 | about one round-trip friction |
+| N1 | net trade profit | median \|model − recorded net profit\| ≤ $6.00 for 30-min long holds filled at ask and exited at bid, $0.65/contract/side fees (simulation-equivalent σ0) | what the trainee sees |
+
+A cell × window with fewer than 30 held-out samples is "insufficient". A component (clock,
+volatility response, skew/convexity, spreads, expiration) is called **acceptable** only when every
+check it governs passes on held-out.
+
+## Comparisons
+
+Each run reports the elementary baseline (S3b), `sim-v1`, the S3b candidate and the combined
+model, with quote errors and sample net-trade profits, so every miss sits beside its baselines.
+
+## Correction budget
+
+- At most **one** bounded correction per component: five in total. Each is a single named change,
+  fitted on development only.
+- At most **six** held-out evaluations in total: the declared model plus up to five corrections.
+- Tolerances never move. Every development and held-out run is appended to `s3c_attempts.jsonl`.
+
+## Carried misses from S3b (stay open until a held-out pass)
+
+These remain open: level (A1), opening-period decay (A4 at the open) and hold profit (A3/B2). An
+S3c development improvement on them is not a validation.
