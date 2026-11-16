@@ -105,3 +105,46 @@ model, with quote errors and sample net-trade profits, so every miss sits beside
 
 These remain open: level (A1), opening-period decay (A4 at the open) and hold profit (A3/B2). An
 S3c development improvement on them is not a validation.
+
+---
+
+## Amendment 1 (2026-11-15, after the S3c return; before any correction is fitted)
+
+Nothing above is edited. The frozen candidate (`f99b361`, `s3c_params.json`, generator `sim-v2`), the
+tolerances, the correction budget and the forward held-out reservation (sessions from 2026-11-16) are
+unchanged. Reserved forward sessions are not inspected for any choice below.
+
+### A1.1 Expiration conventions, verified and kept distinct
+
+| Convention | What it is | Source | Verification |
+|---|---|---|---|
+| **Last trading time** | Expiring equity/ETF options (incl. SPY, QQQ) trade until **16:15 ET**. Index options such as SPXW stop at 16:00. | SEC Release No. 34-105153 (SR-CBOE-2025-079, Cboe Exchange, 2026-04-06): "as is the case for ETFs that trade until 4:15 p.m., trading on the expiration day of equity options will continue until 4:15 p.m." Cboe Equity Options Extended Trading Hours FAQ: the 4:00-4:15 window for those ETF classes is Regular Trading Hours, not a separate session. | primary text read (SEC filing extracted locally) |
+| **Exercise-by-exception reference** | OCC automatically exercises expiring equity/ETF options in the money by **≥ $0.01**, judged against the underlying's **last sale during regular trading hours** (the 16:00 close). Delivery is physical. | OCC Rule 805 (threshold lowered to $0.01: SR-OCC-2007-18, Federal Register 73 FR 4297, 2008-01-24). Reference price: OCC *Unscheduled Market Closings* guide describing Rule 805. | **secondary for the reference price**: OCC pages return HTTP 403 to this environment, so the guide's wording comes from search excerpts only |
+| **Contrary-instruction deadline** | Holders have until **17:30 ET** on the expiration business day to decide to exercise or not. Firms may set earlier cut-offs and may not accept instructions after 17:30. Members may submit contrary exercise advice for customer accounts until 19:30 ET in specified cases. | FINRA Rule 2360(b)(23)(A)(ii)-(iv) (rule page read) | primary text read |
+
+### A1.2 What these conventions do and do not establish
+
+- Between 16:00 and 16:15 the option still trades, but its exercise outcome is judged against a reference price that is
+  already fixed (the 16:00 close). Value after 16:00 can come only from (a) holders' option to override automatic
+  exercise using after-hours moves before 17:30, and (b) trading frictions until 16:15.
+- **None of these rules establishes that remaining variance decays linearly to 17:30.** The deadline is when the
+  decision must be made, not a measured variance profile. The S3c post-close term (and its linear decay to 17:30) is
+  therefore a **modelling assumption**, fitted to development quotes. It is labelled that way in `pricing.py`,
+  `S3C_RESULTS.md` and the sim-v2 limitations. It is not presented as a settlement rule.
+
+### A1.3 Development candidate `s3c-dev2` (separately versioned; at most one correction per component)
+
+These are fitted on development days (≤ 2026-11-13) only and stored in `s3c_params_dev2.json`, with code in
+`pricing_dev2.py`. `pricing.py` and `s3c_params.json` are untouched. Results are development (in-sample) before/after
+tables, not validation. Each correction is named and bounded:
+
+| Component | Open miss it targets | Correction (single change) |
+|---|---|---|
+| clock | A4 opening decay | **implied clock**: bucket weights from the development median decay of ATM straddle-implied remaining variance (09:45-15:55), instead of realized spot returns. Buckets before 09:45 keep the realized-return weight shape. |
+| volatility response | A1 level, A3/B2/N1 hold profit | **realized-vol feedback**: σ_t × (k·RV₆₀(t)/σ0)^η, where RV₆₀ is the trailing 60-minute realized vol of the path (known to a generator) and η is fitted. |
+| expiration | E1 endpoint | **fitted post-close horizon** (modelling assumption): the post-close variance decays linearly to a horizon H fitted with the tail on development 15:55/16:05/16:10 quotes, instead of the assumed 17:30. |
+| spreads | S1 at the QQQ ATM endpoint, N1 | **moneyness-split spreads**: separate h0 + h1·mid for ATM (nearest strike) and non-ATM quotes per window. |
+| skew/convexity | none | no correction; budget unused |
+
+The S3c held-out tolerances still apply to whichever candidate is eventually evaluated. The frozen candidate remains
+the declared comparison, and any held-out use of `s3c-dev2` counts against the six-evaluation budget.
