@@ -99,17 +99,50 @@ def main() -> int:
           "- **D3 evaluation:** N1 is not applicable in the endpoint window. A 30-minute hold opened after 15:50 cannot "
           "finish before the 16:15 trading close.", "",
           "## Settlement convention used", "",
-          "- Expiring SPY/QQQ options trade until 16:15 ET. Automatic exercise is decided from the underlying's 16:00 close "
-          "(OCC exercise-by-exception, $0.01 in the money, physical delivery). Contrary instructions are possible "
-          "after the close (exchange cutoff 17:30 ET per an OCC education page; brokers earlier). The Cboe rulebook text "
-          "was not retrieved.",
-          "- The model's remaining variance after 16:00 is a post-close term decaying to 17:30. It was fitted on 16:05 "
+          "These conventions are verified and cited in S3C_PROTOCOL.md Amendment 1, and kept distinct:",
+          "- **Last trading time:** 16:15 ET for expiring SPY/QQQ options (SEC Release No. 34-105153, SR-CBOE-2025-079, read).",
+          "- **Exercise-by-exception reference:** OCC Rule 805 at $0.01 in the money against the regular-hours last sale "
+          "(the 16:00 close), physical delivery. The threshold comes from the 2008 filing; the reference price is "
+          "secondary (OCC pages return 403 here).",
+          "- **Contrary-instruction deadline:** 17:30 ET exercise-decision cut-off (FINRA Rule 2360(b)(23)(A), read). "
+          "Firms may set earlier cut-offs.",
+          "- **Modelling assumption, not a settlement rule:** the model's remaining variance after 16:00 is a post-close "
+          "term decaying to 17:30. No rule establishes that decay. It was fitted on 16:05 "
           f"development quotes: tail = {params['symbols']['QQQ']['tail']:.4f} (QQQ) and "
           f"{params['symbols']['SPY']['tail']:.4f} (SPY) of a day's variance.",
           "- Recorded quotes keep updating until about 16:14. The generated sim-v2 session still ends at 16:00 (stated limitation).", "",
           "## Carried forward (not resolved)", "",
           "S3b misses A1 level, A3/B2 hold profit and A4 opening decay remain open. The development improvements above "
           "do not validate them. The held-out run on forward sessions decides."]
+    abl_path = HERE / "results" / "s3c_dev_ablation.json"
+    if abl_path.exists():
+        abl = json.loads(abl_path.read_text())
+        L += ["", "## Development candidate s3c-dev2 (Amendment 1): before/after and attribution", "",
+              "This is development (in-sample) only, with one declared correction per component. `pricing.py`, "
+              "`s3c_params.json` and generator sim-v2 are unchanged. dev2 lives in `pricing_dev2.py` + "
+              "`s3c_params_dev2.json`. Medians over the cells of each window, USD per contract; E1 is ATM.", "",
+              "| Symbol | Variant | open A1 / A3 / A4 / N1 | midday A1 / A3 / A4 / N1 | close A1 / A3 / A4 / N1 | E1 15:55 / 16:05 / 16:10 |",
+              "|---|---|---|---|---|---|"]
+        for sym, variants in abl.items():
+            for name, v in variants.items():
+                cols = [" / ".join(f(v[w][k]) for k in ("A1", "A3", "A4", "N1")) for w in ("open", "midday", "close")]
+                e1 = " / ".join(f(v["E1"].get(k)) for k in ("15:55", "16:05", "16:10"))
+                L.append(f"| {sym} | {name} | " + " | ".join(cols) + f" | {e1} |")
+        L += ["", "Attribution (development):",
+              "- **Volatility feedback (eta)** lowers close-window level error (QQQ A1 11.1 to 8.4, SPY 11.2 to 9.2). It "
+              "**worsens the open** (QQQ A1 6.1 to 10.0, A3 5.9 to 7.9, N1 7 to 9), because the trailing 60-minute "
+              "realized vol is undefined or noisy in the first hour.",
+              "- **Implied clock** barely changes the open and **worsens the endpoint** (QQQ E1 16:05 6.9 to 10.1; "
+              "SPY 5.7 to 11.5).",
+              "- **Fitted post-close horizon** (a modelling assumption) improves the QQQ endpoint (E1 16:05 6.85 to 5.86, "
+              "16:10 7.41 to 6.43) and is mixed for SPY. The SPY horizon fit sits at the 18:30 edge of the search grid.",
+              "- **ATM/non-ATM spreads** fix the QQQ ATM endpoint spread (S1 0.015 to 0.010) and leave mids unchanged.",
+              "- **Combined dev2** is mixed: better at the close, worse at the open and at the QQQ endpoint. The "
+              "correction budget (one per component) is now spent. The frozen candidate stays the declared held-out "
+              "comparison, and dev2 is not promoted.", "",
+              "Remaining misses (development): A1 level ($8-11), A3/B2 hold profit (open $6-8.5, elsewhere $4-5), "
+              "A4 opening decay ($3-5), E1 endpoint (QQQ $6-9), and with dev2 the SPY 1-OTM call underlying response at "
+              "the close (U1 0.755)."]
     (HERE / "S3C_RESULTS.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("wrote S3C_RESULTS.md and s3c_manifest.json")
     return 0

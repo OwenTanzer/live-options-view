@@ -53,8 +53,9 @@ LIMITATIONS_V2 = [
     "30-minute hold profit (about $4-6) and opening decay; see calibration/S3C_RESULTS.md.",
     "The volatility level comes from the generated path's realized volatility times a fitted ratio; a real day's "
     "implied level is not knowable from a path, so day-to-day level dispersion is not reproduced.",
-    "The generated session ends at 16:00; real expiring QQQ options trade until 16:15 and keep post-close "
-    "exercise value, which the model prices but the simulated clock does not reach.",
+    "The generated session ends at 16:00; real expiring QQQ options trade until 16:15 (SEC Rel. 34-105153). "
+    "The post-close variance term (decaying to 17:30, the FINRA 2360 exercise-decision deadline) is a modelling "
+    "assumption fitted to development quotes, not a settlement rule.",
     "The path is resampled from real 5-minute returns; intrabar moves are a Brownian bridge, not ticks.",
 ]
 # Generated sessions are labelled with a fixed, obviously synthetic calendar date that only

@@ -88,10 +88,41 @@ Medians across the open/midday/close cells (USD per contract; B1 and U1 are rati
 
 ## Settlement convention used
 
-- Expiring SPY/QQQ options trade until 16:15 ET. Automatic exercise is decided from the underlying's 16:00 close (OCC exercise-by-exception, $0.01 in the money, physical delivery). Contrary instructions are possible after the close (exchange cutoff 17:30 ET per an OCC education page; brokers earlier). The Cboe rulebook text was not retrieved.
-- The model's remaining variance after 16:00 is a post-close term decaying to 17:30. It was fitted on 16:05 development quotes: tail = 0.0265 (QQQ) and 0.0312 (SPY) of a day's variance.
+These conventions are verified and cited in S3C_PROTOCOL.md Amendment 1, and kept distinct:
+- **Last trading time:** 16:15 ET for expiring SPY/QQQ options (SEC Release No. 34-105153, SR-CBOE-2025-079, read).
+- **Exercise-by-exception reference:** OCC Rule 805 at $0.01 in the money against the regular-hours last sale (the 16:00 close), physical delivery. The threshold comes from the 2008 filing; the reference price is secondary (OCC pages return 403 here).
+- **Contrary-instruction deadline:** 17:30 ET exercise-decision cut-off (FINRA Rule 2360(b)(23)(A), read). Firms may set earlier cut-offs.
+- **Modelling assumption, not a settlement rule:** the model's remaining variance after 16:00 is a post-close term decaying to 17:30. No rule establishes that decay. It was fitted on 16:05 development quotes: tail = 0.0265 (QQQ) and 0.0312 (SPY) of a day's variance.
 - Recorded quotes keep updating until about 16:14. The generated sim-v2 session still ends at 16:00 (stated limitation).
 
 ## Carried forward (not resolved)
 
 S3b misses A1 level, A3/B2 hold profit and A4 opening decay remain open. The development improvements above do not validate them. The held-out run on forward sessions decides.
+
+## Development candidate s3c-dev2 (Amendment 1): before/after and attribution
+
+This is development (in-sample) only, with one declared correction per component. `pricing.py`, `s3c_params.json` and generator sim-v2 are unchanged. dev2 lives in `pricing_dev2.py` + `s3c_params_dev2.json`. Medians over the cells of each window, USD per contract; E1 is ATM.
+
+| Symbol | Variant | open A1 / A3 / A4 / N1 | midday A1 / A3 / A4 / N1 | close A1 / A3 / A4 / N1 | E1 15:55 / 16:05 / 16:10 |
+|---|---|---|---|---|---|
+| QQQ | frozen | 6.06 / 5.85 / 4.01 / 7.00 | 11.15 / 4.57 / 2.81 / 4.50 | 11.08 / 5.16 / 2.33 / 5.50 | 7.58 / 6.85 / 7.41 |
+| QQQ | clock only (implied clock, refit sequence) | 6.12 / 6.20 / 4.38 / 7.00 | 11.68 / 4.51 / 2.76 / 4.50 | 11.21 / 4.66 / 2.36 / 4.50 | 7.17 / 10.10 / 10.40 |
+| QQQ | vol feedback only (eta on frozen) | 10.03 / 7.87 / 4.71 / 9.00 | 10.15 / 5.03 / 3.09 / 5.00 | 8.43 / 4.84 / 2.49 / 5.50 | 6.90 / 6.71 / 7.09 |
+| QQQ | expiration only (fitted horizon + tail) | 6.10 / 5.83 / 3.98 / 7.00 | 11.12 / 4.55 / 2.81 / 4.50 | 10.91 / 5.18 / 2.26 / 5.50 | 7.90 / 5.86 / 6.43 |
+| QQQ | spreads only (ATM/non-ATM) | 6.06 / 5.85 / 4.01 / 7.00 | 11.15 / 4.57 / 2.81 / 4.50 | 11.08 / 5.16 / 2.33 / 5.50 | 7.58 / 6.85 / 7.41 |
+| QQQ | all four (s3c-dev2) | 10.09 / 8.43 / 4.87 / 9.00 | 10.37 / 4.94 / 3.07 / 5.00 | 8.71 / 4.50 / 2.61 / 4.50 | 8.07 / 9.15 / 7.76 |
+| SPY | frozen | 4.87 / 5.32 / 3.14 / 6.00 | 8.67 / 3.81 / 2.47 / 4.00 | 11.23 / 4.90 / 2.16 / 5.50 | 7.31 / 5.74 / 6.36 |
+| SPY | clock only (implied clock, refit sequence) | 5.61 / 5.51 / 3.14 / 7.00 | 8.77 / 3.94 / 2.27 / 4.00 | 10.54 / 4.63 / 2.64 / 5.00 | 8.48 / 11.48 / 12.15 |
+| SPY | vol feedback only (eta on frozen) | 6.56 / 5.68 / 3.37 / 7.00 | 8.48 / 3.75 / 2.55 / 4.00 | 9.22 / 4.61 / 2.00 / 4.75 | 6.82 / 5.34 / 6.26 |
+| SPY | expiration only (fitted horizon + tail) | 4.87 / 5.27 / 3.17 / 6.50 | 8.82 / 3.77 / 2.42 / 4.00 | 11.42 / 4.98 / 2.15 / 5.50 | 8.12 / 7.95 / 5.92 |
+| SPY | spreads only (ATM/non-ATM) | 4.87 / 5.32 / 3.14 / 6.00 | 8.67 / 3.81 / 2.47 / 4.00 | 11.23 / 4.90 / 2.16 / 5.50 | 7.31 / 5.74 / 6.36 |
+| SPY | all four (s3c-dev2) | 7.27 / 6.27 / 4.20 / 7.50 | 8.68 / 4.02 / 2.57 / 4.00 | 9.73 / 4.46 / 2.25 / 5.50 | 7.38 / 5.36 / 6.60 |
+
+Attribution (development):
+- **Volatility feedback (eta)** lowers close-window level error (QQQ A1 11.1 to 8.4, SPY 11.2 to 9.2). It **worsens the open** (QQQ A1 6.1 to 10.0, A3 5.9 to 7.9, N1 7 to 9), because the trailing 60-minute realized vol is undefined or noisy in the first hour.
+- **Implied clock** barely changes the open and **worsens the endpoint** (QQQ E1 16:05 6.9 to 10.1; SPY 5.7 to 11.5).
+- **Fitted post-close horizon** (a modelling assumption) improves the QQQ endpoint (E1 16:05 6.85 to 5.86, 16:10 7.41 to 6.43) and is mixed for SPY. The SPY horizon fit sits at the 18:30 edge of the search grid.
+- **ATM/non-ATM spreads** fix the QQQ ATM endpoint spread (S1 0.015 to 0.010) and leave mids unchanged.
+- **Combined dev2** is mixed: better at the close, worse at the open and at the QQQ endpoint. The correction budget (one per component) is now spent. The frozen candidate stays the declared held-out comparison, and dev2 is not promoted.
+
+Remaining misses (development): A1 level ($8-11), A3/B2 hold profit (open $6-8.5, elsewhere $4-5), A4 opening decay ($3-5), E1 endpoint (QQQ $6-9), and with dev2 the SPY 1-OTM call underlying response at the close (U1 0.755).

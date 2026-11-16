@@ -31,6 +31,7 @@ sys.path.insert(0, str(HERE))
 import archive as A  # noqa: E402
 import evaluate as E  # noqa: E402
 import pricing as PR  # noqa: E402
+import pricing_dev2 as PD  # noqa: E402
 
 PROT = json.loads((HERE / "s3c_protocol.json").read_text())
 TOL = PROT["tolerance"]
@@ -113,7 +114,7 @@ def realized(m, day):
 # Fitting (development only)
 # ---------------------------------------------------------------------------
 
-def fit_symbol(days: dict, dev: list[str]) -> dict:
+def fit_symbol(days: dict, dev: list[str], weights_override: list[float] | None = None) -> dict:
     # 1. clock weights from development spot returns inside the session
     acc = defaultdict(list)
     for d in dev:
@@ -127,6 +128,8 @@ def fit_symbol(days: dict, dev: list[str]) -> dict:
     last = max(i for i, x in enumerate(w) if x is not None)
     w = [w[first] if (x is None and i < first) else w[last] if (x is None and i > last) else x for i, x in enumerate(w)]
     w = [x if x is not None else st.mean([y for y in w[max(0, i - 2):i + 3] if y is not None]) for i, x in enumerate(w)]
+    if weights_override is not None:
+        w = list(weights_override)
     params = {"weights": w, "tail": 0.0, "beta": 0.0, "skew_a": 0.0, "skew_b": 0.0, "k": None, "spread": {}}
 
     # 2. post-close tail: model ATM extrinsic at 16:05 (anchored sigma0) = recorded median
@@ -256,6 +259,114 @@ def fit_symbol(days: dict, dev: list[str]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# s3c-dev2 (Amendment 1): four declared corrections, development only
+# ---------------------------------------------------------------------------
+
+def implied_clock_weights(days: dict, dev: list[str], realized_w: list[float]) -> list[float]:
+    """Correction 'clock': weights from the development median decay of ATM straddle-implied remaining
+    variance V(t) = (straddle extrinsic / (0.7979 S))^2, per 5-minute bucket 09:45-16:00. Buckets before
+    09:45 keep the realized-return shape, scaled to match the first observed implied buckets."""
+    dec = defaultdict(list)
+    for d in dev:
+        P = pts(days[d])
+        for t, p in P.items():
+            q = P.get(t + 300)
+            if not q or t + 300 > PR.CLOSE:
+                continue
+            a, b = straddle(p), straddle(q)
+            if not a or not b:
+                continue
+            va = ((a[1] - abs(p["spot"] - a[0])) / (0.7979 * p["spot"])) ** 2
+            vb = ((b[1] - abs(q["spot"] - b[0])) / (0.7979 * q["spot"])) ** 2
+            dec[(t - PR.OPEN) // 300].append(va - vb)
+    w = list(realized_w)
+    obs = {b: st.median(v) for b, v in dec.items() if len(v) >= 10}
+    first = sorted(obs)[:3]
+    scale = st.median(obs[b] for b in first) / st.median(realized_w[b] for b in first)
+    for b in range(PR.BUCKETS):
+        w[b] = max(obs[b], 1e-12) if b in obs else realized_w[b] * scale
+    return w
+
+
+def fit_dev2(days: dict, dev: list[str], frozen: dict) -> dict:
+    # clock correction, then the frozen fitting sequence on the new clock (beta, gamma, skew, k, spreads)
+    w = implied_clock_weights(days, dev, frozen["weights"])
+    p = fit_symbol(days, dev, weights_override=w)
+    p["candidate"] = PD.CANDIDATE
+    # volatility-response correction: eta from residual log vol vs log(k RV60 / sigma0)
+    m = PD.Dev2Model(p)
+    xs, ys = [], []
+    for d in dev:
+        P = pts(days[d])
+        s0, ref = anchor(m, days[d])
+        if not s0:
+            continue
+        m.path = {t: q["spot"] for t, q in P.items()}
+        for t, q in P.items():
+            if t < 10 * 3600 + 45 * 60 or t > 15 * 3600 + 45 * 60:
+                continue
+            rv = m.rv60(t)
+            s_t = invert_sigma0(m, q, t, ref)       # eta = 0 here: sigma0 that reproduces the straddle at t
+            if rv and s_t:
+                xs.append(math.log(m.k * rv / s0))
+                ys.append(math.log(s_t / s0))
+    p["eta"] = sum(x * y for x, y in zip(xs, ys)) / sum(x * x for x in xs) if xs else 0.0
+    p["eta_n"] = len(xs)
+    # expiration correction (modelling assumption): fitted post-close horizon H with its tail
+    samples = []
+    for d in dev:
+        P = pts(days[d])
+        for hm in (15 * 3600 + 55 * 60, 16 * 3600 + 5 * 60, 16 * 3600 + 10 * 60):
+            q = P.get(hm)
+            if q and straddle(q):
+                K, sv = straddle(q)
+                samples.append((d, hm, q, K, sv - abs(q["spot"] - K)))
+    targets = {hm: st.median(x[4] for x in samples if x[1] == hm) for hm in {x[1] for x in samples}}
+    best = None
+    for H in range(16 * 3600 + 15 * 60, 18 * 3600 + 31 * 60, 900):
+        def med_at(tail):
+            mm = PD.Dev2Model({**p, "tail": tail, "post_close_horizon_s": H, "eta": 0.0})
+            out = defaultdict(list)
+            for d, hm, q, K, _ in samples:
+                s0, ref = anchor(mm, days[d])
+                if s0:
+                    out[hm].append(mm.mid(q["spot"], K, "C", hm, s0, ref) + mm.mid(q["spot"], K, "P", hm, s0, ref)
+                                   - abs(q["spot"] - K))
+            return {k: st.median(v) for k, v in out.items()}
+        lo, hi = 0.0, 0.3
+        for _ in range(25):
+            x = 0.5 * (lo + hi)
+            lo, hi = (x, hi) if med_at(x)[16 * 3600 + 5 * 60] < targets[16 * 3600 + 5 * 60] else (lo, x)
+        tail = 0.5 * (lo + hi)
+        meds = med_at(tail)
+        err = sum(abs(meds[k] - targets[k]) for k in targets)
+        if best is None or err < best[0]:
+            best = (err, H, tail)
+    p["post_close_horizon_s"], p["tail"] = best[1], best[2]
+    p["post_close_note"] = "modelling assumption: linear decay to a fitted horizon; not a settlement rule"
+    # spreads correction: ATM vs non-ATM per window
+    for label, cond in (("spread_atm", lambda K, S: abs(K - S) <= 0.5), ("spread_otm", lambda K, S: abs(K - S) > 0.5)):
+        by = defaultdict(list)
+        for d in dev:
+            for t, q in pts(days[d]).items():
+                name = next((n for n, a, b in PR.SPREAD_WINDOWS if a <= t < b), None)
+                for c, qq in q["q"].items():
+                    m_ = mid(qq)
+                    if m_ is not None and cond(sk(c), q["spot"]):
+                        by[name].append((m_, (qq[1] - qq[0]) / 2))
+        tab = {}
+        for name, xy in by.items():
+            n = len(xy)
+            mx = sum(x for x, _ in xy) / n
+            my = sum(y for _, y in xy) / n
+            sxx = sum((x - mx) ** 2 for x, _ in xy)
+            h1 = sum((x - mx) * (y - my) for x, y in xy) / sxx if sxx else 0.0
+            tab[name] = [max(0.0, my - max(0.0, h1) * mx), max(0.0, h1)]
+        p[label] = tab
+    return p
+
+
+# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
@@ -318,8 +429,8 @@ def baseline_params(days: dict, dev: list[str]) -> dict:
     return p
 
 
-def evaluate(params_sym, days: dict, which: list[str], factory=None) -> dict:
-    m = PR.SymbolModel(params_sym) if params_sym is not None else None
+def evaluate(params_sym, days: dict, which: list[str], factory=None, model_cls=None) -> dict:
+    m = (model_cls or PR.SymbolModel)(params_sym) if params_sym is not None else None
     cells = defaultdict(lambda: defaultdict(list))
     invariants = {"quotes": 0, "crossed": 0, "negative_bid": 0, "off_grid": 0, "convexity_violations": 0,
                   "max_parity_abs": 0.0, "snapshots": 0}
@@ -329,6 +440,8 @@ def evaluate(params_sym, days: dict, which: list[str], factory=None) -> dict:
         P = pts(day)
         if factory is not None:
             m = factory(d)
+        if hasattr(m, "path"):
+            m.path = {t: q["spot"] for t, q in P.items()}
         if getattr(m, "fixed", False):
             first = P.get(ANCHOR_T)
             if not first:
@@ -458,9 +571,25 @@ def main() -> int:
     ap.add_argument("--params", default=str(PR.PARAMS_PATH))
     ap.add_argument("--cache", default=str(A.DEFAULT_CACHE))
     ap.add_argument("--out", default=None)
-    ap.add_argument("--model", choices=["combined", "baseline", "sim-v1"], default="combined")
+    ap.add_argument("--model", choices=["combined", "baseline", "sim-v1", "dev2"], default="combined")
+    ap.add_argument("--fit-dev2", action="store_true", help="fit the s3c-dev2 development candidate (Amendment 1)")
     args = ap.parse_args()
     cache = Path(args.cache)
+    if args.fit_dev2:
+        frozen = PR.load_params(args.params)
+        out = {"candidate": PD.CANDIDATE, "protocol": "S3C_PROTOCOL.md Amendment 1", "base_frozen_params_sha256":
+               hashlib.sha256(Path(args.params).read_bytes()).hexdigest(),
+               "fitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "symbols": {}}
+        for symbol in ("QQQ", "SPY"):
+            days = load(cache, symbol)
+            dev, _ = split(sorted(days))           # forward sessions (>= 2026-11-16) are never read here
+            out["symbols"][symbol] = {**fit_dev2(days, dev, frozen["symbols"][symbol]), "development_days": len(dev),
+                                      "development_range": [dev[0], dev[-1]]}
+        PD.DEV2_PARAMS_PATH.write_text(json.dumps(out, indent=1))
+        for sy, p in out["symbols"].items():
+            print(sy, {k: (round(v, 5) if isinstance(v, float) else v) for k, v in p.items()
+                       if k in ("eta", "eta_n", "tail", "post_close_horizon_s", "beta", "k", "skew_a", "skew_b")})
+        return 0
     if args.fit:
         params = {"generator_version": PROT["generator_version"], "protocol": "S3C_PROTOCOL.md",
                   "fitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "symbols": {}}
@@ -488,6 +617,8 @@ def main() -> int:
             continue
         if args.model == "combined":
             r = evaluate(params["symbols"][symbol], days, which)
+        elif args.model == "dev2":
+            r = evaluate(PD.load_dev2()["symbols"][symbol], days, which, model_cls=PD.Dev2Model)
         elif args.model == "baseline":
             r = evaluate(baseline_params(days, dev), days, which)
         else:
