@@ -273,7 +273,8 @@ class ReplaySession:
             "attempts": [{k: v for k, v in a.items() if k != "fills"} for a in self.attempts],
             "rules": {"fee_per_contract_side": self.fee, "multiplier": MULTIPLIER,
                       "quote_max_age_s": MAX_QUOTE_AGE_S,
-                      "buy": "recorded ask", "sell": "recorded bid"},
+                      "buy": "generated ask" if self.pack.get("mode") == "simulation" else "recorded ask",
+                      "sell": "generated bid" if self.pack.get("mode") == "simulation" else "recorded bid"},
         }
 
     def _positions(self, snap, code) -> list[dict]:
@@ -636,6 +637,15 @@ class ReplaySession:
                         return h*3600 + m*60 + s
                     elapsed = seconds(line["decision_time"]) - seconds(entry["decision_time"])
                     time = None if start.get("Theta") is None else start["Theta"] * elapsed / 86400 * mult
+                    if "model_iv" in start and "model_iv" in end:
+                        from pricing import bs
+                        strike, side = float(contract[1:]), contract[0]
+                        s0, s1 = start["UnderlyingPrice"], end["UnderlyingPrice"]
+                        iv0, iv1 = start["model_iv"], end["model_iv"]
+                        t0, t1 = start["model_tau"], end["model_tau"]
+                        levels = [bs(s0, strike, iv0, t0, side), bs(s1, strike, iv0, t0, side),
+                                  bs(s1, strike, iv0, t1, side), bs(s1, strike, iv1, t1, side)]
+                        spot, time, volatility = [(after-before)*mult for before, after in zip(levels, levels[1:])]
                     residual = net - friction - sum(x for x in (spot,time,volatility) if x is not None)
                     results.append(dict(contract=contract, qty=qty, net=net, friction=friction,
                                         spot=spot, time=time, volatility=volatility, residual=residual))

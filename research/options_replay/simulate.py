@@ -353,7 +353,16 @@ class Simulator:
         for sn in pack["snapshots"]:
             if sn["key"] == key:
                 b, a = sn["q"].get(contract, [None, None])
-                return {"key": key, "OptionSymbol": f"SIM {contract}", "Bid": b, "Ask": a,
+                model_inputs = {}
+                if version == SIM_V2:
+                    import pricing as PR
+                    model = PR.model_for(A.SYMBOL)
+                    reference = next((s["spot"] for s in pack["snapshots"] if s["t"] == OPEN_S + 900),
+                                     pack["snapshots"][0]["spot"])
+                    tau = model.tau(sn["t"])
+                    sigma = model.sigma_at(pack["sim"]["sigma0"], sn["spot"], reference, sn["t"])
+                    model_inputs = {"model_tau": tau, "model_iv": model.sigma_k(sigma, sn["spot"], float(contract[1:]), tau)}
+                return {**model_inputs, "key": key, "OptionSymbol": f"SIM {contract}", "Bid": b, "Ask": a,
                         "UnderlyingPrice": sn["spot"], "regenerated": True,
                         "pack_sha256": pack["sim"]["pack_sha256"]}
         return None

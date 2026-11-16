@@ -112,3 +112,13 @@ and every fill matches its source.
 - **Single-user local server:** 127.0.0.1, same-origin check, no authentication, not hosted. Fault injection is
   test-only (`--allow-fault-injection`).
 - `--day/--start` are operator reproduction flags; whoever uses them knows the date.
+
+## Shipped phone trainer
+
+The private trainer serves QQQ at the root and SPY at `/spy/`. Each symbol has an isolated practice store. The dashboard links to the trainer hostname. First-time devices enter through their private invitation. The trainer reuses the dashboard's market-order validator and sends accepted orders to its own clock and ledger. It never submits those orders to a live account.
+
+For the SPY service, set `OPTIONS_TRAINER_SYMBOL=SPY`, run `prepare_spy.py` with the existing read-only data access, then start `server.py --port 8744`. Its default cache is `.cache/spy`; retain its donor file alongside the store. QQQ uses port 8737 and its original frozen inputs. The gateway expects both servers on loopback and reads `release-invite` and `release-cookie` from its private working directory. Both symbols offer same-day expiration. Next-session expirations have no verified synchronized intraday archive here.
+
+Replay volume sums observed volume increments across same-day contracts in each recorded snapshot. It is partial-chain option activity. Simulation resamples volume from the same donor block as the generated path and shows it when the five-minute interval ends. QQQ donors supply shares; SPY donors supply option contracts. Each chart names the unit. Simulated dollar feedback is provisional.
+
+Reveal requires a flat position or expiry settlement. Review shows fills, costs, matched quantities, estimated price contributions and residual. Legacy sessions revealed with positions still open remain unscored.
