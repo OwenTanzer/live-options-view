@@ -197,34 +197,32 @@
             p.t <= end &&
             (el("filter").value === "All" || p.type === el("filter").value[0]),
         );
-      let low = Math.min(...visible.map((p) => p.strike)),
-        high = Math.max(...visible.map((p) => p.strike));
-      if (!visible.length) {
-        low = 0;
-        high = 1;
-      }
-      if (low === high) {
-        low--;
-        high++;
-      }
+      const strikes = [...new Set(visible.map((p) => p.strike))].sort(
+        (a, b) => b - a,
+      );
+      const high = strikes[0],
+        low = strikes[strikes.length - 1];
+      const strikeY = (strike) =>
+        high === low
+          ? (top + bottom) / 2
+          : bottom - ((bottom - top) * (strike - low)) / (high - low);
       ctx.font = "11px monospace";
       ctx.fillStyle = "#adbdc1";
       ctx.fillText("STRIKE $", 2, 13);
       ctx.fillText("TIME ET", left, h - 1);
-      for (let i = 0; i <= 4; i++) {
-        let y = top + ((bottom - top) * i) / 4;
+      let lastLabelY = -Infinity;
+      for (const strike of strikes) {
+        const y = strikeY(strike);
+        if (y - lastLabelY < 16 || (strike !== low && bottom - y < 16))
+          continue;
+        lastLabelY = y;
         ctx.strokeStyle = "#25353c";
         ctx.beginPath();
         ctx.moveTo(left, y);
         ctx.lineTo(right, y);
         ctx.stroke();
         ctx.fillStyle = "#adbdc1";
-        if (visible.length)
-          ctx.fillText(
-            String(+(high - ((high - low) * i) / 4).toFixed(2)),
-            1,
-            y + 3,
-          );
+        ctx.fillText(String(strike), 1, y + 3);
       }
       for (let i = 0; i <= 3; i++) {
         let x = left + ((right - left) * i) / 3;
@@ -236,7 +234,7 @@
       }
       for (const p of visible) {
         let x = left + ((right - left) * (p.t - start)) / 60000,
-          y = bottom - ((bottom - top) * (p.strike - low)) / (high - low),
+          y = strikeY(p.strike),
           a = 8 * p.size,
           r = Math.sqrt(a / Math.PI),
           k = Math.sqrt(a / 2);
