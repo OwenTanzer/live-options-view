@@ -27,7 +27,9 @@ python research/options_replay/server.py               # http://127.0.0.1:8737/
 ```
 
 The first Simulation start builds and freezes its calibration inputs, which takes about 4 minutes; later
-starts are offline. Caches, day packs, the trainer store and session journals live under
+starts are offline. A fresh build fetches only the pinned objects in `sim_inputs_pin.json` and must reproduce
+the frozen inputs byte for byte or stop. **While forward data is reserved, use the preserved frozen cache
+(`.cache/sim_inputs/`) or the original pre-freeze objects instead of a fresh build; see Known limits.** Caches, day packs, the trainer store and session journals live under
 `research/options_replay/.cache/` (gitignored).
 
 ## The two conditions
@@ -91,6 +93,15 @@ and every fill matches its source.
   The s3c-dev2 development candidate is mixed and is not promoted. Held-out evidence depends on forward
   collector sessions; it is a coverage dependency, not a date.
 - **Next-session expiry is unsupported.** No non-0DTE expiry exists in the intraday archives.
+- **A fresh Simulation build is not literally no-read.** `sim_inputs_pin.json` limits a fresh build to pinned
+  objects and checks the frozen bytes, so later bars never reach the model inputs. But `history/QQQ/5/{year}.json`
+  is one growing file per year: `five_min_bars` downloads and JSON-decodes the whole current-year file
+  before cutting it at the pinned last bar. While forward sessions are reserved for S3c, receive Simulation
+  from the preserved frozen cache (`.cache/sim_inputs/frozen_inputs.pkl` + `inputs_manifest.json`, digest
+  `13e18c6aea01fdb9…`) or the original pre-freeze objects, not from a fresh rebuild against the live archive.
+- **Held-out dataset builds use finished sessions only.** `calibration/dataset.py` keeps a day's file once
+  built, so it is run for the reserved comparison only after `calibration/coverage_s3c.py` reports 10 finished
+  sessions for both symbols. `evaluate_s3c.py --set held_out` then decodes exactly the first ten per symbol.
 - **Expiration conventions:** 16:15 ET last trade (SEC Rel. 34-105153), OCC Rule 805 exercise-by-exception at
   $0.01 against the 16:00 close (reference price secondary-sourced), and the FINRA 2360 17:30 ET decision
   deadline. The post-close variance term is a modelling assumption. A Simulation session ends at 16:00, while
