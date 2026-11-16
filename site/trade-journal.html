@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Trade Journal</title>
+<!-- OA-238: private retroactive trade display. This file carries no trade data;
+     everything comes from /api/trade-journal*, which requires a signed-in
+     session listed in TRADE_JOURNAL_VIEWERS. -->
+<style>
+:root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1f21;--muted:#62666b;--line:#dcdcd8;--grid:#ececea;--buy:#1f7a4d;--sell:#b2342a;
+  --accent:#3668b2;--sel:#eef3fb;--warn:#8a5a00;--warnbg:#fff4dc;--ok:#1f7a4d;--bad:#b2342a}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;
+  --line:#33363a;--grid:#26282b;--buy:#4cc38a;--sell:#f07167;--accent:#7fa8f0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167}}
+:root[data-theme="dark"]{--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;--line:#33363a;--grid:#26282b;--buy:#4cc38a;
+  --sell:#f07167;--accent:#7fa8f0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+h1{font-size:17px;margin:0} h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+main{display:grid;grid-template-columns:minmax(280px,380px) 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+@media (max-width:860px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:16px;min-width:0}
+.note{color:var(--muted);font-size:12px} .ok{color:var(--ok)} .bad{color:var(--bad)}
+button,input{font:inherit;font-size:13px;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+button{cursor:pointer} button:disabled{opacity:.5;cursor:default}
+table{border-collapse:collapse;width:100%;font-size:13px} th,td{padding:4px 6px;border-bottom:1px solid var(--grid);text-align:left;vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums} th{color:var(--muted);font-weight:600}
+.pos{display:grid;grid-template-columns:auto 1fr auto;gap:2px 8px;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer}
+.pos.on{background:var(--sel);border-color:var(--accent)} .pos .m{grid-column:2/4;color:var(--muted);font-size:12px}
+.badge{font-size:11px;padding:0 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
+.badge.warn{color:var(--warn);background:var(--warnbg);border-color:var(--warn)}
+.banner{padding:10px;border:1px solid var(--warn);background:var(--warnbg);color:var(--warn);border-radius:6px;margin-bottom:12px}
+svg{display:block;width:100%}
+</style>
+</head>
+<body>
+<header>
+  <h1>Trade journal</h1>
+  <label class="note">Date (America/New_York) <input type="date" id="day" value="2026-11-13"></label>
+  <button id="load">Load</button>
+  <button id="sync">Sync from Notion</button>
+  <span id="syncinfo" class="note"></span>
+</header>
+<main>
+  <section>
+    <div id="msg"></div>
+    <div class="card"><h2>Totals for the day</h2><table id="totals"></table><div class="note" id="totnote"></div></div>
+    <div class="card">
+      <h2>Positions with an execution that day</h2>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><button id="restore">Restore all</button><span class="note" id="selcount"></span></div>
+      <div id="plist"></div>
+    </div>
+    <div class="card" id="unsupcard" hidden><h2>Rows that could not be read</h2><div id="unsup" class="note"></div></div>
+  </section>
+  <section>
+    <div class="card"><h2>Fills on a shared clock (each lane has its own price scale)</h2><div id="lanes"></div></div>
+    <div class="card"><h2>Fills</h2><div style="overflow-x:auto"><table id="fills"></table></div>
+      <div class="note" style="margin-top:6px">Times are the journal's execution-alert or broker order-initiation times, not exchange fill times. Fees are estimated until actual charges are recorded.</div></div>
+  </section>
+</main>
+<script>
+(() => {
+  const TZ = 'America/New_York';
+  const fT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fHM = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  const fDT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const usd = v => (v < 0 ? '−' : '+') + '$' + Math.abs(v).toFixed(2);
+  const T = s => Date.parse(s);
+  let data = null, selected = new Set();
+
+  function label(p) { const c = p.contract; return `${c.underlying} $${+c.strike} ${c.option_type}`; }
+  function orders(p) { return [...new Set(p.executions.map(e => e.order_ref))].join('→'); }
+
+  function showSync(sync) {
+    const parts = [];
+    parts.push(sync.last_success_at ? `Last successful sync ${fDT.format(T(sync.last_success_at))} ET` : 'Never synced');
+    if (sync.last_error) parts.push(`<span class="bad">Last read failed ${fDT.format(T(sync.last_error.at))} ET: ${esc(sync.last_error.message)}</span>`);
+    if (sync.running) parts.push('sync running…');
+    $('syncinfo').innerHTML = parts.join(' · ');
+  }
+
+  async function load() {
+    $('msg').innerHTML = '';
+    const res = await fetch(`/api/trade-journal?date=${encodeURIComponent($('day').value)}`, { credentials: 'same-origin', cache: 'no-store' });
+    if (res.status === 401) { $('msg').innerHTML = '<div class="banner">Sign in on the <a href="/">main page</a> first, then reload.</div>'; return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { $('msg').innerHTML = `<div class="banner">${esc(body.error || `HTTP ${res.status}`)}</div>`; return; }
+    data = body;
+    selected = new Set(data.positions.map(p => p.position_id));       // open with every position selected
+    showSync(data.sync);
+    render();
+  }
+
+  async function sync() {
+    $('sync').disabled = true;
+    try {
+      const res = await fetch('/api/trade-journal/sync', { method: 'POST', credentials: 'same-origin' });
+      const body = await res.json().catch(() => ({}));
+      if (body.sync) showSync(body.sync);
+      if (!res.ok) $('msg').innerHTML = `<div class="banner">Sync did not complete: ${esc(body.error?.message || body.error || res.status)}</div>`;
+      else {
+        const s = body.summary;
+        await load();
+        $('msg').innerHTML = `<div class="note">Synced ${s.rows_in_source} rows: ${s.inserted.length} new, ${s.refreshed.length} refreshed, ${s.unchanged} unchanged` +
+          `${s.deferred.length ? `, ${s.deferred.length} deferred to the next sync` : ''}${s.status_changes.length ? `, ${s.status_changes.length} status changes` : ''}.</div>`;
+      }
+    } finally { $('sync').disabled = false; }
+  }
+
+  function render() {
+    const ps = data.positions;
+    const sel = ps.filter(p => selected.has(p.position_id));
+    const active = sel.filter(p => p.source_status === 'active');
+    const t = data.totals;
+    $('totals').innerHTML = '<tr><th></th><th class="n">Day</th><th class="n">Selected</th></tr>' + [
+      ['Positions', t.positions, active.length, 0], ['Fills', t.fills, active.reduce((a, p) => a + p.n_fills, 0), 0],
+      ['Gross', t.gross, active.reduce((a, p) => a + p.gross_pnl, 0), 2], ['Fees', t.fees, active.reduce((a, p) => a + p.fees, 0), 2],
+      ['Net', t.net, active.reduce((a, p) => a + p.net_pnl, 0), 2],
+    ].map(([k, a, b, d]) => `<tr><td>${k}</td><td class="n">${d ? a.toFixed(d) : a}</td><td class="n">${d ? b.toFixed(d) : b}</td></tr>`).join('');
+    $('totnote').textContent = t.excluded_not_active ? `${t.excluded_not_active} position(s) no longer active in the journal are shown but not counted.` : '';
+    $('selcount').textContent = `${selected.size} of ${ps.length} selected`;
+    $('plist').innerHTML = ps.length ? ps.map(p => {
+      const on = selected.has(p.position_id);
+      const flags = [p.source_status !== 'active' ? `<span class="badge warn">${esc(p.source_status.replaceAll('_', ' '))}</span>` : '',
+        p.revision > 1 ? `<span class="badge">rev ${p.revision}</span>` : '',
+        p.closed ? '' : '<span class="badge warn">open</span>'].join(' ');
+      return `<div class="pos ${on ? 'on' : ''}" data-id="${esc(p.position_id)}"><input type="checkbox" ${on ? 'checked' : ''} aria-label="select ${esc(label(p))}">
+        <span><b>${esc(label(p))}</b> <span class="note">· ${esc(orders(p))}</span> ${flags}</span><span><button data-only="${esc(p.position_id)}">Only</button></span>
+        <span class="m">${fT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fT.format(T(p.closed_ts)) : ''} · ${p.n_fills} fills · gross ${usd(p.gross_pnl)} · fees $${p.fees.toFixed(2)} ${esc(p.fee_basis.join('+'))} · net ${usd(p.net_pnl)}
+        · journal edited ${fDT.format(T(p.source_last_edited))} · read ${fDT.format(T(p.app_read_at))} · <a href="${esc(p.journal_url)}" target="_blank" rel="noopener">row</a></span></div>`;
+    }).join('') : '<div class="note">No journal positions have an execution on this date.</div>';
+    $('unsupcard').hidden = !data.unsupported.length;
+    $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
+    renderLanes(sel);
+    $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
+      sel.flatMap(p => p.executions.map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
+        `<tr><td>${esc(label(p))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
+         <td>${fT.format(T(e.ts))}</td><td class="note">${esc(e.ts_kind)}</td><td class="n">$${e.fee.toFixed(2)} <span class="note">${esc(e.fee_basis)}</span></td>
+         <td class="note"><code>${esc(e.execution_id.replace(/^notion:[0-9a-f]+:/, ''))}</code></td></tr>`).join('');
+  }
+
+  function renderLanes(sel) {
+    if (!sel.length) { $('lanes').innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
+    const ts = sel.flatMap(p => p.executions.map(e => T(e.ts)));
+    const pad = 10 * 60e3, x0 = Math.min(...ts) - pad, x1 = Math.max(...ts) + pad;
+    const W = 900, H = 74, L = 150, R = 16;
+    const X = t => L + (t - x0) / (x1 - x0) * (W - L - R);
+    const step = x1 - x0 > 3 * 3600e3 ? 3600e3 : x1 - x0 > 3600e3 ? 15 * 60e3 : 5 * 60e3;
+    let axis = '';
+    for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step) axis += `<line x1="${X(t)}" x2="${X(t)}" y1="0" y2="${H - 14}" stroke="var(--grid)"/><text x="${X(t)}" y="${H - 2}" font-size="10" text-anchor="middle" fill="var(--muted)">${fHM.format(t)}</text>`;
+    $('lanes').innerHTML = sel.map(p => {
+      const px = p.executions.map(e => e.price); let lo = Math.min(...px), hi = Math.max(...px);
+      if (hi - lo < 1e-9) { lo -= 0.05; hi += 0.05; } const pd = (hi - lo) * 0.25; lo -= pd; hi += pd;
+      const Y = v => 8 + (hi - v) / (hi - lo) * (H - 30);
+      const pts = p.executions.map(e => `${X(T(e.ts)).toFixed(1)},${Y(e.price).toFixed(1)}`).join(' ');
+      const marks = p.executions.map(e => { const x = X(T(e.ts)), y = Y(e.price), c = e.side === 'buy' ? 'var(--buy)' : 'var(--sell)';
+        return `<circle cx="${x}" cy="${y}" r="4" fill="${c}"/><text x="${x + 6}" y="${y + 4}" font-size="11" fill="${c}">${e.side} ${e.price}</text>`; }).join('');
+      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px;border-top:1px solid var(--grid)">${axis}
+        <text x="4" y="20" font-size="12" font-weight="600" fill="var(--ink)">${esc(label(p))}</text><text x="4" y="36" font-size="10" fill="var(--muted)">${esc(orders(p))} · ${lo.toFixed(2)}–${hi.toFixed(2)}</text>
+        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>${marks}</svg>`;
+    }).join('') + '<div class="note" style="margin-top:6px">Exact-option and underlying price paths are a follow-on step; these lanes show the journal fills only.</div>';
+  }
+
+  $('plist').addEventListener('click', ev => {
+    const only = ev.target.closest('[data-only]');
+    if (only) { selected = new Set([only.dataset.only]); render(); return; }
+    if (ev.target.closest('a')) return;
+    const row = ev.target.closest('.pos'); if (!row) return;
+    selected.has(row.dataset.id) ? selected.delete(row.dataset.id) : selected.add(row.dataset.id); render();
+  });
+  $('restore').onclick = () => { if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
+  $('load').onclick = load;
+  $('sync').onclick = sync;
+  load();
+})();
+</script>
+</body>
+</html>

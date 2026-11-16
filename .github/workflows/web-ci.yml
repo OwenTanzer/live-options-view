@@ -96,6 +96,10 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/no_runtime_kv.test.mjs
+      - name: Trade journal reader (OA-238)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/trade_journal.test.mjs
       - name: Independent asset, preview and rollback contracts (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
