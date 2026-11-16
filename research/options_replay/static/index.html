@@ -393,6 +393,8 @@ function drawChart() {
   const x = t => 4 + plotW * (t - left) / Math.max(bar, right - left);
   const y = p => 10 + plotH * (top - p) / (top - bottom);
   const candleW = Math.min(16, Math.max(.5, (x(left + bar) - x(left)) * .68));
+  const lastPrice = values.at(-1).close;
+  const priceY = y(lastPrice);
   let g = "";
   for (const d of V.reveal ? V.reveal.full_day_dark : V.dark) {
     const a = Math.max(left, d.start), b = Math.min(right, d.end);
@@ -400,7 +402,8 @@ function drawChart() {
   }
   for (let i = 0; i < 4; i++) {
     const p = bottom + (top-bottom)*i/3;
-    g += `<path d="M4 ${y(p)}h${plotW}" stroke="var(--line)"/><text x="${plotW+8}" y="${y(p)+4}" font-size="11" fill="var(--muted)">${p.toFixed(2)}</text>`;
+    g += `<path d="M4 ${y(p)}h${plotW}" stroke="var(--line)"/>`;
+    if (Math.abs(y(p) - priceY) > 15) g += `<text x="${plotW+8}" y="${y(p)+4}" font-size="11" fill="var(--muted)">${p.toFixed(2)}</text>`;
   }
   const minInterval = (right - left) * 55 / plotW;
   const interval = [60, 300, 600, 900, 1800, 3600, 7200].find(n => n >= minInterval) || 10800;
@@ -420,6 +423,9 @@ function drawChart() {
     const sample = V.spot.series.filter(p => p[0]<=t).at(-1);
     if(sample) g += `<circle cx="${x(t)}" cy="${y(sample[1])}" r="3.5" stroke="var(--ink)" fill="${f.side==="buy"?"var(--up)":"var(--down)"}"><title>${esc(f.side)} ${esc(f.label)} @ ${f.price}</title></circle>`;
   }
+  g += `<g id="last-price"><title>Last chart price ${px(lastPrice)}</title>
+    <rect x="${plotW+4}" y="${priceY-9}" width="49" height="18" rx="3" fill="#302b1d"/>
+    <text x="${plotW+28.5}" y="${priceY+4}" text-anchor="middle" font-size="12" font-weight="700" fill="#ffdf60">${px(lastPrice)}</text></g>`;
   svg.innerHTML = g;
   const totals = new Map();
   for (const [time, qty] of (V.reveal?.full_day_volume || V.volume || [])) {
