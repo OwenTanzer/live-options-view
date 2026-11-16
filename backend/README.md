@@ -88,9 +88,13 @@ fill that day, and samples the rest of the position's life inside that day's
 09:30-16:15 session with the remaining budget: at most 40 snapshots (QQQ, SPY)
 or 15 Tradier parts (IBIT). A position entered on an earlier day or exiting on
 a later one is noted, and each day reads its own archive. Series come back as
-segments. The page draws each one on its own and never joins across a gap:
-sparse samples appear as points or ticks, unread stretches stay blank, and the
-coverage is labelled. Other underlyings return explicit coverage gaps. Results
+segments. The page draws each one on its own and never joins across a gap.
+Continuity is decided from the observations' own timestamps, never from list
+adjacency: snapshots more than 150 s apart (scaled when sampling is thinned),
+or Tradier parts whose recorded events do not meet within 30 s, start a new
+segment, and the hole is named in `coverage`. A lone observation is a point,
+not a line. Sparse samples appear as points or ticks, and unread stretches stay
+blank. Other underlyings return explicit coverage gaps. Results
 for finished sessions are cached in `trade_journal_context`. While the cutover
 fence is armed the route still serves, but does not write that cache.
 

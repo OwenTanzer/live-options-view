@@ -14,7 +14,8 @@ import { seedAccounts, seedSession } from './helpers/test_env.mjs';
 import worker from '../backend/index.js';
 import { TOKEN_SECRET_NAME, VIEWERS_VAR_NAME, syncTradeJournal } from '../backend/trade-journal.js';
 import {
-  FILL_PAD_MS, MAX_SNAPSHOTS, MAX_TRADIER_PARTS, coveragePlan, nyLocalToUtc, positionContext, snapshotKeyTime,
+  FILL_PAD_MS, MAX_PART_GAP_MS, MAX_SNAPSHOT_GAP_MS, MAX_SNAPSHOTS, MAX_TRADIER_PARTS, coveragePlan, nyLocalToUtc,
+  positionContext, snapshotKeyTime, splitRuns,
 } from '../backend/trade-journal-context.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -218,6 +219,72 @@ test('past sessions are cached; the current session is not', async () => {
   assert.equal(r2.gets + r2.lists, reads);
   const today = await positionContext({ DB: freshDb(), PAPER_TRADES: r2 }, pos, { now: () => new Date('2026-11-13T18:00:00Z') });
   assert.equal(today.cache, 'not_cached_session_open');
+});
+
+// ------------------------------------------- holes inside a window (Chej, 11:20)
+const lineLike = s => s.kind === 'line' || s.kind === 'band';
+function assertNoBridge(series, maxGap) {
+  for (const s of (series?.segments ?? []).filter(lineLike)) {
+    assert.ok(s.points.length >= 2, 'a line needs two observations');
+    assert.ok(gapMs(s.points) <= maxGap, `segment ${s.start}..${s.end} bridges a ${gapMs(s.points) / 1000}s hole`);
+  }
+}
+
+test('splitRuns breaks on observation time, not on list position', () => {
+  const p = (h, m, s) => [et('20261113', h, m, s), 1];
+  const { runs, holes } = splitRuns([p(10, 0, 0), p(10, 1, 8), p(10, 6, 0), p(10, 7, 8)], MAX_SNAPSHOT_GAP_MS);
+  assert.deepEqual(runs.map(r => r.length), [2, 2]);
+  assert.equal(holes.length, 1);
+});
+
+test("Chej's probe: a 10:00-10:01 trade with only the 09:55 and 10:06 snapshots draws no line", async () => {
+  const DB = freshDb();
+  const r2 = new FakeR2();
+  seedSnapshots(r2, '20261113', 9, 55, 9, 55, 60);
+  seedSnapshots(r2, '20261113', 10, 6, 10, 6, 60);
+  const pos = position('QQQ', QQQ_OCC, [[et('20261113', 10, 0), 'buy', 1.5], [et('20261113', 10, 1), 'sell', 1.6]]);
+  const ctx = await positionContext({ DB, PAPER_TRADES: r2 }, pos, { now: after });
+  assert.equal(ctx.option.segments.filter(lineLike).length, 0, 'no band across the 11-minute hole');
+  assert.equal(ctx.underlying.segments.filter(lineLike).length, 0, 'no line across the 11-minute hole');
+  assert.deepEqual(ctx.option.segments.map(s => s.kind), ['points']);
+  assert.equal(allPoints(ctx.option).length, 2);
+  assert.match(ctx.coverage.join(' '), /09:55:00–10:06:00 ET: no snapshot archived \(11 min\); not drawn/);
+});
+
+test('missing snapshots inside a dense window split the band and are named', async () => {
+  const DB = freshDb();
+  const r2 = new FakeR2();
+  seedSnapshots(r2, '20261113', 9, 50, 10, 15, 68);
+  for (const k of [...r2.objects.keys()]) {
+    const m = /snapshot_(\d{6})/.exec(k);
+    if (m && m[1] >= '095800' && m[1] < '100300') r2.objects.delete(k);      // archive hole 09:58-10:03
+  }
+  const pos = position('QQQ', QQQ_OCC, [[et('20261113', 10, 0), 'buy', 1.5], [et('20261113', 10, 5), 'sell', 1.6]]);
+  const ctx = await positionContext({ DB, PAPER_TRADES: r2 }, pos, { now: after });
+  assert.equal(ctx.option.segments.filter(lineLike).length, 2);
+  assertNoBridge(ctx.option, MAX_SNAPSHOT_GAP_MS);
+  assertNoBridge(ctx.underlying, MAX_SNAPSHOT_GAP_MS);
+  assert.match(ctx.coverage.join(' '), /09:57:\d\d–10:03:\d\d ET: no snapshot archived \(\d+ min\); not drawn/);
+});
+
+test('a missing Tradier part splits the series even though its neighbours are adjacent in the listing', async () => {
+  const DB = freshDb();
+  const r2 = new FakeR2();
+  seedTradier(r2, '20261113', 9, 45, 10, 30);
+  // Remove the part ending 10:03 (events 10:00-10:03): the remaining list is still "adjacent".
+  const victim = [...r2.objects.keys()].find(k => {
+    const up = r2.objects.get(k).uploaded.getTime();
+    return Math.abs(up - (nyLocalToUtc('20261113', 10, 3, 0) + 2000)) < 1000;
+  });
+  assert.ok(victim);
+  r2.objects.delete(victim);
+  const pos = position('IBIT', IBIT_OCC, [[et('20261113', 10, 0), 'buy', 0.16], [et('20261113', 10, 4), 'sell', 0.15]]);
+  const ctx = await positionContext({ DB, PAPER_TRADES: r2 }, pos, { now: after });
+  assert.equal(ctx.option.segments.filter(lineLike).length, 2);
+  assertNoBridge(ctx.option, MAX_PART_GAP_MS + 15_000);
+  assertNoBridge(ctx.underlying, MAX_PART_GAP_MS + 15_000);
+  assert.ok(!allPoints(ctx.option).some(p => p[0] > et('20261113', 10, 0) && p[0] < et('20261113', 10, 2, 55)), 'nothing drawn inside the missing part');
+  assert.match(ctx.coverage.join(' '), /09:59:5\d–10:03:00 ET: no Tradier archive recorded \(3 min\); not drawn/);
 });
 
 async function routeEnv() {

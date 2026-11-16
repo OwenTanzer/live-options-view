@@ -10,8 +10,11 @@
 //               (09:30-16:15 ET), sampled evenly with the remaining read budget
 //   * notes  -- entered on an earlier day / exits on a later day / still open
 // Series come back as segments. A segment is drawn on its own; nothing is ever
-// joined across the gap between two segments. Sparse snapshot samples are
-// single points (kind "points"), never a line.
+// joined across the gap between two segments. Continuity is decided from the
+// observations' own timestamps (snapshots more than ~2 cadences apart, Tradier
+// parts whose recorded events do not meet), never from list adjacency; holes
+// inside a window are split out and named in `coverage`. Sparse snapshot
+// samples and lone observations are single points (kind "points"), never a line.
 //
 // Sources (each labelled; separate observations from the journal's fills):
 //   QQQ  intraday/<YYYYMMDD>/snapshot_<HHMMSSffffff>.csv      chain snapshots (~68 s)
@@ -26,7 +29,7 @@ import { jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
 import { JOURNAL_TZ, authorizeJournalViewer, etDate, loadPosition } from './trade-journal.js';
 
-export const CONTEXT_VERSION = 'ctx-v2';
+export const CONTEXT_VERSION = 'ctx-v3';
 export const MAX_SNAPSHOTS = 40;
 export const MAX_TRADIER_PARTS = 15;
 export const FILL_PAD_MS = 5 * 60_000;
@@ -174,7 +177,45 @@ async function listAll(bucket, opts, reads, stopAfter) {
   return { objects, complete: true };
 }
 
+// ------------------------------------------------------------- continuity
+const hms = ms => { const p = nyParts(ms); return [p.h, p.mi, p.s].map(v => String(v).padStart(2, '0')).join(':'); };
+const mins = ms => `${Math.round(ms / 60_000)} min`;
+
+/**
+ * Split time-ordered points into runs wherever consecutive observations are
+ * more than `maxGapMs` apart. Continuity comes from the observations' own
+ * timestamps, never from list adjacency. Returns runs plus the holes found.
+ */
+export function splitRuns(points, maxGapMs) {
+  const runs = [], holes = [];
+  for (const p of points) {
+    const t = Date.parse(p[0]);
+    const run = runs.at(-1);
+    if (run && t - Date.parse(run.at(-1)[0]) <= maxGapMs) run.push(p);
+    else {
+      if (run) holes.push([Date.parse(run.at(-1)[0]), t]);
+      runs.push([p]);
+    }
+  }
+  return { runs, holes };
+}
+
+/** Runs of 2+ observations become line/band segments; a lone observation is a point, never stretched. */
+function runsToSegments(points, maxGapMs, kind) {
+  const { runs, holes } = splitRuns(points, maxGapMs);
+  const segments = [], lone = [];
+  for (const r of runs) {
+    if (r.length >= 2) segments.push({ kind, start: r[0][0], end: r.at(-1)[0], points: r });
+    else lone.push(r[0]);
+  }
+  if (lone.length) segments.push({ kind: 'points', points: lone });
+  return { segments, holes };
+}
+
 // ------------------------------------------------------------- snapshots
+export const SNAPSHOT_CADENCE_MS = 68_000;
+export const MAX_SNAPSHOT_GAP_MS = 150_000;   // ~2x the cadence; a larger gap is a hole, not a line
+
 async function snapshotContext(bucket, src, position, plan, reads) {
   const occ = position.contract.occ_symbol, und = position.contract.underlying;
   const prefix = src.prefix(plan.d);
@@ -193,21 +234,35 @@ async function snapshotContext(bucket, src, position, plan, reads) {
     const obj = await bucket.get(k.key);
     if (obj) read.set(k.key, snapshotRow(await obj.text(), occ));
   }
-  const und_segments = [], opt_segments = [];
+  // Thinned reads widen the normal spacing; anything wider than that is a hole.
+  const maxGap = Math.max(MAX_SNAPSHOT_GAP_MS, Math.ceil(every * SNAPSHOT_CADENCE_MS * 1.6));
+  const und_segments = [], opt_segments = [], coverage = [];
+  const holeNotes = new Set();
   for (const [a, b] of plan.dense) {
     const ks = dense.filter(k => k.t >= a && k.t <= b && read.has(k.key));
     const u = ks.filter(k => read.get(k.key).underlying != null).map(k => [iso(k.t), read.get(k.key).underlying]);
     const o = ks.filter(k => read.get(k.key).quote).map(k => [iso(k.t), ...read.get(k.key).quote]);
-    if (u.length) und_segments.push({ kind: 'line', start: iso(a), end: iso(b), points: u });
-    if (o.length) opt_segments.push({ kind: 'band', start: iso(a), end: iso(b), points: o });
+    const U = runsToSegments(u, maxGap, 'line'), O = runsToSegments(o, maxGap, 'band');
+    und_segments.push(...U.segments);
+    opt_segments.push(...O.segments);
+    // Holes inside the window, and uncovered edges, are named rather than drawn over.
+    const edges = [];
+    const times = ks.map(k => k.t);
+    if (!times.length) edges.push([a, b]);
+    else {
+      if (times[0] - a > maxGap) edges.push([a, times[0]]);
+      if (b - times.at(-1) > maxGap) edges.push([times.at(-1), b]);
+    }
+    for (const [x, y] of [...U.holes, ...edges]) holeNotes.add(`${hms(x)}–${hms(y)} ET: no snapshot archived (${mins(y - x)}); not drawn`);
+    for (const [x, y] of O.holes) holeNotes.add(`${hms(x)}–${hms(y)} ET: no ${occ} quote in the archived snapshots (${mins(y - x)}); not drawn`);
   }
   const su = sparse.filter(k => read.get(k.key)?.underlying != null).map(k => [iso(k.t), read.get(k.key).underlying]);
   const so = sparse.filter(k => read.get(k.key)?.quote).map(k => [iso(k.t), ...read.get(k.key).quote]);
   if (su.length) und_segments.push({ kind: 'points', points: su });
   if (so.length) opt_segments.push({ kind: 'points', points: so });
 
-  const coverage = [];
   if (every > 1) coverage.push(`around fills: 1 in ${every} snapshots read (${dense.length} of ${denseAll.length})`);
+  coverage.push(...holeNotes);
   for (const [a, b] of plan.sparse) {
     const n = sparseAll.filter(k => k.t >= a && k.t <= b).length, m = sparse.filter(k => k.t >= a && k.t <= b).length;
     if (n) coverage.push(`${hm(a)}–${hm(b)} ET: ${m} of ${n} snapshots read, shown as separate points`);
@@ -225,6 +280,8 @@ async function snapshotContext(bucket, src, position, plan, reads) {
 }
 
 // ---------------------------------------------------------------- Tradier
+export const MAX_PART_GAP_MS = 30_000;   // consecutive parts join only if their recorded events meet within this
+
 async function tradierContext(bucket, src, position, plan, reads) {
   const occ = position.contract.occ_symbol, und = position.contract.underlying;
   const [start, end] = plan.interval;
@@ -237,42 +294,59 @@ async function tradierContext(bucket, src, position, plan, reads) {
   const { picked: dense, every } = stride(denseAll, MAX_TRADIER_PARTS);
   const sparseAll = parts.filter(p => !overlaps(p, plan.dense));
   const sparse = evenPick(sparseAll, MAX_TRADIER_PARTS - dense.length);
-  const chosen = [...dense, ...sparse].sort((x, y) => x.a - y.a);
+  const chosen = [...dense, ...sparse];
 
-  // Each read part covers its own ~3 minutes; consecutive parts join into one segment, skipped parts leave a gap.
-  const groups = [];
+  // Read each chosen part; its real span is the first..last event it recorded (any symbol).
+  const loaded = [];
   for (const p of chosen) {
-    const i = parts.indexOf(p);
-    if (groups.length && parts.indexOf(groups.at(-1).at(-1)) === i - 1) groups.at(-1).push(p);
-    else groups.push([p]);
+    reads.gets += 1;
+    const obj = await bucket.get(p.key);
+    if (!obj) continue;
+    let first = Infinity, last = -Infinity;
+    const u = [], q = [];
+    for (const line of (await gunzipText(obj)).split('\n')) {
+      if (!line) continue;
+      let x;
+      try { x = JSON.parse(line); } catch { continue; }
+      const t = x.type === 'timesale' ? +x.date : x.type === 'quote' ? Math.max(+x.biddate || 0, +x.askdate || 0) : NaN;
+      if (!Number.isFinite(t) || t <= 0) continue;
+      first = Math.min(first, t); last = Math.max(last, t);
+      if (x.symbol === und && x.type === 'timesale' && x.last != null) u.push([t, +x.last]);
+      else if (x.symbol === occ && x.type === 'quote' && x.bid != null && x.ask != null) q.push([t, +x.bid, +x.ask]);
+    }
+    if (Number.isFinite(first)) loaded.push({ ...p, first, last, u, q, isDense: dense.includes(p) });
+  }
+  loaded.sort((x, y) => x.first - y.first);
+
+  // Parts join only when their recorded events actually meet; a missing part leaves a hole.
+  const groups = [], holes = [];
+  for (const p of loaded) {
+    const g = groups.at(-1);
+    if (g && p.first - g.at(-1).last <= MAX_PART_GAP_MS) g.push(p);
+    else {
+      if (g && (g.at(-1).isDense || p.isDense)) holes.push([g.at(-1).last, p.first]);
+      groups.push([p]);
+    }
   }
   const und_segments = [], opt_segments = [];
   for (const g of groups) {
-    const a = Math.max(start, g[0].a), b = Math.min(end, g.at(-1).b);
-    const u = new Map(), q = new Map();
-    for (const p of g) {
-      reads.gets += 1;
-      const obj = await bucket.get(p.key);
-      if (!obj) continue;
-      for (const line of (await gunzipText(obj)).split('\n')) {
-        if (!line) continue;
-        let x;
-        try { x = JSON.parse(line); } catch { continue; }
-        if (x.symbol === und && x.type === 'timesale' && x.last != null && x.date) {
-          const t = +x.date; if (t < a || t > b) continue;
-          const k = Math.floor(t / BUCKET_MS); if (!u.has(k) || u.get(k)[0] <= t) u.set(k, [t, +x.last]);
-        } else if (x.symbol === occ && x.type === 'quote' && x.bid != null && x.ask != null && x.biddate) {
-          const t = Math.max(+x.biddate, +(x.askdate ?? 0)); if (t < a || t > b) continue;
-          const k = Math.floor(t / BUCKET_MS); if (!q.has(k) || q.get(k)[0] <= t) q.set(k, [t, +x.bid, +x.ask]);
-        }
-      }
-    }
-    const sorted = m => [...m.values()].sort((x, y) => x[0] - y[0]);
-    if (u.size) und_segments.push({ kind: 'line', start: iso(a), end: iso(b), points: sorted(u).map(([t, px]) => [iso(t), px]) });
-    if (q.size) opt_segments.push({ kind: 'band', start: iso(a), end: iso(b), points: sorted(q).map(([t, bi, as]) => [iso(t), bi, as]) });
+    const a = Math.max(start, g[0].first), b = Math.min(end, g.at(-1).last);
+    const bucket15 = rows => {
+      const m = new Map();
+      for (const r of rows) { if (r[0] < a || r[0] > b) continue; const k = Math.floor(r[0] / BUCKET_MS); if (!m.has(k) || m.get(k)[0] <= r[0]) m.set(k, r); }
+      return [...m.values()].sort((x, y) => x[0] - y[0]);
+    };
+    const u = bucket15(g.flatMap(p => p.u)), q = bucket15(g.flatMap(p => p.q));
+    if (u.length) und_segments.push({ kind: 'line', start: iso(a), end: iso(b), points: u.map(([t, px]) => [iso(t), px]) });
+    if (q.length) opt_segments.push({ kind: 'band', start: iso(a), end: iso(b), points: q.map(([t, bi, as]) => [iso(t), bi, as]) });
   }
   const coverage = [];
   if (every > 1) coverage.push(`around fills: 1 in ${every} archive parts read (${dense.length} of ${denseAll.length})`);
+  for (const [x, y] of holes) coverage.push(`${hms(x)}–${hms(y)} ET: no Tradier archive recorded (${mins(y - x)}); not drawn`);
+  for (const [a, b] of plan.dense) {
+    const inside = loaded.filter(p => p.isDense && p.last >= a && p.first <= b);
+    if (!inside.length) coverage.push(`${hms(a)}–${hms(b)} ET: no Tradier archive around this fill`);
+  }
   if (sparseAll.length) coverage.push(`holding period: ${sparse.length} of ${sparseAll.length} ~3-minute archive parts read; unread stretches are left blank`);
   if (!complete) coverage.push('Tradier listing stopped at its read limit');
   const gaps = parts.length ? [] : [`no ${und} Tradier archive parts for this interval`];
