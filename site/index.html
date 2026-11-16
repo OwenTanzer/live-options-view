@@ -468,6 +468,55 @@
   .oi-skew-labels {
     display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--dim); margin-top: 3px;
   }
+  /* ── SPY / IBIT reference OI skew meters: same look as #oi-skew-meter ── */
+  .ref-oi-skew {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px 10px; margin-bottom: 1rem;
+  }
+  .ref-oi-skew .oi-skew-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .ref-oi-skew h2 { font-size: 0.85rem; font-weight: 600; color: var(--bright); }
+  .ref-oi-skew-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--bright); }
+  .ref-oi-skew-lean { font-size: 0.85rem; font-weight: 600; }
+  .ref-oi-skew[data-lean="put-heavy"] .ref-oi-skew-lean { color: var(--put5); }
+  .ref-oi-skew[data-lean="call-heavy"] .ref-oi-skew-lean { color: var(--call5); }
+  .ref-oi-skew-meta { font-size: 0.72rem; color: var(--dim); }
+  .ref-oi-skew[data-state="stale"] .ref-oi-skew-meta,
+  .ref-oi-skew[data-state="closed"] .ref-oi-skew-meta,
+  .ref-oi-skew[data-coverage="thin"] .ref-oi-skew-meta { color: #d49a00; }
+  .ref-oi-skew[data-state="stale"] .oi-skew-scale,
+  .ref-oi-skew[data-state="closed"] .oi-skew-scale,
+  .ref-oi-skew[data-state="unavailable"] .oi-skew-scale,
+  .ref-oi-skew[data-state="no_data"] .oi-skew-scale { opacity: 0.55; }
+  .ref-oi-skew-track {
+    position: relative; height: 14px; border-radius: 7px;
+    background: linear-gradient(to right, var(--put4) 0%, var(--put2) 35%, #21262d 50%, var(--call2) 65%, var(--call4) 100%);
+    border: 1px solid var(--border);
+  }
+  .ref-oi-skew-track .oi-skew-tick {
+    position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--fg); opacity: 0.6;
+  }
+  .ref-oi-skew-track .oi-skew-zero { border-left-style: solid; opacity: 0.35; }
+  .ref-oi-skew-marker {
+    position: absolute; top: -5px; width: 4px; height: 22px; margin-left: -2px;
+    background: var(--bright); border-radius: 2px; box-shadow: 0 0 0 2px var(--bg);
+  }
+  /* IBIT adaptive reading: visually subordinate and distinct from the published one */
+  .adaptive-oi-skew {
+    margin-top: 8px; padding: 6px 10px 8px; border: 1px dashed var(--border); border-radius: 5px;
+  }
+  .adaptive-oi-skew h3 { font-size: 0.8rem; font-weight: 600; color: var(--bright); }
+  .adaptive-oi-skew-tag { font-size: 0.68rem; color: var(--dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+  /* Don't inherit the published reading's thin-band amber from the IBIT panel. */
+  .ref-oi-skew .adaptive-oi-skew .ref-oi-skew-meta { color: var(--dim); }
+  .adaptive-oi-skew[data-lean="put-heavy"] .ref-oi-skew-lean { color: var(--put5); }
+  .adaptive-oi-skew[data-lean="call-heavy"] .ref-oi-skew-lean { color: var(--call5); }
+  .ref-oi-skew .adaptive-oi-skew[data-state="stale"] .ref-oi-skew-meta,
+  .ref-oi-skew .adaptive-oi-skew[data-state="closed"] .ref-oi-skew-meta,
+  .adaptive-oi-skew[data-state="insufficient"] .ref-oi-skew-lean { color: #d49a00; }
+  .adaptive-oi-skew[data-state="stale"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="closed"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="unavailable"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="insufficient"] .oi-skew-scale { opacity: 0.55; }
   .oi-skew-bot-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
   #oi-skew-bot {
     font-size: 0.78rem; font-weight: 600; padding: 1px 8px; border-radius: 4px;
@@ -1213,6 +1262,73 @@
   <p class="oi-skew-caveat">(call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
 </section>
 
+<section id="spy-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="spy-oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="spy-oi-skew-heading">SPY near-money OI skew</h2>
+    <span id="spy-oi-skew-value" class="ref-oi-skew-value">—</span>
+    <span id="spy-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="spy-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="spy-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="spy-oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="SPY OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="spy-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <p id="spy-oi-skew-detail" class="oi-skew-caveat"></p>
+  <p class="oi-skew-caveat">Reference reading only: no bot trades SPY. (call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+</section>
+
+<section id="ibit-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="ibit-oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="ibit-oi-skew-heading">IBIT near-money OI skew</h2>
+    <span id="ibit-oi-skew-value" class="ref-oi-skew-value">—</span>
+    <span id="ibit-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="ibit-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="ibit-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="ibit-oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="IBIT OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="ibit-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <p id="ibit-oi-skew-detail" class="oi-skew-caveat"></p>
+  <div id="ibit-adaptive-oi-skew" class="adaptive-oi-skew" data-state="unavailable" aria-labelledby="ibit-adaptive-oi-skew-heading">
+    <div class="oi-skew-head">
+      <h3 id="ibit-adaptive-oi-skew-heading">Adaptive near-money OI skew</h3>
+      <span class="adaptive-oi-skew-tag">page-calculated · not the published reading or a bot signal</span>
+    </div>
+    <div class="oi-skew-head">
+      <span id="ibit-adaptive-oi-skew-value" class="ref-oi-skew-value">—</span>
+      <span id="ibit-adaptive-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+      <span id="ibit-adaptive-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+    </div>
+    <div class="oi-skew-scale">
+      <div id="ibit-adaptive-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="ibit-adaptive-oi-skew-heading"
+           aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="IBIT adaptive OI skew unavailable">
+        <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+        <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+        <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+        <span id="ibit-adaptive-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+      </div>
+    </div>
+    <p id="ibit-adaptive-oi-skew-detail" class="oi-skew-caveat"></p>
+  </div>
+  <p class="oi-skew-caveat">No bot trades IBIT. The top reading is the published reference (±2% of spot). IBIT's $1 strikes are roughly 2.5–3% of its price, so ±2% can hold only a strike or two and fewer than 4 is flagged thin. The adaptive reading below it widens the window from ±2% to the 4th-nearest strike with OI (strikes tied at the edge included), capped at ±10%, and shows nothing when coverage is insufficient. Both are (call OI − put OI) ÷ (call OI + put OI). Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+</section>
+
 <div id="price-strip" aria-label="Quote cards">
   <section class="quote-section" aria-labelledby="qp-core-heading">
     <div class="quote-heading-row">
@@ -1547,6 +1663,7 @@ let timerHandle = null;
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
 <script src="js/data-fetch-cycle.js?v=d8b0bb7385cf9ba6"></script>
 <script src="js/oi-skew-meter.js?v=f3f59e5c6aa2a119"></script>
+<script src="js/reference-oi-skew-meters.js?v=a374da1d2206feba"></script>
 <script>
 
 // ── countdown timer ───────────────────────────────────────────────────────────
