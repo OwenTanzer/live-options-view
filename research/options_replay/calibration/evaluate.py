@@ -109,9 +109,16 @@ UNIFORM = Clock([1.0] * BUCKETS)
 # Data
 # ---------------------------------------------------------------------------
 
+# S3c reserves collector sessions from this date as its forward held-out set; S3b never reads them.
+RESERVED_FROM = json.loads((HERE / "s3c_protocol.json").read_text())["split"]["held_out"]["from"]
+
+
 def load(cache: Path, symbol: str) -> dict[str, dict]:
     out = {}
     for f in sorted((cache / "calibration").glob(f"{symbol}_*.json")):
+        stamp = f.stem[len(symbol) + 1:]
+        if not (stamp.isdigit() and len(stamp) == 8) or f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:]}" >= RESERVED_FROM:
+            continue                                   # selected by file name, before decoding
         d = json.loads(f.read_text())
         out[d["day"]] = d
     return out

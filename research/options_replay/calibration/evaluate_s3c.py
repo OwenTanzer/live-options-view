@@ -42,16 +42,48 @@ MIN_SESSIONS = PROT["split"]["held_out"]["min_sessions_per_symbol"]
 ANCHOR_T = 9 * 3600 + 45 * 60
 
 
-def load(cache: Path, symbol: str) -> dict:
+def day_files(cache: Path, symbol: str) -> dict[str, Path]:
+    """{ISO day: dataset file} from file names alone (SYMBOL_YYYYMMDD.json); nothing is opened."""
     out = {}
-    for f in sorted((cache / "calibration_s3c").glob(f"{symbol}_*.json")):
-        d = json.loads(f.read_text())
-        out[d["day"]] = d
+    for f in (cache / "calibration_s3c").glob(f"{symbol}_*.json"):
+        stamp = f.stem[len(symbol) + 1:]
+        if len(stamp) == 8 and stamp.isdigit():
+            out[f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:]}"] = f
+    return dict(sorted(out.items()))
+
+
+def held_out_selection(days: list[str]) -> list[str]:
+    """The declared held-out set: the first MIN_SESSIONS qualifying sessions from HELD_FROM, in
+    chronological order, or [] until that many exist. Later sessions are never part of it."""
+    fwd = sorted(d for d in days if d >= HELD_FROM)
+    return fwd[:MIN_SESSIONS] if len(fwd) >= MIN_SESSIONS else []
+
+
+def load(cache: Path, symbol: str, set_: str = "development") -> dict:
+    """Decode the dataset files a run may use, selected by file name before any is opened.
+
+    development: only days before HELD_FROM; reserved forward files are never decoded.
+    held_out: the development days (baselines are fitted on them) plus exactly the declared first
+    MIN_SESSIONS forward sessions; any later forward file is never decoded.
+    """
+    files = day_files(cache, symbol)
+    wanted = [d for d in files if d < HELD_FROM]
+    if set_ == "held_out":
+        wanted += held_out_selection(list(files))
+    elif set_ != "development":
+        raise ValueError(set_)
+    out = {}
+    for d in wanted:
+        rec = json.loads(files[d].read_text())
+        if rec.get("day") != d:
+            raise SystemExit(f"{files[d].name} records day {rec.get('day')}, not {d}")
+        out[d] = rec
     return out
 
 
 def split(days: list[str]) -> tuple[list[str], list[str]]:
-    return [d for d in days if d < HELD_FROM], [d for d in days if d >= HELD_FROM]
+    """(development, held-out); held-out is the declared first MIN_SESSIONS forward sessions only."""
+    return [d for d in days if d < HELD_FROM], held_out_selection(days)
 
 
 def win(t: int) -> str | None:
@@ -607,14 +639,17 @@ def main() -> int:
     params = PR.load_params(args.params)
     report = {"set": args.set, "label": args.label, "model": args.model, "params_sha256": hashlib.sha256(Path(args.params).read_bytes()).hexdigest(),
               "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "symbols": {}}
+    if args.set == "held_out":
+        # Readiness from file names only: refuse before decoding anything or writing an attempt.
+        short = {s: sum(1 for d in day_files(cache, s) if d >= HELD_FROM) for s in ("QQQ", "SPY")}
+        short = {s: n for s, n in short.items() if n < MIN_SESSIONS}
+        if short:
+            raise SystemExit("not evaluable, nothing run or logged: " + ", ".join(
+                f"{s} has {n} of {MIN_SESSIONS} required held-out sessions" for s, n in short.items()))
     for symbol in ("QQQ", "SPY"):
-        days = load(cache, symbol)
+        days = load(cache, symbol, args.set)
         dev, held = split(sorted(days))
         which = dev if args.set == "development" else held
-        if args.set == "held_out" and len(held) < MIN_SESSIONS:
-            report["symbols"][symbol] = {"held_out_sessions": len(held), "status":
-                                         f"not evaluable: {len(held)} of {MIN_SESSIONS} required held-out sessions exist"}
-            continue
         if args.model == "combined":
             r = evaluate(params["symbols"][symbol], days, which)
         elif args.model == "dev2":
@@ -624,6 +659,8 @@ def main() -> int:
         else:
             r = evaluate(None, days, which, factory=lambda d, s=symbol: SimV1Model(cache, s, d))
         r["days"] = len(which)
+        if args.set == "held_out":
+            r["held_out_days"] = which
         report["symbols"][symbol] = r
     text = json.dumps(report, indent=1, default=lambda o: None)
     if args.out:

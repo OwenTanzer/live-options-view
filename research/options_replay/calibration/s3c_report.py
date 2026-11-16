@@ -37,8 +37,10 @@ def main() -> int:
                 "held_out": {"from": "2026-11-16", "sessions_available": 0, "required_per_symbol": 10},
                 "dataset_sha256": {}}
     cache = HERE.parent / ".cache" / "calibration_s3c"
-    for p in sorted(cache.glob("*.json")):
-        manifest["dataset_sha256"][p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in sorted(cache.glob("*.json")):          # development files only; reserved forward files are not read
+        stamp = p.stem.rsplit("_", 1)[-1]
+        if stamp.isdigit() and f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:]}" < manifest["held_out"]["from"]:
+            manifest["dataset_sha256"][p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
     (HERE / "s3c_manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
     L = ["# S3c results: combined pricing model (sim-v2)", "",

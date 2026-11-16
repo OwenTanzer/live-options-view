@@ -930,5 +930,155 @@ class HeldOutCoverage(unittest.TestCase):
         self.assertEqual(C.MIN_SESSIONS, 10)
 
 
+class HeldOutSelection(unittest.TestCase):
+    """S3c evaluator: reserved forward files are chosen by name before decoding; exactly the first ten."""
+
+    def setUp(self):
+        import tempfile
+        sys.path.insert(0, str(ROOT / "research" / "options_replay" / "calibration"))
+        import evaluate_s3c as V
+        self.V = V
+        self.tmp = Path(tempfile.mkdtemp())
+        d = self.tmp / "calibration_s3c"
+        d.mkdir()
+        self.dev = ["2026-11-10", "2026-11-12", "2026-11-13"]
+        # 13 synthetic forward sessions, written out of order; only the first ten are valid JSON,
+        # so decoding any later one (or any forward file in development mode) would raise.
+        self.fwd = [f"2026-{m:02d}-{x:02d}" for m, x in
+                    [(11, 16), (11, 17), (11, 18), (11, 19), (11, 20), (11, 23), (11, 24), (11, 25), (11, 27),
+                     (11, 30), (12, 1), (12, 2), (12, 3)]]
+        for day in reversed(self.dev + self.fwd):
+            name = d / f"QQQ_{day.replace('-', '')}.json"
+            if day in self.fwd[10:]:
+                name.write_text("not json: must never be decoded")
+            else:
+                name.write_text(json.dumps({"day": day, "points": []}))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_development_never_decodes_forward_files(self):
+        V = self.V
+        for f in (self.tmp / "calibration_s3c").glob("QQQ_202611[12]*.json"):
+            if f.stem[4:] >= "20261116":
+                f.write_text("not json")
+        days = V.load(self.tmp, "QQQ")
+        self.assertEqual(sorted(days), self.dev)
+        self.assertEqual(V.split(sorted(days)), (self.dev, []))
+
+    def test_exactly_first_ten_in_order_with_more_available(self):
+        V = self.V
+        self.assertEqual(V.MIN_SESSIONS, 10)
+        self.assertEqual(V.held_out_selection(self.dev + self.fwd), self.fwd[:10])
+        days = V.load(self.tmp, "QQQ", "held_out")      # files 11-13 are invalid JSON: never opened
+        self.assertEqual(sorted(days), self.dev + self.fwd[:10])
+        dev, held = V.split(sorted(days))
+        self.assertEqual((dev, held), (self.dev, self.fwd[:10]))
+
+    def test_fewer_than_ten_is_empty_and_refused_without_logging(self):
+        import subprocess
+        V = self.V
+        self.assertEqual(V.held_out_selection(self.dev + self.fwd[:9]), [])
+        for f in (self.tmp / "calibration_s3c").glob("QQQ_*.json"):
+            if f.stem[4:] >= "20261125":
+                f.unlink()                               # 7 forward QQQ sessions remain; SPY has none
+        log = ROOT / "research" / "options_replay" / "calibration" / "s3c_attempts.jsonl"
+        before = log.read_bytes()
+        r = subprocess.run([sys.executable, str(ROOT / "research" / "options_replay" / "calibration" / "evaluate_s3c.py"),
+                            "--cache", str(self.tmp), "--set", "held_out", "--label", "fixture"],
+                           capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not evaluable, nothing run or logged", r.stderr)
+        self.assertEqual(log.read_bytes(), before)
+
+
+class SimulationInputPin(unittest.TestCase):
+    """Fresh-cache simulation inputs come only from the pinned inventory, or the build stops."""
+
+    def setUp(self):
+        import hashlib
+        import tempfile
+        import simulate as M
+        self.M, self.h = M, (lambda b: hashlib.sha256(b).hexdigest())
+        self.tmp = Path(tempfile.mkdtemp())
+        self.r2 = self.tmp / "sim_inputs" / "r2"
+        bars = {"t": [100, 400, 700], "o": [1, 2, 3], "h": [1, 2, 3], "l": [1, 2, 3], "c": [1, 2, 3], "v": [1, 1, 1]}
+        files = {"history/QQQ/5/2026.json": json.dumps(bars).encode(),
+                 "history/QQQ/options_0dte/2026-01-05.json": b'{"strike": [1]}',
+                 "intraday/20260105/snapshot_100000000000.csv": b"a,b\n1,2\n"}
+        for k, b in files.items():
+            (self.r2 / k).parent.mkdir(parents=True, exist_ok=True)
+            (self.r2 / k).write_bytes(b)
+        # Synthetic "later archive": a reserved forward day the pin does not contain.
+        (self.r2 / "intraday/20261116").mkdir(parents=True)
+        (self.r2 / "intraday/20261116/snapshot_100000000000.csv").write_bytes(b"later")
+        self.pin = {"manifest": {"r2_objects": {k: self.h(b) for k, b in files.items()},
+                                 "inputs_digest": "d" * 64, "frozen_sha256": None},
+                    "bars": {"2026": {"key": "history/QQQ/5/2026.json", "n": 3, "first_t": 100, "last_t": 700}},
+                    "donor_days": ["2026-01-05"],
+                    "intraday_keys": {"20260105": ["intraday/20260105/snapshot_100000000000.csv"]}}
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def src(self):
+        return self.M.pinned_source(self.pin, self.r2)
+
+    def test_only_pinned_days_and_keys_are_visible(self):
+        M, src = self.M, self.src()
+        self.assertEqual(src.intraday_days_available(), ["20260105"])
+        self.assertEqual(src.intraday_snapshots("20261116"), [])
+        self.assertEqual([d.isoformat() for d in src.all_options_0dte_days("QQQ")], ["2026-01-05"])
+        with self.assertRaises(M.PinError):
+            src.intraday_snapshot_csv("intraday/20261116/snapshot_100000000000.csv")
+        with self.assertRaises(M.PinError):
+            src._list("intraday/")
+
+    def test_grown_bar_file_is_cut_at_the_pinned_last_bar(self):
+        f = self.r2 / "history/QQQ/5/2026.json"
+        b = json.loads(f.read_text())
+        for k in b:
+            b[k] += [9, 9] if k != "t" else [1000, 1300]   # bars after the freeze
+        f.write_text(json.dumps(b))
+        self.assertEqual(self.src().five_min_bars("QQQ", [2026])[2026]["t"], [100, 400, 700])
+        b["c"][0] = 42                                     # pre-freeze history no longer matches
+        b["t"] = [100, 700, 1000, 1300, 1600]
+        f.write_text(json.dumps(b))
+        with self.assertRaises(self.M.PinError):
+            self.src().five_min_bars("QQQ", [2026])
+
+    def test_changed_object_stops_and_is_not_kept(self):
+        k = "history/QQQ/options_0dte/2026-01-05.json"
+        (self.r2 / k).write_bytes(b'{"strike": [2]}')
+        with self.assertRaises(self.M.PinError):
+            self.src().options_0dte_day("QQQ", date(2026, 1, 5))
+        self.assertFalse((self.r2 / k).exists())
+
+    def test_rebuild_must_reproduce_frozen_bytes_or_write_nothing(self):
+        import pickle
+        M, cache = self.M, self.tmp / "sim_inputs"
+
+        def builder(src):
+            return (src.five_min_bars("QQQ", [2026]), src.intraday_days_available())
+        good = pickle.dumps(builder(self.src()), protocol=4)
+        self.pin["manifest"]["frozen_sha256"] = "0" * 64
+        with self.assertRaises(M.PinError):
+            M.rebuild_from_pin(cache, self.pin, builder=builder)
+        self.assertFalse((cache / "frozen_inputs.pkl").exists())
+        self.pin["manifest"]["frozen_sha256"] = self.h(good)
+        inputs, man = M.rebuild_from_pin(cache, self.pin, builder=builder)
+        self.assertEqual((cache / "frozen_inputs.pkl").read_bytes(), good)
+        self.assertEqual(json.loads((cache / "inputs_manifest.json").read_text())["inputs_digest"], "d" * 64)
+
+    def test_committed_pin_matches_the_frozen_identity(self):
+        pin = self.M.load_pin()
+        self.assertEqual(pin["manifest"]["inputs_digest"][:16], "13e18c6aea01fdb9")
+        self.assertEqual(len(pin["manifest"]["r2_objects"]), 535)
+        self.assertEqual(len(pin["donor_days"]), 80)
+        self.assertTrue(all(d < "20261116" for d in pin["intraday_keys"]))
+
+
 if __name__ == "__main__":
     unittest.main()

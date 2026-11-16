@@ -87,6 +87,105 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+PIN_PATH = HERE / "sim_inputs_pin.json"
+
+
+class PinError(RuntimeError):
+    """A fresh install could not reproduce the frozen simulation inputs; nothing was written."""
+
+
+def load_pin(path: Path = PIN_PATH) -> dict:
+    if not path.exists():
+        raise PinError(f"pinned input inventory {path.name} is missing; refusing to build inputs from the live archive")
+    return json.loads(path.read_text())
+
+
+def pinned_source(pin: dict, cache_dir: Path, s3=None):
+    """An R2Source restricted to the pinned inventory.
+
+    Only pinned keys can be fetched; every listing method returns the pinned days/keys instead of
+    listing R2, so days collected after the freeze (including the reserved S3c forward sessions)
+    are never selected or read. Each fetched object must match its pinned SHA-256, except the
+    year files of 5-minute bars, which keep growing: those are decoded and cut at the pinned last
+    bar before anything is built from them, and must then match the pinned count and range.
+    """
+    from r2_sources import R2Source
+
+    objects = pin["manifest"]["r2_objects"]
+    bar_keys = {b["key"] for b in pin["bars"].values()}
+
+    class PinnedR2Source(R2Source):
+        def _get_bytes(self, key: str) -> bytes | None:
+            if key not in objects:
+                raise PinError(f"{key} is not in the pinned input inventory")
+            raw = super()._get_bytes(key)
+            if raw is None:
+                raise PinError(f"pinned input {key} could not be read (R2 read credentials are needed the first time)")
+            if _sha(raw) != objects[key] and key not in bar_keys:
+                self._cache_path(key).unlink(missing_ok=True)
+                raise PinError(f"pinned input {key} changed in the archive (sha256 differs); refusing to rebuild")
+            return raw
+
+        def _list(self, prefix: str) -> list[str]:
+            raise PinError(f"listing {prefix} is not allowed; inputs come from the pinned inventory only")
+
+        def five_min_bars(self, symbol: str, years: list[int]) -> dict:
+            out = {}
+            for year in years:
+                spec = pin["bars"].get(str(year))
+                if spec is None or spec["key"] != f"history/{symbol}/5/{year}.json":
+                    raise PinError(f"5-minute bars {symbol} {year} are not pinned")
+                data = json.loads(self._get_bytes(spec["key"]))
+                keep = [i for i, t in enumerate(data["t"]) if t <= spec["last_t"]]
+                data = {k: [v[i] for i in keep] for k, v in data.items()}
+                if len(data["t"]) != spec["n"] or (data["t"] and data["t"][0] != spec["first_t"]):
+                    raise PinError(f"5-minute bars {year} up to the pinned last bar no longer match the pin")
+                out[year] = data
+            return out
+
+        def all_options_0dte_days(self, symbol: str) -> list[date]:
+            return [date.fromisoformat(d) for d in pin["donor_days"]]
+
+        def intraday_days_available(self) -> list[str]:
+            return sorted(pin["intraday_keys"])
+
+        def intraday_snapshots(self, yyyymmdd: str) -> list[str]:
+            return sorted(pin["intraday_keys"].get(yyyymmdd, []))
+
+    return PinnedR2Source(cache_dir=cache_dir, s3=s3)
+
+
+def build_inputs(src) -> tuple:
+    """(sessions, donors, curve) from a source, using the sim-v1 settings."""
+    from price_path import split_into_sessions
+    import day_generator as G
+    bars = src.five_min_bars("QQQ", list(YEARS))
+    if not bars:
+        raise PinError("no 5-minute history available")
+    sessions = split_into_sessions(bars)
+    donors = G.load_donors(src, "QQQ", max_days=MAX_DONOR_DAYS)
+    curve = G.load_intraday_curve(src, max_days=MAX_INTRADAY_DAYS, samples_per_day=INTRADAY_SAMPLES_PER_DAY)
+    if not donors or curve is None:
+        raise PinError("missing donor chains or intraday calibration")
+    return sessions, donors, curve
+
+
+def rebuild_from_pin(cache: Path, pin: dict | None = None, s3=None, builder=build_inputs) -> tuple:
+    """Rebuild the frozen inputs from the pinned inventory, or stop. Returns (inputs, manifest)."""
+    pin = pin or load_pin()
+    os.environ["SYNTHETIC_DAYS_CACHE"] = str(cache / "r2")
+    inputs = builder(pinned_source(pin, cache / "r2", s3=s3))
+    blob = pickle.dumps(inputs, protocol=4)
+    manifest = pin["manifest"]
+    if _sha(blob) != manifest["frozen_sha256"]:
+        raise PinError("fresh rebuild did not reproduce the frozen simulation inputs (frozen_sha256 "
+                       f"{manifest['frozen_sha256'][:16]}..., got {_sha(blob)[:16]}...); nothing was written")
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "frozen_inputs.pkl").write_bytes(blob)
+    (cache / "inputs_manifest.json").write_text(json.dumps(manifest, indent=1))
+    return inputs, manifest
+
+
 class Simulator:
     """Loads the calibration inputs once (cached, read-only R2) and generates days by seed."""
 
@@ -109,40 +208,13 @@ class Simulator:
             blob = frozen.read_bytes()
             if _sha(blob) != self.manifest["frozen_sha256"]:
                 raise RuntimeError("frozen simulation inputs do not match their manifest")
+            if PIN_PATH.exists() and self.manifest["inputs_digest"] != load_pin()["manifest"]["inputs_digest"]:
+                raise PinError("cached simulation inputs are not the pinned frozen inputs (inputs_digest differs)")
             self._inputs = pickle.loads(blob)
             return self._inputs
-        os.environ["SYNTHETIC_DAYS_CACHE"] = str(self.cache / "r2")
-        from r2_sources import R2Source
-        from price_path import split_into_sessions
-        import day_generator as G
-        src = R2Source(cache_dir=self.cache / "r2")
-        bars = src.five_min_bars("QQQ", list(YEARS))
-        if not bars:
-            raise RuntimeError("no 5-minute history available (R2 read credentials needed the first time)")
-        sessions = split_into_sessions(bars)
-        donors = G.load_donors(src, "QQQ", max_days=MAX_DONOR_DAYS)
-        curve = G.load_intraday_curve(src, max_days=MAX_INTRADAY_DAYS, samples_per_day=INTRADAY_SAMPLES_PER_DAY)
-        if not donors or curve is None:
-            raise RuntimeError("missing donor chains or intraday calibration")
-        self._inputs = (sessions, donors, curve)
-        objects = {}
-        root = self.cache / "r2"
-        for p in sorted(root.rglob("*")):
-            if p.is_file() and not p.name.startswith("_listing"):
-                objects[p.relative_to(root).as_posix()] = _sha(p.read_bytes())
-        blob = pickle.dumps(self._inputs, protocol=4)
-        self.manifest = {
-            "generator_version": GENERATOR_VERSION,
-            "years": list(YEARS), "block_size": BLOCK_SIZE, "strike_window": STRIKE_WINDOW,
-            "max_donor_days": MAX_DONOR_DAYS, "max_intraday_days": MAX_INTRADAY_DAYS,
-            "intraday_samples_per_day": INTRADAY_SAMPLES_PER_DAY,
-            "historical_sessions": len(sessions), "donor_days": [d.day.isoformat() for d in donors],
-            "r2_objects": objects, "frozen_sha256": _sha(blob),
-        }
-        self.manifest["inputs_digest"] = _sha(json.dumps(
-            {k: v for k, v in self.manifest.items() if k != "frozen_sha256"}, sort_keys=True).encode())
-        frozen.write_bytes(blob)
-        man_path.write_text(json.dumps(self.manifest, indent=1))
+        # Fresh cache: rebuild only from the pinned development inventory (never from a listing of
+        # the evolving archive), and accept the result only if it is byte-identical to the frozen inputs.
+        self._inputs, self.manifest = rebuild_from_pin(self.cache)
         return self._inputs
 
     def inputs_digest(self) -> str:
