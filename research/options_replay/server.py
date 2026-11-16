@@ -276,6 +276,33 @@ REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 def make_handler(games: Games, allow_faults: bool = False):
     page = (HERE / "static" / "index.html").read_bytes()
 
+    # The loopback gateway derives this key from a private browser cookie.
+    # Keep a bounded warm cache; active requests retain their workspace.
+    from collections import OrderedDict
+    from weakref import WeakValueDictionary
+    active = WeakValueDictionary()
+    warm = OrderedDict()
+    workspace_lock = threading.Lock()
+
+    def workspace(key):
+        if key is None:
+            return games
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ReplayError("Invalid practice workspace")
+        with workspace_lock:
+            selected = active.get(key)
+            if selected is None:
+                path = games.store.path.parent / "browsers" / (key + ".sqlite3")
+                selected = Games(games.arc, games.pool, games.fee, None, store=TrainerStore(path))
+                selected.sim, selected.sim_lock = games.sim, games.sim_lock
+                selected._pick_pack, selected.prefetch = games._pick_pack, games.prefetch
+                active[key] = selected
+            warm[key] = selected
+            warm.move_to_end(key)
+            if len(warm) > 32:
+                warm.popitem(last=False)
+            return selected
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "OptionsReplay/1"
 
@@ -320,6 +347,7 @@ def make_handler(games: Games, allow_faults: bool = False):
 
         def _replayed(self, req: dict | None, kind: str) -> dict | None:
             """The stored acknowledgment if this request id was already committed."""
+            games = self.workspace
             if req is None or games.store is None:
                 return None
             prior = games.store.get_request(req["id"])
@@ -337,6 +365,7 @@ def make_handler(games: Games, allow_faults: bool = False):
                     return self._send(200, (HERE.parents[1] / "site/shared/format.js").read_bytes(), "text/javascript")
                 if url.path in ("/", "/index.html"):
                     return self._send(200, page, "text/html; charset=utf-8")
+                games = workspace(self.headers.get("X-Practice-Workspace"))
                 if url.path == "/api/view":
                     return self._send(200, games.get(qs.get("s", [""])[0]).view())
                 if url.path in ("/api/records", "/api/trade", "/api/sessions") and games.store is None:
@@ -371,6 +400,7 @@ def make_handler(games: Games, allow_faults: bool = False):
             s = None
             fault = self._fault()
             try:
+                self.workspace = games = workspace(self.headers.get("X-Practice-Workspace"))
                 data = self._body()
                 if url.path == "/api/note":
                     if games.store is None:

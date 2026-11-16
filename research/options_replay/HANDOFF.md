@@ -115,7 +115,7 @@ and every fill matches its source.
 
 ## Shipped phone trainer
 
-The private trainer serves QQQ at the root and SPY at `/spy/`. Each symbol has an isolated practice store. The dashboard links to the trainer hostname. First-time devices enter through their private invitation. The trainer reuses the dashboard's market-order validator and sends accepted orders to its own clock and ledger. It never submits those orders to a live account.
+The private trainer serves QQQ at the root and SPY at `/spy/`. Each symbol has an isolated practice store. The dashboard links to the trainer hostname. First-time browsers open directly and get a private practice history via a secure cookie. Previously invited browsers retain access to their existing records. The trainer reuses the dashboard's market-order validator and sends accepted orders to its own clock and ledger. It never submits those orders to a live account.
 
 For the SPY service, set `OPTIONS_TRAINER_SYMBOL=SPY`, run `prepare_spy.py` with the existing read-only data access, then start `server.py --port 8744`. Its default cache is `.cache/spy`; retain its donor file alongside the store. QQQ uses port 8737 and its original frozen inputs. The gateway expects both servers on loopback and reads `release-invite` and `release-cookie` from its private working directory. Both symbols offer same-day expiration. Next-session expirations have no verified synchronized intraday archive here.
 
