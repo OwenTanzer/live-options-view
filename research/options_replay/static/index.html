@@ -65,6 +65,8 @@ td.held { background: var(--held); }
 .big { font-size: 22px; font-weight: 650; }
 input[type=number] { width: 56px; font: inherit; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .loading { padding: 40px; text-align: center; }
+#saves { font-size: 12px; margin: 0 0 8px; }
+.save { padding: 2px 0; } .save.pending b, .save.unknown b { color: var(--warn); } .save.saved b { color: var(--up); } .save.failed b { color: var(--down); }
 .saved { color: var(--up); font-size: 11px; } .unsaved { color: var(--down); font-size: 11px; }
 .trade { border-bottom: 1px solid var(--line); padding: 6px 0; }
 .trade code, .rec code { font-size: 11px; }
@@ -90,6 +92,7 @@ details summary { cursor: pointer; }
     <button id="new" class="primary">New random day</button>
   </header>
   <div id="msg" role="status" aria-live="polite"></div>
+  <div id="saves" aria-live="polite"></div>
   <div id="game" style="display:none">
     <div class="banner" id="banner" role="alert"></div>
     <div class="grid">
@@ -137,6 +140,7 @@ details summary { cursor: pointer; }
   </div>
   <section class="panel" id="records" style="margin-top:12px">
     <h2>Saved records <span class="muted" style="text-transform:none;letter-spacing:0" id="recwhere"></span> <button class="sm" id="reload-recs">Refresh</button></h2>
+    <div id="sesslist" style="margin-bottom:8px"></div>
     <div id="reclist" class="muted">Loading from storage…</div>
   </section>
   <div id="idle" class="loading muted">Press <b>New random day</b> to land in a random historical session.
@@ -154,17 +158,57 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const DWELL = 500;
 
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const j = await r.json().catch(() => ({ error: "bad response" }));
-  if (!r.ok) { const e = new Error(j.error || r.statusText); e.dwell = !!j.dwell; throw e; }
+  let r;
+  try { r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch (x) { const e = new Error("no response from the server"); e.network = true; throw e; }
+  const j = await r.json().catch(() => null);
+  if (j === null) { const e = new Error("no usable response from the server"); e.network = true; throw e; }
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; e.body = j; e.dwell = !!j.dwell; e.stale = !!j.stale; throw e; }
   return j;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const newRid = () => ((crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2))).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+function remember(sid) { try { localStorage.setItem("optionsReplay.lastSession", sid); } catch (e) { /* convenience only */ } }
+
+// ---- S2c: every write has a request id; the status shown is only what storage confirmed ----
+const saves = [];
+function renderSaves() {
+  const el = $("saves"); if (!el) return;
+  const items = saves.slice(-6).reverse();
+  el.innerHTML = items.map((it) => `<div class="save ${it.status}"><b>${esc(it.label)}</b> · <span>${esc(it.detail)}</span>
+    <code>${esc(it.rid.slice(0, 8))}</code>${it.retry ? ` <button class="sm" data-retry="${esc(it.rid)}">Retry</button>` : ""}</div>`).join("");
+  el.querySelectorAll("[data-retry]").forEach((b) => b.addEventListener("click", () => { const it = saves.find((x) => x.rid === b.dataset.retry); if (it && it.retry) it.retry(); }));
+}
+async function submit(path, body, label, item) {
+  if (!item) {
+    item = { rid: newRid(), label, status: "pending", detail: "saving…" };
+    item.payload = { s: S, ...body, request_id: item.rid, expected_clock: V.session.clock_s };
+    saves.push(item);
+  }
+  item.retry = null; item.status = "pending"; item.detail = "saving…"; renderSaves();
+  for (let n = 0; n < 5; n++) {
+    try {
+      const r = await api(path, item.payload);
+      V = r; S = r.session.id;
+      item.status = "saved";
+      item.detail = r.request && r.request.replayed ? "saved ✓ (confirmed on retry: it had already been saved once)" : "saved ✓";
+      item.ack = r.request && r.request.ack; render(); renderSaves(); return true;
+    } catch (e) {
+      if (e.network) { item.status = "unknown"; item.detail = `no response: unknown whether saved; asking again with the same request id (${n + 2}/5)…`; renderSaves(); await sleep(400 * 2 ** n); continue; }
+      if (e.stale) { item.status = "failed"; item.detail = "not placed: the replay clock had moved, view resynced"; if (e.body.view) { V = e.body.view; render(); } renderSaves(); return false; }
+      if (e.body && e.body.not_saved) { item.status = "failed"; item.detail = "not saved: " + e.message; item.retry = () => submit(path, null, label, item); renderSaves(); return false; }
+      item.status = "failed"; item.detail = "refused: " + e.message; renderSaves(); return false;
+    }
+  }
+  item.status = "unknown"; item.detail = "still no response; unknown whether saved. Retry asks again with the same request id (never twice)";
+  item.retry = () => submit(path, null, label, item); renderSaves(); return false;
 }
 function say(text) { $("msg").textContent = text || ""; }
 
 async function newDay() {
   pause(); say("Loading a random qualified day… (a day's first load downloads its snapshots)");
   $("new").disabled = true;
-  try { V = await api("/api/new", {}); S = V.session.id; anchor = null; lastMove = 0; lastFillCount = -1; openNotes = new Set(); say(""); render(); }
+  try { V = await api("/api/new", {}); S = V.session.id; remember(S); anchor = null; lastMove = 0; lastFillCount = -1; openNotes = new Set(); say(""); render(); }
   catch (e) { say("Could not start: " + e.message); }
   finally { $("new").disabled = false; }
 }
@@ -175,8 +219,10 @@ async function move(path, body) {
   const wait = lastMove + DWELL - performance.now();
   if (wait > 0) return false;
   busy = true;
-  try { V = await api(path, { s: S, ...body }); lastMove = performance.now(); render(); return true; }
-  catch (e) { if (!e.dwell) { say(e.message); pause(); } return false; }
+  try { V = await api(path, { s: S, ...body, expected_clock: V.session.clock_s }); lastMove = performance.now(); render(); return true; }
+  catch (e) {
+    if (e.stale && e.body.view) { V = e.body.view; render(); say("This page was behind the replay clock; it has been resynced."); pause(); return false; }
+    if (!e.dwell) { say(e.message); pause(); } return false; }
   finally { busy = false; refreshButtons(); }
 }
 const step = () => move("/api/step", {});
@@ -210,16 +256,20 @@ async function skipMinutes(min) {
 
 async function order(side, contract, qty) {
   qty = qty || Math.max(1, Math.min(20, parseInt($("qty").value || "1", 10)));
-  try { V = await api("/api/order", { s: S, side, contract, qty }); say(""); render(); }
-  catch (e) { say("Order refused: " + e.message); }
+  say(""); await submit("/api/order", { side, contract, qty }, `${side} ${qty}× ${contract}`);
+}
+async function undo(fillId) { await submit("/api/undo", { fill_id: fillId }, `undo ${fillId}`); }
+async function resume(sid) {
+  pause(); say("Resuming the saved session…");
+  try { V = await api("/api/resume", { s: sid }); S = sid; remember(S); anchor = null; lastMove = 0; lastFillCount = -1; say("Resumed from storage. The date stays hidden until you reveal."); render(); }
+  catch (e) { say("Could not resume: " + e.message); }
 }
 async function reset() {
   if (!V || V.session.revealed) return;
   if (Date.now() - resetArm > 3000) { resetArm = Date.now(); $("reset").textContent = "Confirm reset?"; $("reset").classList.add("danger");
     setTimeout(() => { $("reset").textContent = "↺ Reset"; $("reset").classList.remove("danger"); }, 3000); return; }
   resetArm = 0; pause();
-  try { V = await api("/api/reset", { s: S }); lastMove = 0; anchor = null; render(); say("Reset to the landing time with a fresh ledger. The earlier attempt is kept for the reveal."); }
-  catch (e) { say(e.message); }
+  if (await submit("/api/reset", {}, "reset to landing time")) { lastMove = 0; anchor = null; say("Reset to the landing time with a fresh ledger. The earlier attempt is kept for the reveal."); }
   $("reset").textContent = "↺ Reset"; $("reset").classList.remove("danger");
 }
 async function reveal() {
@@ -326,10 +376,13 @@ function renderPositions(done) {
   document.querySelectorAll("#positions [data-sell]").forEach((b) => b.addEventListener("click", () => order("sell", b.dataset.sell, Number(b.dataset.q))));
   const a = V.account;
   $("account").innerHTML = `Realized net profit <span class="big ${cls(a.realized_net)}">${money(a.realized_net)}</span><br><span class="muted">cash ${money(a.cash)} of ${money(a.cash_start)} · fees paid ${money(a.fees_paid)}</span>`;
-  $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${esc(f.label)} @ ${px(f.price)}` +
+  $("fills").innerHTML = V.fills.length ? V.fills.map((f) => `<div${f.voided ? ' style="text-decoration:line-through;opacity:.6"' : ""}>${f.time_of_day} · <b>${f.side}</b> ${f.qty}× ${esc(f.label)} @ ${px(f.price)}` +
       (f.kind === "fill" ? ` <span class="muted">(bid ${px(f.bid)} / ask ${px(f.ask)} recorded ${f.quote_time}, fee ${money(f.fee)})</span>` : ` <span class="muted">${esc(f.note)}</span>`) +
       (f.net_pnl != null ? ` → <span class="${cls(f.net_pnl)}">${money(f.net_pnl)} net</span>` : "") +
-      (f.saved ? ` <span class="saved">saved ✓ ${esc(f.saved.fill_id)}</span>` : ` <span class="unsaved">${esc(f.save_error || "not saved")}</span>`) + `</div>`).join("") : `<span class="muted">None yet.</span>`;
+      (f.saved ? ` <span class="saved">saved ✓ ${esc(f.saved.fill_id)}</span>` : ` <span class="unsaved">${esc(f.save_error || "not saved")}</span>`) +
+      (f.voided ? ` <span class="muted" style="text-decoration:none">undone ${esc(f.void ? f.void.void_id : "")} (kept on record)</span>` : "") +
+      (f.saved && V.undoable_fill_id === f.saved.fill_id && !V.session.revealed ? ` <button class="sm" data-undo="${esc(f.saved.fill_id)}">Undo</button>` : "") + `</div>`).join("") : `<span class="muted">None yet.</span>`;
+  document.querySelectorAll("[data-undo]").forEach((b) => b.addEventListener("click", () => undo(b.dataset.undo)));
 }
 function reconTable(rc) {
   const rows = rc.lines.map((l) => `<tr><td>#${l.n} ${l.side}</td><td>${l.qty}× ${esc(l.contract)}</td><td>${esc(l.decision_time)}</td>
@@ -362,6 +415,7 @@ async function loadTrades() {
 function noteStatus(tid) {
   const st = noteState[tid] || {};
   if (st.pending) return `<span class="muted">saving…</span>`;
+  if (st.conflict) return `<span class="unsaved">${esc(st.error)}</span> <button class="sm" data-overwrite="${esc(tid)}">Save mine as rev ${st.conflict.rev + 1}</button>`;
   if (st.error) return `<span class="unsaved">not saved: ${esc(st.error)}</span>`;
   if (st.ack) return `<span class="saved">saved rev ${st.ack.rev} ✓ ${esc(st.ack.saved_at.slice(11, 19))} UTC</span>`;
   return "";
@@ -372,6 +426,8 @@ function renderTrades(trades) {
   // keep any textarea the player is typing in
   const active = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.note : null;
   if (active) return;
+  for (const t of trades) { const st = noteState[t.trade_id]; const rev = t.note && t.note.current ? t.note.current.rev : 0;
+    if (!st) noteState[t.trade_id] = { base: rev }; else if (!st.dirty && !st.pending && !st.conflict) st.base = rev; }
   el.innerHTML = trades.map((t) => {
     const cur = t.note && t.note.current ? t.note.current.text : "";
     const open = openNotes.has(t.trade_id);
@@ -389,6 +445,11 @@ function renderTrades(trades) {
     ta.addEventListener("blur", () => { flushNote(ta.dataset.note); });
   });
 }
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest("[data-overwrite]"); if (!b) return;
+  const st = noteState[b.dataset.overwrite]; if (!st || !st.conflict) return;
+  st.base = st.conflict.rev; st.conflict = null; st.error = null; st.dirty = true; flushNote(b.dataset.overwrite);
+});
 function scheduleNote(tid, text) {
   noteState[tid] = { ...(noteState[tid] || {}), draft: text, dirty: true };
   const s = document.getElementById("ns-" + tid); if (s) s.innerHTML = `<span class="muted">unsaved changes…</span>`;
@@ -399,14 +460,35 @@ async function flushNote(tid) {
   const st = noteState[tid]; if (!st || !st.dirty || st.pending) return;
   const text = st.draft; st.pending = true; st.dirty = false; st.error = null;
   const s = document.getElementById("ns-" + tid); if (s) s.innerHTML = noteStatus(tid);
-  try { st.ack = await api("/api/note", { trade_id: tid, text }); }
-  catch (e) { st.error = e.message; st.dirty = true; }
+  if (!st.rid || st.ridText !== text) { st.rid = newRid(); st.ridText = text; }
+  const body = { trade_id: tid, text, base_rev: st.base ?? 0, request_id: st.rid };
+  for (let n = 0; n < 4; n++) {
+    try { st.ack = await api("/api/note", body); st.base = st.ack.rev; st.error = null; st.conflict = null; break; }
+    catch (e) {
+      if (e.network) { st.error = `no response: unknown whether saved; asking again (${n + 2}/4)`; await sleep(400 * 2 ** n); st.error = null; if (n === 3) { st.error = "no response; unknown whether saved. Keep typing or reopen to retry"; st.dirty = true; } continue; }
+      if (e.body && e.body.conflict) { st.conflict = e.body.current; st.error = `a newer revision (rev ${e.body.current.rev}) was saved elsewhere; your text is kept here, not saved`; }
+      else { st.error = e.message; st.dirty = true; }
+      break;
+    }
+  }
   st.pending = false;
   const s2 = document.getElementById("ns-" + tid); if (s2) s2.innerHTML = noteStatus(tid);
   if (st.dirty && !st.error) flushNote(tid);
   if (document.activeElement?.dataset?.note !== tid) { loadTrades(); loadRecords(); }
 }
+async function loadSessions() {
+  try {
+    const r = await api("/api/sessions");
+    let last = null; try { last = localStorage.getItem("optionsReplay.lastSession"); } catch (e) { /* none */ }
+    const open = r.sessions.filter((x) => !x.revealed && x.session_id !== S);
+    $("sesslist").innerHTML = open.length ? `<b>Unfinished sessions</b> (date hidden; resume to finish or reveal):` + open.slice().reverse().map((x) =>
+      `<div class="rec"><code>${esc(x.session_id)}</code>${x.session_id === last ? " · <b>last played here</b>" : ""} · clock ${esc(x.clock)} ET · attempt ${x.attempt} · ${x.trades} trade${x.trades === 1 ? "" : "s"}
+       <button class="sm" data-resume="${esc(x.session_id)}">Resume</button></div>`).join("") : "";
+    $("sesslist").querySelectorAll("[data-resume]").forEach((b) => b.addEventListener("click", () => resume(b.dataset.resume)));
+  } catch (e) { $("sesslist").textContent = "Could not list saved sessions: " + e.message; }
+}
 async function loadRecords() {
+  loadSessions();
   try {
     const r = await api("/api/records");
     $("recwhere").textContent = "· " + r.store;
@@ -415,7 +497,7 @@ async function loadRecords() {
       · gross ${money(t.gross_premium)} · fees ${money(t.fees)} · net ${t.net == null ? "open" : money(t.net)}
       ${t.note && t.note.current ? `<br><span class="muted">note rev ${t.note.current.rev}: ${esc(t.note.current.text.slice(0, 140))}</span>` : ""}
       <details><summary class="muted">fills and decision-time state</summary>${t.fills.map((f) => `<div style="margin:4px 0">
-        <code>${esc(f.fill_id)}</code> ${f.side} ${f.qty}× @ ${px(f.price)} · decision ${esc(f.decision_clock)} ET · recorded ${esc(f.quote_time || "-")} (bid ${px(f.bid)} / ask ${px(f.ask)}) · fee ${money(f.fee)} · cash ${money(f.cash_flow)}
+        <code>${esc(f.fill_id)}</code>${f.voided ? ` <b>undone</b> (${esc(f.void_id)}, kept on record)` : ""} ${f.side} ${f.qty}× @ ${px(f.price)} · decision ${esc(f.decision_clock)} ET · recorded ${esc(f.quote_time || "-")} (bid ${px(f.bid)} / ask ${px(f.ask)}) · fee ${money(f.fee)} · cash ${money(f.cash_flow)}
         · source ${esc(f.source_key || "-")} · state sha256 ${esc(f.decision_state_sha256.slice(0, 12))}… ${f.decision_state_verified ? "✓" : "✗"}</div>`).join("")}</details></div>`).join("")
       : "No saved trades yet.";
   } catch (e) { $("reclist").textContent = "Could not read storage: " + e.message; }

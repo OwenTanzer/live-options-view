@@ -101,6 +101,43 @@ curl "http://127.0.0.1:8737/api/trade?id=tr_…"
 
 The page's **Saved records** panel reads the store on load, so a fresh browser sees every trade.
 
+## Interrupted saves and resume (S2c)
+
+- **Request ids.** Every order, undo, reset and note revision carries a client `request_id`.
+  The id is committed in the same transaction as its effect (`request` table). A retry
+  with the same id and the identical body returns the original acknowledgment
+  (`replayed: true`) instead of applying again. This covers a lost response, a double
+  click, five simultaneous submissions, and a retry after reconnect. The same id with a
+  different body is refused.
+- **Stale requests.** Writes and clock moves carry `expected_clock`. If the replay clock
+  has moved since, the request is refused (409 `stale`) and the current view is returned
+  so the page resyncs. A note revision carries `base_rev`; if a newer revision exists, it
+  is refused as a conflict and nothing is overwritten. The editor keeps the text and
+  offers to save it as the next revision.
+- **Failed writes** roll back completely (503 `not_saved`) and nothing is applied. The page
+  shows *saving…*, *saved ✓*, *no response: unknown whether saved* (retrying with the
+  same id) or *not saved* (with Retry). It shows *saved* only from a storage
+  acknowledgment.
+- **Undo** voids only the latest fill, and only while the clock is still at its decision
+  time (no undo with hindsight). It writes an immutable `fill_void` record; the fill and
+  its decision state stay. The ledger is rebuilt from stored fills through the same code
+  path as live fills.
+- **Resume.** The session clock, attempt and resets are persisted. After a restart, or
+  from another browser, an unrevealed session appears under *Unfinished sessions*.
+  **Resume** rebuilds it from storage, still masked, so it can be finished and revealed.
+  Any request for an unknown in-memory session resumes it transparently.
+- **Fault injection** (testing only, off by default): with `--allow-fault-injection`, the
+  header `X-Replay-Fault: fail_write | drop_response` fails a write before commit, or
+  commits it and drops the response.
+
+Reproduce every case with two real server processes and an independent read of the store:
+
+```sh
+python research/options_replay/s2c_cases.py --day 2026-11-02 --start 14:44     --store research/options_replay/.cache/s2c_cases.sqlite3     # fresh path each run
+python research/options_replay/records.py list --store research/options_replay/.cache/s2c_cases.sqlite3
+python research/options_replay/records.py requests --store research/options_replay/.cache/s2c_cases.sqlite3
+```
+
 ## Tests
 
 ```sh

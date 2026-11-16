@@ -66,6 +66,16 @@ class DwellError(ReplayError):
     status = 429
 
 
+class NotSavedError(ReplayError):
+    """Storage did not acknowledge the write; nothing was applied."""
+    status = 503
+
+
+class StaleError(ReplayError):
+    """The request was made against a clock that is no longer current (stale retry/reconnect)."""
+    status = 409
+
+
 def explain(code: str, snap: dict | None, age: int | None) -> tuple[str, str]:
     """(short label, plain-language sentence) for a disabled-board reason code."""
     if code == "no_snapshot":
@@ -101,8 +111,10 @@ class ReplaySession:
                  start_s: int | None = None, journal_dir: Path | None = None,
                  now: Callable[[], float] = _time.monotonic,
                  raw_lookup: Callable[[str, str], dict | None] | None = None,
-                 on_fill: Callable | None = None, on_reveal: Callable | None = None):
-        self.id = secrets.token_urlsafe(9)
+                 on_fill: Callable | None = None, on_reveal: Callable | None = None,
+                 on_state: Callable | None = None, on_void: Callable | None = None,
+                 session_id: str | None = None):
+        self.id = session_id or secrets.token_urlsafe(9)
         self.pack = pack
         self.snaps = pack["snapshots"]
         self.times = [s["t"] for s in self.snaps]
@@ -118,6 +130,8 @@ class ReplaySession:
         self.raw_lookup = raw_lookup
         self.on_fill = on_fill
         self.on_reveal = on_reveal
+        self.on_state = on_state        # persist clock moves / resets (resume after restart)
+        self.on_void = on_void          # persist an undo as an immutable void record
         self.revealed = False
         self.attempts: list[dict] = []
         self.journal = None
@@ -245,6 +259,7 @@ class ReplaySession:
             "board": rows,
             "positions": self._positions(snap, code),
             "fills": [{k: v for k, v in f.items() if k != "source_key"} for f in self.fills],
+            "undoable_fill_id": (lambda f: (f.get("saved") or {}).get("fill_id") if f else None)(self.undoable_fill()),
             "account": {"cash": round(self.cash, 2), "cash_start": self.cash_start,
                         "realized_net": round(self.realized, 2), "fees_paid": round(self.fees, 2)},
             "attempts": [{k: v for k, v in a.items() if k != "fills"} for a in self.attempts],
@@ -272,6 +287,79 @@ class ReplaySession:
                 round(bid * MULTIPLIER * lot["qty"] - lot["cost"] - exit_fee, 2),
             })
         return out
+
+    # -- ledger --------------------------------------------------------------
+
+    def _apply(self, fill: dict) -> float | None:
+        """Apply one fill to the ledger. The only place ledger arithmetic lives, so a ledger
+        rebuilt from stored fills after a restart or undo is identical to the live one."""
+        c, qty, fee = fill["contract"], fill["qty"], fill["fee"]
+        lot = self.lots.setdefault(c, {"qty": 0, "cost": 0.0})
+        pnl = None
+        if fill["kind"] == "expiry":
+            value = fill["cash_flow"]
+            pnl = value - lot["cost"]
+            self.cash += value
+            self.realized += pnl
+            lot["qty"], lot["cost"] = 0, 0.0
+            self.expired = True
+        elif fill["side"] == "buy":
+            premium = fill["price"] * MULTIPLIER * qty
+            self.cash -= premium + fee
+            lot["qty"] += qty
+            lot["cost"] += premium + fee          # entry fee carried in basis
+        else:
+            proceeds = fill["price"] * MULTIPLIER * qty
+            basis = lot["cost"] * qty / lot["qty"]
+            pnl = proceeds - fee - basis
+            lot["cost"] -= basis
+            lot["qty"] -= qty
+            self.cash += proceeds - fee
+            self.realized += pnl
+        self.fees += fee
+        if lot["qty"] > 0:
+            self.open_trades[c] = fill["trade_id"]
+        else:
+            self.open_trades.pop(c, None)
+        return pnl
+
+    def _rebuild_ledger(self):
+        fills = self.fills
+        clock, furthest, last_move = self.clock, self.furthest, self.last_move
+        self._fresh_ledger()
+        self.clock, self.furthest, self.last_move = clock, furthest, last_move
+        for f in fills:
+            if not f.get("voided"):
+                self._apply(f)
+            self.fills.append(f)
+
+    def restore(self, *, clock: int, furthest: int, attempts: list[dict], fills: list[dict],
+                revealed: bool) -> None:
+        """Rebuild a session from storage after a restart: clock, earlier attempts and the
+        current attempt's ledger (voided fills kept as evidence, not applied)."""
+        self.attempts = attempts
+        self.fills = fills
+        self.clock, self.furthest = clock, furthest
+        self._rebuild_ledger()
+        self.revealed = revealed
+
+    def check_expected(self, expected_clock) -> None:
+        if expected_clock is None:
+            return
+        if int(expected_clock) != self.clock:
+            raise StaleError(f"stale request: made at {hhmmss(int(expected_clock))}, "
+                             f"the replay clock is now {hhmmss(self.clock)}")
+
+    def undoable_fill(self) -> dict | None:
+        """Only the latest live fill, and only while the clock is still at its decision time
+        (no undo with hindsight)."""
+        for f in reversed(self.fills):
+            if f.get("voided"):
+                continue
+            if f["kind"] == "fill" and f["time_of_day"] == hhmmss(self.clock) and not self.revealed:
+                return f
+            return None
+        return None
 
     # -- actions ------------------------------------------------------------
 
@@ -305,8 +393,14 @@ class ReplaySession:
             following = self._next_bar_after(cursor)
             if following is not None:
                 target = min(target, following - 1)   # never reveal a bar beyond the allowance
+        before = (self.clock, self.furthest)
         self.clock = max(self.clock + 1, target)
         self.furthest = max(self.furthest, self.clock)
+        try:
+            self._save_state()
+        except Exception as e:
+            self.clock, self.furthest = before
+            raise NotSavedError(f"clock move not saved: {e}") from e
         self._log("advance", {"seconds": seconds, "max_bars": max_bars})
         if self.clock >= self.close_s:
             self._expire()
@@ -321,10 +415,16 @@ class ReplaySession:
         nxt = self._next_bar_after(self.clock) or self.close_s
         return self.advance(nxt - self.clock, max_bars=None)
 
-    def reset(self) -> dict:
+    def _save_state(self):
+        if self.on_state is not None:
+            self.on_state(self, "move", None)
+
+    def reset(self, request: dict | None = None) -> dict:
         """Back to the landing time with a fresh ledger; the attempt is recorded."""
         if self.revealed:
             raise ReplayError("session already revealed")
+        if self.on_state is not None:
+            self.on_state(self, "reset", request)      # persisted first; failure leaves state as is
         self.attempts.append({"attempt": len(self.attempts) + 1, "realized_net": round(self.realized, 2),
                               "fees_paid": round(self.fees, 2),
                               "fill_count": len([f for f in self.fills if f["kind"] == "fill"]),
@@ -335,7 +435,8 @@ class ReplaySession:
         self._fresh_ledger()
         return self.view()
 
-    def order(self, side: str, contract: str, qty: int) -> dict:
+    def order(self, side: str, contract: str, qty: int, request: dict | None = None,
+              fault: str | None = None) -> dict:
         self._require_open()
         if side not in ("buy", "sell"):
             raise ReplayError("side must be buy or sell")
@@ -385,34 +486,47 @@ class ReplaySession:
                 "net_pnl": None if pnl is None else round(pnl, 2),
                 "trade_id": trade_id, "source_key": snap["key"]}
         # Persist first: if storage does not acknowledge, the order fails and nothing changes.
-        saved = self._persist(fill, decision_state, new_trade)
-        self.cash += cash_flow
-        self.lots[contract] = new_lot
-        if pnl is not None:
-            self.realized += pnl
-        self.fees += fee
-        if new_lot["qty"] > 0:
-            self.open_trades[contract] = trade_id
-        else:
-            self.open_trades.pop(contract, None)
+        saved = self._persist(fill, decision_state, new_trade, request=request, fault=fault)
+        applied = self._apply(fill)
+        assert (applied is None) == (pnl is None) and (pnl is None or abs(applied - pnl) < 1e-6)
         fill["saved"] = saved
         self.fills.append(fill)
         self._log("fill", fill)
         return self.view()
 
-    def _persist(self, fill: dict, decision_state: dict, new_trade: bool) -> dict | None:
+    def _persist(self, fill: dict, decision_state: dict, new_trade: bool, **extra) -> dict | None:
         if self.on_fill is None:
             return None
         try:
-            return self.on_fill(self, fill, decision_state, new_trade)
+            return self.on_fill(self, fill, decision_state, new_trade, **extra)
         except Exception as e:  # storage did not acknowledge
-            raise ReplayError(f"not saved, order not placed: {e}") from e
+            raise NotSavedError(f"not saved, order not placed: {e}") from e
+
+    def undo(self, fill_id: str, request: dict | None = None) -> dict:
+        """Void the latest fill (still at its decision time). The fill stays on record; a void
+        record references it and the ledger is rebuilt without it."""
+        self._require_open()
+        f = self.undoable_fill()
+        if f is None or (f.get("saved") or {}).get("fill_id") != fill_id:
+            raise ReplayError("only the latest fill can be undone, and only before the clock moves")
+        ack = None
+        if self.on_void is not None:
+            try:
+                ack = self.on_void(self, f, request)
+            except Exception as e:
+                raise NotSavedError(f"undo not saved: {e}") from e
+        f["voided"] = True
+        f["void"] = ack
+        self._rebuild_ledger()
+        self._log("undo", {"fill_id": fill_id})
+        return self.view()
 
     def _expire(self):
         if self.expired:
             return
         self.expired = True
         spot = self._last_consistent_spot(self.close_s)
+        pending = []
         for c, lot in self.lots.items():
             if lot["qty"] <= 0:
                 continue
@@ -433,21 +547,32 @@ class ReplaySession:
             except ReplayError as e:   # settlement still happens; the record says it was not saved
                 exp["saved"] = None
                 exp["save_error"] = str(e)
-            self.cash += value
-            self.realized += pnl
+            pending.append(exp)
+        for exp in pending:
+            self._apply(exp)
             self.fills.append(exp)
-            self.open_trades.pop(c, None)
-            lot["qty"], lot["cost"] = 0, 0.0
         self._log("expire", {})
 
     # -- reveal + reconciliation --------------------------------------------
 
     def reconciliation(self, fills: list[dict] | None = None) -> dict:
         """Trade-by-trade money trail, each fill checked against its raw archived row."""
+        own = fills is None
         fills = self.fills if fills is None else fills
         lines, gross, fees = [], 0.0, 0.0
         for f in fills:
-            raw = self.raw_lookup(f["source_key"], f["contract"]) if (self.raw_lookup and f.get("source_key")) else None
+            if f.get("voided"):
+                lines.append({"n": f["n"], "kind": "void", "side": f["side"], "contract": f["contract"],
+                              "qty": f["qty"], "decision_time": f["time_of_day"] + " ET",
+                              "fill_id": (f.get("saved") or {}).get("fill_id"),
+                              "note": "undone: kept on record, excluded from the ledger"})
+                continue
+            raw, raw_error = None, None
+            if self.raw_lookup and f.get("source_key"):
+                try:
+                    raw = self.raw_lookup(f["source_key"], f["contract"])
+                except Exception as e:      # archive unreachable: say so, never guess
+                    raw_error = f"raw row unavailable: {type(e).__name__}"
             expect = None
             if raw is not None and f["kind"] == "fill":
                 expect = raw["Ask"] if f["side"] == "buy" else raw["Bid"]
@@ -459,14 +584,15 @@ class ReplaySession:
                 "decision_time": f["time_of_day"] + " ET", "quote_time": f.get("quote_time"),
                 "quote_age_s": f.get("quote_age_s"), "source_key": f.get("source_key"),
                 "recorded_bid": f.get("bid"), "recorded_ask": f.get("ask"), "fill_price": f["price"],
-                "raw_row": raw, "raw_matches": None if expect is None else abs(expect - f["price"]) < 1e-9,
+                "raw_row": raw, "raw_error": raw_error,
+                "raw_matches": None if expect is None else abs(expect - f["price"]) < 1e-9,
                 "premium_cash": round(premium, 2), "fee": f["fee"], "cash_flow": f.get("cash_flow"),
                 "note": f.get("note"),
             })
         net = gross - fees
         return {"lines": lines, "gross_premium": round(gross, 2), "fees": round(fees, 2),
-                "net": round(net, 2), "ledger_realized_net": round(self.realized, 2) if fills is self.fills else None,
-                "reconciles": abs(net - self.realized) < 0.005 if fills is self.fills else None,
+                "net": round(net, 2), "ledger_realized_net": round(self.realized, 2) if own else None,
+                "reconciles": abs(net - self.realized) < 0.005 if own else None,
                 "formula": "net = sum(sell bid x 100 x qty) - sum(buy ask x 100 x qty) - fee x contracts x sides"}
 
     def reveal(self) -> dict:

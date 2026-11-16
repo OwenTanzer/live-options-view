@@ -354,9 +354,10 @@ class TrainerStorage(unittest.TestCase):
         pack = pack or minute_pack(drift=0.05)
         holder = {}
 
-        def on_fill(sess, fill, state, new_trade):
+        def on_fill(sess, fill, state, new_trade, request=None, fault=None):
             return store.record_fill(session_id=sess.id, trade_id=fill["trade_id"], new_trade=new_trade,
-                                     attempt=len(sess.attempts) + 1, fill=fill, decision_state=state)
+                                     attempt=len(sess.attempts) + 1, fill=fill, decision_state=state,
+                                     request=request, fault=fault)
         s = RS(pack, start_s=OPEN + 3600, on_fill=on_fill,
                on_reveal=lambda sess: store.mark_revealed(sess.id), **kw)
         store.add_session(s.id, pack["day"], s.start_s, s.fee)
@@ -490,6 +491,257 @@ class TrainerStorage(unittest.TestCase):
             self.assertTrue(all(f["decision_state_verified"] for f in t["fills"]))
             self.assertAlmostEqual(t["net"], round(t["gross_premium"] - t["fees"], 2), places=2)
         httpd2.shutdown(); httpd2.server_close(); g2.store.close()
+
+
+class S2cRecovery(unittest.TestCase):
+    """S2c: pending/acked/failed writes, lost responses, duplicates, undo, stale retries, resume."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.db = self.tmp / "trainer.sqlite3"
+        self.servers = []
+
+    def tearDown(self):
+        for httpd, g in self.servers:
+            httpd.shutdown()
+            httpd.server_close()
+            g.store.close()
+
+    def boot(self, faults=True):
+        import threading
+        from http.server import ThreadingHTTPServer
+        import server as srv
+        from store import TrainerStore
+        arc = A.Archive(self.tmp / "cache")
+        g = srv.Games(arc, [DAY], 0.65, 1, force_start=OPEN + 3600, store=TrainerStore(self.db))
+        g._load = lambda day: minute_pack(drift=0.05)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.make_handler(g, allow_faults=faults))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.servers.append((httpd, g))
+        return g, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def stop(self, g):
+        for i, (h, gg) in enumerate(self.servers):
+            if gg is g:
+                h.shutdown(); h.server_close(); g.store.close()
+                self.servers.pop(i)
+                return
+
+    @staticmethod
+    def call(base, path, body=None, fault=None):
+        import urllib.error
+        import urllib.request
+        headers = {"Content-Type": "application/json"}
+        if fault:
+            headers["X-Replay-Fault"] = fault
+        req = urllib.request.Request(base + path, None if body is None else json.dumps(body).encode(), headers)
+        try:
+            return 200, json.load(urllib.request.urlopen(req, timeout=10))
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def start(self, base, g):
+        _, v = self.call(base, "/api/new", {})
+        g.sessions[v["session"]["id"]].now = FakeClock()
+        return v["session"]["id"], v
+
+    def store_counts(self, g):
+        db = g.store._db
+        return {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                for t in ("trade", "fill", "fill_void", "request", "note_revision")}
+
+    def order(self, base, sid, v, side, contract, rid, fault=None):
+        return self.call(base, "/api/order", {"s": sid, "side": side, "contract": contract, "qty": 1,
+                                              "request_id": rid, "expected_clock": v["session"]["clock_s"]},
+                         fault)
+
+    def test_acknowledged_write_logs_request_with_fill(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        code, r = self.order(base, sid, v, "buy", "C703", "req-ack-0001")
+        self.assertEqual(code, 200)
+        self.assertFalse(r["request"]["replayed"])
+        ack = r["request"]["ack"]
+        prior = g.store.get_request("req-ack-0001")
+        self.assertEqual(prior["ack"]["fill_id"], ack["fill_id"])
+        self.assertEqual(self.store_counts(g)["fill"], 1)
+
+    def test_failed_write_changes_nothing_and_retry_succeeds_once(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        code, r = self.order(base, sid, v, "buy", "C703", "req-fail-0001", fault="fail_write")
+        self.assertEqual(code, 503)
+        self.assertTrue(r["not_saved"])
+        self.assertEqual(self.store_counts(g), {"trade": 0, "fill": 0, "fill_void": 0, "request": 0,
+                                                "note_revision": 0})
+        self.assertEqual(g.sessions[sid].cash, 10_000.0)
+        self.assertEqual(g.sessions[sid].fills, [])
+        code, r = self.order(base, sid, v, "buy", "C703", "req-fail-0001")
+        self.assertEqual(code, 200)
+        self.assertEqual(self.store_counts(g)["fill"], 1)
+
+    def test_committed_write_with_lost_response_is_recovered_by_retry(self):
+        import http.client
+        import urllib.error
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        with self.assertRaises((http.client.RemoteDisconnected, urllib.error.URLError, ConnectionError)):
+            self.order(base, sid, v, "buy", "C703", "req-lost-0001", fault="drop_response")
+        self.assertEqual(self.store_counts(g)["fill"], 1)          # it did commit
+        code, r = self.order(base, sid, v, "buy", "C703", "req-lost-0001")   # client retries, same id
+        self.assertEqual(code, 200)
+        self.assertTrue(r["request"]["replayed"])
+        self.assertEqual(r["request"]["ack"]["fill_id"], g.store.get_request("req-lost-0001")["ack"]["fill_id"])
+        self.assertEqual(self.store_counts(g)["fill"], 1)          # exactly once
+        self.assertEqual(len(r["positions"]), 1)
+        self.assertEqual(r["positions"][0]["qty"], 1)
+
+    def test_duplicate_submissions_apply_once(self):
+        import threading
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        results = []
+        ts = [threading.Thread(target=lambda: results.append(self.order(base, sid, v, "buy", "C703", "req-dup-0001")))
+              for _ in range(5)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual({c for c, _ in results}, {200})
+        self.assertEqual(len({r["request"]["ack"]["fill_id"] for _, r in results}), 1)
+        self.assertEqual(sum(1 for _, r in results if not r["request"]["replayed"]), 1)
+        self.assertEqual(self.store_counts(g)["fill"], 1)
+        code, r = self.order(base, sid, v, "buy", "P704", "req-dup-0001")   # same id, different order
+        self.assertEqual(code, 409)
+        self.assertIn("different request", r["error"])
+
+    def test_undo_voids_but_keeps_the_fill_and_is_idempotent(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        _, r = self.order(base, sid, v, "buy", "C703", "req-undo-buy1")
+        fid = r["request"]["ack"]["fill_id"]
+        self.assertEqual(r["undoable_fill_id"], fid)
+        body = {"s": sid, "fill_id": fid, "request_id": "req-undo-0001", "expected_clock": r["session"]["clock_s"]}
+        code, u = self.call(base, "/api/undo", body)
+        self.assertEqual(code, 200)
+        self.assertEqual(u["account"]["cash"], 10_000.0)
+        self.assertEqual(u["positions"], [])
+        code, u2 = self.call(base, "/api/undo", body)                # retried undo: replayed, not doubled
+        self.assertTrue(u2["request"]["replayed"])
+        self.assertEqual(u2["request"]["ack"]["void_id"], u["request"]["ack"]["void_id"])
+        c = self.store_counts(g)
+        self.assertEqual((c["fill"], c["fill_void"]), (1, 1))
+        rec = g.store.trades(session_id=sid)[0]
+        self.assertEqual(rec["status"], "voided")
+        self.assertTrue(rec["fills"][0]["voided"])
+        self.assertTrue(rec["fills"][0]["decision_state_verified"])
+        import sqlite3
+        with self.assertRaises(sqlite3.DatabaseError):
+            g.store._db.execute("DELETE FROM fill_void")
+
+    def test_undo_refused_after_the_clock_moves(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        _, r = self.order(base, sid, v, "buy", "C703", "req-undo-buy2")
+        fid = r["request"]["ack"]["fill_id"]
+        _, a = self.call(base, "/api/step", {"s": sid, "expected_clock": r["session"]["clock_s"]})
+        self.assertIsNone(a["undoable_fill_id"])
+        code, u = self.call(base, "/api/undo", {"s": sid, "fill_id": fid, "request_id": "req-undo-0002",
+                                                "expected_clock": a["session"]["clock_s"]})
+        self.assertEqual(code, 409)
+        self.assertEqual(self.store_counts(g)["fill_void"], 0)
+
+    def test_stale_retries_are_refused_with_the_current_state(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        old_clock = v["session"]["clock_s"]
+        _, a = self.call(base, "/api/step", {"s": sid, "expected_clock": old_clock})
+        code, r = self.call(base, "/api/step", {"s": sid, "expected_clock": old_clock})   # stale step retry
+        self.assertEqual(code, 409)
+        self.assertTrue(r["stale"])
+        self.assertEqual(r["view"]["session"]["clock_s"], a["session"]["clock_s"])
+        code, r = self.order(base, sid, v, "buy", "C703", "req-stale-0001")  # order built on the old clock
+        self.assertEqual(code, 409)
+        self.assertTrue(r["stale"])
+        self.assertEqual(self.store_counts(g)["fill"], 0)
+
+    def test_stale_note_revision_is_refused_not_overwritten(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        _, r = self.order(base, sid, v, "buy", "C703", "req-note-buy1")
+        tid = r["request"]["ack"]["trade_id"]
+        c1, n1 = self.call(base, "/api/note", {"trade_id": tid, "text": "one", "base_rev": 0, "request_id": "req-note-0001"})
+        c2, n2 = self.call(base, "/api/note", {"trade_id": tid, "text": "two", "base_rev": 1, "request_id": "req-note-0002"})
+        c3, n3 = self.call(base, "/api/note", {"trade_id": tid, "text": "one", "base_rev": 0, "request_id": "req-note-0001"})
+        c4, n4 = self.call(base, "/api/note", {"trade_id": tid, "text": "stale edit", "base_rev": 1,
+                                               "request_id": "req-note-0003"})
+        self.assertEqual((c1, n1["rev"], c2, n2["rev"]), (200, 1, 200, 2))
+        self.assertEqual((c3, n3["rev"], n3["replayed"]), (200, 1, True))      # retried rev 1: no rev 3
+        self.assertEqual((c4, n4["conflict"], n4["current"]["rev"]), (409, True, 2))
+        revs = g.store.trades(trade_id=tid)[0]["note"]["revisions"]
+        self.assertEqual([x["text"] for x in revs], ["one", "two"])
+
+    def test_unrevealed_session_resumes_after_restart_and_reveals_safely(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        _, r = self.order(base, sid, v, "buy", "C703", "req-res-buy01")
+        _, a = self.call(base, "/api/advance", {"s": sid, "seconds": 600, "max_bars": None,
+                                                "expected_clock": r["session"]["clock_s"]})
+        _, b = self.order(base, sid, a, "buy", "P704", "req-res-buy02")
+        _, u = self.call(base, "/api/undo", {"s": sid, "fill_id": b["request"]["ack"]["fill_id"],
+                                             "request_id": "req-res-undo1", "expected_clock": b["session"]["clock_s"]})
+        before = {k: u[k] for k in ("positions", "account")}
+        before_clock = u["session"]["clock_s"]
+        self.stop(g)
+
+        g2, base2 = self.boot()                                  # fresh server, nothing in memory
+        self.assertEqual(g2.sessions, {})
+        _, lst = self.call(base2, "/api/sessions")
+        self.assertEqual([(x["session_id"], x["revealed"], x["day"]) for x in lst["sessions"]], [(sid, False, None)])
+        code, w = self.call(base2, "/api/resume", {"s": sid})
+        self.assertEqual(code, 200)
+        g2.sessions[sid].now = FakeClock()
+        self.assertEqual(w["session"]["clock_s"], before_clock)
+        self.assertEqual({k: w[k] for k in ("positions", "account")}, before)
+        self.assertEqual([f.get("voided", False) for f in w["fills"]], [False, True])
+        # save acknowledgments carry the real wall-clock save time; strip those, then no session date
+        blob = re.sub(r'"(saved_at|created_at)": "[^"]*"', '', json.dumps(w))
+        for pat in DATE_PATTERNS:
+            self.assertIsNone(re.search(pat, blob), pat)
+        self.assertNotIn("intraday/", blob)
+        # a retry of the pre-restart order is recognised, not re-applied
+        _, rr = self.order(base2, sid, v, "buy", "C703", "req-res-buy01")   # identical body
+        self.assertTrue(rr["request"]["replayed"])
+        _, sell = self.order(base2, sid, w, "sell", "C703", "req-res-sell1")
+        self.assertEqual(sell["positions"], [])
+        _, rv = self.call(base2, "/api/reveal", {"s": sid})
+        self.assertEqual(rv["reveal"]["date"], DAY)
+        self.assertTrue(rv["reveal"]["reconciliation"]["reconciles"])
+        recs = g2.store.trades(session_id=sid)
+        self.assertEqual([x["status"] for x in recs], ["closed", "voided"])
+        self.assertTrue(all(x["day"] == DAY for x in recs))
+        self.assertEqual(self.store_counts(g2)["fill"], 3)
+
+    def test_resume_restores_reset_attempts(self):
+        g, base = self.boot()
+        sid, v = self.start(base, g)
+        _, r = self.order(base, sid, v, "buy", "C703", "req-rst-buy01")
+        _, a = self.call(base, "/api/advance", {"s": sid, "seconds": 600, "max_bars": None,
+                                                "expected_clock": r["session"]["clock_s"]})
+        _, s1 = self.order(base, sid, a, "sell", "C703", "req-rst-sell1")
+        first_net = s1["account"]["realized_net"]
+        _, z = self.call(base, "/api/reset", {"s": sid, "request_id": "req-rst-0001",
+                                              "expected_clock": s1["session"]["clock_s"]})
+        _, z2 = self.call(base, "/api/reset", {"s": sid, "request_id": "req-rst-0001",
+                                               "expected_clock": s1["session"]["clock_s"]})
+        self.assertTrue(z2["request"]["replayed"])
+        self.assertEqual(z2["session"]["attempt"], 2)            # duplicate reset did not add attempt 3
+        self.stop(g)
+        g2, base2 = self.boot()
+        code, w = self.call(base2, "/api/resume", {"s": sid})
+        self.assertEqual(w["session"]["attempt"], 2)
+        self.assertEqual(w["session"]["clock_s"], OPEN + 3600)
+        self.assertEqual(w["attempts"][0]["realized_net"], first_net)
+        self.assertEqual(w["fills"], [])
 
 
 if __name__ == "__main__":
