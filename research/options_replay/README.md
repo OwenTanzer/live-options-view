@@ -195,6 +195,30 @@ hold-profit error and opening quiet-spot decay still miss. Two bounded correctio
 (post-close tail, then skew), with tolerances unchanged; both are recorded as misses.
 Simulation pricing is still `sim-v1`; the calibrated model is not wired in.
 
+## Combined pricing model and sim-v2 (S3c)
+
+`pricing.py` is the combined quote model. It uses one volatility surface per symbol:
+
+- a business-time clock plus a post-close term;
+- σ0 with a spot response and a time-of-day drift;
+- a smoothly saturated skew shared by calls and puts, so parity is exact;
+- symbol-specific spreads rounded to $0.01.
+
+Its parameters (`calibration/s3c_params.json`) are fitted on development days only by
+`calibration/evaluate_s3c.py --fit`. New Simulation sessions use generator **sim-v2**, which is
+this model. **sim-v1** stays regenerable, so existing seeds and records resume unchanged.
+
+The protocol is `calibration/S3C_PROTOCOL.md`, committed before fitting. Its held-out set is
+forward collector sessions from 2026-11-16; none exist yet, so every S3c number is
+development (in-sample). See `calibration/S3C_RESULTS.md`.
+
+```sh
+python research/options_replay/calibration/dataset.py --grid s3c
+python research/options_replay/calibration/evaluate_s3c.py --model combined --set development --label "..."
+python research/options_replay/calibration/evaluate_s3c.py --set held_out --label "..."   # refuses until 10 sessions/symbol
+python research/options_replay/simulate.py --version sim-v2 --seed 20261116
+```
+
 ## Tests
 
 ```sh
