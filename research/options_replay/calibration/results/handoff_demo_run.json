@@ -1,0 +1,224 @@
+{
+ "replay": {
+  "session": "tdQ-__Ar-2mp",
+  "buy": {
+   "trade_id": "tr_6ce8e2acc194",
+   "fill_id": "fl_4f7f1345247d",
+   "seq": 1,
+   "saved_at": "2026-11-16T05:02:35.201+00:00",
+   "decision_state_sha256": "2e05f73cb3b7cf9e6976060543bb5e9d96d3f4dc50bd2e171fd679d2b2f8e99d"
+  },
+  "sell": {
+   "trade_id": "tr_6ce8e2acc194",
+   "fill_id": "fl_d3c4da8892ff",
+   "seq": 2,
+   "saved_at": "2026-11-16T05:02:51.249+00:00",
+   "decision_state_sha256": "4bba3b4b62c10b4f29dc719cf037f6c00577b8997281f16c954afc5d87e1a3f0"
+  },
+  "buy_fill": {
+   "n": 1,
+   "kind": "fill",
+   "side": "buy",
+   "contract": "C684",
+   "label": "QQQ 684 call, 0DTE",
+   "qty": 1,
+   "price": 1.96,
+   "fee": 0.65,
+   "time_of_day": "14:44:00",
+   "quote_time": "14:43:07",
+   "quote_age_s": 53,
+   "bid": 1.94,
+   "ask": 1.96,
+   "cash_flow": -196.65,
+   "net_pnl": null,
+   "trade_id": "tr_6ce8e2acc194",
+   "saved": {
+    "trade_id": "tr_6ce8e2acc194",
+    "fill_id": "fl_4f7f1345247d",
+    "seq": 1,
+    "saved_at": "2026-11-16T05:02:35.201+00:00",
+    "decision_state_sha256": "2e05f73cb3b7cf9e6976060543bb5e9d96d3f4dc50bd2e171fd679d2b2f8e99d"
+   }
+  },
+  "sell_fill": {
+   "n": 2,
+   "kind": "fill",
+   "side": "sell",
+   "contract": "C684",
+   "label": "QQQ 684 call, 0DTE",
+   "qty": 1,
+   "price": 1.74,
+   "fee": 0.65,
+   "time_of_day": "15:14:00",
+   "quote_time": "15:12:58",
+   "quote_age_s": 62,
+   "bid": 1.74,
+   "ask": 1.76,
+   "cash_flow": 173.35,
+   "net_pnl": -23.3,
+   "trade_id": "tr_6ce8e2acc194",
+   "saved": {
+    "trade_id": "tr_6ce8e2acc194",
+    "fill_id": "fl_d3c4da8892ff",
+    "seq": 2,
+    "saved_at": "2026-11-16T05:02:51.249+00:00",
+    "decision_state_sha256": "4bba3b4b62c10b4f29dc719cf037f6c00577b8997281f16c954afc5d87e1a3f0"
+   }
+  },
+  "net": -23.3,
+  "resumed_net": -23.3,
+  "revealed": "2026-11-02",
+  "reconciliation": {
+   "gross": -22.0,
+   "fees": 1.3,
+   "net": -23.3,
+   "reconciles": true,
+   "fills_match_source": [
+    true,
+    true
+   ]
+  }
+ },
+ "simulation": {
+  "session": "iqHtHfSxEbVL",
+  "seed": 20261116,
+  "generator": "sim-v2",
+  "buy": {
+   "trade_id": "tr_55cdca20a5d4",
+   "fill_id": "fl_2cafdece4612",
+   "seq": 1,
+   "saved_at": "2026-11-16T05:02:52.071+00:00",
+   "decision_state_sha256": "1404e957ac4aa2cd1a1f0124f8975c31eb94995728f392811d6b35b336afaaa6"
+  },
+  "sell": {
+   "trade_id": "tr_55cdca20a5d4",
+   "fill_id": "fl_d4c0a7055560",
+   "seq": 2,
+   "saved_at": "2026-11-16T05:03:00.184+00:00",
+   "decision_state_sha256": "855f11d517d7543804cbf7c7f0a3a0df60521809665cca6191fa609f17ff6579"
+  },
+  "buy_fill": {
+   "n": 1,
+   "kind": "fill",
+   "side": "buy",
+   "contract": "C433",
+   "label": "QQQ 433 call, 0DTE",
+   "qty": 1,
+   "price": 2.52,
+   "fee": 0.65,
+   "time_of_day": "09:46:00",
+   "quote_time": "09:46:00",
+   "quote_age_s": 0,
+   "bid": 2.49,
+   "ask": 2.52,
+   "cash_flow": -252.65,
+   "net_pnl": null,
+   "trade_id": "tr_55cdca20a5d4",
+   "saved": {
+    "trade_id": "tr_55cdca20a5d4",
+    "fill_id": "fl_2cafdece4612",
+    "seq": 1,
+    "saved_at": "2026-11-16T05:02:52.071+00:00",
+    "decision_state_sha256": "1404e957ac4aa2cd1a1f0124f8975c31eb94995728f392811d6b35b336afaaa6"
+   }
+  },
+  "sell_fill": {
+   "n": 2,
+   "kind": "fill",
+   "side": "sell",
+   "contract": "C433",
+   "label": "QQQ 433 call, 0DTE",
+   "qty": 1,
+   "price": 2.43,
+   "fee": 0.65,
+   "time_of_day": "10:00:00",
+   "quote_time": "10:00:00",
+   "quote_age_s": 0,
+   "bid": 2.43,
+   "ask": 2.46,
+   "cash_flow": 242.35,
+   "net_pnl": -10.3,
+   "trade_id": "tr_55cdca20a5d4",
+   "saved": {
+    "trade_id": "tr_55cdca20a5d4",
+    "fill_id": "fl_d4c0a7055560",
+    "seq": 2,
+    "saved_at": "2026-11-16T05:03:00.184+00:00",
+    "decision_state_sha256": "855f11d517d7543804cbf7c7f0a3a0df60521809665cca6191fa609f17ff6579"
+   }
+  },
+  "net": -10.3,
+  "resumed_net": -10.3,
+  "revealed": "simulation seed 20261116",
+  "reconciliation": {
+   "gross": -9.0,
+   "fees": 1.3,
+   "net": -10.3,
+   "reconciles": true,
+   "fills_match_source": [
+    true,
+    true
+   ]
+  }
+ },
+ "recovered_from_store": {
+  "replay": [
+   {
+    "trade_id": "tr_6ce8e2acc194",
+    "contract": "C684",
+    "status": "closed",
+    "net": -23.3,
+    "fills": [
+     [
+      "fl_4f7f1345247d",
+      "buy",
+      1.96,
+      "14:44:00",
+      true
+     ],
+     [
+      "fl_d3c4da8892ff",
+      "sell",
+      1.74,
+      "15:14:00",
+      true
+     ]
+    ]
+   }
+  ],
+  "simulation": [
+   {
+    "trade_id": "tr_55cdca20a5d4",
+    "contract": "C433",
+    "status": "closed",
+    "net": -10.3,
+    "fills": [
+     [
+      "fl_2cafdece4612",
+      "buy",
+      2.52,
+      "09:46:00",
+      true
+     ],
+     [
+      "fl_d4c0a7055560",
+      "sell",
+      2.43,
+      "10:00:00",
+      true
+     ]
+    ]
+   }
+  ]
+ },
+ "simulation_regenerated": {
+  "sim/sim-v2/20261116/0946": [
+   2.49,
+   2.52
+  ],
+  "sim/sim-v2/20261116/1000": [
+   2.43,
+   2.46
+  ]
+ }
+}
