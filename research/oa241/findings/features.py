@@ -43,13 +43,22 @@ def rec_ms(s):
 
 
 def snapshots(root, day, symbols):
+    """Chain snapshots for the explicit, ordered contract keys ``symbols``.
+
+    Every per-contract array is built by indexing a symbol-keyed row map with that
+    ordered list, so column i always belongs to symbols[i]. Returns the snapshot
+    tuples and a digest over (file name, sha256) of every snapshot file read.
+    """
+    assert isinstance(symbols, (list, tuple)), "symbols must be an ordered sequence, never a set"
+    keys = set(symbols)
     compact = day.replace("-", "")
-    out = []
+    out, digests = [], []
     for p in sorted((root / "intraday" / compact).glob("snapshot_*.csv")):
+        digests.append(f"{p.name}:{hashlib.sha256(p.read_bytes()).hexdigest()}")
         h = p.stem.removeprefix("snapshot_")
         t = datetime(int(day[:4]), int(day[5:7]), int(day[8:10]), int(h[:2]), int(h[2:4]), int(h[4:6]),
                      int(h[6:12].ljust(6, "0")), tzinfo=ET)
-        rows = {r["OptionSymbol"]: r for r in csv.DictReader(p.open(newline="")) if r.get("OptionSymbol") in symbols}
+        rows = {r["OptionSymbol"]: r for r in csv.DictReader(p.open(newline="")) if r.get("OptionSymbol") in keys}
 
         def num(r, k):
             try:
@@ -63,7 +72,7 @@ def snapshots(root, day, symbols):
         spots = {num(r, "UnderlyingPrice") for r in rows.values()}
         spots = {x for x in spots if not math.isnan(x)}
         out.append((ms(t), g, d, oi, spots.pop() if len(spots) == 1 else math.nan))
-    return out
+    return out, hashlib.sha256(chr(10).join(digests).encode()).hexdigest()
 
 
 def previous_close(root, day):
@@ -139,7 +148,7 @@ def build(archive, snaproot, day, owner, recent):
                 row = feed.rows[-1]
                 state[idx[row["symbol"]], ("buy", "sell", "unknown").index(row["side"])] += row["size"]
     advance(bounds[-1] + 1)
-    snaps = snapshots(snaproot, day, set(symbols))
+    snaps, snapshot_digest = snapshots(snaproot, day, symbols)
     st = np.array([s[0] for s in snaps])
     gamma = np.full((N, 16), np.nan)
     delta = np.full((N, 16), np.nan)
@@ -160,6 +169,7 @@ def build(archive, snaproot, day, owner, recent):
         symbols=symbols, strikes=[meta[s]["strike"] for s in symbols], types=[meta[s]["option_type"][0].upper() for s in symbols],
         bounds=bounds, cum=cum, qmid=qmid, qqq_dv=qqq_dv, gamma=gamma, delta=delta, oi=oi, spot=spot, snap_age=age,
         open_oi=open_oi, prev_close=pc, prev_close_source=f"{pc_day}/{pc_file}", snapshots=len(snaps),
+        snapshot_digest=snapshot_digest,
         accepted_contracts=dict(buy=int(totals[0]), sell=int(totals[1]), unknown=int(totals[2])))
 
 
@@ -221,7 +231,9 @@ if __name__ == "__main__":
             for row in zip(*agg.values()):
                 w.writerow([("" if isinstance(v, float) and math.isnan(v) else v) for v in row])
         manifest["sessions"][day] = {k: f[k] for k in ("owner", "manifest_sha256", "segments_verified", "symbols", "strikes",
-                                                        "prev_close", "prev_close_source", "snapshots", "accepted_contracts")}
-        manifest["sessions"][day]["csv_sha256"] = hashlib.sha256((outdir / f"{day}.csv").read_bytes()).hexdigest()
+                                                        "prev_close", "prev_close_source", "snapshots", "snapshot_digest",
+                                                        "accepted_contracts")}
+        for ext in ("csv", "npz"):
+            manifest["sessions"][day][f"{ext}_sha256"] = hashlib.sha256((outdir / f"{day}.{ext}").read_bytes()).hexdigest()
         print(day, f["accepted_contracts"], f["snapshots"], f["prev_close_source"], flush=True)
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=1, default=float) + "\n")

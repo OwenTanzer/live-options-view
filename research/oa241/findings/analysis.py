@@ -25,6 +25,9 @@ def load(fdir):
     man = json.loads((fdir / "manifest.json").read_text())
     days = {}
     for day in sorted(man["sessions"]):
+        for ext in ("csv", "npz"):
+            got = __import__("hashlib").sha256((fdir / f"{day}.{ext}").read_bytes()).hexdigest()
+            assert got == man["sessions"][day][f"{ext}_sha256"], f"{day}.{ext} does not match the feature manifest"
         z = np.load(fdir / f"{day}.npz")
         cols = {}
         with (fdir / f"{day}.csv").open() as fh:
@@ -88,7 +91,9 @@ def cluster_boot(rows, stat):
 
 # ---------------- G5a ----------------
 def g5a_rows(days):
-    rows, excluded = [], {"missing_return": 0, "zero_rv": 0}
+    rows = []
+    excluded = {"missing_forward_or_lagged_return": 0, "zero_rv": 0, "prior_volume_window_before_open": 0,
+                "zero_dollar_volume": 0, "missing_exposure_feature": 0}
     for day, d in days.items():
         c = d["c"]
         S, dv = c["qqq_mid"], d["z"]["qqq_dv"]
@@ -96,17 +101,25 @@ def g5a_rows(days):
             t = minute_of(hh)
             y_rv, lag_rv = rv(S, t, t + 30), rv(S, t - 30, t)
             if not (np.isfinite(y_rv) and np.isfinite(lag_rv)):
-                excluded["missing_return"] += 1
+                excluded["missing_forward_or_lagged_return"] += 1
                 continue
             if y_rv == 0 or lag_rv == 0:
                 excluded["zero_rv"] += 1
                 continue
+            # dv[b] holds dollar volume received in minute (b-1, b]; minute 0 is the open.
+            # Window (t-30, t] = buckets t-29..t; prior window (t-60, t-30] = buckets t-59..t-30.
+            if t - 59 < 1:
+                excluded["prior_volume_window_before_open"] += 1
+                continue
             v1, v0 = dv[t - 29:t + 1].sum(), dv[t - 59:t - 29].sum()
+            if v0 <= 0 or v1 <= 0:
+                excluded["zero_dollar_volume"] += 1
+                continue
             feats = dict(G=c["G_within_p100_central"][t] / 1e9, Goi=c["G_oi_unsigned"][t] / 1e9,
                          Glow=c["G_within_p100_low"][t] / 1e9, Ghigh=c["G_within_p100_high"][t] / 1e9,
                          Tlow=c["total_low_p100"][t] / 1e9, Thigh=c["total_high_p100"][t] / 1e9)
-            if not all(np.isfinite(list(feats.values()))) or v0 <= 0 or v1 <= 0:
-                excluded["missing_return"] += 1
+            if not all(np.isfinite(list(feats.values()))):
+                excluded["missing_exposure_feature"] += 1
                 continue
             tod = t / 390
             rows.append(dict(day=day, t=hh, y=math.log(y_rv), lrv=math.log(lag_rv), lret=logret(S, t - 30, t),
@@ -125,16 +138,46 @@ def coef(rows, keys, name):
     return float(ols(X, y)[keys.index(name)])
 
 
-def loso_mse(rows, keys):
-    days_list = sorted({r["day"] for r in rows})
-    err = []
-    for d in days_list:
+def fe_predict(train, test, keys):
+    """Frozen specification: fit with session intercepts on the training sessions, then
+    predict unseen sessions with the pooled intercept (mean of the fitted session intercepts)."""
+    days_list = sorted({r["day"] for r in train})
+    beta = ols(design(train, keys, days_list), np.array([r["y"] for r in train]))
+    slopes, intercept = beta[:len(keys)], float(np.mean(beta[len(keys):]))
+    return np.array([[r[k] for k in keys] for r in test]) @ slopes + intercept
+
+
+def pooled_predict(train, test, keys):
+    """Superseded 9a282b4 behaviour, kept only to report the effect of the deviation."""
+    beta = ols(design(train, keys, None, day_fe=False), np.array([r["y"] for r in train]))
+    return design(test, keys, None, day_fe=False) @ beta
+
+
+def loso_errors(rows, keys, predict=fe_predict):
+    """Squared LOSO errors per held-out session: {day: [errors]}."""
+    out = {}
+    for d in sorted({r["day"] for r in rows}):
         tr = [r for r in rows if r["day"] != d]
         te = [r for r in rows if r["day"] == d]
-        beta = ols(design(tr, keys, None, day_fe=False), np.array([r["y"] for r in tr]))
-        pred = design(te, keys, None, day_fe=False) @ beta
-        err += list((np.array([r["y"] for r in te]) - pred) ** 2)
-    return float(np.mean(err))
+        out[d] = list((np.array([r["y"] for r in te]) - predict(tr, te, keys)) ** 2)
+    return out
+
+
+def loso_mse(rows, keys, predict=fe_predict):
+    return float(np.mean([e for v in loso_errors(rows, keys, predict).values() for e in v]))
+
+
+def loso_reduction_ci(rows, a, b):
+    """Session-bootstrap interval for 1 - MSE(b)/MSE(a) from paired per-session LOSO errors."""
+    ea, eb = loso_errors(rows, MODELS[a]), loso_errors(rows, MODELS[b])
+    days = sorted(ea)
+    vals = []
+    for _ in range(BOOT):
+        pick = RNG.choice(days, len(days), replace=True)
+        sa = sum(sum(ea[d]) for d in pick)
+        sb = sum(sum(eb[d]) for d in pick)
+        vals.append(1 - sb / sa)
+    return [float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))]
 
 
 def g5a(days):
@@ -151,6 +194,12 @@ def g5a(days):
         out["loso_mse_reduction_M3_vs_M2"] = 1 - mse["M3"] / mse["M2"]
         out["loso_mse_reduction_M2_vs_M1"] = 1 - mse["M2"] / mse["M1"]
         out["loso_mse_reduction_M1_vs_M0"] = 1 - mse["M1"] / mse["M0"]
+        out["loso_mse_reduction_M3_vs_M2_ci95"] = loso_reduction_ci(rs, "M2", "M3")
+        out["loso_mse_reduction_M2_vs_M1_ci95"] = loso_reduction_ci(rs, "M1", "M2")
+        out["loso_mse_reduction_M1_vs_M0_ci95"] = loso_reduction_ci(rs, "M0", "M1")
+        pooled = {m: loso_mse(rs, k, pooled_predict) for m, k in MODELS.items()}
+        out["superseded_pooled_fit_loso_mse"] = pooled
+        out["superseded_pooled_fit_reduction_M3_vs_M2"] = 1 - pooled["M3"] / pooled["M2"]
         out["coef_Goi_M3"] = coef(rs, MODELS["M3"], "Goi")
         out["coef_Goi_M3_ci95"] = cluster_boot(rs, lambda s: coef(s, MODELS["M3"], "Goi"))
         per_day = []
@@ -164,14 +213,16 @@ def g5a(days):
         out["G_iqr_bn"] = [float(np.percentile([r["G"] for r in rs], q)) for q in (25, 75)]
         return out
     res = dict(excluded=excluded, all=summary(rows), without_discovery=summary([r for r in rows if r["day"] not in DISCOVERY]))
-    # holdout: fit on <= Oct 30, evaluate Nov 2-16 (pooled intercept)
+    # holdout (already viewed in 9a282b4, so exploratory): session-intercept fit on <= Oct 30,
+    # Nov 2-16 predicted with the pooled intercept
     tr = [r for r in rows if r["day"] < HOLDOUT_FROM]
     te = [r for r in rows if r["day"] >= HOLDOUT_FROM]
-    hold = {}
-    for m in ("M2", "M3"):
-        beta = ols(design(tr, MODELS[m], None, day_fe=False), np.array([r["y"] for r in tr]))
-        hold[m] = float(np.mean((np.array([r["y"] for r in te]) - design(te, MODELS[m], None, day_fe=False) @ beta) ** 2))
-    res["holdout"] = dict(n=len(te), sessions=len({r["day"] for r in te}), mse=hold, reduction_M3_vs_M2=1 - hold["M3"] / hold["M2"])
+    y = np.array([r["y"] for r in te])
+    hold = {m: float(np.mean((y - fe_predict(tr, te, MODELS[m])) ** 2)) for m in ("M2", "M3")}
+    old = {m: float(np.mean((y - pooled_predict(tr, te, MODELS[m])) ** 2)) for m in ("M2", "M3")}
+    res["holdout"] = dict(n=len(te), sessions=len({r["day"] for r in te}), mse=hold, reduction_M3_vs_M2=1 - hold["M3"] / hold["M2"],
+                          status="exploratory: viewed in superseded 9a282b4",
+                          superseded_pooled_fit=dict(mse=old, reduction_M3_vs_M2=1 - old["M3"] / old["M2"]))
     sens = {}
     for alt in ("Glow", "Ghigh", "Tlow", "Thigh"):
         keys = BASE + ["act", "Goi", alt]
@@ -393,7 +444,7 @@ def f1(y, a):
 if __name__ == "__main__":
     fdir = Path(sys.argv[1])
     man, days = load(fdir)
-    res = dict(protocol_commit="0e1d8cc", feature_manifest_sha256=__import__("hashlib").sha256((fdir / "manifest.json").read_bytes()).hexdigest(),
+    res = dict(protocol_commit="0e1d8cc", repairs="see findings/CHANGES.md", feature_manifest_sha256=__import__("hashlib").sha256((fdir / "manifest.json").read_bytes()).hexdigest(),
                sessions=sorted(days), excluded_sessions=man["excluded"], discovery=sorted(DISCOVERY), holdout_from=HOLDOUT_FROM,
                G5a=g5a(days),
                G5b=dict(primary=g5b(days, ["10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30"]),

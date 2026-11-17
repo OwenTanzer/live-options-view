@@ -1,3 +1,5 @@
+> **SUPERSEDED (9a282b4).** These numbers are not accepted. Greeks and OI were misaligned with flow columns (set iteration), the 10:00 volume window was mis-accounted and the LOSO/holdout fits deviated from the frozen session-intercept specification. See CHANGES.md and FINDINGS.md.
+
 # Gamma Exposure and Order Flow: findings
 
 Reproducible account of whether estimated exposure adds information about subsequent volatility, continuation or reversal, and strike movement, and of whether opening open interest plus flow gives advance downside evidence. The definitions were frozen before any outcome was computed:
