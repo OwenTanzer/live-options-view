@@ -7,7 +7,7 @@
 # Account ID matches wrangler.toml (32 hex). The live snapshot transcribed
 # it as 31 chars; the repo configs agree on this value.
 name = "live-options-api"
-main = "backend/index.js"
+main = "backend/worker-entry.js"
 compatibility_date = "2026-06-23"
 account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 

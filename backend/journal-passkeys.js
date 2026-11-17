@@ -1,5 +1,3 @@
-import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions,
-  verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { jsonResponse, parseCookies, readJsonBody } from './common.js';
 
 const ROOT = 'options.moopertonic.net';
@@ -53,6 +51,8 @@ export async function handleJournalPasskey(request, env) {
   const now = Math.floor(Date.now()/1000);
   const state = action === 'options' ? now+'.'+hex(bytes(32)) : parseCookies(request)[CEREMONY];
   if (!/^\d{10}\.[0-9a-f]{64}$/.test(state) || now-Number(state.slice(0,10)) > 300 || Number(state.slice(0,10)) > now) return denied();
+  const { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions,
+    verifyAuthenticationResponse } = await import('@simplewebauthn/server');
   const material = await challenge(db,state,enroll?'create':'get',inviteHash);
   if (action === 'options') {
     const options = enroll
