@@ -201,7 +201,7 @@ class Runner:
         roots = {REFERENCE_ROOTS[a.strategy_id] for a in accounts if a.strategy_id in REFERENCE_ROOTS}
         if roots and base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
             raise ValueError("Reference skew accounts require the Options View paper API")
-        self.reference_readers = {root: SnapshotReader(urljoin(snapshot_url, f"{root.lower()}/latest.json"))
+        self.reference_readers = {root: SnapshotReader(urljoin(snapshot_url, f"{root.lower()}/latest.json"), expected_root=root)
                                   for root in roots}
         self.rate_limiter = RateLimiter()
         # Quotes share the account RateLimiter -- the binding limit is
@@ -442,7 +442,7 @@ class Runner:
                 if account.alias in self.retired:
                     skipped += 1
                     continue
-                root = REFERENCE_ROOTS.get(account.strategy_id)
+                root = REFERENCE_ROOTS.get(getattr(account, "strategy_id", None))
                 self._run_account(account, reference_snapshots.get(root) if root else snapshot, phase)
                 processed += 1
         except BaseException as exc:
