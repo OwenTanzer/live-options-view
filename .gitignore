@@ -5,3 +5,5 @@ experiments/news_pin_bot/db/*.sqlite3
 replay-cache/
 replay-130-full/
 replay-130-full-combined/
+
+/backend/node_modules/

@@ -94,6 +94,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install locked API dependencies
+        run: npm ci --prefix backend --ignore-scripts
       - name: Install pinned deployment tooling
         # Pinned wrangler (review point: confirm the pin matches the
         # known-good version). The deploy script invokes `wrangler`

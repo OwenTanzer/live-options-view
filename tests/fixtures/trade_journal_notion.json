@@ -1,0 +1,2636 @@
+{
+ "_note": "SYNTHETIC test fixture for the OA-238 trade-journal reader. Every contract, price, time, order number, page id, broker id and account digit is invented; only the journal's body formats (F1-F4, partial fills, broker fee reconciliation) are reproduced, in Notion API (2025-09-03) page/block shape. Page 11's pre-reconciliation state is derived in the test by cutting at its 'November 13 fee reconciliation' heading.",
+ "journal_day_totals": {
+  "date": "2026-11-13",
+  "positions": 5,
+  "fills": 10,
+  "gross": 37,
+  "fees_estimated": 5,
+  "net_estimated": 32,
+  "orders": [
+   "7203→7205",
+   "7206→7207",
+   "7208→7209",
+   "7210→7211",
+   "7212→7213"
+  ]
+ },
+ "pages": [
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000001",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000001",
+   "last_edited_time": "2026-11-13T21:36:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $780 Put — November 13, 2026 — 7203→7205",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $780 Put — November 13, 2026 — 7203→7205",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $780 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $780 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 2.1
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 3.05
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": 95.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1 estimated ($0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1 estimated ($0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 94 estimated",
+       "href": null,
+       "text": {
+        "content": "USD 94 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-13T15:12:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+        "href": null,
+        "text": {
+         "content": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Entry receipt 7203",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Entry receipt 7203",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:12:05.000-05:00: USD 2.1. ",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:12:05.000-05:00: USD 2.1. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Exit receipt 7205",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Exit receipt 7205",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:18:06.000-05:00: USD 3.05. These are alert-time proxies.",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:18:06.000-05:00: USD 3.05. These are alert-time proxies.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000002",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000002",
+   "last_edited_time": "2026-11-13T21:36:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "TLT Nov 13 '26 $85.50 Put — November 13, 2026 — 7206→7207",
+       "href": null,
+       "text": {
+        "content": "TLT Nov 13 '26 $85.50 Put — November 13, 2026 — 7206→7207",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "TLT Nov 13 '26 $85.50 Put",
+       "href": null,
+       "text": {
+        "content": "TLT Nov 13 '26 $85.50 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 0.22
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 0.15
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -7.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1 estimated ($0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1 estimated ($0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -8 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -8 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-13T15:20:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+        "href": null,
+        "text": {
+         "content": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Entry receipt 7206",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Entry receipt 7206",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:20:52.000-05:00: USD 0.22. ",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:20:52.000-05:00: USD 0.22. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Exit receipt 7207",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Exit receipt 7207",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:24:29.000-05:00: USD 0.15. These are alert-time proxies.",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:24:29.000-05:00: USD 0.15. These are alert-time proxies.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000003",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000003",
+   "last_edited_time": "2026-11-13T21:36:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $772 Put — November 13, 2026 — 7208→7209",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $772 Put — November 13, 2026 — 7208→7209",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $772 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $772 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 1.9
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 1.66
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -24.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1 estimated ($0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1 estimated ($0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -25 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -25 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-13T15:25:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+        "href": null,
+        "text": {
+         "content": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Entry receipt 7208",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Entry receipt 7208",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:25:43.000-05:00: USD 1.9. ",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:25:43.000-05:00: USD 1.9. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Exit receipt 7209",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Exit receipt 7209",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:27:42.000-05:00: USD 1.66. These are alert-time proxies.",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:27:42.000-05:00: USD 1.66. These are alert-time proxies.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000004",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000004",
+   "last_edited_time": "2026-11-13T21:36:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "IBIT Nov 13 '26 $42.50 Put — November 13, 2026 — 7210→7211",
+       "href": null,
+       "text": {
+        "content": "IBIT Nov 13 '26 $42.50 Put — November 13, 2026 — 7210→7211",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "IBIT Nov 13 '26 $42.50 Put",
+       "href": null,
+       "text": {
+        "content": "IBIT Nov 13 '26 $42.50 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 0.16
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 0.13
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -3.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1 estimated ($0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1 estimated ($0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -4 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -4 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-13T15:29:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+        "href": null,
+        "text": {
+         "content": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Entry receipt 7210",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Entry receipt 7210",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:29:02.000-05:00: USD 0.16. ",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:29:02.000-05:00: USD 0.16. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Exit receipt 7211",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Exit receipt 7211",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T10:52:28.000-05:00: USD 0.13. These are alert-time proxies.",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T10:52:28.000-05:00: USD 0.13. These are alert-time proxies.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000005",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000005",
+   "last_edited_time": "2026-11-13T21:36:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $777 Put — November 13, 2026 — 7212→7213",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $777 Put — November 13, 2026 — 7212→7213",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $777 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $777 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 1.95
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 1.71
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -24.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1 estimated ($0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1 estimated ($0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -25 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -25 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-13T16:40:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+        "href": null,
+        "text": {
+         "content": "E*TRADE ending 0000. One standard contract, multiplier 100. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Entry receipt 7212",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Entry receipt 7212",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T11:40:25.000-05:00: USD 1.95. ",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T11:40:25.000-05:00: USD 1.95. ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "Exit receipt 7213",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Exit receipt 7213",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": " at 2026-11-13T11:45:50.000-05:00: USD 1.71. These are alert-time proxies.",
+        "href": null,
+        "text": {
+         "content": " at 2026-11-13T11:45:50.000-05:00: USD 1.71. These are alert-time proxies.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000006",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000006",
+   "last_edited_time": "2026-11-10T21:33:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $760 Put — November 10, 2026 — 7157→7162",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $760 Put — November 10, 2026 — 7157→7162",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $760 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $760 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 2.3
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 2.81
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": 51
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.00 estimated (0.50 per executed contract-transaction)",
+       "href": null,
+       "text": {
+        "content": "USD 1.00 estimated (0.50 per executed contract-transaction)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 50.00 estimated",
+       "href": null,
+       "text": {
+        "content": "USD 50.00 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-10T15:40:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "One QQQ Nov 13 '26 $760 Put bought for USD 2.30 per premium unit and sold for USD 2.81; multiplier 100.",
+        "href": null,
+        "text": {
+         "content": "One QQQ Nov 13 '26 $760 Put bought for USD 2.30 per premium unit and sold for USD 2.81; multiplier 100.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Opening order 7157",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Opening order 7157",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "; execution-alert timestamp 2026-11-10T07:40:59-08:00.",
+        "href": null,
+        "text": {
+         "content": "; execution-alert timestamp 2026-11-10T07:40:59-08:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Closing order 7162",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "Closing order 7162",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "; execution-alert timestamp 2026-11-10T10:59:00-08:00.",
+        "href": null,
+        "text": {
+         "content": "; execution-alert timestamp 2026-11-10T10:59:00-08:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000007",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000007",
+   "last_edited_time": "2026-11-11T21:30:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $765 Put — November 11, 2026 — 7166→7167",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $765 Put — November 11, 2026 — 7166→7167",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $765 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $765 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 1.02
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 0.7
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -32.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.00 estimated: USD 0.50 × 1 contract × 2 executed transactions; actual charges pending.",
+       "href": null,
+       "text": {
+        "content": "USD 1.00 estimated: USD 0.50 × 1 contract × 2 executed transactions; actual charges pending.",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -33.00 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -33.00 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-11T14:49:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Account: E*TRADE Individual Brokerage ending 0000.",
+        "href": null,
+        "text": {
+         "content": "Account: E*TRADE Individual Brokerage ending 0000.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "heading_2",
+     "has_children": false,
+     "heading_2": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Executions and remaining quantity",
+        "href": null,
+        "text": {
+         "content": "Executions and remaining quantity",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Entry: ",
+        "href": null,
+        "text": {
+         "content": "Entry: ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "order 7166 receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "order 7166 receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ", buy 1 QQQ Nov 13 '26 $765 Put at USD 1.02. Alert timestamp 2026-11-11T09:49:04-05:00.",
+        "href": null,
+        "text": {
+         "content": ", buy 1 QQQ Nov 13 '26 $765 Put at USD 1.02. Alert timestamp 2026-11-11T09:49:04-05:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Exit: ",
+        "href": null,
+        "text": {
+         "content": "Exit: ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "order 7167 receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "order 7167 receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ", sell 1 identical contract at USD 0.70. Alert timestamp 2026-11-11T10:05:11-05:00.",
+        "href": null,
+        "text": {
+         "content": ", sell 1 identical contract at USD 0.70. Alert timestamp 2026-11-11T10:05:11-05:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-003"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000008",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000008",
+   "last_edited_time": "2026-11-11T21:30:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $787 Put — November 11, 2026 — 7179→7180",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $787 Put — November 11, 2026 — 7179→7180",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "QQQ Nov 13 '26 $787 Put",
+       "href": null,
+       "text": {
+        "content": "QQQ Nov 13 '26 $787 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 2.2
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 2.12
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -8.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.00 estimated: USD 0.50 × 1 contract × 2 executed transactions; actual charges pending.",
+       "href": null,
+       "text": {
+        "content": "USD 1.00 estimated: USD 0.50 × 1 contract × 2 executed transactions; actual charges pending.",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -9.00 estimated",
+       "href": null,
+       "text": {
+        "content": "USD -9.00 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-11T19:12:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Account: E*TRADE Individual Brokerage ending 0000.",
+        "href": null,
+        "text": {
+         "content": "Account: E*TRADE Individual Brokerage ending 0000.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "heading_2",
+     "has_children": false,
+     "heading_2": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Executions and remaining quantity",
+        "href": null,
+        "text": {
+         "content": "Executions and remaining quantity",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Entry: ",
+        "href": null,
+        "text": {
+         "content": "Entry: ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "order 7179 receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "order 7179 receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ", buy 1 QQQ Nov 13 '26 $787 Put at USD 2.20. Alert timestamp 2026-11-11T14:12:34-05:00.",
+        "href": null,
+        "text": {
+         "content": ", buy 1 QQQ Nov 13 '26 $787 Put at USD 2.20. Alert timestamp 2026-11-11T14:12:34-05:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Exit: ",
+        "href": null,
+        "text": {
+         "content": "Exit: ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "order 7180 receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "order 7180 receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ", sell 1 identical contract at USD 2.12. Alert timestamp 2026-11-11T14:40:02-05:00.",
+        "href": null,
+        "text": {
+         "content": ", sell 1 identical contract at USD 2.12. Alert timestamp 2026-11-11T14:40:02-05:00.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-003"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000009",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000009",
+   "last_edited_time": "2026-11-13T21:35:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "NVDA Nov 13 '26 $170 Call — November 12, 2026 — 7185→7186",
+       "href": null,
+       "text": {
+        "content": "NVDA Nov 13 '26 $170 Call — November 12, 2026 — 7185→7186",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "NVDA Nov 13 '26 $170 Call",
+       "href": null,
+       "text": {
+        "content": "NVDA Nov 13 '26 $170 Call",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 1.85
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 1.66
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": -19.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.026096 (1.026096 actual)",
+       "href": null,
+       "text": {
+        "content": "USD 1.026096 (1.026096 actual)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD -20.026096",
+       "href": null,
+       "text": {
+        "content": "USD -20.026096",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-12T14:44:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Account: E*TRADE ending 0000. 1 standard contracts, premium multiplier 100.",
+        "href": null,
+        "text": {
+         "content": "Account: E*TRADE ending 0000. 1 standard contracts, premium multiplier 100.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Entry order 7185: 2026-11-12T09:44:46.000-05:00, 1 contracts at USD 1.85; ",
+        "href": null,
+        "text": {
+         "content": "Entry order 7185: 2026-11-12T09:44:46.000-05:00, 1 contracts at USD 1.85; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "entry receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "entry receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ". Exit order 7186: 2026-11-12T09:48:04.000-05:00, 1 contracts at USD 1.66; ",
+        "href": null,
+        "text": {
+         "content": ". Exit order 7186: 2026-11-12T09:48:04.000-05:00, 1 contracts at USD 1.66; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "exit receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "exit receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ".",
+        "href": null,
+        "text": {
+         "content": ".",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "heading_3",
+     "has_children": false,
+     "heading_3": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "November 13 fee reconciliation",
+        "href": null,
+        "text": {
+         "content": "November 13 fee reconciliation",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+        "href": null,
+        "text": {
+         "content": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-003"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000NV2: 2026-11-12T14:48:02Z; SOLD 1 NVDA Nov 13 '26 $170 Call @ 1.66; -100 premium units; fee USD 0.514696.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000NV2: 2026-11-12T14:48:02Z; SOLD 1 NVDA Nov 13 '26 $170 Call @ 1.66; -100 premium units; fee USD 0.514696.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-004"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000NV1: 2026-11-12T14:44:46Z; BOT 1 NVDA Nov 13 '26 $170 Call @ 1.85; 100 premium units; fee USD 0.5114.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000NV1: 2026-11-12T14:44:46Z; BOT 1 NVDA Nov 13 '26 $170 Call @ 1.85; 100 premium units; fee USD 0.5114.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-005"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000010",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000010",
+   "last_edited_time": "2026-11-13T21:35:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "SLV Nov 13 '26 $47 Put — November 12, 2026 — 7189→7193",
+       "href": null,
+       "text": {
+        "content": "SLV Nov 13 '26 $47 Put — November 12, 2026 — 7189→7193",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "SLV Nov 13 '26 $47 Put",
+       "href": null,
+       "text": {
+        "content": "SLV Nov 13 '26 $47 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 1
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 0.55
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 0.58
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": 3.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.023871 (1.023871 actual)",
+       "href": null,
+       "text": {
+        "content": "USD 1.023871 (1.023871 actual)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 1.976129",
+       "href": null,
+       "text": {
+        "content": "USD 1.976129",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-12T15:08:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Account: E*TRADE ending 0000. 1 standard contracts, premium multiplier 100.",
+        "href": null,
+        "text": {
+         "content": "Account: E*TRADE ending 0000. 1 standard contracts, premium multiplier 100.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Entry order 7189: 2026-11-12T10:08:41.000-05:00, 1 contracts at USD 0.55; ",
+        "href": null,
+        "text": {
+         "content": "Entry order 7189: 2026-11-12T10:08:41.000-05:00, 1 contracts at USD 0.55; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "entry receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "entry receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ". Exit order 7193: 2026-11-12T10:19:41.000-05:00, 1 contracts at USD 0.58; ",
+        "href": null,
+        "text": {
+         "content": ". Exit order 7193: 2026-11-12T10:19:41.000-05:00, 1 contracts at USD 0.58; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "exit receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "exit receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ".",
+        "href": null,
+        "text": {
+         "content": ".",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "heading_3",
+     "has_children": false,
+     "heading_3": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "November 13 fee reconciliation",
+        "href": null,
+        "text": {
+         "content": "November 13 fee reconciliation",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+        "href": null,
+        "text": {
+         "content": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-003"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000SL2: 2026-11-12T15:19:40Z; SOLD 1 SLV Nov 13 '26 $47 Put @ 0.58; -100 premium units; fee USD 0.512471.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000SL2: 2026-11-12T15:19:40Z; SOLD 1 SLV Nov 13 '26 $47 Put @ 0.58; -100 premium units; fee USD 0.512471.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-004"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000SL1: 2026-11-12T15:08:41Z; BOT 1 SLV Nov 13 '26 $47 Put @ 0.55; 100 premium units; fee USD 0.5114.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000SL1: 2026-11-12T15:08:41Z; BOT 1 SLV Nov 13 '26 $47 Put @ 0.55; 100 premium units; fee USD 0.5114.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-005"
+    }
+   ]
+  },
+  {
+   "object": "page",
+   "id": "a0000000-0000-4000-8000-000000000011",
+   "url": "https://www.notion.so/synthetic-a0000000000040008000000000000011",
+   "last_edited_time": "2026-11-13T21:35:00.000Z",
+   "archived": false,
+   "in_trash": false,
+   "properties": {
+    "Report": {
+     "type": "title",
+     "title": [
+      {
+       "type": "text",
+       "plain_text": "TLT Nov 13 '26 $85 Put — November 12, 2026 — 7187→7194",
+       "href": null,
+       "text": {
+        "content": "TLT Nov 13 '26 $85 Put — November 12, 2026 — 7187→7194",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Contract": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "TLT Nov 13 '26 $85 Put",
+       "href": null,
+       "text": {
+        "content": "TLT Nov 13 '26 $85 Put",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Quantity": {
+     "type": "number",
+     "number": 2
+    },
+    "Entry Premium": {
+     "type": "number",
+     "number": 0.31
+    },
+    "Exit Premium": {
+     "type": "number",
+     "number": 0.4
+    },
+    "Gross P&L": {
+     "type": "number",
+     "number": 18.0
+    },
+    "Fees": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 2.035724 (1.535724 actual + 0.50 estimated)",
+       "href": null,
+       "text": {
+        "content": "USD 2.035724 (1.535724 actual + 0.50 estimated)",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Net P&L": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "USD 15.964276 estimated",
+       "href": null,
+       "text": {
+        "content": "USD 15.964276 estimated",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Status": {
+     "type": "select",
+     "select": {
+      "name": "Complete — exact fees pending"
+     }
+    },
+    "Trade Date": {
+     "type": "date",
+     "date": {
+      "start": "2026-11-12T14:55:00.000Z",
+      "end": null
+     }
+    },
+    "Setup": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Thesis": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    },
+    "Invalidation": {
+     "type": "rich_text",
+     "rich_text": [
+      {
+       "type": "text",
+       "plain_text": "Undocumented",
+       "href": null,
+       "text": {
+        "content": "Undocumented",
+        "link": null
+       }
+      }
+     ]
+    }
+   },
+   "_blocks": [
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Account: E*TRADE ending 0000. 2 standard contracts, premium multiplier 100.",
+        "href": null,
+        "text": {
+         "content": "Account: E*TRADE ending 0000. 2 standard contracts, premium multiplier 100.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-000"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Entry order 7187: 2026-11-12T09:55:35.000-05:00, 2 contracts at USD 0.31; ",
+        "href": null,
+        "text": {
+         "content": "Entry order 7187: 2026-11-12T09:55:35.000-05:00, 2 contracts at USD 0.31; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "entry receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "entry receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ". Exit order 7194: 2026-11-12T10:20:17.000-05:00, 2 contracts at USD 0.4; ",
+        "href": null,
+        "text": {
+         "content": ". Exit order 7194: 2026-11-12T10:20:17.000-05:00, 2 contracts at USD 0.4; ",
+         "link": null
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": "exit receipt",
+        "href": "https://example.invalid/receipt",
+        "text": {
+         "content": "exit receipt",
+         "link": {
+          "url": "https://example.invalid/receipt"
+         }
+        }
+       },
+       {
+        "type": "text",
+        "plain_text": ".",
+        "href": null,
+        "text": {
+         "content": ".",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-001"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "TLT order 7187 had two one-contract partial executions at 0.31. Count two contracts total, not three.",
+        "href": null,
+        "text": {
+         "content": "TLT order 7187 had two one-contract partial executions at 0.31. Count two contracts total, not three.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-002"
+    },
+    {
+     "object": "block",
+     "type": "heading_3",
+     "has_children": false,
+     "heading_3": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "November 13 fee reconciliation",
+        "href": null,
+        "text": {
+         "content": "November 13 fee reconciliation",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-003"
+    },
+    {
+     "object": "block",
+     "type": "paragraph",
+     "has_children": false,
+     "paragraph": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+        "href": null,
+        "text": {
+         "content": "Supersedes convention fees above. Broker transaction IDs and order-initiation timestamps:",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-004"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000TL2: 2026-11-12T15:20:17Z; SOLD 2 TLT Nov 13 '26 $85 Put @ 0.4; -200 premium units; fee USD 1.024324.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000TL2: 2026-11-12T15:20:17Z; SOLD 2 TLT Nov 13 '26 $85 Put @ 0.4; -200 premium units; fee USD 1.024324.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-005"
+    },
+    {
+     "object": "block",
+     "type": "bulleted_list_item",
+     "has_children": false,
+     "bulleted_list_item": {
+      "rich_text": [
+       {
+        "type": "text",
+        "plain_text": "SYNTHBROKER00000000000000000000000TL1: 2026-11-12T14:55:34Z; BOT 1 TLT Nov 13 '26 $85 Put @ 0.31; 100 premium units; fee USD 0.5114.",
+        "href": null,
+        "text": {
+         "content": "SYNTHBROKER00000000000000000000000TL1: 2026-11-12T14:55:34Z; BOT 1 TLT Nov 13 '26 $85 Put @ 0.31; 100 premium units; fee USD 0.5114.",
+         "link": null
+        }
+       }
+      ]
+     },
+     "id": "a0000000-blk-006"
+    }
+   ]
+  }
+ ]
+}
