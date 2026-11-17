@@ -23,3 +23,12 @@ python research/oa241/findings/features.py ARCHIVE SNAPSHOTS SESSIONS.json FEATU
 python research/oa241/findings/analysis.py FEATURES > research/oa241/findings/results.json
 python -m unittest tests/test_oa241_features.py
 ```
+
+## Effect of the repairs on results (after rerun)
+
+- **Feature fixity.** Repaired features are at `b655f75`. Sept 25 is byte-identical under `PYTHONHASHSEED` 1 and 2 and in the default run.
+- **Signed exposure.** Superseded G_within correlated 0.30 with the repaired values on Sept 25, and about 0.91 on Oct 8 and Nov 10. G_oi_unsigned is identical, because gamma and OI were permuted together.
+- **Volatility (G5a).** The M3-vs-M2 LOSO change moves from −0.6% (pooled fit, misaligned features) to −0.2%, with interval −0.8% … +0.2%. The verdict is tempered from "no out-of-sample information" to "no useful (≥ 2%) out-of-sample gain detected; coefficient sign undetermined".
+- **Downside warning (D3).** The Brier difference moves from −0.0026 to −0.0007, with interval −0.0053 … +0.0029. Still unresolved.
+- **Continuation and strike attraction (G5b, G5c).** Both remain unresolved; the estimates move by less than their intervals.
+- **Exclusion accounting (G5a).** Exclusions are now reported by reason. The 36 excluded anchors are all 34 at 10:00 (33 lack a quote at or before 09:30:00; 1 has a prior volume window before the open) plus 2 in an Oct 8 quote gap.
