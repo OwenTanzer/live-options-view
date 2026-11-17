@@ -16,11 +16,15 @@ def op(*args, template=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault", required=True, help="Owen's private 1Password vault")
+    members = ("Owen", "Jayden", "Jacob")
+    parser.add_argument("--recover", choices=members, help="Create a fresh code for one explicitly revoked member")
     args = parser.parse_args()
     items = op("item", "list", "--vault", args.vault)
     statements = []
-    for member in ("Owen", "Jayden", "Jacob"):
+    for member in ([args.recover] if args.recover else members):
         title = f"Options View private journal invitation — {member}"
+        if args.recover:
+            title += f" (recovery {secrets.token_hex(6)})"
         matches = [item for item in items if item["title"] == title]
         if len(matches) > 1:
             raise SystemExit(f"Resolve duplicate items for {member} before continuing.")
@@ -37,6 +41,10 @@ def main():
         if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code):
             raise SystemExit(f"Invalid saved invitation format for {member}.")
         digest = hashlib.sha256(code.encode("ascii")).hexdigest()
+        if args.recover:
+            statements.append(f"UPDATE trade_journal_members SET invite_hash='{digest}', invite_until=unixepoch()+604800 "
+                              f"WHERE member='{member}' AND credential_id IS NULL AND invite_hash IS NULL;")
+            continue
         statements.append("INSERT OR IGNORE INTO trade_journal_members(member,invite_hash,invite_until) "
                           f"VALUES ('{member}','{digest}',unixepoch()+604800);")
     print("\n".join(statements))

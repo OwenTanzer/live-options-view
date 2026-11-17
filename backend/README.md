@@ -124,8 +124,12 @@ Each member receives only their own enrollment code through a private channel.
 On the site, choose “Join with an invitation”, enter that code, and use “Save my
 passkey” with 1Password. Subsequent visits use “Sign in with a passkey”.
 Codes expire seven days after provisioning and are invalidated on enrollment.
-Removing a member row revokes its credential and all associated sessions.
-Recovery requires a fresh operator-issued invitation, never a reused code.
+To revoke, execute a targeted DELETE on trade_journal_members for that member.
+The revocation trigger erases the invitation, public credential and sessions and
+retains the member name. Repeating initial setup skips that member. To grant
+access again, explicitly revoke first, then run the invitation script with
+`--recover MEMBER`. Apply its single conditional UPDATE and verify one changed
+row before sharing the fresh recovery item privately.
 Never put private positions, credentials or screenshots in a release artifact.
 
 1. Obtain Owen’s merge approval and pass the protected checks for the revision.

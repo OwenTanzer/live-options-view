@@ -73,3 +73,16 @@ CREATE TABLE IF NOT EXISTS trade_journal_sessions (
   token_hash TEXT UNIQUE, credential_id TEXT NOT NULL, challenge TEXT PRIMARY KEY,
   expires INTEGER NOT NULL
 );
+
+-- Retain the member name after revocation so routine INSERT OR IGNORE
+-- provisioning can never reissue that member's original invitation.
+CREATE TRIGGER IF NOT EXISTS trade_journal_revoke_member
+BEFORE DELETE ON trade_journal_members
+BEGIN
+  DELETE FROM trade_journal_sessions WHERE credential_id = OLD.credential_id;
+  UPDATE trade_journal_members
+     SET invite_hash = NULL, invite_until = NULL, credential_id = NULL,
+         public_key = NULL, counter = 0
+   WHERE member = OLD.member;
+  SELECT RAISE(IGNORE);
+END;

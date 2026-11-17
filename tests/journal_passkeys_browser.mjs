@@ -49,7 +49,11 @@ try {
     await page.click('#unlock');
     await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
     assert.equal((await worker.fetch(replay,{DB:db})).status,401);
-    await db.prepare('UPDATE trade_journal_members SET credential_id=NULL WHERE member=?').bind(member).run();
+    await db.prepare('DELETE FROM trade_journal_members WHERE member=?').bind(member).run();
+    await db.prepare('INSERT OR IGNORE INTO trade_journal_members(member,invite_hash,invite_until) VALUES (?,?,unixepoch()+604800)').bind(member,hash).run();
+    const oldInvite=await worker.fetch(new Request(origin+'/api/trade-journal/passkey',{method:'POST',headers:{Origin:origin},body:JSON.stringify({action:'options',invite})}),{DB:db});
+    assert.equal(oldInvite.status,401);
+    assert.equal((await db.prepare('SELECT credential_id,invite_hash FROM trade_journal_members WHERE member=?').bind(member).first()).credential_id,null);
     const revoked=await worker.fetch(new Request(origin+'/api/trade-journal?date=2026-11-13',{headers:{Cookie:carriedCookie}}),{DB:db});
     assert.equal(revoked.status,401);
     await page.close();
