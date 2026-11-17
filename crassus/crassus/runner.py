@@ -21,6 +21,9 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urljoin
+
+from .strategies.oi_skew import REFERENCE_ROOTS
 from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
@@ -195,6 +198,11 @@ class Runner:
 
         self.ledger = DecisionLedger(ledger_dir)
         self.snapshots = SnapshotReader(snapshot_url)
+        roots = {REFERENCE_ROOTS[a.strategy_id] for a in accounts if a.strategy_id in REFERENCE_ROOTS}
+        if roots and base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
+            raise ValueError("Reference skew accounts require the Options View paper API")
+        self.reference_readers = {root: SnapshotReader(urljoin(snapshot_url, f"{root.lower()}/latest.json"))
+                                  for root in roots}
         self.rate_limiter = RateLimiter()
         # Quotes share the account RateLimiter -- the binding limit is
         # per-IP, so quote polling must draw from the same global budget.
@@ -418,6 +426,12 @@ class Runner:
                 log.error("Snapshot read failed: %s", exc)
                 snapshot = None
 
+            reference_snapshots = {}
+            for root, reader in getattr(self, "reference_readers", {}).items():
+                try:
+                    reference_snapshots[root] = reader.read()
+                except Exception as exc:
+                    log.warning("%s snapshot unavailable: %s", root, type(exc).__name__)
             for account in self.accounts:
                 if self.should_stop:
                     event(
@@ -428,7 +442,8 @@ class Runner:
                 if account.alias in self.retired:
                     skipped += 1
                     continue
-                self._run_account(account, snapshot, phase)
+                root = REFERENCE_ROOTS.get(account.strategy_id)
+                self._run_account(account, reference_snapshots.get(root) if root else snapshot, phase)
                 processed += 1
         except BaseException as exc:
             report_cycle("cycle_failed", **fields, error_type=type(exc).__name__)

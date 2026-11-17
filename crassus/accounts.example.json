@@ -329,6 +329,20 @@
       "strategy_id": "qqq_gated_strangle",
       "password_env": "CRASSUS_PW_OA233",
       "active": true
+    },
+    {
+      "alias": "SPY OI Skew Paper",
+      "username": "crassus_skew_spy",
+      "password_env": "CRASSUS_PW_SKEW_SPY",
+      "strategy_id": "oi_skew_spy",
+      "active": false
+    },
+    {
+      "alias": "IBIT OI Skew Paper",
+      "username": "crassus_skew_ibit",
+      "password_env": "CRASSUS_PW_SKEW_IBIT",
+      "strategy_id": "oi_skew_ibit_adaptive",
+      "active": false
     }
   ]
 }
