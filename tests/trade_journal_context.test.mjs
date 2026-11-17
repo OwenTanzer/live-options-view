@@ -10,9 +10,9 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { FakeD1 } from './helpers/d1_shim.mjs';
-import { seedAccounts, seedSession } from './helpers/test_env.mjs';
+import { seedJournalSession } from './helpers/journal-session.mjs';
 import worker from '../backend/index.js';
-import { TOKEN_SECRET_NAME, VIEWERS_VAR_NAME, syncTradeJournal } from '../backend/trade-journal.js';
+import { TOKEN_SECRET_NAME, syncTradeJournal } from '../backend/trade-journal.js';
 import {
   FILL_PAD_MS, MAX_PART_GAP_MS, MAX_SNAPSHOT_GAP_MS, MAX_SNAPSHOTS, MAX_TRADIER_PARTS, coveragePlan, nyLocalToUtc,
   positionContext, snapshotKeyTime, splitRuns,
@@ -295,19 +295,17 @@ async function routeEnv() {
   const byOcc = await journal(DB);
   const r2 = new FakeR2();
   seedSnapshots(r2, '20261113', 11, 0, 12, 30, 68);
-  const e = { DB, PAPER_TRADES: r2, [VIEWERS_VAR_NAME]: 'viewer_a' };
-  await seedAccounts(e, [{ username: 'viewer_a', balance_cash: 0, trades: [] }, { username: 'someone', balance_cash: 0, trades: [] }]);
-  await seedSession(e, 'tok-v', 'viewer_a');
-  await seedSession(e, 'tok-o', 'someone');
+  const e = { DB, PAPER_TRADES: r2 };
+  await seedJournalSession(DB, 'tok-v');
   const get = (q, tok) => worker.fetch(new Request(`https://options.moopertonic.net/api/trade-journal/context?${q}`,
-    { headers: tok ? { Cookie: `session=${tok}` } : {} }), e);
+    { headers: tok ? { Cookie: `__Host-journal=${tok}` } : {} }), e);
   return { e, get, id: byOcc[QQQ_OCC].position_id };
 }
 
 test('context route: viewer-only and validated', async () => {
   const { get, id } = await routeEnv();
   assert.equal((await get(`position_id=${id}`)).status, 401);
-  assert.equal((await get(`position_id=${id}`, 'tok-o')).status, 403);
+  assert.equal((await get(`position_id=${id}`, 'tok-o')).status, 401);
   assert.equal((await get('position_id=../etc', 'tok-v')).status, 400);
   assert.equal((await get(`position_id=${id}&date=13-11-2026`, 'tok-v')).status, 400);
   assert.equal((await get('position_id=pos:0000000000000000', 'tok-v')).status, 404);

@@ -10,8 +10,7 @@
 // * The integration token is a Worker secret, NOTION_TRADE_JOURNAL_TOKEN. It is
 //   sent only in the Authorization header to api.notion.com and never logged,
 //   stored or returned.
-// * Every route requires a signed-in session whose username is listed in the
-//   TRADE_JOURNAL_VIEWERS var. Unset means nobody (fail closed).
+// * Every data route requires a dedicated journal passkey session.
 // * Zero KV operations. State lives in two D1 tables (migration 0003).
 //
 // Identity (fixes the R1 weakness a journal correction exposes):
@@ -23,13 +22,13 @@
 // Rows whose body matches none of the known fill-line formats are stored and
 // shown as unsupported -- never guessed and never silently dropped.
 
-import { checkOrigin, jsonResponse, requireSession } from './common.js';
+import { checkOrigin, jsonResponse } from './common.js';
 
 export const TRADE_JOURNAL_DATA_SOURCE_ID = '2a32c187-f187-4570-9d53-05e611943df0';
 export const NOTION_API = 'https://api.notion.com/v1';
 export const NOTION_VERSION = '2025-09-03';
 export const TOKEN_SECRET_NAME = 'NOTION_TRADE_JOURNAL_TOKEN';
-export const VIEWERS_VAR_NAME = 'TRADE_JOURNAL_VIEWERS';
+
 export const JOURNAL_TZ = 'America/New_York';
 // Bounded per sync so one invocation stays well inside the Worker subrequest
 // limit; anything left over is reported as deferred and picked up next sync.
@@ -618,14 +617,8 @@ export async function journalDay(db, day) {
 }
 
 // ------------------------------------------------------------------- routes
-export async function authorizeJournalViewer(request, env) {
-  const session = await requireSession(request, env);
-  if (!session) return { response: jsonResponse({ error: 'Not signed in' }, 401) };
-  const allowed = String(env[VIEWERS_VAR_NAME] ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (!allowed.length) return { response: jsonResponse({ error: 'Trade journal viewers are not configured', code: 'not_configured', setting: VIEWERS_VAR_NAME }, 403) };
-  if (!allowed.includes(String(session.username).toLowerCase())) return { response: jsonResponse({ error: 'Not authorised for the trade journal' }, 403) };
-  return { session };
-}
+export { authorizeJournalViewer } from './journal-passkeys.js';
+import { authorizeJournalViewer } from './journal-passkeys.js';
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PAGE_ID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;

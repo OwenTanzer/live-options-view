@@ -11,10 +11,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FakeD1 } from './helpers/d1_shim.mjs';
-import { seedAccounts, seedSession } from './helpers/test_env.mjs';
+import { seedJournalSession } from './helpers/journal-session.mjs';
 import worker from '../backend/index.js';
 import {
-  TRADE_JOURNAL_DATA_SOURCE_ID, TOKEN_SECRET_NAME, VIEWERS_VAR_NAME, MAX_BODY_REQUESTS, MAX_QUERY_PAGES,
+  TRADE_JOURNAL_DATA_SOURCE_ID, TOKEN_SECRET_NAME, MAX_BODY_REQUESTS, MAX_QUERY_PAGES,
   MAX_MISSING_CHECKS, MAX_BODY_DEPTH, pagePosition,
   etDate, handleTradeJournalSync, journalDay, syncTradeJournal,
 } from '../backend/trade-journal.js';
@@ -446,27 +446,21 @@ test('removal checks are capped per sync and the rest stay flagged for the next 
 });
 
 // ---------------------------------------------------------------- routes
-async function routeEnv({ viewers = 'viewer_a', token = TOKEN } = {}) {
+async function routeEnv({ token = TOKEN } = {}) {
   const DB = freshDb();
-  const e = { DB, [VIEWERS_VAR_NAME]: viewers, ...(token ? { [TOKEN_SECRET_NAME]: token } : {}) };
-  await seedAccounts(e, [{ username: 'viewer_a', balance_cash: 0, trades: [] }, { username: 'someone', balance_cash: 0, trades: [] }]);
-  await seedSession(e, 'tok-viewer', 'viewer_a');
-  await seedSession(e, 'tok-other', 'someone');
+  const e = { DB, ...(token ? { [TOKEN_SECRET_NAME]: token } : {}) };
+  await seedJournalSession(DB, 'tok-viewer');
   return e;
 }
 const req = (p, cookie, init = {}) => new Request(`https://options.moopertonic.net${p}`, {
-  ...init, headers: { ...(cookie ? { Cookie: `session=${cookie}` } : {}), ...(init.headers ?? {}) } });
+  ...init, headers: { ...(cookie ? { Cookie: `__Host-journal=${cookie}` } : {}), ...(init.headers ?? {}) } });
 
-test('routes require a session and the viewer allowlist (fail closed)', async () => {
+test('routes accept only a journal passkey session', async () => {
   const e = await routeEnv();
   assert.equal((await worker.fetch(req('/api/trade-journal?date=2026-11-13'), e)).status, 401);
-  assert.equal((await worker.fetch(req('/api/trade-journal?date=2026-11-13', 'tok-other'), e)).status, 403);
+  assert.equal((await worker.fetch(req('/api/trade-journal?date=2026-11-13', 'tok-other'), e)).status, 401);
   assert.equal((await worker.fetch(req('/api/trade-journal?date=2026-11-13', 'tok-viewer'), e)).status, 200);
   assert.equal((await worker.fetch(req('/api/trade-journal?date=13-11-2026', 'tok-viewer'), e)).status, 400);
-  const unset = await routeEnv({ viewers: '' });
-  const res = await worker.fetch(req('/api/trade-journal?date=2026-11-13', 'tok-viewer'), unset);
-  assert.equal(res.status, 403);
-  assert.equal((await res.json()).setting, VIEWERS_VAR_NAME);
   const post = await worker.fetch(req('/api/trade-journal/sync', 'tok-viewer', { method: 'POST', headers: { Origin: 'https://evil.example' } }), e);
   assert.equal(post.status, 403);
 });

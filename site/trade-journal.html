@@ -43,11 +43,19 @@ svg{display:block;width:100%}
 </style>
 </head>
 <body>
+<section id="access" hidden><h1>Private trade journal</h1>
+<button id="unlock">Sign in with a passkey</button>
+<details><summary>Join with an invitation</summary>
+<label>One-time code <input id="invitation" type="password" autocomplete="off"></label>
+<button id="enroll">Save my passkey</button></details>
+<p id="authstatus" role="status"></p></section>
+<div id="journal" hidden>
 <header>
   <h1>Trade journal</h1>
   <label class="note">Date (America/New_York) <input type="date" id="day" value="2026-11-13"></label>
   <button id="load">Load</button>
   <button id="sync">Sync from Notion</button>
+  <button id="lock">Sign out</button>
   <span id="syncinfo" class="note"></span>
 </header>
 <main>
@@ -73,6 +81,8 @@ svg{display:block;width:100%}
   </section>
 </main>
 <div id="tip"></div>
+</div>
+<script src="js/journal-passkeys.js"></script>
 <script src="js/trade-journal-loads.js?v=9fddd06fc47afd8d"></script>
 <script>
 (() => {
@@ -110,7 +120,8 @@ svg{display:block;width:100%}
     $('msg').innerHTML = '';
     const res = await loads.loadDay($('day').value);
     if (res.stale) return false;                                       // a later day load superseded this one
-    if (res.status === 401) { $('msg').innerHTML = '<div class="banner">Sign in on the <a href="/">main page</a> first, then reload.</div>'; return false; }
+    if (res.status === 401) { $('access').hidden = false; $('journal').hidden = true; return false; }
+    $('journal').hidden = false;
     const body = res.body || {};
     if (!res.ok) { $('msg').innerHTML = `<div class="banner">${esc(body.error || `HTTP ${res.status}`)}</div>`; return false; }
     data = { ...body, date: res.date };
@@ -292,6 +303,24 @@ svg{display:block;width:100%}
   });
   $('restore').onclick = () => { if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
   document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { win = b.dataset.w; document.querySelectorAll('[data-w]').forEach(x => x.classList.toggle('on', x === b)); renderLanes(); });
+  async function unlock(enroll) {
+    const invite = enroll ? $('invitation').value.trim() : undefined;
+    if (enroll && !invite) { $('authstatus').textContent='Enter your invitation code.'; return; }
+    $('unlock').disabled = $('enroll').disabled = true;
+    try {
+      await journalPasskey(invite);
+      $('invitation').value = '';
+      $('access').hidden = true;
+      await load();
+    } catch (e) { $('authstatus').textContent = e.name === 'NotAllowedError' ? 'Passkey request canceled or unavailable.' : e.message; }
+    finally { $('unlock').disabled = $('enroll').disabled = false; }
+  }
+  $('unlock').onclick = () => unlock(false);
+  $('enroll').onclick = () => unlock(true);
+  $('lock').onclick = async () => {
+    const r = await fetch('/api/trade-journal/passkey',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});
+    if(r.ok) location.reload();
+  };
   $('load').onclick = () => { load(); };
   $('sync').onclick = sync;
   load();

@@ -58,3 +58,18 @@ CREATE TABLE IF NOT EXISTS trade_journal_context (
   built_at      TEXT NOT NULL,
   context_json  TEXT NOT NULL
 );
+
+-- The only principals allowed to enroll are provisioned by the release owner.
+CREATE TABLE IF NOT EXISTS trade_journal_members (
+  member TEXT PRIMARY KEY CHECK(member IN ('Owen','Jayden','Jacob')),
+  invite_hash TEXT UNIQUE, invite_until INTEGER,
+  credential_id TEXT UNIQUE, public_key TEXT, counter INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS trade_journal_auth_key (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1), secret TEXT NOT NULL
+);
+INSERT OR IGNORE INTO trade_journal_auth_key VALUES (1, hex(randomblob(32)));
+CREATE TABLE IF NOT EXISTS trade_journal_sessions (
+  token_hash TEXT UNIQUE, credential_id TEXT NOT NULL, challenge TEXT PRIMARY KEY,
+  expires INTEGER NOT NULL
+);

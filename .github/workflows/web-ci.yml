@@ -61,6 +61,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install locked API dependencies
+        run: npm ci --prefix backend --ignore-scripts
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
       - name: public browser data allowlist
@@ -174,6 +176,8 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/preview_browser.test.mjs
+      - name: Private journal passkey enrollment and sign-in
+        run: node tests/journal_passkeys_browser.mjs
       - name: Reference OI skew desktop and mobile browser workflow
         env:
           NODE_OPTIONS: --experimental-sqlite

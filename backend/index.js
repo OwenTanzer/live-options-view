@@ -6,6 +6,7 @@ import { handlePaperTrade } from './paper-trade.js';
 import { cutoverFenceActive } from './fence.js';
 import { createCronOutcomeLog } from './cron_outcome.js';
 import { handleTradeJournalDay, handleTradeJournalRow, handleTradeJournalSync } from './trade-journal.js';
+import { handleJournalPasskey } from './journal-passkeys.js';
 import { handleTradeJournalContext } from './trade-journal-context.js';
 
 // Re-exported from backend/common.js so the Worker's public API (the 31
@@ -18,7 +19,7 @@ export { MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, USERNAME_RE, constantTimeEqual, der
 
 const MUTATING_API_PATHS = new Set([
   '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
-  '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync',
+  '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync', '/api/trade-journal/passkey',
 ]);
 
 export default {
@@ -87,8 +88,9 @@ export default {
       return handleSettle(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/trade-journal/passkey') return handleJournalPasskey(request, env);
     // OA-238: private, read-only trade journal (Notion Trade Retrospectives).
-    // Session + TRADE_JOURNAL_VIEWERS allowlist on every route; see trade-journal.js.
+    // Private journal passkey session on every data route; see trade-journal.js.
     if (request.method === 'GET' && url.pathname === '/api/trade-journal') {
       return handleTradeJournalDay(request, env, url);
     }

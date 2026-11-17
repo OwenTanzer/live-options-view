@@ -60,10 +60,10 @@ only marked as having left the source after a complete scan.
 
 | Route | Auth | Effect |
 |---|---|---|
-| `GET /api/trade-journal?date=YYYY-MM-DD` | session + viewer | Positions with an execution on that America/New_York date, unsupported rows dated that day, totals, sync status |
-| `GET /api/trade-journal/row?page_id=` | session + viewer | One stored row, with `source_last_edited` (Notion) and `app_read_at` |
-| `POST /api/trade-journal/sync` | session + viewer + origin | Reads Notion and updates D1. Writes are paused by the cutover fence like the other mutating routes |
-| `GET /api/trade-journal/context?position_id=&date=` | session + viewer | Underlying and exact-option series for one position's window, read from existing R2 archives ([`trade-journal-context.js`](trade-journal-context.js)) |
+| `GET /api/trade-journal?date=YYYY-MM-DD` | journal passkey session | Positions with an execution on that America/New_York date, unsupported rows dated that day, totals, sync status |
+| `GET /api/trade-journal/row?page_id=` | journal passkey session | One stored row, with `source_last_edited` (Notion) and `app_read_at` |
+| `POST /api/trade-journal/sync` | journal passkey session + origin | Reads Notion and updates D1. Writes are paused by the cutover fence like the other mutating routes |
+| `GET /api/trade-journal/context?position_id=&date=` | journal passkey session | Underlying and exact-option series for one position's window, read from existing R2 archives ([`trade-journal-context.js`](trade-journal-context.js)) |
 
 A scan pages through the whole data source in a stable order (creation
 time), reads the body of every new or changed row, and only then checks rows
@@ -102,8 +102,7 @@ Settings this needs before it can serve (names only; values are operator-managed
 
 | Setting | Kind | Value |
 |---|---|---|
-| `NOTION_TRADE_JOURNAL_TOKEN` | Worker secret on `live-options-api` | Token of a Notion internal integration with only the **Read content** capability, connected only to the Trade Retrospectives database |
-| `TRADE_JOURNAL_VIEWERS` | `[vars]` on `live-options-api` | Comma-separated usernames allowed to view. Unset means nobody |
+| `NOTION_TRADE_JOURNAL_TOKEN` | Worker secret on `live-options-api` | Token of a Notion internal integration with only the **Read content** capability, shared with the journal and descendants; this reader queries Trade Retrospectives |
 | `backend/migrations/0003_trade_journal.sql` | D1 migration on `live-options` | Additive: `trade_journal_rows`, `trade_journal_sync`, `trade_journal_scan`, `trade_journal_context` |
 
 The token is sent only in the `Authorization` header to `api.notion.com`. It is
@@ -115,20 +114,30 @@ dropped before parsing. The context route only lists and reads the existing
 ### Journal release and rollback
 
 Keep the source journal read-only. Its parent journal grant includes descendants.
-The application queries the one configured retrospectives data source. Confirm
-the exact signed-in viewer username with Owen before setting the API variable.
+The application queries the one configured retrospectives data source. Owen, Jayden and Jacob enroll independently at
+https://options.moopertonic.net/trade-journal.html. A verified passkey authorizes
+the human journal and its refresh only. A normal Options View login grants no access.
+On an operator device with 1Password unlocked, run
+`python scripts/prepare-journal-invitations.py --vault PRIVATE_VAULT` and save its
+hash-only SQL for the migration step. It verifies each saved invitation by readback.
+Each member receives only their own enrollment code through a private channel.
+On the site, choose “Join with an invitation”, enter that code, and use “Save my
+passkey” with 1Password. Subsequent visits use “Sign in with a passkey”.
+Codes expire seven days after provisioning and are invalidated on enrollment.
+Removing a member row revokes its credential and all associated sessions.
+Recovery requires a fresh operator-issued invitation, never a reused code.
 Never put private positions, credentials or screenshots in a release artifact.
 
 1. Obtain Owen’s merge approval and pass the protected checks for the revision.
    Separately confirm release authority. Capture current API and asset versions,
    active traffic, bindings and the D1 recovery point immediately before release.
-2. Apply the reviewed SQL file 0003 to live-options once. Verify the four table
-   definitions against the migration. Existing accounts and sessions stay intact.
+2. Apply the reviewed SQL file 0003 to live-options once. Verify the journal and authentication tables against the migration and apply
+   the three hash-only enrollment statements. Existing accounts and sessions stay intact.
 3. Use the protected API workflow with the reviewed revision. The staged
    setup version contains only the credential setup. Do not promote it as the
    implementation. Verify on the actual candidate the read-only secret binding,
-   viewer variable and existing bindings by name, then confirm authorized
-   session access and rejection of anonymous and other signed-in sessions.
+   existing bindings by name, then confirm journal-passkey access and rejection
+   of anonymous and ordinary Options View sessions.
 4. Through the protected asset workflow publish the same tested revision.
    Open /trade-journal.html as the viewer and sync until the scan reports
    complete. Check the November 13 fills, fee revision, selection and context
