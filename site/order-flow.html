@@ -37,13 +37,18 @@
     }
     small,
     label,
-    .axis {
+    .axis,
+    .muted {
       color: #aabbbf;
     }
     h1 {
       font-size: clamp(30px, 5vw, 54px);
       letter-spacing: -0.05em;
       margin: 4px 0;
+    }
+    h2 {
+      font-size: 17px;
+      margin: 22px 0 6px;
     }
     button,
     select {
@@ -73,10 +78,13 @@
     .unknown {
       color: #b7bbd5;
     }
+    .gap {
+      color: #f2c96b;
+    }
     canvas {
       display: block;
       width: 100%;
-      height: clamp(310px, 53vh, 560px);
+      height: clamp(330px, 56vh, 580px);
       touch-action: manipulation;
     }
     output {
@@ -84,6 +92,7 @@
       min-height: 42px;
       padding: 10px 0;
       color: #dae5e2;
+      white-space: pre-line;
     }
     input {
       max-width: 40vw;
@@ -92,11 +101,55 @@
     footer {
       border-top: 1px solid #314047;
     }
-    #state {
+    #state,
+    #fresh {
       font-family: monospace;
+      font-size: 13px;
+    }
+    #fresh {
+      display: block;
+      padding: 6px 0;
+      color: #c8d4d6;
+    }
+    .table-wrap {
+      overflow-x: auto;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    th,
+    td {
+      padding: 6px 8px;
+      border-bottom: 1px solid #22323a;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th {
+      color: #aabbbf;
+      font-weight: 600;
+    }
+    td:first-child,
+    th:first-child {
+      text-align: left;
+    }
+    tbody tr {
+      cursor: pointer;
+    }
+    tbody tr:hover,
+    tbody tr.sel {
+      background: #13222a;
+    }
+    .notes {
+      font-size: 13px;
+      color: #aabbbf;
+      line-height: 1.5;
     }
     button:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    tr:focus-visible {
       outline: 2px solid #62e3bd;
     }
   </style>
@@ -123,126 +176,248 @@
           <option>Calls</option>
           <option>Puts</option>
         </select></label
+      ><label
+        >Dealer participation
+        <select id="participation">
+          <option value="1">100% (primary)</option>
+          <option value="0.5">50% (illustrative)</option>
+        </select></label
       >
     </nav>
     <div class="legend">
       <b class="buy">+ Inferred buy</b><b class="sell">− Inferred sell</b
-      ><b class="unknown">· Unknown</b><span>○ Call　◇ Put</span
-      ><span>Area = contracts</span>
+      ><b class="unknown">· Unknown side</b><span>○ Call　◇ Put</span
+      ><span>Area = contracts</span><span class="muted">▮ OI concentration</span
+      ><span>▬ Dealer flow S−B, whisker = unknowns assigned</span
+      ><span class="gap">▨ No coverage</span>
     </div>
+    <span id="fresh"></span>
     <canvas
-      aria-label="Rolling time by strike. Select a print to inspect it."
+      aria-label="Prints by time and strike, with estimated dealer gamma per strike at the displayed time. Select a print or strike to inspect it."
     ></canvas
     ><output id="details" aria-live="polite"
-      >Tap a print to inspect price, size and inferred side.</output
+      >Tap a print or a strike to inspect it.</output
     >
     <footer>
       <button id="play">Pause</button
       ><label
         >Position
-        <input id="seek" type="range" min="0" max="1000" value="450" /></label
+        <input id="seek" type="range" min="0" max="1000" value="0" /></label
       ><label
         >Speed
         <select id="speed">
           <option>1</option>
           <option selected>4</option>
           <option>12</option>
+          <option>60</option>
+          <option>300</option>
         </select>
         ×</label
       >
     </footer>
+    <h2 id="table-title">Estimated dealer gamma by strike</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Strike</th>
+            <th title="Inferred buyer-initiated / seller-initiated / unknown contracts, covered session to displayed time">Observed B / S / U</th>
+            <th title="Unsigned: 0.01 × multiplier × gamma × spot² × settled OI">OI concentration $/1%</th>
+            <th title="Dealer flow S−B under the passive-dealer assumption">Dealer flow $/1%</th>
+            <th title="Unknowns to buyers … unknowns to sellers">Flow endpoints</th>
+            <th title="Flow endpoints plus settled OI between −OI and +OI">Conditional total range</th>
+          </tr>
+        </thead>
+        <tbody id="ladder"></tbody>
+      </table>
+    </div>
+    <p class="notes">
+      Prints are recorded trades. Buy and sell are inferred aggressor sides
+      (quote midpoint within one second, else tick rule); unknown volume is
+      kept separate. Dealer flow assumes dealers took the passive side of
+      every signed print (S−B); 50% participation is an illustrative fixed
+      assumption, not an estimate. Endpoints assign all unknowns to buyers or
+      to sellers, and are scenario bounds, not confidence intervals; direction
+      is marked uncertain when they include zero. Opening dealer inventory is
+      unknown: the conditional total range adds −OI…+OI of the latest settled
+      open interest for each exact contract, assumes no net change between
+      settlement and the open, and is applied once. Values use the gamma and
+      spot of one chain snapshot at or before the displayed time; a snapshot
+      older than two minutes or a missing field is shown as no coverage, never
+      as zero. Only the captured contracts are covered.
+    </p>
   </main>
+  <script src="./shared/order-flow-exposure.js"></script>
+  <script src="./shared/order-flow-model.js"></script>
   <script>
+    const X = window.OrderFlowExposure,
+      M = window.OrderFlowModel;
+    const LIVE_URL =
+        "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/order-flow/qqq/v1/recent.json",
+      CHAIN_URL =
+        "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/intraday/latest.json";
     const canvas = document.querySelector("canvas"),
       ctx = canvas.getContext("2d"),
       el = (id) => document.getElementById(id);
-    let data = [],
+    const SIDE = ["buy", "sell", "unknown"],
+      COLOR = { buy: "#62e3bd", sell: "#ff967c", unknown: "#b7bbd5" };
+    let replay = null,
+      feed = null,
+      chain = null,
+      liveRows = [],
       end = Date.now(),
       playing = true,
       last = performance.now(),
-      hits = [];
-    let status = "",
+      hits = [],
+      strikeHits = [],
+      view = null,
+      selected = null,
+      status = "",
       generation = 0,
-      timer = 0,
-      controller = null,
-      dirty = true;
+      timers = [],
+      controllers = [],
+      dirty = true,
+      tableAt = 0,
+      forceTable = true;
     const live = () => el("source").value === "live";
+    const part = () => Number(el("participation").value);
     const clock = (t) =>
       new Date(t).toLocaleTimeString("en-US", {
         timeZone: "America/New_York",
         hour12: false,
       });
+    const money = (v) => {
+      if (v == null) return "—";
+      const a = Math.abs(v),
+        s = v < 0 ? "−" : v > 0 ? "+" : "";
+      return (
+        s +
+        "$" +
+        (a >= 1e9
+          ? (a / 1e9).toFixed(2) + "B"
+          : a >= 1e6
+            ? (a / 1e6).toFixed(2) + "M"
+            : a >= 1e3
+              ? (a / 1e3).toFixed(1) + "k"
+              : a.toFixed(0))
+      );
+    };
+    const unsigned = (v) => (v == null ? "—" : money(v).replace(/^\+/, ""));
+    const contractsCount = (v) => (v == null ? "—" : (v < 0 ? "−" : v > 0 ? "+" : "") + Math.abs(v).toLocaleString("en-US"));
+
+    // Prints within [start, end] for the plot.
+    function visiblePrints(start, stop) {
+      const f = el("filter").value,
+        want = (type) => f === "All" || type === f[0];
+      if (!live() && replay) {
+        const c = replay.cols,
+          out = [];
+        for (let i = X.ofLowerBound(c.t, start); i < c.t.length && c.t[i] <= stop; i++) {
+          const k = replay.contracts[c.contract[i]];
+          if (want(k.type))
+            out.push({ t: c.t[i], size: c.size[i], price: c.cents[i] / 100, symbol: k.symbol,
+              strike: k.strike, type: k.type, side: SIDE[c.side[i]] });
+        }
+        return out;
+      }
+      return liveRows.filter((p) => p.t >= start && p.t <= stop && want(p.type));
+    }
+
+    function currentView() {
+      if (!live()) return replay ? M.replayAt(replay, end) : null;
+      return feed ? M.liveAt(feed, chain, Date.now()) : null;
+    }
+
+    function freshnessText(v) {
+      if (!v) return "";
+      const bits = [];
+      if (v.snapshot)
+        bits.push(
+          "chain " + clock(v.snapshot.t) + " ET (" + Math.round(v.snapshot.age / 1000) + " s old" +
+            (v.snapshot.stale ? ", STALE → no gamma coverage" : "") + ")",
+        );
+      else bits.push("chain snapshot unavailable → no gamma coverage");
+      const c = v.coverage;
+      if (c && c.from != null)
+        bits.push("flow covered from " + clock(c.from) + (c.to ? " to " + clock(c.to) : "") + " ET");
+      if (c && c.gaps && c.gaps.length)
+        bits.push(
+          c.gaps.length + " gap" + (c.gaps.length > 1 ? "s" : "") + ": " +
+            c.gaps.map((g) => (g.start ? clock(g.start) : "?") + "–" + (g.end ? clock(g.end) : "open")).join(", "),
+        );
+      if (c && c.incomplete) bits.push("INCOMPLETE HISTORY");
+      if (live() && feed && feed.session && feed.rows)
+        bits.push("plot shows latest " + feed.rows.length.toLocaleString() + " of " + feed.session.prints.toLocaleString() + " session prints");
+      if (v.clearingDate) bits.push("settled OI clearing date inferred " + v.clearingDate);
+      return bits.join(" · ");
+    }
+
     function draw() {
       const w = canvas.clientWidth,
         h = canvas.clientHeight,
         d = devicePixelRatio || 1;
-      if (
-        canvas.width !== Math.round(w * d) ||
-        canvas.height !== Math.round(h * d)
-      ) {
+      if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
         canvas.width = Math.round(w * d);
         canvas.height = Math.round(h * d);
       }
       ctx.setTransform(d, 0, 0, d, 0, 0);
       ctx.clearRect(0, 0, w, h);
       hits = [];
-      const left = 48,
-        right = w - 17,
+      strikeHits = [];
+      view = currentView();
+      const panel = Math.max(118, Math.min(300, w * 0.3)),
+        left = 48,
+        right = w - panel - 14,
         top = 30,
         bottom = h - 36,
         start = end - 60000,
-        visible = data.filter(
-          (p) =>
-            p.t >= start &&
-            p.t <= end &&
-            (el("filter").value === "All" || p.type === el("filter").value[0]),
-        );
-      const strikes = [...new Set(visible.map((p) => p.strike))].sort(
-        (a, b) => b - a,
-      );
+        visible = visiblePrints(start, end);
+      const strikes = view && view.strikes.length
+        ? view.strikes.map((s) => s.strike)
+        : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
       const high = strikes[0],
         low = strikes[strikes.length - 1];
       const strikeY = (strike) =>
-        high === low
-          ? (top + bottom) / 2
-          : bottom - ((bottom - top) * (strike - low)) / (high - low);
+        high === low ? (top + bottom) / 2 : bottom - ((bottom - top) * (strike - low)) / (high - low);
       ctx.font = "11px monospace";
       ctx.fillStyle = "#adbdc1";
+      ctx.textAlign = "left";
       ctx.fillText("STRIKE $", 2, 13);
       ctx.fillText("TIME ET", left, h - 1);
       let lastLabelY = -Infinity;
       for (const strike of strikes) {
         const y = strikeY(strike);
-        if (y - lastLabelY < 16 || (strike !== low && bottom - y < 16))
-          continue;
-        lastLabelY = y;
         ctx.strokeStyle = "#25353c";
         ctx.beginPath();
         ctx.moveTo(left, y);
-        ctx.lineTo(right, y);
+        ctx.lineTo(w - 4, y);
         ctx.stroke();
+        if (y - lastLabelY < 14 && strike !== low) continue;
+        lastLabelY = y;
         ctx.fillStyle = "#adbdc1";
         ctx.fillText(String(strike), 1, y + 3);
       }
       for (let i = 0; i <= 3; i++) {
-        let x = left + ((right - left) * i) / 3;
-        ctx.fillText(
-          clock(start + i * 20000).slice(0, 8),
-          Math.min(w - 55, Math.max(left, x - 24)),
-          h - 16,
-        );
+        const x = left + ((right - left) * i) / 3;
+        ctx.fillText(clock(start + i * 20000).slice(0, 8), Math.min(right - 55, Math.max(left, x - 24)), h - 16);
+      }
+      // Coverage gaps in the plot window.
+      for (const g of (view && view.coverage && view.coverage.gaps) || []) {
+        const a = Math.max(start, g.start ?? start),
+          b = Math.min(end, g.end ?? end);
+        if (b <= a) continue;
+        const x0 = left + ((right - left) * (a - start)) / 60000,
+          x1 = left + ((right - left) * (b - start)) / 60000;
+        ctx.fillStyle = "#f2c96b22";
+        ctx.fillRect(x0, top - 10, Math.max(2, x1 - x0), bottom - top + 20);
       }
       for (const p of visible) {
-        let x = left + ((right - left) * (p.t - start)) / 60000,
+        const x = left + ((right - left) * (p.t - start)) / 60000,
           y = strikeY(p.strike),
           a = 8 * p.size,
           r = Math.sqrt(a / Math.PI),
           k = Math.sqrt(a / 2);
-        ctx.strokeStyle = {
-          buy: "#62e3bd",
-          sell: "#ff967c",
-          unknown: "#b7bbd5",
-        }[p.side];
+        ctx.strokeStyle = COLOR[p.side];
         ctx.fillStyle = ctx.strokeStyle + "65";
         ctx.beginPath();
         if (p.type === "C") ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -261,49 +436,197 @@
         ctx.textAlign = "left";
         hits.push({ x, y, p, r: Math.max(8, p.type === "C" ? r : k) });
       }
-      el("state").textContent = status + " · " + visible.length + " visible";
+      drawPanel(right + 14, w - 4, top, bottom, strikeY);
+      el("state").textContent = status + " · " + visible.length + " prints in view";
+      if (forceTable || performance.now() - tableAt > 1000) {
+        el("fresh").textContent = freshnessText(view);
+        const focused = document.activeElement?.dataset?.strike;
+        renderTable();
+        if (focused) el("ladder").querySelector(`tr[data-strike="${focused}"]`)?.focus();
+        tableAt = performance.now();
+        forceTable = false;
+      }
     }
+
+    // Exposure aligned to the plot's strike axis, at the plot's right-edge time.
+    function drawPanel(x0, x1, top, bottom, strikeY) {
+      ctx.fillStyle = "#adbdc1";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("AT " + clock(end).slice(0, 8), x0, 13);
+      ctx.fillText("OI conc. | dealer flow", x0, 24);
+      if (!view || !view.strikes.length) return;
+      const p = part(),
+        conc = Math.max(1, ...view.strikes.map((s) => s.concentration.value || 0)),
+        flow = Math.max(1, ...view.strikes.flatMap((s) => [Math.abs(s.flow[p].low || 0), Math.abs(s.flow[p].high || 0)]));
+      const split = x0 + (x1 - x0) * 0.38,
+        mid = split + (x1 - split) / 2,
+        half = (x1 - split) / 2 - 4;
+      ctx.strokeStyle = "#405359";
+      ctx.beginPath();
+      ctx.moveTo(mid, top - 6);
+      ctx.lineTo(mid, bottom + 6);
+      ctx.stroke();
+      for (const s of view.strikes) {
+        const y = strikeY(s.strike);
+        strikeHits.push({ y, strike: s.strike });
+        if (s.concentration.value == null) hatch(x0, y - 5, split - x0 - 6, 10);
+        else {
+          ctx.fillStyle = "#7f9399";
+          ctx.fillRect(x0, y - 5, ((split - x0 - 6) * s.concentration.value) / conc, 10);
+        }
+        const f = s.flow[p];
+        if (f.base == null) {
+          hatch(split + 2, y - 5, x1 - split - 2, 10);
+          continue;
+        }
+        const X0 = (v) => mid + (half * v) / flow;
+        ctx.strokeStyle = "#dfe8e6";
+        ctx.beginPath();
+        ctx.moveTo(X0(f.low), y);
+        ctx.lineTo(X0(f.high), y);
+        ctx.moveTo(X0(f.low), y - 4);
+        ctx.lineTo(X0(f.low), y + 4);
+        ctx.moveTo(X0(f.high), y - 4);
+        ctx.lineTo(X0(f.high), y + 4);
+        ctx.stroke();
+        ctx.fillStyle = f.uncertain ? "#b7bbd5" : f.base < 0 ? "#ff967c" : "#62e3bd";
+        const bx = Math.min(mid, X0(f.base));
+        ctx.fillRect(bx, y - 3, Math.max(1, Math.abs(X0(f.base) - mid)), 6);
+        if (f.covered < f.of) hatch(x1 - 6, y - 5, 6, 10);
+      }
+    }
+
+    function hatch(x, y, w, h) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.strokeStyle = "#f2c96b";
+      for (let i = -h; i < w; i += 4) {
+        ctx.beginPath();
+        ctx.moveTo(x + i, y + h);
+        ctx.lineTo(x + i + h, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function renderTable() {
+      const body = el("ladder"),
+        p = part();
+      el("table-title").textContent =
+        "Estimated dealer gamma by strike at " + clock(end) + " ET · " + (p === 1 ? "100%" : "50%") + " passive participation";
+      if (!view || !view.strikes.length) {
+        body.innerHTML = '<tr><td colspan="6" class="muted">No covered contracts yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = view.strikes
+        .map((s) => {
+          const f = s.flow[p],
+            t = s.total[p],
+            cov = f.covered < f.of ? ` <span class="gap" title="${f.of - f.covered} of ${f.of} contracts lack gamma/spot">▨</span>` : "";
+          return `<tr tabindex="0" data-strike="${s.strike}" class="${selected === s.strike ? "sel" : ""}">
+            <td>${s.strike}</td>
+            <td><span class="buy">${s.observed.B.toLocaleString()}</span> / <span class="sell">${s.observed.S.toLocaleString()}</span> / <span class="unknown">${s.observed.U.toLocaleString()}</span></td>
+            <td>${s.concentration.value == null ? '<span class="gap">no coverage</span>' : unsigned(s.concentration.value)}</td>
+            <td>${f.base == null ? '<span class="gap">no coverage</span>' : money(f.base)}${cov}</td>
+            <td>${f.base == null ? "—" : money(f.low) + " … " + money(f.high) + (f.uncertain ? " · sign uncertain" : "")}</td>
+            <td>${t.low == null ? '<span class="gap">no coverage</span>' : money(t.low) + " … " + money(t.high)}</td>
+          </tr>`;
+        })
+        .join("");
+      if (selected != null) inspect(selected, false);
+    }
+
+    function inspect(strike, announce = true) {
+      selected = strike;
+      if (!view) return;
+      const s = view.strikes.find((r) => r.strike === strike);
+      if (!s) return;
+      const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (live() ? "live" : "archive replay") + ")"];
+      for (const c of s.contracts) {
+        const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
+        const obs = c.observed;
+        lines.push(
+          (c.type === "C" ? "Call" : "Put") + " " + c.symbol + ": recorded prints " + (src.flow ? src.flow.prints ?? "?" : "none") +
+            "; inferred buy " + (obs ? obs.B : "—") + ", inferred sell " + (obs ? obs.S : "—") + ", unknown " + (obs ? obs.U : "—") + " contracts",
+        );
+        lines.push(
+          "   dealer S−B " + contractsCount(c.cases[1] && c.cases[1].base) + " contracts (unknowns " +
+            contractsCount(c.cases[1] && c.cases[1].low) + " … " + contractsCount(c.cases[1] && c.cases[1].high) + "); opening position that would offset it " +
+            contractsCount(c.offset),
+        );
+        lines.push(
+          "   settled OI " + (c.oi == null ? "no coverage" : c.oi.toLocaleString() + (src.oiFirstSeen ? " (first seen " + clock(src.oiFirstSeen) + " ET)" : live() ? " (first observation time not published live)" : "")) +
+            " · gamma " + (src.gamma == null ? "no coverage" : src.gamma.toFixed(5)) + " · spot " + (src.spot == null ? "no coverage" : "$" + src.spot) +
+            " · $/1% per contract " + (c.unit == null ? "—" : "$" + c.unit.toFixed(2)),
+        );
+      }
+      for (const p of X.OF_PARTICIPATION) {
+        const f = s.flow[p],
+          t = s.total[p];
+        lines.push(
+          (p === 1 ? "100% passive (primary): " : "50% uniform (illustrative): ") + "dealer flow " + money(f.base) + " per 1% QQQ [" + money(f.low) + " … " + money(f.high) + "]" +
+            (f.uncertain ? " direction uncertain" : "") + "; conditional total " + (t.low == null ? "no coverage" : money(t.low) + " … " + money(t.high)),
+        );
+      }
+      lines.push(
+        "OI concentration (unsigned) " + unsigned(s.concentration.value) + " per 1%. Total assumes zero net change between settlement and the open." +
+          (view.snapshot ? " Chain snapshot " + clock(view.snapshot.t) + " ET, " + Math.round(view.snapshot.age / 1000) + " s old" + (view.snapshot.stale ? " (stale: not used)" : "") + "." : " No chain snapshot."),
+      );
+      el("details").textContent = lines.join("\n");
+      for (const tr of el("ladder").children) tr.classList.toggle("sel", Number(tr.dataset.strike) === strike);
+    }
+
+    el("ladder").onclick = (e) => {
+      const tr = e.target.closest("tr[data-strike]");
+      if (tr) inspect(Number(tr.dataset.strike));
+    };
+    el("ladder").onkeydown = (e) => {
+      const tr = e.target.closest("tr[data-strike]");
+      if (tr && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        inspect(Number(tr.dataset.strike));
+      }
+    };
     canvas.onclick = (e) => {
-      let b = canvas.getBoundingClientRect(),
-        hit = [...hits]
-          .reverse()
-          .find(
-            (v) =>
-              Math.hypot(v.x - e.clientX + b.left, v.y - e.clientY + b.top) <=
-              v.r,
-          );
+      const b = canvas.getBoundingClientRect(),
+        cx = e.clientX - b.left,
+        cy = e.clientY - b.top;
+      const hit = [...hits].reverse().find((v) => Math.hypot(v.x - cx, v.y - cy) <= v.r);
       if (hit) {
         const p = hit.p;
+        selected = p.strike;
+        inspect(p.strike);
         el("details").textContent =
-          clock(p.t) +
-          " ET　 $" +
-          p.strike +
-          " " +
-          (p.type === "C" ? "call" : "put") +
-          "　 " +
-          p.size +
-          " contracts @ $" +
-          p.price +
-          "　 " +
-          (p.side === "unknown" ? "Unknown side" : "Inferred " + p.side);
+          clock(p.t) + " ET　 $" + p.strike + " " + (p.type === "C" ? "call" : "put") + "　 " + p.size + " contracts @ $" + p.price + "　 " +
+          (p.side === "unknown" ? "Unknown side" : "Inferred " + p.side) + "\n\n" + el("details").textContent;
+        return;
       }
+      const near = strikeHits.reduce((best, s) => (Math.abs(s.y - cy) < Math.abs((best?.y ?? Infinity) - cy) ? s : best), null);
+      if (near && Math.abs(near.y - cy) < 18) inspect(near.strike);
     };
     el("play").onclick = () => {
       playing = !playing;
       el("play").textContent = playing ? "Pause" : "Play";
     };
+    const span = () => replay.coverage.close - replay.coverage.open;
     el("seek").oninput = () => {
-      if (!data.length) return;
-      end = data[0].t + ((data.at(-1).t - data[0].t) * el("seek").value) / 1000;
-      draw();
+      if (!replay) return;
+      end = replay.coverage.open + (span() * el("seek").value) / 1000;
+      dirty = forceTable = true;
     };
-    el("filter").onchange = draw;
+    el("filter").onchange = el("participation").onchange = () => (dirty = forceTable = true);
     function frame(now) {
-      if (!live() && playing && data.length) {
+      if (!live() && playing && replay) {
         end += (now - last) * Number(el("speed").value);
-        if (end > data.at(-1).t) end = data[0].t;
-        el("seek").value =
-          (1000 * (end - data[0].t)) / (data.at(-1).t - data[0].t);
+        if (end > replay.coverage.close) end = replay.coverage.open + 15000;
+        el("seek").value = (1000 * (end - replay.coverage.open)) / span();
+        dirty = true;
+      }
+      if (live()) {
+        end = Date.now();
         dirty = true;
       }
       last = now;
@@ -313,94 +636,99 @@
       }
       setTimeout(() => requestAnimationFrame(frame), 180);
     }
+
+    async function getJson(url, gen, timeoutMs) {
+      const controller = new AbortController();
+      controllers.push(controller);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { cache: "no-store", signal: controller.signal, credentials: "omit" });
+        if (gen !== generation) return { stale: true };
+        if (res.status === 404) return { missing: true };
+        if (!res.ok) throw Error("HTTP " + res.status);
+        return { json: await res.json() };
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
     async function changeSource() {
       const gen = ++generation;
-      clearTimeout(timer);
-      controller?.abort();
-      data = [];
-      end = Date.now();
-      dirty = true;
+      timers.forEach(clearTimeout);
+      controllers.forEach((c) => c.abort());
+      timers = [];
+      controllers = [];
+      feed = chain = null;
+      liveRows = [];
+      selected = null;
+      dirty = forceTable = true;
       const isLive = live();
-      document.querySelector("footer").hidden = isLive;
       document.querySelector("footer").style.display = isLive ? "none" : "flex";
-      el("mode").textContent = isLive
-        ? "QQQ · Live feed"
-        : "Archive replay · September 25, 2026";
-      status = isLive ? "Waiting for feed" : "Loading archive";
-      el("details").textContent =
-        "Tap a print to inspect price, size and inferred side.";
-      history.replaceState(
-        null,
-        "",
-        isLive ? "?source=live" : "?source=replay",
-      );
-      let received = null;
-      async function read() {
-        if (gen !== generation) return;
-        controller = new AbortController();
-        const active = controller;
-        const timeout = setTimeout(() => active.abort(), 8000);
+      el("mode").textContent = isLive ? "QQQ · Live feed" : "Archive replay · September 25, 2026";
+      el("details").textContent = "Tap a print or a strike to inspect it.";
+      history.replaceState(null, "", isLive ? "?source=live" : "?source=replay");
+      if (!isLive) {
+        status = "Loading archive";
         try {
-          const url = isLive
-            ? "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev/order-flow/qqq/v1/recent.json?_=" +
-              Date.now()
-            : "./order-flow-replay.json";
-          const res = await fetch(url, {
-            cache: "no-store",
-            signal: active.signal,
-            credentials: "omit",
-          });
+          const r = replay || (await getJson("./order-flow-replay.json", gen, 60000)).json;
           if (gen !== generation) return;
-          if (res.status === 404 && isLive) {
-            data = [];
-            received = null;
+          replay = replay || M.decodeReplay(r);
+          end = replay.coverage.open + 15000;
+          status = "Archive · " + replay.cols.t.length.toLocaleString() + " audited prints";
+        } catch (e) {
+          if (gen === generation) status = "Archive unavailable";
+        }
+        dirty = true;
+        return;
+      }
+      status = "Waiting for feed";
+      let received = null;
+      async function readFeed() {
+        if (gen !== generation) return;
+        try {
+          const r = await getJson(LIVE_URL + "?_=" + Date.now(), gen, 8000);
+          if (r.stale) return;
+          if (r.missing) {
+            feed = null;
+            liveRows = [];
             status = "Waiting · no published print";
           } else {
-            if (!res.ok) throw Error("HTTP " + res.status);
-            const payload = await res.json();
-            if (gen !== generation) return;
-            if (
-              !Array.isArray(payload.rows) ||
-              (!isLive && !payload.rows.length)
-            )
-              throw Error("Invalid feed");
-            data = payload.rows.sort((a, b) => a.t - b.t);
-            if (isLive) {
-              received = payload.lastReceived;
-              const age = Date.now() - received;
-              status =
-                (age > 15000 ? "Stale" : "Receiving") +
-                " · last print " +
-                new Date(received).toLocaleString("en-US", {
-                  timeZone: "America/New_York",
-                }) +
-                " ET";
-            } else {
-              end =
-                data[0].t + Math.min(15000, (data.at(-1).t - data[0].t) / 2);
-              status = "Archive · 09:30 ET";
-            }
+            if (!r.json || !Array.isArray(r.json.rows)) throw Error("Invalid feed");
+            feed = r.json;
+            liveRows = feed.rows.slice().sort((a, b) => a.t - b.t);
+            received = feed.lastReceived;
+            const age = received == null ? Infinity : Date.now() - received;
+            status = (age > 15000 ? "Stale" : "Receiving") + (received ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");
+            if (!feed.session) status += " · no session history published";
           }
         } catch (e) {
-          if (gen === generation)
-            status =
-              (isLive ? "Disconnected" : "Archive unavailable") +
-              (received ? " · last print " + clock(received) + " ET" : "");
+          if (gen === generation) status = "Disconnected" + (received ? " · last print " + clock(received) + " ET" : "");
         } finally {
-          clearTimeout(timeout);
           if (gen === generation) {
-            if (isLive) end = Date.now();
             dirty = true;
-            if (isLive) timer = setTimeout(read, 3000);
+            timers.push(setTimeout(readFeed, 3000));
           }
         }
       }
-      await read();
+      async function readChain() {
+        if (gen !== generation) return;
+        try {
+          const r = await getJson(CHAIN_URL + "?_=" + Date.now(), gen, 10000);
+          if (r.stale) return;
+          chain = r.missing ? null : r.json;
+        } catch (e) {
+          // Keep the last chain; its age marks it stale once it passes two minutes.
+        } finally {
+          if (gen === generation) {
+            dirty = true;
+            timers.push(setTimeout(readChain, 30000));
+          }
+        }
+      }
+      readFeed();
+      readChain();
     }
-    el("source").value =
-      new URLSearchParams(location.search).get("source") === "replay"
-        ? "replay"
-        : "live";
+    el("source").value = new URLSearchParams(location.search).get("source") === "replay" ? "replay" : "live";
     el("source").onchange = changeSource;
     window.addEventListener("resize", () => (dirty = true));
     changeSource();
