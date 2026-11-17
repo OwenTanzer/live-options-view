@@ -249,6 +249,7 @@
   </main>
   <script src="./shared/order-flow-exposure.js"></script>
   <script src="./shared/order-flow-model.js"></script>
+  <script src="./shared/order-flow-render.js"></script>
   <script>
     const X = window.OrderFlowExposure,
       M = window.OrderFlowModel;
@@ -286,24 +287,8 @@
         timeZone: "America/New_York",
         hour12: false,
       });
-    const money = (v) => {
-      if (v == null) return "—";
-      const a = Math.abs(v),
-        s = v < 0 ? "−" : v > 0 ? "+" : "";
-      return (
-        s +
-        "$" +
-        (a >= 1e9
-          ? (a / 1e9).toFixed(2) + "B"
-          : a >= 1e6
-            ? (a / 1e6).toFixed(2) + "M"
-            : a >= 1e3
-              ? (a / 1e3).toFixed(1) + "k"
-              : a.toFixed(0))
-      );
-    };
-    const unsigned = (v) => (v == null ? "—" : money(v).replace(/^\+/, ""));
-    const contractsCount = (v) => (v == null ? "—" : (v < 0 ? "−" : v > 0 ? "+" : "") + Math.abs(v).toLocaleString("en-US"));
+    const R = window.OrderFlowRender,
+      { money, unsigned, contractsCount } = R;
 
     // Prints within [start, end] for the plot.
     function visiblePrints(start, stop) {
@@ -329,27 +314,10 @@
     }
 
     function freshnessText(v) {
-      if (!v) return "";
-      const bits = [];
-      if (v.snapshot)
-        bits.push(
-          "chain " + clock(v.snapshot.t) + " ET (" + Math.round(v.snapshot.age / 1000) + " s old" +
-            (v.snapshot.stale ? ", STALE → no gamma coverage" : "") + ")",
-        );
-      else bits.push("chain snapshot unavailable → no gamma coverage");
-      const c = v.coverage;
-      if (c && c.from != null)
-        bits.push("flow covered from " + clock(c.from) + (c.to ? " to " + clock(c.to) : "") + " ET");
-      if (c && c.gaps && c.gaps.length)
-        bits.push(
-          c.gaps.length + " gap" + (c.gaps.length > 1 ? "s" : "") + ": " +
-            c.gaps.map((g) => (g.start ? clock(g.start) : "?") + "–" + (g.end ? clock(g.end) : "open")).join(", "),
-        );
-      if (c && c.incomplete) bits.push("INCOMPLETE HISTORY");
+      const extra = [];
       if (live() && feed && feed.session && feed.rows)
-        bits.push("plot shows latest " + feed.rows.length.toLocaleString() + " of " + feed.session.prints.toLocaleString() + " session prints");
-      if (v.clearingDate) bits.push("settled OI clearing date inferred " + v.clearingDate);
-      return bits.join(" · ");
+        extra.push("plot shows latest " + feed.rows.length.toLocaleString() + " of " + feed.session.prints.toLocaleString() + " session prints");
+      return R.freshnessText(v, clock, extra);
     }
 
     function draw() {
@@ -474,6 +442,7 @@
         else {
           ctx.fillStyle = "#7f9399";
           ctx.fillRect(x0, y - 5, ((split - x0 - 6) * s.concentration.value) / conc, 10);
+          if (s.concentration.covered < s.concentration.of) hatch(split - 12, y - 5, 6, 10);
         }
         const f = s.flow[p];
         if (f.base == null) {
@@ -517,25 +486,7 @@
         p = part();
       el("table-title").textContent =
         "Estimated dealer gamma by strike at " + clock(end) + " ET · " + (p === 1 ? "100%" : "50%") + " passive participation";
-      if (!view || !view.strikes.length) {
-        body.innerHTML = '<tr><td colspan="6" class="muted">No covered contracts yet.</td></tr>';
-        return;
-      }
-      body.innerHTML = view.strikes
-        .map((s) => {
-          const f = s.flow[p],
-            t = s.total[p],
-            cov = f.covered < f.of ? ` <span class="gap" title="${f.of - f.covered} of ${f.of} contracts lack gamma/spot">▨</span>` : "";
-          return `<tr tabindex="0" data-strike="${s.strike}" class="${selected === s.strike ? "sel" : ""}">
-            <td>${s.strike}</td>
-            <td><span class="buy">${s.observed.B.toLocaleString()}</span> / <span class="sell">${s.observed.S.toLocaleString()}</span> / <span class="unknown">${s.observed.U.toLocaleString()}</span></td>
-            <td>${s.concentration.value == null ? '<span class="gap">no coverage</span>' : unsigned(s.concentration.value)}</td>
-            <td>${f.base == null ? '<span class="gap">no coverage</span>' : money(f.base)}${cov}</td>
-            <td>${f.base == null ? "—" : money(f.low) + " … " + money(f.high) + (f.uncertain ? " · sign uncertain" : "")}</td>
-            <td>${t.low == null ? '<span class="gap">no coverage</span>' : money(t.low) + " … " + money(t.high)}</td>
-          </tr>`;
-        })
-        .join("");
+      body.innerHTML = R.ladderRowsHtml(view, p, selected);
       if (selected != null) inspect(selected, false);
     }
 
@@ -568,11 +519,13 @@
           t = s.total[p];
         lines.push(
           (p === 1 ? "100% passive (primary): " : "50% uniform (illustrative): ") + "dealer flow " + money(f.base) + " per 1% QQQ [" + money(f.low) + " … " + money(f.high) + "]" +
-            (f.uncertain ? " direction uncertain" : "") + "; conditional total " + (t.low == null ? "no coverage" : money(t.low) + " … " + money(t.high)),
+            (f.uncertain ? " direction uncertain" : "") + "; conditional total " + (t.low == null ? "no coverage" : t.covered < t.of ? "withheld (" + t.covered + "/" + t.of + " contracts covered)" : money(t.low) + " … " + money(t.high)),
         );
       }
       lines.push(
-        "OI concentration (unsigned) " + unsigned(s.concentration.value) + " per 1%. Total assumes zero net change between settlement and the open." +
+        "OI concentration (unsigned) " + unsigned(s.concentration.value) + " per 1% from " + s.concentration.covered + " of " + s.concentration.of +
+          " contracts; conditional total " + (s.total[1].covered < s.total[1].of ? "withheld (" + s.total[1].covered + " of " + s.total[1].of + " contracts covered)" : "covers all " + s.total[1].of + " contracts") +
+          ". Total assumes zero net change between settlement and the open." +
           (view.snapshot ? " Chain snapshot " + clock(view.snapshot.t) + " ET, " + Math.round(view.snapshot.age / 1000) + " s old" + (view.snapshot.stale ? " (stale: not used)" : "") + "." : " No chain snapshot."),
       );
       el("details").textContent = lines.join("\n");

@@ -163,12 +163,14 @@ class RecentPrints:
             session.add(row)
             self.version += 1
 
-    def rebuild(self, client, bucket, prefix, local_segments=(), now=None):
+    def rebuild(self, client, bucket, prefix, local_segments=(), now=None, session_open=None):
         """Replay this session's archived segments (R2, then unuploaded local spool) before capture.
 
-        Overlapping events are dropped by identity. Anything between the last archived
-        receipt and the first live event is recorded as a restart gap. A failure
-        leaves the session marked incomplete; capture proceeds either way.
+        Overlapping events are dropped by identity. When capture starts after the open,
+        the interval from the later of the open and the last archived receipt to the
+        first live event is recorded as a restart gap, including a late start with no
+        archived history at all. A failure leaves the session marked incomplete;
+        capture proceeds either way.
         """
         keys, token, last_receipt, segments = [], None, None, 0
         try:
@@ -196,12 +198,17 @@ class RecentPrints:
             logging.warning("Order-flow session rebuild failed: %s", type(exc).__name__)
             status = "rebuild_failed"
         now = now or datetime.now(timezone.utc)
+        local_now = now.astimezone(ET)
+        opened = session_open or local_now.replace(hour=9, minute=30, second=0, microsecond=0)
+        open_ms, now_ms = int(opened.timestamp() * 1000), int(now.timestamp() * 1000)
         with self.lock:
             if self.session is None:
-                self.session = Session(now.astimezone(ET).date().isoformat())
-            start = _ms(last_receipt) if last_receipt else None
-            self.session.rebuilt = dict(status=status, segments=segments, through=start, at=int(now.timestamp() * 1000))
-            if status != "rebuilt" or start is not None:
+                self.session = Session(local_now.date().isoformat())
+            through = _ms(last_receipt) if last_receipt else None
+            self.session.rebuilt = dict(status=status, segments=segments, through=through, at=now_ms,
+                                        session_open=open_ms)
+            start = max(open_ms, through) if through is not None else open_ms
+            if status != "rebuilt" or now_ms > open_ms:
                 # Closed by the first live event's receipt; open (null end) until then.
                 self.open_gap = dict(start=start, end=None, reason=f"collector_restart:{status}")
                 self.session.gaps.append(self.open_gap)
