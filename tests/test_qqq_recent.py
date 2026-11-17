@@ -111,9 +111,28 @@ class SessionTests(unittest.TestCase):
         feed.rebuild(client, "bucket", "p", now=datetime.fromtimestamp(self.T0 / 1000, timezone.utc))
         session = feed.payload()["session"]
         self.assertEqual(session["rebuilt"]["status"], "rebuild_failed")
-        self.assertEqual(session["gaps"], [dict(start=None, end=None, reason="collector_restart:rebuild_failed")])
+        self.assertEqual(session["gaps"], [dict(start=self.T0, end=None, reason="collector_restart:rebuild_failed")])
         self.trade(feed, 1, 1.0)
         self.assertEqual(feed.payload()["session"]["gaps"][0]["end"], self.T0 + 6)
+
+    def test_late_start_with_empty_archive_flags_the_missing_opening(self):
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": []}
+        feed = recent.RecentPrints()
+        late = self.T0 + 47 * 60000  # collector first starts at 10:17 ET with nothing archived
+        feed.rebuild(client, "bucket", "p", now=datetime.fromtimestamp(late / 1000, timezone.utc))
+        session = feed.payload()["session"]
+        self.assertEqual(session["rebuilt"]["segments"], 0)
+        self.assertEqual(session["gaps"], [dict(start=self.T0, end=None, reason="collector_restart:rebuilt")])
+        self.trade(feed, 1, 1.0, t=late + 1000)
+        self.assertEqual(feed.payload()["session"]["gaps"], [dict(start=self.T0, end=late + 1005, reason="collector_restart:rebuilt")])
+
+    def test_preopen_start_with_empty_archive_has_no_gap(self):
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": []}
+        feed = recent.RecentPrints()
+        feed.rebuild(client, "bucket", "p", now=datetime.fromtimestamp((self.T0 - 60000) / 1000, timezone.utc))
+        self.assertEqual(feed.payload()["session"]["gaps"], [])
 
 
 if __name__ == "__main__":

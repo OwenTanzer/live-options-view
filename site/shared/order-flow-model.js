@@ -94,14 +94,34 @@
         spot: cr ? finite(cr.UnderlyingPrice ?? chain.underlying_price) : null };
     });
     const gaps = (session && session.gaps) || [];
+    let coverage = null;
+    if (session) {
+      const open = (session.rebuilt && session.rebuilt.session_open) || etOpenMs(session.day);
+      // History must start at the open: a first print more than a minute after it, or a
+      // session that has no print yet although the open has passed, is a missing opening.
+      const late = session.first == null ? now > open + OPENING_GRACE_MS : session.first > open + OPENING_GRACE_MS;
+      const missingOpening = late && !gaps.some((g) => g.start != null && g.start <= open + OPENING_GRACE_MS)
+        ? { start: open, end: session.first ?? null } : null;
+      coverage = { from: session.first, to: session.last, open, gaps, rebuilt: session.rebuilt, missingOpening,
+        incomplete: gaps.length > 0 || late || (session.rebuilt != null && session.rebuilt.status !== 'rebuilt') };
+    }
     return { mode: 'live', t: now, strikes: group(rows), contracts: rows,
       snapshot: Number.isFinite(snapT) ? { t: snapT, key: chain.snapshot_key, age, stale: !usable } : null,
-      clearingDate: session ? priorWeekday(session.day) : null,
-      coverage: session ? { from: session.first, to: session.last, gaps, rebuilt: session.rebuilt,
-        incomplete: gaps.length > 0 || (session.rebuilt && session.rebuilt.status !== 'rebuilt') } : null };
+      clearingDate: session ? priorWeekday(session.day) : null, coverage };
   }
 
-  const api = { SIDE_CODES, parseSymbol, priorWeekday, decodeReplay, replayAt, liveAt, strikesOf };
+  const OPENING_GRACE_MS = 60 * 1000;
+
+  // 09:30 America/New_York on an ISO date, as epoch milliseconds.
+  function etOpenMs(day) {
+    const guess = Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10), 13, 30);
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false,
+      hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(guess));
+    const h = +parts.find((p) => p.type === 'hour').value % 24, m = +parts.find((p) => p.type === 'minute').value;
+    return guess - ((h * 60 + m) - (9 * 60 + 30)) * 60000;
+  }
+
+  const api = { SIDE_CODES, parseSymbol, priorWeekday, decodeReplay, replayAt, liveAt, strikesOf, etOpenMs };
   if (typeof module !== 'undefined') module.exports = api;
   else root.OrderFlowModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);
