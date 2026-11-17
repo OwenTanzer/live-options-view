@@ -45,7 +45,7 @@ const FEE_CONVENTION = 0.5; // USD per executed contract until actual charges ar
 // ------------------------------------------------------------------ parsing
 const NUM = String.raw`\d+(?:\.\d+)?`;
 const TS = String.raw`[0-9T:.\\+\-]+`;
-const F1 = new RegExp(String.raw`(Entry|Exit) order (\d+): (${TS}), (\d+) contracts at USD (${NUM})`, 'g');
+const F1 = new RegExp(String.raw`(Entry|Exit) order (\d+): (${TS}), (\d+) (contracts|shares) at USD (${NUM})`, 'g');
 const F2 = new RegExp(String.raw`\[(Entry|Exit) receipt (\d+)\]\([^)]*\) at (${TS}): USD (${NUM})`, 'g');
 const F3 = new RegExp(String.raw`- (Entry|Exit): \[order (\d+) receipt\]\([^)]*\), (?:buy|sell) (\d+) .*? at USD (${NUM})\. Alert timestamp (${TS})\.`, 'g');
 const F4 = new RegExp(String.raw`\[(Opening|Closing) order (\d+)\]\([^)]*\); execution-alert timestamp (${TS})\.`, 'g');
@@ -57,6 +57,8 @@ const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8,
 const pad = (n, w) => String(n).padStart(w, '0');
 
 export function instrumentFromContract(text, multiplier = 100) {
+  const stock = /^([A-Z][A-Z0-9.-]*) shares$/.exec(String(text).trim());
+  if (stock) return { underlying: stock[1], instrument_type: 'shares', multiplier: 1 };
   // "QQQ Nov 13 '26 $673 Put"
   const m = /^([A-Z]+) (\w{3}) (\d{1,2}) '(\d{2}) \\?\$([\d.]+) (Put|Call)$/.exec(String(text).trim());
   if (!m || !MONTHS[m[2]]) return null;
@@ -81,7 +83,7 @@ export function etDate(isoUtc) {
 }
 
 function legsOf(body, props) {
-  let legs = [...body.matchAll(F1)].map(m => ({ leg: m[1], order: m[2], ts: m[3], qty: Number(m[4]), px: m[5], fmt: 'F1' }));
+  let legs = [...body.matchAll(F1)].map(m => ({ leg: m[1], order: m[2], ts: m[3], qty: Number(m[4]), unit: m[5], px: m[6], fmt: 'F1' }));
   if (!legs.length) legs = [...body.matchAll(F2)].map(m => ({ leg: m[1], order: m[2], ts: m[3], qty: Number(props.Quantity), px: m[4], fmt: 'F2' }));
   if (!legs.length) legs = [...body.matchAll(F3)].map(m => ({ leg: m[1], order: m[2], qty: Number(m[3]), px: m[4], ts: m[5], fmt: 'F3' }));
   if (!legs.length) {
@@ -126,6 +128,7 @@ export function pageExecutions(page) {
   const instrument = instrumentFromContract(props.Contract);
   if (!instrument) return { executions: [], gaps: [`contract text not recognised: ${props.Contract ?? '(empty)'}`] };
   const legs = legsOf(body, props);
+  if (legs?.some(l => (l.unit === 'shares') !== (instrument.instrument_type === 'shares'))) return { executions: [], gaps: ['quantity unit disagrees with instrument'] };
   if (!legs) return { executions: [], gaps: ['no supported fill-line format in page body'] };
   const acct = /E\\?\*TRADE(?: Individual Brokerage)? ending (\d+)/.exec(body);
   const account = acct ? `E*TRADE ending ${acct[1]}` : 'unknown account';
@@ -153,6 +156,7 @@ export function pageExecutions(page) {
           ts_note: `broker order-initiation time; execution alert at ${toUtcIso(leg.ts)}`,
           fee: b.fee, fee_basis: 'actual', evidence: [`broker txn ${b.txn}`, `execution alert order ${leg.order} (${leg.fmt})`] });
       } else {
+        if (instrument.instrument_type === 'shares') return { executions: [], gaps: ['share execution requires its documented broker fee'] };
         const actualFee = k === 1 ? reconciled.get(leg.order) : undefined;
         executions.push({ ...common, ts: toUtcIso(leg.ts), ts_kind: 'execution_alert',
           ts_note: 'execution-alert time (proxy, not an exchange fill time)' + (k > 1 ? "; this partial executed at or before the order's final alert" : ''),
@@ -195,6 +199,33 @@ export async function pagePosition(page, { bodyIncomplete = null } = {}) {
     return { ...base, supported: false, unsupported_reason: `page body not fully read: ${bodyIncomplete}`,
       contract_text: page.properties.Contract ?? null, executions: [], gaps: [] };
   }
+  const external = /^External journal account: (.+)$/m.exec(page.body);
+  if (external) return { ...base, supported: false, owner: external[1], contract_text: page.properties.Contract,
+    executions: [], gaps: [], unsupported_reason: external[1] + '’s account. Excluded from Owen’s performance.' };
+
+  const sections = page.body.split(/^Journal leg: (.+)$/gm);
+  if (sections.length > 1) {
+    if (sections.length !== 5 || sections[1].trim() === sections[3].trim()) return { ...base, supported: false, executions: [], gaps: [],
+      unsupported_reason: 'Expected two distinct combination legs' };
+    const account = sections[0].match(/E\\?\*TRADE(?: Individual Brokerage)? ending \d+/)?.[0] || '';
+    const legs = [];
+    for (let i = 1; i < sections.length; i += 2) {
+      const leg = await pagePosition({ ...page, properties: { ...page.properties, Contract: sections[i].trim() },
+        body: account + '\n' + sections[i + 1] });
+      if (!leg.supported || !leg.closed || !leg.contract.occ_symbol) return { ...base, supported: false, executions: [], gaps: [],
+        unsupported_reason: 'Combination has an unreadable or open leg' };
+      legs.push(leg);
+    }
+    const executions = legs.flatMap(l => l.executions.map(e => ({ ...e, execution_id: e.execution_id + ':' + l.contract.occ_symbol })))
+      .sort((a,b) => a.ts.localeCompare(b.ts));
+    const gross = round(legs.reduce((n,l) => n + l.gross_pnl, 0), 2);
+    const fees = round(legs.reduce((n,l) => n + l.fees, 0), 6);
+    return { ...legs[0], ...base, legs, label: page.properties.Contract, executions, n_fills: executions.length,
+      opened_ts: executions[0].ts, closed_ts: executions.at(-1).ts, gross_pnl: gross, realized_gross_pnl: gross,
+      fees, net_pnl: round(gross-fees, 6), fee_basis: [...new Set(legs.flatMap(l => l.fee_basis))],
+      gaps: legs.flatMap(l => l.gaps), row_checks: { flat: true, gross_matches_row: gross === firstNumber(page.properties['Gross P&L']),
+        fees_match_row: Math.abs(fees-firstNumber(page.properties.Fees)) < 0.005 } };
+  }
   const { executions, gaps } = pageExecutions(page);
   if (!executions.length) {
     return { ...base, supported: false, unsupported_reason: gaps[0], contract_text: page.properties.Contract ?? null, executions: [], gaps };
@@ -216,12 +247,20 @@ export async function pagePosition(page, { bodyIncomplete = null } = {}) {
     }
     maxQty = Math.max(maxQty, Math.abs(pos));
   }
+  const expiry = /^Worthless expiration: (\d+) contracts on (\d{4}-\d{2}-\d{2})\.$/m.exec(page.body);
+  if (expiry) {
+    if (+expiry[1] !== pos || pos <= 0 || expiry[2] !== executions[0].instrument.expiration || etDate(executions.at(-1).ts) > expiry[2])
+      return { ...base, supported: false, executions: [], gaps: [], unsupported_reason: 'Expiration disagrees with remaining contracts or date' };
+    realized -= pos * avg * m;
+    pos = 0;
+  }
   const closed = pos === 0;
   const feesPaid = round(executions.reduce((s, e) => s + e.fee, 0), 6);
   const realizedGross = round(realized, 2);
   return {
     ...base, supported: true, account: executions[0].account, mode: 'live', strategy_id: null,
-    contract: executions[0].instrument, opened_ts: executions[0].ts, closed_ts: closed ? executions.at(-1).ts : null,
+    contract: executions[0].instrument, opened_ts: executions[0].ts, closed_ts: closed && !expiry ? executions.at(-1).ts : null,
+    ...(expiry ? { expired_on: expiry[2] } : {}),
     closed, max_qty: maxQty, n_fills: executions.length,
     // Closed: realised gross and net after every fee. Open: null -- see the open_* fields.
     gross_pnl: closed ? realizedGross : null,
@@ -588,18 +627,18 @@ export async function journalDay(db, day) {
   for (const r of results) {
     const v = rowView(r);
     if (v.supported) {
-      if (v.executions.some(e => etDate(e.ts) === day)) positions.push(v);
-    } else if (v.trade_date && etDate(v.trade_date) === day) {
+      if (v.expired_on === day || v.executions.some(e => etDate(e.ts) === day)) positions.push(v);
+    } else if (v.trade_date && (v.trade_date.length === 10 ? v.trade_date : etDate(v.trade_date)) === day) {
       unsupported.push(v);
     }
   }
   positions.sort((a, b) => (a.opened_ts < b.opened_ts ? -1 : 1));
   const counted = positions.filter(p => p.source_status === 'active');
-  const closed = counted.filter(p => p.closed), open = counted.filter(p => !p.closed);
+  const closed = counted.filter(p => p.closed && (p.expired_on || etDate(p.closed_ts)) === day), open = counted.filter(p => !p.closed);
   return {
     date: day, tz: JOURNAL_TZ, positions, unsupported,
     totals: {
-      positions: counted.length, fills: counted.reduce((s, p) => s + p.n_fills, 0),
+      positions: counted.length, fills: counted.reduce((s, p) => s + p.executions.filter(e => etDate(e.ts) === day).length, 0),
       closed_positions: closed.length,
       // Realised results of closed positions only.
       gross: round(closed.reduce((s, p) => s + p.gross_pnl, 0), 2),

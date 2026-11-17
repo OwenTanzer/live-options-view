@@ -67,7 +67,7 @@ svg{display:block;width:100%}
       <div class="row"><button id="restore">Restore all</button><span class="note" id="selcount"></span></div>
       <div id="plist"></div>
     </div>
-    <div class="card" id="unsupcard" hidden><h2>Rows that could not be read</h2><div id="unsup" class="note"></div></div>
+    <div class="card" id="unsupcard" hidden><h2>Rows outside the position totals</h2><div id="unsup" class="note"></div></div>
   </section>
   <section>
     <div class="card">
@@ -102,9 +102,11 @@ svg{display:block;width:100%}
   const loads = createTradeJournalLoads(url => fetch(url, { credentials: 'same-origin', cache: 'no-store' })
     .then(r => r.json().catch(() => ({})).then(body => ({ ok: r.ok, status: r.status, body }))));
   const shownDate = () => (data ? data.date : $('day').value);
+  const dayInNY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const fillsOnDay = p => p.executions.filter(e => dayInNY.format(T(e.ts)) === shownDate());
   const ctxOf = p => loads.context(shownDate(), p.position_id) || { loading: true };
 
-  const label = p => { const c = p.contract; return `${c.underlying} $${+c.strike} ${c.option_type}`; };
+  const label = p => { const c = p.contract; if (p.label) return p.label; if (c.instrument_type === 'shares') return c.underlying + ' shares'; return `${c.underlying} $${+c.strike} ${c.option_type}`; };
   const orders = p => [...new Set(p.executions.map(e => e.order_ref))].join('→');
   const etMs = (h, m) => { const day = shownDate(), noon = Date.parse(day + 'T12:00:00Z');
     const off = (12 - +fH.format(noon)) * 3600e3; return Date.parse(day + 'T00:00:00Z') + (h * 60 + m) * 60e3 + off; };
@@ -158,10 +160,10 @@ svg{display:block;width:100%}
     const ps = data.positions;
     const sel = ps.filter(p => selected.has(p.position_id));
     const act = sel.filter(p => p.source_status === 'active');
-    const closed = act.filter(p => p.closed), open = act.filter(p => !p.closed);
+    const closed = act.filter(p => p.closed && (p.expired_on || dayInNY.format(T(p.closed_ts))) === shownDate()), open = act.filter(p => !p.closed);
     const t = data.totals;
     const rows = [
-      ['Positions', t.positions, act.length, 0], ['Fills', t.fills, act.reduce((a, p) => a + p.n_fills, 0), 0],
+      ['Positions', t.positions, act.length, 0], ['Fills', t.fills, act.reduce((a, p) => a + fillsOnDay(p).length, 0), 0],
       ['Realised gross (closed)', t.gross, closed.reduce((a, p) => a + p.gross_pnl, 0), 2],
       ['Fees (closed)', t.fees, closed.reduce((a, p) => a + p.fees, 0), 2],
       ['Realised net (closed)', t.net, closed.reduce((a, p) => a + p.net_pnl, 0), 2],
@@ -182,14 +184,14 @@ svg{display:block;width:100%}
         : `open ${Math.abs(p.open_qty)} ${p.open_side} · cost basis $${p.open_cost_basis.toFixed(2)} · fees paid $${p.fees.toFixed(2)}${p.realized_gross_pnl ? ` · realised so far ${usd(p.realized_gross_pnl)}` : ''}`;
       return `<div class="pos ${on ? 'on' : ''}" data-id="${esc(p.position_id)}"><input type="checkbox" ${on ? 'checked' : ''} aria-label="select ${esc(label(p))}">
         <span><b>${esc(label(p))}</b> <span class="note">· ${esc(orders(p))}</span> ${flags}</span><span><button data-only="${esc(p.position_id)}">Only</button></span>
-        <span class="m">${fT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fT.format(T(p.closed_ts)) : ''} · ${p.n_fills} fills · ${pnl}
+        <span class="m">${fDT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fDT.format(T(p.closed_ts)) : ''}${p.expired_on ? ' · expired worthless ' + esc(p.expired_on) : ''} · ${fillsOnDay(p).length} fills on this date · position ${pnl}
         · journal edited ${fDT.format(T(p.source_last_edited))} · read ${fDT.format(T(p.app_read_at))} · <a href="${esc(p.journal_url)}" target="_blank" rel="noopener">row</a></span></div>`;
     }).join('') : '<div class="note">No journal positions have an execution on this date.</div>';
     $('unsupcard').hidden = !data.unsupported.length;
     $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
     $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
-      sel.flatMap(p => p.executions.map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
-        `<tr><td>${esc(label(p))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
+      sel.flatMap(p => fillsOnDay(p).map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
+        `<tr><td>${esc(label({ contract: e.instrument }))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
          <td>${fT.format(T(e.ts))}</td><td class="note">${esc(e.ts_kind)}</td><td class="n">$${e.fee.toFixed(2)} <span class="note">${esc(e.fee_basis)}</span></td>
          <td class="note"><code>${esc(e.execution_id.replace(/^notion:[0-9a-f]+:/, ''))}</code></td></tr>`).join('');
     loadContexts(sel);
@@ -201,7 +203,8 @@ svg{display:block;width:100%}
   function domain() {
     const sel = data.positions.filter(p => selected.has(p.position_id));
     if (win === 'session' || !sel.length) return [etMs(9, 30), etMs(16, 15)];
-    const ts = (win === 'fills' ? data.positions : sel).flatMap(p => p.executions.map(e => T(e.ts)));
+    const ts = (win === 'fills' ? data.positions : sel).flatMap(p => fillsOnDay(p).map(e => T(e.ts)));
+    if (!ts.length) return [etMs(9, 30), etMs(16, 15)];
     const pad = win === 'fills' ? 8 * 60e3 : 10 * 60e3;
     return [Math.min(...ts) - pad, Math.max(...ts) + pad];
   }
@@ -248,14 +251,14 @@ svg{display:block;width:100%}
   function renderLanes() {
     const el = $('lanes'); laneData = [];
     if (!data) return;
-    const sel = data.positions.filter(p => selected.has(p.position_id));
+    const sel = data.positions.filter(p => selected.has(p.position_id)).flatMap(p => p.legs ? p.legs.map((leg, i) => ({ ...leg, legContext: ctxOf(p).legs?.[i] || { loading: ctxOf(p).loading, error: ctxOf(p).error } })) : [p]);
     if (!sel.length) { el.innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
     let html = '';
     const unds = [...new Set(sel.map(p => p.contract.underlying))];
     for (const u of unds) {
       const ps = sel.filter(p => p.contract.underlying === u);
-      const ctxs = ps.map(ctxOf);
-      const fills = ps.flatMap(p => p.executions.map(e => ({ ts: e.ts, side: e.side, price: NaN })));
+      const ctxs = ps.map(p => p.legContext || ctxOf(p));
+      const fills = ps.flatMap(p => fillsOnDay(p).map(e => ({ ts: e.ts, side: e.side, price: NaN })));
       const withSeries = ctxs.filter(c => c.underlying);
       if (withSeries.length) {
         // Each position contributes its own segments; windows of different positions are never joined.
@@ -265,16 +268,19 @@ svg{display:block;width:100%}
       else html += gapLane(`${u} underlying`, `Coverage gap: ${ctxs.map(c => c.error || (c.gaps || []).find(g => g.startsWith(u)) || 'no archived series').filter(Boolean)[0]}`);
     }
     for (const p of sel) {
-      const c = ctxOf(p);
-      const fills = p.executions.map(e => ({ ts: e.ts, side: e.side, price: e.price }));
+      const c = p.legContext || ctxOf(p);
+      const fills = fillsOnDay(p).map(e => ({ ts: e.ts, side: e.side, price: e.price }));
       const title = `${label(p)} · ${orders(p)}`;
-      if (c.option) {
+      if (p.contract.instrument_type === 'shares') {
+        const L = lane(title, 'Recorded share fills', [], fills, false);
+        laneData.push({ name: label(p), L }); html += L.html;
+      } else if (c.option) {
         const notes = [...(c.notes || []), ...(c.coverage || [])].join(' · ');
         const L = lane(title, c.option.source + (notes ? ` — ${notes}` : ''), c.option.segments, fills, true);
         laneData.push({ name: label(p), L }); html += L.html;
       }
       else if (c.loading) html += gapLane(title, 'loading archived quotes…');
-      else html += gapLane(title, `Coverage gap: ${c.error || (c.gaps || []).filter(g => !g.includes(' underlying')).join(' ') || 'no archived quotes'} Fills: ${p.executions.map(e => `${e.side} ${e.qty} @ ${e.price} at ${fT.format(T(e.ts))} ET`).join(', ')}.`);
+      else html += gapLane(title, `Coverage gap: ${c.error || (c.gaps || []).filter(g => !g.includes(' underlying')).join(' ') || 'no archived quotes'} Fills on this date: ${fillsOnDay(p).map(e => `${e.side} ${e.qty} @ ${e.price} at ${fT.format(T(e.ts))} ET`).join(', ')}.`);
     }
     el.innerHTML = html;
   }

@@ -508,3 +508,38 @@ test('signed premium-unit broker fees refresh the same fills, preserving alert t
   assert.deepEqual(after.executions.map(e => [e.execution_id,e.ts]), before.executions.map(e => [e.execution_id,e.ts]));
   assert.deepEqual((await pagePosition({ ...page, body: body.replace('-100 premium', '-200 premium') })).fee_basis, ['estimated']);
 });
+
+test('worthless expiration closes remaining inventory without a sale or sale fee', async () => {
+  const page = { page_id: P673, properties: { Contract: "XYZ Nov 13 '26 $10 Put" },
+    body: 'Entry order 1: 2026-11-12T10:00:00-05:00, 2 contracts at USD 0.25\nWorthless expiration: 2 contracts on 2026-11-13.' };
+  const p = await pagePosition(page);
+  assert.deepEqual([p.closed, p.n_fills, p.expired_on, p.closed_ts, p.net_pnl], [true, 1, '2026-11-13', null, -51]);
+  assert.equal((await pagePosition({ ...page, body: page.body.replace('2 contracts on', '1 contracts on') })).supported, false);
+});
+
+test('shares use a unit multiplier and documented charges', async () => {
+  const p = await pagePosition({ page_id: P673, properties: { Contract: 'XYZ shares' }, body:
+    'Entry order 1: 2026-11-13T10:00:00-05:00, 4 shares at USD 5.00\nExit order 2: 2026-11-13T10:01:00-05:00, 4 shares at USD 6.00\n' +
+    '- TX1: 2026-11-13T15:00:00Z; BOT 4 XYZ @ 5.00; posted; fee USD 0.\n- TX2: 2026-11-13T15:01:00Z; SOLD 4 XYZ @ 6.00; posted; fee USD 0.01.' });
+  assert.deepEqual([p.gross_pnl, p.fees, p.net_pnl], [4, .01, 3.99]);
+});
+
+test('combination accounts independently for each leg under one position', async () => {
+  const leg = (strike, buy, sell) => "Journal leg: XYZ Nov 13 '26 $" + strike + " Call\n" +
+    'Entry order 1: 2026-11-13T10:00:00-05:00, 1 contracts at USD ' + buy + '\n' +
+    'Exit order 2: 2026-11-13T10:01:00-05:00, 1 contracts at USD ' + sell;
+  const p = await pagePosition({ page_id: P673, properties: { Contract: 'Two calls' }, body: leg(10,2,3) + '\n' + leg(15,1,.75.toFixed(2)) });
+  assert.deepEqual([p.legs.length, p.n_fills, p.gross_pnl, p.net_pnl], [2, 4, 75, 73]);
+  assert.equal(new Set(p.executions.map(e => e.execution_id)).size, 4);
+});
+
+test('prior-day entry and dated expiry appear on their own days with correct totals', async () => {
+  const p = await pagePosition({ page_id: P673, properties: { Contract: "XYZ Nov 13 '26 $10 Put" },
+    body: 'Entry order 1: 2026-11-12T10:00:00-05:00, 2 contracts at USD 0.25\nWorthless expiration: 2 contracts on 2026-11-13.' });
+  const row = { position_json: JSON.stringify(p), revisions_json: '[]', source_status: 'active' };
+  const db = { prepare: () => ({ all: async () => ({ results: [row] }), first: async () => null }) };
+  const entry = await journalDay(db, '2026-11-12');
+  const expiry = await journalDay(db, '2026-11-13');
+  assert.deepEqual([entry.totals.fills, entry.totals.net], [1, 0]);
+  assert.deepEqual([expiry.positions.length, expiry.totals.fills, expiry.totals.net], [1, 0, -51]);
+});
