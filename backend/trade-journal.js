@@ -634,11 +634,11 @@ export async function journalDay(db, day) {
   }
   positions.sort((a, b) => (a.opened_ts < b.opened_ts ? -1 : 1));
   const counted = positions.filter(p => p.source_status === 'active');
-  const closed = counted.filter(p => p.closed), open = counted.filter(p => !p.closed);
+  const closed = counted.filter(p => p.closed && (p.expired_on || etDate(p.closed_ts)) === day), open = counted.filter(p => !p.closed);
   return {
     date: day, tz: JOURNAL_TZ, positions, unsupported,
     totals: {
-      positions: counted.length, fills: counted.reduce((s, p) => s + p.n_fills, 0),
+      positions: counted.length, fills: counted.reduce((s, p) => s + p.executions.filter(e => etDate(e.ts) === day).length, 0),
       closed_positions: closed.length,
       // Realised results of closed positions only.
       gross: round(closed.reduce((s, p) => s + p.gross_pnl, 0), 2),

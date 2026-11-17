@@ -532,3 +532,14 @@ test('combination accounts independently for each leg under one position', async
   assert.deepEqual([p.legs.length, p.n_fills, p.gross_pnl, p.net_pnl], [2, 4, 75, 73]);
   assert.equal(new Set(p.executions.map(e => e.execution_id)).size, 4);
 });
+
+test('prior-day entry and dated expiry appear on their own days with correct totals', async () => {
+  const p = await pagePosition({ page_id: P673, properties: { Contract: "XYZ Nov 13 '26 $10 Put" },
+    body: 'Entry order 1: 2026-11-12T10:00:00-05:00, 2 contracts at USD 0.25\nWorthless expiration: 2 contracts on 2026-11-13.' });
+  const row = { position_json: JSON.stringify(p), revisions_json: '[]', source_status: 'active' };
+  const db = { prepare: () => ({ all: async () => ({ results: [row] }), first: async () => null }) };
+  const entry = await journalDay(db, '2026-11-12');
+  const expiry = await journalDay(db, '2026-11-13');
+  assert.deepEqual([entry.totals.fills, entry.totals.net], [1, 0]);
+  assert.deepEqual([expiry.positions.length, expiry.totals.fills, expiry.totals.net], [1, 0, -51]);
+});
