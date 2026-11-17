@@ -500,3 +500,17 @@ test('sync + row read through the routes; the token never leaves the Authorizati
     assert.ok(!text.includes('example.invalid'), 'receipt link destination stored or served');
   }
 });
+
+test('signed premium-unit broker fees refresh the same fills, preserving alert times', async () => {
+  const page = { page_id: P673, properties: { Contract: "QQQ Nov 13 '26 $777 Put", Quantity: 1 },
+    body: '[Entry receipt 111](link) at 2026-11-13T11:37:25-05:00: USD 2.00. [Exit receipt 112](link) at 2026-11-13T11:41:50-05:00: USD 2.20.' };
+  const before = await pagePosition(page);
+  const body = page.body + '\n## November 16 broker-fee reconciliation\n' +
+    'tradeB, sell at 2026-11-13T16:41:49Z, quantity -100 premium units, fee USD 0.5142; ' +
+    'tradeA, buy at 2026-11-13T16:37:23Z, quantity 100 premium units, fee USD 0.5114. Actual fees USD 1.0256.';
+  const after = await pagePosition({ ...page, body });
+  assert.equal(after.net_pnl, 18.9744);
+  assert.deepEqual(after.fee_basis, ['actual']);
+  assert.deepEqual(after.executions.map(e => [e.execution_id,e.ts]), before.executions.map(e => [e.execution_id,e.ts]));
+  assert.deepEqual((await pagePosition({ ...page, body: body.replace('-100 premium', '-200 premium') })).fee_basis, ['estimated']);
+});

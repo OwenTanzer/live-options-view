@@ -103,6 +103,24 @@ function firstNumber(v) {
 }
 const round = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
 
+// The journal also reconciles a single round trip in signed premium units.
+function reconciledRoundTrip(body, legs, multiplier) {
+  if (legs.length !== 2 || new Set(legs.map(l => l.leg)).size !== 2) return new Map();
+  const section = body.split(/^#{1,3} [^\n]*broker-fee reconciliation\s*$/im).at(-1);
+  if (section === body) return new Map();
+  const matches = [...section.matchAll(/([A-Za-z0-9_-]+), (buy|sell) at (\S+Z), quantity (-?\d+) premium units, fee USD (\d+\.\d+)/g)];
+  const total = /Actual fees USD (\d+(?:\.\d+)?)/.exec(section);
+  if (matches.length !== 2 || !total || Math.abs(matches.reduce((sum, m) => sum + Number(m[5]), 0) - Number(total[1])) > 0.000001) return new Map();
+  const fees = new Map();
+  for (const leg of legs) {
+    const buy = leg.leg === 'Entry';
+    const match = matches.find(m => m[2] === (buy ? 'buy' : 'sell') && Number(m[4]) === leg.qty * multiplier * (buy ? 1 : -1));
+    if (!match) return new Map();
+    fees.set(leg.order, Number(match[5]));
+  }
+  return fees;
+}
+
 export function pageExecutions(page) {
   const { properties: props, body } = page;
   const pid = page.page_id.replaceAll('-', '');
@@ -114,6 +132,7 @@ export function pageExecutions(page) {
   const account = acct ? `E*TRADE ending ${acct[1]}` : 'unknown account';
   const broker = [...body.matchAll(BROKER)].map(m => ({ txn: m[1], ts: m[2], act: m[3], qty: Number(m[4]), px: Number(m[6]), fee: Number(m[7]) }));
   const partial = Object.fromEntries([...body.matchAll(PARTIALS)].map(m => [m[1], WORDS[m[2]] ?? 0]));
+  const reconciled = reconciledRoundTrip(body, legs, instrument.multiplier);
   const used = new Set();
   const executions = [], gaps = [];
   for (const leg of legs) {
@@ -135,10 +154,11 @@ export function pageExecutions(page) {
           ts_note: `broker order-initiation time; execution alert at ${toUtcIso(leg.ts)}`,
           fee: b.fee, fee_basis: 'actual', evidence: [`broker txn ${b.txn}`, `execution alert order ${leg.order} (${leg.fmt})`] });
       } else {
+        const actualFee = k === 1 ? reconciled.get(leg.order) : undefined;
         executions.push({ ...common, ts: toUtcIso(leg.ts), ts_kind: 'execution_alert',
           ts_note: 'execution-alert time (proxy, not an exchange fill time)' + (k > 1 ? "; this partial executed at or before the order's final alert" : ''),
-          fee: FEE_CONVENTION * qty, fee_basis: 'estimated', evidence: [`execution alert order ${leg.order} (${leg.fmt})`] });
-        gaps.push(`order ${leg.order}${k > 1 ? ` part ${i + 1}/${k}` : ''}: fee estimated (USD 0.50/contract)`);
+          fee: actualFee ?? FEE_CONVENTION * qty, fee_basis: actualFee === undefined ? 'estimated' : 'actual', evidence: [`execution alert order ${leg.order} (${leg.fmt})`] });
+        if (actualFee === undefined) gaps.push(`order ${leg.order}${k > 1 ? ` part ${i + 1}/${k}` : ''}: fee estimated (USD 0.50/contract)`);
       }
     }
   }

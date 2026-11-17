@@ -111,3 +111,29 @@ never logged, stored or returned. Receipt link destinations in page bodies are
 dropped before parsing. The context route only lists and reads the existing
 `PAPER_TRADES` archives. Tests: `node tests/trade_journal.test.mjs` and
 `node tests/trade_journal_context.test.mjs` (synthetic data only).
+
+### Journal release and rollback
+
+Keep the source journal read-only. Its parent journal grant includes descendants.
+The application queries the one configured retrospectives data source. Confirm
+the exact signed-in viewer username with Owen before setting the API variable.
+Never put private positions, credentials or screenshots in a release artifact.
+
+1. Obtain Owen’s merge approval and pass the protected checks for the revision.
+   Separately confirm release authority. Capture current API and asset versions,
+   active traffic, bindings and the D1 recovery point immediately before release.
+2. Apply the reviewed SQL file 0003 to live-options once. Verify the four table
+   definitions against the migration. Existing accounts and sessions stay intact.
+3. Use the protected API workflow with the reviewed revision. The staged
+   setup version contains only the credential setup. Do not promote it as the
+   implementation. Verify on the actual candidate the read-only secret binding,
+   viewer variable and existing bindings by name, then confirm authorized
+   session access and rejection of anonymous and other signed-in sessions.
+4. Through the protected asset workflow publish the same tested revision.
+   Open /trade-journal.html as the viewer and sync until the scan reports
+   complete. Check the November 13 fills, fee revision, selection and context
+   against the private acceptance record. Keep the TLT coverage gap visible.
+5. If verification fails, use the recorded compatible prior asset and API
+   versions through their respective protected rollback procedures (assets
+   first if already published). Leave the additive cache tables in place.
+   Review any cache removal separately. The source requires no reversal.
