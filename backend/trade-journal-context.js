@@ -29,7 +29,7 @@ import { jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
 import { JOURNAL_TZ, authorizeJournalViewer, etDate, loadPosition } from './trade-journal.js';
 
-export const CONTEXT_VERSION = 'ctx-v3';
+export const CONTEXT_VERSION = 'ctx-v4';
 export const MAX_SNAPSHOTS = 40;
 export const MAX_TRADIER_PARTS = 15;
 export const FILL_PAD_MS = 5 * 60_000;
@@ -378,8 +378,11 @@ export async function positionContext(env, position, { day = etDate(position.ope
   const reads = { lists: 0, gets: 0 };
   let ctx;
   if (!src) {
+    // Some archives carry a value for these underlyings (e.g. the chain snapshots' TLT column), but it does not
+    // vary through the session, so it is not a validated price series and is not drawn.
     ctx = { underlying: null, option: null, coverage: [],
-      gaps: [`${und} underlying: no archived price series`, `${occ}: no option history in any archive (no premium path)`] };
+      gaps: [`${und} underlying: no validated time-varying price series (archived values, if any, are not a supported intraday series; not drawn)`,
+        `${occ}: no option history in any archive (unsupported premium path)`] };
   } else if (!env.PAPER_TRADES) {
     return { ...base, error: 'R2 binding PAPER_TRADES is not configured' };
   } else {

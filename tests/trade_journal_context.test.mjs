@@ -191,7 +191,10 @@ test('TLT: no archive -> explicit gaps and no R2 reads', async () => {
   const ctx = await positionContext({ DB, PAPER_TRADES: r2 }, pos, { now: after });
   assert.equal(ctx.underlying, null);
   assert.equal(ctx.option, null);
-  assert.match(ctx.gaps.join(' '), /no option history/);
+  assert.match(ctx.gaps.join(' '), /no option history in any archive \(unsupported premium path\)/);
+  // Archived TLT values exist but are constant: say there is no validated time-varying series, not "no observations".
+  assert.match(ctx.gaps[0], /^TLT underlying: no validated time-varying price series/);
+  assert.doesNotMatch(ctx.gaps.join(' '), /no archived price series|no observations/);
   assert.equal(r2.lists + r2.gets, 0);
 });
 
