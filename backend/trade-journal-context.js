@@ -109,7 +109,8 @@ export function coveragePlan(position, day) {
   const interval = [Math.min(...parts), Math.max(...parts)];
   const notes = [];
   if (etDate(position.opened_ts) < day) notes.push(`entered ${etDate(position.opened_ts)}; this day starts at the ${hm(sessionStart)} ET open`);
-  if (close == null) notes.push('still open in the journal; covered to the session close');
+  if (position.expired_on) notes.push('expired worthless on ' + position.expired_on + '; no sale fill');
+  else if (close == null) notes.push('still open in the journal; covered to the session close');
   else if (etDate(position.closed_ts) > day) notes.push(`exits ${etDate(position.closed_ts)}; this day is covered to the ${hm(sessionEnd)} ET close`);
   return { day, d, interval, dense, sparse: subtract(interval, dense), notes, sessionStart, sessionEnd };
 }
@@ -364,6 +365,13 @@ async function sha(text) {
 
 /** Market context for one supported journal position on New York day `day` (defaults to the entry day). */
 export async function positionContext(env, position, { day = etDate(position.opened_ts), now = () => new Date(), writeCache = true } = {}) {
+  if (position.legs) {
+    const legs = [];
+    for (const leg of position.legs) legs.push(await positionContext(env, leg, { day, now, writeCache }));
+    return { position_id: position.position_id, day, legs };
+  }
+  if (position.contract.instrument_type === 'shares') return { position_id: position.position_id, day,
+    underlying: null, option: null, gaps: [position.contract.underlying + ' underlying: no validated share-price archive for this view'] };
   const plan = coveragePlan(position, day);
   const { underlying: und, occ_symbol: occ } = position.contract;
   const base = { position_id: position.position_id, occ_symbol: occ, underlying_symbol: und, day, version: CONTEXT_VERSION };
