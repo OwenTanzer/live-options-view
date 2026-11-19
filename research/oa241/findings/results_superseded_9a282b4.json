@@ -1,0 +1,938 @@
+{
+ "protocol_commit": "0e1d8cc",
+ "feature_manifest_sha256": "cfd0e00171bc1120de3bdd899acc53ae72f2a9ba95e941d898f076e6edc2b7f0",
+ "sessions": [
+  "2026-09-25",
+  "2026-09-29",
+  "2026-10-01",
+  "2026-10-02",
+  "2026-10-05",
+  "2026-10-06",
+  "2026-10-07",
+  "2026-10-08",
+  "2026-10-09",
+  "2026-10-12",
+  "2026-10-13",
+  "2026-10-14",
+  "2026-10-15",
+  "2026-10-16",
+  "2026-10-19",
+  "2026-10-20",
+  "2026-10-21",
+  "2026-10-22",
+  "2026-10-23",
+  "2026-10-26",
+  "2026-10-27",
+  "2026-10-28",
+  "2026-10-30",
+  "2026-11-02",
+  "2026-11-03",
+  "2026-11-04",
+  "2026-11-05",
+  "2026-11-06",
+  "2026-11-09",
+  "2026-11-10",
+  "2026-11-11",
+  "2026-11-12",
+  "2026-11-13",
+  "2026-11-16"
+ ],
+ "excluded_sessions": {
+  "2026-09-03": "no summary",
+  "2026-09-21": "complete",
+  "2026-09-22": "complete",
+  "2026-09-24": "partial",
+  "2026-09-28": "partial",
+  "2026-09-30": "partial",
+  "2026-10-29": "partial"
+ },
+ "discovery": [
+  "2026-10-05",
+  "2026-10-06",
+  "2026-10-07",
+  "2026-10-08"
+ ],
+ "holdout_from": "2026-11-02",
+ "G5a": {
+  "excluded": {
+   "missing_return": 36,
+   "zero_rv": 0
+  },
+  "all": {
+   "n": 372,
+   "sessions": 34,
+   "coef_G_M3": -1.984104498084725e-05,
+   "coef_G_M3_ci95": [
+    -0.0009955357209971267,
+    0.0006535617638470557
+   ],
+   "loso_mse": {
+    "M0": 0.3815406649211118,
+    "M1": 0.3650537236693317,
+    "M2": 0.36752432134669244,
+    "M3": 0.3695746791454543
+   },
+   "loso_mse_reduction_M3_vs_M2": -0.005578835684258543,
+   "loso_mse_reduction_M2_vs_M1": -0.006767764625237982,
+   "loso_mse_reduction_M1_vs_M0": 0.043211491637959454,
+   "coef_Goi_M3": -0.0011241382709189396,
+   "coef_Goi_M3_ci95": [
+    -0.0021843240698082127,
+    -1.1742321993932854e-06
+   ],
+   "per_session_coef_G_negative_share": 0.4411764705882353,
+   "per_session_fits": 34,
+   "G_iqr_bn": [
+    21.158553044293342,
+    100.08886091942517
+   ]
+  },
+  "without_discovery": {
+   "n": 330,
+   "sessions": 30,
+   "coef_G_M3": -0.00011506074323300949,
+   "coef_G_M3_ci95": [
+    -0.0013238464480010573,
+    0.0006554679356082603
+   ],
+   "loso_mse": {
+    "M0": 0.3806077057735336,
+    "M1": 0.3602375793209571,
+    "M2": 0.362842932505835,
+    "M3": 0.3654909525119798
+   },
+   "loso_mse_reduction_M3_vs_M2": -0.007297978736577004,
+   "loso_mse_reduction_M2_vs_M1": -0.007232319264938836,
+   "loso_mse_reduction_M1_vs_M0": 0.05352000535873791,
+   "coef_Goi_M3": -0.00154587575739548,
+   "coef_Goi_M3_ci95": [
+    -0.0027121810798024807,
+    -0.00023625344389354905
+   ],
+   "per_session_coef_G_negative_share": 0.4,
+   "per_session_fits": 30,
+   "G_iqr_bn": [
+    18.483777743471528,
+    88.49373856870173
+   ]
+  },
+  "holdout": {
+   "n": 121,
+   "sessions": 11,
+   "mse": {
+    "M2": 0.33593409610554353,
+    "M3": 0.3359346378408198
+   },
+   "reduction_M3_vs_M2": -1.6126236739300026e-06
+  },
+  "scenario_sensitivity": {
+   "Glow": {
+    "coef": 2.55193117551246e-05,
+    "ci95": [
+     -8.20751494448557e-05,
+     0.00016604523630172157
+    ]
+   },
+   "Ghigh": {
+    "coef": -3.0839162467917904e-05,
+    "ci95": [
+     -0.00018092583448461403,
+     9.701956959902053e-05
+    ]
+   },
+   "Tlow": {
+    "coef": 2.551931176571406e-05,
+    "ci95": [
+     -8.574668692183928e-05,
+     0.0001576568894524445
+    ]
+   },
+   "Thigh": {
+    "coef": -3.083916246996217e-05,
+    "ci95": [
+     -0.00018999859302838576,
+     9.672766326833321e-05
+    ]
+   }
+  }
+ },
+ "G5b": {
+  "primary": {
+   "n": 408,
+   "sessions": 34,
+   "b_G": -1.5016981738704301e-06,
+   "b_G_ci95": [
+    -6.4841068313974586e-06,
+    9.475625527054275e-07
+   ],
+   "G_iqr_bn": [
+    20.319243329284607,
+    94.53339296161167
+   ],
+   "effect_iqr_pct": -0.01114472529782124,
+   "mean_M_by_quartile_pct": [
+    {
+     "quartile": 1,
+     "n": 102,
+     "mean": 0.03506388491276778
+    },
+    {
+     "quartile": 2,
+     "n": 102,
+     "mean": -0.007305298317316427
+    },
+    {
+     "quartile": 3,
+     "n": 102,
+     "mean": 0.06257809910858295
+    },
+    {
+     "quartile": 4,
+     "n": 102,
+     "mean": -0.034487165586548324
+    }
+   ],
+   "without_discovery": {
+    "n": 360,
+    "b_G": -1.4592137808800754e-06,
+    "ci95": [
+     -7.414504251131759e-06,
+     1.2073863282001836e-06
+    ]
+   }
+  },
+  "hourly_nonoverlapping": {
+   "n": 204,
+   "sessions": 34,
+   "b_G": -1.8808368404668006e-06,
+   "b_G_ci95": [
+    -7.441911307968048e-06,
+    9.984922644183063e-07
+   ],
+   "G_iqr_bn": [
+    20.968506772381254,
+    88.21243323664017
+   ],
+   "effect_iqr_pct": -0.012647485419161863,
+   "mean_M_by_quartile_pct": [
+    {
+     "quartile": 1,
+     "n": 51,
+     "mean": 0.0250413488058532
+    },
+    {
+     "quartile": 2,
+     "n": 51,
+     "mean": 0.04093427369162415
+    },
+    {
+     "quartile": 3,
+     "n": 51,
+     "mean": 0.0630241394876641
+    },
+    {
+     "quartile": 4,
+     "n": 51,
+     "mean": -0.04873943745612583
+    }
+   ],
+   "without_discovery": {
+    "n": 180,
+    "b_G": -1.3645109014562842e-06,
+    "ci95": [
+     -8.830211287134268e-06,
+     2.1756544175456047e-06
+    ]
+   }
+  }
+ },
+ "G5c": {
+  "signed": {
+   "events": 956,
+   "unusable": 721,
+   "sessions": 30,
+   "mean_delta_all": 0.0024058577405840615,
+   "mean_delta_all_ci95": [
+    -0.05372684584467363,
+    0.059994366334119135
+   ],
+   "long_gamma": {
+    "n": 725,
+    "mean": 0.016799999999996325,
+    "ci95": [
+     -0.05963353817114013,
+     0.09021293516781029
+    ]
+   },
+   "short_gamma": {
+    "n": 231,
+    "mean": -0.042770562770558324,
+    "ci95": [
+     -0.1522551020408065,
+     0.04901822916667478
+    ]
+   },
+   "contrast": 0.05957056277055465,
+   "contrast_ci95": [
+    -0.0609733756977375,
+    0.20020081878965748
+   ],
+   "without_discovery": {
+    "n": 830,
+    "contrast": 0.08035466173594089,
+    "ci95": [
+     -0.04752866279837774,
+     0.23418865880350787
+    ]
+   }
+  },
+  "unsigned": {
+   "events": 958,
+   "unusable": 719,
+   "sessions": 30,
+   "mean_delta_all": 0.021701461377871475,
+   "mean_delta_all_ci95": [
+    -0.03920765568089707,
+    0.07674265009410934
+   ]
+  }
+ },
+ "D1": {
+  "2026-10-07": {
+   "largest_15min_drop_pct": -0.334,
+   "onset": "09:33",
+   "timeline_15min": [
+    {
+     "time": "09:30",
+     "spot": null,
+     "put_flow_30m": 0.0,
+     "call_flow_30m": 0.0,
+     "contracts_30m": 0.0,
+     "G_within_bn": 0.0
+    },
+    {
+     "time": "09:45",
+     "spot": 752.88,
+     "put_flow_30m": -4686.0,
+     "call_flow_30m": -6896.0,
+     "contracts_30m": 273788.0,
+     "G_within_bn": 49.401
+    },
+    {
+     "time": "10:00",
+     "spot": 753.97,
+     "put_flow_30m": -13722.0,
+     "call_flow_30m": -4675.0,
+     "contracts_30m": 507731.0,
+     "G_within_bn": 79.285
+    },
+    {
+     "time": "10:15",
+     "spot": 753.505,
+     "put_flow_30m": -11293.0,
+     "call_flow_30m": -5042.0,
+     "contracts_30m": 412799.0,
+     "G_within_bn": 128.355
+    },
+    {
+     "time": "10:30",
+     "spot": 754.365,
+     "put_flow_30m": -5188.0,
+     "call_flow_30m": -9343.0,
+     "contracts_30m": 412036.0,
+     "G_within_bn": 136.646
+    },
+    {
+     "time": "10:45",
+     "spot": 754.175,
+     "put_flow_30m": 1611.0,
+     "call_flow_30m": -6615.0,
+     "contracts_30m": 404022.0,
+     "G_within_bn": 136.691
+    },
+    {
+     "time": "11:00",
+     "spot": 754.365,
+     "put_flow_30m": -627.0,
+     "call_flow_30m": -3029.0,
+     "contracts_30m": 340784.0,
+     "G_within_bn": 176.326
+    },
+    {
+     "time": "11:15",
+     "spot": 755.125,
+     "put_flow_30m": -7923.0,
+     "call_flow_30m": 4860.0,
+     "contracts_30m": 346120.0,
+     "G_within_bn": 146.999
+    },
+    {
+     "time": "11:30",
+     "spot": 754.915,
+     "put_flow_30m": -3382.0,
+     "call_flow_30m": -536.0,
+     "contracts_30m": 323504.0,
+     "G_within_bn": 185.368
+    },
+    {
+     "time": "11:45",
+     "spot": 756.535,
+     "put_flow_30m": -11851.0,
+     "call_flow_30m": 4007.0,
+     "contracts_30m": 334974.0,
+     "G_within_bn": 156.815
+    },
+    {
+     "time": "12:00",
+     "spot": 756.345,
+     "put_flow_30m": -4113.0,
+     "call_flow_30m": 4126.0,
+     "contracts_30m": 344690.0,
+     "G_within_bn": 137.887
+    },
+    {
+     "time": "12:15",
+     "spot": 756.705,
+     "put_flow_30m": 10600.0,
+     "call_flow_30m": -4671.0,
+     "contracts_30m": 274354.0,
+     "G_within_bn": 120.993
+    },
+    {
+     "time": "12:30",
+     "spot": 756.16,
+     "put_flow_30m": 7568.0,
+     "call_flow_30m": -2556.0,
+     "contracts_30m": 186370.0,
+     "G_within_bn": 117.951
+    },
+    {
+     "time": "12:45",
+     "spot": 756.28,
+     "put_flow_30m": 2765.0,
+     "call_flow_30m": -2818.0,
+     "contracts_30m": 138683.0,
+     "G_within_bn": 157.698
+    },
+    {
+     "time": "13:00",
+     "spot": 756.15,
+     "put_flow_30m": 1986.0,
+     "call_flow_30m": -2813.0,
+     "contracts_30m": 158915.0,
+     "G_within_bn": 134.402
+    },
+    {
+     "time": "13:15",
+     "spot": 757.06,
+     "put_flow_30m": 2453.0,
+     "call_flow_30m": -5387.0,
+     "contracts_30m": 225476.0,
+     "G_within_bn": 118.886
+    },
+    {
+     "time": "13:30",
+     "spot": 756.855,
+     "put_flow_30m": -6274.0,
+     "call_flow_30m": -6361.0,
+     "contracts_30m": 214320.0,
+     "G_within_bn": 135.013
+    },
+    {
+     "time": "13:45",
+     "spot": 757.16,
+     "put_flow_30m": -8109.0,
+     "call_flow_30m": -2886.0,
+     "contracts_30m": 123904.0,
+     "G_within_bn": 149.076
+    },
+    {
+     "time": "14:00",
+     "spot": 756.8,
+     "put_flow_30m": -829.0,
+     "call_flow_30m": 21.0,
+     "contracts_30m": 110224.0,
+     "G_within_bn": 154.119
+    },
+    {
+     "time": "14:15",
+     "spot": 757.245,
+     "put_flow_30m": -2059.0,
+     "call_flow_30m": 203.0,
+     "contracts_30m": 150017.0,
+     "G_within_bn": 137.474
+    },
+    {
+     "time": "14:30",
+     "spot": 757.61,
+     "put_flow_30m": -5520.0,
+     "call_flow_30m": -222.0,
+     "contracts_30m": 135218.0,
+     "G_within_bn": 112.35
+    },
+    {
+     "time": "14:45",
+     "spot": 757.435,
+     "put_flow_30m": 924.0,
+     "call_flow_30m": -1449.0,
+     "contracts_30m": 119553.0,
+     "G_within_bn": 116.553
+    },
+    {
+     "time": "15:00",
+     "spot": 757.19,
+     "put_flow_30m": -31.0,
+     "call_flow_30m": -2217.0,
+     "contracts_30m": 116226.0,
+     "G_within_bn": 85.777
+    },
+    {
+     "time": "15:15",
+     "spot": 756.755,
+     "put_flow_30m": -1861.0,
+     "call_flow_30m": -490.0,
+     "contracts_30m": 168529.0,
+     "G_within_bn": 97.678
+    },
+    {
+     "time": "15:30",
+     "spot": 756.86,
+     "put_flow_30m": 3848.0,
+     "call_flow_30m": 834.0,
+     "contracts_30m": 207982.0,
+     "G_within_bn": 16.78
+    },
+    {
+     "time": "15:45",
+     "spot": 757.585,
+     "put_flow_30m": -6791.0,
+     "call_flow_30m": 2622.0,
+     "contracts_30m": 167578.0,
+     "G_within_bn": 28.929
+    },
+    {
+     "time": "16:00",
+     "spot": 757.75,
+     "put_flow_30m": -15993.0,
+     "call_flow_30m": 2431.0,
+     "contracts_30m": 139362.0,
+     "G_within_bn": 21.798
+    }
+   ],
+   "around_onset_5min": [
+    {
+     "time": "09:30",
+     "spot": null,
+     "put_flow_30m": 0.0,
+     "call_flow_30m": 0.0,
+     "contracts_30m": 0.0,
+     "G_within_bn": 0.0
+    },
+    {
+     "time": "09:35",
+     "spot": 754.375,
+     "put_flow_30m": -6159.0,
+     "call_flow_30m": -2714.0,
+     "contracts_30m": 84484.0,
+     "G_within_bn": 38.153
+    },
+    {
+     "time": "09:40",
+     "spot": 752.5,
+     "put_flow_30m": -2232.0,
+     "call_flow_30m": -7457.0,
+     "contracts_30m": 195559.0,
+     "G_within_bn": 41.821
+    },
+    {
+     "time": "09:45",
+     "spot": 752.88,
+     "put_flow_30m": -4686.0,
+     "call_flow_30m": -6896.0,
+     "contracts_30m": 273788.0,
+     "G_within_bn": 49.401
+    }
+   ],
+   "put_flow_jump_at_least_5min_before_onset": [],
+   "cannot_resolve": [
+    "16 contracts at 8 strikes only (no 748-750 puts unless selected)",
+    "participant identity and opening/closing status",
+    "aggressor side is inferred",
+    "two selected days cannot establish predictive validity"
+   ],
+   "universe_strikes": [
+    750.0,
+    751.0,
+    752.0,
+    753.0,
+    754.0,
+    755.0,
+    756.0,
+    757.0
+   ]
+  },
+  "2026-10-08": {
+   "largest_15min_drop_pct": -0.824,
+   "onset": "12:42",
+   "timeline_15min": [
+    {
+     "time": "09:30",
+     "spot": null,
+     "put_flow_30m": 0.0,
+     "call_flow_30m": 0.0,
+     "contracts_30m": 0.0,
+     "G_within_bn": 0.0
+    },
+    {
+     "time": "09:45",
+     "spot": 753.435,
+     "put_flow_30m": -274.0,
+     "call_flow_30m": -9283.0,
+     "contracts_30m": 203658.0,
+     "G_within_bn": 44.552
+    },
+    {
+     "time": "10:00",
+     "spot": 752.97,
+     "put_flow_30m": 241.0,
+     "call_flow_30m": -10255.0,
+     "contracts_30m": 438998.0,
+     "G_within_bn": 49.785
+    },
+    {
+     "time": "10:15",
+     "spot": 754.49,
+     "put_flow_30m": -2292.0,
+     "call_flow_30m": -1450.0,
+     "contracts_30m": 425733.0,
+     "G_within_bn": 63.788
+    },
+    {
+     "time": "10:30",
+     "spot": 756.91,
+     "put_flow_30m": -13394.0,
+     "call_flow_30m": 8182.0,
+     "contracts_30m": 480334.0,
+     "G_within_bn": 51.273
+    },
+    {
+     "time": "10:45",
+     "spot": 755.435,
+     "put_flow_30m": -3865.0,
+     "call_flow_30m": 792.0,
+     "contracts_30m": 491822.0,
+     "G_within_bn": 57.686
+    },
+    {
+     "time": "11:00",
+     "spot": 754.785,
+     "put_flow_30m": 7196.0,
+     "call_flow_30m": -4480.0,
+     "contracts_30m": 457862.0,
+     "G_within_bn": 57.555
+    },
+    {
+     "time": "11:15",
+     "spot": 753.695,
+     "put_flow_30m": 1235.0,
+     "call_flow_30m": 1860.0,
+     "contracts_30m": 443498.0,
+     "G_within_bn": 70.632
+    },
+    {
+     "time": "11:30",
+     "spot": 754.035,
+     "put_flow_30m": 1142.0,
+     "call_flow_30m": 1564.0,
+     "contracts_30m": 364635.0,
+     "G_within_bn": 49.647
+    },
+    {
+     "time": "11:45",
+     "spot": 753.375,
+     "put_flow_30m": 2638.0,
+     "call_flow_30m": -5393.0,
+     "contracts_30m": 376345.0,
+     "G_within_bn": 88.663
+    },
+    {
+     "time": "12:00",
+     "spot": 752.89,
+     "put_flow_30m": 3195.0,
+     "call_flow_30m": -10566.0,
+     "contracts_30m": 373837.0,
+     "G_within_bn": 107.997
+    },
+    {
+     "time": "12:15",
+     "spot": 752.905,
+     "put_flow_30m": -3995.0,
+     "call_flow_30m": -2889.0,
+     "contracts_30m": 329060.0,
+     "G_within_bn": 118.141
+    },
+    {
+     "time": "12:30",
+     "spot": 754.07,
+     "put_flow_30m": -6883.0,
+     "call_flow_30m": -5764.0,
+     "contracts_30m": 482696.0,
+     "G_within_bn": 133.937
+    },
+    {
+     "time": "12:45",
+     "spot": 752.925,
+     "put_flow_30m": 4145.0,
+     "call_flow_30m": -12417.0,
+     "contracts_30m": 515539.0,
+     "G_within_bn": 107.751
+    },
+    {
+     "time": "13:00",
+     "spot": 748.295,
+     "put_flow_30m": 15142.0,
+     "call_flow_30m": -16695.0,
+     "contracts_30m": 432930.0,
+     "G_within_bn": 56.252
+    },
+    {
+     "time": "13:15",
+     "spot": 748.34,
+     "put_flow_30m": 7278.0,
+     "call_flow_30m": -14158.0,
+     "contracts_30m": 335382.0,
+     "G_within_bn": 57.611
+    },
+    {
+     "time": "13:30",
+     "spot": 744.375,
+     "put_flow_30m": -1267.0,
+     "call_flow_30m": -8469.0,
+     "contracts_30m": 168525.0,
+     "G_within_bn": 23.151
+    },
+    {
+     "time": "13:45",
+     "spot": 745.985,
+     "put_flow_30m": -800.0,
+     "call_flow_30m": -3102.0,
+     "contracts_30m": 110043.0,
+     "G_within_bn": 38.107
+    },
+    {
+     "time": "14:00",
+     "spot": 745.83,
+     "put_flow_30m": -1542.0,
+     "call_flow_30m": 10.0,
+     "contracts_30m": 46843.0,
+     "G_within_bn": 42.847
+    },
+    {
+     "time": "14:15",
+     "spot": 746.905,
+     "put_flow_30m": -766.0,
+     "call_flow_30m": -2992.0,
+     "contracts_30m": 31444.0,
+     "G_within_bn": 49.571
+    },
+    {
+     "time": "14:30",
+     "spot": 748.26,
+     "put_flow_30m": -612.0,
+     "call_flow_30m": -3690.0,
+     "contracts_30m": 56250.0,
+     "G_within_bn": 92.289
+    },
+    {
+     "time": "14:45",
+     "spot": 746.575,
+     "put_flow_30m": -680.0,
+     "call_flow_30m": -3762.0,
+     "contracts_30m": 69629.0,
+     "G_within_bn": 41.32
+    },
+    {
+     "time": "15:00",
+     "spot": 746.655,
+     "put_flow_30m": -773.0,
+     "call_flow_30m": -6498.0,
+     "contracts_30m": 41495.0,
+     "G_within_bn": 44.344
+    },
+    {
+     "time": "15:15",
+     "spot": 745.975,
+     "put_flow_30m": 1127.0,
+     "call_flow_30m": -7797.0,
+     "contracts_30m": 28227.0,
+     "G_within_bn": 7.039
+    },
+    {
+     "time": "15:30",
+     "spot": 746.665,
+     "put_flow_30m": 249.0,
+     "call_flow_30m": -3817.0,
+     "contracts_30m": 27888.0,
+     "G_within_bn": 28.597
+    },
+    {
+     "time": "15:45",
+     "spot": 746.615,
+     "put_flow_30m": -2349.0,
+     "call_flow_30m": 266.0,
+     "contracts_30m": 21252.0,
+     "G_within_bn": 14.09
+    },
+    {
+     "time": "16:00",
+     "spot": 747.53,
+     "put_flow_30m": -2630.0,
+     "call_flow_30m": -2319.0,
+     "contracts_30m": 31565.0,
+     "G_within_bn": 41.971
+    }
+   ],
+   "around_onset_5min": [
+    {
+     "time": "12:12",
+     "spot": 753.09,
+     "put_flow_30m": -5815.0,
+     "call_flow_30m": 1813.0,
+     "contracts_30m": 335243.0,
+     "G_within_bn": 121.486
+    },
+    {
+     "time": "12:17",
+     "spot": 752.855,
+     "put_flow_30m": -2103.0,
+     "call_flow_30m": -1297.0,
+     "contracts_30m": 327162.0,
+     "G_within_bn": 108.262
+    },
+    {
+     "time": "12:22",
+     "spot": 754.33,
+     "put_flow_30m": -5949.0,
+     "call_flow_30m": -4394.0,
+     "contracts_30m": 514323.0,
+     "G_within_bn": 122.151
+    },
+    {
+     "time": "12:27",
+     "spot": 754.38,
+     "put_flow_30m": -9613.0,
+     "call_flow_30m": 275.0,
+     "contracts_30m": 485515.0,
+     "G_within_bn": 120.029
+    },
+    {
+     "time": "12:32",
+     "spot": 754.075,
+     "put_flow_30m": -6432.0,
+     "call_flow_30m": -8215.0,
+     "contracts_30m": 481588.0,
+     "G_within_bn": 129.027
+    },
+    {
+     "time": "12:37",
+     "spot": 753.74,
+     "put_flow_30m": -4837.0,
+     "call_flow_30m": -6549.0,
+     "contracts_30m": 467028.0,
+     "G_within_bn": 126.137
+    },
+    {
+     "time": "12:42",
+     "spot": 753.99,
+     "put_flow_30m": -798.0,
+     "call_flow_30m": -7625.0,
+     "contracts_30m": 484431.0,
+     "G_within_bn": 118.482
+    },
+    {
+     "time": "12:47",
+     "spot": 752.845,
+     "put_flow_30m": 2172.0,
+     "call_flow_30m": -13054.0,
+     "contracts_30m": 520670.0,
+     "G_within_bn": 112.216
+    },
+    {
+     "time": "12:52",
+     "spot": 749.835,
+     "put_flow_30m": 14766.0,
+     "call_flow_30m": -20368.0,
+     "contracts_30m": 433049.0,
+     "G_within_bn": 87.888
+    },
+    {
+     "time": "12:57",
+     "spot": 747.8,
+     "put_flow_30m": 16201.0,
+     "call_flow_30m": -20984.0,
+     "contracts_30m": 435306.0,
+     "G_within_bn": 62.176
+    }
+   ],
+   "put_flow_jump_at_least_5min_before_onset": [
+    "12:12",
+    "12:13",
+    "12:17",
+    "12:22",
+    "12:24",
+    "12:25",
+    "12:26",
+    "12:27",
+    "12:28",
+    "12:30",
+    "12:31",
+    "12:32",
+    "12:33"
+   ],
+   "cannot_resolve": [
+    "16 contracts at 8 strikes only (no 748-750 puts unless selected)",
+    "participant identity and opening/closing status",
+    "aggressor side is inferred",
+    "two selected days cannot establish predictive validity"
+   ],
+   "universe_strikes": [
+    751.0,
+    752.0,
+    753.0,
+    754.0,
+    755.0,
+    756.0,
+    757.0,
+    758.0
+   ]
+  }
+ },
+ "D3": {
+  "dev_anchors": 1555,
+  "dev_sessions": 23,
+  "dev_positives": 65,
+  "holdout_anchors": 748,
+  "holdout_sessions": 11,
+  "holdout_positives": 77,
+  "brier_base": 0.09800021361317338,
+  "brier_aug": 0.09540924740447775,
+  "paired_daily_diff_mean": -0.002590966208695646,
+  "paired_daily_diff_ci95": [
+   -0.010723845678251659,
+   0.0037770749107567236
+  ],
+  "useful_threshold": -0.004900010680658669,
+  "threshold": 0.13,
+  "holdout_precision": 0.16149068322981366,
+  "holdout_recall": 0.33766233766233766,
+  "false_alerts_per_session": 12.272727272727273,
+  "daily_diff_sd": 0.013278768877678015,
+  "event_rate_dev": 0.04180064308681672,
+  "required_sessions": {
+   "d=0.3": 88,
+   "d=0.2": 197,
+   "d=0.1": 785
+  },
+  "observed_d": 0.19512096584880947
+ }
+}
