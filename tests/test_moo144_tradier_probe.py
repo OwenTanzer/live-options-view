@@ -166,6 +166,30 @@ class ProbeTests(unittest.TestCase):
         })
         self.assertEqual(universe["option_metadata"]["QQQ-C600"]["strike"], 600)
 
+    def test_opening_selection_keeps_standard_listed_legs_and_excludes_adjusted_roots(self):
+        chain = []
+        for strike in range(550, 651):
+            for kind, right in (("call", "C"), ("put", "P")):
+                if strike == 550 and kind == "put":
+                    continue
+                chain.append({"symbol": f"QQQ260903{right}{strike * 1000:08d}",
+                              "strike": strike, "option_type": kind, "contract_size": 100})
+        chain.append(dict(chain[-1], symbol="QQQ1260903P00650000"))
+        chain.append(dict(chain[-2], contract_size=10, strike=651, symbol="QQQ260903P00651000"))
+        client = FakeTradier()
+        normal_get = client.get
+        client.get = lambda path, **kw: ({"options": {"option": chain}}
+                                         if path.endswith("/chains") else normal_get(path, **kw))
+        for width, expected in (("all", 201), ("64", 128)):
+            symbols, universe = probe.select_symbols(
+                client, 8, 0, "2026-09-03", datetime(2026, 9, 3, 10, tzinfo=ET),
+                opening_strikes=width)
+            self.assertEqual(universe["listed_standard_contracts"], 201)
+            self.assertEqual(len(set(symbols[1:])), expected)
+            self.assertEqual(len(symbols), expected + 1)
+            self.assertEqual(universe["strikes"][0], 550 if width == "all" else 568)
+            self.assertNotIn("QQQ1260903P00650000", symbols)
+
     def test_r2_write_and_segment_upload_are_head_verified(self):
         r2 = FakeR2()
         metadata = probe.put_bytes_verified(

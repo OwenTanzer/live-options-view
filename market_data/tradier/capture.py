@@ -99,9 +99,11 @@ def capture_session(
                 # Readiness belongs to this connection, never an old one that
                 # disconnected before the open. A 200 response alone is insufficient.
                 connection_ready_at = None
-                # Do not wait for requests' default 512-byte buffer to fill at
-                # the boundary; process each complete provider line immediately.
-                for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                # urllib3 yields each HTTP chunk as soon as it arrives. Avoid
+                # decoding a byte at a time during opening bursts. Unframed
+                # responses retain the original low-volume boundary behavior.
+                chunked = getattr(response, "headers", {}).get("Transfer-Encoding", "").lower() == "chunked"
+                for line in response.iter_lines(chunk_size=16384 if chunked else 1, decode_unicode=True):
                     observed_at = now_et()
                     if stop_requested() or observed_at >= session_close:
                         break

@@ -46,6 +46,7 @@ class RunSettings:
 
     token: str
     strike_count: int
+    qqq_opening_strikes: str
     checkpoint_seconds: int
     max_reconnects: int
     lease_ttl_seconds: int
@@ -66,6 +67,12 @@ def load_settings(env: dict[str, str] | None = None) -> RunSettings:
     if not token:
         raise RuntimeError("TRADIER_TOKEN is required")
     strike_count = int(env.get("MOO144_STRIKE_COUNT", "8"))
+    qqq_opening_strikes = env.get("MOO144_QQQ_OPENING_STRIKES", "").strip().lower()
+    if qqq_opening_strikes not in ("", "all") and not (
+        qqq_opening_strikes.isascii() and qqq_opening_strikes.isdecimal()
+        and 2 <= int(qqq_opening_strikes) <= 10000
+    ):
+        raise RuntimeError("MOO144_QQQ_OPENING_STRIKES must be all or a strike count from 2 to 10000")
     checkpoint_seconds = int(env.get("MOO144_CHECKPOINT_SECONDS", "180"))
     max_reconnects = int(env.get("MOO144_MAX_CONSECUTIVE_RECONNECTS", "5"))
     lease_ttl_seconds = int(env.get("MOO144_LEASE_TTL_SECONDS", "300"))
@@ -76,6 +83,8 @@ def load_settings(env: dict[str, str] | None = None) -> RunSettings:
     optional_spool_bytes = int(optional_spool_raw) if optional_spool_raw else None
     lane_specs = parse_underlyings(env.get("MOO144_UNDERLYINGS", DEFAULT_UNDERLYING))
     spool_base = Path(env.get("MOO144_SPOOL_DIR", tempfile.gettempdir()))
+    if qqq_opening_strikes and lane_specs[0] != ("QQQ", "same_day"):
+        raise RuntimeError("MOO144_QQQ_OPENING_STRIKES requires QQQ:same_day as the primary lane")
     if not 2 <= strike_count <= 20:
         raise RuntimeError("MOO144_STRIKE_COUNT must be between 2 and 20")
     if not 30 <= checkpoint_seconds <= 300:
@@ -85,6 +94,7 @@ def load_settings(env: dict[str, str] | None = None) -> RunSettings:
     return RunSettings(
         token=token,
         strike_count=strike_count,
+        qqq_opening_strikes=qqq_opening_strikes,
         checkpoint_seconds=checkpoint_seconds,
         max_reconnects=max_reconnects,
         lease_ttl_seconds=lease_ttl_seconds,
@@ -204,6 +214,7 @@ def main(
     primary.symbols, primary.universe = load_or_select_universe(
         client, r2, bucket, primary.prefix, settings.strike_count, run_date, clock_et(), session_open=session_open,
         underlying=primary.underlying, expiration_policy=primary.expiration_policy,
+        opening_strikes=settings.qqq_opening_strikes,
     )
     primary.stale_recovery = recover_stale_sessions(
         primary.base_spool_dir, run_date, r2, bucket,
