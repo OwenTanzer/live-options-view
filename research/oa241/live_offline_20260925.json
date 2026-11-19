@@ -1,0 +1,29 @@
+{
+ "day": "2026-09-25",
+ "segments": 131,
+ "crash_after_segment": 65,
+ "overlap_segments": 2,
+ "checks": {
+  "session_equals_oa180_audit": true,
+  "overlap_not_double_counted": true,
+  "display_capped_at_2048": true,
+  "session_counts_beyond_cap": true,
+  "reconnect_gap_in_crashed_process": true,
+  "rebuild_status": true,
+  "restart_gap_open_until_live": true,
+  "restart_gap_closed_at_first_live_receipt": true
+ },
+ "session_sides": {
+  "buy": 1798966,
+  "sell": 1826314,
+  "unknown": 1158309
+ },
+ "prints": 680161,
+ "gaps": [
+  {
+   "start": 1790354644755,
+   "end": 1790354644800,
+   "reason": "collector_restart:rebuilt"
+  }
+ ]
+}

@@ -118,7 +118,10 @@ def capture_session(
                             "reconnect": result.reconnects,
                             "outage_seconds": round(outage_seconds, 3),
                         }
-                        spool.write(stats.observe(resumed))
+                        resumed = stats.observe(resumed)
+                        spool.write(resumed)
+                        if recent is not None:
+                            recent.observe(resumed)
                         print(json.dumps({"event": "stream_reconnect_resumed", **resumed}), flush=True)
                         gap_open = False
                         gap_started_at = None
