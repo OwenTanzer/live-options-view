@@ -54,7 +54,7 @@ function ofContract(c) {
     cases: {}, totals: {}, concentration: null, offset: null };
   for (const p of OF_PARTICIPATION) {
     out.cases[p] = ofFlowCases(c.flow, p);
-    out.totals[p] = ofTotalRange(c.flow, c.oi, p);
+    out.totals[p] = c.coverageFrom !== undefined ? null : ofTotalRange(c.flow, c.oi, p);
   }
   if (out.cases[1]) out.offset = -out.cases[1].base;
   if (unit != null && out.oi != null) out.concentration = unit * out.oi;

@@ -277,6 +277,14 @@ def select_symbols(
         "spot_source": spot_source,
         "spot_timestamp_ms": spot_timestamp,
     }
+    if underlying == "QQQ" and expiration == trade_date and duration_seconds == 0:
+        # Keep only standard same-day QQQ legs. The opening selection is immutable.
+        prefix = "QQQ" + expiration.replace("-", "")[2:]
+        universe["listed_qqq_pairs"] = {
+            str(k): [by_strike[k]["call"], by_strike[k]["put"]] for k in complete_strikes
+            if all(by_strike[k][kind] == f"{prefix}{side}{round(k * 1000):08d}"
+                   for kind, side in (("call", "C"), ("put", "P")))
+        }
     return [underlying, *selected], universe
 
 

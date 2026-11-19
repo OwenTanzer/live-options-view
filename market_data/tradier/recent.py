@@ -59,6 +59,7 @@ class Session:
     def __init__(self, day):
         self.day = day
         self.contracts = {}
+        self.added = {}
         self.seen = {}
         self.first = self.last = None
         self.gaps = []
@@ -77,7 +78,7 @@ class Session:
         self.last = row["t"] if self.last is None else max(self.last, row["t"])
 
     def snapshot(self):
-        return dict(day=self.day, first=self.first, last=self.last, prints=self.prints,
+        return dict(day=self.day, added=dict(self.added), first=self.first, last=self.last, prints=self.prints,
                     contracts={s: dict(zip(("B", "S", "U", "prints"), v)) for s, v in sorted(self.contracts.items())},
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
@@ -127,6 +128,18 @@ class RecentPrints:
         option = OPTION.fullmatch(symbol)
         if not option:
             return
+        if event["type"] == "subscription_added":
+            session = self._session_for(_ms(receipt))
+            if session is not None:
+                with self.lock:
+                    session.added.setdefault(symbol, None)
+                    self.version += 1
+            return
+        if (self.session and symbol in self.session.added and self.session.added[symbol] is None
+                and event["type"] in {"quote", "timesale"} and receipt):
+            with self.lock:
+                self.session.added[symbol] = _ms(receipt)
+                self.version += 1
         if event["type"] == "quote":
             self.quotes[symbol] = event
             return

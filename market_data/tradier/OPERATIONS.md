@@ -33,7 +33,8 @@ manually run the producer just to check documentation. The exchange calendar in
 Read [run.py](run.py) for the sequence: settings → pre-open preparation → lease →
 universe and lane admission → capture → reconciliation/finalization.
 
-- [universe.py](universe.py) persists the day's selection for same-day reuse.
+- [universe.py](universe.py) persists the opening selection. New same-day QQQ universes also store the day's listed standard call/put pairs. The primary QQQ lane checks fresh two-sided QQQ quotes every five seconds when quotes arrive and adds the nearest configured number of strikes on the existing WebSocket. Opening and previously added symbols remain subscribed. Other lanes retain their selections. Sessions created before the pair catalog was available continue with their saved fixed subscription.
+- Each added contract has an archived subscription marker. Its first observed quote or trade starts its reported coverage. Rebuild restores pending and observed additions. The live table shows partial-day flow and withholds opening-based totals for these strikes. The final stream summary includes the per-contract first observations (null while pending).
 - [lease.py](lease.py) uses a renewable fenced lease plus a deadline watchdog.
   Confirmed takeover differs from absent or uncertain ownership; a competing
   owner must not be fought by an automatic restart.

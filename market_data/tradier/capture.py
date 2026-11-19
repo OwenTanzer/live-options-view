@@ -50,6 +50,7 @@ def capture_session(
     result: CaptureResult | None = None,
     session_open: datetime | None = None,
     recent=None,
+    adaptive=None,
 ) -> CaptureResult:
     """Run the stream-read loop until session close, a lost lease, or an
     exhausted spool.
@@ -88,10 +89,14 @@ def capture_session(
             session_id = client.create_market_session()
             payload = stream_payload(symbols, session_id)
             phase = "connect"
-            with client.session.get(
-                STREAM, params=payload, stream=True, timeout=(15, 10)
-            ) as response:
-                response.raise_for_status()
+            stream = (adaptive.open(session_id) if adaptive else
+                      client.session.get(STREAM, params=payload, stream=True, timeout=(15, 10)))
+            with stream as response:
+                if adaptive:
+                    lines = response
+                else:
+                    response.raise_for_status()
+                    lines = response.iter_lines(chunk_size=1, decode_unicode=True)
                 phase = "read"
                 connected_at = now_et() if session_open is not None else None
                 if result.stream_connected_at is None:
@@ -101,7 +106,7 @@ def capture_session(
                 connection_ready_at = None
                 # Do not wait for requests' default 512-byte buffer to fill at
                 # the boundary; process each complete provider line immediately.
-                for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                for line in lines:
                     observed_at = now_et()
                     if stop_requested() or observed_at >= session_close:
                         break
@@ -185,6 +190,8 @@ def capture_session(
                     spool.write(observed)
                     if recent is not None:
                         recent.observe(observed)
+                    if adaptive:
+                        adaptive.follow(event, observed_at.timestamp() * 1000)
                 if stop_requested() or now_et() >= session_close:
                     break
                 raise requests.ConnectionError("Tradier stream ended cleanly before session close")

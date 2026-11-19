@@ -396,6 +396,8 @@
       const extra = [];
       if (live() && feed && feed.session && feed.rows)
         extra.push("plot shows latest " + feed.rows.length.toLocaleString() + " of " + feed.session.prints.toLocaleString() + " session prints");
+      if (live() && Object.keys(feed?.session?.added || {}).length)
+        extra.push("Intraday additions show flow since first observation; earlier trading is unknown. Select a strike for contract start times.");
       return R.freshnessText(v, clock, extra);
     }
 
@@ -891,6 +893,9 @@
       const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (live() ? "live" : "archive replay") + ")"];
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
+        if (src.coverageFrom !== undefined)
+          lines.push(c.symbol + (src.coverageFrom == null ? " · awaiting first observation" :
+            " · covered from " + clock(src.coverageFrom) + " ET; earlier flow unknown"));
         const obs = c.observed;
         lines.push(
           (c.type === "C" ? "Call" : "Put") + " " + c.symbol + ": recorded prints " + (src.flow ? src.flow.prints ?? "?" : "none") +
