@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import signal
 import statistics
 import tempfile
@@ -135,6 +136,7 @@ def select_symbols(
     session_open: datetime | None = None,
     underlying: str = DEFAULT_UNDERLYING,
     expiration_policy: str = "same_day",
+    opening_strikes: str = "",
 ) -> tuple[list[str], dict[str, Any]]:
     if expiration_policy not in EXPIRATION_POLICIES:
         raise RuntimeError(f"Unknown expiration policy: {expiration_policy!r}")
@@ -238,6 +240,15 @@ def select_symbols(
             symbol = str(option["symbol"])
         except (KeyError, TypeError, ValueError):
             continue
+        if opening_strikes:
+            # Standard OCC symbols encode root, expiry, right and strike.
+            right = {"call": "C", "put": "P"}.get(kind)
+            if not right or not re.fullmatch(r"QQQ[0-9]{6}[CP][0-9]{8}", symbol):
+                continue
+            if (symbol[3:9] != expiration.replace("-", "")[2:] or symbol[9] != right
+                    or int(symbol[10:]) / 1000 != strike
+                    or str(option.get("contract_size", 100)) != "100"):
+                continue
         if kind in {"call", "put"}:
             by_strike[strike][kind] = symbol
             metadata[symbol] = {
@@ -254,6 +265,9 @@ def select_symbols(
     nearest = sorted(
         complete_strikes, key=lambda strike: abs(strike - spot)
     )[:strike_count]
+    if opening_strikes:
+        ordered = sorted(by_strike, key=lambda strike: (abs(strike - spot), strike))
+        nearest = ordered if opening_strikes == "all" else ordered[:int(opening_strikes)]
     selected = [
         by_strike[strike][kind]
         for strike in sorted(nearest)
@@ -277,6 +291,9 @@ def select_symbols(
         "spot_source": spot_source,
         "spot_timestamp_ms": spot_timestamp,
     }
+    if opening_strikes:
+        universe.update(opening_strikes_requested=opening_strikes,
+                        listed_standard_strikes=len(by_strike), listed_standard_contracts=len(metadata))
     return [underlying, *selected], universe
 
 

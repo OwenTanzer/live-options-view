@@ -59,6 +59,14 @@ receipt cannot substitute for the final session evidence.
 strikes, 180-second checkpoints, five reconnects, a 300-second lease lifetime and
 512 MiB primary spool cap. `MOO144_SPOOL_DIR` must point to persistent storage.
 
+On a new session, `MOO144_QQQ_OPENING_STRIKES=all` selects every listed
+standard same-day call and put when QQQ is the primary lane. An integer selects
+the nearest N listed strikes (including a strike with only one listed leg).
+Leaving it unset uses the existing complete-pair selection. The persisted
+universe wins on restart. A width change takes effect on the next fresh session.
+Use the existing stream. Verify provider acceptance and opening throughput on
+the deployment service; the accepted symbol count and opening load vary by day.
+
 `MOO144_UNDERLYINGS` defaults to QQQ. Optional lanes share the same stream and lease;
 never create a second stream with the same token merely to add IBIT. Admission,
 cutoff and stream routing live in [lanes.py](lanes.py). Optional lanes require an

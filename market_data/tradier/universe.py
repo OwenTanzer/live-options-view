@@ -26,6 +26,7 @@ def load_or_select_universe(
     *,
     underlying: str = DEFAULT_UNDERLYING,
     expiration_policy: str = "same_day",
+    opening_strikes: str = "",
 ) -> tuple[list[str], dict[str, Any]]:
     """Load the day's already-selected contract universe, or select and
     persist it once. A same-day restart must never re-select against a
@@ -38,6 +39,7 @@ def load_or_select_universe(
     symbols, universe = select_symbols(
         client, strike_count, 0, run_date, now_et, session_open=session_open,
         underlying=underlying, expiration_policy=expiration_policy,
+        opening_strikes=opening_strikes,
     )
     return persist_universe(r2, bucket, prefix, symbols, universe)
 
