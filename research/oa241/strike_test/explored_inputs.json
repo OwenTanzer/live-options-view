@@ -1,0 +1,148 @@
+{
+ "anchors_with_quote": 2514,
+ "anchors_no_covered_strike_within_2": 836,
+ "kstar_events": 1678,
+ "kstar_sign_uncertain": 1678,
+ "anchors_with_any_agreeing_strike": 1,
+ "old_control_missing": 728,
+ "kstar_within_025": 216,
+ "old_control_missing_when_within_025": 216,
+ "by_session": {
+  "2026-09-25": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-09-29": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-01": {
+   "kstar_events": 73,
+   "any_agreeing": 0
+  },
+  "2026-10-02": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-05": {
+   "kstar_events": 49,
+   "any_agreeing": 0
+  },
+  "2026-10-06": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-07": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-08": {
+   "kstar_events": 36,
+   "any_agreeing": 0
+  },
+  "2026-10-09": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-12": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-13": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-14": {
+   "kstar_events": 24,
+   "any_agreeing": 0
+  },
+  "2026-10-15": {
+   "kstar_events": 34,
+   "any_agreeing": 0
+  },
+  "2026-10-16": {
+   "kstar_events": 16,
+   "any_agreeing": 0
+  },
+  "2026-10-19": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-20": {
+   "kstar_events": 65,
+   "any_agreeing": 0
+  },
+  "2026-10-21": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-22": {
+   "kstar_events": 27,
+   "any_agreeing": 0
+  },
+  "2026-10-23": {
+   "kstar_events": 66,
+   "any_agreeing": 0
+  },
+  "2026-10-26": {
+   "kstar_events": 28,
+   "any_agreeing": 0
+  },
+  "2026-10-27": {
+   "kstar_events": 21,
+   "any_agreeing": 0
+  },
+  "2026-10-28": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-10-30": {
+   "kstar_events": 36,
+   "any_agreeing": 0
+  },
+  "2026-11-02": {
+   "kstar_events": 48,
+   "any_agreeing": 0
+  },
+  "2026-11-03": {
+   "kstar_events": 74,
+   "any_agreeing": 0
+  },
+  "2026-11-04": {
+   "kstar_events": 33,
+   "any_agreeing": 0
+  },
+  "2026-11-05": {
+   "kstar_events": 0,
+   "any_agreeing": 0
+  },
+  "2026-11-06": {
+   "kstar_events": 74,
+   "any_agreeing": 1
+  },
+  "2026-11-09": {
+   "kstar_events": 0,
+   "any_agreeing": 0
+  },
+  "2026-11-10": {
+   "kstar_events": 70,
+   "any_agreeing": 0
+  },
+  "2026-11-11": {
+   "kstar_events": 49,
+   "any_agreeing": 0
+  },
+  "2026-11-12": {
+   "kstar_events": 5,
+   "any_agreeing": 0
+  },
+  "2026-11-13": {
+   "kstar_events": 2,
+   "any_agreeing": 0
+  },
+  "2026-11-16": {
+   "kstar_events": 34,
+   "any_agreeing": 0
+  }
+ }
+}

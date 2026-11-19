@@ -1,0 +1,261 @@
+{
+ "2026-09-21": {
+  "status": "complete",
+  "partial_reasons": [],
+  "late_start_s": 2.3,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   725.0,
+   726.0,
+   727.0,
+   728.0,
+   729.0,
+   730.0,
+   731.0,
+   732.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 938,
+  "timesales": 910782,
+  "quotes": 786478,
+  "preceding_quote_age_ms": {
+   "sampled_median": 501,
+   "sampled_p95": 1013,
+   "max": 46201
+  },
+  "rth_snapshots": 370,
+  "snapshots_with_all_gamma_and_spot": 370,
+  "snapshot_gaps_over_120s": [
+   [
+    "11:58:35",
+    "12:00:36",
+    121
+   ],
+   [
+    "12:01:38",
+    "12:03:41",
+    123
+   ]
+  ]
+ },
+ "2026-09-22": {
+  "status": "complete",
+  "partial_reasons": [],
+  "late_start_s": 3.2,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   738.0,
+   739.0,
+   740.0,
+   741.0,
+   742.0,
+   743.0,
+   744.0,
+   745.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 447,
+  "timesales": 932932,
+  "quotes": 884497,
+  "preceding_quote_age_ms": {
+   "sampled_median": 547,
+   "sampled_p95": 1034,
+   "max": 14402
+  },
+  "rth_snapshots": 380,
+  "snapshots_with_all_gamma_and_spot": 380,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-09-24": {
+  "status": "partial",
+  "partial_reasons": [
+   "late_start_seconds=256.3"
+  ],
+  "late_start_s": 256.3,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   732.0,
+   733.0,
+   734.0,
+   735.0,
+   736.0,
+   737.0,
+   738.0,
+   739.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 1109,
+  "timesales": 981505,
+  "quotes": 970635,
+  "preceding_quote_age_ms": {
+   "sampled_median": 427,
+   "sampled_p95": 1005,
+   "max": 7374
+  },
+  "rth_snapshots": 380,
+  "snapshots_with_all_gamma_and_spot": 380,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-09-28": {
+  "status": "partial",
+  "partial_reasons": [
+   "reconnects=1"
+  ],
+  "late_start_s": 0,
+  "reconnects": 1,
+  "stream_gap_s": 13.572,
+  "strikes": [
+   737.0,
+   738.0,
+   739.0,
+   740.0,
+   741.0,
+   742.0,
+   743.0,
+   744.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 981,
+  "timesales": 1125506,
+  "quotes": 993114,
+  "preceding_quote_age_ms": {
+   "sampled_median": 558,
+   "sampled_p95": 1086,
+   "max": 5402878
+  },
+  "rth_snapshots": 379,
+  "snapshots_with_all_gamma_and_spot": 379,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-09-30": {
+  "status": "partial",
+  "partial_reasons": [
+   "late_start_seconds=257.7"
+  ],
+  "late_start_s": 257.7,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   738.0,
+   739.0,
+   740.0,
+   741.0,
+   742.0,
+   743.0,
+   744.0,
+   745.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 1518,
+  "timesales": 959761,
+  "quotes": 985642,
+  "preceding_quote_age_ms": {
+   "sampled_median": 504,
+   "sampled_p95": 1342,
+   "max": 3740
+  },
+  "rth_snapshots": 380,
+  "snapshots_with_all_gamma_and_spot": 380,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-10-29": {
+  "status": "partial",
+  "partial_reasons": [
+   "reconnects=1"
+  ],
+  "late_start_s": 0,
+  "reconnects": 1,
+  "stream_gap_s": 1.89,
+  "strikes": [
+   713.0,
+   714.0,
+   715.0,
+   716.0,
+   717.0,
+   718.0,
+   719.0,
+   720.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 1769,
+  "timesales": 1100109,
+  "quotes": 1035002,
+  "preceding_quote_age_ms": {
+   "sampled_median": 471,
+   "sampled_p95": 1178,
+   "max": 300511
+  },
+  "rth_snapshots": 367,
+  "snapshots_with_all_gamma_and_spot": 367,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-11-17": {
+  "status": "complete",
+  "partial_reasons": [],
+  "late_start_s": 0,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   660.0,
+   661.0,
+   662.0,
+   663.0,
+   664.0,
+   665.0,
+   666.0,
+   667.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 661,
+  "timesales": 1080176,
+  "quotes": 893272,
+  "preceding_quote_age_ms": {
+   "sampled_median": 486,
+   "sampled_p95": 995,
+   "max": 300645
+  },
+  "rth_snapshots": 341,
+  "snapshots_with_all_gamma_and_spot": 341,
+  "snapshot_gaps_over_120s": []
+ },
+ "2026-11-18": {
+  "status": "complete",
+  "partial_reasons": [],
+  "late_start_s": 0,
+  "reconnects": 0,
+  "stream_gap_s": 0.0,
+  "strikes": [
+   657.0,
+   658.0,
+   659.0,
+   660.0,
+   661.0,
+   662.0,
+   663.0,
+   664.0
+  ],
+  "contracts": 16,
+  "contracts_with_prints": 16,
+  "min_prints_per_contract": 2086,
+  "timesales": 1264493,
+  "quotes": 1036952,
+  "preceding_quote_age_ms": {
+   "sampled_median": 478,
+   "sampled_p95": 1036,
+   "max": 301452
+  },
+  "rth_snapshots": 347,
+  "snapshots_with_all_gamma_and_spot": 347,
+  "snapshot_gaps_over_120s": []
+ }
+}

@@ -1,0 +1,759 @@
+{
+ "summary": {
+  "anchors": 74,
+  "kstar_events": 74,
+  "kstar_sign_uncertain": 74,
+  "anchors_with_any_agreeing_strike": 0,
+  "kstar_within_025": 13,
+  "old_control_missing_when_within_025": 13,
+  "anchors_spot_within_050_of_744": 23,
+  "kstar_while_near_744": [
+   742,
+   744,
+   745,
+   746
+  ]
+ },
+ "anchors": [
+  {
+   "t": "09:45",
+   "spot": 744.25,
+   "kstar": 744,
+   "distance": 0.25,
+   "flow_m": 105,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "09:50",
+   "spot": 743.88,
+   "kstar": 744,
+   "distance": 0.12,
+   "flow_m": 171,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "09:55",
+   "spot": 744.83,
+   "kstar": 744,
+   "distance": 0.83,
+   "flow_m": 217,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 746
+  },
+  {
+   "t": "10:00",
+   "spot": 744.38,
+   "kstar": 744,
+   "distance": 0.38,
+   "flow_m": -183,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "10:05",
+   "spot": 742.69,
+   "kstar": 741,
+   "distance": 1.69,
+   "flow_m": 213,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "10:10",
+   "spot": 742.61,
+   "kstar": 741,
+   "distance": 1.61,
+   "flow_m": 249,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "10:15",
+   "spot": 740.96,
+   "kstar": 741,
+   "distance": 0.04,
+   "flow_m": 139,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "10:20",
+   "spot": 740.18,
+   "kstar": 741,
+   "distance": 0.82,
+   "flow_m": 270,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "10:25",
+   "spot": 741.18,
+   "kstar": 741,
+   "distance": 0.18,
+   "flow_m": 338,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "10:30",
+   "spot": 741.18,
+   "kstar": 741,
+   "distance": 0.18,
+   "flow_m": 396,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "10:35",
+   "spot": 741.64,
+   "kstar": 741,
+   "distance": 0.64,
+   "flow_m": 404,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "10:40",
+   "spot": 742.17,
+   "kstar": 741,
+   "distance": 1.17,
+   "flow_m": 399,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "10:45",
+   "spot": 741.27,
+   "kstar": 741,
+   "distance": 0.27,
+   "flow_m": 423,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "10:50",
+   "spot": 742.23,
+   "kstar": 741,
+   "distance": 1.23,
+   "flow_m": 441,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "10:55",
+   "spot": 741.64,
+   "kstar": 741,
+   "distance": 0.64,
+   "flow_m": 459,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "11:00",
+   "spot": 742.97,
+   "kstar": 741,
+   "distance": 1.97,
+   "flow_m": 453,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "11:05",
+   "spot": 743.77,
+   "kstar": 742,
+   "distance": 1.77,
+   "flow_m": 221,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 746
+  },
+  {
+   "t": "11:10",
+   "spot": 743.54,
+   "kstar": 742,
+   "distance": 1.54,
+   "flow_m": 178,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "11:15",
+   "spot": 742.92,
+   "kstar": 741,
+   "distance": 1.92,
+   "flow_m": 528,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "11:20",
+   "spot": 742.49,
+   "kstar": 741,
+   "distance": 1.49,
+   "flow_m": 515,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "11:25",
+   "spot": 742.75,
+   "kstar": 741,
+   "distance": 1.75,
+   "flow_m": 535,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "11:30",
+   "spot": 742.73,
+   "kstar": 741,
+   "distance": 1.73,
+   "flow_m": 588,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "11:35",
+   "spot": 743.56,
+   "kstar": 742,
+   "distance": 1.56,
+   "flow_m": 431,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "11:40",
+   "spot": 741.65,
+   "kstar": 741,
+   "distance": 0.65,
+   "flow_m": 718,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "11:45",
+   "spot": 741.25,
+   "kstar": 741,
+   "distance": 0.25,
+   "flow_m": 815,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "11:50",
+   "spot": 741.81,
+   "kstar": 741,
+   "distance": 0.81,
+   "flow_m": 911,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "11:55",
+   "spot": 741.64,
+   "kstar": 741,
+   "distance": 0.64,
+   "flow_m": 921,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 742
+  },
+  {
+   "t": "12:00",
+   "spot": 743.62,
+   "kstar": 742,
+   "distance": 1.62,
+   "flow_m": 597,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "12:05",
+   "spot": 745.11,
+   "kstar": 747,
+   "distance": 1.89,
+   "flow_m": 438,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "12:10",
+   "spot": 745.02,
+   "kstar": 747,
+   "distance": 1.98,
+   "flow_m": 413,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "12:15",
+   "spot": 745.12,
+   "kstar": 745,
+   "distance": 0.12,
+   "flow_m": -445,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "12:20",
+   "spot": 744.76,
+   "kstar": 745,
+   "distance": 0.24,
+   "flow_m": -400,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "12:25",
+   "spot": 743.82,
+   "kstar": 745,
+   "distance": 1.18,
+   "flow_m": -396,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "12:30",
+   "spot": 745.33,
+   "kstar": 747,
+   "distance": 1.67,
+   "flow_m": 536,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "12:35",
+   "spot": 744.33,
+   "kstar": 745,
+   "distance": 0.67,
+   "flow_m": -438,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "12:40",
+   "spot": 744.87,
+   "kstar": 745,
+   "distance": 0.13,
+   "flow_m": -492,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "12:45",
+   "spot": 745.16,
+   "kstar": 747,
+   "distance": 1.84,
+   "flow_m": 641,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "12:50",
+   "spot": 744,
+   "kstar": 745,
+   "distance": 1,
+   "flow_m": -535,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "12:55",
+   "spot": 744.54,
+   "kstar": 745,
+   "distance": 0.46,
+   "flow_m": -592,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:00",
+   "spot": 744.42,
+   "kstar": 745,
+   "distance": 0.58,
+   "flow_m": -619,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:05",
+   "spot": 745,
+   "kstar": 747,
+   "distance": 2,
+   "flow_m": 707,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "13:10",
+   "spot": 744.74,
+   "kstar": 746,
+   "distance": 1.26,
+   "flow_m": 679,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "13:15",
+   "spot": 745.07,
+   "kstar": 747,
+   "distance": 1.93,
+   "flow_m": 706,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "13:20",
+   "spot": 745.02,
+   "kstar": 746,
+   "distance": 0.98,
+   "flow_m": 794,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:25",
+   "spot": 745.23,
+   "kstar": 746,
+   "distance": 0.77,
+   "flow_m": 849,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:30",
+   "spot": 745.13,
+   "kstar": 746,
+   "distance": 0.87,
+   "flow_m": 905,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:35",
+   "spot": 744.62,
+   "kstar": 746,
+   "distance": 1.38,
+   "flow_m": 970,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "13:40",
+   "spot": 744.93,
+   "kstar": 746,
+   "distance": 1.07,
+   "flow_m": 807,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:45",
+   "spot": 745.03,
+   "kstar": 746,
+   "distance": 0.97,
+   "flow_m": 923,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:50",
+   "spot": 745,
+   "kstar": 746,
+   "distance": 1,
+   "flow_m": 820,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "13:55",
+   "spot": 744.63,
+   "kstar": 746,
+   "distance": 1.37,
+   "flow_m": 840,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "14:00",
+   "spot": 744.98,
+   "kstar": 746,
+   "distance": 1.02,
+   "flow_m": 832,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:05",
+   "spot": 744.88,
+   "kstar": 746,
+   "distance": 1.12,
+   "flow_m": 954,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:10",
+   "spot": 745.01,
+   "kstar": 746,
+   "distance": 0.99,
+   "flow_m": 971,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:15",
+   "spot": 745.37,
+   "kstar": 746,
+   "distance": 0.63,
+   "flow_m": 1143,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "14:20",
+   "spot": 745.24,
+   "kstar": 746,
+   "distance": 0.76,
+   "flow_m": 1237,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:25",
+   "spot": 745.2,
+   "kstar": 746,
+   "distance": 0.8,
+   "flow_m": 1229,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:30",
+   "spot": 744.39,
+   "kstar": 746,
+   "distance": 1.61,
+   "flow_m": 775,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "14:35",
+   "spot": 744.91,
+   "kstar": 746,
+   "distance": 1.09,
+   "flow_m": 909,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:40",
+   "spot": 744.28,
+   "kstar": 745,
+   "distance": 0.72,
+   "flow_m": -952,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:45",
+   "spot": 744.69,
+   "kstar": 745,
+   "distance": 0.31,
+   "flow_m": -1220,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:50",
+   "spot": 744.38,
+   "kstar": 745,
+   "distance": 0.62,
+   "flow_m": -1396,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "14:55",
+   "spot": 744.33,
+   "kstar": 745,
+   "distance": 0.67,
+   "flow_m": -1468,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "15:00",
+   "spot": 744.16,
+   "kstar": 744,
+   "distance": 0.16,
+   "flow_m": -1338,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "15:05",
+   "spot": 744.2,
+   "kstar": 744,
+   "distance": 0.2,
+   "flow_m": -1516,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "15:10",
+   "spot": 744.48,
+   "kstar": 744,
+   "distance": 0.48,
+   "flow_m": -1664,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 745
+  },
+  {
+   "t": "15:15",
+   "spot": 744.64,
+   "kstar": 745,
+   "distance": 0.36,
+   "flow_m": -1825,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "15:20",
+   "spot": 744.4,
+   "kstar": 745,
+   "distance": 0.6,
+   "flow_m": -1846,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "15:25",
+   "spot": 744.21,
+   "kstar": 744,
+   "distance": 0.21,
+   "flow_m": -1649,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "15:30",
+   "spot": 743.86,
+   "kstar": 744,
+   "distance": 0.14,
+   "flow_m": -1489,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "15:35",
+   "spot": 743.78,
+   "kstar": 745,
+   "distance": 1.22,
+   "flow_m": -1170,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 743
+  },
+  {
+   "t": "15:40",
+   "spot": 744.23,
+   "kstar": 744,
+   "distance": 0.23,
+   "flow_m": -1293,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  },
+  {
+   "t": "15:45",
+   "spot": 744.52,
+   "kstar": 745,
+   "distance": 0.48,
+   "flow_m": -1725,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": 744
+  },
+  {
+   "t": "15:50",
+   "spot": 744.92,
+   "kstar": 745,
+   "distance": 0.08,
+   "flow_m": -1770,
+   "sign_uncertain": true,
+   "agreeing_strikes_within_2": 0,
+   "old_control": null
+  }
+ ]
+}
