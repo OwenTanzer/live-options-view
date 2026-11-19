@@ -5,7 +5,7 @@ name: Collector suite
 # the same required workflow.
 on:
   push:
-    branches: [master]
+    branches: [master, release/gex-tradier-only-20261119]
     paths:
       - "market_data/**"
       - "deployment/python/**"
@@ -31,6 +31,7 @@ on:
       - "tests/test_auth_safety.py"
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
+      - "tests/test_qqq_recent.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -78,6 +79,7 @@ on:
       - "tests/test_auth_safety.py"
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
+      - "tests/test_qqq_recent.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -105,10 +107,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # The pinned collector release is deployed without merging master.
-          # Test its actual source, not GitHub's synthetic merge with master.
-          ref: ${{ github.head_ref == 'release/gex-tradier-only-20261119' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
