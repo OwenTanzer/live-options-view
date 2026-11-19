@@ -147,6 +147,26 @@ test('five-minute grid (phone) is the one-minute grid sampled at the same times'
   }
 });
 
+test('phone (5-minute) and desktop (1-minute) colour scales are equal at every time (Chej review)', () => {
+  const g5 = H.replayGrid(real, 5 * 60000, grid);
+  assert.equal(g5.scaleGrid, grid);
+  for (let t = OPEN; t <= real.coverage.close; t += 60000) assert.equal(H.gridScale(g5, t), H.gridScale(grid, t), clock(t));
+  for (const t of g5.times) assert.equal(H.gridScale(g5, t), H.gridScale(grid, t));
+  // 15:50 ET: the five-minute cells alone would give a smaller scale than the canonical prefix.
+  const t1550 = OPEN + 380 * 60000;
+  assert.equal(H.gridScale(grid, t1550), 2.5e9);
+  assert.equal(H.gridScale(g5, t1550), 2.5e9);
+  assert.equal(P.niceCeil(g5.maxAbs[H.lastColumn(g5, t1550)]), 2e9, 'sampled-only scale (the reviewed defect)');
+  // Same estimate, same colour on both grids.
+  const j5 = H.lastColumn(g5, t1550), j1 = grid.times.indexOf(g5.times[j5]);
+  for (let k = 0; k < grid.strikes.length; k++) {
+    const a = H.cellAt(g5, j5, k, 1, t1550), b = H.cellAt(grid, j1, k, 1, t1550);
+    assert.equal(H.cellColor(a.flow.base, H.gridScale(g5, t1550)), H.cellColor(b.flow.base, H.gridScale(grid, t1550)));
+  }
+  // Built without a supplied canonical grid, it still uses the one-minute prefix.
+  assert.equal(H.gridScale(H.replayGrid(real, 5 * 60000), t1550), 2.5e9);
+});
+
 test('cell colour is diverging and monotone in magnitude', () => {
   assert.match(H.cellColor(5, 10), /^rgba\(98,227,189,/);
   assert.match(H.cellColor(-5, 10), /^rgba\(255,150,124,/);

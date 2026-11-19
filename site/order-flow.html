@@ -260,7 +260,8 @@
     <h2 id="heatmap-title">Estimated flow gamma by time and strike</h2>
     <span id="heatmap-scale" class="mono-note"></span>
     <div class="profile-legend">
-      <span><b class="buy">green positive</b> / <b class="sell">red negative</b> estimated flow gamma (dealer S−B at the selected participation); colour strength = size on the labelled scale</span>
+      <span><b class="buy">green positive</b> / <b class="sell">red negative</b> estimated flow gamma (dealer S−B at the selected participation); colour strength = size of the estimate on the labelled scale</span>
+      <span><b>Colour shows the estimate, not confidence:</b> a strong colour can still have an undetermined sign when its scenario endpoints cross zero (see the selected-cell readout or the grey-out option)</span>
       <span class="gap">▨ missing or stale input in that cell, never drawn as zero</span>
       <span>blank right of the white cursor: after the displayed time, not shown</span>
       <span class="gap">┅ QQQ spot from each cell's chain snapshot; breaks where the chain is missing or stale</span>
@@ -664,7 +665,8 @@
     function heatGrid(narrow) {
       if (!replay) return null;
       const key = narrow ? "g5" : "g1";
-      if (!grids[key]) grids[key] = HM.replayGrid(replay, narrow ? 5 * 60000 : 60000);
+      if (!grids.g1) grids.g1 = HM.replayGrid(replay, 60000);
+      if (!grids[key]) grids[key] = HM.replayGrid(replay, 5 * 60000, grids.g1);
       return grids[key];
     }
 
@@ -726,8 +728,8 @@
         bottom = top + n * rowH;
       heatGeom = { x0, x1, top, rowH, cw, grid };
       el("heatmap-scale").textContent =
-        "Colour scale ±" + (s ? unsigned(s) : "—") + " per 1% QQQ: largest 100% estimate in any cell through " + clock(end) +
-        " ET (same at 50%, on play, seek or reload) · " + (narrow ? "5-minute" : "1-minute") + " cells, each at its end time";
+        "Colour scale ±" + (s ? unsigned(s) : "—") + " per 1% QQQ: largest 100% estimate in any 1-minute cell through " + clock(end) +
+        " ET (same at 50%, on phone and desktop, on play, seek or reload) · " + (narrow ? "5-minute" : "1-minute") + " cells, each at its end time · colour = estimate, not confidence";
       // Colour key.
       const kx = narrow ? x0 : x1 - 230,
         kw = narrow ? x1 - x0 - 110 : 150;

@@ -7,8 +7,11 @@
 // selected cell and the strike profile and table at the same time and strike come from one
 // calculation. Cells after the displayed time are not shown (inputs stay as-of-time). Missing
 // or stale inputs stay null, never zero. The colour scale is symmetric, uses the 100%
-// participation point estimate of every cell up to the displayed time, and never shrinks, so
-// 50% is drawn on the same scale and seek, play and reload agree.
+// participation point estimate of every one-minute cell up to the displayed time, and never
+// shrinks, so 50% is drawn on the same scale and seek, play and reload agree. A coarser grid
+// (the phone's five-minute cells) takes its scale from the canonical one-minute prefix, so the
+// same estimate keeps the same colour when the page is resized. Colour shows the estimate,
+// not confidence: a strong colour can still have an undetermined sign.
 
 (function (root) {
   const node = typeof module !== 'undefined';
@@ -18,8 +21,9 @@
   const BIN_MS = 60 * 1000;
 
   // Grid over the session at binMs. times[j] is the end of bin j; strikes are the replay's
-  // actual strikes, high to low.
-  function replayGrid(r, binMs = BIN_MS) {
+  // actual strikes, high to low. A grid coarser than one minute needs the canonical one-minute
+  // grid (built here when not supplied) for its colour scale.
+  function replayGrid(r, binMs = BIN_MS, canonical = null) {
     const open = r.coverage.open, close = r.coverage.close;
     const times = [];
     for (let t = open + binMs; t <= close; t += binMs) times.push(t);
@@ -44,7 +48,9 @@
       for (const cell of c.cells) if (cell && cell.flow[1].base != null) m = Math.max(m, Math.abs(cell.flow[1].base));
       maxAbs.push(m);
     }
-    return { binMs, open, close, times, strikes, cols, maxAbs };
+    const grid = { binMs, open, close, times, strikes, cols, maxAbs };
+    grid.scaleGrid = binMs === BIN_MS ? grid : canonical || replayGrid(r, BIN_MS);
+    return grid;
   }
 
   // Index of the last bin ending at or before t (-1 if none): the columns visible at t.
@@ -54,10 +60,11 @@
     return lo - 1;
   }
 
-  // Symmetric colour scale at time t (labelled step, never shrinks).
+  // Symmetric colour scale at time t (labelled step, never shrinks), always from the canonical
+  // one-minute prefix so every grid resolution colours the same estimate the same way.
   function gridScale(grid, t) {
-    const j = lastColumn(grid, t);
-    return j < 0 ? 0 : P.niceCeil(grid.maxAbs[j]);
+    const g = grid.scaleGrid || grid, j = lastColumn(g, t);
+    return j < 0 ? 0 : P.niceCeil(g.maxAbs[j]);
   }
 
   // One cell's display state at participation p. kind: 'value' | 'missing' (inputs missing or
