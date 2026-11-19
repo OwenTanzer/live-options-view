@@ -104,6 +104,62 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session["gaps"][-1]["end"], self.T0 + 30013)
         self.assertEqual(session, recent.RecentPrints.payload(feed)["session"])
 
+    def test_rebuild_receipt_order_across_owners_and_local_overlap(self):
+        import gzip, io, tempfile
+        events = []
+        source = recent.RecentPrints()
+        source.observe = lambda e, _o=source.observe: (events.append(e), _o(e))
+        for n, price in ((1, 1), (2, 2), (3, 1), (4, 3)):
+            self.trade(source, n, price)
+        # Distinct provider identity at the same provider/receipt time survives.
+        self.trade(source, 5, 3, t=self.T0 + 4)
+        def blob(rows):
+            return gzip.compress(b"\n".join(json.dumps(e).encode() for e in rows))
+        # Later owner sorts first; the earliest event exists only locally.
+        blobs = {"p/aaaaaaaaaaaa-part-0000.ndjson.gz": blob(events[2:]),
+                 "p/ffffffffffff-part-0000.ndjson.gz": blob(events[1:3])}
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": [{"Key": k} for k in blobs]}
+        client.get_object.side_effect = lambda **kw: {"Body": io.BytesIO(blobs[kw["Key"]])}
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp) / "zzzz-part-0000.ndjson.gz"
+            local.write_bytes(blob(events[:3]))
+            feed = recent.RecentPrints()
+            feed.rebuild(client, "bucket", "p", local_segments=[local],
+                         now=datetime.fromtimestamp((self.T0 + 60000)/1000, timezone.utc))
+        self.assertEqual(feed.payload()["rows"], source.payload()["rows"])
+        self.assertEqual(feed.payload()["session"]["contracts"], source.payload()["session"]["contracts"])
+        self.assertEqual(feed.payload()["session"]["prints"], 5)
+        self.assertEqual(feed.payload()["session"]["rebuilt"]["status"], "rebuilt")
+        self.assertEqual(feed.payload()["session"]["rebuilt"]["segments"], 3)
+
+    def test_rebuild_reversed_owner_names_preserves_buy(self):
+        import gzip, io
+        events = []
+        source = recent.RecentPrints()
+        source.observe = lambda e, _o=source.observe: (events.append(e), _o(e))
+        self.trade(source, 1, 1)
+        self.trade(source, 2, 2)
+        blobs = {"p/ffffffffffff-part-0000.ndjson.gz": gzip.compress(json.dumps(events[0]).encode()),
+                 "p/aaaaaaaaaaaa-part-0000.ndjson.gz": gzip.compress(json.dumps(events[1]).encode())}
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": [{"Key": k} for k in blobs]}
+        client.get_object.side_effect = lambda **kw: {"Body": io.BytesIO(blobs[kw["Key"]])}
+        feed = recent.RecentPrints()
+        feed.rebuild(client, "bucket", "p", now=datetime.fromtimestamp((self.T0+1000)/1000, timezone.utc))
+        self.assertEqual(feed.payload()["session"]["contracts"][self.SYMBOL],
+                         dict(B=2, S=0, U=2, prints=2))
+        self.assertEqual(feed.payload()["rows"], source.payload()["rows"])
+
+    def test_rebuild_missing_receipt_fails_visibly(self):
+        import gzip, io
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": [{"Key": "p/a.ndjson.gz"}]}
+        client.get_object.return_value = {"Body": io.BytesIO(gzip.compress(b'{"type":"quote"}'))}
+        feed = recent.RecentPrints()
+        feed.rebuild(client, "bucket", "p", now=datetime.fromtimestamp(self.T0/1000, timezone.utc))
+        self.assertEqual(feed.payload()["session"]["rebuilt"]["status"], "rebuild_failed")
+
     def test_failed_rebuild_is_visible_and_not_fatal(self):
         client = Mock()
         client.list_objects_v2.side_effect = OSError()
