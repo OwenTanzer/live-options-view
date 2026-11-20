@@ -18,7 +18,7 @@
     if (ev.kind !== "publication") {
       tr.className = "sys";
       tr.append(cell(t(ev.first_seen)), cell(ev.source), cell(ev.kind));
-      const td = cell(ev.error || (ev.slice ? `${ev.slice.fileName}: ${ev.decoded_rows} decoded / ${ev.slice.rowCount} published${ev.replay ? " (replay)" : ""}` : "") ||
+      const td = cell(ev.error || (ev.slice ? `${ev.slice.fileName}: ${ev.decoded_rows} decoded / ${ev.slice.rowCount} published${ev.restored ? " (backfill · restored)" : ev.replay ? " (replay)" : ""}` : "") ||
         (ev.rows ? ev.rows + " rows, no overlap with previous poll" : ""));
       td.colSpan = 7;
       tr.append(td);
@@ -28,7 +28,8 @@
       tr.append(
         cell(t(ev.first_seen)),
         cell(`${ev.source.replace("dtcc-", "").replace("-credits", "").toUpperCase()} · ${ev.jurisdiction}${ev.route ? " · " + ev.route : ""}`),
-        cell(ev.action + (ev.replay ? " (replay)" : ev.backfill ? " (backfill)" : ""), ev.backfill || ev.replay ? "dim" : ""),
+        cell(ev.action + (ev.restored ? " (backfill · restored)" : ev.replay ? " (replay)" : ev.backfill ? " (backfill)" : ""),
+             ev.backfill || ev.replay ? "dim" : ""),
         cell(t(ev.execution_ts)),
         cell(t(ev.dissemination_ts)),
         cell(notional, /\+$/.test(s.notionalAmountLeg1 || "") ? "capped" : ""),

@@ -55,7 +55,9 @@ rows that audit validated.
   - stored as originals under `dtcc-reconcile/<day>/report-only-slices/`, with a
     `<CHANNEL>.REPORT_ONLY.json` marker;
   - never logged to the tape, and never counted as tape rows.
-  - Restoring them to the tape is a separate objective.
+  - Reconciliation never restores them. Restoring one to the tape is a separate,
+    explicit step: `restore.py` (see the README). It goes through the commit path,
+    and refuses a slice whose identity cannot be established.
 - Their outcome is its own result, `report_only`, with `status` `ok`, `none` or
   `decode_failures`, and each failure listed. **A report-only decode failure cannot
   change the tape verdict.** The rows that did decode feed only the

@@ -417,7 +417,8 @@ class SliceRoute:
         ch = CHANNELS[key]
         url, name = meta.get("fullFilePath") or "", meta.get("fileName") or ""
         u = urlsplit(url)
-        replay = self.is_replay(meta)
+        restored = p.get("restored")  # restore.py: a saved original re-entering through this same path
+        replay = self.is_replay(meta) or bool(restored)  # restored slices are always backfill (no alerts)
         slice_info = {k: meta.get(k) for k in ("fileName", "sliceId", "dissemDTM", "startTs", "endTs", "rowCount")}
         prov = {"publisher": PUBLISHER, "jurisdiction": ch["jurisdiction"], "route": "slice-index"}
         if (u.scheme != "https" or u.hostname != SLICE_HOST or not u.path.startswith(ch["prefix"])
@@ -457,7 +458,7 @@ class SliceRoute:
         if self.crash_hook:
             self.crash_hook("after_raw")
         base = {"first_seen": t_recv, "raw_ref": rel, "slice": slice_info, "replay": replay,
-                "attempts": p["attempts"] + 1, **prov}
+                "attempts": p["attempts"] + 1, **prov, **({"restored": restored} if restored else {})}
         try:
             rows = decode_rows(blob)
         except Exception as exc:

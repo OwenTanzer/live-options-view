@@ -1017,5 +1017,60 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
             reconcile.main(["--archive", str(self.archive), "--day", today])
 
+class RestoreTests(unittest.TestCase):
+    """Offline tape restoration through the commit path (synthetic, disposable archives)."""
+
+    def test_synthetic_restore_demo(self):
+        from market_data.credit_tape import synthetic_restore
+        with tempfile.TemporaryDirectory() as d:
+            result = synthetic_restore.run(os.path.join(d, "archive"))
+        self.assertTrue(result["all_pass"], json.dumps(result["checks"], indent=1))
+
+    def _missed_slice2(self, d):
+        from market_data.credit_tape import synthetic_restore as sr
+        from market_data.credit_tape.synthetic_resilience import SyntheticDTCC
+        archive = os.path.join(d, "archive")
+        dtcc = SyntheticDTCC()
+        for n in (1, 2):
+            dtcc.files[sr.meta(n)["fullFilePath"]] = sr.zipped(sr.SLICES[n])
+        dtcc.index = {"CFTC_CR": [sr.meta(1), sr.meta(2)], "SEC_CR": []}
+        dtcc.fail.add(sr.meta(2)["fullFilePath"])
+        capture.run(archive, ticker=False, slices=True, once=True, opener=dtcc)
+        z = Path(d) / "saved" / sr.meta(2)["fileName"]
+        z.parent.mkdir()
+        z.write_bytes(sr.zipped(sr.SLICES[2]))
+        return archive, z, sr
+
+    def test_unrecorded_hash_stays_unresolved_unless_supplied(self):
+        from market_data.credit_tape import restore
+        with tempfile.TemporaryDirectory() as d:
+            archive, z, sr = self._missed_slice2(d)
+            before = Path(archive, "events.jsonl").read_bytes()
+            res = restore.restore(archive, "CFTC_CR", str(z))
+            self.assertEqual(res["status"], "unresolved")
+            self.assertIn("no recorded or supplied sha256", res["reasons"][0])
+            self.assertEqual(Path(archive, "events.jsonl").read_bytes(), before)  # nothing written
+            self.assertEqual(restore.restore(archive, "CFTC_CR", str(z), sha256="0" * 64)["status"], "unresolved")
+            ok = restore.restore(archive, "CFTC_CR", str(z), sha256=hashlib.sha256(z.read_bytes()).hexdigest())
+            self.assertEqual(ok["status"], "restored")
+            self.assertEqual(sorted(e["id"] for e in sr.pubs(archive, 2)), ["C", "R", "R"])
+
+    def test_row_count_channel_and_archive_mismatches_stay_unresolved(self):
+        from market_data.credit_tape import restore
+        with tempfile.TemporaryDirectory() as d:
+            archive, z, sr = self._missed_slice2(d)
+            short = Path(d) / "short" / z.name
+            short.parent.mkdir()
+            short.write_bytes(sr.zipped(sr.SLICES[2][:2]))  # 2 rows, index entry says 3
+            res = restore.restore(archive, "CFTC_CR", str(short), sha256=hashlib.sha256(short.read_bytes()).hexdigest())
+            self.assertIn("index entry says 3", res["reasons"][0])
+            self.assertEqual(restore.restore(archive, "SEC_CR", str(z))["status"], "unresolved")  # wrong channel
+            legacy = Path(d) / "legacy"
+            (legacy / "dtcc-slices").mkdir(parents=True)
+            (legacy / "events.jsonl").write_text("")
+            self.assertIn("not a credit-tape archive", restore.restore(str(legacy), "CFTC_CR", str(z))["reasons"][0])
+            self.assertEqual(sr.pubs(archive, 2), [])
+
+
 if __name__ == "__main__":
     unittest.main()
