@@ -92,11 +92,11 @@ function bfReplay(bot, nowMs) {
     const flip = before !== 0 && after !== 0 && Math.sign(before) !== Math.sign(after);
     if (before !== 0 && (after === 0 || flip)) {
       const seg = open.get(f.sym);
-      if (seg) segments.push({ ...seg, endMs: ms, settled: settlement });
+      if (seg) segments.push({ ...seg, endMs: ms, settled: settlement, reversalEnd: flip && !settlement });
       open.delete(f.sym);
     }
     if (after !== 0 && !open.has(f.sym)) {
-      open.set(f.sym, { sym: f.sym, startMs: ms, carried: false, sign: Math.sign(after) });
+      open.set(f.sym, { sym: f.sym, startMs: ms, carried: false, sign: Math.sign(after), reversalStart: flip && !settlement });
     }
     const event = (kind, qty = f.qty) => events.push({ ms, kind, fill: { ...f, qty }, bot });
     if (settlement) event('settlement');
@@ -283,9 +283,9 @@ function bfLanesHtml(scored, data, nowMs) {
       const m = /\d{6}([CP])\d{8}$/.exec(seg.sym);
       const cls = !m ? 'bf-seg-other' : m[1] === 'C' ? 'bf-seg-call' : 'bf-seg-put';
       return `<div class="bf-seg ${cls}${seg.endMs != null ? ' bf-seg-closed' : ''}" style="left:${left.toFixed(3)}%;width:${Math.max(0.4, right - left).toFixed(3)}%"
-        title="${escapeHtml(bfContract(seg.sym))}"><span>${escapeHtml(bfContract(seg.sym))}</span></div>
-        ${!entryInLane ? '' : `<span class="bf-mk bf-in" style="left:${left.toFixed(3)}%">▲</span>`}
-        ${endInLane ? `<span class="bf-mk ${seg.settled ? 'bf-dim' : 'bf-out'}" style="left:${right.toFixed(3)}%">${seg.settled ? '◆' : '✕'}</span>` : ''}`;
+        title="${seg.sign < 0 ? 'Short' : 'Long'} ${escapeHtml(bfContract(seg.sym))}"><span>${escapeHtml(bfContract(seg.sym))}</span></div>
+        ${!entryInLane ? '' : `<span class="bf-mk bf-in${seg.reversalStart ? ' bf-mk-reversal-in' : ''}" style="left:${left.toFixed(3)}%" title="Entry">▲</span>`}
+        ${endInLane ? `<span class="bf-mk ${seg.settled ? 'bf-dim' : 'bf-out'}${seg.reversalEnd ? ' bf-mk-reversal-out' : ''}" style="left:${right.toFixed(3)}%" title="${seg.settled ? 'Settlement' : 'Exit'}">${seg.settled ? '◆' : '✕'}</span>` : ''}`;
     }).join('');
     return `<div class="bf-lane">
       <div class="bf-lane-label"><span class="bf-alias">${escapeHtml(s.bot.alias)}</span>
@@ -298,8 +298,8 @@ function bfLanesHtml(scored, data, nowMs) {
     ${bfHeader('MOOPERTONIC · SESSION LANES', data, nowMs)}
     ${bfTape(events, coverage)}
     ${bfCoverageNote(coverage)}
-    <div class="bf-legend"><span><i class="bf-sw bf-seg-call"></i>long call held</span>
-      <span><i class="bf-sw bf-seg-put"></i>put held</span>
+    <div class="bf-legend"><span><i class="bf-sw bf-seg-call"></i>call held (long or short)</span>
+      <span><i class="bf-sw bf-seg-put"></i>put held (long or short)</span>
       <span><i class="bf-sw bf-seg-other"></i>shares / other</span>
       <span class="bf-in">▲ entry</span><span class="bf-out">✕ exit</span><span>◆ settlement</span><span>│ now</span>
       <span class="bf-dim">faded bar = closed · left-edge bar = carried in when history is complete</span></div>

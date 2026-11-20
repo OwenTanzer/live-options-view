@@ -1112,6 +1112,9 @@
   .bf-seg-other { background: #d9a6ff; box-shadow: 0 0 8px rgba(217,166,255,.6); }
   .bf-seg-closed { opacity: 0.45; box-shadow: none; }
   .bf-mk { position: absolute; top: 3px; transform: translateX(-50%); font-size: 0.72rem; }
+  /* Same timestamp, opposite sides of the tick so both reversal markers stay legible. */
+  .bf-mk-reversal-out { transform: translateX(calc(-100% - 2px)); }
+  .bf-mk-reversal-in { transform: translateX(2px); }
   .bf-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f3e6e4; box-shadow: 0 0 6px #f3e6e4; }
   @media (prefers-reduced-motion: reduce) {
     .bf-crawl, .bf-flash { animation: none; }
@@ -1818,7 +1821,7 @@ let timerHandle = null;
 // the section's marker.
 </script>
 <script src="js/bots-panel.js?v=28a7c5050a835806"></script>
-<script src="js/bot-floor.js?v=553500ebbff8419f"></script>
+<script src="js/bot-floor.js?v=12182aff0aeff5fa"></script>
 <script>
 
 // ── historical panel ─────────────────────────────────────────────────────────

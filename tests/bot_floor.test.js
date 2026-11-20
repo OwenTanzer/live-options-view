@@ -116,6 +116,14 @@ const { createHash } = require('node:crypto');
     assert.equal(r.coverage, 'partial');
     assert.equal(r.truncatedFromMs, Date.parse('2026-11-20T15:00:00Z'));
     assert.equal(floor.bfSide(bot), 'SHORT CALL');
+    const lanes = floor.bfLanesHtml([{ bot, complete: true, equity: 100 }], null, r.nowMs);
+    assert.ok(lanes.includes('call held (long or short)') && lanes.includes('title="Short QQQ 611C"'));
+    const exit = lanes.match(/bf-mk-reversal-out" style="left:([\d.]+)%"/);
+    const entry = lanes.match(/bf-mk-reversal-in" style="left:([\d.]+)%"/);
+    assert.ok(exit && entry && exit[1] === entry[1], 'reversal markers share the real timestamp');
+    assert.ok(html.includes('.bf-mk-reversal-out { transform: translateX(calc(-100% - 2px)); }'));
+    assert.ok(html.includes('.bf-mk-reversal-in { transform: translateX(2px); }'));
+
   }
 
   // Rendering: escaping, recent-entry edge, tape, counters, empty sessions.
