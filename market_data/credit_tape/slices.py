@@ -83,6 +83,8 @@ class SliceRoute:
         self.polls_ok, self.polls_err = st.get("polls_ok", 0), st.get("polls_err", 0)
         self.not_modified, self.last_index_at = st.get("not_modified", 0), st.get("last_index_at")
         self.index_backoff, self.index_retry_at = 0.0, 0.0
+        # Per-channel status for health checks: listing in the last full index, last completed slice.
+        self.channels: dict[str, dict] = {k: dict((st.get("channels") or {}).get(k) or {}) for k in CHANNELS}
         # pending: "CHANNEL:sliceId" -> {"key", "meta", "attempts", "retry_at", "last_error"}
         self.pending: dict[str, dict] = {}
         for k, v in self._load(self.pending_path, {}).items():
@@ -111,7 +113,7 @@ class SliceRoute:
             _atomic_json(self.state_path, {
                 "seen_slice_keys": sorted(self.seen, key=self._order)[-50000:], "index_etag": self.etag, "started_at": self.started,
                 "polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
-                "last_index_at": self.last_index_at})
+                "last_index_at": self.last_index_at, "channels": self.channels})
 
     @staticmethod
     def pkey(channel: str, sid: int) -> str:
@@ -222,10 +224,19 @@ class SliceRoute:
 
     def health(self):
         with self.lock:
+            now = self.clock()
             live = sum(1 for p in self.pending.values() if not self.is_replay(p["meta"]))
+            chans = {}
+            for key in CHANNELS:
+                mine = [p for p in self.pending.values() if p["key"] == key]
+                lv = [p for p in mine if not self.is_replay(p["meta"])]
+                chans[key] = {**self.channels[key],
+                              "pending_live": len(lv), "pending_backfill": len(mine) - len(lv),
+                              "oldest_live_pending_s": round(max((now - p.get("enqueued_ts", now) for p in lv), default=0.0), 1),
+                              "max_attempts": max((p["attempts"] for p in mine), default=0)}
             return {"polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
                     "slices_seen": len(self.seen), "pending_live": live, "pending_backfill": len(self.pending) - live,
-                    "last_index_at": self.last_index_at}
+                    "last_index_at": self.last_index_at, "channels": chans}
 
     # -- index -----------------------------------------------------------------
     def poll_index(self, events_path: str) -> None:
@@ -269,6 +280,9 @@ class SliceRoute:
             self.index_backoff = 0.0
             for key, ch in CHANNELS.items():
                 lst = entries.get(key)
+                self.channels[key].update({"listed_in_index": isinstance(lst, list),
+                                           "listed_slices": len(lst) if isinstance(lst, list) else 0,
+                                           "listing_at": t_recv})
                 if not isinstance(lst, list):
                     self.append(events_path, {"source": ch["source"], "kind": "index_channel_missing", "first_seen": t_recv,
                                               "channel": key, "publisher": PUBLISHER, "jurisdiction": ch["jurisdiction"]})
@@ -278,7 +292,7 @@ class SliceRoute:
                     if type(sid) is not int or self.pkey(key, sid) in self.seen or self._done(key, sid):
                         continue
                     self.pending[self.pkey(key, sid)] = {"key": key, "meta": meta, "attempts": 0, "retry_at": 0.0,
-                                         "enqueued_at": t_recv, "last_error": None}
+                                         "enqueued_at": t_recv, "enqueued_ts": self.clock(), "last_error": None}
                     self.seen.add(self.pkey(key, sid))
                     added += 1
             # The ETag is only advanced after pending entries are durable.
@@ -430,6 +444,11 @@ class SliceRoute:
             self._apply(commit)
             if self.crash_hook:
                 self.crash_hook("after_output")  # Chej's case: output written, completion not yet recorded
-            _atomic_json(self._key_file("done", channel, sid), {"at": self.now(), **info})
+            done_at = self.now()
+            _atomic_json(self._key_file("done", channel, sid), {"at": done_at, **info})
             self.pending.pop(self.pkey(channel, sid), None)
+            meta = (evs[0].get("slice") if evs else None) or {}
+            which = "last_backfill_completed" if evs and evs[0].get("replay") else "last_live_completed"
+            self.channels[channel][which] = {"sliceId": sid, "dissemDTM": meta.get("dissemDTM"), "at": done_at,
+                                             "outcome": next(iter(info), "rows")}
             self._save()

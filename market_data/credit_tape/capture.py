@@ -148,6 +148,50 @@ class Source:
         return {"publisher": self.cfg["publisher"], "jurisdiction": self.cfg["jurisdiction"]}
 
 
+def write_health(out: str, health: dict, extra: dict | None = None) -> None:
+    """Atomic health.json (the panel and /healthz/collector read it concurrently)."""
+    path = os.path.join(out, "health.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"t": now(), "sources": health, **(extra or {})}, fh)
+    os.replace(tmp, path)
+
+
+def run(out: str, interval: float = 20.0, ticker: bool = True, slices: bool = True,
+        once: bool = False, stop: threading.Event | None = None, opener=None) -> int:
+    """Collector loop. `stop` (optional) ends it after the current pass. `opener`: tests only."""
+    os.makedirs(out, exist_ok=True)
+    srcs = [Source(n, c, out) for n, c in SOURCES.items()] if ticker else []
+    from market_data.credit_tape.slices import SliceRoute
+    kw = {"opener": opener} if opener else {}
+    route = SliceRoute(out, now, append_jsonl, lock=WRITE_LOCK, **kw) if slices else None
+    events, alerts = os.path.join(out, "events.jsonl"), os.path.join(out, "alerts_outbox.jsonl")
+    bf_stop = None
+    if route and not once:
+        _, bf_stop = route.start_backfill_thread(events, alerts)  # replay never blocks the live loop
+    mode = {"ticker": ticker, "slices": slices, "interval_s": interval}
+    try:
+        while True:
+            for s in srcs:
+                s.poll(alerts, events)
+            if route:
+                route.poll_index(events)
+                route.drain_live(events, alerts)  # runs whether the index answered 200 or 304
+                if once:
+                    route.drain_backfill(events, alerts, budget=10**6)
+            health = {s.name: {"polls_ok": s.polls_ok, "polls_err": s.polls_err, "seen": len(s.seen)} for s in srcs}
+            if route:
+                health["dtcc-slice-index"] = route.health()
+            write_health(out, health, {"collector": mode})
+            if once or (stop is not None and stop.wait(interval)):
+                return 0
+            if stop is None:
+                time.sleep(interval)
+    finally:
+        if bf_stop is not None:
+            bf_stop.set()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -156,29 +200,7 @@ def main() -> int:
     ap.add_argument("--no-ticker", action="store_true", help="slice-index route only")
     ap.add_argument("--no-slices", action="store_true", help="ticker route only")
     a = ap.parse_args()
-    os.makedirs(a.out, exist_ok=True)
-    srcs = [] if a.no_ticker else [Source(n, c, a.out) for n, c in SOURCES.items()]
-    from market_data.credit_tape.slices import SliceRoute
-    slices = None if a.no_slices else SliceRoute(a.out, now, append_jsonl, lock=WRITE_LOCK)
-    events, alerts = os.path.join(a.out, "events.jsonl"), os.path.join(a.out, "alerts_outbox.jsonl")
-    if slices and not a.once:
-        slices.start_backfill_thread(events, alerts)  # replay never blocks the live loop
-    while True:
-        for s in srcs:
-            s.poll(alerts, events)
-        if slices:
-            slices.poll_index(events)
-            slices.drain_live(events, alerts)  # runs whether the index answered 200 or 304
-            if a.once:
-                slices.drain_backfill(events, alerts, budget=10**6)
-        health = {s.name: {"polls_ok": s.polls_ok, "polls_err": s.polls_err, "seen": len(s.seen)} for s in srcs}
-        if slices:
-            health["dtcc-slice-index"] = slices.health()
-        with open(os.path.join(a.out, "health.json"), "w", encoding="utf-8") as fh:
-            json.dump({"t": now(), "sources": health}, fh)
-        if a.once:
-            return 0
-        time.sleep(a.interval)
+    return run(a.out, a.interval, ticker=not a.no_ticker, slices=not a.no_slices, once=a.once)
 
 
 if __name__ == "__main__":

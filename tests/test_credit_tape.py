@@ -320,5 +320,109 @@ class ServerTests(unittest.TestCase):
             sp.Settings.from_env({**base, "CREDIT_TAPE_PUBLIC_ORIGIN": "https://x.test", "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "octocat"})
 
 
+class ServiceReleaseTests(unittest.TestCase):
+    """Release handoff: fail-closed service config, per-channel health, restart check."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.archive = Path(self.tmp.name)
+        self.env = {"CREDIT_TAPE_ARCHIVE": str(self.archive), "CREDIT_TAPE_PUBLIC_ORIGIN": "https://cds.example.test",
+                    "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid", "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret",
+                    "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42"}
+
+    def test_service_refuses_incomplete_gate_and_dev_local(self):
+        from market_data.credit_tape import service
+        for env in ({k: v for k, v in self.env.items() if k != "CREDIT_TAPE_GITHUB_CLIENT_SECRET"},
+                    {k: v for k, v in self.env.items() if k != "CREDIT_TAPE_GITHUB_ALLOWED_IDS"},
+                    {**self.env, "CREDIT_TAPE_DEV_LOCAL": "1"},
+                    {**self.env, "CREDIT_TAPE_INTERVAL": "1"}):
+            self.assertEqual(service.main(env), 2)
+        settings, interval, port = service.config({**self.env, "PORT": "9123"})
+        self.assertEqual((settings.origin, settings.allowed_ids, interval, port),
+                         ("https://cds.example.test", frozenset({42}), 20.0, 9123))
+        self.assertFalse(settings.dev_local)
+
+    def _run_slice_only(self, dtcc):
+        capture.run(str(self.archive), ticker=False, slices=True, once=True, opener=dtcc)
+
+    def test_slice_only_run_health_and_restart_check(self):
+        from market_data.credit_tape import check_archive, synthetic_demo
+        from market_data.credit_tape.synthetic_resilience import SyntheticDTCC
+        dtcc = SyntheticDTCC()
+        for agency, key in (("cftc", "CFTC_CR"), ("sec", "SEC_CR")):
+            meta, blob = synthetic_demo.fixture(agency)
+            dtcc.files[meta["fullFilePath"]] = blob
+            dtcc.index[key] = [meta]
+        self._run_slice_only(dtcc)
+        before = check_archive.check(str(self.archive))
+        self.assertTrue(before["clean"], before)
+        self.assertEqual(before["publications"], {"CFTC_CR": 1, "SEC_CR": 1})
+        self.assertEqual(before["ticker_publications"], 0)
+        health = json.loads((self.archive / "health.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(health["sources"]), {"dtcc-slice-index"})  # ticker output off
+        ok, body = sp.collector_health(self.archive)
+        self.assertTrue(ok, body)
+        self.assertTrue(body["slice_only"])
+        self.assertEqual({k: v["state"] for k, v in body["channels"].items()}, {"CFTC_CR": "ok", "SEC_CR": "ok"})
+        for _ in range(2):  # restarts on an unchanged index
+            self._run_slice_only(dtcc)
+        after = check_archive.check(str(self.archive))
+        self.assertTrue(after["clean"], after)
+        self.assertTrue(check_archive.compare(before, after)["ok"])
+        self.assertEqual(after["publications"], {"CFTC_CR": 1, "SEC_CR": 1})
+        # A duplicated line is caught.
+        ev = self.archive / "events.jsonl"
+        last = ev.read_text(encoding="utf-8").splitlines()[-1]
+        with ev.open("a", encoding="utf-8") as fh:
+            fh.write(last + "\n")
+        self.assertFalse(check_archive.check(str(self.archive))["clean"])
+
+    def test_collector_health_flags_each_channel(self):
+        now = time.time()
+        iso = lambda age: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - age)) + "Z"
+        ch = lambda **kw: {"listed_in_index": True, "listed_slices": 3, "listing_at": iso(30),
+                           "pending_live": 0, "pending_backfill": 0, "oldest_live_pending_s": 0, "max_attempts": 0, **kw}
+
+        def write(beat_age=5, index_age=10, cftc=None, sec=None):
+            (self.archive / "health.json").write_text(json.dumps({
+                "t": iso(beat_age), "collector": {"ticker": False, "slices": True, "interval_s": 20},
+                "sources": {"dtcc-slice-index": {"last_index_at": iso(index_age), "polls_err": 0,
+                                                 "channels": {"CFTC_CR": cftc or ch(), "SEC_CR": sec or ch()}}}}))
+            return sp.collector_health(self.archive, now)
+
+        self.assertTrue(write()[0])
+        ok, body = write(sec=ch(listed_in_index=False))
+        self.assertEqual((ok, body["channels"]["SEC_CR"]["state"], body["channels"]["CFTC_CR"]["state"]),
+                         (False, "missing_from_index", "ok"))
+        ok, body = write(cftc=ch(pending_live=1, oldest_live_pending_s=901))
+        self.assertEqual((ok, body["channels"]["CFTC_CR"]["state"]), (False, "live_backlog"))
+        self.assertFalse(write(beat_age=400)[0])
+        self.assertFalse(write(index_age=700)[0])
+        (self.archive / "health.json").unlink()
+        self.assertFalse(sp.collector_health(self.archive)[0])
+
+    def test_health_endpoint_is_public_but_data_routes_stay_gated(self):
+        s = sp.Settings.from_env(self.env)
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), sp.make_handler(s, identity=lambda *a: 0))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+
+        def get(path, host):
+            c = HTTPConnection("127.0.0.1", srv.server_port, timeout=5)
+            c.request("GET", path, headers={"Host": host})
+            r = c.getresponse()
+            return r.status, r.read()
+
+        st, body = get("/healthz/collector", "healthcheck.railway.app")  # no heartbeat yet
+        self.assertEqual(st, 503)
+        self.assertEqual(json.loads(body)["ok"], False)
+        self.assertEqual(get("/healthz", "healthcheck.railway.app")[0], 200)
+        for path in ("/", "/api/trades", "/api/raw?ref=dtcc-slices/raw/2999-01-01/X.zip",
+                     "/api/export?from=2999-01-01T00:00:00&to=2999-01-02T00:00:00", "/panel.js"):
+            self.assertEqual(get(path, "cds.example.test")[0], 401 if path != "/" else 200, path)
+            self.assertEqual(get(path, "healthcheck.railway.app")[0], 403, path)
+
+
 if __name__ == "__main__":
     unittest.main()

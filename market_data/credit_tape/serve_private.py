@@ -10,6 +10,11 @@ Data routes (all require an allowed session):
   GET /api/raw?ref=<raw_ref>    original source bytes as captured
   GET /api/export?from=&to=     raw events JSONL for an ISO first-seen interval
 
+Unauthenticated status only (no trade content, any Host):
+  GET /healthz                  process up and configured (200) or not (503)
+  GET /healthz/collector        collector heartbeat, index age and per-channel
+                                state for CFTC_CR and SEC_CR (200 ok / 503)
+
 Local demo: CREDIT_TAPE_DEV_LOCAL=1 skips GitHub sign-in but only binds
 127.0.0.1 and refuses any non-loopback Host header.
 """
@@ -26,6 +31,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -210,6 +216,61 @@ def read_events(archive: Path, after: int = 0, limit: int = MAX_ROWS):
     return out[-limit:], seq
 
 
+LIVE_STUCK_S = 900.0   # a live slice still pending after 15 min = channel backlog
+INDEX_STALE_S = 600.0  # no successful index answer (200 or 304) for 10 min
+
+
+def _age(iso, now_ts):
+    if not iso:
+        return None
+    try:
+        return round(now_ts - datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp(), 1)
+    except ValueError:
+        return None
+
+
+def collector_health(archive: Path, now_ts: float | None = None):
+    """Unauthenticated status for provider/uptime checks: states and ages only, no trade content.
+
+    ok = collector heartbeat fresh, slice index answered recently, and for BOTH
+    channels: listed in the last full index and no live slice stuck pending.
+    Quiet markets are not failures: a channel with no new slices stays ok.
+    """
+    now_ts = time.time() if now_ts is None else now_ts
+    try:
+        h = json.loads((archive / "health.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, {"ok": False, "reason": "no collector heartbeat yet"}
+    mode = h.get("collector") or {}
+    interval = float(mode.get("interval_s") or 20.0)
+    route = (h.get("sources") or {}).get("dtcc-slice-index") or {}
+    beat = _age(h.get("t"), now_ts)
+    index_age = _age(route.get("last_index_at"), now_ts)
+    beat_ok = beat is not None and beat < max(3 * interval, 120.0)
+    index_ok = index_age is not None and index_age < INDEX_STALE_S
+    channels = {}
+    for key in ("CFTC_CR", "SEC_CR"):
+        c = (route.get("channels") or {}).get(key) or {}
+        last = c.get("last_live_completed") or {}
+        if not c.get("listed_in_index"):
+            state = "missing_from_index"
+        elif (c.get("oldest_live_pending_s") or 0) >= LIVE_STUCK_S:
+            state = "live_backlog"
+        else:
+            state = "ok"
+        channels[key] = {"state": state, "listed_slices": c.get("listed_slices"),
+                         "listing_age_s": _age(c.get("listing_at"), now_ts),
+                         "pending_live": c.get("pending_live"), "pending_backfill": c.get("pending_backfill"),
+                         "max_attempts": c.get("max_attempts"),
+                         "last_live_dissem_age_s": _age(last.get("dissemDTM"), now_ts),
+                         "last_live_completed_age_s": _age(last.get("at"), now_ts),
+                         "last_backfill_completed_age_s": _age((c.get("last_backfill_completed") or {}).get("at"), now_ts)}
+    ok = beat_ok and index_ok and all(c["state"] == "ok" for c in channels.values())
+    return ok, {"ok": ok, "slice_only": mode.get("ticker") is False and mode.get("slices") is True,
+                "heartbeat_age_s": beat, "index_age_s": index_age, "index_polls_err": route.get("polls_err"),
+                "channels": channels}
+
+
 def read_raw(archive: Path, ref: str) -> bytes:
     if not RAW_REF.fullmatch(ref or "") or ".." in ref:
         raise ValueError("Invalid reference")
@@ -298,6 +359,11 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             if url.path == "/healthz":
                 return self.reply(200 if settings else 503, b'{"status":"ok"}' if settings else b'{"status":"unconfigured"}',
                                   "application/json")
+            if url.path == "/healthz/collector":
+                if not settings:
+                    return self.reply(503, b'{"ok":false,"reason":"unconfigured"}', "application/json")
+                ok, body = collector_health(settings.archive)
+                return self.reply(200 if ok else 503, json.dumps(body).encode(), "application/json")
             if not settings:
                 return self.reply(503, b"Not configured.")
             if not self.host_ok():

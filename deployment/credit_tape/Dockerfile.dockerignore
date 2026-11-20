@@ -1,0 +1,12 @@
+**
+!deployment/
+!deployment/credit_tape/
+!deployment/credit_tape/Dockerfile
+!deployment/credit_tape/Dockerfile.dockerignore
+!market_data/
+!market_data/__init__.py
+!market_data/credit_tape/
+!market_data/credit_tape/**
+market_data/**/__pycache__/
+market_data/**/.env
+market_data/**/.env.*
