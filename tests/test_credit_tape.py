@@ -1,4 +1,6 @@
 """OA-242 credit tape: synthetic fixtures only (repository is public)."""
+import csv
+import hashlib
 import gzip
 import io
 import json
@@ -758,6 +760,137 @@ class PersistentArchiveProofTests(unittest.TestCase):
         import shutil
         shutil.rmtree(self.archive)
         self._collect()
+
+
+class ReconciliationTests(unittest.TestCase):
+    """DTCC coverage reconciliation (synthetic fixtures; real-day results are reported separately)."""
+
+    DAY, TAG = "2001-02-03", "2001_02_03"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.archive = Path(self.tmp.name)
+
+    @staticmethod
+    def row(did, action="NEWT", orig="", notional="5,000,000+"):
+        return {"Dissemination Identifier": did, "Original Dissemination Identifier": orig, "Action type": action,
+                "Notional amount-Leg 1": notional}
+
+    def zipped(self, rows):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=list(self.row("x")))
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            z.writestr("X.csv", buf.getvalue())
+        return out.getvalue()
+
+    def build(self):
+        r = self.row
+        captured = {1: [r("A"), r("B")],
+                    3: [r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R")],
+                    4: [r("R"), r("X")],                 # R reported again; X never in the cumulative file
+                    5: [r("F", notional="1,000,000")]}   # cumulative carries a different value for F
+        self.gap = {2: [r("G", "EROR", "B")]}             # slice 2 was not captured live
+        self.cumulative = [r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R"),
+                           r("F", notional="5,000,000+"), r("G", "EROR", "B"), r("H")]  # H: in no slice
+        lines_out = []
+        for n, rows in captured.items():
+            name = f"CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip"
+            blob = self.zipped(rows)
+            ref = f"dtcc-slices/raw/{self.DAY}/{name}"
+            (self.archive / ref).parent.mkdir(parents=True, exist_ok=True)
+            (self.archive / ref).write_bytes(blob)
+            meta = {"fileName": name, "sliceId": 100 + n, "startTs": f"{self.DAY}T00:0{n}:00Z", "endTs": f"{self.DAY}T00:0{n}:09Z"}
+            lines_out.append({"source": "dtcc-cftc-slices", "kind": "slice", "raw_ref": ref,
+                              "raw_sha256": hashlib.sha256(blob).hexdigest(), "slice": meta, "replay": False})
+            for i, row in enumerate(rows):
+                lines_out.append({"source": "dtcc-cftc-slices", "kind": "publication", "id": row["Dissemination Identifier"],
+                                  "slice": meta, "row_index": i, "replay": False, "record": row})
+        (self.archive / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines_out), encoding="utf-8")
+
+    def opener(self):
+        files = {f"/intraday/cftc/CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip": self.zipped(rows) for n, rows in self.gap.items()}
+        files[f"/cumulative/cftc/CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip"] = self.zipped(self.cumulative)
+        self.requests = []
+
+        def open_(req, timeout=None):
+            path = req.full_url.split("/ppd/api/report", 1)[1]
+            self.requests.append(path)
+            if path not in files:
+                raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+            return FakeResp(files[path])
+        return open_
+
+    def run_rec(self, **kw):
+        from market_data.credit_tape import reconcile
+        return reconcile.reconcile_channel(str(self.archive), "CFTC_CR", self.DAY, fetch_cumulative=True,
+                                           opener=self.opener(), **kw)
+
+    def test_full_reconciliation_keeps_corrections_repeats_and_exposes_gaps(self):
+        self.build()
+        before = (self.archive / "events.jsonl").read_bytes()
+        rep = self.run_rec(recover_gaps=True)
+        c = rep["counts"]
+        self.assertEqual((c["matched"], c["matched_via_gap_recovery"]), (5, 1))  # A B C D G
+        self.assertEqual([x["id"] for x in rep["captured_only"]], ["X"])
+        self.assertEqual([x["id"] for x in rep["missing_unexplained"]], ["H"])
+        self.assertEqual(rep["missing_in_uncaptured_slice"], [])
+        self.assertEqual([(x["id"], x["captured"], x["cumulative"], x["rows_identical"]) for x in rep["repeat_count_mismatch"]],
+                         [("R", 2, 1, True)])
+        self.assertEqual([(x["id"], x["slices"]) for x in rep["repeated_reports"]],
+                         [("R", [f"CFTC_SLICE_CREDITS_{self.TAG}_3.zip", f"CFTC_SLICE_CREDITS_{self.TAG}_4.zip"])])
+        diff = rep["matched_with_differences"][0]
+        self.assertEqual((diff["id"], diff["fields"]), ("F", ["Notional amount-Leg 1"]))
+        self.assertEqual((diff["captured_versions"], diff["cumulative_version"]),
+                         ([{"Notional amount-Leg 1": "1,000,000"}], {"Notional amount-Leg 1": "5,000,000+"}))
+        self.assertEqual(rep["lifecycle_links"], {"original_in_interval": 2, "original_before_interval": 1})
+        self.assertEqual(rep["original_before_interval"], [{"id": "D", "original_id": "Z-PRIOR-DAY", "action": "TERM"}])
+        self.assertEqual(rep["actions"]["cumulative"], {"NEWT": 5, "CORR": 1, "TERM": 1, "EROR": 1})
+        s = rep["slices"]
+        self.assertEqual((s["uncaptured_numbers"], s["recovered_numbers"], s["still_missing_numbers"], s["tail_probe"]),
+                         ([2], [2], [], {"first_absent_slice": 6}))
+        self.assertFalse(rep["complete"])
+        # Daily file and gap slice kept as originals, apart from the tape; the tape logs are untouched.
+        self.assertEqual((self.archive / "events.jsonl").read_bytes(), before)
+        self.assertFalse((self.archive / "alerts_outbox.jsonl").exists())
+        stored = self.archive / "dtcc-reconcile" / self.DAY
+        self.assertEqual((stored / "cumulative" / f"CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip").read_bytes(),
+                         self.zipped(self.cumulative))
+        self.assertTrue((stored / "gap-slices" / f"CFTC_SLICE_CREDITS_{self.TAG}_2.zip").exists())
+
+    def test_without_gap_recovery_missing_records_stay_unresolved(self):
+        self.build()
+        rep = self.run_rec(recover_gaps=False)
+        self.assertEqual(sorted(x["id"] for x in rep["missing_in_uncaptured_slice"]), ["G", "H"])
+        self.assertEqual(rep["missing_in_uncaptured_slice"][0]["uncaptured_slice_numbers"], [2])
+        self.assertEqual(rep["missing_unexplained"], [])
+        self.assertFalse(any("/intraday/" in p for p in self.requests))
+        self.assertFalse(rep["complete"])
+
+    def test_clean_day_is_complete_and_tampered_original_is_not(self):
+        self.build()
+        r = self.row
+        self.gap = {2: [r("G", "EROR", "B")]}
+        self.cumulative = [r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R"), r("R"),
+                           r("X"), r("F", notional="1,000,000"), r("G", "EROR", "B")]
+        rep = self.run_rec(recover_gaps=True)
+        self.assertTrue(rep["complete"], rep["counts"])
+        self.assertEqual(rep["counts"]["repeated_reports"], 1)  # R twice on both sides: kept, consistent
+        (self.archive / f"dtcc-slices/raw/{self.DAY}/CFTC_SLICE_CREDITS_{self.TAG}_1.zip").write_bytes(b"tampered")
+        rep = self.run_rec(recover_gaps=True)
+        self.assertFalse(rep["complete"])
+        self.assertEqual(rep["problems"][0]["problem"], "captured_original_missing_or_hash_mismatch")
+
+    def test_cli_refuses_an_incomplete_day(self):
+        from market_data.credit_tape import reconcile
+        self.build()
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+            reconcile.main(["--archive", str(self.archive), "--day", today])
 
 
 if __name__ == "__main__":
