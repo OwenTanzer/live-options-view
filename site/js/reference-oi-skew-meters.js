@@ -172,9 +172,10 @@ function createReferenceOiSkewMeter(symbol) {
     el('detail').textContent = raw.detail || '';
     root.title = raw.detail || '';
     if (typeof describeTruth === 'function') {
-      renderTruthChip(el('truth'), describeTruth(thin ? 'thin' : raw.availability, {
+      // Coverage must not hide stale/closed observations or failed refreshes.
+      renderTruthChip(el('truth'), describeTruth(thin && raw.availability === 'live' ? 'thin' : raw.availability, {
         observedMs: raw.snapshot_ms ?? null, nowMs,
-        note: [thin ? `${raw.band_strikes} strike${raw.band_strikes === 1 ? '' : 's'}` : null,
+        note: [thin ? `thin: ${raw.band_strikes} strike${raw.band_strikes === 1 ? '' : 's'}` : null,
                raw.refresh_failed ? 'refresh failed' : null].filter(Boolean).join(', ') || null,
       }));
     }

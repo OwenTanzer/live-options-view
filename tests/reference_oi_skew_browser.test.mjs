@@ -10,6 +10,7 @@ const preview = createPreview();
 const originalFetch = globalThis.fetch;
 globalThis.fetch = fixtureNetwork;
 const now = new Date().toISOString(), date = now.slice(0, 10);
+const observed = new Date(Date.now() - 60000).toISOString();
 function snapshot(symbol) {
   const spot = symbol === 'IBIT' ? 40 : symbol === 'SPY' ? 750 : 650;
   return { symbol, timestamp: now, date, expiration: date, underlying_price: spot,
@@ -21,7 +22,7 @@ function snapshot(symbol) {
     market_readings: [{ reading_id: 'reference_oi_skew', symbol,
       values: { imbalance_ratio: -1/3, near_money_call_oi: 100, near_money_put_oi: 200, band_strikes: symbol === 'IBIT' ? 1 : 5 },
       status: { code: 'ok' }, calculation: { version: 'reference_oi_skew.v1', parameters: { near_money_pct: .02 } },
-      input: { snapshot_timestamp: now }, freshness: { status: 'live' } }],
+      input: { snapshot_timestamp: observed }, freshness: { status: 'live' } }],
   };
 }
 for (const sym of ['QQQ', 'SPY', 'IBIT']) preview.docs[`intraday/${sym === 'QQQ' ? '' : sym.toLowerCase() + '/'}latest.json`] = JSON.stringify(snapshot(sym));
@@ -40,8 +41,24 @@ try {
   await page.waitForFunction(() => document.querySelector('#ibit-adaptive-oi-skew-value').textContent === '−0.333');
   assert.match(await page.locator('#ibit-adaptive-oi-skew-meta').textContent(), /±5.00% window · 5 strikes \(38–42\)/);
   assert.match(await page.locator('#ibit-oi-skew-meta').textContent(), /thin: 1 strike/);
+  for (const id of ['oi-skew-truth', 'spy-oi-skew-truth', 'ibit-oi-skew-truth', 'ibit-adaptive-oi-skew-truth']) {
+    assert.match(await page.locator('#' + id).textContent(), /1m$/);
+  }
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
+    for (const id of ['oi-skew-meter', 'spy-oi-skew-meter', 'ibit-oi-skew-meter']) {
+      const drawer = page.locator('#' + id + ' > details');
+      const summary = drawer.locator('summary');
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await drawer.getAttribute('open'), '');
+      assert.match(await drawer.textContent(), /not fresh intraday flow, and not a win probability/);
+      await page.keyboard.press('Space');
+      assert.equal(await drawer.getAttribute('open'), null);
+      await summary.click();
+      assert.equal(await drawer.getAttribute('open'), '');
+      await summary.click();
+    }
     await page.locator('#spy-oi-skew-meter').scrollIntoViewIfNeeded();
     const dimensions = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
     assert.ok(dimensions.scroll <= dimensions.width, JSON.stringify(dimensions));
@@ -49,15 +66,21 @@ try {
     await page.locator('#ibit-oi-skew-meter').screenshot({ path: resolve(out, `ibit-${width}.png`) });
   }
   await page.evaluate(() => referenceOiSkewMeters.IBIT.noteFailure('fixture offline'));
+  assert.equal(await page.locator('#ibit-oi-skew-truth').getAttribute('data-truth'), 'stale');
+  assert.equal(await page.locator('#ibit-adaptive-oi-skew-truth').getAttribute('data-truth'), 'stale');
   assert.match(await page.locator('#ibit-adaptive-oi-skew-meta').textContent(), /stale · refresh failed/);
   await page.screenshot({ path: resolve(out, 'meters-mobile-stale.png') });
   await page.evaluate(() => referenceOiSkewMeters.IBIT.render(Date.now() + 86400000));
+  assert.equal(await page.locator('#ibit-oi-skew-truth').getAttribute('data-truth'), 'closed');
+  assert.equal(await page.locator('#ibit-adaptive-oi-skew-truth').getAttribute('data-truth'), 'closed');
   assert.match(await page.locator('#ibit-adaptive-oi-skew-meta').textContent(), /session closed/);
   await page.evaluate(p => { p.rows = p.rows.filter(r => r.Strike === 40); referenceOiSkewMeters.IBIT.update(p); }, snapshot('IBIT'));
   assert.equal(await page.locator('#ibit-adaptive-oi-skew-value').textContent(), '—');
   assert.match(await page.locator('#ibit-adaptive-oi-skew-detail').textContent(), /Only 1 strike/);
+  assert.equal(await page.locator('#ibit-adaptive-oi-skew-truth').getAttribute('data-truth'), 'insufficient');
   await page.screenshot({ path: resolve(out, 'meters-mobile-insufficient.png') });
   await page.evaluate(() => referenceOiSkewMeters.IBIT.update(null));
+  assert.equal(await page.locator('#ibit-adaptive-oi-skew-truth').getAttribute('data-truth'), 'unavailable');
   assert.equal(await page.locator('#ibit-adaptive-oi-skew-value').textContent(), '—');
   assert.deepEqual(errors, []);
   writeFileSync(resolve(out, 'receipt.json'), JSON.stringify({ timestamp: new Date().toISOString(), widths: [1440, 390], states: ['live', 'stale/refresh failed', 'closed', 'insufficient', 'unavailable'], errors, allRequestsLocal: requests.every(x => new URL(x).origin === LOCAL_ORIGIN), requests: requests.length }, null, 2));

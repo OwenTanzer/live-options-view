@@ -15,8 +15,8 @@ const rel = 'js/reference-oi-skew-meters.js';
 const src = fs.readFileSync(path.join(root, 'site', rel), 'utf8');
 const html = fs.readFileSync(path.join(root, 'site', 'index.html'), 'utf8');
 const SYMBOLS = ['SPY', 'IBIT'];
-const SUFFIXES = ['meter', 'value', 'lean', 'meta', 'track', 'marker', 'detail'];
-const ADAPTIVE_SUFFIXES = ['value', 'lean', 'meta', 'track', 'marker', 'detail'];
+const SUFFIXES = ['meter', 'value', 'lean', 'meta', 'track', 'marker', 'detail', 'truth'];
+const ADAPTIVE_SUFFIXES = ['value', 'lean', 'meta', 'track', 'marker', 'detail', 'truth'];
 let checks = 0;
 
 // ── page wiring ───────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ function harness(extra = {}) {
   }
   const { adaptiveDom, ...rest } = extra;
   const ctx = { document: { getElementById: id => els[id] || null }, module: { exports: {} },
-    ...shared, Date, Math, Number, Intl, String, Array, Map, Set, Object, ...rest };
+    ...shared, ...require('../site/shared/truth-layer.js'), Date, Math, Number, Intl, String, Array, Map, Set, Object, ...rest };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
   const api = ctx.module.exports;
@@ -87,6 +87,28 @@ function payload(symbol, values, { readingSymbol = symbol, status = 'ok', ts = S
 }
 const spyVals = { imbalance_ratio: -0.307, near_money_call_oi: 154267, near_money_put_oi: 291020, band_strikes: 30 };
 const ibitVals = { imbalance_ratio: -0.86, near_money_call_oi: 336, near_money_put_oi: 4472, band_strikes: 1 };
+
+{ // Observation age survives a newer envelope; thin coverage never hides freshness.
+  const { m, e, ad } = harness();
+  for (const symbol of SYMBOLS) {
+    const p = payload(symbol, ibitVals);
+    p.timestamp = new Date(NOW).toISOString();
+    m[symbol].update(p, NOW);
+    assert.equal(e(symbol, 'truth').dataset.truth, 'thin');
+    assert.match(e(symbol, 'truth').textContent, /40s$/);
+    m[symbol].noteFailure('offline', NOW);
+    assert.equal(e(symbol, 'truth').dataset.truth, 'stale');
+    assert.match(e(symbol, 'truth').textContent, /thin: 1 strike, refresh failed/);
+    m[symbol].render(NOW + 86400000);
+    assert.equal(e(symbol, 'truth').dataset.truth, 'closed');
+    m[symbol].update(null, NOW);
+    assert.equal(e(symbol, 'truth').dataset.truth, 'unavailable');
+    assert.match(e(symbol, 'truth').textContent, /age unknown/);
+    checks += 7;
+  }
+  assert.equal(ad('truth').dataset.truth, 'unavailable');
+  checks++;
+}
 
 { // SPY live, well covered; IBIT live, thin; meters do not touch each other
   const { m, e } = harness();
