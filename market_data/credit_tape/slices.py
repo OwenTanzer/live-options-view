@@ -74,19 +74,27 @@ class SliceRoute:
         self.state_path = os.path.join(self.dir, "checkpoint.json")
         self.pending_path = os.path.join(self.dir, "pending.json")
         st = self._load(self.state_path, {})
-        self.seen: set[int] = set(st.get("seen_slice_ids", []))  # enqueued or completed
+        # Slice IDs are only unique within a channel (CFTC and SEC can publish the same
+        # number), so pending and seen are keyed "CHANNEL:sliceId". Legacy bare-int
+        # entries are dropped: completion is already recorded by channel-aware done markers.
+        self.seen: set[str] = {k for k in st.get("seen_slice_keys", []) if isinstance(k, str)}
         self.etag: str | None = st.get("index_etag")
         self.started: str = st.get("started_at") or now()
         self.polls_ok, self.polls_err = st.get("polls_ok", 0), st.get("polls_err", 0)
         self.not_modified, self.last_index_at = st.get("not_modified", 0), st.get("last_index_at")
         self.index_backoff, self.index_retry_at = 0.0, 0.0
-        # pending: sliceId -> {"key", "meta", "attempts", "retry_at", "last_error"}
-        self.pending: dict[int, dict] = {int(k): v for k, v in self._load(self.pending_path, {}).items()}
+        # pending: "CHANNEL:sliceId" -> {"key", "meta", "attempts", "retry_at", "last_error"}
+        self.pending: dict[str, dict] = {}
+        for k, v in self._load(self.pending_path, {}).items():
+            sid = v.get("meta", {}).get("sliceId")
+            if v.get("key") in CHANNELS and type(sid) is int:
+                self.pending[self.pkey(v["key"], sid)] = v  # also migrates legacy bare-int keys
         self.recovered = self._recover()  # finish any commit interrupted before its done marker
-        for sid in list(self.pending):
-            if self._done(self.pending[sid]["key"], sid):
-                del self.pending[sid]
-                self.seen.add(sid)
+        for pk in list(self.pending):
+            p = self.pending[pk]
+            if self._done(p["key"], p["meta"]["sliceId"]):
+                del self.pending[pk]
+                self.seen.add(pk)
         self._save()
 
     # -- persistence -----------------------------------------------------------
@@ -99,11 +107,20 @@ class SliceRoute:
 
     def _save(self):
         with self.lock:
-            _atomic_json(self.pending_path, {str(k): v for k, v in self.pending.items()})
+            _atomic_json(self.pending_path, dict(self.pending))
             _atomic_json(self.state_path, {
-                "seen_slice_ids": sorted(self.seen)[-50000:], "index_etag": self.etag, "started_at": self.started,
+                "seen_slice_keys": sorted(self.seen, key=self._order)[-50000:], "index_etag": self.etag, "started_at": self.started,
                 "polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
                 "last_index_at": self.last_index_at})
+
+    @staticmethod
+    def pkey(channel: str, sid: int) -> str:
+        return f"{channel}:{sid}"
+
+    @staticmethod
+    def _order(pk: str):
+        channel, sid = pk.rsplit(":", 1)
+        return int(sid), channel
 
     @staticmethod
     def commit_key(channel: str, sid: int) -> str:
@@ -184,8 +201,9 @@ class SliceRoute:
                 added = self._apply(commit)
                 _atomic_json(self._key_file("done", commit["channel"], commit["sliceId"]),
                              {"at": self.now(), "recovered": True, "added": added, "raw_intact": raw_ok})
-                self.pending.pop(commit["sliceId"], None)
-                self.seen.add(commit["sliceId"])
+                pk = self.pkey(commit["channel"], commit["sliceId"])
+                self.pending.pop(pk, None)
+                self.seen.add(pk)
                 done.append({"key": commit["key"], "added": added, "raw_intact": raw_ok})
         return done
 
@@ -257,11 +275,11 @@ class SliceRoute:
                     continue
                 for meta in lst:
                     sid = meta.get("sliceId") if isinstance(meta, dict) else None
-                    if type(sid) is not int or sid in self.seen or self._done(key, sid):
+                    if type(sid) is not int or self.pkey(key, sid) in self.seen or self._done(key, sid):
                         continue
-                    self.pending[sid] = {"key": key, "meta": meta, "attempts": 0, "retry_at": 0.0,
+                    self.pending[self.pkey(key, sid)] = {"key": key, "meta": meta, "attempts": 0, "retry_at": 0.0,
                                          "enqueued_at": t_recv, "last_error": None}
-                    self.seen.add(sid)
+                    self.seen.add(self.pkey(key, sid))
                     added += 1
             # The ETag is only advanced after pending entries are durable.
             self.etag, self.last_index_at = etag, t_recv
@@ -279,22 +297,22 @@ class SliceRoute:
     def _due(self, replay: bool):
         now = self.clock()
         with self.lock:
-            return [sid for sid, p in sorted(self.pending.items())
-                    if self.is_replay(p["meta"]) == replay and p["retry_at"] <= now]
+            return [pk for pk in sorted(self.pending, key=self._order)
+                    if self.is_replay(self.pending[pk]["meta"]) == replay and self.pending[pk]["retry_at"] <= now]
 
     def drain_live(self, events_path, alerts_path, budget: int = 50) -> int:
         """Fetch due live slices; called on the live loop every pass (200 or 304 alike)."""
         n = 0
-        for sid in self._due(replay=False)[:budget]:
-            n += self._process(sid, events_path, alerts_path)
+        for pk in self._due(replay=False)[:budget]:
+            n += self._process(pk, events_path, alerts_path)
         return n
 
     def drain_backfill(self, events_path, alerts_path, budget: int = 25, pause: float = 0.0, stop=None) -> int:
         n = 0
-        for sid in self._due(replay=True)[:budget]:
+        for pk in self._due(replay=True)[:budget]:
             if stop is not None and stop.is_set():
                 break
-            n += self._process(sid, events_path, alerts_path)
+            n += self._process(pk, events_path, alerts_path)
             if pause:
                 time.sleep(pause)
         return n
@@ -311,13 +329,14 @@ class SliceRoute:
         t.start()
         return t, stop
 
-    def _process(self, sid, events_path, alerts_path) -> int:
+    def _process(self, pk, events_path, alerts_path) -> int:
         with self.lock:
-            p = self.pending.get(sid)
-            if p is None or self._done(p["key"], sid):
-                self.pending.pop(sid, None)
+            p = self.pending.get(pk)
+            if p is None or self._done(p["key"], p["meta"]["sliceId"]):
+                self.pending.pop(pk, None)
                 return 0
             key, meta = p["key"], p["meta"]
+            sid = meta["sliceId"]
         ch = CHANNELS[key]
         url, name = meta.get("fullFilePath") or "", meta.get("fileName") or ""
         u = urlsplit(url)
@@ -392,7 +411,7 @@ class SliceRoute:
         key = self.commit_key(channel, sid)
         with self.lock:
             if self._done(channel, sid):  # another drain finished it first
-                self.pending.pop(sid, None)
+                self.pending.pop(self.pkey(channel, sid), None)
                 return
             stamp = self.now()
             ev_lines = [{**e, "commit_key": key, "commit_line": i} for i, e in enumerate(evs)]
@@ -412,5 +431,5 @@ class SliceRoute:
             if self.crash_hook:
                 self.crash_hook("after_output")  # Chej's case: output written, completion not yet recorded
             _atomic_json(self._key_file("done", channel, sid), {"at": self.now(), **info})
-            self.pending.pop(sid, None)
+            self.pending.pop(self.pkey(channel, sid), None)
             self._save()

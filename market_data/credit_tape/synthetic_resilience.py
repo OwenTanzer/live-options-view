@@ -130,7 +130,7 @@ def run(out: str) -> dict:
         route.drain_live(events, alerts)
         live_polls += 1
     note("3 live passes ran while backfill was blocked; SEC live download failed (synthetic outage)",
-         sec_attempts=route.pending[201]["attempts"], health=route.health())
+         sec_attempts=route.pending["SEC_CR:201"]["attempts"], health=route.health())
     dtcc.index = {"CFTC_CR": replay + [cftc_live], "SEC_CR": [sec_live]}
     dtcc.etag = '"v2"'
     route.poll_index(events)
@@ -157,13 +157,13 @@ def run(out: str) -> dict:
     restarted.poll_index(events)  # same ETag -> 304
     restarted.drain_live(events, alerts)
     note("pass before retry time: index 304, SEC not yet due", not_modified=restarted.not_modified,
-         sec_pending=201 in restarted.pending)
+         sec_pending="SEC_CR:201" in restarted.pending)
     clock["t"] += slices.RETRY_MAX + 1
     for _ in range(3):
         restarted.poll_index(events)
         restarted.drain_live(events, alerts)
     note("3 passes after retry time, index 304 each time", not_modified=restarted.not_modified,
-         sec_pending=201 in restarted.pending)
+         sec_pending="SEC_CR:201" in restarted.pending)
 
     evs = [json.loads(l) for l in open(events, encoding="utf-8")]
     pubs = [e for e in evs if e["kind"] == "publication"]
@@ -173,7 +173,7 @@ def run(out: str) -> dict:
     verdicts = {
         "live_polling_during_backfill": live_polls == 4 and cftc_live_done and replay_done_while_blocked == 0,
         "failed_slice_recovered_exactly_once_on_304": (
-            count(201) == 1 and 201 not in restarted.pending and index_304 >= 4 and sec_fetches.count("200") == 1),
+            count(201) == 1 and "SEC_CR:201" not in restarted.pending and index_304 >= 4 and sec_fetches.count("200") == 1),
         "replays_emitted_once_each": all(count(m["sliceId"]) == 1 for m in replay),
         "live_cftc_emitted_once": count(104) == 1,
     }

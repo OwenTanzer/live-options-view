@@ -147,7 +147,7 @@ class SliceRouteTests(unittest.TestCase):
         http = FakeHTTP({"CFTC_CR": [m2, m1], "SEC_CR": []}, {m1["fullFilePath"]: z1, m2["fullFilePath"]: z2})
         r = self.route(http)
         r.poll_index(self.ev)
-        self.assertEqual(sorted(r.pending), [1001, 1002])  # index poll only enqueues
+        self.assertEqual(sorted(r.pending), ["CFTC_CR:1001", "CFTC_CR:1002"])  # index poll only enqueues
         self.assertFalse(any(u.endswith(".zip") for u, _ in http.requests))
         self.drain(r)
         r.poll_index(self.ev)  # conditional request -> 304, nothing re-enqueued
@@ -177,10 +177,10 @@ class SliceRouteTests(unittest.TestCase):
         self.drain(r)
         kinds = [(e["kind"], e["slice"]["sliceId"]) for e in lines(self.ev) if e["kind"] in ("slice_rejected", "publication")]
         self.assertEqual(sorted(kinds), [("publication", 1003), ("slice_rejected", 1001)])  # 1002 failed, 1003 not stranded
-        self.assertEqual(r.pending[1002]["attempts"], 1)
+        self.assertEqual(r.pending["CFTC_CR:1002"]["attempts"], 1)
         http.fail.clear()
         r.drain_live(self.ev, self.al)  # not yet due
-        self.assertIn(1002, r.pending)
+        self.assertIn("CFTC_CR:1002", r.pending)
         clock["t"] += slices.RETRY_MAX
         r.poll_index(self.ev)  # index unchanged -> 304
         r.drain_live(self.ev, self.al)
@@ -205,6 +205,32 @@ class SliceRouteTests(unittest.TestCase):
         self.assertEqual(r2.pending, {})
         r2.drain_live(self.ev, self.al)
         self.assertEqual(sum(1 for e in lines(self.ev) if e["kind"] == "publication"), 1)
+
+    def test_same_slice_id_on_both_channels_gives_two_publications(self):
+        mc, ms = slice_meta(1, 1, "2999-01-01T00:00:0%dZ"), slice_meta(1, 1, "2999-01-01T00:00:0%dZ", agency="sec")
+        self.assertEqual(mc["sliceId"], ms["sliceId"])
+        zc = fixture_zip([{"Dissemination Identifier": "C1", "Action type": "NEWT"}])
+        zs = fixture_zip([{"Dissemination Identifier": "S1", "Action type": "NEWT"}])
+        http = FakeHTTP({"CFTC_CR": [mc], "SEC_CR": [ms]}, {mc["fullFilePath"]: zc, ms["fullFilePath"]: zs})
+        r = self.route(http)
+        r.poll_index(self.ev)
+        self.assertEqual(sorted(r.pending), ["CFTC_CR:1001", "SEC_CR:1001"])
+        r.drain_live(self.ev, self.al)
+        r2 = self.route(http)  # restart on an unchanged index
+        r2.poll_index(self.ev)
+        r2.drain_live(self.ev, self.al)
+        pubs = [e for e in lines(self.ev) if e["kind"] == "publication"]
+        self.assertEqual(sorted((e["source"], e["id"]) for e in pubs),
+                         [("dtcc-cftc-slices", "C1"), ("dtcc-sec-slices", "S1")])
+        by_src = {e["source"]: e["raw_ref"] for e in pubs}
+        self.assertEqual(sp.read_raw(Path(self.out), by_src["dtcc-cftc-slices"]), zc)
+        self.assertEqual(sp.read_raw(Path(self.out), by_src["dtcc-sec-slices"]), zs)
+        self.assertEqual(len([a for a in lines(self.al) if a["kind"] == "publication"]), 2)
+
+    def test_synthetic_slice_only_demo(self):
+        from market_data.credit_tape import synthetic_demo
+        result = synthetic_demo.run(self.out)
+        self.assertTrue(result["all_pass"], json.dumps(result["checks"], indent=1))
 
     def test_synthetic_crash_safe_publish(self):
         from market_data.credit_tape import synthetic_crash
