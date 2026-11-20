@@ -242,7 +242,7 @@
     </footer>
     <h2 id="profile-title">Strike profile</h2>
     <span id="profile-scale"></span>
-    <p id="profile-range" class="gap" role="status" hidden></p>
+    <div id="profile-range" class="gap" hidden><span id="profile-range-message" role="status"></span><details><summary>About this range</summary>This profile covers the strikes present in the selected snapshot.</details></div>
     <div class="profile-legend">
       <span><b class="sell">◀ negative</b> / <b class="buy">positive ▶</b> estimated flow gamma: bar = dealer flow S−B at the selected participation; participation scales flow only</span>
       <span><b class="unknown">▬</b> neutral bar: the scenario endpoints cross zero, so the sign is not determined</span>
@@ -649,9 +649,8 @@
         // can leave spot outside every recorded strike. Say so in words, not
         // only as a small label on the chart's edge.
         if (spot > ks[0] || spot < ks[ks.length - 1]) {
-          rangeNote.textContent = "QQQ " + spot.toFixed(2) + " is " + (spot > ks[0] ? "above" : "below") +
-            " every strike recorded today (" + ks[ks.length - 1] + "–" + ks[0] + "). The day's contracts are fixed at the open, " +
-            "so nothing nearer the current price is being recorded; this profile shows the recorded strikes only.";
+          el("profile-range-message").textContent = "QQQ " + spot.toFixed(2) + " is " + (spot > ks[0] ? "above" : "below") +
+            " every strike in this snapshot (" + ks[ks.length - 1] + "–" + ks[0] + ").";
           rangeNote.hidden = false;
         }
         let y = null;

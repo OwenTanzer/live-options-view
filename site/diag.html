@@ -189,7 +189,7 @@ async function testCors(url) {
     const ms = Math.round(performance.now() - start);
     // Reaching the server is not the same as being served: a 4xx/5xx is
     // reachable but not OK, and must not be labelled as a pass.
-    return { ok: true, served: resp.ok, detail: `HTTP ${resp.status} · ${ms}ms · type=${resp.type}` };
+    return { ok: true, served: resp.ok, status: resp.status, detail: `HTTP ${resp.status} · ${ms}ms · type=${resp.type}` };
   } catch (e) {
     const ms = Math.round(performance.now() - start);
     return { ok: false, detail: `${e.name}: ${e.message} · ${ms}ms` };
@@ -244,7 +244,7 @@ function testImg(url) {
       const el = div.querySelector(`[data-k="${key}"]`);
       const state = !r.ok ? 'fail' : r.served === false ? 'warn' : 'pass';
       el.className = state;
-      el.textContent = state === 'pass' ? 'OK' : state === 'warn' ? 'REACHED · NOT OK' : 'FAILED';
+      el.textContent = state === 'pass' ? 'OK' : state === 'warn' ? `HTTP ${r.status}` : 'FAILED';
       el.insertAdjacentHTML('afterend', `<span class="detail"> — ${r.detail}</span>`);
     };
     setResult('cors', cors);
@@ -258,7 +258,7 @@ function testImg(url) {
   const direct = results.filter(r => !r.name.includes('proxy'));
   const proxy  = results.filter(r => r.name.includes('proxy'));
   const allDirectFail = direct.every(r => !r.cors);
-  const directServed = direct.every(r => r.cors && r.corsServed !== false);
+  const servedCount = direct.filter(r => r.cors && r.corsServed === true).length;
   const allDirectNoCorsOk = direct.every(r => r.nocors);
   // Served, not merely reached: a 403 from the proxy is not a working path.
   const proxyOk = proxy.length > 0 && proxy.every(r => r.cors && r.corsServed !== false);
@@ -267,8 +267,8 @@ function testImg(url) {
     verdict.innerHTML = "<b>Nothing reached the direct-R2 server</b> (no-cors also failed) — points to a network/DNS block on this device/connection for the r2.dev hostname specifically, not CORS. Check DNS profiles, VPNs, or carrier filtering." + (proxyOk ? " The same-origin proxy path <b>did</b> succeed — same data, reached through this site's own domain instead of r2.dev." : "");
   } else if (allDirectFail && allDirectNoCorsOk) {
     verdict.innerHTML = "<b>Confirmed: CORS is blocking direct R2 access</b> — no-cors reached the server fine, but the CORS-checked fetch failed on every direct target." + (proxyOk ? " The same-origin proxy path succeeded, which sidesteps this entirely." : "");
-  } else if (!allDirectFail && !directServed) {
-    verdict.innerHTML = "<b>Direct R2 reached but not every target was served</b> — at least one request got an HTTP error status (see the amber REACHED · NOT OK rows above). That is a server/permission answer, not a network or CORS failure.";
+  } else if (!allDirectFail && servedCount < direct.length) {
+    verdict.innerHTML = `<b>${servedCount} of ${direct.length} direct targets served successfully.</b> See each target above for its status or connection error.`;
   } else if (!allDirectFail) {
     verdict.innerHTML = "<b>Direct R2 fetch succeeded here</b> — if the live site is still failing for you right now, this was a one-time snapshot and won't catch something intermittent. Start the live monitor below and leave it running until it happens again.";
   } else {
