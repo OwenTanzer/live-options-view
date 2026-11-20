@@ -39,6 +39,8 @@ Paper check: [CME_CREDIT_ROUTE.md](CME_CREDIT_ROUTE.md). The credit files are da
 
 ### ICE Trade Vault (ICE SDR; also an SEC SBSDR)
 
+Paper check: [ICE_TRADE_VAULT_ROUTE.md](ICE_TRADE_VAULT_ROUTE.md). ICE is parked.
+
 - **Status:** CFTC SDR. Also approved as an SEC SBSDR in June 2021, covering credit.
 - **Index vs single-name:** CFTC side: "all publicly reportable swap transactions
   within the Credit, Foreign Exchange, Interest Rates and Other Commodities asset
@@ -105,6 +107,8 @@ Documentation check: [KOR_CFTC_API_CHECK.md](KOR_CFTC_API_CHECK.md) (schema, fil
 | Bloomberg APA UK (BDRSL) and Bloomberg venues | Derivatives "IR/Credit/FX/Commodity/Equity" | Free delayed page **not confirmed** | Real time via a FIX feed (licensed) |
 | MarketAxess (Trax) APA; TP ICAP, BGC, GFI, Tradition venues | **Not verified** for UK credit derivatives | **Not verified** | — |
 | UK derivatives consolidated tape | None: the FCA has not stated an intention for derivatives (Tradeweb blog, Dec 2025) | — | — |
+
+LSEG alternative: [LSEG_UK_DELAYED_CHECK.md](LSEG_UK_DELAYED_CHECK.md). It is not a confirmed alternative.
 
 ## Candidate for the next implementation step
 
