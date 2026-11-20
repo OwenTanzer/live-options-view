@@ -10,14 +10,43 @@ One process, `python -u -m market_data.credit_tape.service` (the image `CMD`):
 | Part | Behaviour |
 |---|---|
 | Collector thread | DTCC slice-index route only (`capture.run(..., ticker=False, slices=True)`): `CFTC_CR` and `SEC_CR` slices from the public `Slice.json`. Ticker output is off; nothing with source `*-credits` is written. Replay slices drain on a separate backfill thread. |
-| Panel / API / raw / export | `serve_private` handler, GitHub identity-only sign-in (PKCE, `scope=""`), numeric-ID allowlist, opaque 8-hour sessions, exact Host check. `/`, `/panel.js`, `/panel.css`, `/api/trades`, `/api/raw`, `/api/export` all require an allowed session. |
+| Panel / API / raw / export | `serve_private` handler, GitHub identity-only sign-in (PKCE, `scope=""`), numeric-ID allowlist, opaque 8-hour sessions, exact Host check. `/panel.js`, `/panel.css`, `/api/trades`, `/api/raw`, `/api/export` all require an allowed session; without one, `/` shows only the sign-in link. The sign-in flow follows directional-move-lab `scripts/serve_private.py@2bdebbe` (see **Sign-in flow** below). |
 | Unauthenticated | `/healthz` (process up and configured) and `/healthz/collector` (per-channel status). Status, ages and counts only; never trade content; any Host. |
 | Storage | `CREDIT_TAPE_ARCHIVE` on a private mounted volume: raw ZIPs, commit records, done markers, `events.jsonl`, `alerts_outbox.jsonl`, `health.json`. |
 
 Fails closed: exits 2 without starting if any gate variable is missing or invalid,
 if `CREDIT_TAPE_DEV_LOCAL` is set, or if the interval is outside 5..300 s. Exits 1
-if the collector thread dies, so the platform restarts it. SIGTERM finishes the
-current pass, then exits 0. Publishing is crash-safe, so a hard kill is also safe.
+if the collector thread dies **or the replay (backfill) worker fails**: the
+worker's error is written to `health.json` (`backfill_worker.state = "failed"`),
+`/healthz/collector` turns 503, and the collector stops, so the platform restarts
+the service. SIGTERM finishes the current pass, then exits 0. Publishing is
+crash-safe, so a hard kill is also safe.
+
+Raw originals: a slice is complete only when its original ZIP is on the volume
+and matches the sha256 recorded at publish time. If a restart finds a commit whose
+ZIP is missing or hash-invalid, the slice stays **pending** (not complete) and is
+re-downloaded; it completes only when the downloaded bytes match the committed
+sha256. Different bytes keep it pending with `last_error` and backoff
+(`max_attempts` rises in `/healthz/collector`).
+
+### Sign-in flow
+
+Reference: directional-move-lab `scripts/serve_private.py@2bdebbe`. Its flow handling
+is reused; its credentials, cookies and sessions are not.
+
+- `/auth/login` allocates no server-side state. The flow is a signed, HttpOnly,
+  10-minute cookie, and a repeated login reuses a live flow without extending it.
+  The login returns 429 if a flow cannot be issued.
+- The callback accepts GitHub's documented `?code=…&state=…`. If GitHub also sends
+  RFC 9207 `iss`, it must be exactly `https://github.com/login/oauth`. Blank,
+  repeated or unknown fields are refused.
+- A callback first claims the flow as pending (at most 16 at once). **Failure
+  cleanup:** a bad state, a failed code exchange or a non-allowlisted account all
+  release the claim and clear the flow cookie.
+- **One-time replay protection:** only a verified, allowlisted callback records the
+  flow as spent (at most 128, pruned when the flow expires). The same flow can never
+  sign in twice, and failed callbacks cannot use up sign-in capacity.
+- Logout is POST with an exact `Origin`. It revokes the session and clears both cookies.
 
 ## Build
 
@@ -86,6 +115,7 @@ Let `ORIGIN` be the public origin.
    ```
    - `ok` is true only if all of these hold:
      - the collector heartbeat is younger than max(3×interval, 120 s);
+     - `backfill_worker` is not `"failed"`;
      - the last index answer (200 or 304) is under 10 min old;
      - both `CFTC_CR` and `SEC_CR` have `state: "ok"`.
    - The per-channel states are:
@@ -110,28 +140,56 @@ python -m market_data.credit_tape.check_archive --archive "$CREDIT_TAPE_ARCHIVE"
 ```
 
 It exits 0 only if all of the following hold:
+- the archive path exists and is a credit-tape archive. A missing, mistyped or unmounted path fails, and `--compare` against such a run fails too;
+- there is no ticker output of any kind: no event from a ticker source and no ticker archive directory;
 - there are no duplicate `(commit_key, commit_line)` lines in the event or alert log;
 - there are no torn or unreadable lines;
-- every slice commit has its done marker;
+- every slice commit has its done marker. A commit still waiting for its original also fails;
 - every referenced raw ZIP exists and matches the sha256 recorded at publish time;
 - there are no `.part` leftovers;
-- compared with the earlier run, no channel's publication count fell and `ticker_publications` did not grow (it must stay 0).
+- compared with the earlier run, no channel's publication count fell.
 
 ## Rollback
 
-- Stop the deployment, or remove the `credit-tape` service. **Keep the volume.** It is the archive: raw ZIPs plus logs.
-- To roll back code, redeploy the previous commit in the same service with the same volume. Publishing is idempotent by `source/channel/sliceId`, so a restart does not republish completed slices. Re-reading an older index only enqueues slices without a done marker.
-- To inspect or export the archive with the service down, attach the volume to a temporary service and run `check_archive`. Alternatively, run the panel locally on a copy: `CREDIT_TAPE_ARCHIVE=<copy> CREDIT_TAPE_DEV_LOCAL=1 python -m market_data.credit_tape.serve_private`.
+**First release.** There is no earlier runnable image of this service. `ce25cd7`
+and older commits have no service entrypoint or Dockerfile. So rollback is:
+
+1. Stop the `credit-tape` service: remove its active deployment, or delete the
+   service.
+2. **Keep the volume.** It is the archive (raw ZIPs, commit records, done markers,
+   logs). Do not delete or detach-and-delete it.
+3. Do not redeploy an older commit.
+
+Restarting the same release later on the same volume resumes safely. Publishing is
+idempotent by `source/channel/sliceId`: completed slices are not republished, and
+open commits are finished or kept pending.
+
+**Later releases.** Once a known-good release of this service exists, roll back by
+redeploying that release's commit in the same service on the same volume, then run
+the restart verification above.
+
+**Either way:**
+
+- To inspect the archive with the service down, attach the volume to a temporary
+  service and run `check_archive`. Alternatively, run the panel locally on a copy:
+  `CREDIT_TAPE_ARCHIVE=<copy> CREDIT_TAPE_DEV_LOCAL=1 python -m market_data.credit_tape.serve_private`.
 - The existing options collector is not touched:
   - it uses a separate image (`deployment/python/Dockerfile`) and separate services and variables;
   - no R2, KV, D1 or Worker writes happen anywhere in this service;
   - `tests/changed_paths.py` classifies `market_data/credit_tape/*` as an image input of the producer image, but not as a watch path or runtime code of `main-collector`, `tradier-collector` or `banana-options-scanner`, so no options service restarts or promotes on these files.
 
-## Local rehearsal (no deploy)
+## Evidence: kept separate
+
+| Kind | What it shows | How |
+|---|---|---|
+| **Offline synthetic regression** (no network, synthetic fixtures) | Gate, sign-in flow, slice-only run, per-channel health, raw-pending rule, archive checker, worker failure, crash and restart safety | `python -m pytest tests/test_credit_tape.py`; `python -m market_data.credit_tape.synthetic_demo`, `synthetic_crash`, `synthetic_resilience`; `python tests/test_changed_paths.py` |
+| **Public-source local rehearsal** (live public DTCC index, local only, not deployed) | The service runs end to end against the real `Slice.json` and slice files; restart after a hard kill is clean | The commands below. Not part of the regression results; archives stay outside the repo |
+| Fresh SEC proof / full-coverage evidence | Out of scope here | Reported separately |
+
+## Public-source local rehearsal (no deploy)
 
 ```sh
-python -m pytest tests/test_credit_tape.py      # synthetic fixtures only
-python -m market_data.credit_tape.synthetic_demo  # slice-only panel, shared sliceId, restart
+# Uses the live public DTCC index; run the offline synthetic regression separately (see above).
 CREDIT_TAPE_ARCHIVE=<abs dir> CREDIT_TAPE_PUBLIC_ORIGIN=https://credit-tape.example.test \
 CREDIT_TAPE_GITHUB_CLIENT_ID=placeholder CREDIT_TAPE_GITHUB_CLIENT_SECRET=placeholder \
 CREDIT_TAPE_GITHUB_ALLOWED_IDS=1 PORT=8791 python -u -m market_data.credit_tape.service

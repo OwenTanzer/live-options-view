@@ -71,6 +71,7 @@ class SliceRoute:
         os.makedirs(os.path.join(self.dir, "done"), exist_ok=True)
         os.makedirs(os.path.join(self.dir, "commits"), exist_ok=True)
         self.crash_hook = None  # synthetic tests only: callable(stage) that may raise
+        self.backfill_state, self.backfill_error = "not_started", None
         self.state_path = os.path.join(self.dir, "checkpoint.json")
         self.pending_path = os.path.join(self.dir, "pending.json")
         st = self._load(self.state_path, {})
@@ -197,17 +198,61 @@ class SliceRoute:
                 commit = self._load(os.path.join(cdir, fn), None)
                 if not commit or self._done(commit["channel"], commit["sliceId"]):
                     continue
-                raw = os.path.join(self.out, commit["raw_ref"]) if commit.get("raw_ref") else None
-                raw_ok = raw is None or (os.path.exists(raw) and
-                                         hashlib.sha256(open(raw, "rb").read()).hexdigest() == commit["raw_sha256"])
+                pk = self.pkey(commit["channel"], commit["sliceId"])
+                if not self._raw_ok(commit):
+                    # Missing or hash-invalid original: keep the slice pending (re-download),
+                    # never mark it complete. The commit is finished later only with bytes
+                    # whose sha256 equals the one recorded at publish time.
+                    if pk not in self.pending and isinstance(commit.get("meta"), dict):
+                        self.pending[pk] = {"key": commit["channel"], "meta": commit["meta"], "attempts": 0,
+                                            "retry_at": 0.0, "enqueued_at": self.now(), "enqueued_ts": self.clock(),
+                                            "last_error": None}
+                    if pk in self.pending:
+                        self.pending[pk]["last_error"] = "raw missing or hash-invalid; awaiting re-download"
+                    self.seen.add(pk)
+                    done.append({"key": commit["key"], "status": "awaiting_raw", "requeued": pk in self.pending})
+                    continue
                 added = self._apply(commit)
                 _atomic_json(self._key_file("done", commit["channel"], commit["sliceId"]),
-                             {"at": self.now(), "recovered": True, "added": added, "raw_intact": raw_ok})
-                pk = self.pkey(commit["channel"], commit["sliceId"])
+                             {"at": self.now(), "recovered": True, "added": added, "raw_intact": True})
                 self.pending.pop(pk, None)
                 self.seen.add(pk)
-                done.append({"key": commit["key"], "added": added, "raw_intact": raw_ok})
+                done.append({"key": commit["key"], "status": "completed", "added": added})
         return done
+
+    def _raw_ok(self, commit) -> bool:
+        if not commit.get("raw_ref"):
+            return True  # rejected slices have no original
+        path = os.path.join(self.out, commit["raw_ref"])
+        if not os.path.exists(path):
+            return False
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest() == commit.get("raw_sha256")
+
+    def _write_raw(self, path, blob, sha) -> None:
+        """Complete original before anything is published: .part, fsync, re-hash, rename."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".part"
+        with open(tmp, "wb") as fh:
+            fh.write(blob)
+            fh.flush()
+            os.fsync(fh.fileno())
+        with open(tmp, "rb") as fh:
+            if hashlib.sha256(fh.read()).hexdigest() != sha:
+                raise OSError("raw write verification failed")
+        os.replace(tmp, path)
+
+    def _retry_later(self, pk, p, error, t_req, name, replay):
+        with self.lock:
+            p["attempts"] += 1
+            p["last_error"] = error[:300]
+            p["retry_at"] = self.clock() + min(RETRY_MAX, RETRY_MIN * 2 ** (p["attempts"] - 1))
+            self._save()
+        self.append(os.path.join(self.dir, "polls.jsonl"), {"t": t_req, "ok": False, "what": "slice",
+                                                           "sliceId": p["meta"].get("sliceId"), "channel": p["key"],
+                                                           "file": name, "attempt": p["attempts"],
+                                                           "error": p["last_error"], "replay": replay})
+        return 0
 
     def append(self, path, obj):
         with self.lock:
@@ -236,7 +281,13 @@ class SliceRoute:
                               "max_attempts": max((p["attempts"] for p in mine), default=0)}
             return {"polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
                     "slices_seen": len(self.seen), "pending_live": live, "pending_backfill": len(self.pending) - live,
-                    "last_index_at": self.last_index_at, "channels": chans}
+                    "last_index_at": self.last_index_at, "channels": chans,
+                    "backfill_worker": {"state": self.backfill_state, "error": self.backfill_error}}
+
+    def check_workers(self) -> None:
+        """Raise if the replay worker died, so the collector (and the service) stop visibly."""
+        if self.backfill_state == "failed":
+            raise RuntimeError(f"replay backfill worker failed: {self.backfill_error}")
 
     # -- index -----------------------------------------------------------------
     def poll_index(self, events_path: str) -> None:
@@ -333,11 +384,17 @@ class SliceRoute:
 
     def start_backfill_thread(self, events_path, alerts_path, idle: float = 2.0, pause: float = 0.05):
         stop = threading.Event()
+        self.backfill_state, self.backfill_error = "running", None
 
         def run():
-            while not stop.is_set():
-                if not self.drain_backfill(events_path, alerts_path, pause=pause, stop=stop):
-                    stop.wait(idle)
+            try:
+                while not stop.is_set():
+                    if not self.drain_backfill(events_path, alerts_path, pause=pause, stop=stop):
+                        stop.wait(idle)
+                self.backfill_state = "stopped"
+            except BaseException as exc:  # noqa: BLE001 - surfaced through health() and check_workers()
+                self.backfill_error = f"{type(exc).__name__}: {exc}"[:500]
+                self.backfill_state = "failed"
 
         t = threading.Thread(target=run, name="credit-tape-backfill", daemon=True)
         t.start()
@@ -367,29 +424,30 @@ class SliceRoute:
             with self.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=60) as r:
                 blob = r.read()
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            with self.lock:
-                p["attempts"] += 1
-                p["last_error"] = repr(exc)[:300]
-                p["retry_at"] = self.clock() + min(RETRY_MAX, RETRY_MIN * 2 ** (p["attempts"] - 1))
-                self._save()
-            self.append(os.path.join(self.dir, "polls.jsonl"), {"t": t_req, "ok": False, "what": "slice", "sliceId": sid,
-                                                               "file": name, "attempt": p["attempts"],
-                                                               "error": p["last_error"], "replay": replay})
-            return 0
+            return self._retry_later(pk, p, repr(exc), t_req, name, replay)
         t_recv = self.now()
-        rel = f"dtcc-slices/raw/{(meta.get('dissemDTM') or t_recv)[:10]}/{name}"
-        path = os.path.join(self.out, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         sha = hashlib.sha256(blob).hexdigest()
-        tmp = path + ".part"
-        with open(tmp, "wb") as fh:  # complete original before anything is published
-            fh.write(blob)
-            fh.flush()
-            os.fsync(fh.fileno())
-        with open(tmp, "rb") as fh:
-            if hashlib.sha256(fh.read()).hexdigest() != sha:
-                raise OSError("raw write verification failed")
-        os.replace(tmp, path)
+        prior = self._load(self._key_file("commits", key, sid), None)
+        if prior and not self._done(key, sid):
+            # A commit exists whose original was missing or hash-invalid at recovery.
+            if prior.get("raw_sha256") != sha:
+                return self._retry_later(pk, p, "downloaded bytes differ from the committed sha256", t_req, name, replay)
+            try:
+                self._write_raw(os.path.join(self.out, prior["raw_ref"]), blob, sha)
+            except OSError as exc:
+                return self._retry_later(pk, p, repr(exc), t_req, name, replay)
+            with self.lock:
+                added = self._apply(prior)
+                _atomic_json(self._key_file("done", key, sid), {"at": self.now(), "recovered": True, "added": added,
+                                                                "raw_restored": True})
+                self.pending.pop(pk, None)
+                self._save()
+            return 1
+        rel = f"dtcc-slices/raw/{(meta.get('dissemDTM') or t_recv)[:10]}/{name}"
+        try:
+            self._write_raw(os.path.join(self.out, rel), blob, sha)
+        except OSError as exc:  # stays pending; nothing published without an intact original
+            return self._retry_later(pk, p, repr(exc), t_req, name, replay)
         if self.crash_hook:
             self.crash_hook("after_raw")
         base = {"first_seen": t_recv, "raw_ref": rel, "slice": slice_info, "replay": replay,
@@ -433,7 +491,9 @@ class SliceRoute:
             sizes = {}
             for name, path in (("events", events_path), ("alerts", alerts_path)):
                 sizes[name] = os.path.getsize(path) if os.path.exists(path) else 0
+            pend = self.pending.get(self.pkey(channel, sid)) or {}
             commit = {"key": key, "channel": channel, "sliceId": sid, "source": CHANNELS[channel]["source"],
+                      "meta": pend.get("meta"),
                       "raw_ref": raw_ref, "raw_sha256": raw_sha256, "committed_at": stamp,
                       "events_path": os.path.relpath(events_path, self.out), "events_offset": sizes["events"],
                       "alerts_path": os.path.relpath(alerts_path, self.out), "alerts_offset": sizes["alerts"],

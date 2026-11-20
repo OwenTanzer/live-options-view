@@ -3,6 +3,7 @@ import gzip
 import io
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -422,6 +423,197 @@ class ServiceReleaseTests(unittest.TestCase):
                      "/api/export?from=2999-01-01T00:00:00&to=2999-01-02T00:00:00", "/panel.js"):
             self.assertEqual(get(path, "cds.example.test")[0], 401 if path != "/" else 200, path)
             self.assertEqual(get(path, "healthcheck.railway.app")[0], 403, path)
+
+
+class ReleaseReadinessTests(unittest.TestCase):
+    """Chej's release-readiness revision: OAuth flow lifecycle, raw-pending, checker, worker failure."""
+
+    ORIGIN, HOST = "https://cds.example.test", "cds.example.test"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.archive = Path(self.tmp.name)
+        self.settings = sp.Settings(self.archive, self.ORIGIN, "cid", "secret", frozenset({42}))
+
+    # -- OAuth (reference: directional-move-lab scripts/serve_private.py @2bdebbe) ------------
+    def _server(self, store, owner):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), sp.make_handler(self.settings, store=store,
+                                                                    identity=lambda s, c, v: owner()))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return srv.server_port
+
+    def _get(self, port, path, cookie=None):
+        c = HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", path, headers={"Host": self.HOST, **({"Cookie": cookie} if cookie else {})})
+        r = c.getresponse()
+        r.read()
+        return r.status, r
+
+    def test_github_documented_code_and_state_callback_signs_in_once(self):
+        store = sp.Store()
+        port = self._server(store, lambda: 42)
+        flow, state, _ = store.start_flow()
+        ck = f"{sp.FLOW_COOKIE}={flow}"
+        st, r = self._get(port, f"/auth/callback?code=abc&state={state}", ck)  # GitHub's documented form
+        self.assertEqual(st, 303)
+        session = [c for c in r.headers.get_all("Set-Cookie") if c.startswith(sp.SESSION_COOKIE + "=") and "Max-Age=28800" in c]
+        self.assertEqual(len(session), 1)
+        self.assertEqual(self._get(port, "/api/trades", session[0].split(";")[0])[0], 200)
+        # One-time replay protection: the same flow+state is refused afterwards.
+        self.assertEqual(self._get(port, f"/auth/callback?code=abc&state={state}", ck)[0], 403)
+        self.assertEqual(len(store.spent_flows), 1)
+        self.assertEqual(store.pending_flows, set())
+
+    def test_callback_shape_is_strict(self):
+        store = sp.Store()
+        port = self._server(store, lambda: 42)
+        for q in ("code=a&state={s}&iss=https%3A%2F%2Fevil.example", "code=a&state={s}&extra=1", "code=&state={s}",
+                  "code=a&code=b&state={s}", "state={s}"):
+            flow, state, _ = store.start_flow()
+            self.assertEqual(self._get(port, "/auth/callback?" + q.format(s=state), f"{sp.FLOW_COOKIE}={flow}")[0], 403, q)
+        flow, state, _ = store.start_flow()  # RFC 9207 form with GitHub's exact issuer still works
+        self.assertEqual(self._get(port, f"/auth/callback?code=a&state={state}&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth",
+                                   f"{sp.FLOW_COOKIE}={flow}")[0], 303)
+
+    def test_failed_callbacks_release_their_claim_and_cannot_exhaust_sign_in(self):
+        store = sp.Store()
+        who = {"id": 7}
+
+        def owner():
+            if who["id"] is None:
+                raise RuntimeError("GitHub exchange failed")
+            return who["id"]
+
+        port = self._server(store, owner)
+        for i in range(200):  # refused identities and failed exchanges, well past both caps
+            who["id"] = 7 if i % 2 else None
+            flow, state, _ = store.start_flow()
+            self.assertEqual(self._get(port, f"/auth/callback?code=c&state={state}", f"{sp.FLOW_COOKIE}={flow}")[0], 403)
+        self.assertEqual((store.pending_flows, store.spent_flows), (set(), {}))  # failure cleanup, no replay records
+        who["id"] = 42
+        flow, state, _ = store.start_flow()
+        self.assertEqual(self._get(port, f"/auth/callback?code=c&state={state}", f"{sp.FLOW_COOKIE}={flow}")[0], 303)
+
+    def test_login_reuses_a_live_flow_and_refuses_a_spent_one(self):
+        clock = {"t": 1000.0}
+        store = sp.Store(clock=lambda: clock["t"])
+        flow, state, verifier = store.start_flow()
+        self.assertEqual(store.start_flow(flow), (flow, state, verifier))  # reuse, no new expiry
+        store.consume_flow(flow, state)
+        store.finish_flow(flow, accepted=True)
+        self.assertNotEqual(store.start_flow(flow)[0], flow)
+        with self.assertRaises(ValueError):
+            store.consume_flow(flow, state)
+        clock["t"] += 601  # replay record pruned only once the flow itself has expired
+        with self.assertRaises(ValueError):
+            store.consume_flow(flow, state)
+
+    # -- raw originals --------------------------------------------------------------------------
+    def _route(self, http):
+        return slices.SliceRoute(str(self.archive), capture.now, capture.append_jsonl, opener=http, lock=capture.WRITE_LOCK)
+
+    def _stop_after_commit(self, http):
+        r = self._route(http)
+
+        def hook(stage):
+            if stage == "after_commit_record":
+                raise slices.SimulatedStop(stage)
+            return False
+
+        r.crash_hook = hook
+        r.poll_index(str(self.archive / "events.jsonl"))
+        with self.assertRaises(slices.SimulatedStop):
+            r.drain_live(str(self.archive / "events.jsonl"), str(self.archive / "alerts.jsonl"))
+
+    def _setup_slice(self):
+        m = slice_meta(1, 1, "2999-01-01T00:00:0%dZ")
+        z = fixture_zip([{"Dissemination Identifier": "R1", "Action type": "NEWT"}])
+        http = FakeHTTP({"CFTC_CR": [m], "SEC_CR": []}, {m["fullFilePath"]: z})
+        raw = self.archive / "dtcc-slices/raw/2999-01-01" / m["fileName"]
+        return m, z, http, raw
+
+    def test_missing_raw_stays_pending_until_matching_bytes_return(self):
+        from market_data.credit_tape import check_archive
+        m, z, http, raw = self._setup_slice()
+        self._stop_after_commit(http)
+        raw.unlink()  # original lost after the commit record was written
+        http.files[m["fullFilePath"]] = b"different bytes"
+        r = self._route(http)
+        self.assertEqual(r.recovered[0]["status"], "awaiting_raw")
+        self.assertFalse(r._done("CFTC_CR", 1001))
+        self.assertIn("CFTC_CR:1001", r.pending)
+        ev, al = str(self.archive / "events.jsonl"), str(self.archive / "alerts.jsonl")
+        r.drain_live(ev, al)  # wrong bytes: still pending, still not done
+        self.assertFalse(r._done("CFTC_CR", 1001))
+        self.assertIn("differ from the committed sha256", r.pending["CFTC_CR:1001"]["last_error"])
+        self.assertFalse(check_archive.check(str(self.archive))["clean"])
+        http.files[m["fullFilePath"]] = z
+        r.pending["CFTC_CR:1001"]["retry_at"] = 0
+        r.drain_live(ev, al)
+        self.assertTrue(r._done("CFTC_CR", 1001))
+        self.assertEqual(raw.read_bytes(), z)
+        pubs = [e for e in lines(ev) if e["kind"] == "publication"]
+        self.assertEqual([e["id"] for e in pubs], ["R1"])
+        self.assertTrue(check_archive.check(str(self.archive))["clean"])
+
+    def test_hash_invalid_raw_is_not_marked_complete_on_restart(self):
+        m, z, http, raw = self._setup_slice()
+        self._stop_after_commit(http)
+        raw.write_bytes(b"corrupted")
+        http.fail.add(m["fullFilePath"])  # source unavailable for now
+        r = self._route(http)
+        r.drain_live(str(self.archive / "events.jsonl"), str(self.archive / "alerts.jsonl"))
+        self.assertFalse(r._done("CFTC_CR", 1001))
+        self.assertEqual(r.pending["CFTC_CR:1001"]["attempts"], 1)
+        r2 = self._route(http)  # still pending across another restart
+        self.assertIn("CFTC_CR:1001", r2.pending)
+        self.assertEqual(r2.recovered[0]["status"], "awaiting_raw")
+
+    # -- archive checker ------------------------------------------------------------------------
+    def test_checker_rejects_missing_archive_and_any_ticker_output(self):
+        from market_data.credit_tape import check_archive
+        missing = check_archive.check(str(self.archive / "not-mounted"))
+        self.assertFalse(missing["clean"])
+        self.assertFalse(check_archive.compare(missing, missing)["ok"])
+        (self.archive / "dtcc-slices").mkdir()
+        self.assertTrue(check_archive.check(str(self.archive))["clean"])
+        (self.archive / "events.jsonl").write_text(json.dumps({"source": "dtcc-sec-credits", "kind": "possible_gap"}) + "\n")
+        res = check_archive.check(str(self.archive))
+        self.assertEqual((res["clean"], res["ticker_events"]), (False, 1))
+        (self.archive / "events.jsonl").write_text("")
+        (self.archive / "dtcc-cftc-credits").mkdir()
+        self.assertFalse(check_archive.check(str(self.archive))["clean"])
+        with mock.patch.object(sys, "argv", ["check_archive", "--archive", str(self.archive / "nope")]), \
+                mock.patch("builtins.print"):
+            self.assertEqual(check_archive.main(), 1)
+
+    # -- replay worker failure ------------------------------------------------------------------
+    def test_replay_worker_failure_stops_collector_and_service(self):
+        from market_data.credit_tape import service
+        replay = slice_meta(1, 1)  # disseminated before start -> backfill thread
+
+        class Broken(FakeHTTP):
+            def __call__(self, req, timeout=None):
+                if req.full_url.endswith(".zip"):
+                    raise RuntimeError("unexpected decoder bug")
+                return super().__call__(req, timeout)
+
+        http = Broken({"CFTC_CR": [replay], "SEC_CR": []}, {})
+        stop = threading.Event()
+        with self.assertRaisesRegex(RuntimeError, "replay backfill worker failed"):
+            capture.run(str(self.archive), interval=0.05, ticker=False, slices=True, stop=stop, opener=http)
+        health = json.loads((self.archive / "health.json").read_text(encoding="utf-8"))
+        self.assertEqual(health["sources"]["dtcc-slice-index"]["backfill_worker"]["state"], "failed")
+        ok, body = sp.collector_health(self.archive)
+        self.assertEqual((ok, body["backfill_worker"]), (False, "failed"))
+        env = {"CREDIT_TAPE_ARCHIVE": str(self.archive), "CREDIT_TAPE_PUBLIC_ORIGIN": self.ORIGIN,
+               "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid", "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret",
+               "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42", "PORT": "0"}
+        with mock.patch.object(service.capture, "run", side_effect=RuntimeError("replay backfill worker failed: x")), \
+                mock.patch.object(service.signal, "signal"), mock.patch("builtins.print"):
+            self.assertEqual(service.main(env), 1)
 
 
 if __name__ == "__main__":

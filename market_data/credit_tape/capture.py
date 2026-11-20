@@ -183,6 +183,13 @@ def run(out: str, interval: float = 20.0, ticker: bool = True, slices: bool = Tr
             if route:
                 health["dtcc-slice-index"] = route.health()
             write_health(out, health, {"collector": mode})
+            if route:
+                try:
+                    route.check_workers()  # a dead replay worker stops the collector (service exits 1)
+                except RuntimeError:
+                    health["dtcc-slice-index"] = route.health()
+                    write_health(out, health, {"collector": mode})  # leave the failure visible on disk
+                    raise
             if once or (stop is not None and stop.wait(interval)):
                 return 0
             if stop is None:

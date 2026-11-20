@@ -95,18 +95,30 @@ class Settings:
 
 
 class Store:
-    """Opaque in-memory sessions (8h) and signed ephemeral sign-in flows."""
+    """Opaque in-memory sessions (8h) and signed ephemeral sign-in flows.
+
+    Flow lifecycle follows directional-move-lab scripts/serve_private.py @2bdebbe:
+    GET /auth/login allocates no server-side entry (signed HttpOnly cookie, reused
+    while valid); a callback claims the flow as *pending* (at most 16 at once) and
+    releases it on any failure; only a verified, allowed callback reserves a
+    one-time replay record (at most 128, pruned at flow expiry). Failed or refused
+    callbacks therefore cannot exhaust sign-in capacity, and an accepted flow can
+    never be replayed.
+    """
+
+    MAX_PENDING, MAX_SPENT = 16, 128
 
     def __init__(self, clock=time.time):
         self.clock, self.lock = clock, threading.Lock()
         self.sessions: dict[str, tuple[float, int]] = {}
-        self.spent: dict[str, float] = {}
+        self.spent_flows: dict[str, tuple[float]] = {}
+        self.pending_flows: set[str] = set()
         self.key = secrets.token_bytes(32)
 
     def _prune(self):
         now = self.clock()
-        for d in (self.sessions, self.spent):
-            for k in [k for k, v in d.items() if (v[0] if isinstance(v, tuple) else v) <= now]:
+        for d in (self.sessions, self.spent_flows):
+            for k in [k for k, v in d.items() if v[0] <= now]:
                 del d[k]
 
     def _flow(self, token):
@@ -120,19 +132,40 @@ class Store:
             raise ValueError("Expired flow")
         return int(expiry), state, verifier
 
-    def start_flow(self):
-        state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        payload = f"{int(self.clock()) + 600}.{state}.{verifier}"
-        return payload + "." + hmac.new(self.key, payload.encode(), hashlib.sha256).hexdigest(), state, verifier
-
-    def consume_flow(self, token, state):
+    def start_flow(self, current: str = ""):
         with self.lock:
             self._prune()
-            expiry, expected, verifier = self._flow(token)
-            if not hmac.compare_digest(expected, state) or token in self.spent or len(self.spent) >= 128:
-                raise ValueError("Invalid sign-in state")
-            self.spent[token] = expiry
+            try:
+                _, state, verifier = self._flow(current)
+                if current not in self.spent_flows and current not in self.pending_flows:
+                    return current, state, verifier  # repeated login reuses one flow without extending expiry
+            except (ValueError, TypeError):
+                pass
+            state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            payload = f"{int(self.clock()) + 600}.{state}.{verifier}"
+            return payload + "." + hmac.new(self.key, payload.encode(), hashlib.sha256).hexdigest(), state, verifier
+
+    def consume_flow(self, token, state):
+        """Claim a flow for one callback; pair every successful claim with finish_flow."""
+        with self.lock:
+            self._prune()
+            _, expected, verifier = self._flow(token)
+            if (not hmac.compare_digest(expected, state) or token in self.spent_flows
+                    or token in self.pending_flows or len(self.pending_flows) >= self.MAX_PENDING):
+                raise ValueError("Invalid or busy sign-in state")
+            self.pending_flows.add(token)
             return verifier
+
+    def finish_flow(self, token, accepted=False):
+        with self.lock:
+            try:
+                if accepted:
+                    self._prune()
+                    if len(self.spent_flows) >= self.MAX_SPENT:
+                        raise ValueError("Sign-in completion capacity reached")
+                    self.spent_flows[token] = (self._flow(token)[0],)  # one-time replay record
+            finally:
+                self.pending_flows.discard(token)
 
     def new_session(self, owner: int) -> str:
         with self.lock:
@@ -265,10 +298,11 @@ def collector_health(archive: Path, now_ts: float | None = None):
                          "last_live_dissem_age_s": _age(last.get("dissemDTM"), now_ts),
                          "last_live_completed_age_s": _age(last.get("at"), now_ts),
                          "last_backfill_completed_age_s": _age((c.get("last_backfill_completed") or {}).get("at"), now_ts)}
-    ok = beat_ok and index_ok and all(c["state"] == "ok" for c in channels.values())
+    worker = (route.get("backfill_worker") or {}).get("state")
+    ok = beat_ok and index_ok and worker != "failed" and all(c["state"] == "ok" for c in channels.values())
     return ok, {"ok": ok, "slice_only": mode.get("ticker") is False and mode.get("slices") is True,
                 "heartbeat_age_s": beat, "index_age_s": index_age, "index_polls_err": route.get("polls_err"),
-                "channels": channels}
+                "backfill_worker": worker, "channels": channels}
 
 
 def read_raw(archive: Path, ref: str) -> bytes:
@@ -313,6 +347,10 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
         def log_message(self, *a):  # default logging would record OAuth codes
             pass
 
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(15)
+
         def reply(self, status, body=b"", kind="text/plain; charset=utf-8", headers=()):
             self.send_response(status)
             for k, v in [("Content-Type", kind), ("Content-Length", str(len(body))),
@@ -352,7 +390,7 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     or self.headers.get("Origin") != settings.origin):
                 return self.reply(403, b"Forbidden")
             store.revoke(self.cookies().get(SESSION_COOKIE, ""))
-            return self.reply(204, headers=[("Set-Cookie", cookie(SESSION_COOKIE))])
+            return self.reply(204, headers=[("Set-Cookie", cookie(SESSION_COOKIE)), ("Set-Cookie", cookie(FLOW_COOKIE))])
 
         def do_GET(self):
             url = urlsplit(self.path)
@@ -369,7 +407,10 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             if not self.host_ok():
                 return self.reply(403, b"Forbidden")
             if not settings.dev_local and url.path == "/auth/login":
-                flow, state, verifier = store.start_flow()
+                try:
+                    flow, state, verifier = store.start_flow(self.cookies().get(FLOW_COOKIE, ""))
+                except ValueError:
+                    return self.reply(429, b"Please retry sign-in later.")
                 challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
                 loc = "https://github.com/login/oauth/authorize?" + urlencode({
                     "client_id": settings.client_id, "redirect_uri": settings.origin + "/auth/callback",
@@ -377,19 +418,32 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     "code_challenge_method": "S256", "allow_signup": "false"})
                 return self.reply(302, headers=[("Location", loc), ("Set-Cookie", cookie(FLOW_COOKIE, flow, 600))])
             if not settings.dev_local and url.path == "/auth/callback":
+                flow = self.cookies().get(FLOW_COOKIE, "")
+                claimed = False
                 try:
                     q = parse_qs(url.query, strict_parsing=True, keep_blank_values=True, max_num_fields=10)
-                    if set(q) != {"state", "code", "iss"} or any(len(v) != 1 or not v[0] for v in q.values()) \
-                            or q["iss"][0] != GITHUB_ISSUER or len(q["state"][0]) > 128 or len(q["code"][0]) > 1024:
+                    # GitHub documents a callback carrying `code` and `state`; when it also sends the
+                    # RFC 9207 `iss`, it must be GitHub's exact issuer. Blank, repeated or unknown
+                    # fields are refused.
+                    if (set(q) not in ({"state", "code"}, {"state", "code", "iss"})
+                            or any(len(v) != 1 or not v[0] for v in q.values())
+                            or ("iss" in q and q["iss"][0] != GITHUB_ISSUER)
+                            or len(q["state"][0]) > 128 or len(q["code"][0]) > 1024):
                         raise ValueError("Invalid callback")
-                    verifier = store.consume_flow(self.cookies().get(FLOW_COOKIE, ""), q["state"][0])
+                    verifier = store.consume_flow(flow, q["state"][0])
+                    claimed = True
                     owner = identity(settings, q["code"][0], verifier)
                     if not settings.permits(owner):
                         raise ValueError("Account is not allowed")
+                    store.finish_flow(flow, accepted=True)  # one-time: this flow can never be replayed
+                    claimed = False
                     store.revoke(self.cookies().get(SESSION_COOKIE, ""))
                     session = store.new_session(owner)
                 except Exception:
-                    return self.reply(403, b"Sign-in was not accepted.", headers=[("Set-Cookie", cookie(FLOW_COOKIE))])
+                    if claimed:
+                        store.finish_flow(flow)  # failure cleanup: release the pending claim
+                    return self.reply(403, b"Sign-in was not accepted. Return to / and try again.",
+                                      headers=[("Set-Cookie", cookie(FLOW_COOKIE))])
                 return self.reply(303, headers=[("Location", "/"), ("Set-Cookie", cookie(FLOW_COOKIE)),
                                                ("Set-Cookie", cookie(SESSION_COOKIE, session, 8 * 3600))])
             if not self.authorized():

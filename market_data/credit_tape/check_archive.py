@@ -7,8 +7,11 @@ Checks the private archive the service writes:
   * every slice commit has its done marker (nothing half-published)
   * every slice raw ZIP referenced by an event exists and matches the
     sha256 recorded when it was published; no leftover .part files
-  * publication counts per channel, ticker publications (must be 0 for a
-    slice-only service), and pending live/backfill per channel
+  * no ticker output of any kind (events or ticker archive directories):
+    the service is slice-only
+  * the archive exists and is a credit-tape archive (a missing or unmounted
+    path fails instead of reading as clean)
+  * reports publication counts and pending live/backfill per channel
 
 Usage: python -m market_data.credit_tape.check_archive --archive <dir> [--compare before.json]
 Prints JSON; exit 0 only if clean (and, with --compare, if no channel lost
@@ -45,7 +48,14 @@ def _scan(path):
     return torn, unreadable, keys, rows
 
 
+TICKER_SOURCES = ("dtcc-cftc-credits", "dtcc-sec-credits")
+
+
 def check(archive: str) -> dict:
+    if not os.path.isdir(archive) or not os.path.isdir(os.path.join(archive, "dtcc-slices")):
+        # A missing, mistyped or unmounted archive must never read as "clean".
+        return {"archive": os.path.abspath(archive), "clean": False,
+                "error": "archive missing or not a credit-tape archive (no dtcc-slices/)"}
     ev_torn, ev_bad, ev_keys, events = _scan(os.path.join(archive, "events.jsonl"))
     al_torn, al_bad, al_keys, _ = _scan(os.path.join(archive, "alerts_outbox.jsonl"))
     pubs = Counter(e.get("source") for e in events if e.get("kind") == "publication")
@@ -76,11 +86,16 @@ def check(archive: str) -> dict:
         pass
     dup_events = sum(n - 1 for n in ev_keys.values() if n > 1)
     dup_alerts = sum(n - 1 for n in al_keys.values() if n > 1)
-    ticker_pubs = sum(n for s, n in pubs.items() if s and s.endswith("-credits"))
+    ticker_pubs = sum(n for s, n in pubs.items() if s in TICKER_SOURCES)
+    # Any ticker output at all (events of any kind, or a ticker archive directory) fails a slice-only check.
+    ticker_events = sum(1 for e in events if e.get("source") in TICKER_SOURCES)
+    ticker_dirs = [d for d in TICKER_SOURCES if os.path.exists(os.path.join(archive, d))]
     result = {
         "archive": os.path.abspath(archive),
         "publications": {CHANNEL_SOURCES.get(s, s): n for s, n in sorted(pubs.items(), key=lambda kv: str(kv[0]))},
         "ticker_publications": ticker_pubs,
+        "ticker_events": ticker_events,
+        "ticker_dirs": ticker_dirs,
         "slices_published": len(raw_sha),
         "duplicate_event_lines": dup_events,
         "duplicate_alert_lines": dup_alerts,
@@ -93,11 +108,14 @@ def check(archive: str) -> dict:
         "pending_by_channel": pending,
     }
     result["clean"] = not (dup_events or dup_alerts or ev_torn or al_torn or ev_bad or al_bad
-                           or open_commits or raw_missing or raw_mismatch or parts)
+                           or open_commits or raw_missing or raw_mismatch or parts
+                           or ticker_events or ticker_dirs)
     return result
 
 
 def compare(before: dict, after: dict) -> dict:
+    if "publications" not in before or "publications" not in after:
+        return {"ok": False, "error": "a compared check has no archive"}
     lost = {ch: [before["publications"].get(ch, 0), after["publications"].get(ch, 0)]
             for ch in set(before["publications"]) | set(after["publications"])
             if after["publications"].get(ch, 0) < before["publications"].get(ch, 0)}
