@@ -12,15 +12,38 @@ Tool: `python -m market_data.credit_tape.reconcile` (`reconcile.py`).
 
 Three parts are kept apart, and anything not proven is reported as **unknown**.
 
-### 1. Archive audit (first)
+### 1. Archive audit on one snapshot (first)
 
-`check_archive` runs before anything is counted. A logged row is **verified** only if:
-- the audit is clean: archive identity, optional mounted-volume check, every
-  completed commit validated against its original ZIP and its committed lines, no
-  duplicates, no torn lines, no ticker output;
-- and the row's slice has a completed commit with a done marker.
+`check_archive` audits **one consistent snapshot**, and the tape verdict sees only the
+rows that audit validated.
 
-Otherwise rows are counted as `unverified`, and the verdict is `unverified`.
+- **Snapshot order:**
+  1. the done markers;
+  2. the commit records;
+  3. each log's byte size.
+  Every log is read only up to that size. A commit counts as completed only if its
+  done marker is in the snapshot. The marker is written after the commit's lines are
+  appended, so all of its lines lie inside the snapshot. Lines appended later are
+  never read.
+- **Tape rows = audited rows.** These are the publication rows of completed commits
+  that validated with zero problems: log line == commit line == original ZIP row.
+  Each is identified by `(commit_key, commit_line)`. A logged publication is never
+  accepted by its slice filename: any line outside the audited set is `unverified`.
+  That covers a line without a commit, a line from a commit that is in flight or
+  completed after the snapshot, and a line from a commit with problems.
+- **In-flight work is excluded, not failed.** Reconciliation audits in in-flight mode,
+  because the collector may be running. These are reported under
+  `archive_audit.in_flight` and their rows are not counted:
+  - commits without a done marker;
+  - commits created after the listing;
+  - an unterminated last line;
+  - `.part` files.
+  The restart check keeps the strict default.
+- **Binding.** Each channel's report carries `bound_to`: the `archive_id`, the
+  snapshot (bytes and sha256 per log), and a sha256 of the exact verified tape rows
+  the verdict used.
+- If the audit is not clean, or any logged row for the channel/day is unverified, the
+  verdict is `unverified`.
 
 ### 2. Numbered-slice coverage (`slice_coverage`)
 
@@ -33,6 +56,10 @@ Otherwise rows are counted as `unverified`, and the verdict is `unverified`.
     `<CHANNEL>.REPORT_ONLY.json` marker;
   - never logged to the tape, and never counted as tape rows.
   - Restoring them to the tape is a separate objective.
+- Their outcome is its own result, `report_only`, with `status` `ok`, `none` or
+  `decode_failures`, and each failure listed. **A report-only decode failure cannot
+  change the tape verdict.** The rows that did decode feed only the
+  `with_report_only` view.
 - **Unknowns stay unknown.**
   - Any fetch that does not return a readable ZIP (404, error, non-ZIP) is recorded
     with its status under `unknown_numbers`.
@@ -59,7 +86,7 @@ Per-ID states are `matched`, `occurrence_mismatch`, `captured_only` and
 |---|---|---|
 | `tape_parity` | verified tape rows vs saved cumulative | **yes**, the only one |
 | `with_report_only` | verified tape rows + report-only slices vs saved cumulative | no; explains gaps |
-| `unverified_view` | all logged rows (verified or not) + report-only vs saved cumulative | no; shown only when some rows are unverified, and labelled |
+| `unverified_view` | audited + unverified logged rows + report-only vs saved cumulative | no; shown only when some rows are unverified, and labelled |
 
 **Lifecycle records** (CORR, MODI, TERM, EROR, REVI) are kept as their own records.
 A record's `Original Dissemination Identifier` is either:
@@ -68,8 +95,8 @@ A record's `Original Dissemination Identifier` is either:
   proof that the original is on an earlier day.
 
 **Verdict** (`verdict.tape_parity`):
-- `complete`: clean audit, every logged row verified, zero unmatched occurrences on
-  both sides, and no report-only problems;
+- `complete`: clean audit, every logged row of the snapshot verified, and zero
+  unmatched occurrences on both sides. Report-only results play no part;
 - `unverified`: the audit failed or rows lack a validated commit;
 - `incomplete`: any unmatched occurrence;
 - `unknown`: the cumulative file is unavailable.
@@ -125,6 +152,7 @@ So for 11-19:
 | The intraday endpoint serves old slices, byte-identical to the S3 originals | Real data (CFTC #17, SEC #29) |
 | The cumulative file is not in slice order | Real data (11-19) |
 | Unmatched occurrences reported with equal totals; repeats; field differences; captured-only; cumulative-only; unknown fetches; unobserved originals; audit gating (tampered original, legacy archive) | **Synthetic fixtures only** (`ReconciliationTests`) |
+| Verdict bound to audited rows of one snapshot: a filename-matching line without a commit stays unverified; a commit completed after the snapshot listing is excluded (same day → unverified, other day → no effect); report-only decode failure leaves a complete tape verdict complete | **Synthetic fixtures only**; the collector is driven mid-audit through a test hook |
 | A `complete` verdict on real data | **Not yet.** Needs a full UTC day captured by the current collector |
 | Day boundary / tail of a day | **Unknown** by design; an unavailable response is not proof |
 | An unobserved original is on an earlier day | **Unknown**; not inferred |

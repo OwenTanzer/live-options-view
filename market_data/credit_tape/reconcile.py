@@ -129,36 +129,37 @@ def _canon(row: dict) -> str:
 
 # -- inputs -------------------------------------------------------------------------------------
 
-def logged_rows(archive: str, channel: str, day: str, audit: dict):
-    """Rows the tape logged for this channel/day; verified only under a clean audit + validated commit."""
+def logged_rows(channel: str, day: str, snapshot: dict):
+    """From ONE audited snapshot: the slices and publication rows logged for this channel/day.
+
+    Tape rows are exactly the audit's validated rows (completed commit, zero problems, log line ==
+    commit line == original ZIP row), identified by (commit_key, commit_line). A logged publication
+    is never accepted by slice filename alone: any line not in the audited set is unverified.
+    """
     tag = day.replace("-", "_")
     prefix = f"{AGENCY[channel].upper()}_SLICE_CREDITS_{tag}_"
-    cdir = os.path.join(archive, "dtcc-slices", "commits")
-    ddir = os.path.join(archive, "dtcc-slices", "done")
-    with open(os.path.join(archive, "events.jsonl"), encoding="utf-8") as fh:
-        events = [json.loads(l) for l in fh if l.strip()]
-    captured, rows = {}, []
+    events = snapshot.get("events") or []
+    captured = {}
     for e in events:
         if e.get("source") != SOURCE[channel] or e.get("kind") != "slice":
             continue
         meta = e.get("slice") or {}
         name = meta.get("fileName") or ""
-        if not name.startswith(prefix):
-            continue
-        key_file = slices.SliceRoute.commit_key(channel, meta.get("sliceId")).replace("/", "__") + ".json"
-        committed = os.path.isfile(os.path.join(cdir, key_file)) and os.path.isfile(os.path.join(ddir, key_file))
-        captured[name] = {"number": _slice_no(name), "replay": bool(e.get("replay")),
-                          "startTs": meta.get("startTs"), "endTs": meta.get("endTs"),
-                          "verified": bool(audit.get("clean")) and committed}
-    for e in events:
-        if e.get("source") != SOURCE[channel] or e.get("kind") != "publication":
-            continue
-        name = (e.get("slice") or {}).get("fileName") or ""
-        if name in captured:
-            rows.append({"row": e.get("record") or {}, "slice": name, "slice_no": _slice_no(name),
-                         "row_index": e.get("row_index"), "origin": "replay" if e.get("replay") else "live",
-                         "verified": captured[name]["verified"]})
-    return captured, rows
+        if name.startswith(prefix):
+            captured[name] = {"number": _slice_no(name), "replay": bool(e.get("replay")),
+                              "startTs": meta.get("startTs"), "endTs": meta.get("endTs")}
+    audited = [r for r in snapshot.get("audited_rows") or []
+               if r.get("channel") == channel and (r.get("slice") or "").startswith(prefix)]
+    audited_keys = {(r["commit_key"], r["commit_line"]) for r in audited}
+    logged = [e for e in events if e.get("source") == SOURCE[channel] and e.get("kind") == "publication"
+              and ((e.get("slice") or {}).get("fileName") or "").startswith(prefix)]
+    unverified = [e for e in logged if (e.get("commit_key"), e.get("commit_line")) not in audited_keys]
+    tape = [{"row": r["row"], "slice": r["slice"], "slice_no": _slice_no(r["slice"]), "origin": r["origin"],
+             "commit_key": r["commit_key"], "commit_line": r["commit_line"]} for r in audited]
+    unverified_rows = [{"row": e.get("record") or {}, "slice": (e.get("slice") or {}).get("fileName"),
+                        "slice_no": _slice_no((e.get("slice") or {}).get("fileName")),
+                        "origin": "unverified"} for e in unverified]
+    return captured, tape, unverified_rows, len(logged)
 
 
 # -- comparison ---------------------------------------------------------------------------------
@@ -222,12 +223,12 @@ def compare(tape_rows: list[dict], cumulative: list[dict]) -> dict:
 
 # -- per channel ---------------------------------------------------------------------------------
 
-def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover_gaps=False,
+def reconcile_channel(archive: str, channel: str, day: str, audit: dict, snapshot: dict, recover_gaps=False,
                       fetch_cumulative=False, cumulative_dir: str | None = None,
                       opener=urllib.request.urlopen) -> dict:
     ag, tag = AGENCY[channel], day.replace("-", "_")
     base = os.path.join(archive, "dtcc-reconcile", day)
-    captured, tape = logged_rows(archive, channel, day, audit)
+    captured, tape, unverified_rows, logged_count = logged_rows(channel, day, snapshot)
     numbers = sorted(v["number"] for v in captured.values() if v["number"])
     top = numbers[-1] if numbers else 0
     uncaptured = sorted(set(range(1, top + 1)) - set(numbers))
@@ -252,17 +253,18 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
             report_only.append((n, name, blob))
             fetch_status[n] = status
             n += 1
-    ro_rows, ro_meta, problems = [], [], []
+    ro_rows, ro_meta, ro_failures = [], [], []
     for n, name, blob in sorted(report_only):
         path = os.path.join(base, "report-only-slices", name)
         sha = _store(path, blob)
         ro_meta.append({"number": n, "file": os.path.relpath(path, archive), "sha256": sha, "report_only": True})
         try:
-            for i, row in enumerate(slices.decode_rows(blob)):
-                ro_rows.append({"row": row, "slice": name, "slice_no": n, "row_index": i,
-                                "origin": "report_only", "verified": False})
-        except Exception as exc:  # noqa: BLE001 - recorded, never hidden
-            problems.append({"slice": name, "problem": "report_only_slice_decode_failure", "error": repr(exc)[:200]})
+            decoded = slices.decode_rows(blob)
+        except Exception as exc:  # noqa: BLE001 - kept in the report-only result, never in the tape verdict
+            ro_failures.append({"number": n, "slice": name, "sha256": sha, "error": repr(exc)[:200]})
+            continue
+        for i, row in enumerate(decoded):
+            ro_rows.append({"row": row, "slice": name, "slice_no": n, "row_index": i, "origin": "report_only"})
     if ro_meta:
         _store(os.path.join(base, "report-only-slices", f"{channel}.REPORT_ONLY.json"),
                json.dumps({"report_only": True, "channel": channel, "day": day,
@@ -283,7 +285,7 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
     elif os.path.isfile(cum_path):
         cum_blob, cum_status = open(cum_path, "rb").read(), "ok_saved"
 
-    verified_rows = [r for r in tape if r["verified"]]
+    verified_rows = tape
     covered = sorted(captured.values(), key=lambda v: v["number"] or 0)
     report = {
         "channel": channel, "day": day, "interval_utc": [f"{day}T00:00:00Z", f"{_next(day)}T00:00:00Z"],
@@ -296,13 +298,18 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
             "unknown_numbers": sorted(n for n in uncaptured if fetch_status.get(n, "not_fetched") != "ok"),
             "fetch_status": {str(k): v for k, v in sorted(fetch_status.items())},
             "tail": tail,
-            "report_only_slices": ro_meta,
         },
-        "tape_rows": {"logged": len(tape), "verified": len(verified_rows), "unverified": len(tape) - len(verified_rows)},
+        "report_only": {"slices": ro_meta, "decode_failures": ro_failures,
+                        "status": "decode_failures" if ro_failures else ("ok" if ro_meta else "none"),
+                        "note": "report-only: never tape rows; failures here cannot change the tape verdict"},
+        "tape_rows": {"logged": logged_count, "verified": len(verified_rows), "unverified": len(unverified_rows)},
+        "bound_to": {"archive_id": audit.get("archive_id"), "snapshot": audit.get("snapshot"),
+                     "tape_rows_sha256": hashlib.sha256("\n".join(sorted(
+                         _canon({k: r[k] for k in ("commit_key", "commit_line", "row")}) for r in verified_rows)).encode()
+                     ).hexdigest()},
         "cumulative_file": {"name": cum_name, "status": cum_status,
                             "sha256": _sha(cum_blob) if cum_blob is not None else None,
                             "saved": os.path.relpath(cum_path, archive) if cum_blob is not None else None},
-        "problems": problems,
     }
     if cum_blob is None:
         report["tape_parity"] = None
@@ -312,16 +319,17 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
     report["tape_parity"] = compare(verified_rows, cumulative)
     if ro_rows:
         report["with_report_only"] = compare(verified_rows + ro_rows, cumulative)
-    if len(verified_rows) < len(tape):
+    if unverified_rows:
         # Informational only, never part of the verdict: every logged row (verified or not) plus
         # report-only slices against the saved file, so an unaudited archive still shows its shape.
         report["unverified_view"] = {"note": "includes rows that failed or skipped the archive audit; not verified",
-                                     **compare(tape + ro_rows, cumulative)}
+                                     **compare(tape + unverified_rows + ro_rows, cumulative)}
     # Lifecycle links over everything observed in the interval (tape, report-only, cumulative).
-    observed = {r["row"].get(ID) for r in tape + ro_rows} | {r.get(ID) for r in cumulative}
+    every = tape + unverified_rows + ro_rows
+    observed = {r["row"].get(ID) for r in every} | {r.get(ID) for r in cumulative}
     links, not_observed = collections.Counter(), []
     seen = set()
-    for r in [x["row"] for x in tape + ro_rows] + cumulative:
+    for r in [x["row"] for x in every] + cumulative:
         did, orig = r.get(ID), r.get(ORIG)
         if not orig or did in seen:
             continue
@@ -333,7 +341,7 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
             not_observed.append({"id": did, "original_id": orig, "action": r.get(ACTION)})
     report["lifecycle_links"] = dict(links)
     report["original_not_observed"] = not_observed[:LIST_MAX]
-    report["actions"] = {"tape": dict(collections.Counter(r["row"].get(ACTION) for r in tape)),
+    report["actions"] = {"tape_verified": dict(collections.Counter(r["row"].get(ACTION) for r in tape)),
                          "cumulative": dict(collections.Counter(r.get(ACTION) for r in cumulative))}
     reasons = []
     if not audit.get("clean"):
@@ -342,11 +350,9 @@ def reconcile_channel(archive: str, channel: str, day: str, audit: dict, recover
         reasons.append(f"{report['tape_rows']['unverified']} logged rows lack a validated commit")
     if not report["tape_parity"]["parity"]:
         reasons.append("tape rows and the saved cumulative file have unmatched occurrences")
-    if problems:
-        reasons.append("report-only slice problems")
     if not audit.get("clean") or report["tape_rows"]["unverified"]:
         state = "unverified"
-    elif report["tape_parity"]["parity"] and not problems:
+    elif report["tape_parity"]["parity"]:
         state = "complete"
     else:
         state = "incomplete"
@@ -363,11 +369,14 @@ def _next(day: str) -> str:
 
 def run(archive: str, day: str, channels, volume_root=None, recover_gaps=False, fetch_cumulative=False,
         cumulative_dir=None, opener=urllib.request.urlopen, is_mount=os.path.ismount) -> dict:
-    audit = check_archive.check(archive, volume_root, is_mount=is_mount)
+    snapshot: dict = {}
+    # One audited snapshot: the verdict only ever sees the rows this audit validated.
+    audit = check_archive.check(archive, volume_root, is_mount=is_mount, allow_in_flight=True, capture=snapshot)
     summary = {k: audit.get(k) for k in ("clean", "archive_id", "volume", "commits_completed_validated",
-                                         "originals_rechecked", "commit_problems", "error")}
+                                         "originals_rechecked", "commit_problems", "audited_rows",
+                                         "audited_rows_sha256", "snapshot", "in_flight", "error")}
     result = {"day": day, "archive_audit": summary,
-              "channels": {c: reconcile_channel(archive, c, day, audit, recover_gaps, fetch_cumulative,
+              "channels": {c: reconcile_channel(archive, c, day, audit, snapshot, recover_gaps, fetch_cumulative,
                                                 cumulative_dir, opener) for c in channels}}
     result["complete"] = all(r["verdict"]["tape_parity"] == "complete" for r in result["channels"].values())
     return result

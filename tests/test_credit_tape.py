@@ -816,7 +816,8 @@ class ReconciliationTests(unittest.TestCase):
         cumulative = cumulative if cumulative is not None else [
             r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-NOT-SEEN"), r("R"), r("X2"),
             r("S", notional="1"), r("S", notional="1"), r("F", notional="5,000,000+"), r("G", "EROR", "B"), r("H")]
-        files = {f"/intraday/cftc/CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip": self.zipped(rows) for n, rows in gap.items()}
+        files = {f"/intraday/cftc/CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip": rows if isinstance(rows, bytes) else self.zipped(rows)
+                 for n, rows in gap.items()}
         if cumulative_status == 200:
             files[f"/cumulative/cftc/CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip"] = self.zipped(cumulative)
         self.requests = []
@@ -868,7 +869,7 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual((cov["uncaptured_numbers"], cov["report_only_recovered"], cov["unknown_numbers"]), ([2], [2], []))
         self.assertEqual(cov["tail"], {"last_captured_number": 5, "boundary": "unknown",
                                        "probes": [{"number": 6, "status": "unavailable_http_404"}]})
-        self.assertTrue(all(s["report_only"] for s in cov["report_only_slices"]))
+        self.assertTrue(all(s["report_only"] for s in ch["report_only"]["slices"]))
         marker = json.loads((self.archive / "dtcc-reconcile" / self.DAY / "report-only-slices" / "CFTC_CR.REPORT_ONLY.json").read_text())
         self.assertTrue(marker["report_only"])
         # Unobserved original is unknown, not an earlier-day claim.
@@ -927,6 +928,87 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual((ch["tape_rows"]["verified"], ch["verdict"]["tape_parity"]), (0, "unverified"))
         self.assertEqual(ch["tape_parity"]["ids"], {"cumulative_only": 1})  # unverified rows are not counted as tape
         self.assertEqual(ch["unverified_view"]["ids"], {"matched": 1})  # visible, but labelled and outside the verdict
+
+    # -- boundary 1: the verdict is bound to the audited rows of one snapshot ----------------------
+    def _clean_tape(self):
+        return [row for rows in self.captured().values() for row in rows]
+
+    def test_verdict_uses_audited_rows_not_slice_filenames(self):
+        self.build()
+        tape = self._clean_tape()
+        first = self.rec(recover_gaps=False, cumulative=tape)["channels"]["CFTC_CR"]
+        self.assertEqual(first["verdict"]["tape_parity"], "complete")
+        # A publication line that names a real captured slice but is not part of any audited commit.
+        meta = {"fileName": f"CFTC_SLICE_CREDITS_{self.TAG}_1.zip", "sliceId": 5001}
+        with (self.archive / "events.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"source": "dtcc-cftc-slices", "kind": "publication", "slice": meta,
+                                 "record": self.row("FORGED")}) + "\n")
+        res = self.rec(recover_gaps=False, cumulative=tape + [self.row("FORGED")])
+        ch = res["channels"]["CFTC_CR"]
+        self.assertTrue(res["archive_audit"]["clean"])  # a line without a commit key is not an audit failure...
+        self.assertEqual(ch["tape_rows"], {"logged": 11, "verified": 10, "unverified": 1})
+        self.assertEqual(ch["verdict"]["tape_parity"], "unverified")  # ...but it is never counted as tape
+        self.assertEqual(self.by_id(ch["tape_parity"])["FORGED"]["state"], "cumulative_only")
+        self.assertEqual(ch["bound_to"]["tape_rows_sha256"], first["bound_to"]["tape_rows_sha256"])
+
+    def test_rows_committed_after_the_snapshot_listing_are_excluded(self):
+        from market_data.credit_tape import check_archive
+        from market_data.credit_tape.synthetic_resilience import SyntheticDTCC
+        self.build()
+        tape = self._clean_tape()
+        real_check = check_archive.check
+
+        def late(day_tag, n):
+            def write():  # the collector completes another slice while the audit is running
+                dtcc = SyntheticDTCC()
+                name = f"CFTC_SLICE_CREDITS_{day_tag}_{n}.zip"
+                m = {"sliceId": 7000 + n, "fileName": name, "rowCount": 1, "dissemDTM": "2001-02-04T00:00:10Z",
+                     "startTs": "2001-02-04T00:00:00Z", "endTs": "2001-02-04T00:00:09Z",
+                     "fullFilePath": f"https://{slices.SLICE_HOST}/cftc/slices/{name}"}
+                dtcc.files[m["fullFilePath"]] = self.zipped([self.row(f"LATE-{day_tag}")])
+                dtcc.index = {"CFTC_CR": [m], "SEC_CR": []}
+                dtcc.etag = f'"late-{day_tag}-{n}"'  # a changed index (the stored ETag would answer 304)
+                capture.run(str(self.archive), ticker=False, slices=True, once=True, opener=dtcc)
+                assert (self.archive / "dtcc-slices" / "done" / f"dtcc-cftc-slices__CFTC_CR__{7000 + n}.json").exists()
+            return write
+
+        def checked(day_tag, n):
+            return lambda *a, **kw: real_check(*a, **{**kw, "_after_listing": late(day_tag, n)})
+
+        with mock.patch.object(check_archive, "check", checked("2001_02_04", 1)):  # another day
+            res = self.rec(recover_gaps=False, cumulative=tape)
+        ch = res["channels"]["CFTC_CR"]
+        self.assertTrue(res["archive_audit"]["clean"], res["archive_audit"])
+        self.assertEqual(res["archive_audit"]["in_flight"]["commits_after_listing"],
+                         ["dtcc-cftc-slices/CFTC_CR/7001"])
+        self.assertEqual((ch["verdict"]["tape_parity"], ch["tape_rows"]["verified"]), ("complete", 10))
+        with mock.patch.object(check_archive, "check", checked(self.TAG, 9)):  # same day, after the listing
+            res = self.rec(recover_gaps=False, cumulative=tape)
+        ch = res["channels"]["CFTC_CR"]
+        self.assertTrue(res["archive_audit"]["clean"])
+        self.assertEqual(ch["tape_rows"], {"logged": 11, "verified": 10, "unverified": 1})
+        self.assertEqual(ch["verdict"]["tape_parity"], "unverified")
+        self.assertNotIn(f"LATE-{self.TAG}", {u["id"] for u in ch["tape_parity"]["unmatched"]})  # never tape
+        # A fresh audit after the commit completed now includes it as audited tape.
+        res = self.rec(recover_gaps=False, cumulative=tape + [self.row(f"LATE-{self.TAG}")])
+        self.assertEqual(res["channels"]["CFTC_CR"]["verdict"]["tape_parity"], "complete")
+        snap = res["archive_audit"]["snapshot"]["logs"]["events.jsonl"]
+        self.assertEqual(snap["bytes"], (self.archive / "events.jsonl").stat().st_size)
+
+    # -- boundary 2: report-only failures stay in their own result ---------------------------------
+    def test_report_only_decode_failure_cannot_downgrade_verified_tape(self):
+        self.build()
+        tape = self._clean_tape()
+        bad = io.BytesIO()
+        with zipfile.ZipFile(bad, "w") as z:
+            z.writestr("X.csv", bytes([255, 254]) + b" not utf-8")
+        res = self.rec(recover_gaps=True, cumulative=tape, gap={2: bad.getvalue()})
+        ch = res["channels"]["CFTC_CR"]
+        ro = ch["report_only"]
+        self.assertEqual((ro["status"], [f["number"] for f in ro["decode_failures"]]), ("decode_failures", [2]))
+        self.assertEqual(ch["verdict"]["tape_parity"], "complete")
+        self.assertTrue(res["complete"])
+        self.assertNotIn("with_report_only", ch)  # nothing decodable to add
 
     def test_cli_refuses_an_incomplete_day(self):
         from market_data.credit_tape import reconcile

@@ -17,6 +17,10 @@ Proves it is reading the actual persistent archive, then re-verifies it:
     its done marker; no leftover .part files
   * no ticker output of any kind (the service is slice-only)
   * reports publication counts and pending live/backfill per channel
+  * one consistent snapshot: done markers, then commit records, then log sizes; logs are read
+    only up to those sizes (reported with sha256 under "snapshot"), and the exact validated
+    publication rows are counted ("audited_rows", "audited_rows_sha256"). reconcile.py uses
+    these rows, from the same snapshot, as the only tape rows.
 
 Usage: python -m market_data.credit_tape.check_archive --archive <dir> [--volume <mount>] [--compare before.json]
 Prints JSON; exit 0 only if clean (and, with --compare, if the archive_id is
@@ -37,13 +41,24 @@ from market_data.credit_tape import slices, volume
 CHANNEL_SOURCES = {"dtcc-cftc-slices": "CFTC_CR", "dtcc-sec-slices": "SEC_CR"}
 
 
-def _scan(path):
+def _scan(path, limit=None, allow_partial_tail=False):
+    """Parse a log up to `limit` bytes (the snapshot size). Returns
+    (torn, unreadable, index, keys, rows, info). With allow_partial_tail, an unterminated last line
+    inside the snapshot is an in-flight append: excluded and reported, not torn."""
     torn, unreadable, index, keys, rows = False, 0, {}, Counter(), []
+    info = {"bytes": 0, "sha256": None, "in_flight_tail_bytes": 0}
     if not os.path.exists(path):
-        return torn, unreadable, index, keys, rows
+        return torn, unreadable, index, keys, rows, info
     with open(path, "rb") as fh:
-        data = fh.read()
-    torn = bool(data) and not data.endswith(b"\n")
+        data = fh.read() if limit is None else fh.read(limit)
+    info["bytes"], info["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+    if data and not data.endswith(b"\n"):
+        cut = data.rfind(b"\n") + 1
+        if allow_partial_tail:
+            info["in_flight_tail_bytes"] = len(data) - cut
+            data = data[:cut]
+        else:
+            torn = True
     for raw in data.splitlines():
         try:
             obj = json.loads(raw)
@@ -55,7 +70,11 @@ def _scan(path):
             k = (obj["commit_key"], obj.get("commit_line"))
             keys[k] += 1
             index.setdefault(k, obj)
-    return torn, unreadable, index, keys, rows
+    return torn, unreadable, index, keys, rows, info
+
+
+def _canon(obj) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 TICKER_SOURCES = ("dtcc-cftc-credits", "dtcc-sec-credits")
@@ -116,7 +135,23 @@ def _validate_commit(archive, commit, ev_index, al_index):
     return problems
 
 
-def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount) -> dict:
+def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount,
+          allow_in_flight: bool = False, capture: dict | None = None, _after_listing=None) -> dict:
+    """Audit one consistent snapshot of the archive.
+
+    Snapshot order: done markers, then commit records, then each log's byte size; every log is
+    read only up to that size. A commit counts as completed only if its done marker is in the
+    snapshot, and since the marker is written after its lines are appended, all of its lines lie
+    inside the snapshot. Lines appended later are outside the snapshot and never read.
+
+    allow_in_flight (for audits of a running collector, e.g. reconciliation): commits without a
+    done marker and an unterminated last line are reported as in flight and excluded, instead of
+    failing the audit. The restart check keeps the strict default.
+
+    capture (optional dict) receives, from this same snapshot: "audited_rows" (publication rows
+    of completed commits that validated with zero problems, each with commit_key/commit_line,
+    channel, slice and origin) and "events" (the snapshot's events.jsonl objects).
+    """
     base = {"archive": os.path.abspath(archive)}
     if volume_root:
         try:
@@ -133,8 +168,10 @@ def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount
     ident = volume.read_identity(archive)
     sdir = os.path.join(archive, "dtcc-slices")
     cdir, ddir = os.path.join(sdir, "commits"), os.path.join(sdir, "done")
+    done = set(os.listdir(ddir)) if os.path.isdir(ddir) else set()  # snapshot step 1
     names = {f for f in os.listdir(cdir) if f.endswith(".json")} if os.path.isdir(cdir) else set()
-    done = set(os.listdir(ddir)) if os.path.isdir(ddir) else set()
+    if _after_listing:
+        _after_listing()  # tests only: simulate the collector writing after the snapshot listing
     open_commits = sorted(c for c in names if c not in done)
     problems, records = [], {}
     for fn in sorted(names):
@@ -150,21 +187,39 @@ def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount
             rel = c.get(name)
             if isinstance(rel, str) and not os.path.isabs(rel) and ".." not in rel.replace("\\", "/").split("/"):
                 logs.add(rel)
-    scans = {rel: _scan(os.path.join(archive, rel)) for rel in sorted(logs)}
+    sizes = {rel: (os.path.getsize(os.path.join(archive, rel)) if os.path.exists(os.path.join(archive, rel)) else 0)
+             for rel in sorted(logs)}  # snapshot step 3
+    scans = {rel: _scan(os.path.join(archive, rel), sizes[rel], allow_in_flight) for rel in sorted(logs)}
     events = scans["events.jsonl"][4]
     pubs = Counter(e.get("source") for e in events if e.get("kind") == "publication")
     validated = raw_checked = 0
-    for fn, commit in records.items():
+    audited = []
+    for fn, commit in sorted(records.items()):
         if fn in done:
             ev_index = scans.get(commit.get("events_path"), scans["events.jsonl"])[2]
             al_index = scans.get(commit.get("alerts_path"), scans["alerts_outbox.jsonl"])[2]
-            problems += _validate_commit(archive, commit, ev_index, al_index)
+            mine = _validate_commit(archive, commit, ev_index, al_index)
+            problems += mine
             validated += 1
             raw_checked += bool(commit.get("raw_ref"))
+            if not mine:  # exactly the rows this audit validated (log line == commit line == ZIP row)
+                for line in commit.get("events") or []:
+                    if line.get("kind") == "publication":
+                        audited.append({"commit_key": commit.get("key"), "commit_line": line.get("commit_line"),
+                                        "channel": commit.get("channel"),
+                                        "slice": (line.get("slice") or {}).get("fileName"),
+                                        "origin": "replay" if line.get("replay") else "live",
+                                        "row": line.get("record") or {}})
     known_keys = {c.get("key") for c in records.values()}
     orphans = sorted({k for sc in scans.values() for k, _ in sc[3] if k not in known_keys})
+    late_commits = []
     for k in orphans:
-        problems.append({"commit": k, "problem": "logged_lines_without_commit_record"})
+        # A commit created after the snapshot listing writes its record before appending lines, so
+        # in in-flight mode a record that exists now marks those lines as in flight, not orphaned.
+        if allow_in_flight and isinstance(k, str) and os.path.exists(os.path.join(cdir, k.replace("/", "__") + ".json")):
+            late_commits.append(k)
+        else:
+            problems.append({"commit": k, "problem": "logged_lines_without_commit_record"})
     parts = [os.path.join(r, f) for r, _, fs in os.walk(archive) for f in fs if f.endswith(".part")]
     pending = {}
     try:
@@ -176,6 +231,7 @@ def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount
         pass
     dups = {rel: sum(n - 1 for n in sc[3].values() if n > 1) for rel, sc in scans.items()}
     torn = {rel: sc[0] for rel, sc in scans.items()}
+    in_flight_tail = {rel: sc[5]["in_flight_tail_bytes"] for rel, sc in scans.items() if sc[5]["in_flight_tail_bytes"]}
     unreadable = {rel: sc[1] for rel, sc in scans.items()}
     ticker_pubs = sum(n for s, n in pubs.items() if s in TICKER_SOURCES)
     # Any ticker output at all (events of any kind, or a ticker archive directory) fails a slice-only check.
@@ -197,12 +253,23 @@ def check(archive: str, volume_root: str | None = None, is_mount=os.path.ismount
         "duplicate_lines": dups,
         "torn_tail": torn,
         "unreadable_lines": unreadable,
-        "commits_without_done_marker": open_commits,
-        "part_files": parts,
+        "commits_without_done_marker": [] if allow_in_flight else open_commits,
+        "in_flight": {"commits": open_commits, "commits_after_listing": late_commits, "tail_bytes": in_flight_tail,
+                      "part_files": parts} if allow_in_flight else None,
+        "snapshot": {"done_markers": len(done), "commit_records": len(names),
+                     "logs": {rel: {"bytes": sc[5]["bytes"], "sha256": sc[5]["sha256"]} for rel, sc in scans.items()}},
+        "audited_rows": len(audited),
+        "audited_rows_sha256": hashlib.sha256("\n".join(sorted(_canon(r) for r in audited)).encode()).hexdigest(),
+        "part_files": [] if allow_in_flight else parts,
         "pending_by_channel": pending,
     }
+    blocking_open = [] if allow_in_flight else open_commits
     result["clean"] = not (ident is None or problems or any(dups.values()) or any(torn.values())
-                           or any(unreadable.values()) or open_commits or parts or ticker_events or ticker_dirs)
+                           or any(unreadable.values()) or blocking_open or (parts and not allow_in_flight)
+                           or ticker_events or ticker_dirs)
+    if capture is not None:
+        capture["audited_rows"] = audited if result["clean"] else []
+        capture["events"] = events
     if ident is None:
         result["error"] = "archive has no identity (archive.json); not written by the collector"
     return result
