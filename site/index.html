@@ -468,6 +468,23 @@
   .oi-skew-labels {
     display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--dim); margin-top: 3px;
   }
+  /* ── Truth layer (shared/truth-layer.js): state chip + "About this reading" ── */
+  .truth-chip {
+    display: inline-block; font-size: 0.74rem; font-weight: 600; line-height: 1.5;
+    padding: 0 8px; border-radius: 10px; border: 1px solid var(--border);
+    color: var(--fg); white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  /* Trust, never direction: no call/put or gain/loss colours here. */
+  .truth-chip[data-tone="ok"]    { color: var(--bright); border-color: #6e7681; }
+  .truth-chip[data-tone="warn"]  { color: #e8b339; border-color: #8a6a1f; }
+  .truth-chip[data-tone="muted"] { color: var(--dim); border-style: dashed; }
+  .truth-about { margin-top: 6px; }
+  .truth-about > summary {
+    cursor: pointer; font-size: 0.74rem; color: var(--dim); min-height: 24px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .truth-about > summary:hover, .truth-about[open] > summary { color: var(--fg); }
+  .truth-about > p { font-size: 0.76rem; color: var(--dim); margin: 4px 0 0; white-space: normal; }
   /* ── SPY / IBIT reference OI skew meters: same look as #oi-skew-meter ── */
   .ref-oi-skew {
     background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
@@ -1243,6 +1260,7 @@
     <h2 id="oi-skew-heading">QQQ near-money OI skew</h2>
     <span id="oi-skew-value">—</span>
     <span id="oi-skew-lean">Waiting for snapshot</span>
+    <span id="oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
     <span id="oi-skew-meta" role="status"></span>
   </div>
   <div class="oi-skew-scale">
@@ -1259,10 +1277,12 @@
   </div>
   <div class="oi-skew-bot-row">
     <span id="oi-skew-bot" data-state="unknown" data-availability="not_published">Bot signal: not published</span>
-    <span id="oi-skew-bot-detail"></span>
   </div>
-  <p id="oi-skew-thresholds"></p>
-  <p class="oi-skew-caveat">(call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p class="oi-skew-caveat">(call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+    <p id="oi-skew-thresholds"></p>
+    <p id="oi-skew-bot-detail"></p>
+  </details>
 </section>
 
 <section id="spy-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="spy-oi-skew-heading">
@@ -1270,6 +1290,7 @@
     <h2 id="spy-oi-skew-heading">SPY near-money OI skew</h2>
     <span id="spy-oi-skew-value" class="ref-oi-skew-value">—</span>
     <span id="spy-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="spy-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
     <span id="spy-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
   </div>
   <div class="oi-skew-scale">
@@ -1284,8 +1305,10 @@
       <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
     </div>
   </div>
-  <p id="spy-oi-skew-detail" class="oi-skew-caveat"></p>
-  <p class="oi-skew-caveat">Reference reading only: no bot trades SPY. (call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p class="oi-skew-caveat">Reference reading only: no bot trades SPY. (call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+    <p id="spy-oi-skew-detail" class="oi-skew-caveat"></p>
+  </details>
 </section>
 
 <section id="ibit-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="ibit-oi-skew-heading">
@@ -1293,6 +1316,7 @@
     <h2 id="ibit-oi-skew-heading">IBIT near-money OI skew</h2>
     <span id="ibit-oi-skew-value" class="ref-oi-skew-value">—</span>
     <span id="ibit-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="ibit-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
     <span id="ibit-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
   </div>
   <div class="oi-skew-scale">
@@ -1307,7 +1331,6 @@
       <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
     </div>
   </div>
-  <p id="ibit-oi-skew-detail" class="oi-skew-caveat"></p>
   <div id="ibit-adaptive-oi-skew" class="adaptive-oi-skew" data-state="unavailable" aria-labelledby="ibit-adaptive-oi-skew-heading">
     <div class="oi-skew-head">
       <h3 id="ibit-adaptive-oi-skew-heading">Adaptive near-money OI skew</h3>
@@ -1316,6 +1339,7 @@
     <div class="oi-skew-head">
       <span id="ibit-adaptive-oi-skew-value" class="ref-oi-skew-value">—</span>
       <span id="ibit-adaptive-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+      <span id="ibit-adaptive-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
       <span id="ibit-adaptive-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
     </div>
     <div class="oi-skew-scale">
@@ -1329,7 +1353,10 @@
     </div>
     <p id="ibit-adaptive-oi-skew-detail" class="oi-skew-caveat"></p>
   </div>
-  <p class="oi-skew-caveat">No bot trades IBIT. The top reading is the published reference (±2% of spot). IBIT's $1 strikes are roughly 2.5–3% of its price, so ±2% can hold only a strike or two and fewer than 4 is flagged thin. The adaptive reading below it widens the window from ±2% to the 4th-nearest strike with OI (strikes tied at the edge included), capped at ±10%, and shows nothing when coverage is insufficient. Both are (call OI − put OI) ÷ (call OI + put OI). Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p id="ibit-oi-skew-detail" class="oi-skew-caveat"></p>
+    <p class="oi-skew-caveat">No bot trades IBIT. The top reading is the published reference (±2% of spot). IBIT's $1 strikes are roughly 2.5–3% of its price, so ±2% can hold only a strike or two and fewer than 4 is flagged thin. The adaptive reading below it widens the window from ±2% to the 4th-nearest strike with OI (strikes tied at the edge included), capped at ±10%, and shows nothing when coverage is insufficient. Both are (call OI − put OI) ÷ (call OI + put OI). Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+  </details>
 </section>
 
 <div id="price-strip" aria-label="Quote cards">
@@ -1557,6 +1584,7 @@
 <script src="shared/quote-panel.js?v=3806793be069e8a7"></script>
 <script src="shared/chain.js?v=477ee1ce1d6f08f2"></script>
 <script src="shared/oi-skew.js?v=eaf1d6a0da079f08"></script>
+<script src="shared/truth-layer.js?v=d520608fbd4ffaa2"></script>
 <script>// ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being// cached, but it can't evict a copy a device already cached before that header
 // existed, and it does nothing for iOS Safari's back-forward cache (bfcache),
@@ -1666,8 +1694,8 @@ let timerHandle = null;
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
 <script src="js/data-fetch-cycle.js?v=d8b0bb7385cf9ba6"></script>
-<script src="js/oi-skew-meter.js?v=f3f59e5c6aa2a119"></script>
-<script src="js/reference-oi-skew-meters.js?v=0073badf7af7585a"></script>
+<script src="js/oi-skew-meter.js?v=2090f692184a9d86"></script>
+<script src="js/reference-oi-skew-meters.js?v=afd0f36529d824e6"></script>
 <script>
 
 // ── countdown timer ───────────────────────────────────────────────────────────

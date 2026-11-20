@@ -171,6 +171,14 @@ function createReferenceOiSkewMeter(symbol) {
       + `snapshot ${_refSkewEtTime(raw.snapshot_ms)} · ${status}`;
     el('detail').textContent = raw.detail || '';
     root.title = raw.detail || '';
+    if (typeof describeTruth === 'function') {
+      // Coverage must not hide stale/closed observations or failed refreshes.
+      renderTruthChip(el('truth'), describeTruth(thin && raw.availability === 'live' ? 'thin' : raw.availability, {
+        observedMs: raw.snapshot_ms ?? null, nowMs,
+        note: [thin ? `thin: ${raw.band_strikes} strike${raw.band_strikes === 1 ? '' : 's'}` : null,
+               raw.refresh_failed ? 'refresh failed' : null].filter(Boolean).join(', ') || null,
+      }));
+    }
     if (ADAPTIVE_OI_SKEW_SYMBOLS.includes(symbol)) renderAdaptive(raw, label, nowMs);
   }
 
@@ -201,6 +209,12 @@ function createReferenceOiSkewMeter(symbol) {
     box.dataset.lean = res && res.ok ? (res.imbalance > 0 ? 'call-heavy' : res.imbalance < 0 ? 'put-heavy' : 'balanced') : 'none';
     const expiry = payload && payload.expiration ? `exp ${payload.expiration}` : 'expiry unknown';
     const status = label + (raw.refresh_failed ? ' · refresh failed' : '');
+    if (typeof describeTruth === 'function') {
+      renderTruthChip(a('truth'), describeTruth(box.dataset.state, {
+        observedMs: raw.snapshot_ms ?? null, nowMs,
+        note: raw.refresh_failed ? 'refresh failed' : null,
+      }));
+    }
     if (!res || !res.ok) {
       marker.hidden = true;
       a('value').textContent = '—';
