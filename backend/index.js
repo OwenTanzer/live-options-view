@@ -1,3 +1,4 @@
+import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
 import { handleBotIndexReconcile, handleBotMetadata, handleBots } from './bots.js';
@@ -25,6 +26,7 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
       return handleBrowserData(request, url);

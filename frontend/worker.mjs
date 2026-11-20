@@ -27,7 +27,9 @@ export default {
     }
     const url = new URL(request.url);
     let response;
-    if (url.pathname === '/__environment') {
+    if (url.pathname.startsWith('/credit-tape/')) {
+      response = preview ? error('Not available in preview', 404) : await delegate(env.API, request);
+    } else if (url.pathname === '/__environment') {
       if (request.method !== 'GET') return error('Method not allowed', 405);
       response = Response.json({ environment: env.ENVIRONMENT,
         isolation: preview ? 'disposable' : 'production',
