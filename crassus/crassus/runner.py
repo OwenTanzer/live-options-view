@@ -181,10 +181,14 @@ class Runner:
         self.state_dir = Path(state_dir)
         self.forward_directory = self.state_dir / forward_skew.VERSION
         self.forward_bars = ForwardBars(self.forward_directory)
+        self.forward_bar_sources = {"QQQ": self.forward_bars,
+                                    "IBIT": ForwardBars(self.forward_directory, "IBIT")}
         self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
         if self.forward_accounts:
-            if {a.username for a in self.forward_accounts} != set(forward_skew.ARMS):
-                raise ValueError("activate all four comparison accounts together")
+            for root, family in forward_skew.FAMILIES.items():
+                active = {a.username for a in self.forward_accounts if forward_skew.root_for(a) == root}
+                if active and active != set(family["arms"]):
+                    raise ValueError(f"activate all {len(family['arms'])} {root} comparison accounts together")
             if base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
                 raise ValueError("forward comparison requires the Options View paper API")
         self.stop_file = Path(state_dir) / "STOP"
@@ -509,9 +513,12 @@ class Runner:
         )
 
         arm = forward_skew.arm_for(account)
+        forward_bars = None
         if arm:
+            sources = getattr(self, "forward_bar_sources", None) or {"QQQ": self.forward_bars}
+            forward_bars = sources[forward_skew.root_for(account)]
             if phase == "open":
-                self.forward_bars.read(self.cycle_count, clock.now_et())
+                forward_bars.read(self.cycle_count, clock.now_et())
             base.update(comparison_version=forward_skew.VERSION, comparison_arm=arm,
                         comparison_cycle=self.cycle_count, source_revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
         # Reconcile first: the server's view of cash and trades is the only
@@ -576,7 +583,7 @@ class Runner:
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
             elif arm and arm != "baseline":
-                decision = forward_skew.decide(ctx, account, arm, self.forward_bars,
+                decision = forward_skew.decide(ctx, account, arm, forward_bars,
                                                self.forward_directory, decision_id)
             else:
                 # Configurable profit/protective exits (#86) sit between the
