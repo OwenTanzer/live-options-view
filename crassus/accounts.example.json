@@ -349,7 +349,7 @@
       "username": "crassus_oif_ibit_baseline",
       "password_env": "CRASSUS_PW_OIF_IBIT_BASELINE",
       "strategy_id": "oi_skew_ibit_adaptive",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "baseline"
       }
@@ -359,7 +359,7 @@
       "username": "crassus_oif_ibit_protect",
       "password_env": "CRASSUS_PW_OIF_IBIT_PROTECT",
       "strategy_id": "oi_skew_ibit_adaptive",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "protect_only"
       }
@@ -369,7 +369,7 @@
       "username": "crassus_oif_ibit_recover",
       "password_env": "CRASSUS_PW_OIF_IBIT_RECOVER",
       "strategy_id": "oi_skew_ibit_adaptive",
-      "active": false,
+      "active": true,
       "params": {
         "forward_skew_arm": "protect_reentry"
       }
