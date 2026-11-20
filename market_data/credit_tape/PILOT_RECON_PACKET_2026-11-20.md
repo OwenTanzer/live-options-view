@@ -123,9 +123,51 @@ Pilot timeline (from Chej): **launch L = 13:48:53Z**, **restart R = 13:52:14Z**,
   marker `done/<CHANNEL>__<sliceId>.json` (`at`, and `recovered: true` when a commit
   was finished by recovery at startup).
 - **Slice window:** `slice.startTs` and `slice.endTs`.
-- **Collector activity:** `dtcc-slices/polls.jsonl` (one line per index poll, with `t`)
-  and the index copies under `dtcc-slices/index/2026-11-20/` (file name = fetch time).
-  The earliest index copy that lists a slice gives its **first-listed time `Lst`**.
+- **Collector activity:**
+  - `dtcc-slices/polls.jsonl`: one line per index poll, with `t`. A `200` line also has
+    `recv` and `etag`; a `304` line has only `t`.
+  - Saved index copies under `dtcc-slices/index/<UTC day of fetch>/`, one per `200`
+    response, each with `fetched_at`, `etag` and the full `CFTC_CR` / `SEC_CR` lists.
+    Copies near midnight sit in the 11-19 or 11-21 folder, so all three folders are read.
+
+### Listing time is bounded, not observed
+
+The collector polls DTCC's index at intervals. We only see a slice in the index when
+we poll, so **the first saved copy that lists a slice is our first observation, not
+the time DTCC listed it.** No new listing can be observed during a poll gap.
+
+For each slice, per channel:
+
+- **First positive snapshot `O`:** the earliest saved index copy whose channel list
+  contains the slice's `fileName`. `O` is its `fetched_at`.
+- **Last complete negative snapshot `N`:** the latest saved index copy **before `O`**
+  that is complete for that channel and does not contain the slice. "Complete" means:
+  - the copy parsed;
+  - the channel key is present and is a list (`listed_in_index`);
+  - nothing between `N` and `O` is a failed poll whose response was not saved.
+  If a failed or missing poll sits between the last negative copy and `O`, there is no
+  complete negative snapshot next to `O`.
+- **DTCC's listing time lies in `(N, O]`.** When there is no `N` (no copy before `O`,
+  such as the first poll after launch or after the restart, or a gap), the lower bound
+  is **unknown** and the listing time is reported as `unknown, ≤ O`.
+- **Optional tightening, labelled `derived_304`:** a `304` poll at time `t` between `N`
+  and `O` means the index was byte-identical to `N` at `t` (the request carried the
+  ETag of the latest `200` copy, which is `N`). The negative bound then becomes the
+  last such `t`. Because `polls.jsonl` does not record the ETag that was sent, this is
+  derived from the order of `200` lines, and is always reported as derived, alongside
+  the snapshot-only bound.
+
+**Delays, named for what they are:**
+
+| Quantity | Name in the report | What it is |
+|---|---|---|
+| `F − P` | **observation minus publication** | DTCC's delay, plus our polling interval, plus our fetch time. **Not** a source delay |
+| `(N − P, O − P]` | **source listing delay, bounded** | The only statement about DTCC's own delay (publication to index listing). Reported as an interval. Unknown lower bound when there is no `N` |
+| `O − N` | **listing uncertainty** | How wide the bound is (normally one poll interval; wide across the poll gap) |
+| `F − O` | **our fetch delay** | First observation of the listing to receipt of the slice bytes. This one is ours |
+
+`P` itself is DTCC's slice `dissemDTM`. Whether a slice can be listed before its
+`dissemDTM` is not assumed either way; `P` and the bound are reported side by side.
 
 ### Important: what the `replay` flag does and does not mean
 
@@ -149,17 +191,23 @@ filename day, so every row also stays in the full-day parity in section 3.
 
 | Segment | Rule | Expected provenance | Timing reported | Counts as live capture? |
 |---|---|---|---|---|
-| **Pre-launch** | `P < L` | `replay = true` (backfill), or uncaptured (rotated off the index before launch) and therefore `cumulative_only` | `F − P` (large, minutes to hours) | **No**, never |
-| **Restart overlap** | `L ≤ P < R'`, where `R'` is the first index poll after R (from `polls.jsonl`) | `replay = false` in all cases. Split by `F`: `F < D` (captured by the first run), or `F ≥ R` (caught up after restart). `D` is the last poll before the gap. Also flag any done marker with `recovered: true` | `F − P`, and `F − Lst` | Only rows with `F < D`, **and** `F − Lst` within the live bound below. Rows with `F ≥ R` are **post-restart catch-up**, not live |
-| **Post-restart** | `P ≥ R'` | `replay = false` | `F − P`, `F − Lst` | **Yes**, if `F − Lst` is within the live bound. Otherwise "late live" with its delay |
+| **Pre-launch** | `P < L` | `replay = true` (backfill), or uncaptured (rotated off the index before launch) and therefore `cumulative_only` | observation minus publication `F − P` (large) | **No**, never |
+| **Restart overlap** | `L ≤ P < R'`, where `R'` is the first index poll after R (from `polls.jsonl`) | `replay = false` in all cases. Split by `F`: `F < D` (captured by the first run), or `F ≥ R` (caught up after restart). `D` is the last poll before the gap. Also flag any done marker with `recovered: true` | `F − P`, listing bound `(N, O]`, `F − O` | Only rows with `F < D` **and** the live test below. Rows with `F ≥ R` are **post-restart catch-up**, not live. Rows the evidence cannot separate are **`overlap_uncertain`** |
+| **Post-restart** | `P ≥ R'` | `replay = false` | `F − P`, `(N, O]`, `F − O` | **Yes**, if the live test passes. Otherwise "late" with its bounds |
 
-- **Live bound:** a row is "live" when its slice was fetched on the first or second
-  index poll that listed it (`F − Lst` no more than about one poll interval plus the
-  fetch time). The bound is a reporting threshold, not a gate. The exact interval is
-  read from `polls.jsonl`, and every row's `F − P` and `F − Lst` are reported anyway.
-- **Delays kept apart:** `Lst − P` is DTCC's own delay (publication to index listing).
-  `F − Lst` is ours (listing to receipt). Both are reported per segment as count,
-  median, p95 and max.
+- **Live test** (a reporting rule, not a gate): a row counts as live only when
+  1. a complete negative snapshot `N` exists for its slice, **and**
+  2. `O − N` is no wider than the normal poll interval (read from `polls.jsonl`), **and**
+  3. `F − O` is within one poll interval plus fetch time.
+  This says the slice was fetched within about one poll of first appearing. It says
+  nothing finer about DTCC's own timing. Any row without an `N` is never counted live.
+- **`overlap_uncertain`:** in the overlap segment, a row is uncertain when its listing
+  bound `(N, O]` contains the stop or restart. For example, `N ≤ D < O` with `O ≥ R'`:
+  DTCC may have listed it before the first run stopped (and the first run missed it),
+  or during the downtime. The evidence cannot tell which, so the row is neither live
+  nor a confirmed miss.
+- Per segment, every quantity is reported as count, median, p95 and max. The bounds
+  are reported as intervals, never collapsed to one number.
 
 ### Labels for rows that cannot be placed
 
@@ -174,8 +222,10 @@ These rows stay in the full-day parity but are listed separately in the proof ta
 - **`crosses_utc_day`:** `P` or `startTs` falls on 11-19 or 11-21 while the file name
   says 11-20. Parity keeps the filename day; the proof table lists the row with its
   actual times.
-- **`no_listing_seen`:** no saved index copy lists the slice, so `Lst` is unknown. `F − P`
-  is still reported.
+- **`no_listing_seen`:** no saved index copy lists the slice, so `O` (and `N`) are unknown.
+  `F − P` is still reported, as observation minus publication.
+- **`listing_lower_bound_unknown`:** `O` exists but there is no complete negative
+  snapshot `N` before it. Reported as `unknown, ≤ O`.
 
 ### How to tell capture after restart from later replay
 
@@ -185,8 +235,8 @@ These rows stay in the full-day parity but are listed separately in the proof ta
 | `replay` flag | `false` (because `started_at` = L) | `true` |
 | Alert written | yes | no |
 | `F` | at or shortly after R | any time after L, on the backfill thread |
-| `F − Lst` | about the downtime length (listed before R, fetched after R) | usually long; the slice was listed before launch or on the first poll |
-| `polls.jsonl` | `Lst` lies in or before the poll gap `[D, R']` | — |
+| Listing bound `(N, O]` | `O` is the first poll after the restart (`O = R'`), and `N` is at or before `D`, so the bound spans the gap | `O` is the first poll after launch (or after the restart) with no `N`, so the lower bound is unknown |
+| `F − O` | small (fetched as soon as it was observed after R) | can be long (the backfill thread is slower) |
 | Done marker | may be `recovered: true` if its commit was interrupted at the stop | normal |
 
 The decisive test is `P` against **L** together with `F` against **R**. The `replay`
@@ -198,7 +248,38 @@ flag alone cannot separate the two, for the reason above.
   only parity (section 3) shows that, and parity does not show *when*.
 - The true stop time of the first run: only `D` (the last poll before the gap) is
   known from the archive.
+- DTCC's exact listing time: only the interval `(N, O]`, or `unknown, ≤ O`.
 - Real-time behaviour before L: nothing was running.
+
+### Illustrative case: parity passes, live continuity not proven
+
+**Synthetic numbers, for illustration only. Not real data and not a prediction.** One
+channel. The first run polls every 20 s.
+
+| Time (Z) | Event |
+|---|---|
+| 13:48:53 | L: first run starts; `started_at` = L |
+| 13:49:58 | `D`: last index poll of the first run, `200`, saved copy does **not** list slice `#k` (this is `N`) |
+| ~13:50:05 | first run stops (not recorded in the archive) |
+| 13:50:30 | DTCC publishes slice `#k` (`P`, its `dissemDTM`) with 3 rows |
+| 13:52:14 | R: restart |
+| 13:52:20 | `R'`: first poll after the restart, `200`, saved copy lists `#k` (this is `O`) |
+| 13:52:21 | `#k` fetched (`F`); `replay = false` because `P > started_at`, 3 alerts written, panel shows the rows as live |
+
+At reconciliation:
+- **Parity:** the cumulative file has those 3 rows, and the tape has them once each.
+  `tape_parity` can be `complete`.
+- **Proof table:** `#k` is in the restart overlap. `F ≥ R`, so it is
+  **post-restart catch-up**. Its listing bound is `(13:49:58, 13:52:20]`, 142 s wide
+  across the gap. Observation minus publication is 111 s, but that is not DTCC's delay.
+  The source listing delay is only bounded, and here its lower bound is negative, so it
+  says nothing.
+- **Verdict:** completeness proven; **live continuity not proven** for `#k`. The `live`
+  label on the panel and the alerts do not change that.
+
+A variant: had `#k` been published at 13:49:50 (`P` before `D`) but listed only after
+13:49:58, the same bound `(N ≤ D < O)` would make it `overlap_uncertain`. We cannot tell
+whether the first run missed it or DTCC listed it during the downtime.
 
 ## 5. What the packet returns
 
@@ -208,7 +289,9 @@ flag alone cannot separate the two, for the reason above.
    originals.
 3. Every unmatched occurrence, listed by ID.
 4. The proof table per channel: rows and slices per segment, provenance split, timing
-   statistics, the labelled rows, and `D`, `R'` and the live bound used.
+   statistics (observation minus publication, bounded source listing delay, listing
+   uncertainty and our fetch delay), the labelled and `overlap_uncertain` rows, and `D`,
+   `R'` and the poll interval used.
 No real payloads go into the public repo; the reports stay with the pilot owners.
 
 **Gap:** `reconcile.py` does not compute the proof table yet. It is derived from the
