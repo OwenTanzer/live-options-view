@@ -104,6 +104,8 @@ ticker.
 
 ## Candidate for the next implementation step
 
+Follow-up: [TRADEWEB_UK_GO_NO_GO.md](TRADEWEB_UK_GO_NO_GO.md) has the datasets, fields, cadence and terms, with the verdict and the named gaps.
+
 **Tradeweb's free UK delayed-data website (`apa.tradeweb.com`), for iTraxx Europe
 Main and Crossover (5y) prints.**
 
