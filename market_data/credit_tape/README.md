@@ -1,0 +1,68 @@
+# Credit tape (OA-242) — prototype
+
+Private, unfiltered tape of public credit derivatives reports. Local prototype only:
+no Railway service, no R2 or KV writes, no change to the options collector.
+Captured data never enters this repository (it is public); tests use synthetic fixtures.
+
+## Components
+
+| File | Role |
+|---|---|
+| `capture.py` | Polls each source, persists every distinct original response (gzip, byte-identical) **before** decoding, appends one event per newly seen publication with first-seen time, raw reference, publisher and jurisdiction. Decode failures still produce an event pointing at the raw payload. Per-source checkpoint, poll log and `health.json`. |
+| `serve_private.py` + `web/` | Recent-trades panel. GitHub identity-only sign-in (PKCE, `scope=""`), numeric-ID allowlist, opaque 8-hour sessions, server-side checks on `/api/trades`, `/api/raw`, `/api/export` and the panel assets. Design copied from directional-move-lab `scripts/serve_private.py@2bdebbe`; no shared session, cookie or OAuth app. `CREDIT_TAPE_DEV_LOCAL=1` serves without sign-in on 127.0.0.1 only. |
+| `tests/test_credit_tape.py` | Raw-before-decode, no duplicate alert on a repeated payload, decode-failure event, backfill label, every data route 401 without a session, non-allowlisted identity refused, Host check, traversal rejection. |
+
+Run locally:
+
+```sh
+python -m market_data.credit_tape.capture --out <private archive dir> --interval 20
+CREDIT_TAPE_ARCHIVE=<same dir> CREDIT_TAPE_DEV_LOCAL=1 python -m market_data.credit_tape.serve_private  # http://127.0.0.1:8790
+```
+
+## U.S. sources (DTCC public price dissemination)
+
+All unauthenticated HTTPS GETs used by the public dashboard at `pddata.dtcc.com/ppd/`.
+
+| Endpoint | Content | Use |
+|---|---|---|
+| `/ppd/api/ticker/CFTC/CREDITS` | JSON `{tradeList, errorList}`, 100 most recent CFTC Part 43 credit records | Live capture (20 s poll) |
+| `/ppd/api/ticker/SEC/CREDITS` | Same for SEC Regulation SBSR security-based swaps (single names, narrow indices) | Live capture (20 s poll) |
+| `/ppd/api/report/intraday/{cftc,sec}/{CFTC,SEC}_SLICE_CREDITS_YYYY_MM_DD_N.zip` | Numbered intraday slice CSVs | Gap recovery, reconciliation |
+| `/ppd/api/report/cumulative/{cftc,sec}/{CFTC,SEC}_CUMULATIVE_CREDITS_YYYY_MM_DD.zip` | Full-day CSV (11-19: 2,638 CFTC, 1,266 SEC rows) | Daily reconciliation |
+
+Observed: the ticker window is not strictly newest-first (older records rotate in), so
+records disseminated before capture start are labelled `backfill`. Caps are published as
+text (`5,000,000+` SEC; `50,000,000+`/`250,000,000+`/`400,000,000+` CFTC; one `4,557,000+`
+seen) and kept verbatim. The `/ppd/api/slice/...` listing route used by the dashboard
+returned 400 for every parameter form tried.
+
+**Terms.** No terms or disclaimer were found on the PPD dashboard or in its app bundle.
+dtcc.com/terms (updated 2026-03-11) says some material is governed by separate agreements.
+DTCC's licensed automated product is OTC Direct Connect (DTCC Solutions, via AWS Data
+Exchange, EULA). No written permission for automated collection, retention or internal
+display was found; the data is regulator-mandated public dissemination. Open for a decision.
+
+## UK sources (inventory, not connected)
+
+Under FCA PS24/14 (in force 1 Dec 2025) five-year iTraxx Europe Main and Crossover are
+Category 1 (real-time post-trade transparency for venues and OTC firms); single-name CDS
+are excluded from Category 1, so single-name UK coverage may be thin or deferred. APAs and
+venues must offer post-trade data free of charge 15 minutes after publication; paid
+real-time feeds exist (e.g. Tradeweb UK APA data set £13,200/yr flat).
+
+| Candidate | Type | Next step |
+|---|---|---|
+| Tradeweb Europe UK APA / UK MTF | APA + venue | Locate free 15-min page; check credit coverage and fields omitted vs paid |
+| Bloomberg APA / Bloomberg Trading Facility | APA + venue | Locate free delayed page |
+| MarketAxess (Trax) APA | APA | Confirm derivatives coverage |
+| TP ICAP, BGC, GFI, Tradition UK venues | OTF/MTF | Check credit post-trade pages |
+
+Not connected yet; no zero-activity inference from missing UK coverage.
+
+## Proposed cloud plan (not activated)
+
+One isolated Railway service (`credit-tape`) running capture + panel, its own volume for
+the private raw archive (or a separate **private** R2 bucket, never `qqq-options-chain-data`
+and never KV), its own GitHub OAuth app and env (`CREDIT_TAPE_*`). No dependency on, or
+writes to, the options collector, Worker, D1 or existing buckets. Rollback = stop the
+service; the archive volume is retained.

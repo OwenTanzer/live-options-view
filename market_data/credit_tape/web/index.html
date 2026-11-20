@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Credit Tape</title>
+<link rel="stylesheet" href="/panel.css">
+</head>
+<body>
+<header>
+  <h1>Credit tape <small>public U.S. credit derivatives reports</small></h1>
+  <div id="health" aria-live="polite">loading…</div>
+</header>
+<p class="note">Unfiltered, as published. Notionals ending in <b>+</b> are capped by the source and are lower bounds. “Backfill” rows were published before capture started. Each row links to the original payload as captured.</p>
+<form id="export">
+  <label>Export first-seen from <input name="from" placeholder="2026-11-20T00:00:00"></label>
+  <label>to <input name="to" placeholder="2026-11-21T00:00:00"></label>
+  <button>Download JSONL</button>
+</form>
+<div class="scroll">
+<table>
+  <thead><tr>
+    <th>First seen (UTC)</th><th>Source</th><th>Action</th><th>Executed</th><th>Disseminated</th>
+    <th>Notional</th><th>Underlier / product</th><th>Expiry</th><th>Coupon</th><th>Original</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</div>
+<script src="/panel.js"></script>
+</body>
+</html>
