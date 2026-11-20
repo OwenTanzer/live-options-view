@@ -18,7 +18,8 @@
     if (ev.kind !== "publication") {
       tr.className = "sys";
       tr.append(cell(t(ev.first_seen)), cell(ev.source), cell(ev.kind));
-      const td = cell(ev.error || (ev.rows ? ev.rows + " rows, no overlap with previous poll" : ""));
+      const td = cell(ev.error || (ev.slice ? `${ev.slice.fileName}: ${ev.decoded_rows} decoded / ${ev.slice.rowCount} published${ev.replay ? " (replay)" : ""}` : "") ||
+        (ev.rows ? ev.rows + " rows, no overlap with previous poll" : ""));
       td.colSpan = 7;
       tr.append(td);
     } else {
@@ -26,8 +27,8 @@
       const notional = [s.notionalAmountLeg1, s.notionalCurrencyLeg1].filter(Boolean).join(" ");
       tr.append(
         cell(t(ev.first_seen)),
-        cell(`${ev.source.replace("dtcc-", "").replace("-credits", "").toUpperCase()} · ${ev.jurisdiction}`),
-        cell(ev.action + (ev.backfill ? " (backfill)" : ""), ev.backfill ? "dim" : ""),
+        cell(`${ev.source.replace("dtcc-", "").replace("-credits", "").toUpperCase()} · ${ev.jurisdiction}${ev.route ? " · " + ev.route : ""}`),
+        cell(ev.action + (ev.replay ? " (replay)" : ev.backfill ? " (backfill)" : ""), ev.backfill || ev.replay ? "dim" : ""),
         cell(t(ev.execution_ts)),
         cell(t(ev.dissemination_ts)),
         cell(notional, /\+$/.test(s.notionalAmountLeg1 || "") ? "capped" : ""),
@@ -42,6 +43,7 @@
       a.rel = "noopener";
       a.textContent = `row ${ev.row_index}`;
       a.title = `${ev.id} in ${ev.raw_ref}`;
+      if (ev.slice) a.textContent = `${ev.slice.fileName} row ${ev.row_index}`;
       td.append(a);
       tr.append(td);
     }
@@ -59,7 +61,7 @@
       first = false;
       const h = data.health || {};
       health.textContent = "collector " + (h.t ? t(h.t) : "unknown") + " · " +
-        Object.entries(h.sources || {}).map(([k, v]) => `${k}: ${v.polls_ok} ok / ${v.polls_err} err`).join(" · ");
+        Object.entries(h.sources || {}).map(([k, v]) => `${k}: ${v.polls_ok} ok${v.not_modified != null ? " / " + v.not_modified + " unchanged" : ""} / ${v.polls_err} err`).join(" · ");
     } catch (e) {
       health.textContent = "panel cannot reach server";
     }

@@ -149,16 +149,24 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--interval", type=float, default=20.0)
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--no-ticker", action="store_true", help="slice-index route only")
+    ap.add_argument("--no-slices", action="store_true", help="ticker route only")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    srcs = [Source(n, c, a.out) for n, c in SOURCES.items()]
+    srcs = [] if a.no_ticker else [Source(n, c, a.out) for n, c in SOURCES.items()]
+    from market_data.credit_tape.slices import SliceRoute
+    slices = None if a.no_slices else SliceRoute(a.out, now, append_jsonl)
     events, alerts = os.path.join(a.out, "events.jsonl"), os.path.join(a.out, "alerts_outbox.jsonl")
     while True:
         for s in srcs:
             s.poll(alerts, events)
+        if slices:
+            slices.poll(events, alerts)
+        health = {s.name: {"polls_ok": s.polls_ok, "polls_err": s.polls_err, "seen": len(s.seen)} for s in srcs}
+        if slices:
+            health["dtcc-slice-index"] = slices.health()
         with open(os.path.join(a.out, "health.json"), "w", encoding="utf-8") as fh:
-            json.dump({"t": now(), "sources": {s.name: {"polls_ok": s.polls_ok, "polls_err": s.polls_err,
-                                                         "seen": len(s.seen)} for s in srcs}}, fh)
+            json.dump({"t": now(), "sources": health}, fh)
         if a.once:
             return 0
         time.sleep(a.interval)

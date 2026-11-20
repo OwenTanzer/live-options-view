@@ -6,7 +6,9 @@ import os
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
+import zipfile
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +16,7 @@ from unittest import mock
 
 from market_data.credit_tape import capture
 from market_data.credit_tape import serve_private as sp
+from market_data.credit_tape import slices
 
 
 def fixture_row(i, action="NEWT", notional="5,000,000+", diss="2099-01-01T00:00:00Z"):
@@ -77,6 +80,100 @@ class CaptureTests(unittest.TestCase):
         run_poll(self.src, json.dumps({"tradeList": [fixture_row(9, diss="2000-01-01T00:00:00Z"), fixture_row(1)]}).encode(), self.out)
         ev = [e for e in lines(os.path.join(self.out, "events.jsonl")) if e["id"] == "FIXTURE9"][0]
         self.assertTrue(ev["backfill"])
+
+
+def fixture_zip(rows):
+    buf = io.StringIO()
+    w = __import__("csv").DictWriter(buf, fieldnames=["Dissemination Identifier", "Action type", "Notional amount-Leg 1",
+                                                      "Odd new column"])
+    w.writeheader()
+    for r in rows:
+        w.writerow(r)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        z.writestr("FIXTURE.csv", buf.getvalue())
+    return out.getvalue()
+
+
+class FakeHTTP:
+    """Serves a synthetic index/slices; records requests; can fail or 304."""
+
+    def __init__(self, index, files, etag='"e1"'):
+        self.index, self.files, self.etag, self.requests, self.fail = index, files, etag, [], set()
+
+    def __call__(self, req, timeout=None):
+        url = req.full_url
+        self.requests.append((url, dict(req.header_items())))
+        if url in self.fail:
+            raise urllib.error.URLError("synthetic outage")
+        if url == slices.INDEX_URL:
+            if req.get_header("If-none-match") == self.etag:
+                raise urllib.error.HTTPError(url, 304, "Not Modified", {}, None)
+            r = FakeResp(json.dumps(self.index).encode())
+            r.headers = {"ETag": self.etag, "Last-Modified": "Fri, 01 Jan 2099 00:00:00 GMT"}
+            return r
+        r = FakeResp(self.files[url])
+        r.headers = {}
+        return r
+
+
+def slice_meta(n, rows, dissem="2000-01-01T00:00:0%dZ", agency="cftc"):
+    name = f"{agency.upper()}_SLICE_CREDITS_2099_01_01_{n}.zip"
+    return {"sliceId": 1000 + n, "fileName": name, "rowCount": rows, "dissemDTM": dissem % n,
+            "startTs": "2099-01-01T00:00:00Z", "endTs": "2099-01-01T00:00:00Z",
+            "fullFilePath": f"https://{slices.SLICE_HOST}/{agency}/slices/{name}"}
+
+
+class SliceRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = self.tmp.name
+        self.ev, self.al = os.path.join(self.out, "events.jsonl"), os.path.join(self.out, "alerts.jsonl")
+
+    def route(self, http):
+        return slices.SliceRoute(self.out, capture.now, capture.append_jsonl, opener=http)
+
+    def test_unseen_slices_persisted_before_decode_rowcount_checked_once(self):
+        m1, m2 = slice_meta(1, 1), slice_meta(2, 3)  # m2 publishes 3 but carries 2 -> mismatch
+        z1 = fixture_zip([{"Dissemination Identifier": "S1", "Action type": "NEWT", "Notional amount-Leg 1": "5,000,000+", "Odd new column": "Q"}])
+        z2 = fixture_zip([{"Dissemination Identifier": "S2", "Action type": "CORR"}, {"Dissemination Identifier": "S3", "Action type": "TERM"}])
+        http = FakeHTTP({"CFTC_CR": [m2, m1], "SEC_CR": []}, {m1["fullFilePath"]: z1, m2["fullFilePath"]: z2})
+        r = self.route(http)
+        r.poll(self.ev, self.al)
+        r.poll(self.ev, self.al)  # conditional request -> 304, nothing refetched
+        self.assertEqual(http.requests[-1][1].get("If-none-match"), '"e1"')
+        evs = lines(self.ev)
+        pubs = [e for e in evs if e["kind"] == "publication"]
+        self.assertEqual([e["id"] for e in pubs], ["S1", "S2", "S3"])  # sliceId order
+        self.assertEqual(pubs[0]["record"]["Odd new column"], "Q")
+        self.assertEqual(pubs[0]["record"]["Notional amount-Leg 1"], "5,000,000+")
+        self.assertEqual(sp.read_raw(Path(self.out), pubs[0]["raw_ref"]), z1)
+        mism = [e for e in evs if e["kind"] == "rowcount_mismatch"]
+        self.assertEqual([(e["slice"]["fileName"], e["decoded_rows"]) for e in mism], [(m2["fileName"], 2)])
+        self.assertTrue(all(e["replay"] for e in pubs))  # published before collector start
+        self.assertEqual([a["kind"] for a in lines(self.al)], ["rowcount_mismatch"])  # replays don't alert rows
+        self.assertEqual(sum(1 for u, _ in http.requests if u.endswith(".zip")), 2)
+
+    def test_foreign_host_rejected_and_outage_resumes_in_order(self):
+        bad = dict(slice_meta(1, 1), fullFilePath="https://evil.example/cftc/slices/x.zip")
+        m2, m3 = slice_meta(2, 1, "2999-01-01T00:00:0%dZ"), slice_meta(3, 1, "2999-01-01T00:00:0%dZ")
+        z = fixture_zip([{"Dissemination Identifier": "L", "Action type": "NEWT"}])
+        http = FakeHTTP({"CFTC_CR": [bad, m2, m3], "SEC_CR": []}, {m2["fullFilePath"]: z, m3["fullFilePath"]: z})
+        http.fail.add(m2["fullFilePath"])
+        r = self.route(http)
+        r.poll(self.ev, self.al)
+        self.assertEqual([e["kind"] for e in lines(self.ev)], ["slice_rejected"])
+        self.assertNotIn(m3["sliceId"], r.seen)  # stopped at the failed slice
+        http.fail.clear()
+        http.etag = '"e2"'
+        r.backoff_until = 0
+        r.poll(self.ev, self.al)
+        live = [e for e in lines(self.ev) if e["kind"] == "publication"]
+        self.assertEqual([e["slice"]["sliceId"] for e in live], [1002, 1003])
+        self.assertFalse(any(e["replay"] for e in live))
+        self.assertEqual(len([a for a in lines(self.al) if a["kind"] == "publication"]), 2)
+        self.assertFalse(any("evil" in u for u, _ in http.requests))
 
 
 class ServerTests(unittest.TestCase):

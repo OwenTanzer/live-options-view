@@ -40,7 +40,14 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
 SESSION_COOKIE = "__Host-cds-session"
 FLOW_COOKIE = "__Host-cds-flow"
 GITHUB_ISSUER = "https://github.com/login/oauth"
-RAW_REF = re.compile(r"^[a-z0-9-]{1,40}/raw/\d{4}-\d{2}-\d{2}/[0-9A-Za-z.+_-]{1,80}\.json\.gz$")
+RAW_REF = re.compile(r"^[a-z0-9-]{1,40}/raw/\d{4}-\d{2}-\d{2}/[0-9A-Za-z.+_-]{1,80}\.(json\.gz|zip)$")
+# Slice CSV headers -> the ticker's field names used by the panel summary.
+CSV_ALIASES = {"notionalAmountLeg1": "Notional amount-Leg 1", "notionalCurrencyLeg1": "Notional currency-Leg 1",
+               "underlierIDLeg1": "Underlier ID-Leg 1", "underlyingAssetName": "Underlying Asset Name",
+               "expirationDate": "Expiration Date", "fixedRateLeg1": "Fixed rate-Leg 1", "price": "Price",
+               "platformIdentifier": "Platform identifier", "cleared": "Cleared",
+               "blocktradeElectionIndicator": "Block trade election indicator",
+               "uniqueProductIdentifierShortName": "UPI FISN", "productName": "Product name"}
 MAX_ROWS = 500
 EXPORT_LIMIT = 64 * 1024 * 1024
 
@@ -193,11 +200,12 @@ def read_events(archive: Path, after: int = 0, limit: int = MAX_ROWS):
                 continue
             rec = ev.pop("record", None) or {}
             ev["seq"] = seq
-            ev["summary"] = {k: rec.get(k) for k in (
-                "notionalAmountLeg1", "notionalCurrencyLeg1", "underlierIDLeg1", "underlyingAssetName",
-                "expirationDate", "fixedRateLeg1", "price", "platformIdentifier", "cleared",
-                "blocktradeElectionIndicator", "uniqueProductIdentifierShortName", "productName")
-                if rec.get(k) not in (None, "")}
+            summary = {}
+            for k, alias in CSV_ALIASES.items():
+                v = rec.get(k, rec.get(alias))
+                if v not in (None, ""):
+                    summary[k] = v
+            ev["summary"] = summary
             out.append(ev)
     return out[-limit:], seq
 
@@ -208,6 +216,8 @@ def read_raw(archive: Path, ref: str) -> bytes:
     target = (archive / ref).resolve()
     if not target.is_relative_to(archive.resolve()) or target.is_symlink():
         raise ValueError("Invalid reference")
+    if ref.endswith(".zip"):
+        return target.read_bytes()  # slice zip exactly as published
     with gzip.open(target, "rb") as fh:
         return fh.read()
 
@@ -335,9 +345,10 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                 if url.path == "/api/raw":
                     ref = q.get("ref", [""])[0]
                     blob = read_raw(settings.archive, ref)
-                    return self.reply(200, blob, "application/json", headers=[
+                    is_zip = ref.endswith(".zip")
+                    return self.reply(200, blob, "application/zip" if is_zip else "application/json", headers=[
                         ("X-Original-SHA256", hashlib.sha256(blob).hexdigest()),
-                        ("Content-Disposition", f'inline; filename="{Path(ref).name[:-3]}"')])
+                        ("Content-Disposition", f'{"attachment" if is_zip else "inline"}; filename="{Path(ref).name if is_zip else Path(ref).name[:-3]}"')])
                 if url.path == "/api/export":
                     blob = export_events(settings.archive, q.get("from", [""])[0], q.get("to", [""])[0])
                     return self.reply(200, blob, "application/x-ndjson", headers=[
