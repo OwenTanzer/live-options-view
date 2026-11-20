@@ -20,6 +20,8 @@ ticker.
 
 ### CME Repository Services (CME SDR)
 
+Paper check: [CME_CREDIT_ROUTE.md](CME_CREDIT_ROUTE.md). The credit files are daily (reconciliation-only), there is no documented intraday machine-readable surface, and CME's Data Terms prohibit automated access without written permission.
+
 - **Status:** CFTC-registered SDR for Credit, Rates, FX, Commodity and Equity.
   (Official: [CME repository page](https://www.cmegroup.com/market-data/repository/data.html).)
   CME closed its EU and Australian repositories but kept the U.S. SDR (press reports).
