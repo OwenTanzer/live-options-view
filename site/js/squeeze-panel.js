@@ -90,6 +90,20 @@ function renderSqueezePanel() {
   warningEl.textContent = failureNotice || '';
   warningEl.classList.toggle('hidden', !failureNotice);
 
+  // Results from an earlier session must look old, not just be preceded by a
+  // warning: the table is dimmed and captioned with its scan date.
+  const currentDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(squeezeNow()));
+  const scanDay = squeezePointer && squeezePointer.session_date;
+  const staleResults = Boolean(scanDay && scanDay < currentDay);
+  const tableEl = document.getElementById('squeeze-table');
+  if (tableEl) tableEl.classList.toggle('squeeze-stale', staleResults);
+  const captionEl = document.getElementById('squeeze-caption');
+  if (captionEl) {
+    captionEl.textContent = scanDay
+      ? `${staleResults ? 'Earlier session — ' : ''}results from the ${scanDay} scan (New York)`
+      : '';
+  }
+
   const rows = (squeezePointer && squeezePointer.candidates) || [];
   if (!rows.length) {
     tbody.innerHTML = squeezePointer ? '<tr><td colspan="6" class="squeeze-empty">No eligible candidates in the latest scan.</td></tr>' : '<tr><td colspan="6" class="squeeze-empty">No scan published yet.</td></tr>';
@@ -107,7 +121,6 @@ function renderSqueezePanel() {
     // the row's own data, not tracked state, so it stays stable across
     // any number of polls of the same run.
     const firstSeen = formatSqueezeFirstSeen(row);
-    const currentDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(squeezeNow()));
     const firstSeenHtml = (firstSeen.isNew && squeezePointer.session_date === currentDay ? '<span class="squeeze-new-badge">New</span> ' : '') + escapeHtml(firstSeen.text);
     return `<tr>
       <td><a href="https://www.tradingview.com/symbols/${encodeURIComponent(row.ticker)}/" target="_blank" rel="noopener">${escapeHtml(row.ticker)}</a></td>

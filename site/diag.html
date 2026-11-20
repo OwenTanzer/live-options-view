@@ -28,6 +28,7 @@
   .pending { color: #e8c84b; }
   .pass { color: #00cc55; font-weight: 600; }
   .fail { color: #ee3300; font-weight: 600; }
+  .warn { color: #e8a33b; font-weight: 600; }
   .detail { color: #6e7681; font-size: 0.78rem; word-break: break-all; }
   #verdict {
     margin-top: 0.75rem;
@@ -186,7 +187,9 @@ async function testCors(url) {
   try {
     const resp = await fetch(url, { mode: 'cors', cache: 'no-store' });
     const ms = Math.round(performance.now() - start);
-    return { ok: true, detail: `HTTP ${resp.status} · ${ms}ms · type=${resp.type}` };
+    // Reaching the server is not the same as being served: a 4xx/5xx is
+    // reachable but not OK, and must not be labelled as a pass.
+    return { ok: true, served: resp.ok, detail: `HTTP ${resp.status} · ${ms}ms · type=${resp.type}` };
   } catch (e) {
     const ms = Math.round(performance.now() - start);
     return { ok: false, detail: `${e.name}: ${e.message} · ${ms}ms` };
@@ -239,28 +242,33 @@ function testImg(url) {
 
     const setResult = (key, r) => {
       const el = div.querySelector(`[data-k="${key}"]`);
-      el.className = r.ok ? 'pass' : 'fail';
-      el.textContent = r.ok ? 'OK' : 'FAILED';
+      const state = !r.ok ? 'fail' : r.served === false ? 'warn' : 'pass';
+      el.className = state;
+      el.textContent = state === 'pass' ? 'OK' : state === 'warn' ? 'REACHED · NOT OK' : 'FAILED';
       el.insertAdjacentHTML('afterend', `<span class="detail"> — ${r.detail}</span>`);
     };
     setResult('cors', cors);
     setResult('nocors', nocors);
     setResult('img', img);
 
-    results.push({ name: t.name, cors: cors.ok, nocors: nocors.ok });
+    results.push({ name: t.name, cors: cors.ok, corsServed: cors.served, corsDetail: cors.detail, nocors: nocors.ok });
   }
 
   const verdict = document.getElementById('verdict');
   const direct = results.filter(r => !r.name.includes('proxy'));
   const proxy  = results.filter(r => r.name.includes('proxy'));
   const allDirectFail = direct.every(r => !r.cors);
+  const directServed = direct.every(r => r.cors && r.corsServed !== false);
   const allDirectNoCorsOk = direct.every(r => r.nocors);
-  const proxyOk = proxy.every(r => r.cors);
+  // Served, not merely reached: a 403 from the proxy is not a working path.
+  const proxyOk = proxy.length > 0 && proxy.every(r => r.cors && r.corsServed !== false);
 
   if (direct.every(r => !r.cors && !r.nocors)) {
     verdict.innerHTML = "<b>Nothing reached the direct-R2 server</b> (no-cors also failed) — points to a network/DNS block on this device/connection for the r2.dev hostname specifically, not CORS. Check DNS profiles, VPNs, or carrier filtering." + (proxyOk ? " The same-origin proxy path <b>did</b> succeed — same data, reached through this site's own domain instead of r2.dev." : "");
   } else if (allDirectFail && allDirectNoCorsOk) {
     verdict.innerHTML = "<b>Confirmed: CORS is blocking direct R2 access</b> — no-cors reached the server fine, but the CORS-checked fetch failed on every direct target." + (proxyOk ? " The same-origin proxy path succeeded, which sidesteps this entirely." : "");
+  } else if (!allDirectFail && !directServed) {
+    verdict.innerHTML = "<b>Direct R2 reached but not every target was served</b> — at least one request got an HTTP error status (see the amber REACHED · NOT OK rows above). That is a server/permission answer, not a network or CORS failure.";
   } else if (!allDirectFail) {
     verdict.innerHTML = "<b>Direct R2 fetch succeeded here</b> — if the live site is still failing for you right now, this was a one-time snapshot and won't catch something intermittent. Start the live monitor below and leave it running until it happens again.";
   } else {
@@ -467,7 +475,8 @@ function buildReportText() {
   lines.push('== Section 1: One-shot reachability ==');
   if (!oneShotResults.length) lines.push('(not finished running yet)');
   for (const r of oneShotResults) {
-    lines.push(`  ${r.name}: cors=${r.cors ? 'OK' : 'FAIL'} · no-cors=${r.nocors ? 'OK' : 'FAIL'}`);
+    const cors = !r.cors ? 'FAIL' : r.corsServed === false ? `REACHED-NOT-OK (${r.corsDetail.split(' · ')[0]})` : 'OK';
+    lines.push(`  ${r.name}: cors=${cors} · no-cors=${r.nocors ? 'OK' : 'FAIL'}`);
   }
   lines.push('');
 

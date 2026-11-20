@@ -242,6 +242,7 @@
     </footer>
     <h2 id="profile-title">Strike profile</h2>
     <span id="profile-scale"></span>
+    <p id="profile-range" class="gap" role="status" hidden></p>
     <div class="profile-legend">
       <span><b class="sell">◀ negative</b> / <b class="buy">positive ▶</b> estimated flow gamma: bar = dealer flow S−B at the selected participation; participation scales flow only</span>
       <span><b class="unknown">▬</b> neutral bar: the scenario endpoints cross zero, so the sign is not determined</span>
@@ -640,8 +641,19 @@
       });
       // QQQ spot between strikes, from the same snapshot as the values.
       const spot = view && view.contracts.find((c) => c.spot != null)?.spot;
-      if (spot != null) {
+      const rangeNote = el("profile-range");
+      rangeNote.hidden = true;
+      if (spot != null && rows.length) {
         const ks = rows.map((r) => r.strike);
+        // The collector fixes the day's contracts at the open, so a large move
+        // can leave spot outside every recorded strike. Say so in words, not
+        // only as a small label on the chart's edge.
+        if (spot > ks[0] || spot < ks[ks.length - 1]) {
+          rangeNote.textContent = "QQQ " + spot.toFixed(2) + " is " + (spot > ks[0] ? "above" : "below") +
+            " every strike recorded today (" + ks[ks.length - 1] + "–" + ks[0] + "). The day's contracts are fixed at the open, " +
+            "so nothing nearer the current price is being recorded; this profile shows the recorded strikes only.";
+          rangeNote.hidden = false;
+        }
         let y = null;
         for (let k = 0; k < ks.length - 1; k++)
           if (spot <= ks[k] && spot >= ks[k + 1]) y = top + k * rowH + rowH / 2 + ((ks[k] - spot) / (ks[k] - ks[k + 1])) * rowH;

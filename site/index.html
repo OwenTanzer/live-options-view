@@ -950,6 +950,9 @@
   #squeeze-table td a { color: #58a6ff; text-decoration: none; }
   #squeeze-table td a:hover { text-decoration: underline; }
   .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  #squeeze-caption { caption-side: top; text-align: left; color: var(--dim); font-size: 0.74rem; padding: 0 0 6px; }
+  #squeeze-table.squeeze-stale tbody { opacity: 0.55; filter: saturate(0.3); }
+  #squeeze-table.squeeze-stale #squeeze-caption { color: #e8c84b; }
   .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
   .squeeze-new-badge {
     background: #167a3f;
@@ -1520,6 +1523,7 @@
     comparisons are archived separately and not shown here.
   </div>
   <table id="squeeze-table">
+    <caption id="squeeze-caption"></caption>
     <thead>
       <tr>
         <th>Ticker</th>
@@ -1696,7 +1700,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/squeeze-panel.js?v=29307f6a6d2645a7"></script>
+<script src="js/squeeze-panel.js?v=482ae52ec5b1fae1"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────

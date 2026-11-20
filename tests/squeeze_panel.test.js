@@ -89,5 +89,7 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
   panel.now='2026-09-24T12:00:00Z';await panel.fetchSqueezeLatest();
   assert.equal(el('squeeze-status').dataset.state,'stale');
   assert.doesNotMatch(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  assert.equal(el('squeeze-caption').textContent,'Earlier session — results from the 2026-09-23 scan (New York)',
+    'a prior-session shortlist is captioned with its scan date and marked as earlier');
   console.log('PASS scheduled panel: atomic fetches, concurrency, statuses, rows, escaping and prior-session badges');
 })().catch(e=>{console.error(e);process.exitCode=1;});
