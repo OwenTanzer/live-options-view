@@ -1,6 +1,8 @@
 # One-day identification key: iTraxx Europe Main and Crossover 5y in UK post-trade rows (OA-242)
 
-Desk-only, 2026-11-20. Prepared for the single TREU business-day check proposed in
+Desk-only, 2026-11-20. **Status: UK sample lane paused after review.** The approved TREU
+viewer showed delayed reports, but the full-day CSV route was unavailable and no target
+rows were verified. No DSB account or lookup is authorised. Prepared for the single TREU business-day check proposed in
 [UK_DECISION_TABLE.md](UK_DECISION_TABLE.md), which is pending Owen's approval. It uses
 **no Tradeweb data**, and involved no terms acceptance, outreach or implementation.
 Sources are official product and regulatory references, read as search-indexed text.
@@ -89,9 +91,11 @@ Undecided rows are listed with their raw identifier and the reason.
   - `VOLO`: "Transaction for which limited details are published".
   - `FULV`: "Transaction for which limited details have been previously published".
   - PS24/14 deleted all other supplementary deferral flags.
-- **Link key:** (venue of publication MIC, transaction identification code). The TIC is
-  assigned by the trading venue or APA, so it is unique only within one publisher. The
-  MIC must be part of the key.
+- **Link key (corrected after review):** (venue of publication MIC, **original trading
+  day**, transaction identification code). MAR 11 Annex 2 scopes the TIC to the
+  publishing venue or APA **and** the trading day, so both belong in the key. Use the
+  original trading day from the trading date and time field, **not** the date the FULV
+  report is published.
 - **Count rule:** one trade per link key, dated by its **original trading date and
   time** (not the publication time). The VOLO row is the first sighting (first-seen and
   publication time recorded). The FULV row supplies the omitted volume and is

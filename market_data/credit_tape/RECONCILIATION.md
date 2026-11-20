@@ -8,6 +8,8 @@ ZIPs). DTCC's daily **cumulative** file is used **only to reconcile** a complete
 
 Tool: `python -m market_data.credit_tape.reconcile` (`reconcile.py`).
 
+Pilot run plan for 2026-11-20: [PILOT_RECON_PACKET_2026-11-20.md](PILOT_RECON_PACKET_2026-11-20.md).
+
 ## What a report contains, per channel (`CFTC_CR`, `SEC_CR`) and completed UTC day
 
 Three parts are kept apart, and anything not proven is reported as **unknown**.
