@@ -24,19 +24,23 @@ const { createHash } = require('node:crypto');
       t('not a time'),
       t('2026-11-20T15:02:00Z', { qty: 0 }),
       t('2026-11-20T15:03:00Z', { price: null }),
-      t('2026-11-20T15:04:00Z'),
+      t('2026-11-20T15:04:00Z', { execution_id: 'settle:example', status: undefined,
+        instrument_type: { unexpected: true }, type: ['call'], strike: { unexpected: true } }),
     ], now);
     assert.equal(out.session_fills_truncated, false);
     assert.deepEqual(out.session_fills.map(f => f.ts),
       ['2026-11-20T05:10:00.000Z', '2026-11-20T15:04:00.000Z'],
       'only filled buy/sell executions from the New York day, with valid qty and price');
     assert.deepEqual(Object.keys(out.session_fills[0]).sort(),
-      ['instrument_type', 'price', 'qty', 'side', 'strike', 'sym', 'ts', 'type'],
+      ['instrument_type', 'kind', 'price', 'qty', 'side', 'strike', 'sym', 'ts', 'type'],
       'no quote internals or request ids reach the public roster');
 
+    assert.deepEqual(out.session_fills.map(f => f.kind), ['fill', 'settlement']);
+    assert.deepEqual([out.session_fills[1].instrument_type, out.session_fills[1].type, out.session_fills[1].strike],
+      ['option', null, null], 'unexpected historical values cannot propagate through display fields');
     const many = Array.from({ length: MAX_SESSION_FILLS + 5 }, (_, i) =>
       t(new Date(Date.parse('2026-11-20T15:00:00Z') + i * 1000).toISOString(), { price: i }));
-    const capped = sessionFills(many, now);
+    const capped = sessionFills(many.reverse(), now);
     assert.equal(capped.session_fills.length, MAX_SESSION_FILLS);
     assert.equal(capped.session_fills_truncated, true);
     assert.equal(capped.session_fills[0].price, 5, 'the newest fills are kept');
@@ -107,8 +111,9 @@ const { createHash } = require('node:crypto');
       session_fills: [fill('2026-11-20T15:00:00Z', C, 'sell', 2)],
     };
     const r = floor.bfReplay(bot, Date.parse('2026-11-20T19:52:00Z'));
-    assert.deepEqual(r.events.map(e => e.kind), ['entry']);
+    assert.deepEqual(r.events.map(e => [e.kind, e.fill.qty]), [['exit', 1], ['entry', 1]]);
     assert.equal(r.segments.length, 2);
+    assert.equal(r.coverage, 'partial');
     assert.equal(r.truncatedFromMs, Date.parse('2026-11-20T15:00:00Z'));
     assert.equal(floor.bfSide(bot), 'SHORT CALL');
   }
@@ -122,7 +127,7 @@ const { createHash } = require('node:crypto');
         session_fills: [fill('2026-11-20T19:44:00Z', C, 'buy', 1, 1.7)] } },
       { complete: true, equity: 9950, bot: { alias: 'Stop', starting_balance: 10000, positions: [],
         session_fills: [fill('2026-11-20T15:05:00Z', C, 'buy', 1, 1.42), fill('2026-11-20T19:41:00Z', C, 'sell', 1, 0.92)] } },
-      { complete: false, equity: null, bot: { alias: 'Pending', starting_balance: 10000, positions: [{ sym: P, qty: 1 }] } },
+      { complete: false, equity: null, bot: { alias: 'Pending', starting_balance: 10000, positions: [{ sym: P, qty: 1 }], session_fills: [] } },
     ];
     const out = floor.bfFloorHtml(scored, { as_of: '2026-11-20T19:51:30Z' }, () => 1.77, now);
     assert.ok(!out.includes(evil) && out.includes('&lt;img'), 'aliases are escaped');
@@ -138,6 +143,26 @@ const { createHash } = require('node:crypto');
     assert.ok(lanes.includes('bf-seg-closed') && lanes.includes('bf-seg-put'));
     assert.ok(!lanes.includes(evil));
     assert.ok(floor.bfFloorHtml([], null, () => null, now).includes('NO FILLS YET THIS SESSION'));
+  }
+
+  // Missing backend fields and partial results must not look like full-day zeroes.
+  {
+    const now = Date.parse('2026-11-20T19:52:00Z');
+    const scored = [{ complete: true, equity: 100, bot: { alias: 'Old API', starting_balance: 100,
+      positions: [{ sym: C, qty: 1 }] } }];
+    const oldFloor = floor.bfFloorHtml(scored, null, () => null, now);
+    const oldLanes = floor.bfLanesHtml(scored, null, now);
+    assert.ok(oldFloor.includes('Fill history unavailable.'));
+    assert.ok(!oldFloor.includes('NO FILLS TODAY'));
+    assert.ok(oldLanes.includes('History unavailable') && !oldLanes.includes('class="bf-seg '));
+    const bot = { alias: 'Settled', starting_balance: 100, positions: [], session_fills_truncated: true,
+      session_fills: [{ ...fill('2026-11-20T19:00:00Z', C, 'sell', 1, 0), kind: 'settlement' }] };
+    const replay = floor.bfReplay(bot, now);
+    assert.deepEqual(replay.events.map(e => e.kind), ['settlement']);
+    assert.equal(replay.segments[0].settled, true, 'settlement closes the book lane without showing an execution exit');
+    const partial = [{ ...scored[0], bot }];
+    assert.ok(floor.bfFloorHtml(partial, null, () => null, now).includes('0<small> · partial</small>'));
+    assert.ok(floor.bfLanesHtml(partial, null, now).includes('Partial fill history.'));
   }
 
   // View switching persists per viewer and only draws when selected.

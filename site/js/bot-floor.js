@@ -63,7 +63,10 @@ function bfSide(bot) {
 
 // Replays today's fills into entry/exit events and held segments.
 function bfReplay(bot, nowMs) {
-  const fills = Array.isArray(bot.session_fills) ? bot.session_fills : [];
+  if (!Array.isArray(bot.session_fills)) {
+    return { events: [], segments: [], coverage: 'unavailable', truncatedFromMs: null, nowMs };
+  }
+  const fills = bot.session_fills;
   const net = new Map();
   for (const f of fills) net.set(f.sym, (net.get(f.sym) || 0) + (f.side === 'buy' ? f.qty : -f.qty));
   const held = new Map();
@@ -85,28 +88,48 @@ function bfReplay(bot, nowMs) {
     const before = qty.get(f.sym) || 0;
     const after = before + (f.side === 'buy' ? f.qty : -f.qty);
     qty.set(f.sym, after);
-    let kind;
-    if (before === 0 && after !== 0) kind = 'entry';
-    else if (before !== 0 && after === 0) kind = 'exit';
-    else if (before !== 0 && Math.sign(before) !== Math.sign(after)) kind = 'entry';
-    else kind = Math.abs(after) > Math.abs(before) ? 'add' : 'reduce';
-    if (before !== 0 && (after === 0 || Math.sign(before) !== Math.sign(after))) {
+    const settlement = f.kind === 'settlement';
+    const flip = before !== 0 && after !== 0 && Math.sign(before) !== Math.sign(after);
+    if (before !== 0 && (after === 0 || flip)) {
       const seg = open.get(f.sym);
-      if (seg) segments.push({ ...seg, endMs: ms });
+      if (seg) segments.push({ ...seg, endMs: ms, settled: settlement });
       open.delete(f.sym);
     }
     if (after !== 0 && !open.has(f.sym)) {
       open.set(f.sym, { sym: f.sym, startMs: ms, carried: false, sign: Math.sign(after) });
     }
-    events.push({ ms, kind, fill: f, bot });
+    const event = (kind, qty = f.qty) => events.push({ ms, kind, fill: { ...f, qty }, bot });
+    if (settlement) event('settlement');
+    else if (flip) {
+      event('exit', Math.abs(before));
+      event('entry', Math.abs(after));
+    } else if (before === 0 && after !== 0) event('entry');
+    else if (before !== 0 && after === 0) event('exit');
+    else event(Math.abs(after) > Math.abs(before) ? 'add' : 'reduce');
   }
   for (const seg of open.values()) segments.push({ ...seg, endMs: null });
   const truncated = bot.session_fills_truncated === true && fills.length
     ? Date.parse(fills[0].ts) : null;
-  return { events, segments, truncatedFromMs: Number.isFinite(truncated) ? truncated : null, nowMs };
+  return { events, segments, coverage: bot.session_fills_truncated === true ? 'partial' : 'complete', truncatedFromMs: Number.isFinite(truncated) ? truncated : null, nowMs };
 }
 
-function bfKindIsEntry(kind) { return kind === 'entry' || kind === 'add'; }
+function bfKindClass(kind) {
+  return kind === 'settlement' ? 'bf-dim' : kind === 'entry' || kind === 'add' ? 'bf-in' : 'bf-out';
+}
+
+const BF_KIND_LABEL = { entry: 'IN', exit: 'OUT', add: 'ADD', reduce: 'TRIM', settlement: 'SETTLE' };
+
+function bfCoverage(rows) {
+  if (!rows.some(r => r.replay.coverage !== 'complete')) return 'complete';
+  return rows.every(r => r.replay.coverage === 'unavailable') ? 'unavailable' : 'partial';
+}
+
+function bfCoverageNote(coverage) {
+  if (coverage === 'complete') return '';
+  return `<div class="bf-dim" role="status">${coverage === 'unavailable'
+    ? 'Fill history unavailable. Current positions and P&amp;L can still be shown.'
+    : 'Partial fill history. Counts and lanes cover only the fills available; earlier or unavailable activity is not shown.'}</div>`;
+}
 
 function bfPnl(s) {
   return s.complete ? s.equity - s.bot.starting_balance : null;
@@ -130,6 +153,7 @@ function bfEventText(e) {
   const f = e.fill;
   const verb = f.side === 'buy' ? 'BUY' : 'SELL';
   const tag = e.kind === 'exit' ? ' EXIT' : e.kind === 'entry' ? ' ENTRY' : '';
+  if (e.kind === 'settlement') return `${bfHm(e.ms)} ${String(e.bot.alias).toUpperCase()} SETTLE ${bfContract(f.sym, f.qty)} @${fmtQ(f.price)}`;
   return `${bfHm(e.ms)} ${String(e.bot.alias).toUpperCase()} ${verb} ${bfContract(f.sym, f.qty)} @${fmtQ(f.price)}${tag}`;
 }
 
@@ -142,10 +166,11 @@ function bfHeader(title, data, nowMs) {
   </div>`;
 }
 
-function bfTape(events) {
+function bfTape(events, coverage) {
   const items = events.slice(0, BF_TAPE_ITEMS).map(e =>
-    `<span class="${bfKindIsEntry(e.kind) ? 'bf-in' : 'bf-out'}">${escapeHtml(bfEventText(e))}</span>`).join('');
-  if (!items) return '<div class="bf-tape"><div class="bf-tape-empty">NO FILLS YET THIS SESSION</div></div>';
+    `<span class="${bfKindClass(e.kind)}">${escapeHtml(bfEventText(e))}</span>`).join('');
+  if (!items) return `<div class="bf-tape"><div class="bf-tape-empty">${coverage === 'complete'
+    ? 'NO FILLS YET THIS SESSION' : 'FILL HISTORY UNAVAILABLE OR PARTIAL'}</div></div>`;
   // Two copies make the crawl seamless; the log below is the accessible copy.
   return `<div class="bf-tape" aria-hidden="true"><div class="bf-crawl">${items}${items}</div></div>`;
 }
@@ -158,6 +183,7 @@ function bfCollect(scored, nowMs) {
 
 function bfFloorHtml(scored, data, markFn, nowMs) {
   const { rows, events } = bfCollect(scored, nowMs);
+  const coverage = bfCoverage(rows);
   const live = rows.filter(r => !r.s.bot.account_closed);
   const inPos = live.filter(r => (r.s.bot.positions || []).length).length;
   const entries = events.filter(e => e.kind === 'entry').length;
@@ -166,10 +192,12 @@ function bfFloorHtml(scored, data, markFn, nowMs) {
   const floorPnl = marked.reduce((t, r) => t + bfPnl(r.s), 0);
   const pending = rows.length - marked.length;
 
+  const count = n => coverage === 'unavailable' ? '—' :
+    coverage === 'partial' ? `${n}<small> · partial</small>` : String(n);
   const stats = [
     ['BOTS IN A POSITION', `${inPos} / ${live.length}`, 'bf-amber'],
-    ['ENTRIES TODAY', String(entries), 'bf-red'],
-    ['EXITS TODAY', String(exits), 'bf-blue'],
+    ['ENTRIES TODAY', count(entries), 'bf-red'],
+    ['EXITS TODAY', count(exits), 'bf-blue'],
     ['FLOOR P&amp;L SINCE START', escapeHtml(bfMoney(floorPnl)) + (pending ? `<small> · ${pending} pending</small>` : ''),
       floorPnl >= 0 ? 'bf-green' : 'bf-red'],
   ].map(([label, value, cls]) => `<div class="bf-stat"><div class="bf-stat-label">${label}</div>
@@ -180,41 +208,43 @@ function bfFloorHtml(scored, data, markFn, nowMs) {
     const pnl = bfPnl(s);
     const last = replay.events[replay.events.length - 1];
     const recent = last && nowMs - last.ms <= BF_RECENT_MS && nowMs >= last.ms;
-    const edge = recent ? (bfKindIsEntry(last.kind) ? 'bf-edge-in' : 'bf-edge-out') : '';
+    const edge = recent ? (last.kind === 'entry' ? 'bf-edge-in' : last.kind === 'exit' ? 'bf-edge-out' : '') : '';
     const ps = bot.positions || [];
     const p = ps.length === 1 ? ps[0] : null;
     const mark = p ? markFn(p.sym) : null;
     const contract = !ps.length ? '—' : p ? bfContract(p.sym, p.qty) : `${ps.length} legs`;
     const event = last
-      ? `${last.kind === 'entry' ? 'IN' : last.kind === 'exit' ? 'OUT' : last.kind === 'add' ? 'ADD' : 'TRIM'} ${bfHm(last.ms)}`
-      : bot.account_closed ? 'CLOSED' : 'NO FILLS TODAY';
+      ? `${BF_KIND_LABEL[last.kind]} ${bfHm(last.ms)}`
+      : bot.account_closed ? 'CLOSED' : replay.coverage === 'complete' ? 'NO FILLS TODAY' : 'FILLS UNAVAILABLE';
     const side = bfSide(bot);
     const sideCls = side.endsWith('CALL') ? 'bf-tag-call' : side.endsWith('PUT') ? 'bf-tag-put' : side === 'FLAT' ? 'bf-tag-flat' : 'bf-tag-other';
     return `<div class="bf-tile ${edge}${bot.account_closed ? ' bf-closed' : ''}" style="background:${bfHeat(pnl, bot.starting_balance, 0.55)}">
       <div class="bf-tile-top"><span class="bf-alias">${escapeHtml(bot.alias)}</span><span class="bf-tag ${sideCls}">${side}</span></div>
       <div class="bf-tile-mid"><span class="bf-pnl">${escapeHtml(bfMoney(pnl))}</span><span>${escapeHtml(contract)}</span></div>
       <div class="bf-tile-low"><span>IN ${p && p.avg_price != null ? fmtQ(p.avg_price) : '—'} · MK ${mark != null ? fmtQ(mark) : '—'}</span>
-        <span class="${recent ? 'bf-flash ' : ''}${last ? (bfKindIsEntry(last.kind) ? 'bf-in' : 'bf-out') : ''}">${event}</span></div>
+        <span class="${recent ? 'bf-flash ' : ''}${last ? bfKindClass(last.kind) : ''}">${event}</span></div>
     </div>`;
   }).join('');
 
   const log = events.slice(0, BF_LOG_ROWS).map(e => {
     const f = e.fill;
     return `<li><span class="bf-dim">${bfHm(e.ms)}</span>
-      <span class="${bfKindIsEntry(e.kind) ? 'bf-in' : 'bf-out'} bf-log-tag">${bfKindIsEntry(e.kind) ? 'IN' : 'OUT'}</span>
+      <span class="${bfKindClass(e.kind)} bf-log-tag">${BF_KIND_LABEL[e.kind]}</span>
       <span class="bf-log-text">${escapeHtml(e.bot.alias)} ${escapeHtml(bfContract(f.sym))} @${fmtQ(f.price)}</span></li>`;
-  }).join('') || '<li class="bf-dim">No fills yet this session.</li>';
+  }).join('') || (coverage === 'complete' ? '<li class="bf-dim">No fills yet this session.</li>'
+    : '<li class="bf-dim">No fills in the available history.</li>');
 
   return `<div class="bf-wall">
     ${bfHeader('MOOPERTONIC · BOT DESK', data, nowMs)}
-    ${bfTape(events)}
+    ${bfTape(events, coverage)}
+    ${bfCoverageNote(coverage)}
     <div class="bf-body">
       <div class="bf-main">
         <div class="bf-stats">${stats}</div>
         <div class="bf-grid">${tiles}</div>
       </div>
-      <section class="bf-log" aria-label="Entry and exit log, New York time">
-        <h4>ENTRY / EXIT LOG · ET</h4>
+      <section class="bf-log" aria-label="Fill and settlement log, New York time">
+        <h4>FILL &amp; SETTLEMENT LOG · ET</h4>
         <ol>${log}</ol>
       </section>
     </div>
@@ -231,6 +261,7 @@ function bfPct(min) {
 
 function bfLanesHtml(scored, data, nowMs) {
   const { rows, events } = bfCollect(scored, nowMs);
+  const coverage = bfCoverage(rows);
   const nowPct = bfPct(bfEtMinutes(nowMs));
   const ticks = ['09:30', '10:30', '11:30', '12:30', '13:30', '14:30', '15:30'].map(t => {
     const [h, m] = t.split(':').map(Number);
@@ -238,18 +269,23 @@ function bfLanesHtml(scored, data, nowMs) {
   }).join('');
   const lanes = rows.map(({ s, replay }) => {
     const pnl = bfPnl(s);
-    const segs = replay.segments.map(seg => {
+    const segs = replay.coverage === 'unavailable' ? '<span class="bf-lane-unavailable bf-dim">History unavailable</span>' : replay.segments.map(seg => {
       const startMin = seg.carried
         ? (replay.truncatedFromMs != null ? bfEtMinutes(replay.truncatedFromMs) : BF_SESSION_OPEN_MIN)
         : bfEtMinutes(seg.startMs);
+      const endMin = seg.endMs != null ? bfEtMinutes(seg.endMs) : bfEtMinutes(nowMs);
+      // The tape records the full New York date; lanes only show regular hours.
+      if (endMin < BF_SESSION_OPEN_MIN || startMin > BF_SESSION_CLOSE_MIN) return '';
       const left = bfPct(startMin);
-      const right = seg.endMs != null ? bfPct(bfEtMinutes(seg.endMs)) : nowPct;
+      const right = bfPct(endMin);
+      const entryInLane = !seg.carried && startMin >= BF_SESSION_OPEN_MIN;
+      const endInLane = seg.endMs != null && endMin <= BF_SESSION_CLOSE_MIN;
       const m = /\d{6}([CP])\d{8}$/.exec(seg.sym);
       const cls = !m ? 'bf-seg-other' : m[1] === 'C' ? 'bf-seg-call' : 'bf-seg-put';
       return `<div class="bf-seg ${cls}${seg.endMs != null ? ' bf-seg-closed' : ''}" style="left:${left.toFixed(3)}%;width:${Math.max(0.4, right - left).toFixed(3)}%"
         title="${escapeHtml(bfContract(seg.sym))}"><span>${escapeHtml(bfContract(seg.sym))}</span></div>
-        ${seg.carried ? '' : `<span class="bf-mk bf-in" style="left:${left.toFixed(3)}%">▲</span>`}
-        ${seg.endMs != null ? `<span class="bf-mk bf-out" style="left:${right.toFixed(3)}%">✕</span>` : ''}`;
+        ${!entryInLane ? '' : `<span class="bf-mk bf-in" style="left:${left.toFixed(3)}%">▲</span>`}
+        ${endInLane ? `<span class="bf-mk ${seg.settled ? 'bf-dim' : 'bf-out'}" style="left:${right.toFixed(3)}%">${seg.settled ? '◆' : '✕'}</span>` : ''}`;
     }).join('');
     return `<div class="bf-lane">
       <div class="bf-lane-label"><span class="bf-alias">${escapeHtml(s.bot.alias)}</span>
@@ -260,12 +296,13 @@ function bfLanesHtml(scored, data, nowMs) {
   }).join('');
   return `<div class="bf-wall">
     ${bfHeader('MOOPERTONIC · SESSION LANES', data, nowMs)}
-    ${bfTape(events)}
+    ${bfTape(events, coverage)}
+    ${bfCoverageNote(coverage)}
     <div class="bf-legend"><span><i class="bf-sw bf-seg-call"></i>long call held</span>
       <span><i class="bf-sw bf-seg-put"></i>put held</span>
       <span><i class="bf-sw bf-seg-other"></i>shares / other</span>
-      <span class="bf-in">▲ entry</span><span class="bf-out">✕ exit</span><span>│ now</span>
-      <span class="bf-dim">faded bar = closed · bar from the left edge = carried in</span></div>
+      <span class="bf-in">▲ entry</span><span class="bf-out">✕ exit</span><span>◆ settlement</span><span>│ now</span>
+      <span class="bf-dim">faded bar = closed · left-edge bar = carried in when history is complete</span></div>
     <div class="bf-lanes">
       <div class="bf-lane bf-axis"><div class="bf-lane-label"></div><div class="bf-ticks">${ticks}</div></div>
       ${lanes}

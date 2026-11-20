@@ -253,6 +253,7 @@ export async function handleBots(request, env) {
     const usernames = await botUsernames(env);
 
     const bots = [];
+    const asOf = new Date();
     const store = createStorage(env);
     for (const name of usernames) {
       const record = await store.users.get(name);
@@ -273,7 +274,7 @@ export async function handleBots(request, env) {
         first_trade_ts: trades.length ? trades[0].ts : null,
         last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
         positions: netPositions(trades),
-        ...sessionFills(trades),
+        ...sessionFills(trades, asOf),
         strategy_state: record.strategy_state ?? null,
         paper_margin_limit: record.paper_margin_limit ?? 1,
         paper_financing_rate: record.paper_financing_rate ?? 0,
@@ -282,14 +283,14 @@ export async function handleBots(request, env) {
     }
 
     bots.sort((a, b) => a.alias.localeCompare(b.alias));
-    return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
+    return jsonResponse({ bots, as_of: asOf.toISOString() }, 200);
   } catch {
     console.error('bot_roster_read_failed');
     return jsonResponse({ error: 'Bot roster temporarily unavailable' }, 503);
   }
 }
 // The current New York day's fills, oldest first, for the floor board's
-// entry/exit tape and session lanes. Only filled executions are projected, and
+// entry/exit tape and session lanes. Settlement is a separate position adjustment, and
 // only the fields a display needs (no quote internals or request ids). Capped
 // so a high-frequency bot (the smoke round-trippers trade every cycle) cannot
 // grow the public roster without bound; the newest fills are kept and
@@ -320,18 +321,23 @@ function sessionFillList(trades, now) {
     const qty = Number(t.qty);
     const price = Number(t.price);
     if (t.price == null || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) continue;
+    const id = t.execution_id ?? t.execution_request_id;
+    const settlement = typeof id === 'string' && id.startsWith('settle:');
     fills.push({
       ts: new Date(ms).toISOString(),
       sym: String(t.sym ?? ''),
       side: t.side,
       qty,
       price,
-      instrument_type: t.instrument_type ?? 'option',
-      type: t.type ?? null,
-      strike: t.strike ?? null,
+      instrument_type: t.instrument_type === 'share' ? 'share' : 'option',
+      type: t.type === 'call' || t.type === 'put' ? t.type : null,
+      strike: typeof t.strike === 'number' && Number.isFinite(t.strike) && t.strike >= 0 ? t.strike : null,
+      kind: settlement ? 'settlement' : 'fill',
     });
   }
-  return fills;
+  // Concurrent requests timestamp before appending, so append order is not necessarily time order.
+  // Stable sort preserves ledger order for equal timestamps.
+  return fills.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
 // Projects the account's position book into the roster's wire shape.
