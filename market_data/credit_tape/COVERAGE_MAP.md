@@ -53,6 +53,8 @@ ticker.
 
 ### KOR Reporting (KOR SDR; also an SEC SBSDR)
 
+Documentation check: [KOR_CFTC_API_CHECK.md](KOR_CFTC_API_CHECK.md) (schema, filter/cursor semantics, access rules, evidence gap).
+
 - **Status:** CFTC SDR, provisionally registered on 2022-03-30, licensed "in all
   asset classes". SEC SBSDR approved by order dated 2024-11-04
   ([89 FR 2024-25961](https://www.govinfo.gov/content/pkg/FR-2024-11-08/html/2024-25961.htm)).
