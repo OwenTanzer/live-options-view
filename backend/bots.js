@@ -273,6 +273,7 @@ export async function handleBots(request, env) {
         first_trade_ts: trades.length ? trades[0].ts : null,
         last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
         positions: netPositions(trades),
+        ...sessionFills(trades),
         strategy_state: record.strategy_state ?? null,
         paper_margin_limit: record.paper_margin_limit ?? 1,
         paper_financing_rate: record.paper_financing_rate ?? 0,
@@ -287,6 +288,52 @@ export async function handleBots(request, env) {
     return jsonResponse({ error: 'Bot roster temporarily unavailable' }, 503);
   }
 }
+// The current New York day's fills, oldest first, for the floor board's
+// entry/exit tape and session lanes. Only filled executions are projected, and
+// only the fields a display needs (no quote internals or request ids). Capped
+// so a high-frequency bot (the smoke round-trippers trade every cycle) cannot
+// grow the public roster without bound; the newest fills are kept and
+// `session_fills_truncated` says older ones were dropped, so the client knows
+// a position it held before the first listed fill may have opened later than
+// the session open.
+export const MAX_SESSION_FILLS = 100;
+const NEW_YORK_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+export function sessionFills(trades, now = new Date()) {
+  const fills = sessionFillList(trades, now);
+  return {
+    session_fills: fills.slice(-MAX_SESSION_FILLS),
+    session_fills_truncated: fills.length > MAX_SESSION_FILLS,
+  };
+}
+
+function sessionFillList(trades, now) {
+  const day = NEW_YORK_DAY.format(now);
+  const fills = [];
+  for (const t of trades) {
+    if (!t || (t.status && t.status !== 'filled')) continue;
+    if (t.side !== 'buy' && t.side !== 'sell') continue;
+    const ms = Date.parse(t.ts);
+    if (!Number.isFinite(ms) || NEW_YORK_DAY.format(new Date(ms)) !== day) continue;
+    const qty = Number(t.qty);
+    const price = Number(t.price);
+    if (t.price == null || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) continue;
+    fills.push({
+      ts: new Date(ms).toISOString(),
+      sym: String(t.sym ?? ''),
+      side: t.side,
+      qty,
+      price,
+      instrument_type: t.instrument_type ?? 'option',
+      type: t.type ?? null,
+      strike: t.strike ?? null,
+    });
+  }
+  return fills;
+}
+
 // Projects the account's position book into the roster's wire shape.
 //
 // This delegates to computeBookFromTrades rather than accumulating its own cost

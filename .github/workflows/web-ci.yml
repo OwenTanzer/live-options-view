@@ -132,6 +132,8 @@ jobs:
         run: node tests/account_closure.test.js
       - name: automated tab panel
         run: node tests/bots_panel.test.js
+      - name: automated tab floor and session-lane views
+        run: node tests/bot_floor.test.js
       - name: live quote service
         run: node tests/live_quote_service.test.js
       - name: adaptive quote instruments projection

@@ -199,6 +199,7 @@ function renderBots() {
     document.getElementById('bots-by-strategy').innerHTML = '';
     document.getElementById('bots-status').textContent =
       botsStatusLine('no automated accounts registered yet');
+    if (typeof renderBotFloor === 'function') renderBotFloor([], botsData, botMark);
     return;
   }
 
@@ -272,6 +273,10 @@ function renderBots() {
         : '<div class="bot-nopos">flat — no open positions</div>'}
     </div>`;
   }).join('');
+
+  // Floor / session-lane views (js/bot-floor.js) draw from the same scored
+  // roster; they are no-ops while the card view is selected.
+  if (typeof renderBotFloor === 'function') renderBotFloor(scored, botsData, botMark);
 
   const asOf = botsData.as_of ? new Date(botsData.as_of).toLocaleTimeString() : '—';
   document.getElementById('bots-status').textContent =
