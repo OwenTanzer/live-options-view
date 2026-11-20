@@ -1048,6 +1048,98 @@
   .bot-pnl.down { color: #ee3300; }
   .bot-pnl.flat { color: var(--dim); }
   .bot-meta { font-size: 0.72rem; color: var(--dim); margin-top: 4px; }
+
+  /* ── automated: floor + session-lane views (js/bot-floor.js) ─────────── */
+  #bots-cards.hidden, #bot-floor.hidden { display: none; }
+  #bots-view { margin-left: auto; display: inline-flex; gap: 4px; }
+  .bots-view-btn {
+    background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; min-height: 30px; font-size: 0.74rem; cursor: pointer;
+  }
+  .bots-view-btn[aria-pressed="true"] { color: #0a0605; background: #ffb300; border-color: #ffb300; }
+  .bf-wall {
+    --bf-pixel: 'VT323', 'DotGothic16', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bf-dot: 'DotGothic16', 'VT323', ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #0a0605;
+    background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1.4px);
+    background-size: 5px 5px;
+    color: #ff3b30; font-family: var(--bf-dot);
+    border: 1px solid #3a1210; border-radius: 6px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+  }
+  .bf-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+  .bf-title { font-size: 1.35rem; letter-spacing: 3px; text-shadow: 0 0 8px rgba(255,59,48,.6); margin-right: auto; }
+  .bf-clock { color: #ffb300; }
+  .bf-dim { color: #c08a84; }
+  .bf-in { color: #ffb300; } .bf-out { color: #5ac8fa; }
+  .bf-green { color: #4cd964; } .bf-red { color: #ff6b5f; } .bf-blue { color: #5ac8fa; } .bf-amber { color: #ffb300; }
+  .bf-tape {
+    margin: 0 -14px; height: 46px; overflow: hidden; display: flex; align-items: center;
+    background: #120605; border-top: 3px solid #3a1210; border-bottom: 3px solid #3a1210;
+    font-family: var(--bf-pixel); font-size: 1.9rem;
+  }
+  .bf-crawl { display: flex; gap: 56px; padding-left: 14px; white-space: nowrap; animation: bf-crawl 45s linear infinite; }
+  .bf-crawl span { text-shadow: 0 0 6px currentColor; }
+  .bf-tape-empty { padding-left: 14px; color: #c08a84; font-size: 1.4rem; }
+  @keyframes bf-crawl { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .bf-body { display: flex; flex-wrap: wrap; gap: 12px; }
+  .bf-main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .bf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .bf-stat { border: 2px solid #3a1210; background: #120605; padding: 6px 10px; }
+  .bf-stat-label { font-size: 0.72rem; color: #c08a84; }
+  .bf-stat-value { font-size: 1.7rem; line-height: 1.15; text-shadow: 0 0 8px currentColor; }
+  .bf-stat-value small { font-size: 0.75rem; text-shadow: none; color: #c08a84; }
+  .bf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .bf-tile {
+    border: 2px solid #3a1210; padding: 6px 8px; min-height: 84px; color: #fff;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 4px; min-width: 0;
+  }
+  .bf-tile.bf-closed { opacity: 0.55; }
+  .bf-edge-in { border-color: #ffb300; box-shadow: 0 0 12px rgba(255,179,0,.55); }
+  .bf-edge-out { border-color: #5ac8fa; box-shadow: 0 0 12px rgba(90,200,250,.55); }
+  .bf-tile-top, .bf-tile-mid, .bf-tile-low { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .bf-alias { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #f3e6e4; font-size: 0.8rem; }
+  .bf-tile-mid { font-size: 0.74rem; color: #f3e6e4; }
+  .bf-pnl { font-size: 1.45rem; line-height: 1; color: #fff; }
+  .bf-tile-low { font-size: 0.68rem; color: #ead2ce; }
+  .bf-tag { font-size: 0.66rem; padding: 0 5px; flex-shrink: 0; background: #0a0605; }
+  .bf-tag-call { color: #4cd964; } .bf-tag-put { color: #ff8a80; }
+  .bf-tag-flat { color: #ead2ce; background: transparent; border: 1px solid #c08a84; }
+  .bf-tag-other { color: #d9a6ff; }
+  .bf-flash { animation: bf-blink 1s steps(1) infinite; }
+  @keyframes bf-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .4; } }
+  .bf-log { flex: 1 1 260px; border: 2px solid #3a1210; background: #120605; padding: 8px 10px; }
+  .bf-log h4 { margin: 0 0 6px; font-weight: 400; color: #ffb300; font-size: 0.9rem; }
+  .bf-log ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .bf-log li { display: flex; gap: 8px; font-size: 0.74rem; border-bottom: 1px dashed #3a1210; padding-bottom: 4px; }
+  .bf-log-tag { width: 45px; flex-shrink: 0; }
+  .bf-log-text { color: #ead2ce; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bf-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 0.7rem; color: #c08a84; }
+  .bf-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.72rem; color: #c08a84; }
+  .bf-sw { display: inline-block; width: 12px; height: 10px; margin-right: 5px; vertical-align: middle; }
+  .bf-lanes { overflow-x: auto; overflow-y: hidden; display: flex; flex-direction: column; gap: 4px; }
+  .bf-lane { display: flex; align-items: center; min-width: 760px; min-height: 28px; }
+  .bf-lane-unavailable { padding: 0 8px; font-size: 0.68rem; }
+  .bf-lane-label { width: 200px; flex-shrink: 0; display: flex; justify-content: space-between; gap: 6px; padding-right: 10px; font-size: 0.74rem; }
+  .bf-track { position: relative; flex-grow: 1; height: 24px; border: 1px solid #3a1210; }
+  .bf-axis { min-height: 16px; }
+  .bf-ticks { position: relative; flex-grow: 1; height: 16px; font-size: 0.66rem; color: #c08a84; }
+  .bf-ticks span { position: absolute; transform: translateX(-50%); }
+  .bf-seg { position: absolute; top: 3px; bottom: 3px; overflow: hidden; }
+  .bf-seg span { font-size: 0.62rem; color: #0a0605; padding-left: 12px; white-space: nowrap; line-height: 16px; }
+  .bf-seg-call { background: #4cd964; box-shadow: 0 0 8px rgba(76,217,100,.6); }
+  .bf-seg-put { background: #ff6b5f; box-shadow: 0 0 8px rgba(255,107,95,.6); }
+  .bf-seg-other { background: #d9a6ff; box-shadow: 0 0 8px rgba(217,166,255,.6); }
+  .bf-seg-closed { opacity: 0.45; box-shadow: none; }
+  .bf-mk { position: absolute; top: 3px; transform: translateX(-50%); font-size: 0.72rem; }
+  /* Same timestamp, opposite sides of the tick so both reversal markers stay legible. */
+  .bf-mk-reversal-out { transform: translateX(calc(-100% - 2px)); }
+  .bf-mk-reversal-in { transform: translateX(2px); }
+  .bf-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f3e6e4; box-shadow: 0 0 6px #f3e6e4; }
+  @media (prefers-reduced-motion: reduce) {
+    .bf-crawl, .bf-flash { animation: none; }
+    .bf-tape { overflow-x: auto; }
+  }
   .bot-last-trade { font-size: 0.8rem; line-height: 1.5; color: var(--fg); }
   .bot-card table { width: 100%; min-width: 0; margin-top: 8px; font-size: 0.72rem; }
   .bot-card th { color: var(--dim); font-weight: 500; text-align: right; }
@@ -1524,7 +1616,14 @@
   <div id="bots-header">
     <span id="bots-title">Automated Accounts</span>
     <span id="bots-status">—</span>
+    <span id="bots-view" role="group" aria-label="Automated accounts view">
+      <button type="button" class="bots-view-btn" data-view="cards" aria-pressed="true">Cards</button>
+      <button type="button" class="bots-view-btn" data-view="floor" aria-pressed="false">Floor</button>
+      <button type="button" class="bots-view-btn" data-view="lanes" aria-pressed="false">Session lanes</button>
+    </span>
   </div>
+  <div id="bot-floor" class="hidden"></div>
+  <div id="bots-cards">
   <div id="bots-hint">
     Crassus / Golden Goose paper-trading bots. Equity = cash + open positions marked at
     the live mid. Positions are marked against the same quotes the Live tab polls, so a
@@ -1532,6 +1631,7 @@
   </div>
   <div id="bots-by-strategy"></div>
   <div id="bots-grid"></div>
+  </div> <!-- /bots-cards -->
 
 </div> <!-- /bots-panel -->
 
@@ -1752,7 +1852,8 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/bots-panel.js?v=d381cc4ee2155fd9"></script>
+<script src="js/bots-panel.js?v=28a7c5050a835806"></script>
+<script src="js/bot-floor.js?v=12182aff0aeff5fa"></script>
 <script>
 
 // ── historical panel ─────────────────────────────────────────────────────────
