@@ -763,7 +763,7 @@ class PersistentArchiveProofTests(unittest.TestCase):
 
 
 class ReconciliationTests(unittest.TestCase):
-    """DTCC coverage reconciliation (synthetic fixtures; real-day results are reported separately)."""
+    """DTCC coverage reconciliation (synthetic fixtures; the real-day run is reported separately)."""
 
     DAY, TAG = "2001-02-03", "2001_02_03"
 
@@ -788,33 +788,37 @@ class ReconciliationTests(unittest.TestCase):
             z.writestr("X.csv", buf.getvalue())
         return out.getvalue()
 
-    def build(self):
+    def captured(self):
         r = self.row
-        captured = {1: [r("A"), r("B")],
-                    3: [r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R")],
-                    4: [r("R"), r("X")],                 # R reported again; X never in the cumulative file
-                    5: [r("F", notional="1,000,000")]}   # cumulative carries a different value for F
-        self.gap = {2: [r("G", "EROR", "B")]}             # slice 2 was not captured live
-        self.cumulative = [r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R"),
-                           r("F", notional="5,000,000+"), r("G", "EROR", "B"), r("H")]  # H: in no slice
-        lines_out = []
-        for n, rows in captured.items():
-            name = f"CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip"
-            blob = self.zipped(rows)
-            ref = f"dtcc-slices/raw/{self.DAY}/{name}"
-            (self.archive / ref).parent.mkdir(parents=True, exist_ok=True)
-            (self.archive / ref).write_bytes(blob)
-            meta = {"fileName": name, "sliceId": 100 + n, "startTs": f"{self.DAY}T00:0{n}:00Z", "endTs": f"{self.DAY}T00:0{n}:09Z"}
-            lines_out.append({"source": "dtcc-cftc-slices", "kind": "slice", "raw_ref": ref,
-                              "raw_sha256": hashlib.sha256(blob).hexdigest(), "slice": meta, "replay": False})
-            for i, row in enumerate(rows):
-                lines_out.append({"source": "dtcc-cftc-slices", "kind": "publication", "id": row["Dissemination Identifier"],
-                                  "slice": meta, "row_index": i, "replay": False, "record": row})
-        (self.archive / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines_out), encoding="utf-8")
+        return {1: [r("A"), r("B")],
+                3: [r("C", "CORR", "A"), r("D", "TERM", "Z-NOT-SEEN"), r("R")],
+                4: [r("R"), r("X"), r("S", notional="1")],   # R reported twice; X never in the cumulative file
+                5: [r("F", notional="1,000,000"), r("S", notional="2")]}
 
-    def opener(self):
-        files = {f"/intraday/cftc/CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip": self.zipped(rows) for n, rows in self.gap.items()}
-        files[f"/cumulative/cftc/CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip"] = self.zipped(self.cumulative)
+    def build(self):
+        """Capture through the real slice route so the archive has commits, done markers and an identity."""
+        from market_data.credit_tape.synthetic_resilience import SyntheticDTCC
+        dtcc = SyntheticDTCC()
+        metas = []
+        for n, rows in self.captured().items():
+            name = f"CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip"
+            m = {"sliceId": 5000 + n, "fileName": name, "rowCount": len(rows), "dissemDTM": f"{self.DAY}T00:0{n}:10Z",
+                 "startTs": f"{self.DAY}T00:0{n}:00Z", "endTs": f"{self.DAY}T00:0{n}:09Z",
+                 "fullFilePath": f"https://{slices.SLICE_HOST}/cftc/slices/{name}"}
+            dtcc.files[m["fullFilePath"]] = self.zipped(rows)
+            metas.append(m)
+        dtcc.index = {"CFTC_CR": metas, "SEC_CR": []}  # slice 2 never listed: uncaptured
+        capture.run(str(self.archive), ticker=False, slices=True, once=True, opener=dtcc)
+
+    def ppd(self, gap=None, cumulative=None, cumulative_status=200):
+        r = self.row
+        gap = {2: [r("G", "EROR", "B")]} if gap is None else gap
+        cumulative = cumulative if cumulative is not None else [
+            r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-NOT-SEEN"), r("R"), r("X2"),
+            r("S", notional="1"), r("S", notional="1"), r("F", notional="5,000,000+"), r("G", "EROR", "B"), r("H")]
+        files = {f"/intraday/cftc/CFTC_SLICE_CREDITS_{self.TAG}_{n}.zip": self.zipped(rows) for n, rows in gap.items()}
+        if cumulative_status == 200:
+            files[f"/cumulative/cftc/CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip"] = self.zipped(cumulative)
         self.requests = []
 
         def open_(req, timeout=None):
@@ -825,65 +829,104 @@ class ReconciliationTests(unittest.TestCase):
             return FakeResp(files[path])
         return open_
 
-    def run_rec(self, **kw):
+    def rec(self, recover_gaps=True, **kw):
         from market_data.credit_tape import reconcile
-        return reconcile.reconcile_channel(str(self.archive), "CFTC_CR", self.DAY, fetch_cumulative=True,
-                                           opener=self.opener(), **kw)
+        return reconcile.run(str(self.archive), self.DAY, ["CFTC_CR"], recover_gaps=recover_gaps,
+                             fetch_cumulative=True, opener=self.ppd(**kw))
 
-    def test_full_reconciliation_keeps_corrections_repeats_and_exposes_gaps(self):
-        self.build()
-        before = (self.archive / "events.jsonl").read_bytes()
-        rep = self.run_rec(recover_gaps=True)
-        c = rep["counts"]
-        self.assertEqual((c["matched"], c["matched_via_gap_recovery"]), (5, 1))  # A B C D G
-        self.assertEqual([x["id"] for x in rep["captured_only"]], ["X"])
-        self.assertEqual([x["id"] for x in rep["missing_unexplained"]], ["H"])
-        self.assertEqual(rep["missing_in_uncaptured_slice"], [])
-        self.assertEqual([(x["id"], x["captured"], x["cumulative"], x["rows_identical"]) for x in rep["repeat_count_mismatch"]],
-                         [("R", 2, 1, True)])
-        self.assertEqual([(x["id"], x["slices"]) for x in rep["repeated_reports"]],
-                         [("R", [f"CFTC_SLICE_CREDITS_{self.TAG}_3.zip", f"CFTC_SLICE_CREDITS_{self.TAG}_4.zip"])])
-        diff = rep["matched_with_differences"][0]
-        self.assertEqual((diff["id"], diff["fields"]), ("F", ["Notional amount-Leg 1"]))
-        self.assertEqual((diff["captured_versions"], diff["cumulative_version"]),
-                         ([{"Notional amount-Leg 1": "1,000,000"}], {"Notional amount-Leg 1": "5,000,000+"}))
-        self.assertEqual(rep["lifecycle_links"], {"original_in_interval": 2, "original_before_interval": 1})
-        self.assertEqual(rep["original_before_interval"], [{"id": "D", "original_id": "Z-PRIOR-DAY", "action": "TERM"}])
-        self.assertEqual(rep["actions"]["cumulative"], {"NEWT": 5, "CORR": 1, "TERM": 1, "EROR": 1})
-        s = rep["slices"]
-        self.assertEqual((s["uncaptured_numbers"], s["recovered_numbers"], s["still_missing_numbers"], s["tail_probe"]),
-                         ([2], [2], [], {"first_absent_slice": 6}))
-        self.assertFalse(rep["complete"])
-        # Daily file and gap slice kept as originals, apart from the tape; the tape logs are untouched.
-        self.assertEqual((self.archive / "events.jsonl").read_bytes(), before)
-        self.assertFalse((self.archive / "alerts_outbox.jsonl").exists())
-        stored = self.archive / "dtcc-reconcile" / self.DAY
-        self.assertEqual((stored / "cumulative" / f"CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip").read_bytes(),
-                         self.zipped(self.cumulative))
-        self.assertTrue((stored / "gap-slices" / f"CFTC_SLICE_CREDITS_{self.TAG}_2.zip").exists())
+    @staticmethod
+    def by_id(parity):
+        return {u["id"]: u for u in parity["unmatched"]}
 
-    def test_without_gap_recovery_missing_records_stay_unresolved(self):
+    def test_full_row_multiplicities_report_unmatched_occurrences_on_both_sides(self):
         self.build()
-        rep = self.run_rec(recover_gaps=False)
-        self.assertEqual(sorted(x["id"] for x in rep["missing_in_uncaptured_slice"]), ["G", "H"])
-        self.assertEqual(rep["missing_in_uncaptured_slice"][0]["uncaptured_slice_numbers"], [2])
-        self.assertEqual(rep["missing_unexplained"], [])
-        self.assertFalse(any("/intraday/" in p for p in self.requests))
-        self.assertFalse(rep["complete"])
+        ev = (self.archive / "events.jsonl").read_bytes()
+        al = (self.archive / "alerts_outbox.jsonl").read_bytes() if (self.archive / "alerts_outbox.jsonl").exists() else b""
+        res = self.rec()
+        self.assertTrue(res["archive_audit"]["clean"])
+        ch = res["channels"]["CFTC_CR"]
+        self.assertEqual(ch["tape_rows"], {"logged": 10, "verified": 10, "unverified": 0})
+        tp = ch["tape_parity"]
+        u = self.by_id(tp)
+        # S: same total count (2 vs 2) but different rows -> still reported, both sides.
+        self.assertEqual((u["S"]["state"], u["S"]["same_total_count"]), ("occurrence_mismatch", True))
+        self.assertEqual(sum(x["count"] for x in u["S"]["unmatched_tape"]), 1)
+        self.assertEqual(sum(x["count"] for x in u["S"]["unmatched_cumulative"]), 1)
+        # R: 2 on the tape, 1 in the cumulative file -> one unmatched tape occurrence, none on the other side.
+        self.assertEqual((u["R"]["same_total_count"], u["R"]["unmatched_tape"][0]["count"], u["R"]["unmatched_cumulative"]),
+                         (False, 1, []))
+        self.assertEqual(u["F"]["differing_fields"], ["Notional amount-Leg 1"])
+        self.assertEqual({k: u[k]["state"] for k in ("X", "X2", "G", "H")},
+                         {"X": "captured_only", "X2": "cumulative_only", "G": "cumulative_only", "H": "cumulative_only"})
+        self.assertEqual(tp["ids"]["matched"], 4)  # A B C D
+        self.assertEqual(tp["occurrences"], {"matched": 6, "unmatched_tape": 4, "unmatched_cumulative": 5})
+        self.assertFalse(tp["parity"])
+        # Report-only recovery is a separate view; it resolves G but never becomes tape parity.
+        self.assertNotIn("G", self.by_id(ch["with_report_only"]))
+        self.assertIn("G", u)
+        cov = ch["slice_coverage"]
+        self.assertEqual((cov["uncaptured_numbers"], cov["report_only_recovered"], cov["unknown_numbers"]), ([2], [2], []))
+        self.assertEqual(cov["tail"], {"last_captured_number": 5, "boundary": "unknown",
+                                       "probes": [{"number": 6, "status": "unavailable_http_404"}]})
+        self.assertTrue(all(s["report_only"] for s in cov["report_only_slices"]))
+        marker = json.loads((self.archive / "dtcc-reconcile" / self.DAY / "report-only-slices" / "CFTC_CR.REPORT_ONLY.json").read_text())
+        self.assertTrue(marker["report_only"])
+        # Unobserved original is unknown, not an earlier-day claim.
+        self.assertEqual(ch["lifecycle_links"], {"original_observed_in_interval": 2, "original_not_observed": 1})
+        self.assertEqual(ch["original_not_observed"], [{"id": "D", "original_id": "Z-NOT-SEEN", "action": "TERM"}])
+        self.assertEqual(ch["verdict"]["tape_parity"], "incomplete")
+        self.assertEqual(ch["verdict"]["unknowns"]["tail_boundary"], "unknown")
+        # Tape logs untouched; daily file saved as an original apart from the tape.
+        self.assertEqual((self.archive / "events.jsonl").read_bytes(), ev)
+        self.assertEqual((self.archive / "alerts_outbox.jsonl").read_bytes() if (self.archive / "alerts_outbox.jsonl").exists() else b"", al)
+        self.assertTrue((self.archive / "dtcc-reconcile" / self.DAY / "cumulative" / f"CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip").exists())
+        from market_data.credit_tape import check_archive
+        self.assertTrue(check_archive.check(str(self.archive))["clean"])  # reconcile output does not disturb the audit
 
-    def test_clean_day_is_complete_and_tampered_original_is_not(self):
+    def test_unavailable_responses_are_unknown(self):
         self.build()
+        res = self.rec(gap={})  # slice 2 answers 404
+        ch = res["channels"]["CFTC_CR"]
+        cov = ch["slice_coverage"]
+        self.assertEqual((cov["unknown_numbers"], cov["fetch_status"]), ([2], {"2": "unavailable_http_404"}))
+        self.assertNotIn("with_report_only", ch)
+        self.assertEqual(ch["verdict"]["unknowns"]["slice_numbers"], [2])
+        res = self.rec(cumulative_status=404)
+        ch = res["channels"]["CFTC_CR"]
+        self.assertEqual((ch["tape_parity"], ch["verdict"]["tape_parity"]), (None, "unknown"))
+        self.assertFalse(res["complete"])
+
+    def test_clean_day_is_complete_only_after_a_clean_audit(self):
+        self.build()
+        tape = [row for rows in self.captured().values() for row in rows]
+        res = self.rec(recover_gaps=False, cumulative=tape)
+        ch = res["channels"]["CFTC_CR"]
+        self.assertEqual(ch["verdict"]["tape_parity"], "complete", ch["verdict"])
+        self.assertTrue(res["complete"])
+        self.assertEqual(ch["tape_parity"]["repeated_reports_total"], 2)  # R and S kept, consistent
+        self.assertEqual(self.requests, [f"/cumulative/cftc/CFTC_CUMULATIVE_CREDITS_{self.TAG}.zip"])
+        # Same parity, but a tampered original fails the audit: rows become unverified.
+        raw = self.archive / "dtcc-slices" / "raw" / self.DAY / f"CFTC_SLICE_CREDITS_{self.TAG}_1.zip"
+        raw.write_bytes(b"tampered")
+        res = self.rec(recover_gaps=False, cumulative=tape)
+        ch = res["channels"]["CFTC_CR"]
+        self.assertFalse(res["archive_audit"]["clean"])
+        self.assertEqual((ch["verdict"]["tape_parity"], ch["tape_rows"]["verified"]), ("unverified", 0))
+        self.assertFalse(res["complete"])
+
+    def test_legacy_archive_without_commits_is_unverified(self):
         r = self.row
-        self.gap = {2: [r("G", "EROR", "B")]}
-        self.cumulative = [r("A"), r("B"), r("C", "CORR", "A"), r("D", "TERM", "Z-PRIOR-DAY"), r("R"), r("R"),
-                           r("X"), r("F", notional="1,000,000"), r("G", "EROR", "B")]
-        rep = self.run_rec(recover_gaps=True)
-        self.assertTrue(rep["complete"], rep["counts"])
-        self.assertEqual(rep["counts"]["repeated_reports"], 1)  # R twice on both sides: kept, consistent
-        (self.archive / f"dtcc-slices/raw/{self.DAY}/CFTC_SLICE_CREDITS_{self.TAG}_1.zip").write_bytes(b"tampered")
-        rep = self.run_rec(recover_gaps=True)
-        self.assertFalse(rep["complete"])
-        self.assertEqual(rep["problems"][0]["problem"], "captured_original_missing_or_hash_mismatch")
+        name = f"CFTC_SLICE_CREDITS_{self.TAG}_1.zip"
+        meta = {"fileName": name, "sliceId": 1}
+        (self.archive / "dtcc-slices").mkdir()
+        (self.archive / "events.jsonl").write_text(
+            json.dumps({"source": "dtcc-cftc-slices", "kind": "slice", "slice": meta, "raw_ref": "x", "raw_sha256": "y"}) + "\n" +
+            json.dumps({"source": "dtcc-cftc-slices", "kind": "publication", "slice": meta, "record": r("A")}) + "\n")
+        res = self.rec(recover_gaps=False, cumulative=[r("A")])
+        ch = res["channels"]["CFTC_CR"]
+        self.assertEqual((ch["tape_rows"]["verified"], ch["verdict"]["tape_parity"]), (0, "unverified"))
+        self.assertEqual(ch["tape_parity"]["ids"], {"cumulative_only": 1})  # unverified rows are not counted as tape
+        self.assertEqual(ch["unverified_view"]["ids"], {"matched": 1})  # visible, but labelled and outside the verdict
 
     def test_cli_refuses_an_incomplete_day(self):
         from market_data.credit_tape import reconcile
@@ -891,7 +934,6 @@ class ReconciliationTests(unittest.TestCase):
         today = time.strftime("%Y-%m-%d", time.gmtime())
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
             reconcile.main(["--archive", str(self.archive), "--day", today])
-
 
 if __name__ == "__main__":
     unittest.main()
