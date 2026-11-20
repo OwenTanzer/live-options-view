@@ -114,6 +114,8 @@ Bloomberg UK MTF (BMTF) on-venue complement: [BMTF_UK_CHECK.md](BMTF_UK_CHECK.md
 
 Ranked UK decision (Tradeweb TREU/TREA, BMTF, ECHO) and the recommended next check: [UK_DECISION_TABLE.md](UK_DECISION_TABLE.md).
 
+Identification key for that check (Main/Crossover 5y S46 on-the-run, S45 first off-the-run; VOLO/FULV linking): [UK_ITRAXX_ID_KEY.md](UK_ITRAXX_ID_KEY.md).
+
 ## Candidate for the next implementation step
 
 Follow-up: [TRADEWEB_UK_GO_NO_GO.md](TRADEWEB_UK_GO_NO_GO.md) has the datasets, fields, cadence and terms, with the verdict and the named gaps.
