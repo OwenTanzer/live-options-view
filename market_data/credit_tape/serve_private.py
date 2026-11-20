@@ -43,6 +43,10 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/index.html": ("index.html", "text/html; charset=utf-8"),
           "/panel.js": ("panel.js", "text/javascript; charset=utf-8"),
           "/panel.css": ("panel.css", "text/css; charset=utf-8")}
+from .site_table import render_table
+
+SITE = "https://options.moopertonic.net"
+SITE_PREFIX = "/credit-tape"
 SESSION_COOKIE = "__Host-cds-session"
 FLOW_COOKIE = "__Host-cds-flow"
 GITHUB_ISSUER = "https://github.com/login/oauth"
@@ -66,6 +70,14 @@ class Settings:
     client_secret: str = ""
     allowed_ids: frozenset = frozenset()
     dev_local: bool = False
+
+    options_view: bool = False
+
+    @property
+    def callback(self):
+        if self.options_view:
+            return SITE + SITE_PREFIX + "/auth/callback"
+        return self.origin + "/auth/callback"
 
     def permits(self, user_id) -> bool:
         return type(user_id) is int and user_id in self.allowed_ids
@@ -91,7 +103,7 @@ class Settings:
         cid, secret = env["CREDIT_TAPE_GITHUB_CLIENT_ID"], env["CREDIT_TAPE_GITHUB_CLIENT_SECRET"]
         if not cid or not secret:
             raise ValueError("Incomplete OAuth configuration")
-        return cls(archive, origin, cid, secret, frozenset(ids))
+        return cls(archive, origin, cid, secret, frozenset(ids), options_view=env.get("CREDIT_TAPE_OPTIONS_VIEW") == "1")
 
 
 class Store:
@@ -204,7 +216,7 @@ def github_identity(settings: Settings, code: str, verifier: str) -> int:
 
     tok = fetch(Request("https://github.com/login/oauth/access_token", headers={"Accept": "application/json"},
                         data=urlencode({"client_id": settings.client_id, "client_secret": settings.client_secret,
-                                        "code": code, "redirect_uri": settings.origin + "/auth/callback",
+                                        "code": code, "redirect_uri": settings.callback,
                                         "code_verifier": verifier}).encode()))
     if tok.get("scope") != "" or str(tok.get("token_type", "")).lower() != "bearer" or not tok.get("access_token"):
         raise ValueError("Unexpected OAuth token response")
@@ -222,6 +234,46 @@ def cookie(name, value="", age=0):
 
 # ---- archive readers -------------------------------------------------------
 
+def panel_event(line, seq):
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return {"seq": seq, "kind": "unreadable_event_line"}
+    rec = ev.pop("record", None) or {}
+    ev["seq"] = seq
+    summary = {}
+    for k, alias in CSV_ALIASES.items():
+        v = rec.get(k, rec.get(alias))
+        if v not in (None, ""):
+            summary[k] = v
+    ev["summary"] = summary
+    return ev
+
+
+def read_table_window(archive: Path, limit=MAX_ROWS):
+    """Read a bounded tail from the append-only archive. Cursor is completed byte length."""
+    try:
+        fh = (archive / "events.jsonl").open("rb")
+    except FileNotFoundError:
+        return [], 0
+    with fh:
+        end = fh.seek(0, 2)
+        pos = end
+        chunks = []
+        newlines = 0
+        while pos and newlines <= limit:
+            size = min(pos, 65536)
+            pos -= size
+            fh.seek(pos)
+            block = fh.read(size)
+            chunks.append(block)
+            newlines += block.count(b"\n")
+        content = b"".join(reversed(chunks))
+        complete = content.rfind(b"\n") + 1
+        lines = content[:complete].splitlines()[-limit:]
+        return [panel_event(line, None) for line in lines], pos + complete
+
+
 def read_events(archive: Path, after: int = 0, limit: int = MAX_ROWS):
     """Publication events after line `after`, newest last, without the bulky record body."""
     out, seq = [], 0
@@ -232,20 +284,7 @@ def read_events(archive: Path, after: int = 0, limit: int = MAX_ROWS):
         for seq, line in enumerate(fh, 1):
             if seq <= after:
                 continue
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                out.append({"seq": seq, "kind": "unreadable_event_line"})
-                continue
-            rec = ev.pop("record", None) or {}
-            ev["seq"] = seq
-            summary = {}
-            for k, alias in CSV_ALIASES.items():
-                v = rec.get(k, rec.get(alias))
-                if v not in (None, ""):
-                    summary[k] = v
-            ev["summary"] = summary
-            out.append(ev)
+            out.append(panel_event(line, seq))
     return out[-limit:], seq
 
 
@@ -386,10 +425,12 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             self.do_GET()
 
         def do_POST(self):
-            if (not settings or settings.dev_local or not self.host_ok() or self.path != "/auth/logout"
-                    or self.headers.get("Origin") != settings.origin):
+            if (not settings or settings.dev_local or not self.host_ok() or self.path not in (("/auth/logout", SITE_PREFIX + "/auth/logout") if settings.options_view else ("/auth/logout",))
+                    or self.headers.get("Origin") != (SITE if self.path.startswith(SITE_PREFIX + "/") else settings.origin)):
                 return self.reply(403, b"Forbidden")
             store.revoke(self.cookies().get(SESSION_COOKIE, ""))
+            if self.path.startswith(SITE_PREFIX + "/"):
+                return self.reply(303, headers=[("Location", "/credit-tape/"), ("Set-Cookie", cookie(SESSION_COOKIE)), ("Set-Cookie", cookie(FLOW_COOKIE))])
             return self.reply(204, headers=[("Set-Cookie", cookie(SESSION_COOKIE)), ("Set-Cookie", cookie(FLOW_COOKIE))])
 
         def do_GET(self):
@@ -406,6 +447,15 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                 return self.reply(503, b"Not configured.")
             if not self.host_ok():
                 return self.reply(403, b"Forbidden")
+            site = url.path.startswith(SITE_PREFIX + "/")
+            if site:
+                if not settings.options_view:
+                    return self.reply(503, b"Credit tape site integration is not enabled.")
+                url = url._replace(path=url.path[len(SITE_PREFIX):])
+                if url.path not in ("/", "/table.css", "/table.js", "/auth/login", "/auth/callback"):
+                    return self.reply(404, b"Not found")
+            elif settings.options_view and url.path == "/auth/login":
+                return self.reply(302, headers=[("Location", SITE + SITE_PREFIX + "/auth/login")])
             if not settings.dev_local and url.path == "/auth/login":
                 try:
                     flow, state, verifier = store.start_flow(self.cookies().get(FLOW_COOKIE, ""))
@@ -413,7 +463,7 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     return self.reply(429, b"Please retry sign-in later.")
                 challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
                 loc = "https://github.com/login/oauth/authorize?" + urlencode({
-                    "client_id": settings.client_id, "redirect_uri": settings.origin + "/auth/callback",
+                    "client_id": settings.client_id, "redirect_uri": settings.callback,
                     "scope": "", "state": state, "code_challenge": challenge,
                     "code_challenge_method": "S256", "allow_signup": "false"})
                 return self.reply(302, headers=[("Location", loc), ("Set-Cookie", cookie(FLOW_COOKIE, flow, 600))])
@@ -444,15 +494,23 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                         store.finish_flow(flow)  # failure cleanup: release the pending claim
                     return self.reply(403, b"Sign-in was not accepted. Return to / and try again.",
                                       headers=[("Set-Cookie", cookie(FLOW_COOKIE))])
-                return self.reply(303, headers=[("Location", "/"), ("Set-Cookie", cookie(FLOW_COOKIE)),
+                return self.reply(303, headers=[("Location", "/credit-tape/" if site else "/"), ("Set-Cookie", cookie(FLOW_COOKIE)),
                                                ("Set-Cookie", cookie(SESSION_COOKIE, session, 8 * 3600))])
             if not self.authorized():
+                if site and url.path == "/":
+                    return self.reply(200, b'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Credit tape</title><h1>Credit tape</h1><a href="/credit-tape/auth/login">Sign in with GitHub</a>', "text/html; charset=utf-8")
                 if url.path in ("/", "/index.html"):
                     return self.reply(200, b'<!doctype html><title>Sign in</title><h1>Credit tape</h1>'
                                            b'<p><a href="/auth/login">Sign in with GitHub</a></p>', "text/html; charset=utf-8")
                 return self.reply(401, b"Sign in required.")
             q = parse_qs(url.query)
             try:
+                if site and url.path == "/":
+                    events, cursor = read_table_window(settings.archive)
+                    return self.reply(200, render_table(events, cursor), "text/html; charset=utf-8")
+                if site and url.path in ("/table.css", "/table.js"):
+                    kind = "text/css" if url.path.endswith(".css") else "text/javascript"
+                    return self.reply(200, (STATIC / url.path[1:]).read_bytes(), kind)
                 if url.path == "/api/trades":
                     after = int(q.get("after", ["0"])[0])
                     rows, last = read_events(settings.archive, max(after, 0))

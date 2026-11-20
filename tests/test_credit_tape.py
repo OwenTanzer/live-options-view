@@ -277,6 +277,35 @@ class ServerTests(unittest.TestCase):
             "first_seen": "2099-01-01T00:00:01.000+00:00", "raw_ref": "dtcc-sec-credits/raw/2099-01-01/x_abc.json.gz",
             "row_index": 0, "record": fixture_row(1)}) + "\n")
 
+    def test_main_site_table_uses_owner_session_and_static_rows(self):
+        from urllib.parse import parse_qs, urlsplit
+        settings = sp.Settings(self.archive, "https://cds.example.test", "cid", "secret", frozenset({42}), options_view=True)
+        port = self.serve(settings, identity=lambda *_: 42)
+        host = "cds.example.test"
+        page = "/credit-tape/"
+        status, signed_out, _ = self.get(port, page, host)
+        self.assertEqual(status, 200)
+        self.assertNotIn(b"FIXTURE1", signed_out)
+        self.assertIn(b"/credit-tape/auth/login", signed_out)
+        _, _, login = self.get(port, page + "auth/login", host)
+        params = parse_qs(urlsplit(login.getheader("Location")).query)
+        self.assertEqual(params["redirect_uri"], ["https://options.moopertonic.net/credit-tape/auth/callback"])
+        flow = login.getheader("Set-Cookie").split(";")[0]
+        status, _, callback = self.get(port, page + "auth/callback?code=fake&state=" + params["state"][0], host, flow)
+        self.assertEqual((status, callback.getheader("Location")), (303, page))
+        session = next(c.split(";")[0] for c in callback.headers.get_all("Set-Cookie") if c.startswith(sp.SESSION_COOKIE+"="))
+        status, body, response = self.get(port, page, host, session)
+        self.assertEqual(status, 200)
+        self.assertIn(b"<tbody><tr", body)
+        self.assertIn(b"FIXTURE1", body)
+        self.assertIn(b"5M+", body)
+        self.assertIn("no-store", response.getheader("Cache-Control"))
+        with (self.archive / "events.jsonl").open("ab") as f:
+            f.write(b'{"unfinished"')
+        events, cursor = sp.read_table_window(self.archive)
+        self.assertEqual(len(events), 1)
+        self.assertLess(cursor, (self.archive / "events.jsonl").stat().st_size)
+
     def test_github_mode_gates_every_data_route(self):
         s = sp.Settings(self.archive, "https://cds.example.test", "cid", "secret", frozenset({42}))
         port = self.serve(s)
