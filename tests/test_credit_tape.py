@@ -1026,6 +1026,20 @@ class RestoreTests(unittest.TestCase):
             result = synthetic_restore.run(os.path.join(d, "archive"))
         self.assertTrue(result["all_pass"], json.dumps(result["checks"], indent=1))
 
+    def test_interrupted_restore_resumes_or_stays_unresolved(self):
+        from market_data.credit_tape import synthetic_restore_interrupt as sri
+        result = sri.run()
+        self.assertTrue(result["all_pass"], json.dumps([(r["scenario"], r["pass"]) for r in result["results"]]))
+        by = {r["scenario"]: r for r in result["results"]}
+        self.assertEqual(sorted(by), sorted(sri.SCENARIOS))
+        for name in ("staged_missing", "staged_tampered"):
+            mid = by[name]["after_second_restart"]
+            self.assertEqual((mid["slice2_rows"], mid["s3_downloads_of_slice2"]), ([], 0))
+            self.assertEqual(mid["restore_status"]["unresolved"], ["CFTC_CR:9102"])
+        for r in result["results"]:
+            final = r.get("after_rerun_and_restart") or r["after_second_restart"]
+            self.assertNotIn("Q-REPLACEMENT", final["slice2_rows"])
+
     def _missed_slice2(self, d):
         from market_data.credit_tape import synthetic_restore as sr
         from market_data.credit_tape.synthetic_resilience import SyntheticDTCC

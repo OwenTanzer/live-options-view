@@ -2,7 +2,18 @@
 
 Restores ONE slice the tape missed, through the existing commit path (SliceRoute._process
 -> durable idempotent commit), so it appears in the panel as backfill with the original-ZIP
-link. Makes no network request: the commit path's opener can serve only the saved file.
+link. Makes no network request: the commit path's opener refuses every URL.
+
+Interruption safety: the verified bytes are first staged inside the archive
+(dtcc-slices/restores/<commit key>.zip, temp + fsync + re-hash + rename). The pending entry
+records that staged file and the expected sha256, and the commit path publishes a restored
+slice ONLY from those staged bytes, never from the network. If the restore stops at any point:
+  - the ordinary collector, on restart, resumes it from the same staged bytes and hash; or
+  - if the staged bytes are missing or no longer match, it marks the restore
+    restore_state "unresolved": still pending, never fetched, never published, and visible in
+    health.json (restores.unresolved) and in `restore.py --status`. Rerunning restore with the
+    verified saved ZIP re-stages it and completes it.
+A staged file with different bytes is never overwritten in place; it is renamed *.superseded-*.
 Daily cumulative files are never used here; they stay comparison-only.
 
 Source identity must be established, or the slice stays unresolved:
@@ -27,6 +38,7 @@ Run it with the collector stopped (it opens the archive's pending queue).
 
 Usage: python -m market_data.credit_tape.restore --archive <dir> --channel CFTC_CR|SEC_CR --zip <path>
        [--sha256 <hex>]
+       python -m market_data.credit_tape.restore --archive <dir> --status
 Prints JSON; exit 0 if restored or already complete, 1 if unresolved.
 """
 from __future__ import annotations
@@ -46,25 +58,28 @@ from market_data.credit_tape import capture, slices, volume
 NAME = re.compile(r"^(CFTC|SEC)_SLICE_CREDITS_(\d{4})_(\d{2})_(\d{2})_(\d+)\.zip$")
 
 
-class _LocalOnly:
-    """Opener for the commit path: serves exactly one saved original; refuses everything else."""
+class _NoNetwork:
+    """Opener for the commit path during a restore: every request is refused and recorded."""
 
-    def __init__(self, url: str, blob: bytes):
-        self.url, self.blob, self.requests = url, blob, []
+    def __init__(self):
+        self.requests = []
 
     def __call__(self, req, timeout=None):
         self.requests.append(req.full_url)
-        if req.full_url != self.url:
-            raise urllib.error.URLError("restore is offline: only the saved original can be read")
-        import io
+        raise urllib.error.URLError("restore is offline: restored slices are read only from staged bytes")
 
-        class _R(io.BytesIO):
-            def __enter__(self):
-                return self
 
-            def __exit__(self, *a):
-                return False
-        return _R(self.blob)
+def _store_verified(path: str, blob: bytes, sha: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    with open(tmp, "wb") as fh:
+        fh.write(blob)
+        fh.flush()
+        os.fsync(fh.fileno())
+    with open(tmp, "rb") as fh:
+        if hashlib.sha256(fh.read()).hexdigest() != sha:
+            raise OSError("staging verification failed")
+    os.replace(tmp, path)
 
 
 def index_entries(archive: str, channel: str, file_name: str) -> list[dict]:
@@ -99,7 +114,8 @@ def recorded_sha(archive: str, channel: str, file_name: str) -> list[dict]:
     return out
 
 
-def restore(archive: str, channel: str, zip_path: str, sha256: str | None = None) -> dict:
+def restore(archive: str, channel: str, zip_path: str, sha256: str | None = None,
+            _stop_before_commit: bool = False, _crash_hook=None) -> dict:
     name = os.path.basename(zip_path)
     res = {"channel": channel, "file": name, "status": "unresolved", "reasons": []}
     unresolved = lambda why: {**res, "reasons": res["reasons"] + [why]}
@@ -150,38 +166,75 @@ def restore(archive: str, channel: str, zip_path: str, sha256: str | None = None
         return unresolved(f"decoded {len(rows)} rows, index entry says {meta.get('rowCount')}")
 
     events, alerts = os.path.join(archive, "events.jsonl"), os.path.join(archive, "alerts_outbox.jsonl")
-    opener = _LocalOnly(meta["fullFilePath"], blob)
+    opener = _NoNetwork()
     route = slices.SliceRoute(archive, capture.now, capture.append_jsonl, opener=opener, lock=capture.WRITE_LOCK)
+    if _crash_hook:
+        route.crash_hook = _crash_hook
     pk = route.pkey(channel, sid)
     if route._done(channel, sid):
         route.pending.pop(pk, None)
         route._save()
         return {**res, "status": "already_complete", "commit_key": route.commit_key(channel, sid),
-                "commit_path_reads_served_locally": opener.requests}
+                "network_requests": opener.requests}
+    # Stage the verified bytes inside the archive first (temp, fsync, re-hash, rename). The pending
+    # entry names this file and its sha256, and the commit path publishes a restore only from it.
+    rel = os.path.join("dtcc-slices", "restores", route.commit_key(channel, sid).replace("/", "__") + ".zip")
+    staged = os.path.join(archive, rel)
+    if os.path.exists(staged):
+        with open(staged, "rb") as fh:
+            current = hashlib.sha256(fh.read()).hexdigest()
+        if current != sha:  # never overwritten in place; kept for inspection
+            os.replace(staged, staged + f".superseded-{capture.now().replace(':', '').replace('+', '')}")
+    if not os.path.exists(staged):
+        _store_verified(staged, blob, sha)
+    restored = {"source": "saved_numbered_intraday_zip", "sha256": sha, "local_zip": rel,
+                "identity": "saved index entry + recorded sha256 + rowCount"}
     with route.lock:
-        route.pending[pk] = {"key": channel, "meta": meta, "attempts": 0, "retry_at": 0.0,
+        prev = route.pending.get(pk) or {}
+        route.pending[pk] = {"key": channel, "meta": meta, "attempts": prev.get("attempts", 0), "retry_at": 0.0,
                              "enqueued_at": capture.now(), "enqueued_ts": route.clock(), "last_error": None,
-                             "restored": {"source": "saved_numbered_intraday_zip", "sha256": sha,
-                                          "identity": "saved index entry + recorded sha256 + rowCount"}}
+                             "restored": restored}  # also clears an earlier restore_state "unresolved"
         route.seen.add(pk)
         route._save()
+    if _stop_before_commit:  # tests only: the process stops here
+        return {**res, "status": "interrupted", "staged": rel}
     route._process(pk, events, alerts)
     if not route._done(channel, sid):
         p = route.pending.get(pk) or {}
         return unresolved(f"commit path did not complete: {p.get('last_error')}")
     return {**res, "status": "restored", "commit_key": route.commit_key(channel, sid), "rows": len(rows),
-            "commit_path_reads_served_locally": opener.requests}
+            "staged": rel, "network_requests": opener.requests}
+
+
+def status(archive: str) -> dict:
+    """Restores still pending in the archive's queue (resumable) and those left unresolved."""
+    try:
+        with open(os.path.join(archive, "dtcc-slices", "pending.json"), encoding="utf-8") as fh:
+            pending = json.load(fh)
+    except (OSError, ValueError):
+        pending = {}
+    rows = [{"pending_key": k, "state": v.get("restore_state") or "resumable",
+             "staged": (v.get("restored") or {}).get("local_zip"), "sha256": (v.get("restored") or {}).get("sha256"),
+             "last_error": v.get("last_error")} for k, v in sorted(pending.items()) if v.get("restored")]
+    return {"restores": rows, "unresolved": [r["pending_key"] for r in rows if r["state"] == "unresolved"]}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--archive", default=os.environ.get("CREDIT_TAPE_ARCHIVE"), required=False)
-    ap.add_argument("--channel", required=True, choices=sorted(slices.CHANNELS))
-    ap.add_argument("--zip", required=True)
+    ap.add_argument("--channel", choices=sorted(slices.CHANNELS))
+    ap.add_argument("--zip")
+    ap.add_argument("--status", action="store_true", help="list pending and unresolved restores")
     ap.add_argument("--sha256")
     a = ap.parse_args(argv)
     if not a.archive:
         ap.error("--archive or CREDIT_TAPE_ARCHIVE required")
+    if a.status:
+        result = status(a.archive)
+        print(json.dumps(result, indent=1))
+        return 1 if result["unresolved"] else 0
+    if not a.channel or not a.zip:
+        ap.error("--channel and --zip required (or --status)")
     result = restore(a.archive, a.channel, a.zip, a.sha256)
     print(json.dumps(result, indent=1))
     return 0 if result["status"] in ("restored", "already_complete") else 1

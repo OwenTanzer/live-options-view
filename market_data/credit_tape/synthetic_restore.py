@@ -124,7 +124,7 @@ def run(archive: str) -> dict:
     r_two = restore.restore(archive, "CFTC_CR", str(saved2))
     ev["3_restore"] = {"tampered": [r_tampered["status"], r_tampered["reasons"]],
                        "slice4": [r_four["status"], r_four["reasons"]],
-                       "slice2": {k: r_two.get(k) for k in ("status", "commit_key", "rows", "identity", "commit_path_reads_served_locally")}}
+                       "slice2": {k: r_two.get(k) for k in ("status", "commit_key", "rows", "identity", "staged", "network_requests")}}
     after_restore = len(pubs(archive, 2))
 
     r_again = restore.restore(archive, "CFTC_CR", str(saved2))  # rerun
@@ -184,7 +184,8 @@ def run(archive: str) -> dict:
         "tampered_copy_unresolved": r_tampered["status"] == "unresolved",
         "unknown_identity_slice4_unresolved": r_four["status"] == "unresolved",
         "slice2_restored_via_commit_path": r_two["status"] == "restored" and r_two["commit_key"] == "dtcc-cftc-slices/CFTC_CR/9102",
-        "restore_reads_only_the_saved_file": r_two["commit_path_reads_served_locally"] == [meta(2)["fullFilePath"]],
+        "restore_makes_no_network_request": r_two["network_requests"] == []
+        and hashlib.sha256((Path(archive) / r_two["staged"]).read_bytes()).hexdigest() == r_two["sha256"],
         "repeats_and_correction_kept": sorted(e["id"] for e in p2) == ["C", "R", "R"],
         "rerun_is_noop": r_again["status"] == "already_complete",
         "no_duplicate_after_rerun_restart_replay": after_restore == 3 and len(p2) == 3,

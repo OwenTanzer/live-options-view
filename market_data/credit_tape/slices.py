@@ -248,6 +248,32 @@ class SliceRoute:
                 raise OSError("raw write verification failed")
         os.replace(tmp, path)
 
+    def _restored_bytes(self, restored: dict):
+        """(blob, None) if the staged restore file exists inside the archive and matches; else (None, reason)."""
+        rel = restored.get("local_zip") or ""
+        path = os.path.realpath(os.path.join(self.out, rel))
+        root = os.path.realpath(self.out)
+        if not rel or os.path.isabs(rel) or os.path.commonpath([root, path]) != root:
+            return None, "restore has no staged file inside the archive"
+        if not os.path.isfile(path):
+            return None, f"staged restore bytes missing: {rel}"
+        with open(path, "rb") as fh:
+            blob = fh.read()
+        if not restored.get("sha256") or hashlib.sha256(blob).hexdigest() != restored["sha256"]:
+            return None, "staged restore bytes do not match the expected sha256"
+        return blob, None
+
+    def _restore_unresolved(self, pk, p, why, t_req, name):
+        """Leave the restore visibly unresolved: kept pending, never fetched or published, until restore.py reruns."""
+        with self.lock:
+            p["restore_state"] = "unresolved"
+            p["last_error"] = why[:300]
+            self._save()
+        self.append(os.path.join(self.dir, "polls.jsonl"), {"t": t_req, "ok": False, "what": "restore",
+                                                           "sliceId": p["meta"].get("sliceId"), "channel": p["key"],
+                                                           "file": name, "error": p["last_error"]})
+        return 0
+
     def _retry_later(self, pk, p, error, t_req, name, replay):
         with self.lock:
             p["attempts"] += 1
@@ -288,7 +314,10 @@ class SliceRoute:
             return {"polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
                     "slices_seen": len(self.seen), "pending_live": live, "pending_backfill": len(self.pending) - live,
                     "last_index_at": self.last_index_at, "channels": chans,
-                    "backfill_worker": {"state": self.backfill_state, "error": self.backfill_error}}
+                    "backfill_worker": {"state": self.backfill_state, "error": self.backfill_error},
+                    "restores": {"pending": sorted(k for k, p in self.pending.items() if p.get("restored")),
+                                 "unresolved": sorted(k for k, p in self.pending.items()
+                                                      if p.get("restore_state") == "unresolved")}}
 
     def check_workers(self) -> None:
         """Raise if the replay worker died, so the collector (and the service) stop visibly."""
@@ -368,8 +397,14 @@ class SliceRoute:
     def _due(self, replay: bool):
         now = self.clock()
         with self.lock:
-            return [pk for pk in sorted(self.pending, key=self._order)
-                    if self.is_replay(self.pending[pk]["meta"]) == replay and self.pending[pk]["retry_at"] <= now]
+            out = []
+            for pk in sorted(self.pending, key=self._order):
+                p = self.pending[pk]
+                if p.get("restore_state") == "unresolved":
+                    continue  # blocked until restore.py supplies verified bytes again
+                if (self.is_replay(p["meta"]) or bool(p.get("restored"))) == replay and p["retry_at"] <= now:
+                    out.append(pk)
+            return out
 
     def drain_live(self, events_path, alerts_path, budget: int = 50) -> int:
         """Fetch due live slices; called on the live loop every pass (200 or 304 alike)."""
@@ -427,11 +462,19 @@ class SliceRoute:
                                              "slice": slice_info, "replay": replay, **prov}], [], {"rejected": True})
             return 1
         t_req = self.now()
-        try:
-            with self.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=60) as r:
-                blob = r.read()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return self._retry_later(pk, p, repr(exc), t_req, name, replay)
+        if restored:
+            # A restore is published ONLY from its staged, verified local bytes and expected sha256,
+            # never from the network: an interrupted restore can resume, but it can never publish
+            # replacement bytes under restored provenance.
+            blob, why = self._restored_bytes(restored)
+            if blob is None:
+                return self._restore_unresolved(pk, p, why, t_req, name)
+        else:
+            try:
+                with self.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=60) as r:
+                    blob = r.read()
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                return self._retry_later(pk, p, repr(exc), t_req, name, replay)
         t_recv = self.now()
         sha = hashlib.sha256(blob).hexdigest()
         prior = self._load(self._key_file("commits", key, sid), None)
