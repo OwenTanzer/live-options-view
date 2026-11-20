@@ -34,7 +34,13 @@ async function refresh() {
       if (!response.ok) throw new Error();
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
       const main = doc.querySelector('main[data-cursor]');
-      if (!main) throw new Error();
+      if (!main) {
+        if (doc.querySelector('a[href="/credit-tape/auth/login"]')) {
+          location.reload();
+          return;
+        }
+        throw new Error();
+      }
       if (main.dataset.cursor !== document.querySelector('main').dataset.cursor) {
         for (const selector of ['header p','nav','tbody']) document.querySelector(selector).replaceWith(doc.querySelector(selector));
         document.querySelector('main').dataset.cursor = main.dataset.cursor;
