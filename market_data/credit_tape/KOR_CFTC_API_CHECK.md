@@ -66,7 +66,8 @@ execution), `product` coding, enumerations for `actionType`/`eventType`, any
 - **Auto-refresh (Observed, UI code):** "Auto Updates" re-queries from the top, with
   no cursor, every **5 seconds** (`REFRESH_INTERVAL` factory `5e3`).
 - **Replay (Gap):** no since/after or sequence parameter and no documented sort
-  order (KOR's own example is not monotonic). Cursor stability under new arrivals
+  order (KOR's two-item example happens to be in ascending time, which is not a
+  stated guarantee). Cursor stability under new arrivals
   and cursor expiry are undocumented. Deterministic replay, or a gap-free resume
   after downtime, is therefore not established.
 - **History depth (Official):** rulebook §11.1.2: data stays available "on the KOR
