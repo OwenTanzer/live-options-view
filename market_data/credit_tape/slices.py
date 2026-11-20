@@ -14,10 +14,16 @@ Structure (so live collection keeps moving through replay and retries):
 * ``drain_backfill`` fetches replay slices (disseminated before start). Run it
   on its own thread (``start_backfill_thread``) so replay never blocks live
   polling.
-* A slice is emitted exactly once: original bytes are written, its events are
-  appended in one write, then a done marker is recorded before it leaves the
-  pending store. On restart, pending slices that already have a marker are
-  dropped without re-emitting.
+* Publishing is a durable, idempotent commit keyed by (source, channel,
+  sliceId): (1) the complete raw ZIP is written to a temp file, fsynced,
+  hash-checked and renamed into place; (2) a commit record holding every event
+  and alert line plus the pre-append offsets of both logs is written
+  atomically; (3) the lines are appended, each tagged with its commit key and
+  line number; (4) a done marker is written. On restart, any commit without a
+  done marker is re-applied from its recorded offsets: lines already present
+  are skipped, a torn trailing line is trimmed, missing lines are appended,
+  then the marker is written. Re-applying is idempotent, so a stop at any
+  point yields no loss and no duplicate.
 """
 from __future__ import annotations
 
@@ -44,6 +50,10 @@ UA = "Mozilla/5.0 (credit-tape research client)"
 RETRY_MIN, RETRY_MAX = 5.0, 300.0
 
 
+class SimulatedStop(Exception):
+    """Raised only by synthetic crash hooks to model a process stop."""
+
+
 def _atomic_json(path: str, obj) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -59,6 +69,8 @@ class SliceRoute:
         self.lock = lock or threading.RLock()  # pass the writer's lock when sharing an event log
         self.dir = os.path.join(out, "dtcc-slices")
         os.makedirs(os.path.join(self.dir, "done"), exist_ok=True)
+        os.makedirs(os.path.join(self.dir, "commits"), exist_ok=True)
+        self.crash_hook = None  # synthetic tests only: callable(stage) that may raise
         self.state_path = os.path.join(self.dir, "checkpoint.json")
         self.pending_path = os.path.join(self.dir, "pending.json")
         st = self._load(self.state_path, {})
@@ -70,8 +82,9 @@ class SliceRoute:
         self.index_backoff, self.index_retry_at = 0.0, 0.0
         # pending: sliceId -> {"key", "meta", "attempts", "retry_at", "last_error"}
         self.pending: dict[int, dict] = {int(k): v for k, v in self._load(self.pending_path, {}).items()}
-        for sid in list(self.pending):  # completed just before a crash: drop, don't re-emit
-            if self._done(sid):
+        self.recovered = self._recover()  # finish any commit interrupted before its done marker
+        for sid in list(self.pending):
+            if self._done(self.pending[sid]["key"], sid):
                 del self.pending[sid]
                 self.seen.add(sid)
         self._save()
@@ -92,12 +105,89 @@ class SliceRoute:
                 "polls_ok": self.polls_ok, "polls_err": self.polls_err, "not_modified": self.not_modified,
                 "last_index_at": self.last_index_at})
 
-    def _done(self, sid: int) -> bool:
-        return os.path.exists(os.path.join(self.dir, "done", str(sid)))
+    @staticmethod
+    def commit_key(channel: str, sid: int) -> str:
+        return f"{CHANNELS[channel]['source']}/{channel}/{sid}"
 
-    def _mark_done(self, sid: int, info: dict):
-        path = os.path.join(self.dir, "done", str(sid))
-        _atomic_json(path, info)
+    def _key_file(self, kind: str, channel: str, sid: int) -> str:
+        return os.path.join(self.dir, kind, self.commit_key(channel, sid).replace("/", "__") + ".json")
+
+    def _done(self, channel: str, sid: int) -> bool:
+        return os.path.exists(self._key_file("done", channel, sid))
+
+    # -- durable idempotent publish -------------------------------------------
+    @staticmethod
+    def _trim_torn_tail(path: str, floor: int) -> None:
+        """Drop an incomplete trailing line written after `floor` (a stop mid-append)."""
+        if not os.path.exists(path):
+            return
+        with open(path, "rb+") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            if size <= floor:
+                return
+            fh.seek(size - 1)
+            if fh.read(1) == b"\n":
+                return
+            fh.seek(floor)
+            tail = fh.read()
+            cut = tail.rfind(b"\n")
+            fh.truncate(floor + cut + 1 if cut >= 0 else floor)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def _apply(self, commit: dict) -> dict:
+        """Append whatever part of the commit is missing; safe to repeat."""
+        added = {}
+        for name in ("events", "alerts"):
+            path = os.path.join(self.out, commit[name + "_path"])
+            floor = commit[name + "_offset"]
+            self._trim_torn_tail(path, floor)
+            present = set()
+            if os.path.exists(path):
+                with open(path, "rb") as fh:
+                    fh.seek(floor)
+                    for raw in fh:
+                        try:
+                            obj = json.loads(raw)
+                        except ValueError:
+                            continue
+                        if obj.get("commit_key") == commit["key"]:
+                            present.add(obj.get("commit_line"))
+            missing = [ln for ln in commit[name] if ln["commit_line"] not in present]
+            if missing:
+                lines = [json.dumps(o, separators=(",", ":")) + "\n" for o in missing]
+                with open(path, "a", encoding="utf-8") as fh:
+                    if self.crash_hook and len(lines) > 1 and self.crash_hook("tear_" + name):
+                        fh.write("".join(lines[: len(lines) // 2]))
+                        fh.write(lines[len(lines) // 2][:20])  # torn line
+                        fh.flush()
+                        raise SimulatedStop("mid_" + name)
+                    fh.write("".join(lines))
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            added[name] = len(missing)
+        return added
+
+    def _recover(self) -> list:
+        done = []
+        with self.lock:
+            cdir = os.path.join(self.dir, "commits")
+            for fn in sorted(os.listdir(cdir)):
+                if not fn.endswith(".json"):
+                    continue
+                commit = self._load(os.path.join(cdir, fn), None)
+                if not commit or self._done(commit["channel"], commit["sliceId"]):
+                    continue
+                raw = os.path.join(self.out, commit["raw_ref"]) if commit.get("raw_ref") else None
+                raw_ok = raw is None or (os.path.exists(raw) and
+                                         hashlib.sha256(open(raw, "rb").read()).hexdigest() == commit["raw_sha256"])
+                added = self._apply(commit)
+                _atomic_json(self._key_file("done", commit["channel"], commit["sliceId"]),
+                             {"at": self.now(), "recovered": True, "added": added, "raw_intact": raw_ok})
+                self.pending.pop(commit["sliceId"], None)
+                self.seen.add(commit["sliceId"])
+                done.append({"key": commit["key"], "added": added, "raw_intact": raw_ok})
+        return done
 
     def append(self, path, obj):
         with self.lock:
@@ -167,7 +257,7 @@ class SliceRoute:
                     continue
                 for meta in lst:
                     sid = meta.get("sliceId") if isinstance(meta, dict) else None
-                    if type(sid) is not int or sid in self.seen or self._done(sid):
+                    if type(sid) is not int or sid in self.seen or self._done(key, sid):
                         continue
                     self.pending[sid] = {"key": key, "meta": meta, "attempts": 0, "retry_at": 0.0,
                                          "enqueued_at": t_recv, "last_error": None}
@@ -224,7 +314,7 @@ class SliceRoute:
     def _process(self, sid, events_path, alerts_path) -> int:
         with self.lock:
             p = self.pending.get(sid)
-            if p is None or self._done(sid):
+            if p is None or self._done(p["key"], sid):
                 self.pending.pop(sid, None)
                 return 0
             key, meta = p["key"], p["meta"]
@@ -236,7 +326,7 @@ class SliceRoute:
         prov = {"publisher": PUBLISHER, "jurisdiction": ch["jurisdiction"], "route": "slice-index"}
         if (u.scheme != "https" or u.hostname != SLICE_HOST or not u.path.startswith(ch["prefix"])
                 or not name.endswith(".zip") or "/" in name or u.path.rsplit("/", 1)[-1] != name):
-            self._finish(sid, events_path, alerts_path, [{"source": ch["source"], "kind": "slice_rejected", "first_seen": self.now(),
+            self._finish(sid, key, events_path, alerts_path, [{"source": ch["source"], "kind": "slice_rejected", "first_seen": self.now(),
                                              "slice": slice_info, "replay": replay, **prov}], [], {"rejected": True})
             return 1
         t_req = self.now()
@@ -257,8 +347,18 @@ class SliceRoute:
         rel = f"dtcc-slices/raw/{(meta.get('dissemDTM') or t_recv)[:10]}/{name}"
         path = os.path.join(self.out, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as fh:  # original bytes before decoding
+        sha = hashlib.sha256(blob).hexdigest()
+        tmp = path + ".part"
+        with open(tmp, "wb") as fh:  # complete original before anything is published
             fh.write(blob)
+            fh.flush()
+            os.fsync(fh.fileno())
+        with open(tmp, "rb") as fh:
+            if hashlib.sha256(fh.read()).hexdigest() != sha:
+                raise OSError("raw write verification failed")
+        os.replace(tmp, path)
+        if self.crash_hook:
+            self.crash_hook("after_raw")
         base = {"first_seen": t_recv, "raw_ref": rel, "slice": slice_info, "replay": replay,
                 "attempts": p["attempts"] + 1, **prov}
         try:
@@ -266,11 +366,11 @@ class SliceRoute:
                 rows = list(csv.DictReader(io.StringIO(z.read(z.namelist()[0]).decode("utf-8"))))
         except Exception as exc:
             ev = {"source": ch["source"], "kind": "decode_failure", "error": repr(exc)[:300], **base}
-            self._finish(sid, events_path, alerts_path, [ev], [ev], {"decode_failure": True})
+            self._finish(sid, key, events_path, alerts_path, [ev], [ev], {"decode_failure": True}, rel, sha)
             return 1
         match = len(rows) == meta.get("rowCount")
         evs = [{"source": ch["source"], "kind": "slice", "requested_at": t_req,
-                "raw_sha256": hashlib.sha256(blob).hexdigest(), "decoded_rows": len(rows), "rowcount_match": match, **base}]
+                "raw_sha256": sha, "decoded_rows": len(rows), "rowcount_match": match, **base}]
         alerts = []
         if not match:
             mm = {"source": ch["source"], "kind": "rowcount_mismatch", "decoded_rows": len(rows), **base}
@@ -285,18 +385,32 @@ class SliceRoute:
             evs.append(ev)
             if not replay:
                 alerts.append({k: v for k, v in ev.items() if k != "record"})
-        self._finish(sid, events_path, alerts_path, evs, alerts, {"rows": len(rows), "raw_ref": rel})
+        self._finish(sid, key, events_path, alerts_path, evs, alerts, {"rows": len(rows)}, rel, sha)
         return 1
 
-    def _finish(self, sid, events_path, alerts_path, evs, alerts, info):
+    def _finish(self, sid, channel, events_path, alerts_path, evs, alerts, info, raw_ref=None, raw_sha256=None):
+        key = self.commit_key(channel, sid)
         with self.lock:
-            if self._done(sid):  # another drain finished it first
+            if self._done(channel, sid):  # another drain finished it first
                 self.pending.pop(sid, None)
                 return
-            self._append_many(events_path, evs)
-            if alerts:
-                stamp = self.now()
-                self._append_many(alerts_path, [{**a, "alert_written": stamp} for a in alerts])
-            self._mark_done(sid, {"at": self.now(), **info})
+            stamp = self.now()
+            ev_lines = [{**e, "commit_key": key, "commit_line": i} for i, e in enumerate(evs)]
+            al_lines = [{**a, "alert_written": stamp, "commit_key": key, "commit_line": i} for i, a in enumerate(alerts)]
+            sizes = {}
+            for name, path in (("events", events_path), ("alerts", alerts_path)):
+                sizes[name] = os.path.getsize(path) if os.path.exists(path) else 0
+            commit = {"key": key, "channel": channel, "sliceId": sid, "source": CHANNELS[channel]["source"],
+                      "raw_ref": raw_ref, "raw_sha256": raw_sha256, "committed_at": stamp,
+                      "events_path": os.path.relpath(events_path, self.out), "events_offset": sizes["events"],
+                      "alerts_path": os.path.relpath(alerts_path, self.out), "alerts_offset": sizes["alerts"],
+                      "events": ev_lines, "alerts": al_lines}
+            _atomic_json(self._key_file("commits", channel, sid), commit)
+            if self.crash_hook:
+                self.crash_hook("after_commit_record")
+            self._apply(commit)
+            if self.crash_hook:
+                self.crash_hook("after_output")  # Chej's case: output written, completion not yet recorded
+            _atomic_json(self._key_file("done", channel, sid), {"at": self.now(), **info})
             self.pending.pop(sid, None)
             self._save()

@@ -206,6 +206,12 @@ class SliceRouteTests(unittest.TestCase):
         r2.drain_live(self.ev, self.al)
         self.assertEqual(sum(1 for e in lines(self.ev) if e["kind"] == "publication"), 1)
 
+    def test_synthetic_crash_safe_publish(self):
+        from market_data.credit_tape import synthetic_crash
+        result = synthetic_crash.run()
+        self.assertTrue(result["all_pass"], json.dumps(result, indent=1))
+        self.assertEqual([r["stop_at"] for r in result["results"]], synthetic_crash.STOP_POINTS)
+
     def test_synthetic_resilience_run(self):
         from market_data.credit_tape import synthetic_resilience
         result = synthetic_resilience.run(self.out)

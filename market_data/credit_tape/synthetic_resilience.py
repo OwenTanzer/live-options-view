@@ -136,8 +136,8 @@ def run(out: str) -> dict:
     route.poll_index(events)
     route.drain_live(events, alerts)
     live_polls += 1
-    cftc_live_done = os.path.exists(os.path.join(out, "dtcc-slices", "done", "104"))
-    replay_done_while_blocked = sum(os.path.exists(os.path.join(out, "dtcc-slices", "done", str(m["sliceId"]))) for m in replay)
+    cftc_live_done = route._done("CFTC_CR", 104)
+    replay_done_while_blocked = sum(route._done("CFTC_CR", m["sliceId"]) for m in replay)
     note("index v2 (200): live CFTC #4 fetched while backfill still blocked",
          cftc_live_done=cftc_live_done, replay_done=replay_done_while_blocked)
     gate.set()
