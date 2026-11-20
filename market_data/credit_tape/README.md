@@ -56,6 +56,9 @@ display was found; the data is regulator-mandated public dissemination. Open for
 
 ## UK sources (inventory, not connected)
 
+Superseded in detail by [COVERAGE_MAP.md](COVERAGE_MAP.md) (U.S. SDRs beyond DTCC, UK publishers, evidence labels, next candidate).
+
+
 Under FCA PS24/14 (in force 1 Dec 2025) five-year iTraxx Europe Main and Crossover are
 Category 1 (real-time post-trade transparency for venues and OTC firms); single-name CDS
 are excluded from Category 1, so single-name UK coverage may be thin or deferred. APAs and
