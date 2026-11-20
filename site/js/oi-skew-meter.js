@@ -133,6 +133,14 @@ function renderOiSkewMeter(nowMs = Date.now()) {
     `${raw.symbol || 'QQQ'} · reference ±${((raw.band_pct ?? 0.02) * 100).toFixed(0)}% band · `
     + `snapshot ${_oiSkewEtTime(raw.snapshot_ms)} · ${status}`;
   root.title = raw.detail;
+  // Truth layer chip: the at-a-glance state and observation age; the meta
+  // line above stays the precise record.
+  if (typeof describeTruth === 'function') {
+    renderTruthChip($('oi-skew-truth'), describeTruth(raw.availability, {
+      observedMs: raw.snapshot_ms ?? null, nowMs,
+      note: raw.refresh_failed ? 'refresh failed' : null,
+    }));
+  }
 
   const botEl = $('oi-skew-bot');
   botEl.textContent = bot.text;
