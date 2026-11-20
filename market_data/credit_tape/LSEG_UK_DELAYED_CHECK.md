@@ -12,6 +12,13 @@ Labels: **Official** (LSEG's own text, as indexed), **Indexed third-party**,
 There is a real LSEG UK credit publisher, but coverage and permission are both
 unverified, and LSEG's website terms prohibit automated access.
 
+**Correction after review (2026-11-20):** LSEG's own delayed-data page documents ECHO
+files as semicolon-delimited UTC minute files, available 15 minutes after first
+publication. Its portal terms name certain paid uses that need a licence. Whether the
+wider site's automation ban covers the portal, and whether unattended archiving and
+private display are permitted, is unestablished. Five-year Main/Crossover rows are
+unverified. ECHO is parked for ingestion.
+
 ## Publisher and data set
 
 - **Publisher: TRADEcho UK APA (MIC `ECHO`), London Stock Exchange.**

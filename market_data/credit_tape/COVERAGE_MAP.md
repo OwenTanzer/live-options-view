@@ -110,6 +110,8 @@ Documentation check: [KOR_CFTC_API_CHECK.md](KOR_CFTC_API_CHECK.md) (schema, fil
 
 LSEG alternative: [LSEG_UK_DELAYED_CHECK.md](LSEG_UK_DELAYED_CHECK.md). It is not a confirmed alternative.
 
+Bloomberg UK MTF (BMTF) on-venue complement: [BMTF_UK_CHECK.md](BMTF_UK_CHECK.md). It trades iTraxx Main/Crossover, but publication of those rows in its delayed CSV feed and its Terms of Use are unverified.
+
 ## Candidate for the next implementation step
 
 Follow-up: [TRADEWEB_UK_GO_NO_GO.md](TRADEWEB_UK_GO_NO_GO.md) has the datasets, fields, cadence and terms, with the verdict and the named gaps.
