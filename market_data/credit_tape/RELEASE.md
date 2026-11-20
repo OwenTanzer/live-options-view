@@ -12,10 +12,15 @@ One process, `python -u -m market_data.credit_tape.service` (the image `CMD`):
 | Collector thread | DTCC slice-index route only (`capture.run(..., ticker=False, slices=True)`): `CFTC_CR` and `SEC_CR` slices from the public `Slice.json`. Ticker output is off; nothing with source `*-credits` is written. Replay slices drain on a separate backfill thread. |
 | Panel / API / raw / export | `serve_private` handler, GitHub identity-only sign-in (PKCE, `scope=""`), numeric-ID allowlist, opaque 8-hour sessions, exact Host check. `/panel.js`, `/panel.css`, `/api/trades`, `/api/raw`, `/api/export` all require an allowed session; without one, `/` shows only the sign-in link. The sign-in flow follows directional-move-lab `scripts/serve_private.py@2bdebbe` (see **Sign-in flow** below). |
 | Unauthenticated | `/healthz` (process up and configured) and `/healthz/collector` (per-channel status). Status, ages and counts only; never trade content; any Host. |
-| Storage | `CREDIT_TAPE_ARCHIVE` on a private mounted volume: raw ZIPs, commit records, done markers, `events.jsonl`, `alerts_outbox.jsonl`, `health.json`. |
+| Storage | `CREDIT_TAPE_ARCHIVE`, a directory **inside** the mounted volume named by `CREDIT_TAPE_VOLUME` (or Railway's `RAILWAY_VOLUME_MOUNT_PATH`). It holds raw ZIPs, commit records, done markers, `events.jsonl`, `alerts_outbox.jsonl`, `health.json`, and the one-time identity file `archive.json` (`archive_id`). |
 
-Fails closed: exits 2 without starting if any gate variable is missing or invalid,
-if `CREDIT_TAPE_DEV_LOCAL` is set, or if the interval is outside 5..300 s. Exits 1
+Fails closed: exits 2 without starting, and without writing anything, in any of these cases:
+- any gate variable is missing or invalid;
+- `CREDIT_TAPE_DEV_LOCAL` is set;
+- the interval is outside 5..300 s;
+- **the persistent volume is absent.** No volume is named; the named path does not exist; it is not a mount point; or `CREDIT_TAPE_ARCHIVE` is outside it, or is the volume root itself. The service never falls back to the container's temporary filesystem. It creates `archive.json` once, on first start, and logs the `archive_id` on every start.
+
+It exits 1
 if the collector thread dies **or the replay (backfill) worker fails**: the
 worker's error is written to `health.json` (`backfill_worker.state = "failed"`),
 `/healthz/collector` turns 503, and the collector stops, so the platform restarts
@@ -80,7 +85,8 @@ confirm this in the console; the archive design assumes a single writer.
 
 | Variable | Value |
 |---|---|
-| `CREDIT_TAPE_ARCHIVE` | `/data/credit-tape` (absolute, on the volume) |
+| `CREDIT_TAPE_VOLUME` | `/data`: the volume's mount path. It may be omitted if Railway sets `RAILWAY_VOLUME_MOUNT_PATH` for the attached volume; the service uses that instead. |
+| `CREDIT_TAPE_ARCHIVE` | `/data/credit-tape` (absolute, inside the volume) |
 | `CREDIT_TAPE_PUBLIC_ORIGIN` | `https://<service domain>`: exact origin, no port or path |
 | `CREDIT_TAPE_GITHUB_CLIENT_ID` | The client ID of a **new** GitHub OAuth app used only for this service |
 | `CREDIT_TAPE_GITHUB_CLIENT_SECRET` | That app's secret, stored as a sealed or secret variable |
@@ -131,33 +137,44 @@ Let `ORIGIN` be the public origin.
 
 ## Restart verification
 
-Run the read-only checker inside the service, e.g. `railway ssh`, then from `/app`:
+Run the read-only checker inside the service, e.g. via `railway ssh`, then from `/app`. `--volume` defaults to `CREDIT_TAPE_VOLUME` or `RAILWAY_VOLUME_MOUNT_PATH`.
 
 ```sh
-python -m market_data.credit_tape.check_archive --archive "$CREDIT_TAPE_ARCHIVE" > /data/check-before.json
+python -m market_data.credit_tape.check_archive --archive "$CREDIT_TAPE_ARCHIVE" --volume /data > /data/check-before.json
 # restart or redeploy the service, wait two intervals, confirm /healthz/collector is 200
-python -m market_data.credit_tape.check_archive --archive "$CREDIT_TAPE_ARCHIVE" --compare /data/check-before.json
+python -m market_data.credit_tape.check_archive --archive "$CREDIT_TAPE_ARCHIVE" --volume /data --compare /data/check-before.json
 ```
 
-It exits 0 only if all of the following hold:
-- the archive path exists and is a credit-tape archive. A missing, mistyped or unmounted path fails, and `--compare` against such a run fails too;
-- there is no ticker output of any kind: no event from a ticker source and no ticker archive directory;
-- there are no duplicate `(commit_key, commit_line)` lines in the event or alert log;
-- there are no torn or unreadable lines;
-- every slice commit has its done marker. A commit still waiting for its original also fails;
-- every referenced raw ZIP exists and matches the sha256 recorded at publish time;
-- there are no `.part` leftovers;
-- compared with the earlier run, no channel's publication count fell.
+It proves it read the actual persistent archive, then re-verifies it.
+
+**It exits 0 only if:**
+
+- **Same persistent archive**
+  - `--volume` exists, is a mount point, and contains the archive.
+  - The archive exists, is a credit-tape archive, and has its `archive.json` identity.
+  - With `--compare`, the `archive_id` is identical before and after. A restart that came up on a fresh or temporary directory fails here.
+- **Every completed commit validates.** The checker re-checks each one against:
+  - **its original ZIP:** present and byte-identical (sha256) to the bytes committed;
+  - **its log lines:** every committed event and alert line is present and identical, in the log the commit names;
+  - **the ZIP content:** the ZIP is re-decoded, and its rows must match the committed publications (count, row order, record, `Dissemination Identifier`) and the slice event's `decoded_rows`. A recorded **decode failure** must still fail to decode, and its original and its event/alert lines are checked the same way. Rejected slices have no original, so only their lines are checked.
+  - Problems are listed per commit, for example `original_missing`, `original_hash_mismatch`, `committed_event_line_missing`, `committed_alert_line_missing`, `committed_event_line_differs`, `publication_differs_from_original_row`.
+- **No partial or duplicate output**
+  - No logged line points to a missing commit record, and no `(commit_key, commit_line)` is duplicated.
+  - There are no torn or unreadable lines.
+  - Every commit has its done marker; a commit still waiting for its original fails.
+  - There are no `.part` leftovers.
+- **No ticker output of any kind:** no ticker event and no ticker directory.
+- **With `--compare`:** no channel's publication count fell, and the number of completed commits did not fall.
 
 ## Rollback
 
 **First release.** There is no earlier runnable image of this service. `ce25cd7`
 and older commits have no service entrypoint or Dockerfile. So rollback is:
 
-1. Stop the `credit-tape` service: remove its active deployment, or delete the
-   service.
-2. **Keep the volume.** It is the archive (raw ZIPs, commit records, done markers,
-   logs). Do not delete or detach-and-delete it.
+1. Stop the `credit-tape` deployment.
+2. **Keep the volume** attached and intact. It is the archive (`archive.json`, raw
+   ZIPs, commit records, done markers, logs). Do not delete the service or the
+   volume as part of rollback.
 3. Do not redeploy an older commit.
 
 Restarting the same release later on the same volume resumes safely. Publishing is
@@ -188,11 +205,17 @@ the restart verification above.
 
 ## Public-source local rehearsal (no deploy)
 
+The service refuses a plain directory, so a rehearsal needs a real mount, e.g. a
+named Docker volume. It uses the live public DTCC index; run the offline synthetic
+regression separately (see above).
+
 ```sh
-# Uses the live public DTCC index; run the offline synthetic regression separately (see above).
-CREDIT_TAPE_ARCHIVE=<abs dir> CREDIT_TAPE_PUBLIC_ORIGIN=https://credit-tape.example.test \
-CREDIT_TAPE_GITHUB_CLIENT_ID=placeholder CREDIT_TAPE_GITHUB_CLIENT_SECRET=placeholder \
-CREDIT_TAPE_GITHUB_ALLOWED_IDS=1 PORT=8791 python -u -m market_data.credit_tape.service
+docker build -f deployment/credit_tape/Dockerfile -t credit-tape .
+docker run --rm -p 8791:8791 -v credit-tape-rehearsal:/data \
+  -e CREDIT_TAPE_VOLUME=/data -e CREDIT_TAPE_ARCHIVE=/data/credit-tape -e PORT=8791 \
+  -e CREDIT_TAPE_PUBLIC_ORIGIN=https://credit-tape.example.test \
+  -e CREDIT_TAPE_GITHUB_CLIENT_ID=placeholder -e CREDIT_TAPE_GITHUB_CLIENT_SECRET=placeholder \
+  -e CREDIT_TAPE_GITHUB_ALLOWED_IDS=1 credit-tape
 curl -s localhost:8791/healthz/collector
 curl -s -o /dev/null -w "%{http_code}\n" -H "Host: credit-tape.example.test" localhost:8791/api/trades   # 401
 ```

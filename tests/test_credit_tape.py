@@ -328,7 +328,10 @@ class ServiceReleaseTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.archive = Path(self.tmp.name)
-        self.env = {"CREDIT_TAPE_ARCHIVE": str(self.archive), "CREDIT_TAPE_PUBLIC_ORIGIN": "https://cds.example.test",
+        self.volume = self.archive / "volume"
+        self.volume.mkdir()
+        self.env = {"CREDIT_TAPE_ARCHIVE": str(self.volume / "credit-tape"), "CREDIT_TAPE_VOLUME": str(self.volume),
+                    "CREDIT_TAPE_PUBLIC_ORIGIN": "https://cds.example.test",
                     "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid", "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret",
                     "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42"}
 
@@ -338,8 +341,8 @@ class ServiceReleaseTests(unittest.TestCase):
                     {k: v for k, v in self.env.items() if k != "CREDIT_TAPE_GITHUB_ALLOWED_IDS"},
                     {**self.env, "CREDIT_TAPE_DEV_LOCAL": "1"},
                     {**self.env, "CREDIT_TAPE_INTERVAL": "1"}):
-            self.assertEqual(service.main(env), 2)
-        settings, interval, port = service.config({**self.env, "PORT": "9123"})
+            self.assertEqual(service.main(env, is_mount=lambda p: True), 2)
+        settings, interval, port = service.config({**self.env, "PORT": "9123"}, is_mount=lambda p: True)
         self.assertEqual((settings.origin, settings.allowed_ids, interval, port),
                          ("https://cds.example.test", frozenset({42}), 20.0, 9123))
         self.assertFalse(settings.dev_local)
@@ -512,6 +515,8 @@ class ReleaseReadinessTests(unittest.TestCase):
 
     # -- raw originals --------------------------------------------------------------------------
     def _route(self, http):
+        from market_data.credit_tape import volume
+        volume.ensure_identity(str(self.archive))
         return slices.SliceRoute(str(self.archive), capture.now, capture.append_jsonl, opener=http, lock=capture.WRITE_LOCK)
 
     def _stop_after_commit(self, http):
@@ -578,6 +583,9 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertFalse(missing["clean"])
         self.assertFalse(check_archive.compare(missing, missing)["ok"])
         (self.archive / "dtcc-slices").mkdir()
+        self.assertFalse(check_archive.check(str(self.archive))["clean"])  # no archive identity
+        from market_data.credit_tape import volume
+        volume.ensure_identity(str(self.archive))
         self.assertTrue(check_archive.check(str(self.archive))["clean"])
         (self.archive / "events.jsonl").write_text(json.dumps({"source": "dtcc-sec-credits", "kind": "possible_gap"}) + "\n")
         res = check_archive.check(str(self.archive))
@@ -608,12 +616,148 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(health["sources"]["dtcc-slice-index"]["backfill_worker"]["state"], "failed")
         ok, body = sp.collector_health(self.archive)
         self.assertEqual((ok, body["backfill_worker"]), (False, "failed"))
-        env = {"CREDIT_TAPE_ARCHIVE": str(self.archive), "CREDIT_TAPE_PUBLIC_ORIGIN": self.ORIGIN,
+        env = {"CREDIT_TAPE_ARCHIVE": str(self.archive / "vol" / "credit-tape"), "CREDIT_TAPE_VOLUME": str(self.archive / "vol"),
+               "CREDIT_TAPE_PUBLIC_ORIGIN": self.ORIGIN,
                "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid", "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret",
                "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42", "PORT": "0"}
         with mock.patch.object(service.capture, "run", side_effect=RuntimeError("replay backfill worker failed: x")), \
                 mock.patch.object(service.signal, "signal"), mock.patch("builtins.print"):
-            self.assertEqual(service.main(env), 1)
+            (self.archive / "vol").mkdir()
+            self.assertEqual(service.main(env, is_mount=lambda p: True), 1)
+
+
+class PersistentArchiveProofTests(unittest.TestCase):
+    """Chej: prove the restart check reads the actual persistent archive (local fixtures only)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.vol = self.root / "volume"
+        self.archive = self.vol / "credit-tape"
+
+    def env(self, **kw):
+        return {"CREDIT_TAPE_ARCHIVE": str(self.archive), "CREDIT_TAPE_VOLUME": str(self.vol),
+                "CREDIT_TAPE_PUBLIC_ORIGIN": "https://cds.example.test", "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid",
+                "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret", "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42", "PORT": "0", **kw}
+
+    # -- missing volume ---------------------------------------------------------------------------
+    def test_service_refuses_absent_volume_and_writes_nothing(self):
+        from market_data.credit_tape import service
+        mounted = lambda p: True
+        cases = {
+            "volume path missing": (self.env(), mounted),
+            "volume not a mount point": (self.env(), os.path.ismount),  # a plain directory
+            "no volume named": ({k: v for k, v in self.env().items() if k != "CREDIT_TAPE_VOLUME"}, mounted),
+            "archive outside volume": (self.env(CREDIT_TAPE_ARCHIVE=str(self.root / "elsewhere")), mounted),
+            "archive is the volume root": (self.env(CREDIT_TAPE_ARCHIVE=str(self.vol)), mounted),
+        }
+        with mock.patch("builtins.print"), mock.patch.object(service.capture, "run") as run:
+            for name, (env, is_mount) in cases.items():
+                if name != "volume path missing":
+                    self.vol.mkdir(exist_ok=True)
+                self.assertEqual(service.main(env, is_mount=is_mount), 2, name)
+                self.assertFalse(self.archive.exists(), name)
+                self.assertFalse((self.root / "elsewhere").exists(), name)
+            run.assert_not_called()
+        # Railway's own variable is honoured when CREDIT_TAPE_VOLUME is not set.
+        env = {k: v for k, v in self.env().items() if k != "CREDIT_TAPE_VOLUME"}
+        env["RAILWAY_VOLUME_MOUNT_PATH"] = str(self.vol)
+        service.config(env, is_mount=lambda p: True)
+
+    def test_checker_refuses_unmounted_volume_and_a_different_archive(self):
+        from market_data.credit_tape import check_archive
+        self._collect()
+        ok = check_archive.check(str(self.archive), str(self.vol), is_mount=lambda p: True)
+        self.assertTrue(ok["clean"], ok)
+        self.assertTrue(ok["volume"]["mounted_and_contains_archive"])
+        bad = check_archive.check(str(self.archive), str(self.vol), is_mount=lambda p: False)
+        self.assertFalse(bad["clean"])
+        self.assertFalse(check_archive.check(str(self.archive), str(self.root / "no-such-volume"))["clean"])
+        # Restart that came up on a fresh directory: different archive_id -> compare fails.
+        other = self.root / "fresh"
+        self._collect(other)
+        after = check_archive.check(str(other))
+        self.assertTrue(after["clean"])
+        cmp = check_archive.compare(ok, after)
+        self.assertEqual((cmp["same_archive_id"], cmp["ok"]), (False, False))
+        self.assertTrue(check_archive.compare(ok, check_archive.check(str(self.archive)))["ok"])
+
+    # -- completed commits vs originals and lines -------------------------------------------------
+    def _collect(self, out=None):
+        from market_data.credit_tape import synthetic_demo
+        from market_data.credit_tape.synthetic_resilience import SyntheticDTCC
+        out = out or self.archive
+        dtcc = SyntheticDTCC()
+        for agency, key in (("cftc", "CFTC_CR"), ("sec", "SEC_CR")):
+            meta, blob = synthetic_demo.fixture(agency)
+            dtcc.files[meta["fullFilePath"]] = blob
+            dtcc.index[key] = [meta]
+        bad = dict(dtcc.index["CFTC_CR"][0], sliceId=900000000000000102,
+                   fileName="CFTC_SLICE_CREDITS_2999_01_01_2.zip",
+                   fullFilePath=f"https://{slices.SLICE_HOST}/cftc/slices/CFTC_SLICE_CREDITS_2999_01_01_2.zip")
+        dtcc.files[bad["fullFilePath"]] = b"not a zip"  # decode failure, still archived as published
+        dtcc.index["CFTC_CR"].append(bad)
+        with mock.patch.object(slices.SliceRoute, "is_replay", lambda self, m: False):  # live: alerts too
+            capture.run(str(out), ticker=False, slices=True, once=True, opener=dtcc)
+        return out
+
+    def _raw(self, name):
+        return self.archive / "dtcc-slices/raw/2999-01-01" / name
+
+    def test_completed_commits_validate_including_decode_failure(self):
+        from market_data.credit_tape import check_archive
+        self._collect()
+        res = check_archive.check(str(self.archive))
+        self.assertTrue(res["clean"], res)
+        self.assertEqual((res["commits_completed_validated"], res["originals_rechecked"]), (3, 3))
+        kinds = [e["kind"] for e in lines(str(self.archive / "events.jsonl"))]
+        self.assertEqual(kinds.count("decode_failure"), 1)
+        self.assertEqual(kinds.count("publication"), 2)
+
+    def test_missing_original_is_reported_per_commit(self):
+        from market_data.credit_tape import check_archive
+        self._collect()
+        self._raw("SEC_SLICE_CREDITS_2999_01_01_1.zip").unlink()
+        self._raw("CFTC_SLICE_CREDITS_2999_01_01_2.zip").unlink()  # the decode-failure original
+        self._raw("CFTC_SLICE_CREDITS_2999_01_01_1.zip").write_bytes(b"tampered")
+        res = check_archive.check(str(self.archive))
+        self.assertFalse(res["clean"])
+        got = sorted((p["commit"], p["problem"]) for p in res["commit_problem_list"])
+        self.assertEqual(got, [
+            ("dtcc-cftc-slices/CFTC_CR/900000000000000101", "original_hash_mismatch"),
+            ("dtcc-cftc-slices/CFTC_CR/900000000000000102", "original_missing"),
+            ("dtcc-sec-slices/SEC_CR/900000000000000101", "original_missing"),
+        ])
+
+    def test_missing_or_altered_committed_line_is_reported(self):
+        from market_data.credit_tape import check_archive
+        self._collect()
+        ev, al = self.archive / "events.jsonl", self.archive / "alerts_outbox.jsonl"
+        evs = ev.read_text(encoding="utf-8").splitlines()
+        drop = next(i for i, l in enumerate(evs) if '"kind":"publication"' in l and "SYN-SEC-0001" in l)
+        ev.write_text("\n".join(evs[:drop] + evs[drop + 1:]) + "\n", encoding="utf-8")
+        als = al.read_text(encoding="utf-8").splitlines()
+        dfail = next(i for i, l in enumerate(als) if '"kind":"decode_failure"' in l)
+        al.write_text("\n".join(als[:dfail] + als[dfail + 1:]) + "\n", encoding="utf-8")
+        res = check_archive.check(str(self.archive))
+        got = sorted((p["commit"], p["problem"]) for p in res["commit_problem_list"])
+        self.assertEqual(got, [
+            ("dtcc-cftc-slices/CFTC_CR/900000000000000102", "committed_alert_line_missing"),
+            ("dtcc-sec-slices/SEC_CR/900000000000000101", "committed_event_line_missing"),
+        ])
+        self.assertFalse(res["clean"])
+        # An edited line (same key, different content) is caught as well.
+        self.tearDown_and_rebuild()
+        txt = (self.archive / "events.jsonl").read_text(encoding="utf-8").replace("SYN-CFTC-0001", "SYN-CFTC-EDIT", 1)
+        (self.archive / "events.jsonl").write_text(txt, encoding="utf-8")
+        probs = {p["problem"] for p in check_archive.check(str(self.archive))["commit_problem_list"]}
+        self.assertIn("committed_event_line_differs", probs)
+
+    def tearDown_and_rebuild(self):
+        import shutil
+        shutil.rmtree(self.archive)
+        self._collect()
 
 
 if __name__ == "__main__":

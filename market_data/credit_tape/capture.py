@@ -161,6 +161,8 @@ def run(out: str, interval: float = 20.0, ticker: bool = True, slices: bool = Tr
         once: bool = False, stop: threading.Event | None = None, opener=None) -> int:
     """Collector loop. `stop` (optional) ends it after the current pass. `opener`: tests only."""
     os.makedirs(out, exist_ok=True)
+    from market_data.credit_tape.volume import ensure_identity
+    ensure_identity(out)  # one-time archive id; check_archive --compare requires it unchanged
     srcs = [Source(n, c, out) for n, c in SOURCES.items()] if ticker else []
     from market_data.credit_tape.slices import SliceRoute
     kw = {"opener": opener} if opener else {}

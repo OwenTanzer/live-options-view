@@ -50,6 +50,12 @@ UA = "Mozilla/5.0 (credit-tape research client)"
 RETRY_MIN, RETRY_MAX = 5.0, 300.0
 
 
+def decode_rows(blob: bytes) -> list[dict]:
+    """Decode a slice ZIP (first member, UTF-8 CSV). check_archive re-uses this to re-verify commits."""
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        return list(csv.DictReader(io.StringIO(z.read(z.namelist()[0]).decode("utf-8"))))
+
+
 class SimulatedStop(Exception):
     """Raised only by synthetic crash hooks to model a process stop."""
 
@@ -453,8 +459,7 @@ class SliceRoute:
         base = {"first_seen": t_recv, "raw_ref": rel, "slice": slice_info, "replay": replay,
                 "attempts": p["attempts"] + 1, **prov}
         try:
-            with zipfile.ZipFile(io.BytesIO(blob)) as z:
-                rows = list(csv.DictReader(io.StringIO(z.read(z.namelist()[0]).decode("utf-8"))))
+            rows = decode_rows(blob)
         except Exception as exc:
             ev = {"source": ch["source"], "kind": "decode_failure", "error": repr(exc)[:300], **base}
             self._finish(sid, key, events_path, alerts_path, [ev], [ev], {"decode_failure": True}, rel, sha)

@@ -12,7 +12,11 @@ process exits non-zero so the platform restarts it; publishing is crash-safe
 (see slices.py), so a restart at any point loses nothing and duplicates nothing.
 
 Usage: python -u -m market_data.credit_tape.service
-Env: CREDIT_TAPE_ARCHIVE, CREDIT_TAPE_PUBLIC_ORIGIN, CREDIT_TAPE_GITHUB_CLIENT_ID,
+Persistent storage: CREDIT_TAPE_ARCHIVE must be inside a mounted volume named by
+CREDIT_TAPE_VOLUME (or Railway's RAILWAY_VOLUME_MOUNT_PATH); startup is refused
+if the volume is absent or not a mount point (see volume.py).
+
+Env: CREDIT_TAPE_ARCHIVE, CREDIT_TAPE_VOLUME, CREDIT_TAPE_PUBLIC_ORIGIN, CREDIT_TAPE_GITHUB_CLIENT_ID,
      CREDIT_TAPE_GITHUB_CLIENT_SECRET, CREDIT_TAPE_GITHUB_ALLOWED_IDS,
      PORT (default 8790), CREDIT_TAPE_INTERVAL (seconds, default 20).
 """
@@ -27,12 +31,16 @@ from http.server import ThreadingHTTPServer
 
 from market_data.credit_tape import capture
 from market_data.credit_tape import serve_private as sp
+from market_data.credit_tape import volume
 
 
-def config(env=os.environ):
+def config(env=os.environ, is_mount=os.path.ismount):
     if env.get("CREDIT_TAPE_DEV_LOCAL"):
         raise ValueError("CREDIT_TAPE_DEV_LOCAL is for local demos only; unset it for the service")
     settings = sp.Settings.from_env(env)  # raises on any missing/invalid gate setting
+    # Production writes only into a mounted persistent volume; an absent volume refuses startup
+    # instead of silently archiving into the container's temporary filesystem.
+    volume.require_volume(str(settings.archive), env, is_mount)
     interval = float(env.get("CREDIT_TAPE_INTERVAL", "20"))
     if not 5 <= interval <= 300:
         raise ValueError("CREDIT_TAPE_INTERVAL must be 5..300 seconds")
@@ -40,9 +48,9 @@ def config(env=os.environ):
     return settings, interval, port
 
 
-def main(env=os.environ) -> int:
+def main(env=os.environ, is_mount=os.path.ismount) -> int:
     try:
-        settings, interval, port = config(env)
+        settings, interval, port = config(env, is_mount)
     except (KeyError, ValueError) as exc:
         name = exc.args[0] if isinstance(exc, KeyError) else str(exc)
         print(f"credit-tape service not started: configuration incomplete or invalid ({name})", flush=True)
@@ -53,6 +61,11 @@ def main(env=os.environ) -> int:
     with open(probe, "w") as fh:  # fail now, not mid-commit, if the volume is read-only
         fh.write("ok")
     os.remove(probe)
+    try:
+        ident = volume.ensure_identity(archive)
+    except ValueError as exc:
+        print(f"credit-tape service not started: {exc}", flush=True)
+        return 2
 
     stop = threading.Event()
     failed = {}
@@ -74,7 +87,8 @@ def main(env=os.environ) -> int:
     web = threading.Thread(target=srv.serve_forever, name="credit-tape-panel", daemon=True)
     web.start()
     worker.start()
-    print(f"credit-tape service: slice-only collector every {interval:g}s, archive={archive}, "
+    print(f"credit-tape service: slice-only collector every {interval:g}s, archive={archive} "
+          f"(archive_id {ident['archive_id']}, volume {volume.volume_root(env)}), "
           f"panel on :{srv.server_port} for {settings.origin} ({len(settings.allowed_ids)} allowed ids)", flush=True)
     while not stop.wait(1.0):
         if not worker.is_alive():
