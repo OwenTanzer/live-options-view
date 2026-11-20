@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -40,8 +41,11 @@ def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds")
 
 
+WRITE_LOCK = threading.RLock()  # ticker loop and slice backfill thread share the event log
+
+
 def append_jsonl(path: str, obj: dict) -> None:
-    with open(path, "a", encoding="utf-8") as fh:
+    with WRITE_LOCK, open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(obj, separators=(",", ":")) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
@@ -155,13 +159,18 @@ def main() -> int:
     os.makedirs(a.out, exist_ok=True)
     srcs = [] if a.no_ticker else [Source(n, c, a.out) for n, c in SOURCES.items()]
     from market_data.credit_tape.slices import SliceRoute
-    slices = None if a.no_slices else SliceRoute(a.out, now, append_jsonl)
+    slices = None if a.no_slices else SliceRoute(a.out, now, append_jsonl, lock=WRITE_LOCK)
     events, alerts = os.path.join(a.out, "events.jsonl"), os.path.join(a.out, "alerts_outbox.jsonl")
+    if slices and not a.once:
+        slices.start_backfill_thread(events, alerts)  # replay never blocks the live loop
     while True:
         for s in srcs:
             s.poll(alerts, events)
         if slices:
-            slices.poll(events, alerts)
+            slices.poll_index(events)
+            slices.drain_live(events, alerts)  # runs whether the index answered 200 or 304
+            if a.once:
+                slices.drain_backfill(events, alerts, budget=10**6)
         health = {s.name: {"polls_ok": s.polls_ok, "polls_err": s.polls_err, "seen": len(s.seen)} for s in srcs}
         if slices:
             health["dtcc-slice-index"] = slices.health()

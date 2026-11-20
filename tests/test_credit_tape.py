@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -131,8 +132,13 @@ class SliceRouteTests(unittest.TestCase):
         self.out = self.tmp.name
         self.ev, self.al = os.path.join(self.out, "events.jsonl"), os.path.join(self.out, "alerts.jsonl")
 
-    def route(self, http):
-        return slices.SliceRoute(self.out, capture.now, capture.append_jsonl, opener=http)
+    def route(self, http, clock=None):
+        return slices.SliceRoute(self.out, capture.now, capture.append_jsonl, opener=http,
+                                 clock=clock or time.time, lock=capture.WRITE_LOCK)
+
+    def drain(self, r):
+        r.drain_live(self.ev, self.al)
+        r.drain_backfill(self.ev, self.al, budget=10**6)
 
     def test_unseen_slices_persisted_before_decode_rowcount_checked_once(self):
         m1, m2 = slice_meta(1, 1), slice_meta(2, 3)  # m2 publishes 3 but carries 2 -> mismatch
@@ -140,8 +146,12 @@ class SliceRouteTests(unittest.TestCase):
         z2 = fixture_zip([{"Dissemination Identifier": "S2", "Action type": "CORR"}, {"Dissemination Identifier": "S3", "Action type": "TERM"}])
         http = FakeHTTP({"CFTC_CR": [m2, m1], "SEC_CR": []}, {m1["fullFilePath"]: z1, m2["fullFilePath"]: z2})
         r = self.route(http)
-        r.poll(self.ev, self.al)
-        r.poll(self.ev, self.al)  # conditional request -> 304, nothing refetched
+        r.poll_index(self.ev)
+        self.assertEqual(sorted(r.pending), [1001, 1002])  # index poll only enqueues
+        self.assertFalse(any(u.endswith(".zip") for u, _ in http.requests))
+        self.drain(r)
+        r.poll_index(self.ev)  # conditional request -> 304, nothing re-enqueued
+        self.drain(r)
         self.assertEqual(http.requests[-1][1].get("If-none-match"), '"e1"')
         evs = lines(self.ev)
         pubs = [e for e in evs if e["kind"] == "publication"]
@@ -155,25 +165,51 @@ class SliceRouteTests(unittest.TestCase):
         self.assertEqual([a["kind"] for a in lines(self.al)], ["rowcount_mismatch"])  # replays don't alert rows
         self.assertEqual(sum(1 for u, _ in http.requests if u.endswith(".zip")), 2)
 
-    def test_foreign_host_rejected_and_outage_resumes_in_order(self):
+    def test_foreign_host_rejected_and_failed_slice_does_not_block_others(self):
         bad = dict(slice_meta(1, 1), fullFilePath="https://evil.example/cftc/slices/x.zip")
         m2, m3 = slice_meta(2, 1, "2999-01-01T00:00:0%dZ"), slice_meta(3, 1, "2999-01-01T00:00:0%dZ")
         z = fixture_zip([{"Dissemination Identifier": "L", "Action type": "NEWT"}])
         http = FakeHTTP({"CFTC_CR": [bad, m2, m3], "SEC_CR": []}, {m2["fullFilePath"]: z, m3["fullFilePath"]: z})
         http.fail.add(m2["fullFilePath"])
-        r = self.route(http)
-        r.poll(self.ev, self.al)
-        self.assertEqual([e["kind"] for e in lines(self.ev)], ["slice_rejected"])
-        self.assertNotIn(m3["sliceId"], r.seen)  # stopped at the failed slice
+        clock = {"t": 0.0}
+        r = self.route(http, clock=lambda: clock["t"])
+        r.poll_index(self.ev)
+        self.drain(r)
+        kinds = [(e["kind"], e["slice"]["sliceId"]) for e in lines(self.ev) if e["kind"] in ("slice_rejected", "publication")]
+        self.assertEqual(sorted(kinds), [("publication", 1003), ("slice_rejected", 1001)])  # 1002 failed, 1003 not stranded
+        self.assertEqual(r.pending[1002]["attempts"], 1)
         http.fail.clear()
-        http.etag = '"e2"'
-        r.backoff_until = 0
-        r.poll(self.ev, self.al)
+        r.drain_live(self.ev, self.al)  # not yet due
+        self.assertIn(1002, r.pending)
+        clock["t"] += slices.RETRY_MAX
+        r.poll_index(self.ev)  # index unchanged -> 304
+        r.drain_live(self.ev, self.al)
         live = [e for e in lines(self.ev) if e["kind"] == "publication"]
-        self.assertEqual([e["slice"]["sliceId"] for e in live], [1002, 1003])
+        self.assertEqual(sorted(e["slice"]["sliceId"] for e in live), [1002, 1003])
+        self.assertEqual(next(e for e in live if e["slice"]["sliceId"] == 1002)["attempts"], 2)
         self.assertFalse(any(e["replay"] for e in live))
         self.assertEqual(len([a for a in lines(self.al) if a["kind"] == "publication"]), 2)
         self.assertFalse(any("evil" in u for u, _ in http.requests))
+
+    def test_done_marker_prevents_reemit_after_crash(self):
+        m = slice_meta(1, 1, "2999-01-01T00:00:0%dZ")
+        z = fixture_zip([{"Dissemination Identifier": "C", "Action type": "NEWT"}])
+        http = FakeHTTP({"CFTC_CR": [m], "SEC_CR": []}, {m["fullFilePath"]: z})
+        r = self.route(http)
+        r.poll_index(self.ev)
+        r.drain_live(self.ev, self.al)
+        # Simulate a crash after the done marker but before pending.json was rewritten.
+        with open(r.pending_path, "w", encoding="utf-8") as fh:
+            json.dump({str(m["sliceId"]): {"key": "CFTC_CR", "meta": m, "attempts": 0, "retry_at": 0}}, fh)
+        r2 = self.route(http)
+        self.assertEqual(r2.pending, {})
+        r2.drain_live(self.ev, self.al)
+        self.assertEqual(sum(1 for e in lines(self.ev) if e["kind"] == "publication"), 1)
+
+    def test_synthetic_resilience_run(self):
+        from market_data.credit_tape import synthetic_resilience
+        result = synthetic_resilience.run(self.out)
+        self.assertEqual(result["verdicts"], {k: True for k in result["verdicts"]}, json.dumps(result, indent=1))
 
 
 class ServerTests(unittest.TestCase):
