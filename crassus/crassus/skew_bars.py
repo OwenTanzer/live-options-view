@@ -1,4 +1,4 @@
-"""One public, read-only QQQ chart request per open comparison cycle."""
+"""One public, read-only chart request per underlying per open comparison cycle."""
 
 from datetime import datetime, timedelta, timezone
 from math import isfinite
@@ -11,13 +11,14 @@ from .exchange_calendar import session_close
 from .durability import atomic_json
 import json
 
-SOURCE = "https://query1.finance.yahoo.com/v8/finance/chart/QQQ"
+CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
+SOURCE = CHART + "QQQ"
 
 
-def ingest(payload, received, existing):
+def ingest(payload, received, existing, symbol="QQQ"):
     chart = payload["chart"]["result"][0]
     meta = chart["meta"]
-    if meta["symbol"] != "QQQ" or meta["dataGranularity"] != "5m":
+    if meta["symbol"] != symbol or meta["dataGranularity"] != "5m":
         raise ValueError("unexpected chart identity")
     stamps = chart["timestamp"]
     if not stamps or stamps != sorted(set(stamps)):
@@ -67,8 +68,9 @@ def ingest(payload, received, existing):
 
 
 class ForwardBars:
-    def __init__(self, directory):
+    def __init__(self, directory, symbol="QQQ"):
         self.directory = directory
+        self.symbol = symbol
         self.cycle = None
         self.rows = []
         self.error = None
@@ -77,13 +79,15 @@ class ForwardBars:
         if cycle == self.cycle:
             return self.rows
         self.cycle = cycle
-        path = self.directory / ("bars-" + now.date().isoformat() + ".json")
+        # QQQ keeps its original file name so in-flight sessions stay continuous.
+        prefix = "bars-" if self.symbol == "QQQ" else "bars-" + self.symbol + "-"
+        path = self.directory / (prefix + now.date().isoformat() + ".json")
         self.rows = []
         self.error = None
         try:
             self.rows = json.loads(path.read_text()) if path.exists() else []
             response = requests.get(
-                SOURCE,
+                CHART + self.symbol,
                 params={"range": "1d", "interval": "5m", "includePrePost": "false"},
                 headers={"User-Agent": "Mozilla/5.0"},
                 timeout=4,
@@ -91,7 +95,7 @@ class ForwardBars:
             )
             response.raise_for_status()
             before = len(self.rows)
-            ingest(response.json(), datetime.now(timezone.utc), self.rows)
+            ingest(response.json(), datetime.now(timezone.utc), self.rows, self.symbol)
             if len(self.rows) != before:
                 atomic_json(path, self.rows)
         except (

@@ -17,6 +17,7 @@ from crassus.skew_bars import ingest
 from crassus.strategy import Decision
 
 SYM = "QQQ261116C00680000"
+IBIT_SYM = "IBIT261120C00060000"
 START = datetime(2026, 11, 16, 10, 30, tzinfo=ET)
 
 
@@ -25,17 +26,28 @@ class Comparison(unittest.TestCase):
         self.assertIsNone(
             f.arm_for(SimpleNamespace(username="crassus_oiskew", params={}))
         )
-        for user, arm in f.ARMS.items():
-            self.assertEqual(
+        for root, family in f.FAMILIES.items():
+            for user, arm in family["arms"].items():
+                account = SimpleNamespace(
+                    username=user,
+                    strategy_id=family["strategy_id"],
+                    params={"forward_skew_arm": arm},
+                )
+                self.assertEqual(f.arm_for(account), arm)
+                self.assertEqual(f.root_for(account), root)
+        # An IBIT arm cannot run the QQQ signal, and vice versa.
+        for user, sid in (
+            ("crassus_oif_ibit_protect", "oi_skew_qqq"),
+            ("crassus_oif_protect", "oi_skew_ibit_adaptive"),
+        ):
+            with self.assertRaises(ValueError):
                 f.arm_for(
                     SimpleNamespace(
                         username=user,
-                        strategy_id="oi_skew_qqq",
-                        params={"forward_skew_arm": arm},
+                        strategy_id=sid,
+                        params={"forward_skew_arm": "protect_only"},
                     )
-                ),
-                arm,
-            )
+                )
         with self.assertRaises(ValueError):
             f.arm_for(
                 SimpleNamespace(
@@ -43,10 +55,12 @@ class Comparison(unittest.TestCase):
                 )
             )
 
-    def scenario(self, arm):
-        account = SimpleNamespace(
-            username=next(k for k, v in f.ARMS.items() if v == arm)
-        )
+    def scenario(self, arm, root="QQQ"):
+        arms = f.FAMILIES[root]["arms"]
+        strategy_id = f.FAMILIES[root]["strategy_id"]
+        sym = SYM if root == "QQQ" else IBIT_SYM
+        signal_name = "oi_skew_qqq" if root == "QQQ" else "ibit_signal"
+        account = SimpleNamespace(username=next(k for k, v in arms.items() if v == arm))
         trades = []
         bars = SimpleNamespace(rows=[], error=None)
         with TemporaryDirectory() as folder:
@@ -62,15 +76,15 @@ class Comparison(unittest.TestCase):
                         timestamp=now.isoformat(), underlying_price=680
                     ),
                     quotes=lambda syms: {
-                        SYM: Quote(
-                            SYM, bid, bid + 0.01, now.isoformat(), now.isoformat()
+                        sym: Quote(
+                            sym, bid, bid + 0.01, now.isoformat(), now.isoformat()
                         )
                     },
                 )
                 signal = (
-                    Decision("buy", "valid skew", "oi_skew_qqq", "1", SYM, 1)
+                    Decision("buy", "valid skew", strategy_id, "1", sym, 1)
                     if ctx.book.is_flat
-                    else Decision.no_trade("supported", "oi_skew_qqq", "1")
+                    else Decision.no_trade("supported", strategy_id, "1")
                 )
                 signal.metadata = {
                     "imbalance_ratio": 0.5,
@@ -81,10 +95,12 @@ class Comparison(unittest.TestCase):
                     if phase
                     else None
                 )
-                with patch.object(f, "oi_skew_qqq", return_value=signal), patch.object(
+                with patch.object(f, signal_name, return_value=signal), patch.object(
                     f, "direction", return_value=row
                 ):
-                    return f.decide(ctx, account, arm, bars, Path(folder), str(n))
+                    d = f.decide(ctx, account, arm, bars, Path(folder), str(n))
+                    self.assertEqual(d.strategy_id, strategy_id)
+                    return d
 
             def fill(n, d, price):
                 trades.append(
@@ -130,6 +146,40 @@ class Comparison(unittest.TestCase):
 
     def test_recovery(self):
         self.scenario("protect_reentry")
+
+    def test_ibit_protect(self):
+        self.scenario("protect_only", "IBIT")
+
+    def test_ibit_recovery(self):
+        self.scenario("protect_reentry", "IBIT")
+
+    def test_ibit_stop_still_applies(self):
+        # No stop-only IBIT arm, but the protection arms keep the 35% stop.
+        self.assertNotIn("stop", f.IBIT_ARMS.values())
+
+    def test_chart_identity_per_symbol(self):
+        t = int(START.timestamp())
+        data = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"symbol": "IBIT", "dataGranularity": "5m"},
+                        "timestamp": [t, t + 300],
+                        "indicators": {
+                            "quote": [
+                                {k: [1, 2] for k in ("open", "high", "low", "close")}
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+        received = (START + timedelta(minutes=5, seconds=3)).astimezone(timezone.utc)
+        rows = []
+        ingest(data, received, rows, "IBIT")
+        self.assertEqual(len(rows), 1)
+        with self.assertRaises(ValueError):
+            ingest(data, received, [], "QQQ")
 
     def test_completed_chart_only(self):
         t = int(START.timestamp())

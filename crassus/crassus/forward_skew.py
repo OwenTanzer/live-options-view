@@ -1,4 +1,4 @@
-"""Versioned paper-only overlays for four specific fresh OI accounts."""
+"""Versioned paper-only overlays for specific fresh OI accounts (QQQ and IBIT families)."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -11,7 +11,7 @@ from .exchange_calendar import session_close
 from .profit_protection import Observation, ProtectConfig, ProtectionChain
 from .skew_bars import direction
 from .skew_direction import Position
-from .strategies.oi_skew import _option_type_from_symbol, oi_skew_qqq
+from .strategies.oi_skew import _option_type_from_symbol, _reference_decision, oi_skew_qqq
 from .strategy import Decision
 
 PAPER_ORIGIN = "https://options.moopertonic.net"
@@ -22,15 +22,40 @@ ARMS = dict(
     crassus_oif_protect="protect_only",
     crassus_oif_recover="protect_reentry",
 )
+# IBIT runs the same overlay on the adaptive-window IBIT signal. There is no
+# 35% stop-only arm here; protection arms still carry the 35% premium stop.
+IBIT_ARMS = dict(
+    crassus_oif_ibit_baseline="baseline",
+    crassus_oif_ibit_protect="protect_only",
+    crassus_oif_ibit_recover="protect_reentry",
+)
+FAMILIES = {
+    "QQQ": dict(strategy_id="oi_skew_qqq", arms=ARMS),
+    "IBIT": dict(strategy_id="oi_skew_ibit_adaptive", arms=IBIT_ARMS),
+}
+
+
+def root_for(account):
+    username = getattr(account, "username", None)
+    return next((r for r, f in FAMILIES.items() if username in f["arms"]), None)
 
 
 def arm_for(account):
     arm = (getattr(account, "params", None) or {}).get("forward_skew_arm")
-    if arm != ARMS.get(getattr(account, "username", None)) or (
-        arm and account.strategy_id != "oi_skew_qqq"
-    ):
+    root = root_for(account)
+    family = FAMILIES.get(root)
+    expected = family["arms"].get(account.username) if family else None
+    if arm != expected or (arm and account.strategy_id != family["strategy_id"]):
         raise ValueError("forward comparison identity/config mismatch")
     return arm
+
+
+def ibit_signal(ctx):
+    return _reference_decision(ctx, "oi_skew_ibit_adaptive")
+
+
+def signal_for(root, ctx):
+    return oi_skew_qqq(ctx) if root == "QQQ" else ibit_signal(ctx)
 
 
 def snap_time(value):
@@ -138,14 +163,20 @@ def decide(ctx, account, arm, bars, directory, decision_id):
     state = json.loads(path.read_text()) if path.exists() else {}
     chain = reconcile(state, ctx, arm)
     bar = int(now.timestamp() // 300)
+    root = root_for(account) or "QQQ"
+    strategy_id = FAMILIES[root]["strategy_id"]
     metadata = {"comparison": VERSION, "arm": arm, "decision_id": decision_id}
+    if root != "QQQ":
+        metadata["root"] = root
 
     def result(action, reason, symbol=None, quantity=None):
         return Decision(
-            action, reason, "oi_skew_qqq", VERSION, symbol, quantity, metadata=metadata
+            action, reason, strategy_id, VERSION, symbol, quantity, metadata=metadata
         )
 
-    signal = oi_skew_qqq(ctx) if ctx.snapshot else result("no_trade", "No OI snapshot")
+    signal = (
+        signal_for(root, ctx) if ctx.snapshot else result("no_trade", "No OI snapshot")
+    )
     meta = signal.metadata or {}
     metadata["oi_signal"] = signal.to_dict() if ctx.snapshot else None
     if ctx.session_phase != "open":
