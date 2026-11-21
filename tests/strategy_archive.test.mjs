@@ -8,7 +8,7 @@ import { makeStorage } from './helpers/d1_shim.mjs';
 async function fixture() {
   const DB = makeStorage();
   DB.db.exec(
-    readFileSync(new URL('../backend/migrations/0005_strategy_archive.sql', import.meta.url), 'utf8'),
+    readFileSync(new URL('../backend/migrations/0007_strategy_archive.sql', import.meta.url), 'utf8'),
   );
   assert.equal(DB.raw('SELECT count(*) AS n FROM strategy_archive')[0].n, 0);
   DB.db.exec(readFileSync(new URL('./fixtures/strategy_archive.sql', import.meta.url), 'utf8'));
