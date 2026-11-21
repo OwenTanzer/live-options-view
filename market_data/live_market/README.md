@@ -73,3 +73,10 @@ The [OAuth operations reference](../../site/tastytrade-oauth.md) covers credenti
 provisioning; credentials do not belong in documentation or logs. Fixture checks
 are inventoried in [Collector CI](../../.github/workflows/collector-ci.yml).
 Historical design details remain linked from [documentation history](../../docs/HISTORY.md).
+
+## Private Bitcoin monthly quote lane
+
+[btc_options.py](btc_options.py) optionally shares the continuous price-lane feed.
+It has no archive writer and is disabled unless `BTC_OPTIONS_ENABLED=1`. Read the
+[product source and continuity gates](../../docs/BTC_PAPER_OPTIONS.md) before enabling;
+fixture coverage does not establish account coverage or audience display rights.

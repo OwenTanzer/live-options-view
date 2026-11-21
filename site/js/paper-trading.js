@@ -237,9 +237,19 @@ function computeBook(trades = session?.trades || []) {
       underlying: occRoot(t.sym) || t.underlying || 'QQQ',
       instrument_type: instrumentType, multiplier,
       strike: t.strike, type: t.type, exp: t.exp,
+      ...(instrumentType === 'futures_option' ? { contract: t.contract, fees: 0, open_fees: 0, realized_gross: 0 } : {}),
     });
     b.realized -= (t.fee_units ?? 0) / 10000;
     const q = t.side === 'buy' ? t.qty : -t.qty;
+    if (instrumentType === 'futures_option') {
+      const fee = t.fees ?? 0; b.fees += fee;
+      if (q > 0) b.open_fees += fee;
+      else {
+        const allocated = b.pos > 0 ? b.open_fees * Math.min(-q, b.pos) / b.pos : 0;
+        b.open_fees -= allocated; b.realized -= allocated + fee;
+        b.realized_gross += (t.price - b.avg) * Math.min(-q, b.pos) * b.multiplier;
+      }
+    }
     if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
       b.avg = (b.avg * Math.abs(b.pos) + t.price * Math.abs(q)) / (Math.abs(b.pos) + Math.abs(q));
       b.pos += q;
@@ -342,20 +352,21 @@ function setTradePending(pending, message = '') {
 let settling = false;
 
 function hasExpiredPositions() {
+  if (Object.values(computeBook()).some(b => b.instrument_type === 'futures_option' && b.pos > 0 && Date.now() >= Date.parse(b.contract?.expires_at))) return true;
   if (!session || !lastDataDate) return false;
   return Object.values(computeBook(session.trades)).some(b =>
     b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < lastDataDate);
 }
 
 async function settleExpired() {
-  if (!session || !lastDataDate || settling || !hasExpiredPositions()) return;
+  if (!session || settling || !hasExpiredPositions()) return;
   settling = true;
   try {
     const response = await fetch('/api/settle', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: lastDataDate, spot_marks: spotMarks }),
+      body: JSON.stringify({ as_of: lastDataDate || new Date().toISOString().slice(0, 10), spot_marks: spotMarks }),
     });
     const result = await response.json().catch(() => ({}));
     if (response.status === 410) {
@@ -384,11 +395,12 @@ function closePosition(sym) {
   executeTrade({
     sym, instrument_type: b.instrument_type,
     strike: b.strike, type: b.type, exp: b.exp,
-  }, b.pos > 0 ? 'sell' : 'buy', Math.abs(b.pos));
+  }, b.pos > 0 ? 'sell' : 'buy', b.instrument_type === 'futures_option' ? 1 : Math.abs(b.pos));
 }
 
 function instrumentLabel(value, symbol = value.sym) {
   if (value.instrument_type === 'prediction') return escapeHtml(symbol);
+  if (value.instrument_type === 'futures_option') return escapeHtml(`${value.contract?.future_symbol || '/BTC'} ${value.strike} ${value.type} · ${value.exp}`);
   if ((value.instrument_type ?? 'option') === 'share') return symbol;
   return `${occRoot(symbol) || value.underlying || 'QQQ'} ${value.strike} ${value.type === 'call' ? 'C' : 'P'}${value.exp ? ` · ${value.exp}` : ''}`;
 }
@@ -418,12 +430,13 @@ function renderPaper() {
   const open = Object.entries(book).filter(([, b]) => b.pos !== 0);
   const realized = Object.values(book).reduce((s, b) => s + b.realized, 0);
   let unreal = 0;
+  let unavailableBtcMark = false;
 
   const posDiv = document.getElementById('paper-positions');
   if (open.length === 0) {
     posDiv.innerHTML = '';
   } else {
-    const optionRows = open.filter(([, b]) => b.instrument_type === 'option');
+    const optionRows = open.filter(([, b]) => ['option', 'futures_option'].includes(b.instrument_type));
     const shareRows = open.filter(([, b]) => b.instrument_type === 'share');
     let html = '';
     const eventRows = open.filter(([, b]) => b.instrument_type === 'prediction');
@@ -434,14 +447,16 @@ function renderPaper() {
     if (optionRows.length) {
       html += '<h4>Options</h4><table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
       for (const [sym, b] of optionRows) {
-        const mark = liveQuotes.get(sym)?.mid ?? positionMarks[sym] ?? null;
-        const pnl = mark != null ? (mark - b.avg) * b.pos * b.multiplier : null;
+        const btc = b.instrument_type === 'futures_option';
+        const mark = btc ? (typeof btcOptions !== 'undefined' ? btcOptions.mark(sym) : null) : (liveQuotes.get(sym)?.mid ?? positionMarks[sym] ?? null);
+        const pnl = mark != null ? (mark - b.avg) * b.pos * b.multiplier - (b.open_fees || 0) : null;
+        if (btc && mark == null) unavailableBtcMark = true;
         if (pnl != null) unreal += pnl;
         html += `<tr>
           <td>${instrumentLabel(b, sym)}</td>
           <td>${b.pos > 0 ? '+' : ''}${b.pos}</td>
-          <td>${fmtQ(b.avg)}</td>
-          <td>${mark != null ? fmtQ(mark) : '—'}</td>
+          <td>${fmtQ(b.avg)}${btc ? `/BTC · $${(b.avg * 5 * b.pos + b.open_fees).toFixed(2)} basis` : ''}</td>
+          <td>${mark != null ? fmtQ(mark) + (btc ? `/BTC · $${(mark * 5 * b.pos).toFixed(2)} liquidation before exit fee` : '') : (btc ? 'Exit unavailable / settlement pending' : '—')}</td>
           <td class="${pnl != null ? pnlClass(pnl) : ''}">${pnl != null ? fmtMoney(pnl) : '—'}</td>
           <td><button class="paper-btn" data-sym="${sym}">close</button></td>
         </tr>`;
@@ -476,8 +491,8 @@ function renderPaper() {
     `Cash <span>${fmtMoney(session.balance_cash)}</span>` +
     (session.trades.length
       ? ` · Realized <span class="${pnlClass(realized)}">${fmtMoney(realized)}</span>
-         · Open <span class="${pnlClass(unreal)}">${fmtMoney(unreal)}</span>
-         · Total <span class="${pnlClass(total)}">${fmtMoney(total)}</span>`
+         · Open <span class="${pnlClass(unreal)}">${unavailableBtcMark ? 'unavailable' : fmtMoney(unreal)}</span>
+         · Total <span class="${pnlClass(total)}">${unavailableBtcMark ? 'unavailable' : fmtMoney(total)}</span>`
       : '');
   document.getElementById('paper-hint').style.display = session.trades.length ? 'none' : '';
 
@@ -487,7 +502,7 @@ function renderPaper() {
       const market = t.bid != null && t.ask != null ? ` [${fmtQ(t.bid)} × ${fmtQ(t.ask)}]` : '';
       const order = t.order_type === 'limit' ? ` limit ${fmtQ(t.limit_price)}` : ' market';
       const orderId = t.order_id ? ` · order ${t.order_id}` : '';
-      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${instrumentLabel(t)} @ ${fmtQ(t.price)}${market} ·${order}${orderId}${t.note ? ` (${t.note})` : ''}</div>`;
+      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${instrumentLabel(t)} @ ${fmtQ(t.price)}${market} ·${order}${orderId}${t.note ? ` (${t.note})` : ''}${t.instrument_type === 'futures_option' ? ` · simulated · cash ${fmtMoney(t.cash_delta)} · fee $${t.fees.toFixed(2)} · source ${escapeHtml(t.quote_ts || t.settlement_mark?.published_at || '—')} · sizes ${t.source_quote?.bid_size ?? '—'} × ${t.source_quote?.ask_size ?? '—'}` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
 
   document.getElementById('user-name').textContent = session.username;

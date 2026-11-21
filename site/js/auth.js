@@ -12,6 +12,7 @@
 let authMode = 'login';
 
 function renderAuthGate() {
+  if (typeof btcOptions !== 'undefined') btcOptions.syncSession();
   const authPanel = document.getElementById('auth-panel');
   const paperPanel = document.getElementById('paper-panel');
   if (session) {

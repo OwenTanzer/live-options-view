@@ -131,9 +131,19 @@ export function computeBookFromTrades(trades) {
       instrument_type: instrumentType, multiplier,
       strike: t.strike, type: t.type, exp: t.exp,
       ...(t.prediction ? { prediction: t.prediction } : {}),
+      ...(instrumentType === 'futures_option' ? { contract: t.contract, fees: 0, open_fees: 0, realized_gross: 0 } : {}),
     });
     b.realized -= (t.fee_units ?? 0) / 10000;
     const q = t.side === 'buy' ? t.qty : -t.qty;
+    if (instrumentType === 'futures_option') {
+      const fee = t.fees ?? 0; b.fees += fee;
+      if (q > 0) b.open_fees += fee;
+      else {
+        const allocated = b.pos > 0 ? b.open_fees * Math.min(-q, b.pos) / b.pos : 0;
+        b.open_fees -= allocated; b.realized -= allocated + fee;
+        b.realized_gross += (t.price - b.avg) * Math.min(-q, b.pos) * b.multiplier;
+      }
+    }
     if (b.pos === 0 || Math.sign(b.pos) === Math.sign(q)) {
       b.avg = (b.avg * Math.abs(b.pos) + t.price * Math.abs(q)) / (Math.abs(b.pos) + Math.abs(q));
       b.pos += q;

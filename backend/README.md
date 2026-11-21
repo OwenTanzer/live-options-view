@@ -189,3 +189,7 @@ multi-underlying, cron and boundary suites. See the independent
 [producer/release guide](../market_data/prediction/README.md). A permitted
 production event/quote/paper-fill/reload/resolution receipt remains outstanding;
 synthetic acceptance is not licensed capture. No real-money routing exists.
+## Bitcoin monthly paper product
+
+See [implementation, source gaps and staged rollout](../docs/BTC_PAPER_OPTIONS.md).
+The private reader, entry switch and final-mark reader are separate controls.

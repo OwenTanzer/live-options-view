@@ -46,6 +46,7 @@ class LiveQuoteRegistry:
     """Thread-safe session pointer behind the process-lifetime HTTP server."""
 
     def __init__(self):
+        self.btc = None
         self._lock = threading.Lock()
         self._feed: Optional[DXLinkFeed] = None
         self._contracts: dict[str, dict] = {}
@@ -265,6 +266,26 @@ def start_live_quote_server(registry: LiveQuoteRegistry, port: Optional[int] = N
             parsed = urlparse(self.path)
             if parsed.path == "/health":
                 self._json(200, registry.health())
+                return
+            if parsed.path == "/btc-options":
+                if not access_key or self.headers.get("X-Live-Quote-Key") != access_key:
+                    self._json(403, {"error": "Forbidden"})
+                    return
+                if registry.btc is None:
+                    self._json(503, {"error": "BTC product disabled"})
+                    return
+                query = parse_qs(parsed.query)
+                try:
+                    symbols = list(dict.fromkeys(filter(None, query.get("symbols", [""])[0].split(","))))
+                    held = json.loads(query.get("held", ["[]"])[0])
+                    if len(symbols) > 64 or any(not re.fullmatch(r"BTCOPT:[0-9a-f]{40}", s) for s in symbols):
+                        raise ValueError()
+                    if not isinstance(held, list) or len(held) > 64 or any(not isinstance(s, str) or len(s) > 128 for s in held):
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    self._json(400, {"error": "Invalid BTC request"})
+                    return
+                self._json(200, registry.btc.payload(symbols, held))
                 return
             if parsed.path != "/live-quotes":
                 self._json(404, {"error": "Not found"})

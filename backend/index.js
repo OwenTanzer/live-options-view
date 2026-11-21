@@ -1,4 +1,5 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleBtcOptions } from './btc-options.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -111,6 +112,8 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/trade-journal/sync') {
       return handleTradeJournalSync(request, env);
     }
+
+    if (request.method === 'GET' && url.pathname === '/api/btc-options') return handleBtcOptions(request, env);
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
       return handleLiveQuotes(url, env);
