@@ -447,6 +447,13 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                 return self.reply(503, b"Not configured.")
             if not self.host_ok():
                 return self.reply(403, b"Forbidden")
+            if url.path == "/api/private/identity":
+                if settings.dev_local or not settings.options_view or url.query:
+                    return self.reply(404, b"Not found")
+                github_id = store.identity(self.cookies().get(SESSION_COOKIE, ""))
+                if not settings.permits(github_id):
+                    return self.reply(401, b"Sign in required.")
+                return self.reply(200, json.dumps({"github_id": github_id}).encode(), "application/json")
             site = url.path.startswith(SITE_PREFIX + "/")
             if site:
                 if not settings.options_view:

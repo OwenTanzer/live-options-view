@@ -294,6 +294,14 @@ class ServerTests(unittest.TestCase):
         status, _, callback = self.get(port, page + "auth/callback?code=fake&state=" + params["state"][0], host, flow)
         self.assertEqual((status, callback.getheader("Location")), (303, page))
         session = next(c.split(";")[0] for c in callback.headers.get_all("Set-Cookie") if c.startswith(sp.SESSION_COOKIE+"="))
+        subject = "/api/private/identity"
+        self.assertEqual(self.get(port, subject, host)[0], 401)
+        self.assertEqual(self.get(port, subject, host, sp.SESSION_COOKIE + "=forged")[0], 401)
+        self.assertEqual(self.get(port, subject + "?github_id=99", host, session)[0], 404)
+        self.assertEqual(self.get(port, page + "api/private/identity", host, session)[0], 404)
+        status, principal, headers = self.get(port, subject, host, session)
+        self.assertEqual((status, json.loads(principal)), (200, {"github_id": 42}))
+        self.assertIn("no-store", headers.getheader("Cache-Control"))
         status, body, response = self.get(port, page, host, session)
         self.assertEqual(status, 200)
         self.assertIn(b"<tbody><tr", body)
@@ -336,6 +344,7 @@ class ServerTests(unittest.TestCase):
 
     def test_dev_local_serves_loopback_only_and_rejects_traversal(self):
         port = self.serve(sp.Settings(self.archive, dev_local=True))
+        self.assertEqual(self.get(port, "/api/private/identity")[0], 404)
         self.assertEqual(self.get(port, "/api/trades")[0], 200)
         self.assertEqual(self.get(port, "/api/trades", "cds.example.test")[0], 403)
         self.assertEqual(self.get(port, "/api/raw?ref=../../etc/passwd")[0], 400)
