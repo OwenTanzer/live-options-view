@@ -42,10 +42,18 @@ const finished = {run_id:'morning',status:'finished',acquisition_status:'complet
 const reset = () => { responses = {'latest.json':response(morning),'latest-attempt.json':response(morning),
   'latest-schedule.json':response(finished),'squeeze-calendar.json':response(calendar)}; };
 (async () => {
+  responses = { 'latest.json': new Error('offline') };
+  await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state, 'unavailable');
+  assert.doesNotMatch(el('squeeze-status').textContent, /showing last known/);
+  assert.match(el('squeeze-tbody').innerHTML, /Scan unavailable/);
   reset(); await panel.fetchSqueezeLatest();
   assert.equal(el('squeeze-status').dataset.state,'live');
   assert.match(el('squeeze-tbody').innerHTML,/AAA/);
   assert.match(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  // Scores are bars on the scanner's fixed 0-1 scale, with the number kept beside them.
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:56%"><\/span><\/span><span class="squeeze-num">0\.560</);
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:60%">/);
   assert.equal(el('squeeze-warning').textContent,'');
   assert.ok(calls.filter(([u]) => !u.startsWith('/squeeze-calendar')).every(([u])=>u.includes('/v1/scheduled/')));
   assert.ok(calls.every(([,o])=>o.cache==='no-store'));
