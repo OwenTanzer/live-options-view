@@ -19,7 +19,7 @@ const elements = Object.fromEntries(['underlying-select', 'btc-panel', 'btc-chai
 let resolveRequest, book = {}, ticketClosed = 0;
 const context = vm.createContext({ console, Date: class extends Date { static now() { return now; } },
   document: { body: el(), getElementById: id => elements[id], createElement: el, querySelectorAll: () => [] },
-  sessionVerified: true, URL, location: { href: 'https://fixture.invalid/' }, history: { replaceState() {} },
+  sessionVerified: true, URL, URLSearchParams, location: { href: 'https://fixture.invalid/' }, history: { replaceState() {} },
   UNDERLYING_KEY: 'chain_underlying', localStorage: { setItem() {} }, showTab() {},
   session: { username: 'fixture', trades }, ticketEl: null, pendingExecutions: new Set(),
   computeBook: () => book, closeTicket: () => ticketClosed++, clearChain() {}, renderSelectedChain() {}, renderPaper() {},
