@@ -1,3 +1,4 @@
+import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 // Production entry HTML/scripts through the disposable gateway and real account API.
 // All accounts, credentials, quotes and fills are local synthetic fixtures.
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   for (const width of [390, 320]) {
     const preview = createPreview();
-    preview.apiEnv.BTC_OPTIONS_USERS = 'entitled_fixture'; preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
+    setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
     const password = 'local-fixture-password', salt = btoa('local-test-salt');
     const hash = await derivePasswordHash(password, salt);
     await seedAccounts(preview.apiEnv, ['entitled_fixture', 'wrong_fixture'].map(username => ({
@@ -39,6 +40,11 @@ try {
       // The response is computed before the delay to exercise an already-authorized old response.
       const response = await preview.fetch(new Request(r.url(), { method: r.method(), headers: await r.allHeaders(),
         ...(r.postDataBuffer() ? { body: r.postDataBuffer() } : {}) }));
+    // Synthetic fixture proof; the separate owner-link suite exercises real WebAuthn.
+    if (['/api/login','/api/register'].includes(new URL(r.url()).pathname) && response.ok && r.postDataJSON()?.username === 'entitled_fixture') {
+      const token = response.headers.get('Set-Cookie').split(';')[0].slice('session='.length);
+      await seedBtcOwnerSession(preview.apiEnv, token, 'entitled_fixture');
+    }
       const body = Buffer.from(await response.arrayBuffer());
       if (url.pathname === heldPath) {
         heldPath = null;
@@ -71,9 +77,9 @@ try {
       await page.locator('.btc-login').click();
       assert.equal(await page.locator('#auth-username').evaluate(el => el === document.activeElement), true);
       await login('wrong_fixture');
-      await page.getByRole('button', { name: 'Switch paper account' }).waitFor();
+      await page.locator('.btc-owner-link').waitFor();
       assert.equal(await page.locator('.btc-contract').count(), 0);
-      await page.getByRole('button', { name: 'Switch paper account' }).click();
+      await page.locator('#auth-logout').click();
       await login('entitled_fixture');
       await page.locator('.btc-buy:not([disabled])').waitFor();
       assert.equal(await page.locator('#underlying-select').inputValue(), 'BTC');
@@ -141,12 +147,12 @@ try {
       releaseHeld(); await lateAccount;
       assert.equal(await page.locator('.btc-contract').count(), 0);
       await page.locator('.btc-login').click(); await login('wrong_fixture');
-      await page.getByRole('button', { name: 'Switch paper account' }).waitFor();
+      await page.locator('.btc-owner-link').waitFor();
       assert.equal(await page.locator('.btc-contract').count(), 0);
       assert.equal(await page.evaluate(() => btcOptions.quotes.size), 0);
       // An order accepted for the old account may finish after logout; its reply
       // must not append a fill to the replacement account or throw on null session.
-      await page.getByRole('button', { name: 'Switch paper account' }).click();
+      await page.locator('#auth-logout').click();
       await login('entitled_fixture');
       await page.locator('.btc-buy:not([disabled])').waitFor();
       waiting = hold('/api/paper-trade');
@@ -155,7 +161,7 @@ try {
       await page.locator('#auth-logout').click();
       await page.locator('.btc-login').click(); await login('wrong_fixture');
       releaseHeld();
-      await page.getByRole('button', { name: 'Switch paper account' }).waitFor();
+      await page.locator('.btc-owner-link').waitFor();
       await page.waitForFunction(() => pendingExecutions.size === 0);
       assert.equal(await page.evaluate(() => session.trades.length), 0, 'old-account fill cannot populate new account');
       assert.deepEqual(errors, []);

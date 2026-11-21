@@ -1,3 +1,4 @@
+import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 // Local disposable full-page mobile flow. No provider network or credentials.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -6,7 +7,7 @@ import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const preview = createPreview();
-preview.apiEnv.BTC_OPTIONS_USERS = 'btc_reader';
+setupBtcOwner(preview.apiEnv);
 preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
 const cases = Object.fromEntries(btcClockScenarios().map(s => [s.name, s]));
 let market = cases.snapshot.payload, clock = cases.snapshot.now;
@@ -36,6 +37,11 @@ try {
     const r = route.request(); assert.equal(new URL(r.url()).origin, LOCAL_ORIGIN);
     const response = await preview.fetch(new Request(r.url(), { method: r.method(), headers: await r.allHeaders(),
       ...(r.postDataBuffer() ? { body: r.postDataBuffer() } : {}) }));
+    // Synthetic fixture proof; the separate owner-link suite exercises real WebAuthn.
+    if (['/api/login','/api/register'].includes(new URL(r.url()).pathname) && response.ok && r.postDataJSON()?.username === 'btc_reader') {
+      const token = response.headers.get('Set-Cookie').split(';')[0].slice('session='.length);
+      await seedBtcOwnerSession(preview.apiEnv, token, 'btc_reader');
+    }
     await route.fulfill({ status: response.status, body: Buffer.from(await response.arrayBuffer()), headers: Object.fromEntries(response.headers) });
   });
   await page.goto(LOCAL_ORIGIN);

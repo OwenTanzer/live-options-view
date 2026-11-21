@@ -1,3 +1,4 @@
+import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -38,9 +39,11 @@ class Bucket {
 async function harness(c = contract) {
   const bucket = new Bucket();
   const env = withD1({ PAPER_TRADES: bucket, LIVE_QUOTE_ORIGIN: 'https://fixture.invalid', LIVE_QUOTE_KEY: 'fixture',
-    BTC_OPTIONS_USERS: 'fixture', BTC_OPTIONS_ENTRIES: '1' });
+    BTC_OPTIONS_ENTRIES: '1' });
   await seedAccounts(env, [{ username: 'fixture', trades: [], balance_cash: 10000 }]);
   await seedSession(env, 'fixture-session', 'fixture');
+  setupBtcOwner(env);
+  await seedBtcOwnerSession(env, 'fixture-session', 'fixture');
   let market = payload(c), clock = now;
   const oldFetch = global.fetch, OldDate = Date;
   global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
@@ -223,7 +226,7 @@ test('anonymous/private authorization and alternate public paths', async () => {
   try {
     const url = 'https://options.moopertonic.net/api/btc-options';
     assert.equal((await handleBtcOptions(new Request(url), h.env)).status, 401);
-    h.env.BTC_OPTIONS_USERS = '';
+    h.env.BTC_OWNER_LINK = 'disabled';
     assert.equal((await handleBtcOptions(new Request(url, { headers: { Cookie: `${SESSION_COOKIE}=fixture-session` } }), h.env)).status, 403);
     assert.equal((await handleLiveQuotes(new URL('https://options.moopertonic.net/api/live-quotes?symbols=' + sym), h.env)).status, 403);
     assert.equal(isPublicBrowserDataKey('paper-trades/btc-final/a/2026-11-27.json'), false);
@@ -235,7 +238,7 @@ test('revoked display access denies fresh quotes and execution even for holders'
   const h = await harness();
   try {
     assert.equal((await h.order(intent())).status, 201);
-    h.env.BTC_OPTIONS_USERS = '';
+    h.env.BTC_OWNER_LINK = 'disabled';
     let calls = 0;
     global.fetch = async () => { calls++; throw Error('No provider call after revocation'); };
     const response = await handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', {

@@ -202,8 +202,10 @@ jobs:
           npx playwright install --with-deps chromium
       - name: BTC monthly mobile fixture workflow
         run: |
+          node --test tests/btc_owner_link.test.mjs
           node tests/btc_options_browser.test.mjs
           node tests/btc_mobile_chain.test.mjs
+          node tests/btc_owner_link_browser.test.mjs
       - name: Disposable preview rendered workflow (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite

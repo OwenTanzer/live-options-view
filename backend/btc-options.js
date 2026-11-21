@@ -1,12 +1,10 @@
 // Private BTC monthly paper product. No broker orders or public archive fallback.
 import { computeBookFromTrades, jsonResponse, requireSession, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
+import { btcAllowed, ownerLinkAvailable } from './btc-owner-link.js';
 
 export const BTC_KEY = /^BTCOPT:[0-9a-f]{40}$/;
 export const BTC_FEE = 2.50; // Explicit simulation convention, not a broker fee quote.
-export function btcAllowed(env, username) {
-  return String(env.BTC_OPTIONS_USERS || '').split(',').map(s => s.trim()).includes(username);
-}
 export function btcSession(now = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago',
     weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map(x => [x.type, x.value]));
@@ -82,13 +80,15 @@ export async function handleBtcOptions(request, env) {
   if (!session) return jsonResponse({ error: 'Sign in required' }, 401);
   // Holdings are not a market-data entitlement. Entries may be disabled
   // independently while an entitled owner continues to manage positions.
-  if (!btcAllowed(env, session.username)) return jsonResponse({ error: 'BTC options access not enabled' }, 403);
+  if (!await btcAllowed(env, session)) return jsonResponse({ error: 'This paper session has no authorized Bitcoin data source',
+    owner_link_available: ownerLinkAvailable(env) }, 403);
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
   try {
     const response = await fetchBtc(env, session.record, symbols);
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
+    if (!await btcAllowed(env, session)) return jsonResponse({ error: 'Bitcoin data access revoked' }, 403);
     const entries = env.BTC_OPTIONS_ENTRIES === '1';
     return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: BTC_FEE,
       fee_model: 'Simulated $2.50 per contract per side; $0 expiration fee' }, 200);
