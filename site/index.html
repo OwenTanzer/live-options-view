@@ -1710,7 +1710,7 @@
 // relying on the user finding a hard-refresh. BUILD_ID is stamped by the deploy
 // workflow (sed-replaced from the literal placeholder below); left as the
 // placeholder in local/dev checkouts, where it harmlessly never mismatches.
-const BUILD_ID = "be36ce5-20261121034943";
+const BUILD_ID = "__BUILD_ID__";
 
 function checkForNewBuild() {
   fetch(`${location.pathname}?_=${Date.now()}`, { cache: 'no-store' })
