@@ -24,7 +24,7 @@ export async function ownerIdentity(request) {
   if (cookies.length !== 1 || !/^__Host-cds-session=[A-Za-z0-9_.~-]{16,512}$/.test(cookies[0])) return null;
   const response = await fetch(CREDIT_ORIGIN + '/api/private/identity', {
     method: 'GET', headers: { Cookie: cookies[0], Accept: 'application/json' },
-    redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(5000),
+    redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) return null;
   const data = JSON.parse(await readLimited(response, 1024));
