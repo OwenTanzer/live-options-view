@@ -34,7 +34,7 @@ export function network(f) {
     if (!u.startsWith(KALSHI_API + '/')) throw Error('Unexpected network destination');
     if ((options.method || 'GET') !== 'GET' || options.headers?.Cookie || options.headers?.Authorization) throw Error('Unsafe provider request');
     const path = u.slice(KALSHI_API.length); let data;
-    if (path.startsWith('/markets/orderbooks?')) data = {orderbooks: new URL(u).searchParams.get('tickers').split(',').map(ticker => ({ticker, ...f.book}))};
+    if (path.startsWith('/markets/orderbooks?')) data = {orderbooks: new URL(u).searchParams.getAll('tickers').map(ticker => ({ticker, ...f.book}))};
     else if (path.includes('/orderbook')) data = f.book;
     else if (path.startsWith('/markets/')) data = { market: f.raw };
     else if (path.startsWith('/events/fee_changes')) data = f.fees;

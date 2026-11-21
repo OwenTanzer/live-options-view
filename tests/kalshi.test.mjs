@@ -224,3 +224,11 @@ test('chain batch refuses unsupported, repeated and oversized page inputs', asyn
   }
   assert.equal(f.requests.filter(r=>r.url.includes('/markets/orderbooks?')).length,0);
 }));
+
+test('chain protocol repeats ticker parameters and checks every response identity', async () => scenario(async (env,f) => {
+  const tickers=[TICKER,'KXHIGHNY-FIXTURE2'];
+  const result=await (await handleKalshi(request('quotes',{markets:tickers}),env)).json();
+  assert.equal(Object.keys(result.quotes).length,2);
+  const url=new URL(f.requests.find(r=>r.url.includes('/markets/orderbooks?')).url);
+  assert.deepEqual(url.searchParams.getAll('tickers'),tickers);
+}));

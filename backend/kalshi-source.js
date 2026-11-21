@@ -120,7 +120,7 @@ export async function chainQuotes(env, markets) {
   if (!Array.isArray(markets) || markets.length < 1 || markets.length > 16 ||
       new Set(markets).size !== markets.length || markets.some(m => !ticker(m) ||
         !Object.keys(SERIES_SUBJECT).some(s => m.startsWith(s + '-')))) throw Error('Invalid chain page');
-  const r = await publicRead(env, '/markets/orderbooks?tickers=' + markets.map(encodeURIComponent).join(','));
+  const r = await publicRead(env, '/markets/orderbooks?' + markets.map(m => 'tickers=' + encodeURIComponent(m)).join('&'));
   if (!Array.isArray(r.data.orderbooks) || r.data.orderbooks.length !== markets.length ||
       new Set(r.data.orderbooks.map(b => b.ticker)).size !== markets.length ||
       r.data.orderbooks.some(b => !markets.includes(b.ticker))) throw Error('Book identity mismatch');
