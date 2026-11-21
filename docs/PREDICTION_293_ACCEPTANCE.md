@@ -77,3 +77,49 @@ the producer/API/site lanes independently. Keep all production entry/feed gates
 closed pending rights and licensed acceptance.
 
 —Steve 🐦
+
+## Brian review checkpoint — November 21, 2026
+
+Supervisor integrated preview API routing, a stable seven-day synthetic cutoff
+and the collector test clock at `ca6391f`. Review corrections at `f09f06b` add
+explicit synthetic/disposable labeling, mobile portfolio wrapping, an isolated
+preview regression and an authenticated desktop/mobile browser workflow. Master
+`5b65933` was merged into the release branch at `75c011a`; the incoming master
+delta contains research and inactive Crassus work, with no overlapping backend
+instrument changes. Recheck current refs before merge because the supervisor can
+push concurrently.
+
+Verified locally: 13 prediction tests and the DOM workflow; worker logic, paper
+trading, multi-underlying, D1 storage, account closure, settlement outcome/cron,
+no-runtime-KV, capture boundary, bounded proxy, preview isolation and preview
+storage checks. Paper-trading's content hash passes with canonical LF bytes;
+Windows autocrlf bytes fail the hash assertion without a semantic source change.
+Changed-path tests remain 76/78 here with two temporary-directory permission
+errors. Local Playwright is unavailable and the browser access host is offline;
+the new browser workflow is not claimed as locally rendered. CI now retains its
+desktop/mobile screenshots and receipt as a revision-named artifact.
+
+The existing MSI localhost:8787 server reports preview/disposable, fixtures and
+`local-unbuilt`. Authenticated HTTP buy/retry/exit/reload was verified: three YES
+at $0.45, duplicate request replay without another debit, then three sold at
+$0.40, exactly two persisted fills and a $0.15 loss. A user can register a disposable account on the preview home page. This establishes local transport behavior, not exact-revision
+rendered acceptance or a hosted deployment. Preview memory expires at restart.
+
+Release ordering: obtain green final-head Web and Collector CI and inspect the
+retained rendered evidence. The complete PR is a reviewed mixed API/assets
+change; it adds an independent fixture producer but does not activate it or
+change existing producer watch settings. Record current Worker revisions and
+cron before promotion. Publish the compatible API through `deploy.yml` first,
+then assets through `deploy-staged.yml`, each at the exact approved SHA through
+the protected production environment. Read back the sole API cron as
+`*/15 * * * *`, empty asset crons, and the serving asset revision. Equity sweeps
+remain guarded to weekdays at 12–23 UTC. Keep all production prediction feed,
+display and entry gates unset; no PREDICTION_DATA production binding or schema
+migration is needed. Synthetic funds remain in the disposable local preview.
+Asset rollback uses a compatible separated artifact; API rollback must preserve
+any event obligations if production prediction trading is ever enabled later.
+
+This session has not merged to master or deployed. Its Git metadata is read-only,
+shell GitHub traffic is blocked and remote MSI execution requires approval under
+a never policy. Supervisor supplies Git/release execution. No production feed,
+KV operations or existing producer restarts were performed.
