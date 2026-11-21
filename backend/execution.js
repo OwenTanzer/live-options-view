@@ -27,12 +27,12 @@ export function validateTradeIntent(body) {
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.execution_request_id)) {
     return 'execution_request_id must be a UUID';
   }
-  if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
+  if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > (body.instrument_type === 'prediction' ? 512 : MAX_STRING_LEN)) {
     return 'sym must be a non-empty string';
   }
   const instrumentType = body.instrument_type ?? 'option';
-  if (instrumentType !== 'option' && instrumentType !== 'share') {
-    return 'instrument_type must be "option" or "share"';
+  if (instrumentType !== 'option' && instrumentType !== 'share' && instrumentType !== 'prediction') {
+    return 'instrument_type must be option, share or prediction';
   }
   if (instrumentType === 'share' && !TRADEABLE_SHARE_SYMBOLS.has(body.sym)) {
     return 'share symbol is not in the tradeable equity list';

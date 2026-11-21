@@ -1,3 +1,4 @@
+import { predictionQuote } from './prediction.js';
 // backend/paper-trade.js (B4) -- paper trading: the /api/paper-trade route,
 // the largest single function in the Worker (304 lines). Moved verbatim
 // from worker.js; the router in worker.js still owns the route table. It
@@ -163,16 +164,21 @@ export async function handlePaperTrade(request, env) {
   }
 
   let quotePayload;
+  let eventQuote;
   try {
-    const quoteResponse = await fetchLiveQuotes([body.sym], env);
-    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
-    quotePayload = await quoteResponse.json();
+    if (body.instrument_type === 'prediction') {
+      eventQuote = await predictionQuote(env, body);
+    } else {
+      const quoteResponse = await fetchLiveQuotes([body.sym], env);
+      if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
+      quotePayload = await quoteResponse.json();
+    }
   } catch (error) {
     return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
   }
   const quoteReceivedAt = new Date();
 
-  const quoteResult = exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
+  const quoteResult = eventQuote ?? exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
@@ -180,6 +186,7 @@ export async function handlePaperTrade(request, env) {
   const executedAt = new Date();
   const priceResult = executionPriceForOrder(quoteResult, body);
   const common = {
+    ...(quoteResult.prediction ? { prediction: quoteResult.prediction, fee_units: quoteResult.fee_units } : {}),
     execution_id: executionId,
     execution_request_id: executionId,
     ts: executedAt.toISOString(),
@@ -188,7 +195,7 @@ export async function handlePaperTrade(request, env) {
     bid_ts: quoteResult.bidTs,
     ask_ts: quoteResult.askTs,
     sym: body.sym,
-    underlying: /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
+    underlying: quoteResult.underlying ?? /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
     instrument_type: body.instrument_type ?? 'option',
     multiplier: quoteResult.multiplier,
     strike: quoteResult.strike,
@@ -246,6 +253,10 @@ export async function handlePaperTrade(request, env) {
   let cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+  if (trade.instrument_type === 'prediction') {
+    const units = quoteResult.price_units * trade.qty;
+    cashDelta = ((trade.side === 'buy' ? -units : units) - trade.fee_units) / 10000;
+  }
   // Financing is charged only when closing a leveraged share position. The
   // loan is the negative cash created by the entry; one annual rate and the
   // elapsed calendar days are enough for this single-position paper bot.
@@ -287,6 +298,7 @@ export async function handlePaperTrade(request, env) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
     if (record.account_closed) return { error: 'account_closed' };
+    if (trade.instrument_type === 'prediction' && (Date.now() >= Date.parse(trade.prediction.rules.cutoff) || Date.now() - Date.parse(trade.quote_ts) > 15000)) return { error: 'stale_prediction' };
     if (trade.side === 'buy' && (record.balance_cash < 0 || -cashDelta > record.balance_cash)) {
       const marginLimit = Number(record.paper_margin_limit ?? 1);
       const book = computeBookFromTrades(record.trades);
@@ -305,11 +317,13 @@ export async function handlePaperTrade(request, env) {
         return { error: 'insufficient_balance' };
       }
     }
-    if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
+    if (['share', 'prediction'].includes(trade.instrument_type) && trade.side === 'sell') {
       const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;
       if (held < trade.qty) return { error: 'insufficient_position' };
     }
-    const balance_cash = record.balance_cash + cashDelta;
+    const balance_cash = trade.instrument_type === 'prediction'
+      ? (Math.round(record.balance_cash * 10000) + Math.round(cashDelta * 10000)) / 10000
+      : record.balance_cash + cashDelta;
     return {
       record: { ...record, balance_cash, trades: [...record.trades, trade] },
       result: { trade, balance_cash },
@@ -340,10 +354,10 @@ export async function handlePaperTrade(request, env) {
       return jsonResponse({ error: 'Account closure rejection could not be recorded' }, 503);
     }
   }
-  if (kvOutcome.error === 'insufficient_position') {
+  if (kvOutcome.error === 'insufficient_position' || kvOutcome.error === 'stale_prediction') {
     const rejection = Object.freeze({
       ...common,
-      error: 'Cannot sell more shares than are held',
+      error: kvOutcome.error === 'stale_prediction' ? 'Prediction book expired before execution' : 'Cannot sell more units than are held',
       status: 'rejected',
       http_status: 400,
     });

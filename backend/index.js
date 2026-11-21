@@ -1,3 +1,4 @@
+import { handlePrediction, settlePredictions } from './prediction.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -78,6 +79,8 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/bot-index/reconcile') {
       return handleBotIndexReconcile(request, env);    }
 
+    if (request.method === 'GET' && url.pathname.startsWith('/api/prediction/')) return handlePrediction(request, env, url);
+
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return handleMe(request, env);
     }
@@ -155,6 +158,12 @@ export default {
       console.log(JSON.stringify({ event: 'settlement_skipped_cutover_fence' }));
       outcome.completed({ no_op_reason: 'cutover_fence' });
       return;
+    }
+    const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
+    // The 24/7 event clock must not broaden legacy equity settlement hours.
+    if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {
+      outcome.completed({ no_op_reason: 'outside_equity_session' }); return;
     }
     ctx.waitUntil(settleAllBots(env).then(
       summary => { outcome.completed(summary); },

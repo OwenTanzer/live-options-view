@@ -129,13 +129,13 @@ async function settleAccount(env, username, as_of, spot_marks) {
 async function liquidateAccount(env, username, token) {
   const store = createStorage(env);
   const record = await store.users.get(username);
-  if (record && record.is_bot) {
+  if (record && (record.is_bot || record.trades.some(t => t.instrument_type === 'prediction'))) {
     const outcome = await withUserRecord(env, username, (record) => ({
       record: { ...record, account_closed: true, closed_at: record.closed_at ?? new Date().toISOString(),
         closure_reason: record.closure_reason ?? 'insolvent_settlement' }, result: { closed: true },
     }));
     if (outcome.error) throw new Error('Bot closure could not be persisted');
-    return; // Retain identity and history; never auto-provision a wiped bot.
+    return; // Retain bot identity and event obligations/correction history.
   }
   await store.users.delete(username);
   // Drop the roster index entry too, or a liquidated bot leaves a pointer to

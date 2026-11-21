@@ -33,8 +33,9 @@ must not silently disappear from the roster. The dated
 [cutover record](../site/operations/2026-09-28-bot-index-cutover.md) preserves rollout
 evidence. Do not replay its migration steps as routine startup instructions.
 
-The settlement cron runs every fifteen minutes during hours 12–23 UTC on weekdays,
-even with no browser open. Browser-triggered and scheduled settlement can obtain
+The single settlement cron runs every fifteen minutes, 24/7. Prediction outcomes
+are swept independently of browser activity; the legacy equity sweep remains
+guarded to hours 12–23 UTC on weekdays. Browser-triggered and scheduled settlement can obtain
 spot marks differently. Source availability and closed-account policy are
 separate questions; a successful sweep is not proof that every historical mark
 exists. See the [system map](../ARCHITECTURE.md#following-one-value).
@@ -150,3 +151,41 @@ Never put private positions, credentials or screenshots in a release artifact.
    versions through their respective protected rollback procedures (assets
    first if already published). Leave the additive cache tables in place.
    Review any cache removal separately. The source requires no reversal.
+
+
+## Prediction markets (#293)
+
+`prediction.js` extends the authenticated paper ledger with long-only YES/NO
+positions, reciprocal server prices, explicit fees, quote provenance and official
+resolution/correction entries. Keys include provider, environment, series,
+market and outcome. Original option/share records retain their interpretation.
+The existing paper-trade reservations, leases and serialized D1 mutations remain
+authoritative. Cash deltas use 1/10000 USD units. Corrections are immutable cash
+adjustments; a negative balance blocks subsequent entries. Accounts with event
+history are retained on legacy insolvency so corrections cannot be erased.
+
+GET `/api/prediction/markets`, `/archive?batch=SHA256` and `/portfolio` require
+an Options View session on every request and return no-store. The portfolio
+continues during display rollback or feed outages. Private evidence uses a new
+read-only `PREDICTION_DATA` R2 binding, never the public capture bucket or KV.
+No production binding is configured here. Select `PREDICTION_ENVIRONMENT` and a
+reviewed `PREDICTION_RIGHTS_RECEIPT` before attaching a licensed demo/production
+source. Display and buys each need their own `PREDICTION_DISPLAY=enabled` and
+`PREDICTION_ENTRIES=enabled`. Sales and settlement ignore the entry switch.
+Fixtures additionally require `ENVIRONMENT=preview` and `ISOLATION=disposable`.
+The local preview supplies synthetic books through a separate binding.
+
+The 24/7 sweep scans D1 users, including humans and closed accounts, and reads
+the private official-resolution index. Missing/disputed/unofficial outcomes stay
+pending. Delisted terms persist in fills. Later revisions adjust amounts already
+paid. The first rule supports entry-premium refunds on voids (fees retained) and
+fixed per-contract fees. Another convention must be implemented before enabling
+that series. This complete sweep suits the current small roster; a bounded D1
+due queue is required before substantially scaling accounts. The serving caps
+of 200 markets and 10,000 resolutions fail closed.
+
+Run `node tests/prediction.test.mjs` plus the paper, worker, storage, closure,
+multi-underlying, cron and boundary suites. See the independent
+[producer/release guide](../market_data/prediction/README.md). A permitted
+production event/quote/paper-fill/reload/resolution receipt remains outstanding;
+synthetic acceptance is not licensed capture. No real-money routing exists.

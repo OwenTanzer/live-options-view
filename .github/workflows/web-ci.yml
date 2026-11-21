@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
       - "frontend/**"
       - "tests/**"
@@ -28,6 +29,7 @@ on:
     branches: [master]
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
       - "frontend/**"
       - "tests/**"
@@ -73,6 +75,10 @@ jobs:
         run: node --test tests/r2_proxy_bounded.test.js
       - name: historical archive loading
         run: node tests/historical_archive.test.js
+      - name: Prediction market fixture acceptance
+        run: |
+          node tests/prediction.test.mjs
+          node tests/prediction_ui.test.mjs
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: D1 account/session storage (#208)
@@ -172,7 +178,7 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/settlement_cron_outcome.test.mjs
-      - name: API settlement cron schedule (MON-FRI)
+      - name: API settlement cron schedule (24/7 events, guarded equities)
         run: node --test tests/api_cron_schedule.test.mjs
       - name: Install browser test dependencies
         run: |

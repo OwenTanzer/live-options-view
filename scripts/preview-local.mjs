@@ -1,3 +1,4 @@
+import { fixture as predictionFixture } from '../tests/fixtures/prediction.mjs';
 // Local emulation only, not a Cloudflare/IAM emulator. No credentials read.
 import http from 'node:http';
 import { readFileSync, existsSync, statSync, realpathSync } from 'node:fs';
@@ -74,6 +75,14 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
   };
   const apiEnv = withD1({ PAPER_TRADES: bucket, BOT_INDEX_READS: 'r2',
     LIVE_QUOTE_ORIGIN: 'https://preview-quotes.invalid', LIVE_QUOTE_KEY: 'fixture-not-a-secret' });
+  const predictionMarket = predictionFixture();
+  // Separate disposable prediction binding; never aliases capture/operational R2.
+  Object.assign(apiEnv, { ENVIRONMENT: 'preview', ISOLATION: 'disposable',
+    PREDICTION_ENVIRONMENT: 'fixtures', PREDICTION_DISPLAY: 'enabled', PREDICTION_ENTRIES: 'enabled',
+    PREDICTION_DATA: { async get(key) {
+      if (key !== 'prediction/v1/fixtures/current.json') return null;
+      return { json: async () => ({ schema: 'prediction.catalog.v1', markets: [{ ...predictionMarket, book: { ...predictionMarket.book, exchange_ts: new Date().toISOString(), receive_ts: new Date().toISOString() } }] }) };
+    } } });
   apiEnv.ASSETS = { fetch: async () => new Response('Unknown API route', { status: 404 }) };
   const docs = fixtureDocuments();
   const calls = { api: [], reads: [] };
