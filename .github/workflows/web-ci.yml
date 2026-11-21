@@ -68,6 +68,8 @@ jobs:
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
       - name: One Clock source and cursor contract
+        env:
+          NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js

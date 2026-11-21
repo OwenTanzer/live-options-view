@@ -18,6 +18,40 @@ The browser's implementation lives separately in [site/](../site).
 
 ## Boundaries worth preserving
 
+### One Clock observer storage (not activated)
+
+[`one-clock-observer.js`](one-clock-observer.js) supplies trusted ingestion and
+as-of reads over additive migration `0004_one_clock.sql`. It is deliberately not
+mounted as an unauthenticated ingestion route. An owning adapter must authorize
+the namespace and source, project an allowlisted payload, prove availability and
+declare prospective/replay/backfill collection before calling it. A namespace is
+an internal access boundary, never a client-supplied substitute for authentication.
+
+Rule versions and observation revisions are immutable. Source observations,
+event/outcome revisions, source checkpoint and batch receipt commit in one D1
+batch. A generation trigger rejects concurrent stale evaluations; retry with the
+same batch identity after rereading state. A failed batch rolls back completely.
+There are no Workers KV, provider-feed, account-execution or settlement calls.
+`observedEventsAsOf` filters observer revision time as well as source cohort and
+session, so later corrections do not appear on rewind. First ingestion retains
+its collection mode; backfill cannot silently become a prospective observation.
+
+Bounds: 500 observations per delivery, 10,000 observation revisions per scoped
+session and 100 registered versions per namespace. Exceeding a bound fails before
+checkpoint commit; it is not a partial-success receipt. Integrations must establish
+their workload against these bounds and preserve opaque source cursors rather
+than infer completeness from the latest timestamp. Counting ongoing matches is
+a reader projection, not a durable write on every tick.
+
+Apply the reviewed additive migration before activating an observer consumer;
+retain current API/assets for rollback and leave new history intact when disabling
+the reader. No migration, active source ingestion or production activation is
+performed by this code change. See [One Clock](../docs/ONE_CLOCK.md) for staged
+delivery. Tests use the real SQLite engine through the D1 shim, including atomic
+failure, restart, duplicate delivery, late outcome, correction rewind, concurrent
+generation and namespace isolation. D1's batch transaction behavior and service
+limits are documented by [Cloudflare](https://developers.cloudflare.com/d1/platform/limits/).
+
 The live-quote route proxies the collector's in-memory feed. Archive reads use
 stored R2 artifacts; the public site's archive-base selection is explained in
 [Architecture](../ARCHITECTURE.md#browser-and-data-boundaries).
