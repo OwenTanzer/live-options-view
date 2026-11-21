@@ -51,6 +51,32 @@ class BtcTests(unittest.TestCase):
             self.assertIsNone(normalize({**row(), **changed}, FUTURE))
         self.assertIsNone(normalize(row(), {**FUTURE, 'expiration-date': '2026-12-31'}))
 
+    def test_production_shape_discovery_and_held_restart(self):
+        # Same classification fields as the authenticated Nov 21 response.
+        # Synthetic symbols/strikes; no restricted quote data in this fixture.
+        self.rows = [row(84000)]
+        c = normalize(self.rows[0], FUTURE)
+        self.assertEqual(c['future_month'], '2026-11')
+        self.product.refresh(self.feed, 'fixture', NOW)
+        self.assertEqual(self.product.entries, [c['contract_key']])
+        self.assertIn(c['contract_key'], self.product.selected)
+        restarted = BtcOptions(lambda url, **kw: FakeResponse(
+            {'items': []} if '/futures-option-chains/' in url else
+            self.rows[0] if '/instruments/future-options/' in url else FUTURE))
+        restarted.payload([], [c['provider_symbol']], NOW)
+        restarted.refresh(self.feed, 'fixture', NOW)
+        self.assertIn(c['contract_key'], restarted.selected)
+
+    def test_exact_product_and_deliverable_reject_other_products(self):
+        for code in ('MBT', 'BFF', 'BTCW', '', None):
+            self.assertIsNone(normalize({**row(), 'future-option-product':
+                {'code': code, 'exchange': 'CME', 'expiration-type': 'End-Of-Month'}}, FUTURE))
+        for expiry_type in ('Weekly', 'Daily', '', None):
+            self.assertIsNone(normalize({**row(), 'future-option-product':
+                {'code': 'BTC', 'exchange': 'CME', 'expiration-type': expiry_type}}, FUTURE))
+        self.assertIsNone(normalize(row(), {**FUTURE, 'notional-multiplier': '0.1'}))
+        self.assertIsNone(normalize({**row(), 'settlement-type': 'Cash'}, FUTURE))
+
     def test_bounded_window_held_priority_and_restart_resolution(self):
         self.product.refresh(self.feed, 'fixture', NOW)
         p = self.product.payload([], [], NOW)

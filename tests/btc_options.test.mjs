@@ -106,7 +106,7 @@ test('partial finalization recovery, limits, insufficient cash and entry-only di
     assert.equal((await h.order(buy)).status, 503);
     assert.equal((await h.order(buy)).status, 200);
     assert.equal((await h.store.users.get('fixture')).trades.length, 1);
-    h.env.BTC_OPTIONS_ENTRIES = '0'; h.env.BTC_OPTIONS_USERS = '';
+    h.env.BTC_OPTIONS_ENTRIES = '0';
     assert.equal((await h.order(intent())).status, 403);
     assert.equal((await h.order(intent('sell'))).status, 201);
   } finally { h.restore(); }
@@ -143,6 +143,23 @@ test('anonymous/private authorization and alternate public paths', async () => {
     assert.equal((await handleLiveQuotes(new URL('https://options.moopertonic.net/api/live-quotes?symbols=' + sym), h.env)).status, 403);
     assert.equal(isPublicBrowserDataKey('paper-trades/btc-final/a/2026-11-27.json'), false);
     assert.equal(isPublicBrowserDataKey('intraday/btc/latest.json'), false);
+  } finally { h.restore(); }
+});
+
+test('revoked display access denies fresh quotes and execution even for holders', async () => {
+  const h = await harness();
+  try {
+    assert.equal((await h.order(intent())).status, 201);
+    h.env.BTC_OPTIONS_USERS = '';
+    let calls = 0;
+    global.fetch = async () => { calls++; throw Error('No provider call after revocation'); };
+    const response = await handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', {
+      headers: { Cookie: `${SESSION_COOKIE}=fixture-session` },
+    }), h.env);
+    assert.equal(response.status, 403);
+    assert.equal((await h.order(intent('sell'))).status, 403);
+    assert.equal(calls, 0);
+    assert.equal(computeBookFromTrades((await h.store.users.get('fixture')).trades)[sym].pos, 1);
   } finally { h.restore(); }
 });
 

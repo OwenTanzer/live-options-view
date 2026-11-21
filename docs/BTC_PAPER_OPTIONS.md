@@ -17,6 +17,16 @@ contract retains provider and streamer symbols, security ID when supplied, futur
 expiry, cutoff, strike, put/call and multiplier. Missing monthly or deliverable
 facts fail closed. Weekly, micro and Bitcoin Friday products are excluded.
 
+The authenticated November 21 production response uses `End-Of-Month`, product
+code `BTC` and product exchange `CME`. It reports `American` exercise and
+`is-exercisable-weekly=true` even for the standard monthly. These vendor flags
+are not classification or exercise authority: CME's cryptocurrency option FAQ
+specifies European exercise and monthly delivery into an immediately expiring
+future. Discovery and held-symbol lookup both require the exact product fields,
+matching option/future expiry and five-bitcoin size. A null future maturity date
+falls back to its verified expiration date. Fixtures reproduce these fields with
+synthetic instruments; no early-exercise behavior is added.
+
 Public documentation checked on November 21:
 
 - [tastytrade product list](https://tastytrade.com/learn/trading-products/futures/available-futures-products/)
@@ -59,9 +69,13 @@ There is no BTC chain archive or KV operation.
 
 `GET /api/btc-options` requires an Options View session. `BTC_OPTIONS_USERS` is a
 comma-separated explicit audience allowlist, to be configured only after licensing
-approval. Existing holders retain access to their positions after removal from the
-entry audience. `BTC_OPTIONS_ENTRIES=1` independently permits new buys for that
-audience; absent/zero blocks new entries while closes and settlement remain enabled.
+approval. Holdings never confer quote entitlement: removing a user from this
+allowlist blocks both fresh quote reads and paper execution, while retaining the
+ledger and settlement obligations. `BTC_OPTIONS_ENTRIES=1` independently permits new buys for that
+audience; absent/zero blocks new entries while closes for entitled holders and
+settlement remain enabled. The initial live trial is restricted to the verified
+subscriber's own site account, with no other resident granted access merely
+because they can sign in.
 The collector route also requires the existing `X-Live-Quote-Key`. The public quote
 route refuses BTC keys/provider future-option symbols. Neither browser-data proxy
 allowlist exposes the chain or settlement records. The disposable preview explicitly
