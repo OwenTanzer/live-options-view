@@ -90,6 +90,7 @@ const btcOptions = {
       this.equityHint = hint.textContent;
       hint.textContent = 'Open a Bitcoin contract ticket to buy or close one contract. Premium ×5, plus the displayed fee.';
     } else if (!active && wasActive) hint.textContent = this.equityHint || '';
+    if (wasActive !== active && typeof tickerPoller !== 'undefined') tickerPoller?.kick();
     if (active) {
       this.saveSelection('BTC');
       showTab('live');
@@ -385,5 +386,9 @@ const btcOptions = {
   },
 };
 document.addEventListener?.('scroll', () => btcOptions.requestVisible(), { capture: true, passive: true });
-setInterval(() => btcOptions.refresh(), 5000);
+function refreshVisibleBtcQuotes() {
+  if (!document.hidden) btcOptions.refresh();
+}
+document.addEventListener?.('visibilitychange', refreshVisibleBtcQuotes);
+setInterval(refreshVisibleBtcQuotes, 5000);
 setInterval(() => btcOptions.updateActions(), 1000);

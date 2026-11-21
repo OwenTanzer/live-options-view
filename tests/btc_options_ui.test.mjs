@@ -16,16 +16,30 @@ const trades = [{ sym, contract: c, instrument_type: 'futures_option', multiplie
 function el() { return { children: [], dataset: {}, hidden: false, textContent: '', classList: { add() {} }, querySelectorAll() { return []; },
   setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(c) { this.children.push(c); }, append(c) { this.children.push(c); } }; }
 const elements = Object.fromEntries(['underlying-select', 'btc-panel', 'btc-chain', 'no-data', 'title', 'paper-hint'].map(k => [k, el()]));
+const intervals = new Map(), listeners = new Map();
 let resolveRequest, book = {}, ticketClosed = 0;
 const context = vm.createContext({ console, Date: class extends Date { static now() { return now; } },
-  document: { body: el(), getElementById: id => elements[id], createElement: el, querySelectorAll: () => [] },
+  document: { addEventListener: (name, cb) => listeners.set(name, cb), body: el(), getElementById: id => elements[id], createElement: el, querySelectorAll: () => [] },
   sessionVerified: true, URL, URLSearchParams, location: { href: 'https://fixture.invalid/' }, history: { replaceState() {} },
   UNDERLYING_KEY: 'chain_underlying', localStorage: { setItem() {} }, showTab() {},
   session: { username: 'fixture', trades }, ticketEl: null, pendingExecutions: new Set(),
   computeBook: () => book, closeTicket: () => ticketClosed++, clearChain() {}, renderSelectedChain() {}, renderPaper() {},
-  setInterval() {}, openTicket() {}, fetch: () => new Promise(resolve => { resolveRequest = resolve; }) });
+  setInterval: (cb, ms) => intervals.set(ms, cb), openTicket() {}, fetch: () => new Promise(resolve => { resolveRequest = resolve; }) });
 vm.runInContext(readFileSync(new URL('../site/js/btc-options.js', import.meta.url), 'utf8'), context);
 const btc = vm.runInContext('btcOptions', context);
+let refreshes = 0;
+const actualRefresh = btc.refresh;
+btc.refresh = () => refreshes++;
+context.document.hidden = true;
+intervals.get(5000)();
+listeners.get('visibilitychange')();
+assert.equal(refreshes, 0);
+context.document.hidden = false;
+listeners.get('visibilitychange')();
+assert.equal(refreshes, 1, 'resume immediately');
+intervals.get(5000)();
+assert.equal(refreshes, 2, 'retain foreground cadence');
+btc.refresh = actualRefresh;
 btc.data = { session: 'open' }; btc.quotes.set(sym, q);
 assert.equal(btc.mark(sym), 120);
 btc.quotes.set(sym, { ...q, bid_size: 0 }); assert.equal(btc.mark(sym), null);

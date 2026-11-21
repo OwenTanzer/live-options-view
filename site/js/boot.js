@@ -88,7 +88,15 @@
     if (session) renderPaper();
   });
   updatePriceStrip(tickerState.snapshot());
-  tickerPoller = new LiveQuotePoller(tickerState, { maxQuoteAgeMs: SHARE_QUOTE_MAX_AGE_MS });
+  tickerPoller = new LiveQuotePoller(tickerState, {
+    maxQuoteAgeMs: SHARE_QUOTE_MAX_AGE_MS,
+    requestedSymbols: () => {
+      if (!btcOptions.active) return tickerState.interestSymbols();
+      // BTC hides the ticker strip. The paper book still displays held shares.
+      return Object.entries(computeBook()).filter(([, p]) => p.instrument_type === 'share' && p.pos !== 0)
+        .map(([symbol]) => symbol);
+    },
+  });
   tickerPoller.subscribeHealth(health => renderTransportHealth('ticker-health', 'Tickers', health));
   tickerPoller.start();
 

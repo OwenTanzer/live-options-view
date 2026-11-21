@@ -139,6 +139,17 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   assert.ok(boot.pollers.every(p => p.started), 'both pollers must start');
   assert.equal(boot.pollers[0].healthFns.length, 1, 'live poller subscribes renderQuoteHealth');
   assert.equal(boot.pollers[1].opts.maxQuoteAgeMs, 90_000, 'ticker poller gets the share-quote max age');
+  const symbols = boot.pollers[1].opts.requestedSymbols;
+  boot.sandbox.tickerState.interestSymbols = () => ['QQQ', 'SPY'];
+  boot.sandbox.computeBook = () => ({});
+  assert.deepEqual([...symbols()], ['QQQ', 'SPY']);
+  boot.sandbox.btcOptions.active = true;
+  assert.deepEqual([...symbols()], [], 'no hidden ticker request in an empty BTC book');
+  boot.sandbox.computeBook = () => ({ SPY: { instrument_type: 'share', pos: 3 },
+    QQQ: { instrument_type: 'share', pos: 0 }, opt: { instrument_type: 'option', pos: 1 } });
+  assert.deepEqual([...symbols()], ['SPY'], 'keep live marks for open shares');
+  boot.sandbox.btcOptions.active = false;
+  assert.deepEqual([...symbols()], ['QQQ', 'SPY'], 'restore full ticker demand');
   assert.equal(boot.calls.startCountdown, 1, 'boot must start the 60s refresh cycle');
   assert.equal(boot.calls.fetchSteoCalibration, 1, 'boot must fetch STEO once at startup');
   assert.equal(boot.calls.fetchSqueezeLatest, 1, 'boot must fetch the squeeze panel once at startup');

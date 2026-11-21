@@ -271,6 +271,7 @@ class LiveQuotePoller {
   constructor(service, {
     fetchFn = (...args) => fetch(...args),
     endpoint = '/api/live-quotes',
+    requestedSymbols = () => service.interestSymbols(),
     foregroundIntervalMs = 5_000,
     hiddenIntervalMs = 60_000,
     closedIntervalMs = 60_000,
@@ -284,6 +285,7 @@ class LiveQuotePoller {
     this.service = service;
     this.fetchFn = fetchFn;
     this.endpoint = endpoint;
+    this.requestedSymbols = requestedSymbols;
     this.foregroundIntervalMs = foregroundIntervalMs;
     this.hiddenIntervalMs = hiddenIntervalMs;
     this.closedIntervalMs = closedIntervalMs;
@@ -338,7 +340,7 @@ class LiveQuotePoller {
 
   async poll() {
     if (!this.running || this.inFlight) return this.inFlight;
-    const symbols = this.service.interestSymbols();
+    const symbols = this.requestedSymbols();
     if (!symbols.length) {
       this._setHealth({
         state: 'idle', requested: 0, returned: 0, retryAt: null,
