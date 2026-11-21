@@ -47,19 +47,15 @@ el('history-clock-load-bots').onclick=async()=>{
     }
   } catch(error) {clearBot(error.message);} finally {button.disabled=false;}
 };
-el('history-clock-bot').onchange=()=>{clock.select(clock.snapshot());renderBot();};
+function renderCommitted(selection) { renderBot();return renderChain(selection); }
+el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();
   el('history-clock-skew').textContent='';el('history-clock-adaptive').textContent='';el('history-clock-evidence').textContent='';
 }
-async function renderSelection() {
-  clearBot('Loading shared cursor…');
-  const session=el('history-clock-date').value,instrument=el('history-clock-instrument').value;
+async function renderChain(selection) {
+  const {session,instrument}=selection;
   try {
-    const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
-    const cutoff=sessionInstant(session,h,m,s);
-    const selection=clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff});
-    renderBot();
     coverage=null;clear('Loading evidence available at this cursor…');
     const result=await clock.read('chain'); if(result.discarded) return;
     const reading=result.reading,row=reading.row;
@@ -68,7 +64,8 @@ async function renderSelection() {
     // Existing read-only renderer and calculations, same eligible parent record.
     buildHeatmapRows(el('history-clock-rows'),data,relativeOiRanges(data.rows));
     const raw=describeReferenceOiSkew(data,selection.cutoff);
-    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${el('history-clock-time').value} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). Read-only replay.`;
+    const cursorLabel=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(selection.cutoff);
+    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). Read-only replay.`;
     el('history-clock-skew').textContent=`Published reference skew: ${raw.text} · ${raw.availability==='live'?'fresh at cursor':raw.availability}. ${raw.detail}`;
     if(instrument==='IBIT') {
       const adaptive=computeAdaptiveOiSkew(data.rows,data.underlying_price);
@@ -77,7 +74,15 @@ async function renderSelection() {
         : `Reconstructed IBIT adaptive skew unavailable: ${adaptive.reason}.`;
     }
     el('history-clock-evidence').textContent=JSON.stringify({source:row.source,id:row.id,eventAt:row.eventAt,availableAt:row.availableAt,evidence:row.evidence,details:row.details,coverage},null,2);
-  } catch(error) { if(clock.snapshot().instrument===instrument && clock.snapshot().session===session) clear(error.message); }
+  } catch(error) { if(clock.snapshot().generation===selection.generation) clear(error.message); }
+}
+function renderSelection() {
+  try {
+    const session=el('history-clock-date').value,instrument=el('history-clock-instrument').value;
+    const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
+    const cutoff=sessionInstant(session,h,m,s);
+    return renderCommitted(clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff}));
+  } catch(error) {clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');}
 }
 el('history-clock-form').onsubmit=event=>{event.preventDefault();renderSelection();};
 el('history-view').onchange=()=>{
