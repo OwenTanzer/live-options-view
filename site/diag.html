@@ -91,8 +91,9 @@
 <div class="origin">Running from: <span id="origin-label"></span></div>
 <div id="netinfo">Loading network info…</div>
 
-<h2 class="section">1. One-shot reachability (direct R2 vs same-origin Worker proxy)</h2>
+<h2 class="section">1. One-shot data reachability</h2>
 <div class="subtext">Runs once, right now. A clean pass here doesn't rule out something intermittent — see the live monitor below for that.</div>
+<div id="proxy-scope" class="subtext"></div>
 <div id="tests"></div>
 <div id="verdict">Running tests…</div>
 
@@ -111,7 +112,7 @@
 <h2 class="section">2. Live monitor</h2>
 <div class="subtext">
   Polls the exact same URL pattern the live app uses (cache-busted, no-store) every 5s,
-  against both the direct R2 path and the same-origin proxy path, and keeps a running log
+  against the available data paths, and keeps a running log
   (persisted across reloads) with network conditions at the time of each attempt. Leave
   this running in the background during normal use — when "Load failed" happens again,
   come back here and the log will show exactly when, on which path, and what the network
@@ -123,7 +124,7 @@
 
 <h2 class="section">3. Burst / concurrency test</h2>
 <div class="subtext">
-  Fires 6 concurrent requests on each path (12 total) at once, mimicking how the live app
+  Fires 6 concurrent requests on each available path at once, mimicking how the live app
   fires several fetches together on boot — isolates whether concurrent load (not a single
   request in isolation) is what triggers failures.
 </div>
@@ -144,6 +145,10 @@
 <script src="shared/chain.js"></script>
 <script>
 const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
+const hasProxy = location.origin === 'https://live-options-view.otmooper12.workers.dev';
+document.getElementById('proxy-scope').textContent = hasProxy
+  ? 'Checking the public archive and the same-origin Worker proxy.'
+  : 'This site reads the public archive directly. Proxy checks run on the Worker hostname.';
 const PROXY = `${location.origin}/r2-proxy`;
 let oneShotResults = [];
 let pipelineResults = [];
@@ -179,7 +184,7 @@ const ONE_SHOT_TARGETS = [
   { name: "manifest.json (direct R2)",  url: `${R2}/manifest.json` },
   { name: "OIranges.csv (direct R2)",   url: `${R2}/derived/OIranges.csv` },
   { name: "latest.json (direct R2)",    url: `${R2}/intraday/latest.json` },
-  { name: "manifest.json (via Worker proxy, same-origin)", url: `${PROXY}/manifest.json` },
+  ...(hasProxy ? [{ name: "manifest.json (via Worker proxy, same-origin)", url: `${PROXY}/manifest.json` }] : []),
 ];
 
 async function testCors(url) {
@@ -283,7 +288,7 @@ function testImg(url) {
 // that could drift out of sync with it.
 const PIPELINE_PATHS = [
   { name: 'direct R2', rangesUrl: `${R2}/derived/OIranges.csv`, dataUrl: `${R2}/intraday/latest.json` },
-  { name: 'proxy (same-origin)', rangesUrl: `${PROXY}/derived/OIranges.csv`, dataUrl: `${PROXY}/intraday/latest.json` },
+  ...(hasProxy ? [{ name: 'proxy (same-origin)', rangesUrl: `${PROXY}/derived/OIranges.csv`, dataUrl: `${PROXY}/intraday/latest.json` }] : []),
 ];
 
 async function fetchText(url) {
@@ -393,7 +398,7 @@ async function runPipelineTest(path) {
 const LOG_KEY = 'diag_log_v1';
 const MONITOR_TARGETS = [
   { name: 'direct R2',  mk: () => `${R2}/intraday/latest.json?_=${Date.now()}` },
-  { name: 'proxy',      mk: () => `${PROXY}/intraday/latest.json?_=${Date.now()}` },
+  ...(hasProxy ? [{ name: 'proxy',      mk: () => `${PROXY}/intraday/latest.json?_=${Date.now()}` }] : []),
 ];
 let monitorTimer = null;
 
@@ -448,14 +453,14 @@ renderLog();
 // ── section 3: burst / concurrency test ──────────────────────────────────────
 document.getElementById('burst-run').onclick = async () => {
   const el = document.getElementById('burst-result');
-  el.textContent = 'Running burst (12 concurrent requests across both paths)…';
+  el.textContent = 'Running burst on available paths…';
   const attempts = [];
   for (let i = 0; i < 6; i++) {
     attempts.push(fetch(`${R2}/intraday/latest.json?_=${Date.now()}_${i}a`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
     // Proxy burst query must stay digits-only (?_= form): the bounded
     // /r2-proxy/ route rejects anything else, so the a/b suffix lives only
     // on the direct-R2 line above.
-    attempts.push(fetch(`${PROXY}/intraday/latest.json?_=${Date.now()}${i}`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
+    if (hasProxy) attempts.push(fetch(`${PROXY}/intraday/latest.json?_=${Date.now()}${i}`, { cache: 'no-store' }).then(r => r.ok).catch(() => false));
   }
   const results = await Promise.all(attempts);
   const okCount = results.filter(Boolean).length;
