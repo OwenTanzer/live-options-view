@@ -71,11 +71,15 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     const history=await stmt(db,'SELECT COUNT(*) AS n FROM one_clock_activations WHERE namespace=?',namespace).first();
     if(history.n>=1000&&body.action==='activate')throw new Error('activation history bound');
     const writes=[stmt(db,'UPDATE one_clock_activations SET ended_at=? WHERE namespace=? AND rule_id=? AND ended_at IS NULL',now,namespace,body.ruleId)];
+    const closing=active?await stmt(db,'SELECT payload FROM one_clock_rules WHERE namespace=? AND rule_id=? AND version=?',namespace,body.ruleId,active.version).first():null;
+    const scopes=new Set(closing?JSON.parse(closing.payload).instruments:[]);
     if(body.action==='activate') {
       writes.push(stmt(db,'INSERT INTO one_clock_activations(namespace,rule_id,version,started_at) VALUES(?,?,?,?)',namespace,body.ruleId,body.version,now));
-      const [day,previous]=observerSessions(now);
-      for(const instrument of JSON.parse(saved.payload).instruments)for(const session of [day,previous])writes.push(stmt(db,'INSERT INTO one_clock_evaluation_work(namespace,session,instrument) VALUES(?,?,?) ON CONFLICT DO NOTHING',namespace,session,instrument));
+      for(const instrument of JSON.parse(saved.payload).instruments)scopes.add(instrument);
     }
+    // Pause or replacement may arrive before recovery after an outage. Preserve
+    // the closing version's recent scopes atomically with its closed interval.
+    for(const instrument of scopes)for(const session of observerSessions(now))writes.push(stmt(db,'INSERT INTO one_clock_evaluation_work(namespace,session,instrument) VALUES(?,?,?) ON CONFLICT DO NOTHING',namespace,session,instrument));
     await db.batch(writes);
     return jsonResponse({active:body.action==='activate',changedAt:now,pendingOutcomesContinue:true});
   } catch(error) {

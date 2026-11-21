@@ -82,6 +82,22 @@ test('active definitions recover jobs after missed sessions without any precedin
   assert.ok(results.every(r=>r.state==='evaluated'));
   assert.equal(DB.raw('SELECT COUNT(*) AS n FROM one_clock_evaluation_work')[0].n,3);
 });
+test('pause and replacement preserve closing scopes before outage recovery runs',async t=>{
+  const realNow=Date.now;Date.now=()=>sessionInstant('2026-11-23',12);t.after(()=>{Date.now=realNow;});
+  const {DB,call}=await setup(t),at=sessionInstant('2026-11-19',9,30);
+  await activate(DB,rule,at);
+  await DB.prepare('INSERT INTO one_clock_evaluation_work(namespace,session,instrument) VALUES(?,?,?)').bind('account:alice','2026-11-19','QQQ').run();
+  assert.equal((await call('alice',{action:'deactivate',ruleId:rule.id,version:1})).status,200);
+  assert.deepEqual(DB.raw("SELECT session FROM one_clock_evaluation_work WHERE session>'2026-11-19' ORDER BY session").map(r=>r.session),['2026-11-20','2026-11-23']);
+  await activate(DB,{...rule,id:'replacement'},at);
+  await registerObservedRule(DB,{namespace:'account:alice',rule:{...rule,id:'replacement',version:2,instruments:['SPY']},registeredAt:at});
+  // Remove only disposable fixture jobs to model the same outage for replacement.
+  await DB.prepare('DELETE FROM one_clock_evaluation_work').run();
+  assert.equal((await call('alice',{action:'activate',ruleId:'replacement',version:2})).status,200);
+  assert.deepEqual(DB.raw('SELECT session,instrument FROM one_clock_evaluation_work ORDER BY session,instrument'),[
+    {session:'2026-11-20',instrument:'QQQ'},{session:'2026-11-20',instrument:'SPY'},
+    {session:'2026-11-23',instrument:'QQQ'},{session:'2026-11-23',instrument:'SPY'}]);
+});
 test('inactive rises do not consume once allowance; activation preserves condition state and session anchors',async t=>{
   const {DB}=await setup(t),at=sessionInstant('2026-11-20',9,30),session='2026-11-20';
   const once={...rule,transition:'once-per-session'};
