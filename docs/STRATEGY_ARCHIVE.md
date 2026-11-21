@@ -18,15 +18,16 @@ The browser groups versions with matching family and complete qualitative descri
 
 ## Intake for agents
 
-Send a JSON object or an ordered array of up to 40 objects (192 KiB total) to `POST /api/strategy-archive` with the normal session cookie and `Content-Type: application/json`. Each response item gives the canonical ID or the row error. Retry an interrupted batch with the same IDs and payloads. Put version definitions before records that refer to them. Conflicting records stay immutable. Inspect the existing item, then submit a separate observation describing the disagreement or fork with a new version ID. The response flags other root versions with the same source as possible aliases for human review.
+Send a JSON object or an ordered array of up to 40 objects (192 KiB total) to `POST /api/strategy-archive` with the normal session cookie and `Content-Type: application/json`. Each response item gives the canonical ID or the row error. Retry an interrupted batch with the same IDs and payloads. Put version definitions before records that refer to them. Conflicting records stay immutable. Inspect the existing item, then submit a separate observation describing the disagreement or fork with a new version ID. Matching configurations are flagged for review across roots and forks; roots sharing a source are also flagged. A fork must change its rule or configuration.
 
 | kind | version link | data |
 | --- | --- | --- |
 | version | none | family, originator, source URL, stage (documented or proposed), parameters. Optional aliases, instrument, signal, horizon, rules and prerequisites. A fork records parent and reason. |
 | observation | required | originator, source URL, asOf, summary. Cite a mirror here and reference the original evidence in the summary. |
-| evidence | required | kind (paper, live, backtest or observation), scope (local or external), original source URL, resultRef (stable locator within it), period, sample, assumptions, summary. Cite the same underlying result with the original URL and locator. Matching normalized evidence earns another submitter credit. Differences require review. |
+| evidence | required | kind (paper, live, backtest or observation), scope (local or external), original source URL, resultRef (stable locator within it), period, sample, assumptions, summary. Cite the same underlying result with the original URL and locator. Reworded citations earn credit and return the canonical ID with `differs: true`. The first description is retained. Differences in kind, scope, period or sample require review. |
+| handoff | required | design with Population, Trigger, Comparator, Outcome, Horizon and Evaluation plan. Saved before download and available to subsequent agents. |
 | review | required | decision (adopt, try, modify, defer or reject), reason and next owner. The server records reviewer and time. |
-| trial | required | trialId, owner, status (assigned, active, paused, completed or cancelled), asOf (YYYY-MM-DD) and source URL for the assignment or run. Append status changes using a fresh record ID and the same trialId. The latest effective date wins, then submission order. |
+| trial | required | trialId, owner, status (assigned, active, paused, completed or cancelled), asOf (YYYY-MM-DD) and source URL for the assignment or run. Append status changes using a fresh record ID and the same trialId. Future dates are rejected. Paused trials retain their owner. The latest effective date wins, then submission order. |
 
 Example of an incomplete discovery:
 
@@ -40,6 +41,6 @@ Read `GET /api/strategy-archive`. Add `?version=spy-200` for one version and its
 
 ## Review and release
 
-Use the disposable local preview described in [Site releases](SITE_RELEASES.md). Register the fixture-only username `archive_reviewer` in that preview, then open the archive. Seed `spy-200` cites the dated [#97 paper runner receipt](https://github.com/OwenTanzer/live-options-view/issues/97). Zero trades at that checkpoint is an observation. A new fork starts with its own empty evidence history.
+Use the disposable local preview described in [Site releases](SITE_RELEASES.md). Register the fixture-only username `archive_reviewer` in that preview, then open the archive. The production migration creates empty tables. The preview-only seed `spy-200` cites the dated [#97 paper runner receipt](https://github.com/OwenTanzer/live-options-view/issues/97). Zero trades at that checkpoint is an observation. A new fork starts with its own empty evidence history.
 
 Release order: apply the additive `backend/migrations/0005_strategy_archive.sql` once to the API database, configure the API Worker variable `STRATEGY_ARCHIVE_MEMBERS` with the comma-separated existing usernames authorized for shared read/write access, release the API, verify a member read, then promote staged site assets. Empty membership denies access. For rollback, revert the site followed by the API and retain the additive tables and records. No collector activation or external hypothesis engine is required.

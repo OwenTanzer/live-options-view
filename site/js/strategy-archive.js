@@ -8,12 +8,21 @@ let records = [],
 const linked = new Map();
 const related = (id) => linked.get(id) || [];
 const evidence = (id) => related(id).filter((r) => r.kind === 'evidence');
+function evidenceSummary(id, localOnly = false) {
+  const items = evidence(id).filter((e) => !localOnly || e.data.scope === 'local');
+  const samples = [...new Set(items.map((e) => e.data.sample))];
+  return (
+    items.length +
+    (localOnly ? ' local results' : ' results') +
+    (samples.length ? ' · ' + samples.slice(0, 2).join(', ') + (samples.length > 2 ? ' …' : '') : '')
+  );
+}
 function trials(id) {
   const latest = new Map();
   for (const r of related(id).filter((r) => r.kind === 'trial')) {
     if ((latest.get(r.data.trialId)?.data.asOf || '') <= r.data.asOf) latest.set(r.data.trialId, r);
   }
-  return [...latest.values()].filter((r) => ['active', 'assigned'].includes(r.data.status));
+  return [...latest.values()].filter((r) => ['active', 'assigned', 'paused'].includes(r.data.status));
 }
 const review = (id) =>
   related(id)
@@ -22,7 +31,7 @@ const review = (id) =>
 const display = (x) => (x == null ? 'Unknown' : typeof x === 'object' ? JSON.stringify(x) : String(x));
 const parameter = (v, k) => {
   const p = v.data.parameters[k];
-  return p ? p.state || [p.value, p.unit].filter((x) => x != null).join(' ') : 'Unknown';
+  return p ? p.state || [p.value, p.unit].filter((x) => x != null).join(' ') : 'Not recorded';
 };
 function node(tag, value, parent) {
   const el = document.createElement(tag);
@@ -182,12 +191,7 @@ function showCoverage(list) {
       for (const v of matches)
         action(
           node('div', null, cell),
-          [
-            v.id,
-            v.data.stage,
-            trialSummary(v.id),
-            evidence(v.id).filter((e) => e.data.scope === 'local').length + ' local results',
-          ].join(' · '),
+          [v.id, v.data.stage, trialSummary(v.id), evidenceSummary(v.id, true)].join(' · '),
           () => open(v),
         );
     }
@@ -223,7 +227,7 @@ function render() {
         [d.instrument, d.horizon].filter(Boolean).join(' / '),
         [d.rule?.entryCondition || 'Unknown entry', d.rule?.exitCondition || 'Unknown exit'].join(' / '),
         d.originator,
-        evidence(v.id).length + ' results · ' + trialSummary(v.id),
+        evidenceSummary(v.id) + ' · ' + trialSummary(v.id),
         review(v.id)?.data.decision || 'Awaiting review',
       ])
         node('td', value || 'Unknown', tr);
@@ -318,19 +322,34 @@ async function submit(input) {
         (r.id || 'Record') +
         ' · ' +
         (r.error ||
-          (r.possibleAliases
-            ? 'Saved · review possible aliases: ' + r.possibleAliases.join(', ')
-            : 'Saved')),
+          (r.differs
+            ? 'Credited to the existing result; submitted wording differs'
+            : r.possibleAliases
+              ? 'Saved · review possible aliases: ' + r.possibleAliases.join(', ')
+              : 'Saved')),
     )
     .join('\n');
   return results;
 }
+// Keep the same submission identity until an acknowledgement arrives.
+const pendingForms = new Map();
+async function submitForm(record) {
+  const key = JSON.stringify(record);
+  if (!pendingForms.has(key)) pendingForms.set(key, crypto.randomUUID());
+  const result = await submit({ ...record, id: pendingForms.get(key) });
+  pendingForms.delete(key);
+  return result;
+}
 function run(fn) {
-  return async () => {
+  return async (event) => {
+    const button = event?.currentTarget;
+    if (button) button.disabled = true;
     try {
       await fn();
     } catch (e) {
       $('message').textContent = e.message;
+    } finally {
+      if (button) button.disabled = false;
     }
   };
 }
@@ -386,10 +405,8 @@ $('batch').value = JSON.stringify(
 );
 $('submit').onclick = run(() => submit(JSON.parse($('batch').value)));
 $('fork').onclick = run(async () => {
-  const id = crypto.randomUUID(),
-    parent = selected;
-  const [result] = await submit({
-    id,
+  const parent = selected;
+  const [result] = await submitForm({
     kind: 'version',
     data: {
       ...parent.data,
@@ -402,11 +419,10 @@ $('fork').onclick = run(async () => {
       parameters: JSON.parse($('forkParams').value),
     },
   });
-  if (!result.error) open(versions.find((v) => v.id === id));
+  if (!result.error) open(versions.find((v) => v.id === result.id));
 });
 $('trial').onclick = run(() =>
-  submit({
-    id: crypto.randomUUID(),
+  submitForm({
     kind: 'trial',
     version: selected.id,
     data: {
@@ -419,8 +435,7 @@ $('trial').onclick = run(() =>
   }),
 );
 $('review').onclick = run(() =>
-  submit({
-    id: crypto.randomUUID(),
+  submitForm({
     kind: 'review',
     version: selected.id,
     data: { decision: $('decision').value, reason: $('reason').value, owner: $('owner').value },
@@ -431,13 +446,22 @@ for (const name of design) {
   const label = node('label', name, $('plan'));
   node('input', null, label);
 }
-$('handoff').onclick = run(() => {
+$('handoff').onclick = run(async () => {
   const values = [...$('plan').querySelectorAll('input')].map((i) => i.value.trim());
   if (values.some((v) => !v)) throw Error('Complete each hypothesis field before export.');
-  download(selected.id + '-hypothesis', {
+  const version = selected;
+  const designRecord = Object.fromEntries(design.map((k, i) => [k, values[i]]));
+  const [record] = await submitForm({
+    kind: 'handoff',
+    version: version.id,
+    data: { design: designRecord },
+  });
+  if (record.error) return;
+  download(version.id + '-hypothesis', {
+    handoffId: record.id,
     version: selected.id,
     configuration: selected.data,
-    design: Object.fromEntries(design.map((k, i) => [k, values[i]])),
+    design: designRecord,
     trials: related(selected.id).filter((r) => r.kind === 'trial'),
     evidence: evidence(selected.id),
   });

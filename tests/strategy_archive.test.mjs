@@ -10,6 +10,8 @@ async function fixture() {
   DB.db.exec(
     readFileSync(new URL('../backend/migrations/0005_strategy_archive.sql', import.meta.url), 'utf8'),
   );
+  assert.equal(DB.raw('SELECT count(*) AS n FROM strategy_archive')[0].n, 0);
+  DB.db.exec(readFileSync(new URL('./fixtures/strategy_archive.sql', import.meta.url), 'utf8'));
   // The shim uses a single synchronous SQLite connection. D1 serializes
   // transactions; run each batch in one synchronous transaction here too.
   DB.batch = async (statements) => atomic(statements);
@@ -85,9 +87,29 @@ test('two authenticated clients share attribution, forks, trial assignments and 
   };
   const [a, b] = await Promise.all([
     intake('alice', shared),
-    intake('brian', { ...shared, id: 'brian-citation' }),
+    intake('brian', {
+      ...shared,
+      id: 'brian-citation',
+      data: { ...shared.data, summary: 'Paraphrase of the same result' },
+    }),
   ]);
   assert.equal(a[0].id, b[0].id);
+  assert.ok(a[0].differs || b[0].differs);
+  const retry = await intake('brian', {
+    ...shared,
+    id: 'brian-citation',
+    data: { ...shared.data, summary: 'Paraphrase of the same result' },
+  });
+  assert.equal(retry[0].id, a[0].id);
+  for (const field of ['kind', 'scope', 'period', 'sample']) {
+    const change = { kind: 'paper', scope: 'local', period: 'other', sample: '1 observation' };
+    const [conflict] = await intake('alice', {
+      ...shared,
+      id: 'conflict-' + field,
+      data: { ...shared.data, [field]: change[field] },
+    });
+    assert.match(conflict.error, /Conflicting/);
+  }
   const conflict = await intake('brian', { ...fork, data: { ...fork.data, reason: 'Changed' } });
   assert.ok(conflict[0].error);
   const trial = {
@@ -97,7 +119,7 @@ test('two authenticated clients share attribution, forks, trial assignments and 
     data: {
       owner: 'Chej',
       trialId: 'first',
-      asOf: '2026-11-21',
+      asOf: new Date().toISOString().slice(0, 10),
       status: 'assigned',
       source: lead.data.source,
     },
@@ -132,4 +154,39 @@ test('two authenticated clients share attribution, forks, trial assignments and 
   });
   assert.match(invalid.error, /Unknown rule field/);
   assert.equal((await call('alice', undefined, '?after=-1')).status, 400);
+});
+
+test('fork identity respects all five qualitative fields and rejects unchanged configurations', async () => {
+  const { call } = await fixture();
+  const [parent] = (await (await call('alice', undefined, '?version=spy-200')).json()).records;
+  const send = async (id, data) =>
+    (await (await call('alice', { id, kind: 'version', data })).json()).results[0];
+  const data = { ...parent.data, parent: parent.id, stage: 'proposed', reason: 'Test variation' };
+  assert.match((await send('noop', data)).error, /must change/);
+  for (const key of Object.keys(data.rule)) {
+    const changed = { ...data, rule: { ...data.rule, [key]: data.rule[key] + ' (alternative)' } };
+    assert.equal((await send('change-' + key.toLowerCase(), changed)).error, undefined);
+  }
+  const shorter = structuredClone(data);
+  shorter.parameters.lookback.value = 150;
+  await send('fork-a', shorter);
+  assert.deepEqual((await send('fork-b', shorter)).possibleAliases, ['fork-a']);
+  const distinct = structuredClone(shorter);
+  distinct.rule.riskReward = 'Short exposure';
+  assert.equal((await send('fork-c', distinct)).possibleAliases, undefined);
+  const result = await (
+    await call('alice', {
+      id: 'future',
+      kind: 'trial',
+      version: parent.id,
+      data: {
+        owner: 'alice',
+        status: 'completed',
+        trialId: 'x',
+        source: data.source,
+        asOf: '9999-12-31',
+      },
+    })
+  ).json();
+  assert.match(result.results[0].error, /through today/);
 });

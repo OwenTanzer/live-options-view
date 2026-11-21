@@ -23,6 +23,23 @@ function source(data) {
   fields(data, ['source']);
   requireValue(/^https?:\/\//i.test(data.source) && URL.canParse(data.source), 'Invalid source URL');
 }
+function configuration(data) {
+  const rule = Object.fromEntries(
+    Object.keys(ruleFields).map((key) => [key, data.rule?.[key]?.toLowerCase() ?? null]),
+  );
+  return JSON.stringify(
+    sorted({
+      family: data.family,
+      instrument: data.instrument,
+      horizon: data.horizon,
+      signal: data.signal,
+      rules: data.rules,
+      parameters: data.parameters,
+      rule,
+    }),
+  );
+}
+const designFields = ['Population', 'Trigger', 'Comparator', 'Outcome', 'Horizon', 'Evaluation plan'];
 function validate(row) {
   requireValue(
     object(row) && string(row.id) && idPattern.test(row.id) && object(row.data),
@@ -104,6 +121,10 @@ function validate(row) {
         'Invalid evidence classification',
       );
       break;
+    case 'handoff':
+      requireValue(object(d.design), 'Expected hypothesis design');
+      fields(d.design, designFields);
+      break;
     case 'review':
       fields(d, ['reason', 'owner']);
       requireValue(
@@ -119,6 +140,13 @@ function validate(row) {
         'Invalid trial status',
       );
       requireValue(/^\d{4}-\d{2}-\d{2}$/.test(d.asOf), 'Expected trial date YYYY-MM-DD');
+      const date = new Date(d.asOf + 'T00:00:00Z');
+      requireValue(
+        Number.isFinite(+date) &&
+          date.toISOString().slice(0, 10) === d.asOf &&
+          d.asOf <= new Date().toISOString().slice(0, 10),
+        'Trial date must be a valid date through today',
+      );
       break;
     default:
       throw new RangeError('Unknown record kind');
@@ -135,8 +163,14 @@ export async function submitRecord(db, row, actor) {
       .bind(target)
       .first();
     requireValue(parent, 'Unknown version ' + target);
-    if (kind === 'version')
-      requireValue(JSON.parse(parent.data).family === data.family, 'Fork family differs from parent');
+    if (kind === 'version') {
+      const original = JSON.parse(parent.data);
+      requireValue(original.family === data.family, 'Fork family differs from parent');
+      requireValue(
+        configuration(original) !== configuration(data),
+        'Fork must change its rule or configuration',
+      );
+    }
   }
   const payload = JSON.stringify(sorted(data));
   const insert = db
@@ -150,33 +184,46 @@ export async function submitRecord(db, row, actor) {
       ? "kind='evidence' AND version=? AND json_extract(data,'$.source')=? AND json_extract(data,'$.resultRef')=?"
       : 'id=?';
   const keys = kind === 'evidence' ? [version, data.source, data.resultRef] : [id];
+  const evidence = kind === 'evidence';
+  const classification = ['kind', 'scope', 'period', 'sample'];
+  const agreement = evidence
+    ? classification.map((k) => `json_extract(data,'$.${k}')=?`).join(' AND ')
+    : 'data=?';
+  const values = evidence ? classification.map((k) => data[k]) : [payload];
+  const predicate = match + ' AND kind=? AND version IS ? AND ' + agreement;
+  const args = [...keys, kind, version, ...values];
   const credit = db
     .prepare(
       'INSERT OR IGNORE INTO strategy_archive_credit SELECT id,? FROM strategy_archive WHERE ' +
-        match +
-        ' AND kind=? AND version IS ? AND data=?',
+        predicate,
     )
-    .bind(actor, ...keys, kind, version, payload);
+    .bind(actor, ...args);
   await db.batch([insert, credit]);
   const stored = await db
-    .prepare('SELECT id,kind,version,data FROM strategy_archive WHERE ' + match)
-    .bind(...keys)
+    .prepare('SELECT id,data FROM strategy_archive WHERE ' + predicate)
+    .bind(...args)
     .first();
-  requireValue(
-    stored && stored.kind === kind && stored.version === version && stored.data === payload,
-    'Conflicting record; inspect before merging',
-  );
-  if (kind === 'version' && !data.parent) {
-    const aliases = await db
+  requireValue(stored, 'Conflicting record; inspect before merging');
+  if (evidence && stored.data !== payload) return { id: stored.id, differs: true };
+  if (kind === 'version') {
+    const candidates = await db
       .prepare(
-        `SELECT id FROM strategy_archive
-      WHERE kind='version' AND id<>? AND json_extract(data,'$.source')=?
-      AND json_extract(data,'$.parent') IS NULL ORDER BY seq LIMIT 10`,
+        `SELECT id,data FROM strategy_archive WHERE kind='version' AND id<>? AND
+      ((json_extract(data,'$.family')=? AND json_extract(data,'$.parameters')=?) OR
+       (? IS NULL AND json_extract(data,'$.parent') IS NULL AND json_extract(data,'$.source')=?)) ORDER BY seq`,
       )
-      .bind(id, data.source)
+      .bind(id, data.family, JSON.stringify(sorted(data.parameters)), data.parent ?? null, data.source)
       .all();
-    if (aliases.results.length)
-      return { id: stored.id, possibleAliases: aliases.results.map((r) => r.id) };
+    const aliases = candidates.results
+      .filter((r) => {
+        const other = JSON.parse(r.data);
+        return (
+          (!data.parent && !other.parent && data.source === other.source) ||
+          configuration(other) === configuration(data)
+        );
+      })
+      .map((r) => r.id);
+    if (aliases.length) return { id: stored.id, possibleAliases: aliases };
   }
   return { id: stored.id };
 }

@@ -77,6 +77,7 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
     LIVE_QUOTE_ORIGIN: 'https://preview-quotes.invalid', LIVE_QUOTE_KEY: 'fixture-not-a-secret' });
   apiEnv.STRATEGY_ARCHIVE_MEMBERS = 'archive_reviewer';
   apiEnv.DB.db.exec(readFileSync(resolve(ROOT, 'backend/migrations/0005_strategy_archive.sql'), 'utf8'));
+  apiEnv.DB.db.exec(readFileSync(resolve(ROOT, 'tests/fixtures/strategy_archive.sql'), 'utf8'));
 
   const predictionMarket = predictionFixture();
   // Stable terms for the lifetime of this disposable session, with enough time

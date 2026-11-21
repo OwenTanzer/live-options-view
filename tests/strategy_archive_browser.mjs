@@ -18,6 +18,8 @@ try {
     errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.context().addCookies([{ name: 'session', value: 'test-session', url: LOCAL_ORIGIN }]);
+  let loseFirstForkResponse = true;
+  const forkAttempts = [];
   await page.route('**/*', async (route) => {
     const r = route.request();
     assert.equal(new URL(r.url()).origin, LOCAL_ORIGIN);
@@ -28,6 +30,14 @@ try {
         ...(r.postDataBuffer() ? { body: r.postDataBuffer() } : {}),
       }),
     );
+    if (r.method() === 'POST' && r.postDataJSON()?.kind === 'version') {
+      forkAttempts.push(r.postDataJSON().id);
+      if (loseFirstForkResponse) {
+        loseFirstForkResponse = false;
+        await route.abort('failed');
+        return;
+      }
+    }
     await route.fulfill({
       status: response.status,
       body: Buffer.from(await response.arrayBuffer()),
@@ -42,8 +52,15 @@ try {
   await page.locator('#forkParams').fill(JSON.stringify(inputs));
   await page.locator('#forkReason').fill('Compare shorter lookback');
   await page.locator('#fork').click();
+  await page.waitForFunction(
+    () =>
+      !document.querySelector('#fork').disabled &&
+      document.querySelector('#message').textContent.length > 0,
+  );
+  await page.locator('#fork').click();
   await page.waitForFunction(() => document.querySelector('#title').textContent !== 'spy-200');
   const fork = await page.locator('#title').textContent();
+  assert.deepEqual(forkAttempts, [fork, fork]);
   assert.match(await page.locator('#diff').textContent(), /lookback/);
   assert.doesNotMatch(await page.locator('#diff').textContent(), /Parameter · exposure/);
   assert.doesNotMatch(await page.locator('#facts').textContent(), /Zero trades/);
@@ -51,7 +68,7 @@ try {
   for (const [id, value] of Object.entries({
     trialId: 'lookback-trial',
     trialOwner: 'Chej',
-    trialDate: '2026-11-21',
+    trialDate: new Date().toISOString().slice(0, 10),
     trialSource: 'https://example.org/trials/1',
   }))
     await page.locator('#' + id).fill(value);
@@ -69,6 +86,8 @@ try {
   assert.equal(data.configuration.parameters.lookback.value, 150);
   assert.equal(data.evidence.length, 0);
   assert.equal(data.design.Comparator, 'Fixture design');
+  assert.ok(data.handoffId);
+  assert.match(await page.locator('#facts').textContent(), /handoff/);
   await page.reload();
   await page.locator('#rows button').first().waitFor();
   assert.match(await page.locator('#rows').textContent(), /Chej \(assigned\)/);
