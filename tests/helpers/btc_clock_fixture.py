@@ -36,6 +36,8 @@ def scenarios():
     product.feed = feed
     product.contracts = {c['contract_key']: c}
     product.entries = [c['contract_key']]
+    product.listed = set(product.entries)
+    product.expiries = [c['exp']]
     product.status = 'fixture'
     product._subscribe(NOW)
     event = {'eventType': 'Quote', 'eventSymbol': c['streamer_symbol'],

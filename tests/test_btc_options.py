@@ -82,7 +82,10 @@ class BtcTests(unittest.TestCase):
         self.product.refresh(self.feed, 'fixture', NOW)
         p = self.product.payload([], [], NOW)
         self.assertLessEqual(p['subscription_count'], BUDGET)
-        self.assertEqual(len(p['contracts']), 22)
+        self.assertEqual(len(p['contracts']), 60)
+        self.assertEqual(p['subscription_count'], 22)
+        far = p['contracts'][0]['contract_key']
+        self.assertIn(far, self.product.payload([far], [], NOW)['subscribed_keys'])
         self.assertTrue(any(s['symbol'] == 'QQQ' for s in self.feed._subs))
         held = normalize(row(50000), FUTURE)
         self.product.payload([held['contract_key']], [held['provider_symbol']], NOW)
@@ -94,9 +97,37 @@ class BtcTests(unittest.TestCase):
         self.product.refresh(self.feed, 'fixture', NOW + timedelta(seconds=301))
         self.assertIn(held['contract_key'], self.product.selected)
 
+    def test_inspected_contract_survives_background_refresh_and_non_view_requests(self):
+        self.product.refresh(self.feed, 'fixture', NOW)
+        p = self.product.payload([], [], NOW, expiry='front')
+        outside = [c['contract_key'] for c in p['contracts'] if c['contract_key'] not in p['subscribed_keys']]
+        far, ticket = outside[:2]
+        self.product.payload([far], [], NOW, expiry='front')
+        # Execution asks for an exact symbol without replacing the viewport.
+        result = self.product.payload([ticket], [], NOW)
+        self.assertTrue({ticket, far}.issubset(result['subscribed_keys']))
+        self.assertIn(far, self.product.payload([], [], NOW)['subscribed_keys'])
+        self.product.refresh(self.feed, 'fixture', NOW + timedelta(seconds=301))
+        self.assertIn(far, self.product.selected)
+        next_feed = DXLinkFeed('wss://fixture.invalid', 'fixture')
+        self.product.refresh(next_feed, 'fixture', NOW + timedelta(seconds=303))
+        self.assertIn(far, self.product.selected)
+
+    def test_closing_only_expiry_survives_partial_held_resolution(self):
+        self.rows = [{**row(85000), 'is-closing-only': True}]
+        self.product.refresh(self.feed, 'fixture', NOW)
+        held = normalize(row(50000), FUTURE)
+        self.product.payload([], [held['provider_symbol']], NOW)
+        self.product.refresh(self.feed, 'fixture', NOW + timedelta(seconds=31))
+        result = self.product.payload([], [], NOW + timedelta(seconds=32), expiry='2026-11-27')
+        self.assertEqual(result['expiries'], ['2026-11-27'])
+        self.assertEqual(result['entry_keys'], [])
+        self.assertEqual([c['strike'] for c in result['contracts']], [85000])
+        self.assertIn(held['contract_key'], result['subscribed_keys'])
+
     def test_reconnect_invalidates_and_missing_side_does_not_carry(self):
         self.product.refresh(self.feed, 'fixture', NOW)
-        c = self.product.payload([], [], NOW)['contracts'][0]
+        c = self.product.payload([], [], NOW)['quotes'][0]['contract']
         streamer = c['streamer_symbol']
         event = {'eventType': 'Quote', 'eventSymbol': streamer, 'bidPrice': 100, 'askPrice': 120,
                  'bidSize': 2, 'askSize': 3, 'bidTime': int(NOW.timestamp() * 1000), 'askTime': int(NOW.timestamp() * 1000)}
@@ -146,7 +177,7 @@ class BtcTests(unittest.TestCase):
 
     def test_wire_diagnostics_exclude_future_and_equity_quotes(self):
         self.product.refresh(self.feed, 'fixture', NOW)
-        c = self.product.payload([], [], NOW)['contracts'][0]
+        c = self.product.payload([], [], NOW)['quotes'][0]['contract']
         events = [{'eventType': 'Quote', 'eventSymbol': symbol, 'bidPrice': 1, 'askPrice': 2,
                    'bidSize': 1, 'askSize': 1, 'bidTime': 0, 'askTime': None}
                   for symbol in ('QQQ', FUTURE['streamer-symbol'], c['streamer_symbol'])]
@@ -162,7 +193,7 @@ class BtcTests(unittest.TestCase):
         for invalidate in (lambda: self.feed._on_error(None, 'fixture transport error'),
                            lambda: self.feed._record_auth_rejection('fixture rejection')):
             self.feed._connected = self.feed._authorized = self.feed._channel_open = True
-            c = self.product.payload([], [], NOW)['contracts'][0]
+            c = self.product.payload([], [], NOW)['quotes'][0]['contract']
             event = {'eventType': 'Quote', 'eventSymbol': c['streamer_symbol'],
                      'bidPrice': 1, 'askPrice': 2, 'bidSize': 1, 'askSize': 1}
             self.feed._ingest([event])
