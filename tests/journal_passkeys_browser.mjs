@@ -10,6 +10,7 @@ const origin = 'https://options.moopertonic.net';
 const db = new FakeD1();
 db.db.exec(FakeD1.schemaSql());
 db.db.exec(readFileSync(new URL('../backend/migrations/0003_trade_journal.sql',import.meta.url),'utf8'));
+db.db.exec(readFileSync(new URL('../backend/migrations/0009_one_clock_journal.sql',import.meta.url),'utf8'));
 const browser = await chromium.launch({channel:'chromium',headless:true});
 try {
   for (const member of ['Owen','Jayden','Jacob']) {
@@ -26,7 +27,8 @@ try {
       const r=route.request(), url=new URL(r.url());
       assert.equal(url.origin,origin);
       if (!url.pathname.startsWith('/api/')) {
-        if (!['/trade-journal.html','/js/trade-journal-loads.js','/js/journal-passkeys.js'].includes(url.pathname)) return route.abort();
+        if (!['/trade-journal.html','/js/trade-journal-loads.js','/js/journal-passkeys.js',
+          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js'].includes(url.pathname)) return route.abort();
         return route.fulfill({path:'site'+url.pathname});
       }
       const headers=await r.allHeaders();

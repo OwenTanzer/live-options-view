@@ -15,9 +15,10 @@ function createTradeJournalLoads(fetchJson) {
   let generation = 0;          // bumped by every day load and every reset
   let currentDate = null;      // the date of the most recently REQUESTED day
   let loadedDate = null;       // the date whose day list is currently applied
+  let currentCutoff = null;
   const contexts = new Map();  // `${date}|${position_id}` -> { gen, value }
 
-  const key = (date, positionId) => `${date}|${positionId}`;
+  const key = (date, positionId) => `${date}|${currentCutoff??'retrospective'}|${positionId}`;
 
   // Drop every context and invalidate everything in flight.
   function reset() { generation += 1; contexts.clear(); }
@@ -25,12 +26,13 @@ function createTradeJournalLoads(fetchJson) {
   // Load one day's positions. Resolves { stale: true } when a later day load
   // (or a reset) was issued before this response arrived; the caller must then
   // apply nothing. Otherwise resolves { stale: false, date, ok, status, body }.
-  async function loadDay(date) {
+  async function loadDay(date,cutoff=null) {
     reset();
     const gen = generation;
     currentDate = date;
+    currentCutoff = cutoff;
     let res;
-    try { res = await fetchJson(`/api/trade-journal?date=${encodeURIComponent(date)}`); }
+    try { res = await fetchJson(`/api/trade-journal?date=${encodeURIComponent(date)}${cutoff===null?'':`&cutoff=${cutoff}`}`); }
     catch { res = { ok: false, status: 0, body: { error: 'network error' } }; }
     if (gen !== generation || date !== currentDate) return { stale: true, date };
     if (res.ok) loadedDate = date;
@@ -56,7 +58,7 @@ function createTradeJournalLoads(fetchJson) {
     contexts.set(k, entry);
     let value;
     try {
-      const res = await fetchJson(`/api/trade-journal/context?position_id=${encodeURIComponent(positionId)}&date=${encodeURIComponent(date)}`);
+      const res = await fetchJson(`/api/trade-journal/context?position_id=${encodeURIComponent(positionId)}&date=${encodeURIComponent(date)}${currentCutoff===null?'':`&cutoff=${currentCutoff}`}`);
       value = res.ok ? res.body : { error: (res.body && res.body.error) || `HTTP ${res.status}` };
     } catch { value = { error: 'network error' }; }
     // Applied only if no reset/day switch happened and this is still the

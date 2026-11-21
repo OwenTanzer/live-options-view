@@ -23,6 +23,8 @@
 // shown as unsupported -- never guessed and never silently dropped.
 
 import { checkOrigin, jsonResponse } from './common.js';
+import { journalBookState } from './journal-book.js';
+import { journalCutoff,journalScope,journalSnapshots } from './one-clock-journal.js';
 
 export const TRADE_JOURNAL_DATA_SOURCE_ID = '2a32c187-f187-4570-9d53-05e611943df0';
 export const NOTION_API = 'https://api.notion.com/v1';
@@ -231,22 +233,7 @@ export async function pagePosition(page, { bodyIncomplete = null } = {}) {
     return { ...base, supported: false, unsupported_reason: gaps[0], contract_text: page.properties.Contract ?? null, executions: [], gaps };
   }
   executions.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.execution_id < b.execution_id ? -1 : 1));
-  const m = executions[0].instrument.multiplier;
-  let pos = 0, avg = 0, realized = 0, maxQty = 0;
-  for (const e of executions) {
-    const q = e.side === 'buy' ? e.qty : -e.qty;
-    if (pos === 0 || Math.sign(pos) === Math.sign(q)) {
-      avg = (avg * Math.abs(pos) + e.price * Math.abs(q)) / (Math.abs(pos) + Math.abs(q));
-      pos += q;
-    } else {
-      const closing = Math.min(Math.abs(q), Math.abs(pos));
-      realized += (e.price - avg) * closing * m * Math.sign(pos);
-      pos += q;
-      if (pos === 0) avg = 0;
-      else if (Math.sign(pos) === Math.sign(q)) avg = e.price;   // flipped through flat
-    }
-    maxQty = Math.max(maxQty, Math.abs(pos));
-  }
+  let { pos, avg, realized, maxQty, m } = journalBookState(executions);
   const expiry = /^Worthless expiration: (\d+) contracts on (\d{4}-\d{2}-\d{2})\.$/m.exec(page.body);
   if (expiry) {
     if (+expiry[1] !== pos || pos <= 0 || expiry[2] !== executions[0].instrument.expiration || etDate(executions.at(-1).ts) > expiry[2])
@@ -615,17 +602,18 @@ export function syncView(s) {
   };
 }
 
-export async function loadPosition(db, positionId) {
+export async function loadPosition(db, positionId, cutoff=null) {
+  if(cutoff!==null)return (await journalSnapshots(db,{cutoff,positionId}))[0]??null;
   const r = await db.prepare('SELECT * FROM trade_journal_rows WHERE position_id = ?').bind(positionId).first();
   return r ? rowView(r) : null;
 }
 
 /** Every stored position with an execution on `day` (America/New_York), plus unsupported rows dated that day. */
-export async function journalDay(db, day) {
-  const { results } = await db.prepare('SELECT * FROM trade_journal_rows').all();
+export async function journalDay(db, day, cutoff=null) {
+  const views=cutoff===null?(await db.prepare('SELECT * FROM trade_journal_rows').all()).results.map(rowView)
+    :await journalSnapshots(db,{cutoff});
   const positions = [], unsupported = [];
-  for (const r of results) {
-    const v = rowView(r);
+  for (const v of views) {
     if (v.supported) {
       if (v.expired_on === day || v.executions.some(e => etDate(e.ts) === day)) positions.push(v);
     } else if (v.trade_date && (v.trade_date.length === 10 ? v.trade_date : etDate(v.trade_date)) === day) {
@@ -651,7 +639,9 @@ export async function journalDay(db, day) {
       open_realized_gross: round(open.reduce((s, p) => s + p.realized_gross_pnl, 0), 2),
       excluded_not_active: positions.length - counted.length,
     },
-    sync: syncView(await loadSync(db)),
+    sync: cutoff===null?syncView(await loadSync(db)):null,
+    ...(cutoff===null?{view:'retrospective'}:{view:'recorded-as-of',cutoff,
+      coverage:{basis:'D1 revision receipts',prior_unretained_revisions:'unavailable'}}),
   };
 }
 
@@ -667,7 +657,8 @@ export async function handleTradeJournalDay(request, env, url) {
   if (auth.response) return auth.response;
   const day = url.searchParams.get('date') ?? '';
   if (!ISO_DAY.test(day)) return jsonResponse({ error: 'date must be YYYY-MM-DD' }, 400);
-  return jsonResponse(await journalDay(env.DB, day), 200);
+  let cutoff;try{cutoff=journalCutoff(url);journalScope(day,cutoff);}catch(error){return jsonResponse({error:error.message},400);}
+  return jsonResponse(await journalDay(env.DB, day,cutoff), 200);
 }
 
 export async function handleTradeJournalRow(request, env, url) {
@@ -677,6 +668,11 @@ export async function handleTradeJournalRow(request, env, url) {
   if (!PAGE_ID.test(raw)) return jsonResponse({ error: 'page_id must be a Notion page id' }, 400);
   const hex = raw.replaceAll('-', '').toLowerCase();
   const pageId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  let cutoff;try{cutoff=journalCutoff(url);}catch(error){return jsonResponse({error:error.message},400);}
+  if(cutoff!==null) {
+    const row=(await journalSnapshots(env.DB,{cutoff,pageId}))[0];
+    return jsonResponse(row?{row,view:'recorded-as-of',cutoff}:{error:'no position recorded by cutoff'},row?200:404);
+  }
   const r = await env.DB.prepare('SELECT * FROM trade_journal_rows WHERE page_id = ?').bind(pageId).first();
   if (!r) return jsonResponse({ error: 'not in the synced journal', page_id: pageId, sync: syncView(await loadSync(env.DB)) }, 404);
   return jsonResponse({ row: rowView(r), served_at: new Date().toISOString(), sync: syncView(await loadSync(env.DB)) }, 200);

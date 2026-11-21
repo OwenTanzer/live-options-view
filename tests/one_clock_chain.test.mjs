@@ -23,6 +23,11 @@ function storage(changes={}) {
     async get(key){calls.push(['get',key]);const r=records.get(key);if(!r)return null;return {size:Buffer.byteLength(r.text),uploaded:new Date(r.uploaded),etag:r.etag,text:async()=>r.text};}};
 }
 const scope=(cutoff=T+2000,instrument='QQQ')=>({session,instrument,cutoff});
+test('public chain route retains same-day contract when internal journal reads allow later publication',async()=>{
+  const db=storage(),url=new URL(`https://example.test/api/one-clock/chain?session=${session}&instrument=QQQ&cutoff=${sessionInstant('2026-11-10',0)}`);
+  assert.equal((await handleOneClockChain(new Request(url),{PAPER_TRADES:db},url)).status,400);
+  assert.equal(db.calls.length,0);
+});
 test('New York archive conversion handles summer/winter and validates dates',()=>{
   assert.equal(new Date(T).toISOString(),'2026-11-09T14:30:00.000Z');
   assert.equal(new Date(sessionInstant('2026-07-09',9,30)).toISOString(),'2026-07-09T13:30:00.000Z');

@@ -33,6 +33,17 @@ function manualFetch() {
 const flush = () => new Promise(r => setImmediate(r));
 const POS = 'pos:synthetic0001';
 
+test('same-day cutoff change discards later context and partitions the cache',async()=>{
+  const f=manualFetch(),loads=createTradeJournalLoads(f.fetchJson);
+  let day=loads.loadDay('2026-11-09',2000);f.reply('&cutoff=2000',{positions:[]});await day;
+  const later=loads.loadContext('2026-11-09',POS);
+  day=loads.loadDay('2026-11-09',1000);f.reply('trade-journal?date=2026-11-09&cutoff=1000',{positions:[]});await day;
+  const earlier=loads.loadContext('2026-11-09',POS);
+  f.reply('&cutoff=1000',{marker:'earlier'});assert.equal(await earlier,true);
+  f.reply('&cutoff=2000',{marker:'later'});assert.equal(await later,false);
+  assert.deepEqual(loads.context('2026-11-09',POS),{marker:'earlier'});
+});
+
 test('context: Nov 13 resolves before Nov 12; only Nov 13 is applied', async () => {
   const f = manualFetch();
   const loads = createTradeJournalLoads(f.fetchJson);
