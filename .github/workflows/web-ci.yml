@@ -211,6 +211,7 @@ jobs:
           node --test tests/btc_github_link.test.mjs tests/credit_tape_site.test.mjs
           node tests/btc_options_browser.test.mjs
           node tests/btc_mobile_chain.test.mjs
+          node tests/btc_compact_chain.test.mjs
           node tests/btc_owner_link_browser.test.mjs
           node tests/btc_github_browser.test.mjs
       - name: Private Kalshi phone and desktop fixture workflow

@@ -158,6 +158,7 @@ try {
       waiting = hold('/api/paper-trade');
       await page.locator('.btc-buy').click();
       await page.locator('#trade-ticket .btn-buy').click(); await waiting;
+      await page.locator('.btc-dismiss').click();
       await page.locator('#auth-logout').click();
       await page.locator('.btc-login').click(); await login('wrong_fixture');
       releaseHeld();
