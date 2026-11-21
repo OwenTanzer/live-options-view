@@ -1,6 +1,6 @@
 # One Clock implementation and extension contract
 
-Status: foundation plus offline authoring/replay implementation, not activated. Inventory baseline: master
+Status: shared clock, offline authoring/replay and durable observer storage implemented; no production observer activation. Inventory baseline: master
 `dba3304`, November 21, 2026. Repository findings below do not establish live
 deployment, archive completeness or a source's historical availability.
 
@@ -42,6 +42,15 @@ observer must preserve that as an attributed revision. The same pure evaluator
 accepts an entire archive or only records that have arrived. No strategy or order
 execution runs from this page. D1 persistence, live activation, source ingestion,
 full categorical/comparison statistics and reader migrations are later slices.
+
+The observer storage in `backend/one-clock-observer.js` reuses this evaluator.
+It atomically commits observations, event/outcome history and source checkpoints
+to D1 with optimistic generation protection and exact batch-id retry receipts.
+The additive migration and trusted boundary are described in the
+[backend guide](../backend/README.md#one-clock-observer-storage-not-activated).
+It has no public ingestion route or running source consumer yet. Controlled
+recordings test parity and restart; production source activation and natural
+event/outcome receipts remain outstanding.
 
 `site/shared/one-clock.js` has no network, storage or timer. The application
 owns one clock for a view and registers source adapters once. A live refresh
