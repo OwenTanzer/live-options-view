@@ -79,6 +79,7 @@ class MultiUnderlying(unittest.TestCase):
   with patch.object(quotes,'COLLECT_IBIT',False): registry.quote_payload(['IBIT291221C00001000'])
   self.assertEqual(len(feed.added),100)
 
+ @patch.object(quotes, 'datetime', FixedDatetime)
  def test_quote_payload_explains_every_absent_contract(self):
   # The 503 that made the option lane look broken was the service correctly
   # refusing to quote outside a feed session. Inside a session the remaining

@@ -45,6 +45,8 @@ class DXLinkFeed:
         self._ready = threading.Event()
         self._subs: list[dict] = []
         self._pending_option_subs: list[dict] = []
+        self._btc_symbols = set()
+        self._btc_owned = set()
         self._subscription_error: Optional[str] = None
         self._subscribed          = False
         self._timesale_symbols: list[str] = []
@@ -102,6 +104,26 @@ class DXLinkFeed:
             if self._subscribed:
                 self._flush_pending_option_subscriptions_locked()
         return len(additions)
+
+    def replace_btc_subscriptions(self, symbols):
+        """Replace only this private product's Quote events; preserve price/equity lanes."""
+        wanted = set(symbols)
+        if len(wanted) > 65:
+            raise ValueError("BTC subscription budget exceeded")
+        with self._lock:
+            known = {(e["type"], e["symbol"]) for e in self._subs}
+            removed = self._btc_owned - wanted
+            added = {s for s in wanted if ("Quote", s) not in known}
+            remove = [{"type": "Quote", "symbol": s} for s in removed]
+            add = [{"type": "Quote", "symbol": s} for s in added]
+            if self._subscribed and (remove or add):
+                self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": False, "remove": remove, "add": add})
+            self._subs = [e for e in self._subs if not (e["type"] == "Quote" and e["symbol"] in removed)] + add
+            for symbol in removed:
+                self._state.pop(symbol, None)
+            self._btc_owned = (self._btc_owned - removed) | added
+            self._btc_symbols = wanted
 
     def _flush_pending_option_subscriptions_locked(self):
         while self._pending_option_subs:
@@ -249,6 +271,8 @@ class DXLinkFeed:
                 pass
             return
         with self._lock:
+            for symbol in self._btc_symbols:
+                self._state.pop(symbol, None)
             self._connected = True
             # A silent redial skips _on_close, so clear the previous connection's
             # auth/channel state here; health must not report a dead login.
@@ -343,7 +367,7 @@ class DXLinkFeed:
                 "type": "FEED_SETUP", "channel": 1,
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
-                    "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"],
+                    "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime", "bidSize", "askSize"],
                     "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice", "prevDayId"],
                     "Trade":    ["eventType", "eventSymbol", "dayVolume", "price", "time"],
                     "TradeETH": ["eventType", "eventSymbol", "price", "time"],
@@ -685,6 +709,14 @@ class DXLinkFeed:
                         self._quote_time_counts["with_provider_time"] += 1
                     else:
                         self._quote_time_counts["without_provider_time"] += 1
+                    if sym in self._btc_symbols:
+                        # Replace both sides, including missing prices/sizes. Never
+                        # carry a withdrawn side forward as executable liquidity.
+                        s.update(bid=b, ask=a, bid_size=self._to_float(event.get("bidSize")),
+                                 ask_size=self._to_float(event.get("askSize")),
+                                 bid_ts=now.isoformat(), ask_ts=now.isoformat(),
+                                 bid_observed_at=bid_time, ask_observed_at=ask_time)
+                        continue
                     if b is not None:
                         s["bid"] = b
                         s["bid_ts"] = now.isoformat()

@@ -115,6 +115,7 @@ function renderChainTitle(symbol) {
 // Renders whichever underlying is selected, from that underlying's own
 // validated snapshot only. Each symbol's stale/unavailable state is its own.
 function renderSelectedChain() {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) { btcOptions.render(); return; }
   const symbol = chainSelection.symbol;
   if (typeof qqqIv !== "undefined") qqqIv.select(symbol);
   renderChainTitle(symbol);
@@ -142,6 +143,7 @@ function renderSelectedChain() {
 }
 
 function selectUnderlying(symbol) {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) btcOptions.select(false);
   if (!chainSelection.select(symbol)) return;
   if (typeof closeTicket === 'function') closeTicket();
   try { localStorage.setItem(UNDERLYING_KEY, chainSelection.symbol); } catch (e) {}

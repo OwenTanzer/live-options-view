@@ -150,3 +150,8 @@ Never put private positions, credentials or screenshots in a release artifact.
    versions through their respective protected rollback procedures (assets
    first if already published). Leave the additive cache tables in place.
    Review any cache removal separately. The source requires no reversal.
+
+## Bitcoin monthly paper product
+
+See [implementation, source gaps and staged rollout](../docs/BTC_PAPER_OPTIONS.md).
+The private reader, entry switch and final-mark reader are separate controls.

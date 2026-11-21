@@ -1,3 +1,4 @@
+import { settleBtcAccount } from './btc-options.js';
 // backend/settlement.js (B4) -- settlement: the pure pricing/validation
 // functions (this slice), plus the settlement machinery and the /api/settle
 // route (slice e). Moved verbatim from worker.js; the entry re-exports the
@@ -129,7 +130,7 @@ async function settleAccount(env, username, as_of, spot_marks) {
 async function liquidateAccount(env, username, token) {
   const store = createStorage(env);
   const record = await store.users.get(username);
-  if (record && record.is_bot) {
+  if (record && (record.is_bot || record.trades?.some(t => t.instrument_type === 'futures_option'))) {
     const outcome = await withUserRecord(env, username, (record) => ({
       record: { ...record, account_closed: true, closed_at: record.closed_at ?? new Date().toISOString(),
         closure_reason: record.closure_reason ?? 'insolvent_settlement' }, result: { closed: true },
@@ -251,6 +252,18 @@ export async function settleAllBots(env, now = new Date()) {
     no_op_reason: null,
   };
 
+  const btcUsers = await createStorage(env).users.listUsernames();
+  for (const name of btcUsers) {
+    const record = await createStorage(env).users.get(name);
+    if (record?.trades?.some(t => t.instrument_type === 'futures_option')) {
+      const btc = await settleBtcAccount(env, name, now.getTime());
+      if (btc.error) summary.accounts_retry++;
+      else if (btc.result.settled.length) {
+        summary.accounts_settled++; summary.positions_settled += btc.result.settled.length;
+      }
+    }
+  }
+
   const pendingByUsername = new Map();
   const neededExpirations = new Set();
 
@@ -269,7 +282,7 @@ export async function settleAllBots(env, now = new Date()) {
   summary.expirations_needed = neededExpirations.size;
 
   if (!pendingByUsername.size) {
-    summary.no_op_reason = usernames.length ? 'no_expired_positions' : 'no_bot_accounts';
+    summary.no_op_reason = summary.accounts_settled ? null : (usernames.length ? 'no_expired_positions' : 'no_bot_accounts');
     return summary;
   }
 
@@ -353,5 +366,8 @@ export async function handleSettle(request, env) {
     return jsonResponse({ error: 'Settlement could not be recorded, try again' }, 503);
   }
 
-  return jsonResponse(kvOutcome.result, 200);
+  const btc = await settleBtcAccount(env, session.username);
+  if (btc.error) return jsonResponse({ error: 'BTC settlement pending retry' }, 503);
+  return jsonResponse({ ...kvOutcome.result, settled: [...kvOutcome.result.settled, ...btc.result.settled],
+    pending_btc: btc.result.pending, balance_cash: btc.result.balance_cash }, 200);
 }

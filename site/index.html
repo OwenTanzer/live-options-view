@@ -1357,6 +1357,10 @@
 .iv-pop{position:absolute;top:100%;left:0;z-index:50;width:min(285px,88vw);padding:10px;background:var(--panel,#161b22);border:1px solid var(--border,#30363d);border-radius:6px;box-shadow:0 5px 18px #0009}
 .iv-pop canvas{display:block;width:100%;height:78px}.iv-pop small{color:var(--dim);line-height:1.4}
 @media(max-width:650px){#qqq-iv{flex-basis:100%}}
+  #btc-panel { padding: 12px; max-width: 100%; }
+  .btc-contract { display:block; white-space:pre-line; text-align:left; width:100%; max-width:680px; padding:10px; margin:6px 0; overflow-wrap:anywhere; }
+  #trade-ticket { max-width:calc(100vw - 16px); }
+  #trade-ticket .t-row { flex-wrap:wrap; }
 </style>
 </head>
 <body>
@@ -1385,6 +1389,7 @@
     <option value="SPY">SPY</option>
     <option value="IBIT">IBIT</option>
   </select>
+  <button id="btc-select" type="button" aria-pressed="false">Bitcoin futures options</button>
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
   <span id="price-age" class="chain-snapshot" role="status"></span>
@@ -1395,6 +1400,7 @@
     <span id="chain-note" class="chain-note"></span>
 </div>
 
+<section id="btc-panel" hidden aria-label="Bitcoin futures options"><div id="btc-chain"></div></section>
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
@@ -1839,7 +1845,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/paper-trading.js?v=54f0d2a51e7c4025"></script>
+<script src="js/paper-trading.js?v=f3c30d1461477d33"></script>
 <script>
 
 // ── auth ───────────────────────────────────────────────────────────────────────
@@ -1847,7 +1853,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/auth.js?v=602f112254101ca9"></script>
+<script src="js/auth.js?v=a0d0bd5712695f86"></script>
 <script>
 
 // ── trade ticket popover ──────────────────────────────────────────────────────
@@ -1855,7 +1861,8 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/trade-ticket.js?v=85fc34910f5d761f"></script>
+<script src="js/trade-ticket.js?v=139825bda8755a1b"></script>
+<script src="js/btc-options.js?v=75d2d62584ff5ae2"></script>
 <script>
 
 // ── data fetch cycle ──────────────────────────────────────────────────────────
@@ -1865,7 +1872,7 @@ let timerHandle = null;
 // stays here as the section's marker.
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
-<script src="js/data-fetch-cycle.js?v=d8b0bb7385cf9ba6"></script>
+<script src="js/data-fetch-cycle.js?v=137d3c337e3408d1"></script>
 <script src="js/oi-skew-meter.js?v=2090f692184a9d86"></script>
 <script src="js/reference-oi-skew-meters.js?v=afd0f36529d824e6"></script>
 <script>

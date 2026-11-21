@@ -9,9 +9,10 @@ function openTicket(e, row) {
   e.stopPropagation();
   closeTicket();
   const sym  = row.OptionSymbol;
-  const q    = liveQuotes.get(sym) || {};
+  const btc = row.instrument_type === 'futures_option';
+  const q = (btc ? btcOptions.quotes.get(sym) : liveQuotes.get(sym)) || {};
   const info = {
-    sym, instrument_type: 'option',
+    sym, instrument_type: btc ? 'futures_option' : 'option', contract: row.contract,
     strike: +row.Strike, type: row.Type, exp: row.Expiration,
   };
   const fresh = stamp => Number.isFinite(Date.parse(stamp)) && Date.now() - Date.parse(stamp) <= 15000 && Date.now() - Date.parse(stamp) >= -30000;
@@ -20,6 +21,7 @@ function openTicket(e, row) {
 
   const t = document.createElement('div');
   t.id = 'trade-ticket';
+  if (btc) t.dataset.btc = sym;
   t.innerHTML = `
     <div class="t-head">${instrumentLabel(info)} · ${q.bid != null ? fmtQ(q.bid) : '—'} × ${q.ask != null ? fmtQ(q.ask) : '—'}</div>
     <div class="t-row t-order-row">
@@ -42,6 +44,7 @@ function openTicket(e, row) {
   t.style.top  = (r.bottom + window.scrollY + 4) + 'px';
 
   const qtyEl = t.querySelector('#t-qty');
+  if (btc) { qtyEl.value = '1'; qtyEl.disabled = true; t.querySelector('.t-head').textContent += ' · Simulated · $2.50 fee per side'; }
   const orderTypeEl = t.querySelector('#t-order-type');
   const limitWrap = t.querySelector('.t-limit');
   const limitEl = t.querySelector('#t-limit');

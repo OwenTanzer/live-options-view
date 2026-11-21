@@ -13,6 +13,7 @@ on:
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
+      - "tests/test_btc_options.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
       - "tests/test_market_readings.py"
@@ -61,6 +62,7 @@ on:
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
+      - "tests/test_btc_options.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
       - "tests/test_market_readings.py"
@@ -170,3 +172,6 @@ jobs:
           docker run --rm --network none \
             -v "$PWD/tests/producer_packaging.py:/app/tests/producer_packaging.py:ro" \
             producer-check python tests/producer_packaging.py
+
+      - name: BTC monthly private quote fixtures
+        run: python -m unittest discover -s tests -p test_btc_options.py -v

@@ -1,3 +1,4 @@
+import { btcAllowed, fetchBtc, heldBtc, exactBtcQuote } from './btc-options.js';
 // backend/paper-trade.js (B4) -- paper trading: the /api/paper-trade route,
 // the largest single function in the Worker (304 lines). Moved verbatim
 // from worker.js; the router in worker.js still owns the route table. It
@@ -162,9 +163,16 @@ export async function handlePaperTrade(request, env) {
       closure_reason: session.record.closure_reason }, 403);
   }
 
+  const btc = body.instrument_type === 'futures_option';
+  if (btc && body.side === 'buy' && (!btcAllowed(env, session.username) || env.BTC_OPTIONS_ENTRIES !== '1')) {
+    return jsonResponse({ error: 'BTC new entries disabled' }, 403);
+  }
+  if (btc && body.side === 'sell' && !heldBtc(session.record).some(c => c.contract_key === body.sym)) {
+    return jsonResponse({ error: 'No held BTC contract' }, 400);
+  }
   let quotePayload;
   try {
-    const quoteResponse = await fetchLiveQuotes([body.sym], env);
+    const quoteResponse = await (btc ? fetchBtc(env, session.record, [body.sym]) : fetchLiveQuotes([body.sym], env));
     if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
     quotePayload = await quoteResponse.json();
   } catch (error) {
@@ -202,6 +210,8 @@ export async function handlePaperTrade(request, env) {
     bid: quoteResult.bid,
     ask: quoteResult.ask,
     username: session.username,
+    ...(btc ? { contract: quoteResult.contract, source_quote: quoteResult.source_quote,
+      fees: quoteResult.fees, fee_model: quoteResult.fee_model, underlying: '/BTC' } : {}),
   };
   const candidate = Object.freeze(priceResult.error
     ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
@@ -246,6 +256,7 @@ export async function handlePaperTrade(request, env) {
   let cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+  if (btc) { cashDelta -= trade.fees; trade = { ...trade, cash_delta: cashDelta }; }
   // Financing is charged only when closing a leveraged share position. The
   // loan is the negative cash created by the entry; one annual rate and the
   // elapsed calendar days are enough for this single-position paper bot.
@@ -286,6 +297,13 @@ export async function handlePaperTrade(request, env) {
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
+    if (btc) {
+      if (exactBtcQuote(quotePayload, body, Date.now()).error) return { error: 'quote_expired' };
+      const book = computeBookFromTrades(record.trades);
+      const held = book[trade.sym];
+      if (trade.side === 'buy' && !held?.pos && Object.values(book).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).length >= 64) return { error: 'position_budget' };
+      if (held?.pos && JSON.stringify(held.contract) !== JSON.stringify(trade.contract)) return { error: 'metadata_changed' };
+    }
     if (record.account_closed) return { error: 'account_closed' };
     if (trade.side === 'buy' && (record.balance_cash < 0 || -cashDelta > record.balance_cash)) {
       const marginLimit = Number(record.paper_margin_limit ?? 1);
@@ -305,7 +323,7 @@ export async function handlePaperTrade(request, env) {
         return { error: 'insufficient_balance' };
       }
     }
-    if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
+    if (['share', 'futures_option'].includes(trade.instrument_type) && trade.side === 'sell') {
       const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;
       if (held < trade.qty) return { error: 'insufficient_position' };
     }
@@ -316,6 +334,13 @@ export async function handlePaperTrade(request, env) {
     };
   });
 
+  if (['quote_expired', 'metadata_changed', 'position_budget'].includes(kvOutcome.error)) {
+    const rejection = { ...common, error: kvOutcome.error, status: 'rejected', http_status: 409 };
+    try {
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch { return jsonResponse({ error: 'Rejection could not be recorded' }, 503); }
+  }
   if (kvOutcome.error === 'insufficient_balance' || kvOutcome.result?.balance_rejection) {
     const rejection = Object.freeze(kvOutcome.result?.balance_rejection ?? {
       ...common,
@@ -343,7 +368,7 @@ export async function handlePaperTrade(request, env) {
   if (kvOutcome.error === 'insufficient_position') {
     const rejection = Object.freeze({
       ...common,
-      error: 'Cannot sell more shares than are held',
+      error: 'Cannot sell more than the held quantity',
       status: 'rejected',
       http_status: 400,
     });

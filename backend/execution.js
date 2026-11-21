@@ -1,3 +1,4 @@
+import { exactBtcQuote, BTC_KEY } from './btc-options.js';
 // backend/execution.js (B4) -- execution: trade-intent validation, the R2
 // reservation-lease machinery (reserve/renew/finalize + expiry), and the
 // exact-quote pricers (share + contract). Moved verbatim from worker.js;
@@ -31,9 +32,10 @@ export function validateTradeIntent(body) {
     return 'sym must be a non-empty string';
   }
   const instrumentType = body.instrument_type ?? 'option';
-  if (instrumentType !== 'option' && instrumentType !== 'share') {
+  if (!['option', 'share', 'futures_option'].includes(instrumentType)) {
     return 'instrument_type must be "option" or "share"';
   }
+  if (instrumentType === 'futures_option' && (!BTC_KEY.test(body.sym) || body.qty !== 1)) return 'BTC monthly orders require an exact key and one contract';
   if (instrumentType === 'share' && !TRADEABLE_SHARE_SYMBOLS.has(body.sym)) {
     return 'share symbol is not in the tradeable equity list';
   }
@@ -160,6 +162,7 @@ export async function quoteProviderErrorResponse(response) {
   );
 }
 export function exactExecutionQuote(payload, intent, nowMs) {
+  if (intent.instrument_type === 'futures_option') return exactBtcQuote(payload, intent, nowMs);
   if ((intent.instrument_type ?? 'option') === 'share') {
     return exactShareQuote(payload, intent.sym, intent.side, nowMs);
   }
