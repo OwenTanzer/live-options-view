@@ -94,6 +94,41 @@ test('backfill never upgrades to prospective on repeat delivery',async t=>{
   assert.equal((await read(db,demoStart+302000))[0].collection,'backfill');
 });
 
+test('backfilled anchor remains part of trigger lineage with prospective current input',async t=>{
+  const db=await setup(t);
+  const anchor=demoRows.find(r=>r.id==='skew-0');
+  const trigger=demoRows.find(r=>r.id==='skew-5');
+  await observeBatch(db,batch('skew',anchor.availableAt,{collection:'backfill',observations:[anchor]}));
+  await observeBatch(db,batch('skew',trigger.availableAt,{collection:'prospective',observations:[trigger]}));
+  const event=(await read(db,trigger.availableAt))[0];
+  assert.equal(event.collection,'backfill');
+  const input=event.lineage.inputs.find(e=>e.anchor);
+  assert.equal(input.record.collection,'prospective');
+  assert.equal(input.anchor.collection,'backfill');
+  assert.equal(input.anchor.id,anchor.id);
+  assert.equal(input.anchor.receivedAt,anchor.availableAt);
+});
+
+test('outcome baseline and endpoint retain their own backfill and receipt lineage',async t=>{
+  const db=await setup(t);
+  const trigger=demoStart+301000;
+  await observeBatch(db,batch('price',trigger,{collection:'backfill'}));
+  await observeBatch(db,batch('skew',trigger,{collection:'prospective'}));
+  let event=(await read(db,trigger))[0];
+  assert.equal(event.collection,'prospective');
+  assert.equal(event.lineage.outcomes['spot-15m'].baseline.collection,'backfill');
+  assert.equal(event.lineage.outcomes['spot-15m'].collection,null);
+  const measured=demoStart+1261000;
+  await observeBatch(db,batch('price',measured,{collection:'prospective'}));
+  event=(await read(db,measured))[0];
+  assert.equal(event.collection,'prospective');
+  assert.equal(event.lineage.outcomes['spot-15m'].collection,'backfill');
+  assert.equal(event.lineage.outcomes['spot-15m'].endpoint.collection,'prospective');
+  assert.equal(event.lineage.outcomes['spot-15m'].baseline.receivedAt,trigger);
+  assert.equal(event.lineage.outcomes['spot-15m'].endpoint.receivedAt,measured);
+  assert.equal((await read(db,trigger))[0].lineage.outcomes['spot-15m'].endpoint,null);
+});
+
 test('concurrent generation is rejected atomically and can retry from current state',async t=>{
   const db=await setup(t);
   let injected=false;

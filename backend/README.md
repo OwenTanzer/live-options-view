@@ -35,6 +35,10 @@ There are no Workers KV, provider-feed, account-execution or settlement calls.
 `observedEventsAsOf` filters observer revision time as well as source cohort and
 session, so later corrections do not appear on rewind. First ingestion retains
 its collection mode; backfill cannot silently become a prospective observation.
+Each saved event also carries `lineage.inputs` (current and anchor receipts)
+and `lineage.outcomes` (baseline and endpoint receipts plus measurement collection).
+A prospective trigger can have a backfilled outcome; consumers must retain both
+labels. Receipt times and original collection modes survive repeated delivery.
 
 Bounds: 500 observations per delivery, 10,000 observation revisions per scoped
 session and 100 registered versions per namespace. Exceeding a bound fails before

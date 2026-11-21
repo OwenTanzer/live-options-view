@@ -64,12 +64,29 @@ export async function observeBatch(db, input) {
     for (const event of events) {
       const key = await digest(event.id);
       const { matchingObservations, ...stable } = event; // Counts remain a projection, not a write per tick.
-      const inputs = event.inputEvidence.map(e => receiptByRecord.get(JSON.stringify([
-        JSON.stringify([e.source,event.session,event.instrument,event.origin,e.id]),e.revision])));
-      const eventCollection = inputs.some(r => r?.collection === 'backfill') ? 'backfill' :
-        inputs.some(r => r?.collection === 'replay') ? 'replay' :
-        event.triggeredAt < registered.registered_at ? 'retrospective' : 'prospective';
-      current.set(key,{ ...stable,id:key,collection:eventCollection,registeredAt:registered.registered_at });
+      function lineage(evidence) {
+        if (!evidence?.id) return null;
+        const receipt = receiptByRecord.get(JSON.stringify([
+          JSON.stringify([evidence.source,event.session,event.instrument,event.origin,evidence.id]),evidence.revision]));
+        return { ...evidence, collection:receipt?.collection ?? 'unknown', receivedAt:receipt?.received_at ?? null };
+      }
+      function classify(records, fallback) {
+        const modes = records.filter(Boolean).map(r => r.collection);
+        return ['backfill','replay','unknown'].find(mode => modes.includes(mode)) ?? fallback;
+      }
+      const inputs = event.inputEvidence.map(e => ({ record:lineage(e), anchor:lineage(e.anchorEvidence) }));
+      const eventCollection = classify(inputs.flatMap(e => [e.record,e.anchor]),
+        event.triggeredAt < registered.registered_at ? 'retrospective' : 'prospective');
+      // An observed trigger and its later measurement can have different
+      // collection histories. Never upgrade an endpoint or anchor on redelivery.
+      const outcomes = Object.fromEntries(event.outcomes.map(outcome => {
+        const baseline = lineage(event.baselines[outcome.id]?.evidence);
+        const endpoint = lineage(outcome.evidence);
+        return [outcome.id,{ baseline,endpoint,collection:outcome.state === 'measured'
+          ? classify([baseline,endpoint],eventCollection) : null }];
+      }));
+      current.set(key,{ ...stable,id:key,collection:eventCollection,registeredAt:registered.registered_at,
+        lineage:{ inputs,outcomes } });
     }
   }
   const generation = (state?.generation ?? 0) + 1;
