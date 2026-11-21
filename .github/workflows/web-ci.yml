@@ -182,8 +182,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: One Clock Python binding and blind Trainer invariants
-        run: python -m unittest tests.test_one_clock_python tests.test_options_replay
       - name: Collector-to-API and UI BTC fixtures
         # Cross-language fixtures run real FULL wire events through the collector.
         # Importing its package requires the existing producer dependencies.
@@ -191,6 +189,8 @@ jobs:
           pip install -r deployment/python/requirements.txt
           node tests/btc_options.test.mjs
           node tests/btc_options_ui.test.mjs
+      - name: One Clock Python binding and blind Trainer invariants
+        run: python -m unittest tests.test_one_clock_python tests.test_options_replay
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
       - name: multi-underlying chain and settlement (#182)

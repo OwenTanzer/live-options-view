@@ -170,7 +170,7 @@ class ReplaySession:
         age = t - snap["t"]
         if age > MAX_QUOTE_AGE_S:
             return snap, "gap", age
-        if t - snap.get("content_t", snap["t"]) > MAX_QUOTE_AGE_S:
+        if t - self.source.content_time(t) > MAX_QUOTE_AGE_S:
             return snap, "frozen", age
         if not snap["ok"]:
             return snap, snap["reason"], age
@@ -182,7 +182,7 @@ class ReplaySession:
         points = {self.open_s, until}
         points.update(t for t in self.source.ready if self.open_s <= t <= until)
         for s in self.snaps:
-            for p in (s["t"], s["t"] + MAX_QUOTE_AGE_S + 1, s.get("content_t", s["t"]) + MAX_QUOTE_AGE_S + 1):
+            for p in (s["t"], s["t"] + MAX_QUOTE_AGE_S + 1):
                 if self.open_s <= p <= until:
                     points.add(p)
         pts = sorted(points)

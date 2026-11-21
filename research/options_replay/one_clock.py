@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import json
 import math
 import heapq
+import hashlib
 import re
 
 ORIGINS = {"recorded", "reconstructed", "synthetic"}
@@ -136,36 +137,69 @@ class TrainerSource:
         if not self.session.startswith('SIM:'):
             self.base = round(datetime.fromisoformat(self.session).replace(tzinfo=ZoneInfo('America/New_York')).timestamp()*1000)
         self.rows, ready = [], set()
+        payload_indices = {}
         for i, snap in enumerate(pack["snapshots"]):
+            # A repeated immutable payload has one representative index. Pack
+            # order is not payload identity; content_t is a full-pack derivation.
+            payload = _canonical({k:v for k,v in snap.items() if k != 'content_t'})
+            payload_index = payload_indices.setdefault(payload, i)
             at = snap["t"]
             available = snap.get("available_s", None if self.origin == "recorded" else at)
             row = observation(dict(source="trainer-chain", id=snap.get("observation_id", snap.get("key", str(i))),
                 revision=snap.get("revision", 1), session=self.session, instrument=instrument, origin=self.origin,
-                evidence=snap.get("key", f"generated:{i}"), eventAt=self.base+round(at*1000),
+                evidence=snap.get("key", f"generated:{snap.get('observation_id',i)}"), eventAt=self.base+round(at*1000),
                 availableAt=None if available is None else self.base+round(available*1000),
-                value=None if snap.get("retracted") else i))
+                payloadDigest=hashlib.sha256(repr(payload).encode()).hexdigest(),
+                value=None if snap.get("retracted") else payload_index))
             self.rows.append(row)
             if available is not None:
                 ready.add(math.ceil(available))
         self.ready = sorted(ready)
         # Compile the immutable pack once. Views and dark-stretch boundaries
         # use binary search, not a whole-pack selection per displayed second.
-        self.boundaries, self.latest_rows, self.conflict_at = [], [], None
+        self.boundaries, self.latest_rows, self.content_times, self.conflict_at = [], [], [], None
         identities, seen = {}, {}
         pending = sorted((row for row in self.rows if row['availableAt'] is not None),key=lambda row:row['availableAt'])
+        # Segment tree over event order: each node describes its active suffix
+        # of identical content. Corrections remove the old revision first. This
+        # derives frozen age from eligible evidence in O(log n) per publication,
+        # without retaining every prefix or trusting archive-wide content_t.
+        ordered = sorted(pending,key=lambda r:(r['eventAt'],r['availableAt'],_key(r)))
+        slots = {id(row):i for i,row in enumerate(ordered)}
+        size = 1 << max(0,(len(ordered)-1).bit_length())
+        tree = [None] * (2*size)
+        def update(row, active):
+            at = size + slots[id(row)]
+            snap = pack['snapshots'][row['value']] if row['value'] is not None else None
+            sig = _canonical([snap.get('spot'),snap.get('q')]) if snap is not None else ('retracted',identity(row))
+            tree[at] = (sig,True,row['eventAt']) if active else None
+            while at > 1:
+                at //= 2
+                left,right = tree[at*2:at*2+2]
+                if left is None or right is None:
+                    tree[at] = left if right is None else right
+                else:
+                    joins = right[1] and left[0] == right[0]
+                    tree[at] = (right[0],left[1] and joins,left[2] if joins else right[2])
         heap=[]
         for i,row in enumerate(pending):
+            previous = identities.get(identity(row))
             try:
                 _apply(row, identities, seen)
             except ValueError:
                 self.conflict_at = row['availableAt']
                 break
+            if identities[identity(row)] is row:
+                if previous is not None:
+                    update(previous,False)
+                update(row,True)
             heapq.heappush(heap,_Latest(row))
             while heap and identities[identity(heap[0].row)] is not heap[0].row:
                 heapq.heappop(heap)
             if i+1 == len(pending) or pending[i+1]['availableAt'] != row['availableAt']:
                 self.boundaries.append(row['availableAt'])
                 self.latest_rows.append(heap[0].row)
+                self.content_times.append((tree[1][2]-self.base)/1000)
         self._last_cutoff,self._last_rows=None,()
 
     def latest(self,seconds):
@@ -181,3 +215,8 @@ class TrainerSource:
             self._last_rows=select_as_of(self.rows,dict(session=self.session,instrument=self.instrument,origin=self.origin,cutoff=cutoff))
             self._last_cutoff=cutoff
         return self._last_rows
+
+    def content_time(self, seconds):
+        self.latest(seconds)  # retain the same conflict gate
+        i=bisect_right(self.boundaries,self.base+round(seconds*1000))-1
+        return self.content_times[i] if i>=0 else None

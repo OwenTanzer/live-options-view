@@ -7,6 +7,7 @@ sys.path.insert(0,str(ROOT/'research'/'options_replay'))
 from one_clock import select_as_of,observation,reading_as_of,TrainerSource
 from tests.test_options_replay import make_pack,RS,OPEN,DAY,DATE_PATTERNS
 import re
+from copy import deepcopy
 
 
 class PortableClock(unittest.TestCase):
@@ -74,6 +75,57 @@ class PortableClock(unittest.TestCase):
         self.assertEqual(len(source.latest_rows),10000)
         self.assertEqual(source.latest(OPEN+9999)['value'],9999)
         self.assertEqual(source.latest(OPEN-1),None)
+
+    def test_hidden_payload_cannot_change_frozen_age_or_order_eligibility(self):
+        views=[]
+        for hidden_spot in (700,701):
+            pack=make_pack({OPEN:700,OPEN+60:hidden_spot,OPEN+120:700})
+            pack['snapshots'][1]['available_s']=OPEN+300
+            session=RS(pack,start_s=OPEN+180)
+            view=session.view()
+            views.append((view['quotes'],view['board'],view['spot']['series']))
+            self.assertEqual(view['quotes']['code'],'frozen')
+            with self.assertRaisesRegex(ValueError,'frozen'):
+                session.order('buy','C700',1)
+        self.assertEqual(views[0],views[1])
+
+    def test_content_age_matches_eligible_revision_history(self):
+        pack=make_pack({OPEN:700,OPEN+60:701,OPEN+120:700})
+        correction=deepcopy(pack['snapshots'][1])
+        correction.update(revision=2,available_s=OPEN+150)
+        correction['spot']=700
+        correction['q']=deepcopy(pack['snapshots'][0]['q'])
+        retraction=deepcopy(correction)
+        retraction.update(revision=3,available_s=OPEN+210,retracted=True)
+        pack['snapshots'].extend([correction,retraction])
+        source=TrainerSource(pack,'QQQ')
+        for seconds in range(OPEN,OPEN+301):
+            previous=None
+            content=None
+            for row in source.at(seconds):
+                snap=pack['snapshots'][row['value']] if row['value'] is not None else None
+                sig=(snap['spot'],snap['q']) if snap else ('retracted',row['id'])
+                if sig!=previous:content=(row['eventAt']-source.base)/1000
+                previous=sig
+            self.assertEqual(source.content_time(seconds),content)
+        self.assertEqual(source.content_time(OPEN+149),OPEN+120)
+        self.assertEqual(source.content_time(OPEN+150),OPEN)
+        self.assertEqual(source.content_time(OPEN+210),OPEN+120)
+
+    def test_duplicate_payloads_collapse_but_immutable_conflicts_fail(self):
+        pack=make_pack({OPEN:700})
+        pack['snapshots'].append(deepcopy(pack['snapshots'][0]))
+        source=TrainerSource(pack,'QQQ')
+        self.assertEqual(len(source.at(OPEN)),1)
+        self.assertEqual(source.latest(OPEN)['value'],0)
+        self.assertEqual(RS(pack,start_s=OPEN).view()['quotes']['status'],'live')
+        for retracted in (False,True):
+            bad=deepcopy(pack)
+            for snap in bad['snapshots']:snap['retracted']=retracted
+            bad['snapshots'][1]['spot']=701
+            source=TrainerSource(bad,'QQQ')
+            with self.assertRaisesRegex(ValueError,'conflicting'):source.latest(OPEN)
+            with self.assertRaisesRegex(ValueError,'conflicting'):source.at(OPEN)
 
 
 if __name__=='__main__':unittest.main()
