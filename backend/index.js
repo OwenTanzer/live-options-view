@@ -1,4 +1,5 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleKalshi, kalshiTick } from './kalshi.js';
 import { handleBtcOptions } from './btc-options.js';
 import { handleOneClockChain } from './one-clock-chain.js';
 import { handleOneClockSqueeze } from './one-clock-squeeze.js';
@@ -32,6 +33,7 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
     if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
     if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
@@ -171,6 +173,7 @@ export default {
       return;
     }
     const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.KALSHI_PERSONAL_ENABLED === '1') ctx.waitUntil(kalshiTick(env).catch(() => { console.error('kalshi_private_sweep_failed'); }));
     // Reuse the existing invocation. Catalog failures do not block settlement;
     // metadata reads and additive D1 checkpoints never execute a trade.
     if(env.ONE_CLOCK_CATALOG==='enabled')ctx.waitUntil(advanceOneClockCatalogs(env,{now:Date.now()}));

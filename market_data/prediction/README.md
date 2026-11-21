@@ -1,5 +1,12 @@
 # Prediction evidence (#293)
 
+The owner-only production follow-up runs bounded public REST reads in the API
+Worker with private D1 capture/ledger/replay. See the current
+[Kalshi identity contract and release guide](../../docs/KALSHI_PRIVATE.md).
+It shares the fixed-point model with this collector, but does not activate this
+standalone producer or publish a shared feed. The original fixture producer
+and licensing discussion below describe the broader, unactivated lane.
+
 Independent Node producer, deliberately outside the shared Python image and all
 existing capture processes. `collector.mjs` takes a private R2-compatible
 `{get, put}` binding and normalized events. `run.mjs` runs **only synthetic

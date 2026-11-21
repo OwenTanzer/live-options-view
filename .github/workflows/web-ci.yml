@@ -85,6 +85,7 @@ jobs:
         run: |
           node tests/prediction.test.mjs
           node tests/prediction_ui.test.mjs
+          node --test tests/kalshi.test.mjs
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: D1 account/session storage (#208)
@@ -202,6 +203,10 @@ jobs:
           npx playwright install --with-deps chromium
       - name: BTC monthly mobile fixture workflow
         run: node tests/btc_options_browser.test.mjs
+      - name: Private Kalshi phone and desktop fixture workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/kalshi_browser.test.mjs
       - name: Disposable preview rendered workflow (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
