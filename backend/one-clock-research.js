@@ -41,7 +41,16 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
       if(!validSession(session)||!instruments.includes(instrument)||cutoff>Date.now()+60000||sessionAt(cutoff)<session)throw new Error('invalid result scope');
       const events=await observedEventsAsOf(db,{namespace,selection:{session,instrument,cutoff,origin:'recorded'}});
       const coverage=await list(stmt(db,`SELECT h.coverage FROM one_clock_ingestion_history h WHERE session=? AND instrument=? AND recorded_at<=? AND generation=(SELECT MAX(h2.generation) FROM one_clock_ingestion_history h2 WHERE h2.source=h.source AND h2.session=h.session AND h2.instrument=h.instrument AND h2.recorded_at<=?)`,session,instrument,cutoff,cutoff));
-      return jsonResponse({session,instrument,cutoff,events,coverage:coverage.map(r=>JSON.parse(r.coverage)),origin:'recorded'});
+      const attempts=await list(stmt(db,`SELECT h.rule_id,h.version,h.attempted_at,h.state,h.reason FROM one_clock_evaluation_history h
+        WHERE namespace=? AND session=? AND instrument=? AND attempted_at<=?
+        AND attempted_at=(SELECT MAX(h2.attempted_at) FROM one_clock_evaluation_history h2 WHERE h2.namespace=h.namespace AND h2.session=h.session AND h2.instrument=h.instrument AND h2.rule_id=h.rule_id AND h2.version=h.version AND h2.attempted_at<=?) LIMIT 101`,namespace,session,instrument,cutoff,cutoff));
+      const bounds=equitySession(session);
+      const applicable=bounds?await list(stmt(db,`SELECT DISTINCT r.rule_id,r.version FROM one_clock_rules r JOIN one_clock_activations a
+        ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
+        WHERE r.namespace=? AND r.registered_at<=? AND a.started_at<=? AND (a.ended_at IS NULL OR a.ended_at>=?)
+        AND EXISTS(SELECT 1 FROM json_each(r.payload,'$.instruments') WHERE value=?) LIMIT 101`,namespace,cutoff,Math.min(cutoff,bounds.close),bounds.open,instrument)):[];
+      const evaluation=applicable.map(r=>attempts.find(a=>a.rule_id===r.rule_id&&a.version===r.version)??{...r,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'});
+      return jsonResponse({session,instrument,cutoff,events,coverage:coverage.map(r=>JSON.parse(r.coverage)),evaluation,origin:'recorded'});
     }
     const origin=checkOrigin(request);if(origin)return origin;
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
@@ -82,12 +91,15 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   const db=env.DB,[day,previous]=observerSessions(now);
   // Keep pending measurements after deactivation. Existing intervals retain
   // history; they never cause the evaluator to retract an old accepted event.
-  // One bounded SQL rollover, not a statement loop for every user or rule.
-  // Activation creates the initial scope jobs; old scopes retain evidence.
+  // Recover directly from definitions after any number of missed invocations.
+  // Existing jobs are excluded before LIMIT so recovery progresses fairly.
   await stmt(db,`INSERT INTO one_clock_evaluation_work(namespace,session,instrument)
-    SELECT DISTINCT w.namespace,?,w.instrument FROM one_clock_evaluation_work w WHERE w.session=?
-    AND EXISTS(SELECT 1 FROM one_clock_activations a WHERE a.namespace=w.namespace AND (a.ended_at IS NULL OR a.ended_at>=?))
-    LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now-2*86400000).run();
+    SELECT DISTINCT r.namespace,d.value,i.value FROM one_clock_rules r
+    JOIN one_clock_activations a ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
+    JOIN json_each(r.payload,'$.instruments') i JOIN json_each(json_array(?,?)) d
+    WHERE a.started_at<=MIN(?,CASE WHEN d.value=? THEN ? ELSE ? END) AND (a.ended_at IS NULL OR a.ended_at>=?)
+    AND NOT EXISTS(SELECT 1 FROM one_clock_evaluation_work w WHERE w.namespace=r.namespace AND w.session=d.value AND w.instrument=i.value)
+    ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,equitySession(day).close,equitySession(previous).close,equitySession(previous).open).run();
   // Two accounts/four rules each per invocation; shared source reads are memoized.
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
   const reads=new Map(),results=[];let statementBudget=800;
@@ -117,17 +129,26 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       // Regular-session observations share the producer's calendar; premarket
       // payloads do not silently become an anchor or trigger for this policy.
       const sourceRecords=data.records.filter(r=>r.event_at>=bounds.open&&r.event_at<=bounds.close);
+      if(statementBudget<4)break; // Defer untouched rules, rather than call a depleted budget a failure.
       const evaluate=()=>observeBatch(db,{namespace:job.namespace,batchId:`tick:${job.session}:${job.instrument}:${now}:${start}`,source:'public-registry',cursor:String(start),
         selection,sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
         ruleKeys:chosen.map(r=>JSON.stringify([r.rule_id,r.version]))});
-      let result;
+      let result,failure=null;
       try{result=await evaluate();}catch(error){
-        if(error.message!=='evaluation statement budget'||chosen.length<=1)throw error;
-        chosen=chosen.slice(0,1);result=await evaluate();
+        chosen=chosen.slice(0,1);
+        try{result=await evaluate();}catch(singleError){
+          if(singleError.message==='evaluation statement budget'&&statementBudget<800){results.push({state:'deferred',session:job.session,instrument:job.instrument});continue;}
+          failure=singleError.message==='evaluation statement budget'?'Rule exceeds the bounded evaluation capacity. Narrow its scope or save a less frequent trigger.':'Rule evaluation failed; retained evidence is unchanged.';
+        }
       }
-      statementBudget-=result.statements;
-      await stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+chosen.length)%Math.max(1,rules.length),job.namespace,job.session,job.instrument).run();
-      results.push({state:'evaluated',session:job.session,instrument:job.instrument,...result});
+      statementBudget-=result?.statements??0;
+      // Attempt receipt and scheduling advance together even on a broken rule.
+      // Evidence/checkpoints move only inside the successful observer batch.
+      await db.batch([
+        ...chosen.map(r=>stmt(db,'INSERT INTO one_clock_evaluation_history(namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',job.namespace,job.session,job.instrument,r.rule_id,r.version,now,failure?'failed':'evaluated',failure)),
+        stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+chosen.length)%Math.max(1,rules.length),job.namespace,job.session,job.instrument)
+      ]);
+      results.push({state:failure?'failed':'evaluated',session:job.session,instrument:job.instrument,...result});
     } catch {
       // A broken source/account cannot monopolize the fair rotation. This is
       // scheduling progress only; no evidence or evaluation checkpoint moves.

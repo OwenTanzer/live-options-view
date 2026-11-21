@@ -60,7 +60,7 @@ function evidence(row) {
     eventAt: row.eventAt, availableAt: row.availableAt, evidence: row.evidence } : null;
 }
 
-export function evaluateEvents({ rule: input, observations, selection, sessionClose }) {
+export function evaluateEvents({ rule: input, observations, selection, sessionClose, activationWindows }) {
   const rule = eventRule(input);
   const cutoff = instant(selection.cutoff);
   const close = instant(sessionClose);
@@ -132,7 +132,11 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
     }
     if (!matches) { bullish = false; active = null; previousSignature = null; continue; }
     const signature = JSON.stringify(values.map(v => v.row ? [observationKey(v.row), v.row.revision] : null));
-    if (!bullish && (rule.transition !== 'once-per-session' || events.length === 0)) {
+    // Anchors and condition state retain the whole session's eligible history.
+    // Activation admits a rising edge; it neither invents an edge nor spends
+    // the once-per-session allowance on an inactive occurrence.
+    const admitted = activationWindows === undefined || activationWindows.some(w => at >= w.started_at && (w.ended_at === null || at < w.ended_at));
+    if (admitted && !bullish && (rule.transition !== 'once-per-session' || events.length === 0)) {
       const id = JSON.stringify([rule.id, rule.version, selection.origin, selection.session, selection.instrument, at, signature]);
       const baselines = Object.fromEntries(rule.outcomes.map(o => {
         const reading = readingAt(o.source, at, o.maxAgeMs);

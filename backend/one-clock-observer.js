@@ -73,12 +73,10 @@ export async function observeBatch(db, input) {
   for (const row of incoming) if (!receiptByRecord.has(revisionKey(row))) receiptByRecord.set(revisionKey(row),{ collection, received_at:cutoff });
   const current = new Map();
   for (const registered of rules) {
-    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection,sessionClose:close });
+    const activationWindows=input.activationWindows?.[JSON.stringify([registered.rule_id,registered.version])];
+    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection,sessionClose:close,
+      activationWindows:input.activationWindows?(activationWindows??[]):undefined });
     for (const event of events) {
-      if(input.activationWindows) {
-        const windows=input.activationWindows[JSON.stringify([event.ruleId,event.ruleVersion])]??[];
-        if(!windows.some(w=>event.triggeredAt>=w.started_at&&(w.ended_at===null||event.triggeredAt<w.ended_at)))continue;
-      }
       const key = await digest(event.id);
       const { matchingObservations, ...stable } = event; // Counts remain a projection, not a write per tick.
       function lineage(evidence) {

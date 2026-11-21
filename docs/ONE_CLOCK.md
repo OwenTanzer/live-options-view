@@ -43,7 +43,9 @@ are not yet enabled for this observer; their separate replay readers remain.
 The existing 15-minute API invocation runs bounded, shared ingestion before
 account evaluation. It rotates two account/session/instrument jobs and up to four
 rule versions per job, with an aggregate 800 evaluation-statement budget and a
-single-rule retry when a group exceeds that budget. At most two public scope
+single-rule retry when a group exceeds that budget. Failed rules retain an
+as-of attempt receipt and advance the rotation; other rules can continue. A
+depleted invocation budget defers work without recording a false rule failure. At most two public scope
 reads occur, each with two 1,000-object metadata pages, 20 artifact pairs,
 4 MiB of bodies and 1 MiB per object. Accounts in the same scope reuse the read.
 Initial/older unprocessed evidence is labelled backfill, never upgraded by retry.
@@ -64,7 +66,10 @@ versions and 10,000 normalized records per session, 100 rule versions per accoun
 1,000 active rule versions. Exceeding a bound reports failure without a false
 completion checkpoint.
 
-The latest two NYSE sessions are revisited. Older sessions remain provisional:
+The latest two NYSE sessions are revisited. Jobs recover directly from active
+definitions after missed sessions. Activation gates rising-edge admission before
+the once-per-session quota; anchors and condition state retain eligible session
+history, so activation itself does not manufacture an edge. Older sessions remain provisional:
 arbitrarily late changes and versions overwritten between polls cannot be
 recovered automatically. Existing retained versions are preserved. A native,
 immutable publication outbox from each existing publisher remains the durable
@@ -77,7 +82,10 @@ The Builder's **Save to account**, **Observe saved version**, and **Pause
 observation** controls are distinct from local synthetic fixture saves.
 **Observed Results** follows the shared cursor, includes observer receipt gating,
 retains trigger/endpoint collection lineage, and exposes coverage independently
-from zero events. Inspecting a receipt does not manufacture a source replay at an
+from zero events. Per-rule attempts distinguish evaluated, failed and not-yet-
+evaluated states at the selected cutoff. Live refresh retains the committed
+session and instrument; draft edits apply only through Read cutoff or Live.
+Inspecting a receipt does not manufacture a source replay at an
 earlier time. Full historical replay linkage, rich aggregate filters/comparisons,
 remaining source migrations and native publication handoff are still open.
 

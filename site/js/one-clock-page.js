@@ -16,6 +16,7 @@ let timer = null;
 let selectedId = null;
 let previewing = false;
 let observedMode=false,accountState=null,observedBody=null;
+let observedGeneration=0,observedSelection=null;
 const registry = createSourceRegistry();
 for (const source of demoSources) registry.register({ ...source, version: 'fixture-1', owner: 'offline demo',
   maxAgeMs: 150000, read: async () => demoRows.filter(r => r.source === source.id) });
@@ -103,6 +104,7 @@ function updateOutcomes() {
   if (!currentRule.outcomes.length) $('outcome-choice').append(option('', 'Tracking only'));
 }
 function showResults(active) {
+  observedGeneration++;observedSelection=null;
   if(observedMode){observedMode=false;clearInterval(timer);timer=null;clock.select({...demoSelection,mode:'replay',cutoff:demoStart+301000});}
   $('observed-results').hidden=true;document.querySelector('.replay').hidden=false;
   $('show-observed').setAttribute('aria-pressed','false');
@@ -210,17 +212,20 @@ registry.register({id:'observed-events',version:'1',owner:'authenticated observe
       session,instrument,origin:'recorded',eventAt:event.triggeredAt,availableAt:event.recordedAt,evidence:event.id,value:event}));
     if(!signal.aborted)observedBody=body;return rows;
   }});
-async function readObserved(live=false) {
+async function readObserved(selection,generation) {
+  const live=selection.mode==='live';
   try {
-    const cutoff=live?Date.now():Date.parse($('observed-cutoff').value+'Z');
+    if(!observedMode||generation!==observedGeneration)return;
+    const cutoff=live?Date.now():selection.cutoff;
     $('observed-cutoff').value=new Date(cutoff).toISOString().slice(0,19);
-    clock.select({session:$('observed-day').value,instrument:$('observed-instrument').value,mode:live?'live':'replay',origin:'recorded',cutoff});
+    clock.select({...selection,cutoff});
     $('observed-status').textContent='Reading retained evidence…';
     $('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
-    const result=await clock.read('observed-events');if(result.discarded||!observedMode)return;
+    const result=await clock.read('observed-events');if(result.discarded||!observedMode||generation!==observedGeneration)return;
     const events=result.rows.map(r=>r.value),outcomes=events.flatMap(e=>e.outcomes);
-    $('observed-status').textContent=`${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
+    $('observed-status').textContent=`${result.selection.session} · ${result.selection.instrument} · ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
     $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(c=>`${c.source}: ${c.reason}; ${c.pending} pending artifacts, ${c.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
+    $('observed-coverage').textContent+=' '+(observedBody.evaluation??[]).map(r=>`${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' ');
     $('observed-stats').textContent=`${new Set(events.map(e=>e.session)).size} sessions · ${outcomes.filter(o=>o.state==='measured').length} measured outcomes · ${outcomes.filter(o=>o.state==='pending').length} pending · ${outcomes.filter(o=>o.state==='missing').length} missing`;
     $('observed-ledger').replaceChildren(...events.map(event=>{
       const tr=document.createElement('tr');
@@ -231,16 +236,25 @@ async function readObserved(live=false) {
       };td.append(button);tr.append(td);return tr;
     }));
     $('observed-evidence').hidden=true;
-  }catch(error){$('observed-status').textContent=error.message;}
+  }catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
+}
+function commitObserved(live) {
+  const generation=++observedGeneration;clearInterval(timer);timer=null;
+  observedSelection=Object.freeze({session:$('observed-day').value,instrument:$('observed-instrument').value,
+    mode:live?'live':'replay',origin:'recorded',cutoff:live?Date.now():Date.parse($('observed-cutoff').value+'Z')});
+  const selection=observedSelection;
+  readObserved(selection,generation);
+  if(live)timer=setInterval(()=>readObserved(selection,generation),60000);
 }
 $('show-observed').onclick=async()=>{
+  const generation=++observedGeneration;observedSelection=null;
   observedMode=true;clearInterval(timer);timer=null;$('builder').hidden=true;$('results').hidden=true;document.querySelector('.replay').hidden=true;$('observed-results').hidden=false;
   $('show-observed').setAttribute('aria-pressed','true');$('show-builder').setAttribute('aria-pressed','false');$('show-results').setAttribute('aria-pressed','false');
   document.querySelector('.notice').hidden=true;$('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
-  try{await loadAccount();if(!observedMode)return;await readObserved(true);if(observedMode)timer=setInterval(()=>readObserved(true),60000);}catch(error){$('observed-status').textContent=error.message;}
+  try{await loadAccount();if(!observedMode||generation!==observedGeneration)return;commitObserved(true);}catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
 };
-$('observed-read').onclick=()=>{clearInterval(timer);timer=null;readObserved(false);};
-$('observed-live').onclick=()=>{clearInterval(timer);readObserved(true);timer=setInterval(()=>readObserved(true),60000);};
+$('observed-read').onclick=()=>commitObserved(false);
+$('observed-live').onclick=()=>commitObserved(true);
 $('preview-rule').onclick = () => { try { currentRule = formRule(); previewing = true; updateOutcomes(); render(); showResults(true); } catch(e) { status(e.message,true); } };
 $('rule-form').onsubmit = event => {
   event.preventDefault();

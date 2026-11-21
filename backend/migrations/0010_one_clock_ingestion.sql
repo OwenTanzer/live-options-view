@@ -54,3 +54,11 @@ CREATE TABLE IF NOT EXISTS one_clock_evaluation_work (
   PRIMARY KEY(namespace,session,instrument)
 );
 CREATE INDEX IF NOT EXISTS one_clock_evaluation_due ON one_clock_evaluation_work(session,updated_at);
+-- Account-scoped attempt history is separate from shared source coverage.
+-- A successful source read cannot hide an unevaluated or oversized rule.
+CREATE TABLE IF NOT EXISTS one_clock_evaluation_history (
+  namespace TEXT NOT NULL, session TEXT NOT NULL, instrument TEXT NOT NULL,
+  rule_id TEXT NOT NULL, version INTEGER NOT NULL, attempted_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('evaluated','failed')), reason TEXT,
+  PRIMARY KEY(namespace,session,instrument,rule_id,version,attempted_at)
+);
