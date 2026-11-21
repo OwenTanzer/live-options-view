@@ -3,7 +3,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, w
 import { resolve, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { ROOT, verifyArtifact } from './build-assets.mjs';
+import { DIRECT_ASSET_PATHS, ROOT, verifyArtifact } from './build-assets.mjs';
 
 // Intentionally a narrow, fail-closed TOML subset, not a general TOML parser.
 // New provider knobs require review here rather than bypassing an asset-only plan.
@@ -16,20 +16,32 @@ export function validateAssetConfig(config, manifest) {
       if(tables.has(table))throw new Error('Asset config duplicate table: '+table);
       tables.add(table); continue;
     }
-    const item=line.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|true|false|\[\s*\])\s*(?:#.*)?$/);
+    const item=line.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|true|false|\[\s*\])\s*(?:#.*)?$/)
+      || (table === 'assets' && line.match(/^(run_worker_first)\s*=\s*(\[[^\]]*\])\s*(?:#.*)?$/));
     if(!item)throw new Error('Unsupported asset config; explicit review required');
     const key=table+'.'+item[1], value=item[2];
     if(fields.has(key))throw new Error('Asset config duplicate key: '+key);
+    if (key === 'assets.run_worker_first' && value.startsWith('[')) {
+      let routes;
+      try { routes = JSON.parse(value); } catch { throw new Error('Invalid asset routing list'); }
+      const approved = ['/*', ...DIRECT_ASSET_PATHS.map(path => '!' + path)];
+      if (JSON.stringify(routes) !== JSON.stringify(approved)) throw new Error('Asset config route mismatch');
+    }
     fields.set(key,value.startsWith("'")?value.slice(1,-1):JSON.parse(value));
   }
   const expected={
     'root.name':manifest.targets.assets, 'root.main':'payload/frontend/worker.mjs',
     'vars.ENVIRONMENT':'production', 'assets.directory':'payload/site',
-    'assets.binding':'ASSETS', 'assets.run_worker_first':true,
+    'assets.binding':'ASSETS',
     'services.binding':'API', 'services.service':manifest.targets.api,
   };
   for(const [key,value] of Object.entries(expected)) {
     if(fields.get(key)!==value)throw new Error('Asset config contract mismatch: '+key);
+  }
+  const routing = fields.get('assets.run_worker_first');
+  if (routing !== true && !Array.isArray(routing)) throw new Error('Asset config requires explicit gateway routing');
+  if (Array.isArray(routing) && !manifest.files?.['site/_headers']) {
+    throw new Error('Direct asset routing requires revision headers in the artifact; select its compatible gateway config');
   }
   // Omission can preserve an old combined Worker's cron during cutover.
   const crons=fields.get('triggers.crons');
@@ -40,7 +52,7 @@ export function validateAssetConfig(config, manifest) {
     throw new Error('Asset config compatibility_date must be a real ISO date');
   }
   for(const key of fields.keys()) {
-    if(key in expected || key==='root.compatibility_date' || key==='triggers.crons')continue;
+    if(key in expected || key==='assets.run_worker_first' || key==='root.compatibility_date' || key==='triggers.crons')continue;
     if(key==='vars.ASSET_REVISION'&&fields.get(key)===manifest.revision)continue;
     throw new Error('Unexpected asset config field; explicit review required: '+key);
   }

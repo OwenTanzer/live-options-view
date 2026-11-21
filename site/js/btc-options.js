@@ -53,6 +53,7 @@ const btcOptions = {
       this.quotes.clear();
       if (!response.ok) {
         this.ownerLinkAvailable = data.owner_link_available === true;
+        this.retryAccessAt = Date.now() + 5 * 60_000;
         this.access = response.status === 401 ? 'signin' : response.status === 403 ? 'unauthorized' : null;
         if (this.access) {
           session.trades = (session.trades || []).filter(t => t.instrument_type !== 'futures_option');
@@ -390,5 +391,8 @@ function refreshVisibleBtcQuotes() {
   if (!document.hidden) btcOptions.refresh();
 }
 document.addEventListener?.('visibilitychange', refreshVisibleBtcQuotes);
-setInterval(refreshVisibleBtcQuotes, 5000);
+setInterval(() => {
+  if (btcOptions.access && Date.now() < btcOptions.retryAccessAt) return;
+  refreshVisibleBtcQuotes();
+}, 5000);
 setInterval(() => btcOptions.updateActions(), 1000);

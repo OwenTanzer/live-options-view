@@ -395,6 +395,16 @@ const INFO = { sym: SYM, strike: 600, type: 'call', exp: '2026-09-18' };
   assert.equal(calls.marginCall[0], 'A settlement obligation exceeded the account balance');
   assert.equal(get('session').trades.length, 1, 'a margin-called settlement adds no trade');
 
+  nextResponse = response({settled: []});
+  await get('settleExpired')();
+  const emptyCount = fetchCalls.length;
+  await get('settleExpired')();
+  assert.equal(fetchCalls.length, emptyCount, 'unchanged empty settlement is coalesced');
+  get('spotMarks')['2026-09-18'] = 500;
+  await get('settleExpired')();
+  assert.equal(fetchCalls.length, emptyCount + 1, 'a new mark retries immediately');
+  vm.runInContext('lastEmptySettlement.retryAt = 0', context);
+
   // --- settleExpired: a transient 500 leaves the book alone for the next cycle. ---
   nextResponse = response({}, 500);
   await get('settleExpired')();
