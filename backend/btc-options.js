@@ -67,9 +67,10 @@ export function exactBtcQuote(payload, intent, now = Date.now()) {
 export function heldBtc(record) {
   return Object.values(computeBookFromTrades(record.trades || [])).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).map(b => b.contract);
 }
-export async function fetchBtc(env, record, symbols = []) {
+export async function fetchBtc(env, record, symbols = [], expiry = null) {
   if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) throw new Error('Quote service unavailable');
   const url = new URL('/btc-options', env.LIVE_QUOTE_ORIGIN);
+  if (expiry) url.searchParams.set('expiry', expiry);
   url.searchParams.set('symbols', symbols.join(','));
   url.searchParams.set('held', JSON.stringify(heldBtc(record).map(c => c.provider_symbol)));
   return fetch(url, { headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY },
@@ -85,7 +86,7 @@ export async function handleBtcOptions(request, env) {
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
   try {
-    const response = await fetchBtc(env, session.record, symbols);
+    const response = await fetchBtc(env, session.record, symbols, new URL(request.url).searchParams.get('expiry'));
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
     if (!await btcAllowed(env, session, request)) return jsonResponse({ error: 'Bitcoin data access revoked' }, 403);

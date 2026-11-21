@@ -135,14 +135,12 @@ class BtcOptions:
             for symbol in missing[:4]:
                 rows.append(self._read('/instruments/future-options/' + quote(symbol, safe=''), token))
             monthly = [r for r in rows if is_standard_monthly(r)]
-            nearest = min((r.get('expiration-date', '') for r in monthly if instant(r.get('stops-trading-at')) and instant(r['stops-trading-at']) > now), default=None)
-            rows = [r for r in monthly if r.get('expiration-date') == nearest or r.get('symbol') in held_snapshot]
+            rows = [r for r in monthly if (instant(r.get('stops-trading-at')) or now) > now
+                    or r.get('symbol') in held_snapshot]
             futures, resolved, closing_only = {}, {}, set()
             for row in rows:
                 fs = row.get('underlying-symbol', '')
                 if fs not in futures:
-                    if len(futures) >= 5:
-                        raise ValueError('future_budget')
                     futures[fs] = self._read('/instruments/futures/' + quote(fs, safe=''), token)
                 c = normalize(row, futures[fs])
                 if c:
@@ -152,8 +150,7 @@ class BtcOptions:
             with self._lock:
                 if due:
                     active = [c for c in resolved.values() if instant(c['stops_trading_at']) > now and c['contract_key'] not in closing_only]
-                    nearest = min((c['exp'] for c in active), default=None)
-                    self.entries = [c['contract_key'] for c in active if c['exp'] == nearest]
+                    self.entries = [c['contract_key'] for c in active]
                 prior = {k: c for k, c in self.contracts.items() if c['provider_symbol'] in self.held}
                 prior.update(resolved)
                 if not due:
@@ -169,10 +166,14 @@ class BtcOptions:
             except Exception:
                 self.status = 'subscription_unavailable'
 
-    def _subscribe(self, now):
+    def _subscribe(self, now, symbols=(), expiry=None):
         held = [c for c in self.contracts.values() if c['provider_symbol'] in self.held
                 and instant(c['stops_trading_at']) > now]
         active = [self.contracts[k] for k in self.entries if k in self.contracts]
+        expiries = sorted({c['exp'] for c in active})
+        self.expiry = expiry if expiry in expiries else next(iter(expiries), None)
+        active = [c for c in active if c['exp'] == self.expiry]
+        inspected = [self.contracts[k] for k in symbols if k in self.contracts]
         state = self.feed.get_state()
         # Center on the deliverable future, never on spot BTC or another month.
         center = None
@@ -184,8 +185,9 @@ class BtcOptions:
             bid, ask = future_quote.get('bid'), future_quote.get('ask')
             if isinstance(bid, (int, float)) and isinstance(ask, (int, float)) and 0 < bid <= ask:
                 center = (bid + ask) / 2
+        self.center = center
         window = sorted(active, key=lambda c: (abs(c['strike'] - center), c['strike'], c['type']))[:WINDOW_STRIKES * 2] if center else []
-        chosen = list({c['contract_key']: c for c in held + window}.values())[:BUDGET]
+        chosen = list({c['contract_key']: c for c in held + inspected + window}.values())[:BUDGET]
         streams = [c['streamer_symbol'] for c in chosen]
         if active and active[0].get('future_streamer_symbol'):
             streams.append(active[0]['future_streamer_symbol'])
@@ -193,18 +195,19 @@ class BtcOptions:
         self.selected = {c['contract_key'] for c in chosen}
         self.subscription_count = len(chosen)
 
-    def payload(self, symbols, held, now=None):
+    def payload(self, symbols, held, now=None, expiry=None):
         now = now or datetime.now(timezone.utc)
         with self._lock:
             for s in held:
                 if isinstance(s, str) and len(s) <= 128 and (s in self.held or len(self.held) < BUDGET):
                     self.held[s] = now
             if self.feed:
-                try: self._subscribe(now)
+                try: self._subscribe(now, symbols, expiry)
                 except Exception: self.status = 'subscription_unavailable'
             selected = getattr(self, 'selected', set())
-            contracts = [self.contracts[k] for k in selected if k in self.contracts]
-            requested = symbols or [c['contract_key'] for c in contracts]
+            contracts = [c for c in self.contracts.values() if c['exp'] == getattr(self, 'expiry', None)
+                         or c['provider_symbol'] in self.held]
+            requested = list(dict.fromkeys([*symbols, *sorted(selected)]))
             ready, state, diagnostics = self.feed.get_btc_snapshot() if self.feed else (False, {}, {})
             quotes, unavailable = [], {}
             for key in requested:
@@ -226,6 +229,8 @@ class BtcOptions:
                 quotes.append(q)
             return {'contracts': contracts, 'quotes': quotes, 'entry_keys': self.entries,
                     'unavailable': unavailable, 'session': session(now), 'source_status': self.status,
-                    'subscription_count': self.subscription_count, 'subscription_budget': BUDGET,
+                    'expiries': sorted({self.contracts[k]['exp'] for k in self.entries}),
+                    'expiry': getattr(self, 'expiry', None), 'center': getattr(self, 'center', None),
+                    'subscribed_keys': sorted(selected), 'subscription_count': self.subscription_count, 'subscription_budget': BUDGET,
                     'wire_time_diagnostics': diagnostics,
                     'server_ts': now.isoformat()}

@@ -47,7 +47,7 @@ try {
           contracts.push(c); quotes.push({ ...payload.quotes[0], symbol:c.contract_key, contract:c, bid:120 + n, ask:122 + n, bid_size:2, ask_size:3, bid_ts:ts, ask_ts:ts, bid_received_ts:ts, ask_received_ts:ts });
         }
         // Deliberately shuffled input; pairing must never cross futures months.
-        btcOptions.data = { ...payload, contracts:contracts.reverse(), quotes, entries_enabled:true, entry_keys:contracts.map(c=>c.contract_key), session:'open' };
+        btcOptions.data = { ...payload, expiry:null, contracts:contracts.reverse(), quotes, entries_enabled:true, entry_keys:contracts.map(c=>c.contract_key), session:'open' };
         btcOptions.quotes = new Map(quotes.map(q=>[q.symbol,q]));
         session.trades = contracts.filter(c=>c.strike===85000).map(c=>({sym:c.contract_key, instrument_type:'futures_option', contract:c, multiplier:5, side:'buy', qty:1, price:100, fees:2.5, strike:c.strike, type:c.type, exp:c.exp}));
         btcOptions.render(); window.scrollTo(0,0);
@@ -83,6 +83,27 @@ try {
       assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(),true);
       assert.equal(await page.locator('#trade-ticket .btn-sell').isDisabled(),true);
       assert.match(await page.locator('.btc-ticket-details').textContent(),/stale/);
+      await page.evaluate(() => {
+        closeTicket();
+        const data = btcOptions.data;
+        data.expiries = [...new Set(data.contracts.map(c => c.exp))].sort();
+        data.expiry = data.expiries[0];
+        data.center = 89000;
+        btcOptions.render();
+        btcOptions.refresh = () => { data.expiry = btcOptions.expiry; btcOptions.render(); };
+      });
+      for (const expiry of ['2026-11-27', '2026-12-27']) {
+        await page.getByLabel('Standard monthly expiry').selectOption(expiry);
+        assert.equal(await page.locator('.btc-series').count(), 1);
+        assert.equal(await page.locator('.btc-contract').count(), 15);
+        for (const edge of ['first', 'last']) {
+          const row = page.locator('.btc-strike-row')[edge]();
+          await row.scrollIntoViewIfNeeded();
+          const top = await row.evaluate(el => el.getBoundingClientRect().top);
+          await page.evaluate(() => btcOptions.refresh());
+          assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
+        }
+      }
       assert.deepEqual(errors,[]);
       console.log(`PASS ${width}x667: ${rects.filter(r=>r.complete).length} COMPLETE distinct strike rows, paired calls/puts, correct buy/owned close tickets, stale denial, empty legs, no overflow`);
     } finally { await context.close(); preview.close(); }

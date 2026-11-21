@@ -25,7 +25,15 @@ const btcOptions = {
     if (!sessionVerified || !session || (!this.active && !hasHoldings)) { this.quotes.clear(); this.render(); return; }
     const generation = this.generation, request = ++this.request, username = session.username;
     try {
-      const response = await fetch('/api/btc-options', { credentials: 'same-origin', cache: 'no-store' });
+      const query = new URLSearchParams();
+      if (this.expiry) query.set('expiry', this.expiry);
+      const visible = [...document.querySelectorAll('.btc-contract')].filter(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      }).map(el => el.dataset.symbol);
+      if (ticketEl?.dataset.btc) visible.unshift(ticketEl.dataset.btc);
+      if (visible.length) query.set('symbols', [...new Set(visible)].slice(0, 64).join(','));
+      const response = await fetch('/api/btc-options' + (query.size ? '?' + query : ''), { credentials: 'same-origin', cache: 'no-store' });
       const data = await response.json();
       if (generation !== this.generation || request !== this.request || session?.username !== username) return;
       this.quotes.clear();
@@ -163,6 +171,14 @@ const btcOptions = {
       button.title = reason || this.clockLabel(sym, side);
     }
   },
+  updateCoverage(listed) {
+    const label = document.querySelector('.btc-coverage');
+    if (!label) return;
+    const subscribed = new Set(this.data.subscribed_keys);
+    const count = listed.filter(c => subscribed.has(c.contract_key)).length;
+    const fresh = listed.filter(c => ['ask', 'bid'].some(side => this.side(c.contract_key, side) != null)).length;
+    label.textContent = ` ${listed.length} listed · ${count} subscribed · ${fresh} fresh`;
+  },
   updateActions() {
     for (const row of document.querySelectorAll('.btc-contract')) {
       const sym = row.dataset.symbol;
@@ -186,6 +202,15 @@ const btcOptions = {
     const data = this.data, root = document.getElementById('btc-chain');
     const focus = document.activeElement?.dataset;
     const focused = focus?.btcAction ? { ...focus } : null;
+    const listed = (data?.contracts || []).filter(c => !data.expiry || c.exp === data.expiry);
+    const book = computeBook();
+    const layout = JSON.stringify([this.owner, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
+    if (data && root.dataset.layout === layout && root.querySelector('.btc-series')) {
+      this.updateActions();
+      this.updateCoverage(listed);
+      return;
+    }
+    root.dataset.layout = layout;
     root.replaceChildren();
     const element = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; el.textContent = text; return el; };
     const status = element('div', 'btc-status', '');
@@ -228,8 +253,17 @@ const btcOptions = {
       unlink.type = 'button'; unlink.disabled = btcOwnerLink.busy; unlink.onclick = () => btcOwnerLink.unlink(); status.appendChild(unlink);
       if (btcOwnerLink.message) status.appendChild(element('p', 'btc-link-status', btcOwnerLink.message));
     }
+    if (data.expiries?.length) {
+      const picker = element('select', '', '');
+      picker.setAttribute('aria-label', 'Standard monthly expiry');
+      for (const expiry of data.expiries) picker.add(new Option(expiry, expiry));
+      picker.value = data.expiry;
+      picker.onchange = () => { this.expiry = picker.value; this.refresh(); };
+      status.appendChild(picker);
+      status.appendChild(element('span', 'btc-coverage', ''));
+    }
     const groups = new Map();
-    for (const c of [...(data.contracts || [])].sort((a, b) => a.exp.localeCompare(b.exp) || a.future_month.localeCompare(b.future_month) || a.future_symbol.localeCompare(b.future_symbol) || a.strike - b.strike || a.type.localeCompare(b.type))) {
+    for (const c of [...listed].sort((a, b) => a.exp.localeCompare(b.exp) || a.future_month.localeCompare(b.future_month) || a.future_symbol.localeCompare(b.future_symbol) || a.strike - b.strike || a.type.localeCompare(b.type))) {
       const key = JSON.stringify([c.exp, c.future_month, c.future_symbol]);
       if (!groups.has(key)) groups.set(key, { contract: c, strikes: new Map() });
       const strikes = groups.get(key).strikes;
@@ -284,6 +318,11 @@ const btcOptions = {
     }
     if (!data.contracts?.length) root.append('No verified standard monthly contracts available.');
     this.updateActions();
+    this.updateCoverage(listed);
+    if (data.center && listed.length) {
+      const rows = [...root.querySelectorAll('.btc-strike-row')];
+      rows.reduce((a, b) => Math.abs(a.dataset.strike - data.center) <= Math.abs(b.dataset.strike - data.center) ? a : b).scrollIntoView({block: 'center'});
+    }
     if (focused) [...root.querySelectorAll('[data-btc-action]')].find(el => el.dataset.symbol === focused.symbol && el.dataset.btcAction === focused.btcAction)?.focus({ preventScroll: true });
   },
 };
