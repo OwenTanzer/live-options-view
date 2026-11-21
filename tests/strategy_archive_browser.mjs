@@ -2,13 +2,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { createPreview, LOCAL_ORIGIN } from '../scripts/preview-local.mjs';
-import { createStorage } from '../backend/storage.js';
 const { chromium } = createRequire(import.meta.url)('playwright');
-const preview = createPreview(),
-  store = createStorage(preview.apiEnv);
-const username = 'archive_reviewer';
-await store.users.insert(username, { username, version: 0 });
-await store.sessions.create('test-session', username, 3600);
+const preview = createPreview();
 const browser = await chromium.launch({
   channel: 'chromium',
   ...(process.env.ARCHIVE_TEST_CHROME ? { executablePath: process.env.ARCHIVE_TEST_CHROME } : {}),
@@ -17,7 +12,6 @@ try {
   const page = await browser.newPage(),
     errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.context().addCookies([{ name: 'session', value: 'test-session', url: LOCAL_ORIGIN }]);
   let loseFirstForkResponse = true;
   const forkAttempts = [];
   await page.route('**/*', async (route) => {

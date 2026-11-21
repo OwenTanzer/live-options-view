@@ -31,11 +31,11 @@ async function fixture() {
     await storage.users.insert(user, { username: user, version: 0 });
     await storage.sessions.create(user + '-token', user, 3600);
   }
-  const env = { DB, STRATEGY_ARCHIVE_MEMBERS: 'alice,brian' };
+  const env = { DB };
   const call = (user, body, path = '') =>
     worker.fetch(
       new Request('http://localhost:8787/api/strategy-archive' + path, {
-        headers: { Cookie: 'session=' + user + '-token', 'Content-Type': 'application/json' },
+        headers: { ...(user ? {Cookie: 'session=' + user + '-token'} : {}), 'Content-Type': 'application/json' },
         ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
       }),
       env,
@@ -44,8 +44,8 @@ async function fixture() {
 }
 test('two authenticated clients share attribution, forks, trial assignments and immutable evidence', async () => {
   const { call } = await fixture();
-  assert.equal((await call('unknown')).status, 401);
-  assert.equal((await call('guest')).status, 403);
+  assert.equal((await call(null)).status, 200);
+  assert.equal((await call('guest')).status, 200);
   const { records } = await (await call('alice')).json();
   const parent = records.find((r) => r.id === 'spy-200');
   const historical = records.find((r) => r.kind === 'evidence');
@@ -189,4 +189,13 @@ test('fork identity respects all five qualitative fields and rejects unchanged c
     })
   ).json();
   assert.match(result.results[0].error, /through today/);
+});
+
+test('signed-out clients can submit and retrieve archive records',async()=>{
+  const {call}=await fixture();
+  const record={id:'public-lead',kind:'version',data:{family:'Public discovery',originator:'Paper author',stage:'documented',source:'https://example.org/study',parameters:{}}};
+  const submitted=await (await call(null,record)).json();
+  assert.equal(submitted.results[0].id,record.id);
+  const read=await (await call(null,undefined,'?version=public-lead')).json();
+  assert.deepEqual(read.records[0].credits,['guest:anonymous']);
 });

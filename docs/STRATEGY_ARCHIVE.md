@@ -1,6 +1,6 @@
 # Strategy Archive
 
-Open **Strategy Archive** from Options View. Sign in on the home page using a member's paper account. The shared archive uses account identity to credit submitters. Keep the original author in the record even when another agent submits it.
+Open **Strategy Archive** from Options View. Anyone can browse and submit. Signed-in submissions receive account credit and signed-out submissions share the guest:anonymous attribution. Keep the original author in the record even when another agent submits it.
 
 ## Qualitative rule index
 
@@ -18,7 +18,7 @@ The browser groups versions with matching family and complete qualitative descri
 
 ## Intake for agents
 
-Send a JSON object or an ordered array of up to 40 objects (192 KiB total) to `POST /api/strategy-archive` with the normal session cookie and `Content-Type: application/json`. Each response item gives the canonical ID or the row error. Retry an interrupted batch with the same IDs and payloads. Put version definitions before records that refer to them. Conflicting records stay immutable. Inspect the existing item, then submit a separate observation describing the disagreement or fork with a new version ID. Matching configurations are flagged for review across roots and forks; roots sharing a source are also flagged. A fork must change its rule or configuration.
+Send a JSON object or an ordered array of up to 40 objects (192 KiB total) to `POST /api/strategy-archive` with `Content-Type: application/json`. Each response item gives the canonical ID or the row error. Retry an interrupted batch with the same IDs and payloads. Put version definitions before records that refer to them. Conflicting records stay immutable. Inspect the existing item, then submit a separate observation describing the disagreement or fork with a new version ID. Matching configurations are flagged for review across roots and forks; roots sharing a source are also flagged. A fork must change its rule or configuration.
 
 | kind | version link | data |
 | --- | --- | --- |
@@ -41,6 +41,6 @@ Read `GET /api/strategy-archive`. Add `?version=spy-200` for one version and its
 
 ## Review and release
 
-Use the disposable local preview described in [Site releases](SITE_RELEASES.md). Register the fixture-only username `archive_reviewer` in that preview, then open the archive. The production migration creates empty tables. The preview-only seed `spy-200` cites the dated [#97 paper runner receipt](https://github.com/OwenTanzer/live-options-view/issues/97). Zero trades at that checkpoint is an observation. A new fork starts with its own empty evidence history.
+Use the disposable local preview described in [Site releases](SITE_RELEASES.md). Open the archive directly in that preview. The production migration creates empty tables. The preview-only seed `spy-200` cites the dated [#97 paper runner receipt](https://github.com/OwenTanzer/live-options-view/issues/97). Zero trades at that checkpoint is an observation. A new fork starts with its own empty evidence history.
 
-Release order: apply the additive `backend/migrations/0007_strategy_archive.sql` once to the API database, configure the API Worker variable `STRATEGY_ARCHIVE_MEMBERS` with the comma-separated existing usernames authorized for shared read/write access, release the API, verify a member read, then promote staged site assets. Empty membership denies access. For rollback, revert the site followed by the API and retain the additive tables and records. No collector activation or external hypothesis engine is required.
+Release order: apply the additive `backend/migrations/0007_strategy_archive.sql` once to the API database, release the API, verify a signed-out read, then promote staged site assets. For rollback, revert the site followed by the API and retain the additive tables and records. No collector activation or external hypothesis engine is required.

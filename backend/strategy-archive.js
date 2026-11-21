@@ -228,14 +228,6 @@ export async function submitRecord(db, row, actor) {
   return { id: stored.id };
 }
 export async function archive(request, env) {
-  const session = await requireSession(request, env);
-  if (!session) return jsonResponse({ error: 'Sign in to Options View first' }, 401);
-  const members = (env.STRATEGY_ARCHIVE_MEMBERS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!members.includes(session.username))
-    return jsonResponse({ error: 'Archive membership required' }, 403);
   if (request.method === 'GET') {
     const cursor = Number(new URL(request.url).searchParams.get('after') || 0);
     if (!Number.isSafeInteger(cursor) || cursor < 0)
@@ -298,10 +290,13 @@ export async function archive(request, env) {
   if (!Array.isArray(rows)) rows = [rows];
   if (!rows.length || rows.length > 40)
     return jsonResponse({ error: 'Submit 1–40 records per batch' }, 400);
+  const session = await requireSession(request, env);
+  // Colons are excluded from account usernames, keeping anonymous credit distinct.
+  const actor = session?.username ?? 'guest:anonymous';
   const results = [];
   for (const row of rows) {
     try {
-      results.push(await submitRecord(env.DB, row, session.username));
+      results.push(await submitRecord(env.DB, row, actor));
     } catch (e) {
       if (!(e instanceof RangeError)) throw e;
       results.push({ id: row?.id ?? null, error: e.message });
