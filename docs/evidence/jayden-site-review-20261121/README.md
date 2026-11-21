@@ -21,6 +21,8 @@ Release revision: **8fe8aecefe0eecf3051be6bc6017df215fdb9d31** (tree `d7f2e02dad
 
 Revised-head CI: [285](https://github.com/OwenTanzer/live-options-view/actions/runs/44874779752), [288](https://github.com/OwenTanzer/live-options-view/actions/runs/44874838154), both success. Every other exact draft head also had successful Web CI before merge. The combined local integration tree equals the final master tree, including all three `index.html` changes.
 
+Other reviewed-head CI receipts: [286](https://github.com/OwenTanzer/live-options-view/actions/runs/44863458254), [287](https://github.com/OwenTanzer/live-options-view/actions/runs/44863573100), [289](https://github.com/OwenTanzer/live-options-view/actions/runs/44863844218), [290](https://github.com/OwenTanzer/live-options-view/actions/runs/44864121460), all success.
+
 ## Checks actually run
 
 - `squeeze_panel.test.js`, `squeeze_scanner_display.test.js`, `truth_layer.test.js` (63 checks), plus rendered stale/error/mobile fixtures. New initial-unavailable regression is committed on #285.
