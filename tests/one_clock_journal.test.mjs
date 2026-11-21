@@ -13,7 +13,7 @@ const day='2026-11-09',T=sessionInstant(day,10),id='pos:0123456789abcdef',page='
 const instrument={underlying:'QQQ',instrument_type:'option',multiplier:100,occ_symbol:'QQQ261109C00600000',strike:600,option_type:'call'};
 const fill=(side,qty,price,at,fee=.5)=>({execution_id:`${side}:${at}`,instrument,side,qty,price,fee,fee_basis:'estimated',ts:new Date(at).toISOString(),ts_kind:'execution_alert',ts_note:'later exit and future fee review'});
 const position=(executions)=>({position_id:id,journal_page_id:page,supported:true,contract:instrument,executions,report:'future retrospective',gaps:['future close'],row_checks:{flat:true},closed:true,net_pnl:999});
-async function setup(t){const db=makeStorage();t.after(()=>db.db.close());for(const migration of ['0003_trade_journal.sql','0007_one_clock_journal.sql'])await db.exec(fs.readFileSync(new URL('../backend/migrations/'+migration,import.meta.url),'utf8'));return db;}
+async function setup(t){const db=makeStorage();t.after(()=>db.db.close());for(const migration of ['0003_trade_journal.sql','0008_one_clock_journal.sql'])await db.exec(fs.readFileSync(new URL('../backend/migrations/'+migration,import.meta.url),'utf8'));return db;}
 async function record(db,p,at,revision=1,status='active') {
   await db.prepare('INSERT INTO trade_journal_history(page_id,position_id,source_status,revision,content_hash,position_json,recorded_at) VALUES(?,?,?,?,?,?,?)')
     .bind(page,id,status,revision,'synthetic:'+revision,JSON.stringify(p),at).run();
