@@ -115,6 +115,7 @@ class PortableClock(unittest.TestCase):
     def test_duplicate_payloads_collapse_but_immutable_conflicts_fail(self):
         pack=make_pack({OPEN:700})
         pack['snapshots'].append(deepcopy(pack['snapshots'][0]))
+        pack['snapshots'][1]['spot']=700.0  # same JSON number, different Python type
         source=TrainerSource(pack,'QQQ')
         self.assertEqual(len(source.at(OPEN)),1)
         self.assertEqual(source.latest(OPEN)['value'],0)

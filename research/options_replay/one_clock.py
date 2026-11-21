@@ -138,18 +138,21 @@ class TrainerSource:
             self.base = round(datetime.fromisoformat(self.session).replace(tzinfo=ZoneInfo('America/New_York')).timestamp()*1000)
         self.rows, ready = [], set()
         payload_indices = {}
+        payload_digests = {}
         for i, snap in enumerate(pack["snapshots"]):
             # A repeated immutable payload has one representative index. Pack
             # order is not payload identity; content_t is a full-pack derivation.
             payload = _canonical({k:v for k,v in snap.items() if k != 'content_t'})
             payload_index = payload_indices.setdefault(payload, i)
+            if payload_index == i:
+                payload_digests[i] = hashlib.sha256(repr(payload).encode()).hexdigest()
             at = snap["t"]
             available = snap.get("available_s", None if self.origin == "recorded" else at)
             row = observation(dict(source="trainer-chain", id=snap.get("observation_id", snap.get("key", str(i))),
                 revision=snap.get("revision", 1), session=self.session, instrument=instrument, origin=self.origin,
                 evidence=snap.get("key", f"generated:{snap.get('observation_id',i)}"), eventAt=self.base+round(at*1000),
                 availableAt=None if available is None else self.base+round(available*1000),
-                payloadDigest=hashlib.sha256(repr(payload).encode()).hexdigest(),
+                payloadDigest=payload_digests[payload_index],
                 value=None if snap.get("retracted") else payload_index))
             self.rows.append(row)
             if available is not None:
