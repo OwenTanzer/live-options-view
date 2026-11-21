@@ -226,6 +226,10 @@ function publishSnapshotQuotes(data) {
 function computeBook(trades = session?.trades || []) {
   const book = {};
   for (const t of trades) {
+    if (t.adjustment_units !== undefined) {
+      if (book[t.sym]) book[t.sym].realized += t.adjustment_units / 10000;
+      continue;
+    }
     const instrumentType = t.instrument_type ?? 'option';
     const multiplier = t.multiplier ?? (instrumentType === 'share' ? 1 : 100);
     const b = book[t.sym] ?? (book[t.sym] = {
@@ -235,6 +239,7 @@ function computeBook(trades = session?.trades || []) {
       strike: t.strike, type: t.type, exp: t.exp,
       ...(instrumentType === 'futures_option' ? { contract: t.contract, fees: 0, open_fees: 0, realized_gross: 0 } : {}),
     });
+    b.realized -= (t.fee_units ?? 0) / 10000;
     const q = t.side === 'buy' ? t.qty : -t.qty;
     if (instrumentType === 'futures_option') {
       const fee = t.fees ?? 0; b.fees += fee;
@@ -394,6 +399,7 @@ function closePosition(sym) {
 }
 
 function instrumentLabel(value, symbol = value.sym) {
+  if (value.instrument_type === 'prediction') return escapeHtml(symbol);
   if (value.instrument_type === 'futures_option') return escapeHtml(`${value.contract?.future_symbol || '/BTC'} ${value.strike} ${value.type} · ${value.exp}`);
   if ((value.instrument_type ?? 'option') === 'share') return symbol;
   return `${occRoot(symbol) || value.underlying || 'QQQ'} ${value.strike} ${value.type === 'call' ? 'C' : 'P'}${value.exp ? ` · ${value.exp}` : ''}`;
@@ -433,6 +439,11 @@ function renderPaper() {
     const optionRows = open.filter(([, b]) => ['option', 'futures_option'].includes(b.instrument_type));
     const shareRows = open.filter(([, b]) => b.instrument_type === 'share');
     let html = '';
+    const eventRows = open.filter(([, b]) => b.instrument_type === 'prediction');
+    if (eventRows.length) {
+      html += '<h4>Prediction markets</h4><p><a href="/prediction.html">Quotes, paper exits and official results</a></p>';
+      for (const [sym, b] of eventRows) html += `<p>${escapeHtml(sym)} · ${b.pos} held · entry ${fmtPriceMoney(b.avg)} · liquidation unavailable here</p>`;
+    }
     if (optionRows.length) {
       html += '<h4>Options</h4><table><tr><th>Contract</th><th>Pos</th><th>Avg</th><th>Mark</th><th>PnL</th><th></th></tr>';
       for (const [sym, b] of optionRows) {

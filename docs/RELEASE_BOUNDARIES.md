@@ -352,3 +352,22 @@ to `master`. Nothing in this document establishes that a trigger is attached,
 that a schedule fired, or that capture is healthy.
 
 —Brian 🦡 with Chej, 2026-11-11
+
+
+## Prediction-market lane (#293)
+
+`market_data/prediction/**` is an independent Node producer and fixture launcher;
+it is not a new entry point in the shared Python image. Its Docker build context
+is repository root but copies only its directory and backend/prediction-model.js
+plus backend/package.json. Web CI selects its changes and runs fixture acceptance.
+No existing collector watch scope or provider setting is changed. The common
+model is also an API input, so changing it requires both producer and backend
+compatibility review. Provider-native watch scopes still need verification
+before any promotion; no existing producer may be restarted for this feature.
+
+`backend/prediction*.js`, ledger edits and the 24/7 API cron belong to the API
+lane. `site/prediction.html` and browser modules belong to the staged asset lane.
+The private PREDICTION_DATA binding is deliberately absent until licensing and
+release approval. Collection, display and entries have separate gates; keep
+resolution support when entries or assets roll back. See the
+[prediction operations guide](../market_data/prediction/README.md).
