@@ -1,5 +1,6 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
 import { handleBtcOptions } from './btc-options.js';
+import { handleOneClockChain } from './one-clock-chain.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -28,6 +29,7 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {

@@ -457,6 +457,15 @@ class AssetApiSplit(unittest.TestCase):
                 self.assertFalse(view.asset, "the asset artifact excludes backend code")
                 self.assertFalse(view.prose)
 
+    def test_shared_one_clock_evaluator_and_calendar_affect_both_services(self):
+        for path in ("site/shared/one-clock.js", "site/shared/one-clock-events.js",
+                     "site/shared/one-clock-session.js"):
+            with self.subTest(path=path):
+                view = self.view([path])
+                self.assertTrue(view.api)
+                self.assertTrue(view.asset)
+                self.assertTrue(view.needs_integration_review)
+
     def test_shared_configuration_is_a_reviewed_mixed_change(self):
         for path in (
             "wrangler.toml",
