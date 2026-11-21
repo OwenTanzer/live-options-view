@@ -76,6 +76,8 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
   const apiEnv = withD1({ PAPER_TRADES: bucket, BOT_INDEX_READS: 'r2',
     LIVE_QUOTE_ORIGIN: 'https://preview-quotes.invalid', LIVE_QUOTE_KEY: 'fixture-not-a-secret' });
   const predictionMarket = predictionFixture();
+  const fixtureDeadline = new Date(Date.now() + 7 * 86400000).toISOString();
+  Object.assign(predictionMarket.rules, { cutoff: fixtureDeadline, window_start: fixtureDeadline, window_end: fixtureDeadline });
   // Separate disposable prediction binding; never aliases capture/operational R2.
   Object.assign(apiEnv, { ENVIRONMENT: 'preview', ISOLATION: 'disposable',
     PREDICTION_ENVIRONMENT: 'fixtures', PREDICTION_DISPLAY: 'enabled', PREDICTION_ENTRIES: 'enabled',

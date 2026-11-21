@@ -87,6 +87,9 @@ class MultiUnderlying(unittest.TestCase):
   # looked identical (returned < requested). Each now carries a reason, and the
   # ones that are not the caller's business to retry are named.
   TODAY='2026-11-10'
+  clock = patch.object(quotes, 'datetime', wraps=datetime)
+  clock.start().now.side_effect = lambda tz=None: datetime(2026, 11, 10, 14, 30, tzinfo=tz)
+  self.addCleanup(clock.stop)
   class Feed:
    def __init__(self): self.added=[]
    def add_option_subscriptions(self,symbols): self.added+=symbols
