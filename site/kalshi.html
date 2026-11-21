@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<title>Private Kalshi research · Options View</title><link rel="stylesheet" href="/kalshi.css"></head>
+<body><main><header><a href="/">← Options View</a><h1>Kalshi event markets</h1>
+<p>Owen’s private Kalshi research. Real public market observations, simulated execution. No venue orders.</p></header>
+<nav><a href="/credit-tape/auth/login" target="_blank" rel="noopener">Sign in with GitHub</a>
+<button id="check">Check sign-in</button><button id="logout">Sign out</button></nav>
+<p id="status" role="status" aria-live="polite">Checking private access…</p>
+<section id="workspace" hidden>
+<div class="toolbar"><h2>Event markets</h2><button id="discover">Discover markets</button></div>
+<p id="scope"></p><label>Search category, event or contract <input id="search" type="search" autocomplete="off"></label>
+<div id="markets" class="cards"></div>
+<section id="detail" hidden><h2 id="title"></h2><p id="clock"></p><p id="quotes"></p>
+<button id="refresh">Get a fresh book</button><details><summary>Exact terms, fees and settlement sources</summary><pre id="rules"></pre></details>
+<p id="comparison"></p><form id="ticket"><label>Outcome <select id="outcome"><option>YES</option><option>NO</option></select></label>
+<label>Action <select id="side"><option value="buy">Buy on paper</option><option value="sell">Sell holdings</option></select></label>
+<label>Contracts <input id="qty" type="number" min="1" max="10000" step="1" value="1" required></label>
+<button id="submit" type="submit" disabled>Submit paper order</button></form>
+<p>Each order fetches a fresh book on the server and uses its displayed size. Quotes can change before execution. Fees use the current series and event taker convention.</p>
+<p id="receipt" role="status"></p></section>
+<h2>Separate paper account</h2><p id="cash"></p><div id="positions" class="cards"></div>
+<details><summary>Immutable fill provenance</summary><pre id="fills"></pre></details>
+<h2>Private replay</h2><button id="archives">Load observations</button><p>Seven days of periodic snapshots; gaps are unobserved. Archived prices cannot fill an order. Fill provenance stays in the ledger.</p>
+<div id="archive-list"></div><pre id="replay"></pre><p id="health"></p>
+</section></main><script type="module" src="/js/kalshi.js"></script></body></html>

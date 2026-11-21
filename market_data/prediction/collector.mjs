@@ -1,22 +1,8 @@
 // Independent read-only producer. Adapters supply licensed messages; no order API.
 import { createHash } from 'node:crypto';
 import { compareEvent, marketKey, validateRules } from '../../backend/prediction-model.js';
-export function fixed(value, scale) {
-  const m = /^(\d+)(?:\.(\d+))?$/.exec(String(value));
-  if (!m) throw Error('Invalid decimal');
-  const digits = Math.log10(scale), fraction = (m[2] ?? '');
-  if (fraction.slice(digits).replace(/0/g, '')) throw Error('Unsupported increment');
-  const result = Number(m[1]) * scale + Number(fraction.slice(0, digits).padEnd(digits, '0'));
-  if (!Number.isSafeInteger(result)) throw Error('Unsafe decimal');
-  return result;
-}
-export function kalshiSnapshot(payload) {
-  const book = payload.orderbook_fp;
-  if (!book) throw Error('Expected documented fixed-point orderbook');
-  const levels = rows => rows.map(([price, size]) => [fixed(price, 10000), fixed(size, 1)])
-    .filter(x => x[1] > 0).sort((a, b) => b[0] - a[0]);
-  return { yes: levels(book.yes_dollars), no: levels(book.no_dollars) };
-}
+import { kalshiSnapshot } from '../../backend/kalshi-model.js';
+export { fixed, kalshiSnapshot } from '../../backend/kalshi-model.js';
 export class Replay {
   constructor() { this.markets = new Map(); this.seen = new Map(); this.observations = []; this.resolutions = []; }
   apply(event) {

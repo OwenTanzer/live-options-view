@@ -4,6 +4,7 @@ import { marketKey, positionKey, quoteEvent, validateRules, UNIT } from './predi
 
 export function predictionNamespace(env) {
   const mode = env.PREDICTION_ENVIRONMENT;
+  if (mode === 'production') throw Error('Production research requires the private Kalshi principal route');
   if (!['fixtures', 'demo', 'production'].includes(mode)) throw Error('Prediction environment unavailable');
   if (mode === 'fixtures' && !(env.ENVIRONMENT === 'preview' && env.ISOLATION === 'disposable')) throw Error('Fixtures require disposable preview');
   if (mode !== 'fixtures' && !env.PREDICTION_RIGHTS_RECEIPT) throw Error('Source rights unavailable');
@@ -76,11 +77,16 @@ export function resolvePredictionRecord(record, resolutions, now = Date.now()) {
   for (const sym of new Set(entries.map(t => t.sym))) {
     const entry = entries.find(t => t.sym === sym), meta = entry.prediction;
     const r = resolutions.filter(r => r.market_key === marketKey(meta.rules)).sort((a, b) => b.revision - a.revision)[0];
+    // A finalized venue record may close an event earlier than the entry's scheduled cutoff.
+    // Only the private official adapter supplies this closing time; fixture behavior is unchanged.
+    const officialBinary = ['official_weather_binary', 'official_event_binary'].includes(meta.rules.rule_type);
+    const cutoff = officialBinary && Number.isFinite(Date.parse(r?.closed_at))
+      ? Math.min(Date.parse(meta.rules.cutoff), Date.parse(r.closed_at)) : Date.parse(meta.rules.cutoff);
     if (!r || r.official !== true || !r.source || !r.id || !Number.isSafeInteger(r.revision) || r.revision < 1 ||
         !['YES', 'NO', 'VOID'].includes(r.result) || r.rule_version !== meta.rules.version ||
         !Number.isFinite(Date.parse(r.receive_ts)) || !Number.isFinite(Date.parse(r.exchange_ts)) ||
         Date.parse(r.receive_ts) > now || Date.parse(r.exchange_ts) > now ||
-        Date.parse(r.exchange_ts) < Date.parse(meta.rules.cutoff) || now < Date.parse(meta.rules.cutoff)) continue;
+        Date.parse(r.exchange_ts) < cutoff || now < cutoff) continue;
     const previous = trades.filter(t => t.sym === sym && t.resolution);
     if (previous.some(t => t.resolution.revision >= r.revision)) continue;
     const initial = previous.find(t => !t.adjustment_units);
@@ -92,7 +98,7 @@ export function resolvePredictionRecord(record, resolutions, now = Date.now()) {
     const paid = previous.reduce((s, t) => s + (t.payout_units ?? 0), 0);
     const delta = target - paid;
     const trade = { execution_request_id: `resolve:${sym}:${r.revision}`, execution_id: `resolve:${sym}:${r.revision}`,
-      sym, instrument_type: 'prediction', multiplier: 1, underlying: 'BTC', prediction: meta,
+      sym, instrument_type: 'prediction', multiplier: 1, underlying: meta.rules.underlying, prediction: meta,
       side: 'sell', qty: previous.length ? 0 : qty, price: previous.length ? 0 : target / qty / UNIT,
       status: 'filled', ts: new Date(now).toISOString(), resolution: r,
       resolution_cost_units: cost, payout_units: delta, ...(previous.length ? { adjustment_units: delta } : {}) };

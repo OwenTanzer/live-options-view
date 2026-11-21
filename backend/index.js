@@ -1,8 +1,10 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleKalshi, kalshiTick } from './kalshi.js';
 import { handleBtcOptions } from './btc-options.js';
 import { handleBtcOwnerLink } from './btc-owner-link.js';
 import { handleOneClockChain } from './one-clock-chain.js';
 import { handleOneClockSqueeze } from './one-clock-squeeze.js';
+import { advanceOneClockCatalogs } from './one-clock-catalog-sources.js';
 import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -33,6 +35,7 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
     if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
     if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
@@ -173,6 +176,10 @@ export default {
       return;
     }
     const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.KALSHI_PERSONAL_ENABLED === '1') ctx.waitUntil(kalshiTick(env).catch(() => { console.error('kalshi_private_sweep_failed'); }));
+    // Reuse the existing invocation. Catalog failures do not block settlement;
+    // metadata reads and additive D1 checkpoints never execute a trade.
+    if(env.ONE_CLOCK_CATALOG==='enabled')ctx.waitUntil(advanceOneClockCatalogs(env,{now:Date.now()}));
     if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
     // The 24/7 event clock must not broaden legacy equity settlement hours.
     if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {
