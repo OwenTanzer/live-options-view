@@ -79,7 +79,8 @@ class MultiUnderlying(unittest.TestCase):
   with patch.object(quotes,'COLLECT_IBIT',False): registry.quote_payload(['IBIT291221C00001000'])
   self.assertEqual(len(feed.added),100)
 
- def test_quote_payload_explains_every_absent_contract(self):
+ @patch.object(quotes, "datetime", wraps=datetime)
+ def test_quote_payload_explains_every_absent_contract(self, clock):
   # The 503 that made the option lane look broken was the service correctly
   # refusing to quote outside a feed session. Inside a session the remaining
   # ambiguity was silence: an expired contract, a later expiry the provider had
@@ -87,6 +88,7 @@ class MultiUnderlying(unittest.TestCase):
   # looked identical (returned < requested). Each now carries a reason, and the
   # ones that are not the caller's business to retry are named.
   TODAY='2026-11-10'
+  clock.now.return_value = datetime.fromisoformat(TODAY + 'T14:30:00+00:00')
   class Feed:
    def __init__(self): self.added=[]
    def add_option_subscriptions(self,symbols): self.added+=symbols
