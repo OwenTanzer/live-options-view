@@ -30,7 +30,7 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
     // Outcome IDs are local to a rule. Pool only identical measurement specs,
     // never unlike horizons/units just because their human labels look alike.
     const candidates=signature?(rule?.outcomes??[]).filter(o=>outcomeSignature(o)===signature):[];
-    const spec=candidates.length===1?candidates[0]:null;
+    const spec=key===outcome?.ruleKey?reference:candidates.length===1?candidates[0]:null;
     const measured=spec?event.outcomes.find(o=>o.id===spec.id)??null:null;
     if(measured&&!['measured','pending','missing'].includes(measured.state))throw new Error('Invalid retained outcome state.');
     if(measured?.state==='measured'&&(!Number.isSafeInteger(measured.availableAt)||!Number.isSafeInteger(measured.measuredAt)||measured.availableAt>cutoff||measured.measuredAt>cutoff))throw new Error('Outcome has not passed the selected availability cutoff.');
@@ -65,6 +65,7 @@ function histogram(sorted) {
   if(low===high)return [{low,high,count:sorted.length,includesHigh:true}];
   if(!Number.isFinite(high-low))return [{low,high,count:sorted.length,includesHigh:true}];
   const count=Math.min(10,Math.ceil(Math.sqrt(sorted.length))),width=(high-low)/count;
+  if(width===0)return [{low,high,count:sorted.length,includesHigh:true}];
   const bins=Array.from({length:count},(_,i)=>({low:low+i*width,high:i===count-1?high:low+(i+1)*width,count:0,includesHigh:i===count-1}));
   for(const value of sorted)bins[Math.min(count-1,Math.floor((value-low)/width))].count++;
   return bins;
@@ -75,6 +76,7 @@ function histogram(sorted) {
 // Report a standard error, not a significance verdict or a small-sample CI.
 export function compareResults(rows,{field='rule',a,b,kind='numeric',category}={}) {
   if(!['rule','instrument','collection'].includes(field)||typeof a!=='string'||typeof b!=='string'||a===b)throw new Error('Choose two distinct comparison groups.');
+  if(!['numeric','category'].includes(kind)||kind==='category'&&!(['string','boolean'].includes(typeof category)||finite(category)))throw new Error('Choose a supported comparison outcome and category.');
   const group=event=>field==='rule'?ruleKey(event):event[field]??'replay';
   const clusters=new Map(),totals={a:{sum:0,n:0,sessions:new Set()},b:{sum:0,n:0,sessions:new Set()}};
   for(const {event,outcome} of rows) {
@@ -90,9 +92,10 @@ export function compareResults(rows,{field='rule',a,b,kind='numeric',category}={
   const base={estimate,standardError:null,sessions:clusters.size,aCount:A.n,bCount:B.n,aSessions:A.sessions.size,bSessions:B.sessions.size,
     unit:kind==='category'?'percentage points':'outcome units',method:'Session-clustered standard error; occurrence-weighted difference A minus B.'};
   if(estimate===null)return {...base,reason:'Both groups need a measured outcome.'};
+  if(!finite(estimate))return {...base,estimate:null,reason:'Numeric range exceeds the supported comparison precision.'};
   if(A.sessions.size<2||B.sessions.size<2)return {...base,reason:'Between-session uncertainty is not estimable: each group needs at least two measured sessions. The descriptive difference is available.'};
-  const sum=[...clusters.values()].reduce((total,c)=>total+((c.a.sum-c.a.n*A.sum/A.n)/A.n-(c.b.sum-c.b.n*B.sum/B.n)/B.n)**2,0);
-  const standardError=Math.sqrt(clusters.size/(clusters.size-1)*sum);
+  const influences=[...clusters.values()].map(c=>(c.a.sum-c.a.n*A.sum/A.n)/A.n-(c.b.sum-c.b.n*B.sum/B.n)/B.n);
+  const standardError=Math.hypot(...influences)*Math.sqrt(clusters.size/(clusters.size-1));
   if(!finite(estimate)||!finite(standardError))return {...base,estimate:finite(estimate)?estimate:null,reason:'Numeric range exceeds the supported comparison precision.'};
   return {...base,standardError,reason:'Assumes independent sessions. Few sessions, serial dependence and adaptive exploration can make uncertainty unreliable; this is not a predictive test.'};
 }

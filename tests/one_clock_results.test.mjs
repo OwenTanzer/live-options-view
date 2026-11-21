@@ -54,9 +54,9 @@ test('shared-session comparison preserves covariance and is invariant to within-
   const events=[event('a1',1,{session:'2026-11-19'}),event('a2',3),event('b1',0,{rule:'b',session:'2026-11-19'}),event('b2',0,{rule:'b'})];
   const config={a:ruleKey(rules[0]),b:ruleKey(rules[1])};
   const result=compareResults(project(events).rows,config);
-  assert.equal(result.estimate,2);assert.equal(result.standardError,1);assert.equal(result.sessions,2);
+  assert.equal(result.estimate,2);assert.ok(Math.abs(result.standardError-1)<1e-12);assert.equal(result.sessions,2);
   const duplicated=events.flatMap(e=>[e,{...e,id:e.id+'copy'}]);
-  assert.equal(compareResults(project(duplicated).rows,config).standardError,1);
+  assert.ok(Math.abs(compareResults(project(duplicated).rows,config).standardError-1)<1e-12);
   const one=compareResults(project(events.filter(e=>e.session==='2026-11-20')).rows,config);
   assert.equal(one.estimate,3);assert.equal(one.standardError,null);assert.match(one.reason,/not estimable/);
 });
@@ -66,7 +66,7 @@ test('categorical comparison is a percentage-point difference for a chosen typed
     {event:{ruleId:'b',ruleVersion:1,session:'1'},outcome:{state:'measured',value:true}},
     {event:{ruleId:'b',ruleVersion:1,session:'2'},outcome:{state:'measured',value:true}}];
   const result=compareResults(rows,{a:ruleKey(rules[0]),b:ruleKey(rules[1]),kind:'category',category:true});
-  assert.equal(result.estimate,-50);assert.equal(result.standardError,50);assert.equal(result.unit,'percentage points');
+  assert.equal(result.estimate,-50);assert.ok(Math.abs(result.standardError-50)<1e-12);assert.equal(result.unit,'percentage points');
 });
 test('categorical event endpoints wait for publication and never require a numeric baseline',()=>{
   const rule={...demoRules[0],outcomes:[{...spec,id:'present',source:'shortlist',field:'present',measure:'category',horizonMs:60000}]};
@@ -81,4 +81,19 @@ test('replay links preserve an exact millisecond cursor and reject mixed-day or 
   assert.throws(()=>replaySelection(params+'&one_clock_at='+T),/Invalid/);
   params.set('one_clock_session','2026-11-19');assert.throws(()=>replaySelection(params),/scope/);
   params.set('one_clock_session','2026-11-20');params.set('one_clock_instrument','private');assert.throws(()=>replaySelection(params),/scope/);
+});
+test('an explicitly selected outcome remains scored when its rule has equivalent measurement specs',()=>{
+  const definitions=[{...rules[0],outcomes:[spec,{...spec,id:'second'}]},
+    {...rules[1],outcomes:[{...spec,id:'one'},{...spec,id:'two'}]}];
+  const own=event('own',1);own.outcomes.push({...own.outcomes[0],id:'second',value:2});
+  const other=event('other',3,{rule:'b'});other.outcomes=[{...other.outcomes[0],id:'one'},{...other.outcomes[0],id:'two'}];
+  const selected=project([own,other],{rules:definitions,outcome:{ruleKey:ruleKey(definitions[0]),id:'second'}});
+  assert.equal(selected.summary.measured,1);assert.equal(selected.summary.unscored,1);assert.equal(selected.summary.mean,2);
+});
+test('underflowing histogram widths and overflowing comparison effects remain finite or unavailable',()=>{
+  const tiny=project([event('zero',0),event('tiny',Number.MIN_VALUE)]).summary;
+  assert.equal(tiny.distribution.reduce((n,b)=>n+b.count,0),2);
+  const extremes=project([event('big',Number.MAX_VALUE),event('small',-Number.MAX_VALUE,{rule:'b'})]);
+  const comparison=compareResults(extremes.rows,{a:ruleKey(rules[0]),b:ruleKey(rules[1])});
+  assert.equal(comparison.estimate,null);assert.equal(comparison.standardError,null);assert.match(comparison.reason,/precision/);
 });
