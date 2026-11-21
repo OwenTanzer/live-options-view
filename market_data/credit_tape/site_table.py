@@ -33,7 +33,7 @@ def amount(raw):
             return format((n / divisor).normalize(), "f") + unit + ("+" if value.endswith("+") else "")
 
 
-def render_table(events, cursor, has_sample=False, sample_view=False):
+def render_table(events, cursor, has_sample=False, sample_view=False, has_treu=False, treu_view=False):
     rows = []
     anchors = {}
     for ev in reversed(events):
@@ -52,6 +52,14 @@ def render_table(events, cursor, has_sample=False, sample_view=False):
         product = s.get("uniqueProductIdentifierShortName")
         name = s.get("underlyingAssetName") or s.get("underlierIDLeg1") or product or s.get("productName") or "—"
         detail = " · ".join(str(v) for v in (product if product != name else "", s.get("expirationDate")) if v)
+        raw_link = ""
+        if treu_view:
+            filename, _, digest = ev["raw_ref"].partition("#")
+            raw_link = (f'<small><a href="?view=treu&amp;file={h(filename)}&amp;sha={h(digest)}">'
+                        f'Original CSV · row {int(ev["row_index"])+1}</a></small>')
+            detail = " · ".join(str(v) for v in (detail, ev.get("id"),
+                               "Executed " + str(ev.get("execution_ts") or "unknown"),
+                               "Published " + str(ev.get("dissemination_ts") or "unknown")) if v)
         action = ev.get("action") or "—"
         channel = (ev.get("jurisdiction") or ev.get("source") or "—").removeprefix("US-")
         publisher = ev.get("publisher") or ev.get("source") or "Unknown publisher"
@@ -62,7 +70,7 @@ def render_table(events, cursor, has_sample=False, sample_view=False):
         history = " · ".join(k for k in ("backfill", "replay") if ev.get(k))
         index = " ".join(str(v) for v in [*s.values(), ev.get("id"), ev.get("original_id"), ev.get("first_seen")] if v)
         rows.append(f'<tr{anchor} data-publisher="{h(publisher)}" data-search="{h(index)}" data-channel="{h(channel)}" data-action="{h(action)}">'
-                    f'<td>{stamp}</td><td>{h(name)}<small>{h(detail)}</small></td>'
+                    f'<td>{stamp}</td><td>{h(name)}<small>{h(detail)}</small>{raw_link}</td>'
                     f'<td>{h(action)}<small>{h(origin)} {h(history)} {h(ev.get("qualification"))}</small></td>'
                     f'<td><b>{h(amount(s.get("notionalAmountLeg1")))}</b><small>{h(s.get("notionalCurrencyLeg1"))}</small></td></tr>')
     links = " ".join(f'<a href="#t{k}">{v}</a>' for k, v in anchors.items())
@@ -71,6 +79,12 @@ def render_table(events, cursor, has_sample=False, sample_view=False):
         switch_view = ('<a href="/credit-tape/">Return to live tape</a>' if sample_view else
                        '<a href="/credit-tape/?view=treu-sample">Tradeweb UK sample</a>')
     title = "Tradeweb UK sample" if sample_view else "Credit tape"
+    if has_treu:
+        if treu_view:
+            title = "Tradeweb UK MTF · delayed intraday reports"
+            switch_view = '<a href="/credit-tape/">DTCC credit tape</a>'
+        else:
+            switch_view += ' <a href="/credit-tape/?view=treu">Tradeweb UK MTF · delayed intraday reports</a>'
     notices = len(events) - len(rows)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Credit tape · Options View</title>

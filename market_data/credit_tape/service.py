@@ -31,7 +31,7 @@ from http.server import ThreadingHTTPServer
 
 from market_data.credit_tape import capture
 from market_data.credit_tape import serve_private as sp
-from market_data.credit_tape import volume
+from market_data.credit_tape import treu, volume
 
 
 def config(env=os.environ, is_mount=os.path.ismount):
@@ -87,6 +87,8 @@ def main(env=os.environ, is_mount=os.path.ismount) -> int:
     web = threading.Thread(target=srv.serve_forever, name="credit-tape-panel", daemon=True)
     web.start()
     worker.start()
+    uk_worker = threading.Thread(target=treu.run, args=(settings.archive, stop), name="tradeweb-treu", daemon=True)
+    uk_worker.start()
     print(f"credit-tape service: slice-only collector every {interval:g}s, archive={archive} "
           f"(archive_id {ident['archive_id']}, volume {volume.volume_root(env)}), "
           f"panel on :{srv.server_port} for {settings.origin} ({len(settings.allowed_ids)} allowed ids)", flush=True)
@@ -94,6 +96,7 @@ def main(env=os.environ, is_mount=os.path.ismount) -> int:
         if not worker.is_alive():
             break
     worker.join(timeout=interval + 90)  # finish the current pass; commits are crash-safe regardless
+    uk_worker.join(timeout=20)
     srv.shutdown()
     srv.server_close()
     if failed or (not stop.is_set()):

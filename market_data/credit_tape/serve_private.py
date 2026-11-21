@@ -43,6 +43,8 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/index.html": ("index.html", "text/html; charset=utf-8"),
           "/panel.js": ("panel.js", "text/javascript; charset=utf-8"),
           "/panel.css": ("panel.css", "text/css; charset=utf-8")}
+import sqlite3
+from . import treu
 from .site_table import render_table
 
 SITE = "https://options.moopertonic.net"
@@ -447,6 +449,11 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                 if not settings:
                     return self.reply(503, b'{"ok":false,"reason":"unconfigured"}', "application/json")
                 ok, body = collector_health(settings.archive)
+                if (settings.archive / treu.DATABASE).exists():
+                    try:
+                        body["treu"] = treu.health(settings.archive)
+                    except sqlite3.Error:
+                        body["treu"] = {"listing_ok": False}
                 return self.reply(200 if ok else 503, json.dumps(body).encode(), "application/json")
             if not settings:
                 return self.reply(503, b"Not configured.")
@@ -523,8 +530,30 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     sample_view = q.get("view") == ["treu-sample"]
                     if sample_view and not has_sample:
                         return self.reply(404, b"Sample unavailable")
-                    events, cursor = read_table_window(sample if sample_view else settings.archive)
-                    return self.reply(200, render_table(events, cursor, has_sample, sample_view), "text/html; charset=utf-8")
+                    has_treu = (settings.archive / treu.DATABASE).is_file()
+                    treu_view = q.get("view") == ["treu"]
+                    if treu_view:
+                        if not has_treu:
+                            return self.reply(503, b"TREU collector starting")
+                        if "file" in q:
+                            name = q["file"][0]
+                            digest = q.get("sha", [""])[0]
+                            if not treu.NAME.fullmatch(name) or not re.fullmatch("[0-9a-f]{64}", digest):
+                                return self.reply(400, b"Invalid TREU file reference")
+                            with treu.reader(settings.archive) as db:
+                                match = db.execute("SELECT raw FROM files WHERE name=? AND digest=?",
+                                                   (name, digest)).fetchone()
+                            if not match:
+                                return self.reply(404, b"File unavailable")
+                            return self.reply(200, gzip.decompress(match[0]), "text/csv", headers=[
+                                ("Content-Disposition", f'attachment; filename="{name}"'),
+                                ("X-Original-SHA256", digest)])
+                        rows = treu.window(settings.archive, MAX_ROWS)
+                        events = [panel_event(line, seq) for seq, line in rows]
+                        cursor = rows[-1][0] if rows else 0
+                    else:
+                        events, cursor = read_table_window(sample if sample_view else settings.archive)
+                    return self.reply(200, render_table(events, cursor, has_sample, sample_view, has_treu, treu_view), "text/html; charset=utf-8")
                 if site and url.path in ("/table.css", "/table.js"):
                     kind = "text/css" if url.path.endswith(".css") else "text/javascript"
                     return self.reply(200, (STATIC / url.path[1:]).read_bytes(), kind)
@@ -549,6 +578,8 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     blob = export_events(settings.archive, q.get("from", [""])[0], q.get("to", [""])[0])
                     return self.reply(200, blob, "application/x-ndjson", headers=[
                         ("Content-Disposition", 'attachment; filename="credit-tape-export.jsonl"')])
+            except sqlite3.Error:
+                return self.reply(503, b"Archive unavailable")
             except (ValueError, OSError):
                 return self.reply(400, b"Bad request.")
             if url.path not in ASSETS:
