@@ -65,12 +65,18 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     const saved=await stmt(db,'SELECT payload FROM one_clock_rules WHERE namespace=? AND rule_id=? AND version=?',namespace,body.ruleId,body.version).first();
     if(!saved)return jsonResponse({error:'Saved definition not found.'},404);
     validatedRule(JSON.parse(saved.payload));
+    // Read the generation first: any action interleaving with the subsequent
+    // interval read makes the entire mutation fail its transactional CAS.
+    const activationState=await stmt(db,'SELECT generation FROM one_clock_activation_state WHERE namespace=? AND rule_id=?',namespace,body.ruleId).first();
     const active=await stmt(db,'SELECT version,started_at FROM one_clock_activations WHERE namespace=? AND rule_id=? AND ended_at IS NULL',namespace,body.ruleId).first();
     if(body.action==='activate'&&active?.version===body.version)return jsonResponse({active:true,startedAt:active.started_at});
     if(body.action==='deactivate'&&active?.version!==body.version)return jsonResponse({active:false});
     const history=await stmt(db,'SELECT COUNT(*) AS n FROM one_clock_activations WHERE namespace=?',namespace).first();
     if(history.n>=1000&&body.action==='activate')throw new Error('activation history bound');
-    const writes=[stmt(db,'UPDATE one_clock_activations SET ended_at=? WHERE namespace=? AND rule_id=? AND ended_at IS NULL',now,namespace,body.ruleId)];
+    if(active&&now<active.started_at)throw new Error('activation generation conflict');
+    const writes=[stmt(db,`INSERT INTO one_clock_activation_state(namespace,rule_id,generation) VALUES(?,?,?)
+      ON CONFLICT(namespace,rule_id) DO UPDATE SET generation=excluded.generation`,namespace,body.ruleId,(activationState?.generation??0)+1)];
+    if(active)writes.push(stmt(db,'UPDATE one_clock_activations SET ended_at=? WHERE namespace=? AND rule_id=? AND version=? AND started_at=? AND ended_at IS NULL',now,namespace,body.ruleId,active.version,active.started_at));
     const closing=active?await stmt(db,'SELECT payload FROM one_clock_rules WHERE namespace=? AND rule_id=? AND version=?',namespace,body.ruleId,active.version).first():null;
     const scopes=new Set(closing?JSON.parse(closing.payload).instruments:[]);
     if(body.action==='activate') {
@@ -84,7 +90,7 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     return jsonResponse({active:body.action==='activate',changedAt:now,pendingOutcomesContinue:true});
   } catch(error) {
     const message=String(error.message);
-    if(/immutable|UNIQUE constraint/.test(message))return jsonResponse({error:'This version or activation changed concurrently. Reopen it and save a new version.'},409);
+    if(/immutable|UNIQUE constraint|activation generation conflict/.test(message))return jsonResponse({error:'This version or activation changed concurrently. Reopen it before retrying.'},409);
     if(/bound|scope|query|rule|input|invalid|field|choose|condition|outcome|instrument|version|required/i.test(message))return jsonResponse({error:message.slice(0,200)},400);
     return jsonResponse({error:'Observer storage is unavailable; no success is claimed.'},503);
   }

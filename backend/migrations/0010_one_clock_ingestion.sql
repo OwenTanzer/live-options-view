@@ -35,10 +35,20 @@ CREATE TABLE IF NOT EXISTS one_clock_ingestion_history (
 CREATE INDEX IF NOT EXISTS one_clock_ingestion_history_cutoff ON one_clock_ingestion_history(session,instrument,recorded_at);
 CREATE TABLE IF NOT EXISTS one_clock_activations (
   namespace TEXT NOT NULL, rule_id TEXT NOT NULL, version INTEGER NOT NULL,
-  started_at INTEGER NOT NULL, ended_at INTEGER,
+  started_at INTEGER NOT NULL, ended_at INTEGER CHECK(ended_at IS NULL OR ended_at>=started_at),
   PRIMARY KEY(namespace,rule_id,version,started_at)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_clock_one_active_version ON one_clock_activations(namespace,rule_id) WHERE ended_at IS NULL;
+CREATE TABLE IF NOT EXISTS one_clock_activation_state (
+  namespace TEXT NOT NULL, rule_id TEXT NOT NULL, generation INTEGER NOT NULL,
+  PRIMARY KEY(namespace,rule_id)
+);
+CREATE TRIGGER IF NOT EXISTS one_clock_activation_insert BEFORE INSERT ON one_clock_activation_state
+WHEN NOT EXISTS(SELECT 1 FROM one_clock_activation_state WHERE namespace=NEW.namespace AND rule_id=NEW.rule_id) AND NEW.generation<>1
+BEGIN SELECT RAISE(ABORT,'activation generation conflict'); END;
+CREATE TRIGGER IF NOT EXISTS one_clock_activation_update BEFORE UPDATE ON one_clock_activation_state
+WHEN NEW.generation<>OLD.generation+1
+BEGIN SELECT RAISE(ABORT,'activation generation conflict'); END;
 CREATE TRIGGER IF NOT EXISTS one_clock_active_capacity BEFORE INSERT ON one_clock_activations
 WHEN NEW.ended_at IS NULL AND ((SELECT COUNT(*) FROM one_clock_activations WHERE ended_at IS NULL)>=1000 OR
   (NOT EXISTS(SELECT 1 FROM one_clock_activations WHERE namespace=NEW.namespace AND ended_at IS NULL) AND

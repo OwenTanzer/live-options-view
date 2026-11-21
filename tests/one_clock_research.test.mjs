@@ -98,6 +98,33 @@ test('pause and replacement preserve closing scopes before outage recovery runs'
     {session:'2026-11-20',instrument:'QQQ'},{session:'2026-11-20',instrument:'SPY'},
     {session:'2026-11-23',instrument:'QQQ'},{session:'2026-11-23',instrument:'SPY'}]);
 });
+test('stale pause cannot close a replacement and stale activation cannot undo a pause',async t=>{
+  const realNow=Date.now;let now=realNow();Date.now=()=>now;t.after(()=>{Date.now=realNow;});
+  const {DB,call}=await setup(t);
+  for(const version of [1,2,3])assert.equal((await call('alice',{action:'save',rule:{...rule,version}})).status,201);
+  assert.equal((await call('alice',{action:'activate',ruleId:rule.id,version:1})).status,200);
+  const prepare=DB.prepare.bind(DB);let hold=false,release,reached;
+  DB.prepare=sql=>{
+    const statement=prepare(sql);if(!sql.startsWith('SELECT version,started_at FROM one_clock_activations'))return statement;
+    const bind=statement.bind.bind(statement);
+    statement.bind=(...args)=>{const bound=bind(...args),first=bound.first.bind(bound);bound.first=async()=>{
+      const row=await first();if(hold){hold=false;reached();await new Promise(resolve=>{release=resolve;});}return row;
+    };return bound;};return statement;
+  };
+  async function interleave(stale,next) {
+    now+=1000;hold=true;const blocked=new Promise(resolve=>{reached=resolve;});
+    const pending=call('alice',stale);await blocked;now+=1000;
+    assert.equal((await call('alice',next)).status,200);release();
+    assert.equal((await pending).status,409);
+  }
+  await interleave({action:'deactivate',ruleId:rule.id,version:1},{action:'activate',ruleId:rule.id,version:2});
+  assert.equal(DB.raw('SELECT version FROM one_clock_activations WHERE ended_at IS NULL')[0].version,2);
+  await interleave({action:'activate',ruleId:rule.id,version:3},{action:'deactivate',ruleId:rule.id,version:2});
+  assert.equal(DB.raw('SELECT version FROM one_clock_activations WHERE ended_at IS NULL').length,0);
+  assert.equal(DB.raw('SELECT version FROM one_clock_activations WHERE version=3').length,0);
+  assert.equal(DB.raw('SELECT version FROM one_clock_activations WHERE ended_at<started_at').length,0);
+  assert.equal(DB.raw('SELECT generation FROM one_clock_activation_state')[0].generation,3);
+});
 test('inactive rises do not consume once allowance; activation preserves condition state and session anchors',async t=>{
   const {DB}=await setup(t),at=sessionInstant('2026-11-20',9,30),session='2026-11-20';
   const once={...rule,transition:'once-per-session'};
