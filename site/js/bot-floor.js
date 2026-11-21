@@ -343,5 +343,8 @@ function setBotsView(view, { persist = true } = {}) {
   }
   let saved = null;
   try { saved = localStorage.getItem(BF_VIEW_KEY); } catch { /* ignore */ }
-  setBotsView(saved || 'cards', { persist: false });
+  // Initialization has never persisted a default: existing saved values are
+  // explicit viewer choices. Keep them, including Cards on a phone.
+  const phone = typeof matchMedia === 'function' && matchMedia('(max-width: 600px)').matches;
+  setBotsView(BF_VIEWS.includes(saved) ? saved : phone ? 'floor' : 'cards', { persist: false });
 })();
