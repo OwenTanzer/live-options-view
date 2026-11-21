@@ -52,7 +52,7 @@ svg{display:block;width:100%}
 <div id="journal" hidden>
 <header>
   <h1>Trade journal</h1>
-  <label class="note">Date (America/New_York) <input type="date" id="day" value="2026-11-13"></label>
+  <label class="note">Date (America/New_York) <input type="date" id="day"></label>
   <button id="load">Load</button>
   <button id="sync">Sync from Notion</button>
   <button id="lock">Sign out</button>
@@ -103,6 +103,7 @@ svg{display:block;width:100%}
     .then(r => r.json().catch(() => ({})).then(body => ({ ok: r.ok, status: r.status, body }))));
   const shownDate = () => (data ? data.date : $('day').value);
   const dayInNY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  $('day').value = dayInNY.format(new Date());
   const fillsOnDay = p => p.executions.filter(e => dayInNY.format(T(e.ts)) === shownDate());
   const ctxOf = p => loads.context(shownDate(), p.position_id) || { loading: true };
 
