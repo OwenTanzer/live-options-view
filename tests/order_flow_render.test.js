@@ -64,3 +64,15 @@ test('no print yet after the open is incomplete; before the open it is not', () 
   assert.equal(M.liveAt(feed(s), null, OPEN + 5 * 60000).coverage.incomplete, true);
   assert.equal(M.liveAt(feed(s), null, OPEN - 60000).coverage.incomplete, false);
 });
+
+test('the live ladder includes all opening legs, even before their first event', () => {
+  const pending = 'QQQ260925C00760000';
+  const quoted = 'QQQ260925P00760000';
+  const view = M.liveAt(feed(session({ contracts: {}, opening: { [pending]: null, [quoted]: OPEN } })), null, OPEN + 1);
+  assert.equal(view.strikes.length, 1);
+  assert.deepEqual(view.contracts.map(c => [c.symbol, c.firstObserved, c.flow]), [
+    [pending, null, null], [quoted, OPEN, null],
+  ]);
+  assert.match(R.freshnessText(view, clock), /1 of 2 opening contracts observed/);
+  assert.match(R.ladderRowsHtml(view, 1, null), /no coverage/);
+});

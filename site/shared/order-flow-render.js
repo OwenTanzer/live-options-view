@@ -46,6 +46,7 @@
         (v.snapshot.stale ? ', STALE → no gamma coverage' : '') + ')');
     } else bits.push('chain snapshot unavailable → no gamma coverage');
     const c = v.coverage;
+    if (c && c.requested) bits.push(c.observed + ' of ' + c.requested + ' opening contracts observed');
     if (c && c.missingOpening) {
       bits.push('OPENING MISSING: no flow from ' + clock(c.missingOpening.start) + ' to ' +
         (c.missingOpening.end != null ? clock(c.missingOpening.end) : 'now') + ' ET');
