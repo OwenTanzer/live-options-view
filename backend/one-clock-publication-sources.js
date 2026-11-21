@@ -19,7 +19,6 @@ export async function nativeScopeRecords(db,descriptor,{session,instrument,cutof
   if(!first)return null;
   const start=Math.min(...JSON.parse(first.payload).records.map(r=>instant(r.eventAt)));
   const firstSession=JSON.parse(first.payload).records.map(r=>r.session).sort()[0];
-  if(session<firstSession)return null;
   const status=await stmt(db,'SELECT coverage FROM one_clock_publication_status INDEXED BY one_clock_publication_status_cutoff WHERE stream=? AND checked_at<=? ORDER BY checked_at DESC,generation DESC LIMIT 1',stream,cutoff).first();
   const retainedProgress=status?JSON.parse(status.coverage):null;
   const progress=currentProgress??retainedProgress,nextSequence=retainedProgress?.nextSequence??1,records=[];let after=null,bytes=0;
@@ -32,6 +31,9 @@ export async function nativeScopeRecords(db,descriptor,{session,instrument,cutof
       records.push({source:row.source,record_id:row.id,revision:row.revision,session,instrument,origin:'recorded',event_at:row.eventAt,available_at:row.availableAt,received_at:receivedAt,collection:row.details.observerCollection??'backfill',payload});
     }
   }while(after);
+  // A later commit may correct an earlier session than the stream's first
+  // publication. Decide ownership from this scope's retained evidence.
+  if(session<firstSession&&!records.length)return null;
   const lastPublicationAt=records.length?Math.max(...records.map(r=>r.available_at)):null;
   const coverage={source:descriptor.id,adapterVersion:'1',session,instrument,updatedAt:cutoff,indexComplete:progress?.reason==='tail-at-check',pending:progress?.reason==='tail-at-check'?0:1,gaps:progress?.reason==='blocked-entry'?1:0,
     nativeStart:start,nextSequence,lastPublicationAt,publicationAgeMs:lastPublicationAt===null?null:cutoff-lastPublicationAt,

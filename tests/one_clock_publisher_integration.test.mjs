@@ -121,3 +121,19 @@ test('concurrent legacy ingestion rejects stale cutover and retry includes its n
   await assert.rejects(compose(DB,native,[old],T+65000),/legacy ingestion advanced/);assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_source_handoffs')[0].n,0);
   const rows=await compose(DB,native,[old],T+65000);assert.ok(rows.some(r=>r.record_id==='late-legacy'));assert.equal(DB.raw('SELECT legacy_generation FROM one_clock_source_handoffs')[0].legacy_generation,1);
 });
+
+test('late native evidence for a session before the first commit is consumed by its existing scheduler job',async t=>{
+  const {DB,bucket,env}=await setup(t),older='2026-11-19',namespace='account:fixture',now=T+242000;
+  const rule={id:'older',version:1,name:'older threshold',instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',conditions:[{source:'price',field:'spot',op:'>=',value:700,maxAgeMs:150000}],outcomes:[]};
+  await registerObservedRule(DB,{namespace,rule,registeredAt:T-86400000-10000});
+  await DB.prepare('INSERT INTO one_clock_activations(namespace,rule_id,version,started_at) VALUES(?,?,?,?)').bind(namespace,rule.id,1,T-86400000-10000).run();
+  bucket.visible=5;await advanceNativePublications(env,{now});
+  const olderNative=await nativeScopeRecords(DB,collectorPublication,{session:older,instrument:'QQQ',cutoff:now});assert.equal(olderNative.records.length,1);assert.equal(olderNative.records[0].collection,'backfill');
+  const oldAttempt={session:older,instrument:'QQQ',rule_id:rule.id,version:1,attempted_at:now-1000,state:'evaluated'};
+  assert.equal((await markPendingNativeEvidence(DB,[oldAttempt],now))[0].state,'pending');
+  let olderLegacy=0;const adapter={id:'archived-chain',version:'1',instruments:['QQQ'],outputs:['price','skew'],async discover(bucket,selection){if(selection.session===older)olderLegacy++;return {artifacts:[],complete:true};}};
+  const result=await advanceOneClockResearch(env,{now:now+1,sources:[adapter]});assert.ok(result.some(r=>r.state==='evaluated'&&r.session===older));assert.equal(olderLegacy,0);
+  const attempt=DB.raw('SELECT session,instrument,rule_id,version,attempted_at,state FROM one_clock_evaluation_history WHERE session=?',older)[0];
+  assert.equal((await markPendingNativeEvidence(DB,[attempt],now+1))[0].state,'evaluated');
+  const receipt=JSON.parse(DB.raw('SELECT coverage FROM one_clock_ingestion_history WHERE source=? AND session=?','collector-chain',older)[0].coverage);assert.equal(receipt.lastPublicationAt,T+241000);
+});
