@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>One Clock · Options View</title>
+  <link rel="stylesheet" href="/one-clock.css">
+</head>
+<body>
+<header><a href="/">OPTIONS VIEW</a><span>Research instruments</span></header>
+<main>
+  <div class="intro"><div><p class="eyebrow">ONE CLOCK</p><h1>Define a moment.<br>Follow what happens.</h1></div>
+  <p class="lede">Register a market event, inspect each occurrence, and measure its outcome on the same clock.</p></div>
+  <aside class="notice"><strong>Offline engineering session · SYN-1</strong><span>Hand-authored synthetic data. These results are not market evidence. Live observation is not activated.</span></aside>
+  <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Event Results</button></nav>
+  <section id="builder" aria-labelledby="builder-title">
+    <div class="section-head"><h2 id="builder-title">Event Builder</h2><button id="new-rule">New event class</button></div>
+    <div class="toolbar"><label>Saved definition<select id="versions"></select></label><button id="reopen">Reopen</button><button id="export-rule">Export rule</button></div>
+    <form id="rule-form">
+      <div class="form-grid"><label>Event name<input id="rule-name" required maxlength="120"></label><label>Instrument<select id="instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label>
+      <label>Combine conditions<select id="combine"><option value="all">All conditions</option><option value="any">Any condition</option></select></label>
+      <label>Count a new occurrence<select id="transition"><option value="rising">When false becomes true</option><option value="once-per-session">First match each session</option></select></label>
+      <label>When input is missing<select id="missing"><option value="hold">Keep previous state</option><option value="reset">Reset to non-matching</option></select></label></div>
+      <h3>Conditions</h3><div id="conditions"></div><button type="button" id="add-condition">+ Add condition</button>
+      <h3>Outcomes <small>Optional — you can track without predicting</small></h3><div id="outcomes"></div><button type="button" id="add-outcome">+ Add outcome</button>
+      <div class="actions"><button type="button" id="preview-rule">Preview</button><button class="primary" type="submit" id="save-rule">Save new version</button></div>
+    </form>
+    <p id="form-status" role="status"></p><details><summary>Portable rule</summary><pre id="rule-json"></pre></details>
+  </section>
+  <section id="results" aria-labelledby="results-title" hidden>
+    <div class="section-head"><h2 id="results-title">Event Results</h2><label>Event class and version<select id="result-version"></select></label></div>
+    <div class="toolbar"><label>Outcome<select id="outcome-choice"></select></label><label>View<select id="result-scope"><option value="cursor">Follow replay cursor</option><option value="full">Full session · retrospective</option></select></label></div>
+    <p id="rule-description"></p><p id="comparison-note" class="muted"></p>
+    <div id="stats" class="stats" aria-live="polite"></div>
+    <div class="table-wrap"><table><thead><tr><th>Trigger (UTC)</th><th>Rule</th><th>Matching observations</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody id="ledger"></tbody></table></div>
+    <p id="empty-state"></p>
+  </section>
+  <section class="replay" aria-labelledby="replay-title"><div class="section-head"><h2 id="replay-title">Session replay</h2><strong id="cursor-time"></strong></div>
+    <p class="muted">SYN-1 · QQQ · synthetic clock in UTC. Counts and outcomes follow this cursor.</p>
+    <div class="replay-controls"><button id="play" aria-pressed="false">Play</button><label class="slider-label">Replay cursor<input type="range" id="cursor" min="0" max="3601" step="1" value="301"></label></div>
+    <svg id="session-strip" viewBox="0 0 900 100" role="img" aria-label="Observed skew through the cursor"></svg>
+    <p id="selected-event" aria-live="polite">Choose an occurrence to inspect its trigger evidence.</p><pre id="event-evidence" hidden></pre>
+  </section>
+  <footer>Definitions are saved in this browser. Export JSON to retain a portable copy. <a href="https://claude.ai/artifact/DYV8n2FjbrsmP4ytcs9g6Y">Nov. 9 reconstructed prototype</a> is a separate historical demonstration.</footer>
+</main>
+<script type="module" src="/js/one-clock-page.js"></script>
+</body></html>

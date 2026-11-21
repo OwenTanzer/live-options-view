@@ -1,6 +1,6 @@
 # One Clock implementation and extension contract
 
-Status: foundation implementation, not activated. Inventory baseline: master
+Status: foundation plus offline authoring/replay implementation, not activated. Inventory baseline: master
 `dba3304`, November 21, 2026. Repository findings below do not establish live
 deployment, archive completeness or a source's historical availability.
 
@@ -24,6 +24,24 @@ PR 8 must not become a gate holding already qualified readers. Missing archive
 evidence blocks that source's historical lane, not the usable instrument.
 
 ## One adapter, shared selection
+
+The offline instrument is `/one-clock.html`. Its bundled SYN-1 records are
+hand-authored engineering fixtures, never historical or prospective market
+evidence. The blank form supports multiple AND/OR conditions, explicit rising
+or first-per-session transitions, missing-input behavior, and zero or multiple
+numeric outcomes. Browser saves create immutable versions; export retains the
+portable rule. Results switch classes and versions and reconcile counts with
+the ledger at the cursor. A separate explicit full-session view is retrospective.
+The linked Nov. 9 prototype remains a separately reviewed reconstruction.
+
+`one-clock-events.js` evaluates observations in availability order using one
+incremental source index. Outcome endpoints separately qualify by event time,
+availability, tolerance and session close. A late eligible endpoint can change a
+missing outcome to measured without changing the trigger identity; the durable
+observer must preserve that as an attributed revision. The same pure evaluator
+accepts an entire archive or only records that have arrived. No strategy or order
+execution runs from this page. D1 persistence, live activation, source ingestion,
+full categorical/comparison statistics and reader migrations are later slices.
 
 `site/shared/one-clock.js` has no network, storage or timer. The application
 owns one clock for a view and registers source adapters once. A live refresh
