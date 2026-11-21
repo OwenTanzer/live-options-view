@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Strategy Archive · Options View</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font: 15px/1.5 system-ui;
+        color: #e4eceb;
+        background: #101819;
+      }
+      body {
+        margin: auto;
+        max-width: 86rem;
+        padding: 1.3rem;
+      }
+      header,
+      section,
+      details {
+        margin: 1rem 0;
+      }
+      h1 {
+        font: 500 2.5rem Georgia;
+        margin: 0.2rem 0;
+      }
+      h2 {
+        font-size: 1.25rem;
+      }
+      a,
+      button.link {
+        color: #96ddd1;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+        background: #192728;
+        border: 1px solid #567474;
+        border-radius: 0.25rem;
+        padding: 0.38rem;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid #ffce7b;
+      }
+      label {
+        display: inline-grid;
+        gap: 0.15rem;
+        margin: 0.2rem 0.4rem 0.3rem 0;
+      }
+      textarea {
+        width: 95%;
+        min-height: 6rem;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: bold;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+      td,
+      th {
+        text-align: left;
+        vertical-align: top;
+        padding: 0.42rem;
+        border-bottom: 1px solid #34494b;
+      }
+      th {
+        color: #a3c0bf;
+      }
+      .scroll {
+        overflow: auto;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      button.link {
+        background: none;
+        border: 0;
+        text-align: left;
+        padding: 0;
+        text-decoration: underline;
+      }
+      #message {
+        white-space: pre-wrap;
+        color: #f0cc96;
+      }
+      small {
+        color: #aac1bf;
+      }
+      fieldset {
+        border: 1px solid #385052;
+        margin: 0.6rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/">Options View</a>
+      <h1>Strategy Archive</h1>
+    </header>
+    <p id="message" role="status"></p>
+    <main hidden>
+      <section aria-label="Search strategies">
+        <label>Search<input id="search" type="search" placeholder="Agent, instrument, rule…" /></label
+        ><label>Family<select id="family"></select></label
+        ><label
+          >Evidence<select id="evidenceFilter">
+            <option value="">Any</option>
+            <option value="local">Local result</option>
+            <option value="external">External result</option>
+            <option value="none">No results</option>
+          </select></label
+        ><label
+          >Review<select id="reviewFilter">
+            <option value="">Any</option>
+            <option>Awaiting review</option>
+            <option>try</option>
+            <option>adopt</option>
+            <option>modify</option>
+            <option>defer</option>
+            <option>reject</option>
+          </select></label
+        ><label>Parameter<select id="param"></select></label
+        ><label>Minimum<input id="min" type="number" step="any" /></label
+        ><label>Maximum<input id="max" type="number" step="any" /></label
+        ><button id="addFilter">Keep range</button> <button id="reset">Clear filters</button>
+        <button id="export">Export filtered versions</button>
+        <div id="ranges"></div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Version / family</th>
+                <th>Instrument / horizon</th>
+                <th>Signal</th>
+                <th>Originator</th>
+                <th>Evidence / trials</th>
+                <th>Review</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <h2>Parameter coverage</h2>
+        <label>Horizontal axis<select id="axisX"></select></label
+        ><label>Vertical axis<select id="axisY"></select></label>
+        <div id="coverage" class="scroll"></div>
+      </section>
+      <section id="detail" hidden>
+        <h2 id="title"></h2>
+        <div id="facts"></div>
+        <label>Compare version<select id="compare"></select></label>
+        <div id="diff"></div>
+        <details>
+          <summary>Fork this version</summary>
+          <label>Reason<input id="forkReason" /></label>
+          <p>Edit the settings below. The new version starts as a proposal.</p>
+          <textarea id="forkParams" aria-label="Fork parameters"></textarea
+          ><button id="fork">Save proposed fork</button>
+        </details>
+        <details>
+          <summary>Review this version</summary>
+          <label
+            >Decision<select id="decision">
+              <option>try</option>
+              <option>adopt</option>
+              <option>modify</option>
+              <option>defer</option>
+              <option>reject</option>
+            </select></label
+          ><label>Next owner<input id="owner" /></label><label>Rationale<input id="reason" /></label
+          ><button id="review">Save review</button>
+        </details>
+        <details>
+          <summary>Assign or update a trial</summary>
+          <label>Trial identifier<input id="trialId" /></label
+          ><label>Trial owner<input id="trialOwner" /></label
+          ><label
+            >Status<select id="trialStatus">
+              <option>assigned</option>
+              <option>active</option>
+              <option>paused</option>
+              <option>completed</option>
+              <option>cancelled</option>
+            </select></label
+          ><label>As of<input type="date" id="trialDate" /></label
+          ><label>Assignment or run link<input type="url" id="trialSource" /></label
+          ><button id="trial">Save trial status</button>
+        </details>
+        <details>
+          <summary>Prepare hypothesis handoff</summary>
+          <p>Record the test design for this exact configuration.</p>
+          <div id="plan"></div>
+          <button id="handoff">Export hypothesis</button>
+        </details>
+      </section>
+      <details>
+        <summary>Submit records</summary>
+        <p>
+          Paste one record or a JSON array of up to 40. Keep the same identifiers when retrying. The
+          example starts a discovery with incomplete rules.
+        </p>
+        <textarea id="batch" aria-label="Discovery records"></textarea
+        ><button id="submit">Submit records</button>
+      </details>
+    </main>
+    <script type="module" src="/js/strategy-archive.js"></script>
+  </body>
+</html>

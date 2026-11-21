@@ -150,3 +150,5 @@ Never put private positions, credentials or screenshots in a release artifact.
    versions through their respective protected rollback procedures (assets
    first if already published). Leave the additive cache tables in place.
    Review any cache removal separately. The source requires no reversal.
+
+[Strategy Archive](../docs/STRATEGY_ARCHIVE.md) documents shared strategy records, membership, agent intake, review and release order.

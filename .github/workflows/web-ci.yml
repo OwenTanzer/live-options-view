@@ -182,6 +182,12 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/preview_browser.test.mjs
+      - name: Strategy archive shared intake and browser workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: |
+          node --test tests/strategy_archive.test.mjs
+          node tests/strategy_archive_browser.mjs
       - name: Private journal passkey enrollment and sign-in
         run: node tests/journal_passkeys_browser.mjs
       - name: Reference OI skew desktop and mobile browser workflow

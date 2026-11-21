@@ -74,6 +74,8 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
   };
   const apiEnv = withD1({ PAPER_TRADES: bucket, BOT_INDEX_READS: 'r2',
     LIVE_QUOTE_ORIGIN: 'https://preview-quotes.invalid', LIVE_QUOTE_KEY: 'fixture-not-a-secret' });
+  apiEnv.STRATEGY_ARCHIVE_MEMBERS = 'archive_reviewer';
+  apiEnv.DB.db.exec(readFileSync(resolve(ROOT, 'backend/migrations/0004_strategy_archive.sql'), 'utf8'));
   apiEnv.ASSETS = { fetch: async () => new Response('Unknown API route', { status: 404 }) };
   const docs = fixtureDocuments();
   const calls = { api: [], reads: [] };

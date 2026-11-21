@@ -1,3 +1,4 @@
+import { archive } from './strategy-archive.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -19,7 +20,7 @@ export { BOT_INDEX_KEY, handleBotIndexReconcile, handleBotMetadata, handleBots, 
 export { MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, USERNAME_RE, constantTimeEqual, derivePasswordHash, randomSaltBase64 } from './auth.js';
 
 const MUTATING_API_PATHS = new Set([
-  '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
+  '/api/strategy-archive', '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync', '/api/trade-journal/passkey',
 ]);
 
@@ -54,6 +55,8 @@ export default {
         headers: { 'Content-Type': 'application/json', 'Retry-After': '30', 'Cache-Control': 'no-store' },
       });
     }
+
+    if (url.pathname === '/api/strategy-archive') return archive(request, env);
 
     if (request.method === 'POST' && url.pathname === '/api/register') {
       return handleRegister(request, env);
