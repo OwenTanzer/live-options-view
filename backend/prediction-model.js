@@ -28,6 +28,7 @@ export function quoteEvent(m, outcome, side, qty, now) {
   if (!b?.synchronized || b.gap) return fail('Book is unsynchronized');
   if (m.status !== 'open' || now >= Date.parse(r.cutoff)) return fail('Market is closed or halted');
   const rest = ['official_weather_binary', 'official_event_binary'].includes(r.rule_type) && b.clock_basis === 'provider_http_date';
+  if (['official_weather_binary', 'official_event_binary'].includes(r.rule_type) && !rest) return fail('Unsupported live quote clock');
   const quoteTime = rest ? b.provider_response_ts : b.exchange_ts;
   if (rest && (b.exchange_ts !== null || !Number.isFinite(Date.parse(b.request_ts)) ||
       Date.parse(b.receive_ts) - Date.parse(b.request_ts) > 5000 ||

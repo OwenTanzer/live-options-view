@@ -13,6 +13,7 @@ export function kalshiSnapshot(payload) {
   if (!book) throw Error('Expected documented fixed-point orderbook');
   const levels = rows => {
     if (!Array.isArray(rows) || rows.length > 100) throw Error('Invalid book depth');
+    // Only integer orders are supported; fractional displayed liquidity is rounded DOWN.
     return rows.map(([price, size]) => [fixed(price, 10000), Math.floor(fixed(size, 100) / 100)])
       .filter(x => x[1] > 0).sort((a, b) => b[0] - a[0]);
   };
@@ -43,7 +44,7 @@ export function validateKalshiRules(r) {
       !Object.hasOwn(SERIES_SUBJECT, r.series) || r.currency !== 'USD' || r.payout_units !== 10000 ||
       r.size_increment !== 1 || r.fee_convention !== 'kalshi_taker_2026_07_07' ||
       r.void_policy !== 'official_only' || r.underlying !== SERIES_SUBJECT[r.series] ||
-      !Array.isArray(r.price_ranges) || !r.price_ranges.length) throw Error('Unsupported weather contract');
+      !Array.isArray(r.price_ranges) || !r.price_ranges.length) throw Error('Unsupported binary contract');
   for (const k of ['published_at', 'cutoff', 'window_end']) if (!Number.isFinite(Date.parse(r[k]))) throw Error('Missing rule time');
   for (const p of r.price_ranges) if (![p.start, p.end, p.step].every(Number.isSafeInteger) ||
       p.start < 0 || p.end > 10000 || p.end <= p.start || p.step < 1) throw Error('Unsupported tick schedule');

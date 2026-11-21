@@ -203,6 +203,10 @@ jobs:
           npx playwright install --with-deps chromium
       - name: BTC monthly mobile fixture workflow
         run: node tests/btc_options_browser.test.mjs
+      - name: Private Kalshi phone and desktop fixture workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/kalshi_browser.test.mjs
       - name: Disposable preview rendered workflow (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
