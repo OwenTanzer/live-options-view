@@ -2,6 +2,11 @@
 export const demoStart = Date.parse('2026-11-09T14:15:00Z');
 export const demoClose = demoStart + 60 * 60_000;
 export const demoSelection = { session: 'SYN-1', instrument: 'QQQ', origin: 'synthetic', cutoff: demoStart };
+export const demoSources = [
+  { id: 'skew', label: 'OI skew', fields: { imbalance: 'Imbalance', strikes: 'Strikes in band' } },
+  { id: 'price', label: 'Underlying price', fields: { spot: 'Spot price' } },
+  { id: 'shortlist', label: 'Published shortlist', fields: { present: 'Instrument is present' } },
+];
 export const demoRows = Array.from({ length: 61 }, (_, minute) => {
   const at = demoStart + minute * 60_000;
   const common = { revision: 1, session: 'SYN-1', instrument: 'QQQ', origin: 'synthetic',

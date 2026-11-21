@@ -1,6 +1,6 @@
 import { createClock, createSourceRegistry, selectAsOf } from '../shared/one-clock.js';
 import { eventRule, saveRule, evaluateEvents, aggregateEvents } from '../shared/one-clock-events.js';
-import { demoRules, demoRows, demoStart, demoClose, demoSelection } from '../shared/one-clock-demo.js';
+import { demoRules, demoRows, demoStart, demoClose, demoSelection, demoSources } from '../shared/one-clock-demo.js';
 
 const $ = id => document.getElementById(id);
 const storageKey = 'one-clock.rules.v1';
@@ -16,8 +16,8 @@ let timer = null;
 let selectedId = null;
 let previewing = false;
 const registry = createSourceRegistry();
-for (const source of ['skew', 'price', 'shortlist']) registry.register({ id: source, version: 'fixture-1', owner: 'offline demo',
-  maxAgeMs: 150000, read: async () => demoRows.filter(r => r.source === source) });
+for (const source of demoSources) registry.register({ ...source, version: 'fixture-1', owner: 'offline demo',
+  maxAgeMs: 150000, read: async () => demoRows.filter(r => r.source === source.id) });
 const clock = createClock({ registry, initial: { ...demoSelection, mode: 'replay', cutoff: demoStart + 301000 } });
 
 function option(value, label = value) { const el = document.createElement('option'); el.value = value; el.textContent = label; return el; }
@@ -34,10 +34,19 @@ function inputControl(label, name, value, type = 'text') {
   wrapper.append(input); return wrapper;
 }
 function removeButton(row) { const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Remove'; button.onclick = () => row.remove(); return button; }
-const sources = registry.list().map(id => [id, `${id} fixture`]);
+const sources = registry.list().map(id => [id, registry.get(id).label]);
+function sourceFields(source, field) {
+  const sourceControl = selectControl('Input', 'source', sources, source);
+  const fieldControl = selectControl('Field', 'field', Object.entries(registry.get(source).fields), field);
+  sourceControl.querySelector('select').onchange = event => {
+    const fields = Object.entries(registry.get(event.target.value).fields);
+    fieldControl.querySelector('select').replaceChildren(...fields.map(([id,label]) => option(id,label)));
+  };
+  return [sourceControl,fieldControl];
+}
 function condition(c = { source: 'skew', field: 'imbalance', op: '>=', value: 0.3, maxAgeMs: 150000 }) {
   const row = document.createElement('div'); row.className = 'condition';
-  row.append(selectControl('Input', 'source', sources, c.source), inputControl('Field', 'field', c.field),
+  row.append(...sourceFields(c.source,c.field),
     selectControl('Compare', 'op', ['>=','>','<=','<','=='].map(v => [v,v]), c.op), inputControl('Value', 'value', String(c.value)),
     selectControl('Reference', 'relativeToAnchor', [['false','Absolute'],['true','Change from first reading']], String(!!c.relativeToAnchor)), removeButton(row),
     inputControl('Maximum age (seconds)', 'maxAgeMs', c.maxAgeMs / 1000, 'number'));
@@ -45,7 +54,7 @@ function condition(c = { source: 'skew', field: 'imbalance', op: '>=', value: 0.
 }
 function outcome(o = { id: `outcome-${crypto.randomUUID()}`, source: 'price', field: 'spot', measure: 'return', horizonMs: 900000, toleranceMs: 150000, maxAgeMs: 150000 }) {
   const row = document.createElement('div'); row.className = 'outcome'; row.dataset.id = o.id;
-  row.append(selectControl('Input', 'source', sources, o.source), inputControl('Field', 'field', o.field),
+  row.append(...sourceFields(o.source,o.field),
     selectControl('Measure', 'measure', [['return','Return (%)'],['change','Change'],['value','Endpoint value']], o.measure),
     inputControl('Horizon (minutes)', 'horizonMs', o.horizonMs / 60000, 'number'),
     inputControl('Tolerance (seconds)', 'toleranceMs', o.toleranceMs / 1000, 'number'), removeButton(row),
