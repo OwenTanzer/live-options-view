@@ -217,6 +217,13 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/preview_browser.test.mjs
+      - name: Strategy archive shared intake and browser workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: |
+          node --test tests/strategy_archive.test.mjs
+          node tests/strategy_archive_browser.mjs
+
       - name: Prediction desktop and mobile fixture workflow (#293)
         env:
           NODE_OPTIONS: --experimental-sqlite

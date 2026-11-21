@@ -191,3 +191,15 @@ test('failed evidence persistence never debits; revoked identity cannot replay a
   const b=intent(); assert.equal((await order(env,b)).status,201);
   f.identity=OWNER_ID+1; assert.equal((await order(env,b)).status,401);
 }));
+
+test('edge requests expose redirects to callers and reject them without following', async () => scenario(async env => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    assert.equal(options.redirect, 'manual');
+    calls.push(url);
+    return new Response(null, { status: 302, headers: { Location: 'https://example.invalid/' } });
+  };
+  assert.equal((await handleKalshi(request('status'), env)).status, 401);
+  await assert.rejects(fetchMarket(env, TICKER), /source unavailable/);
+  assert.equal(calls.length, 2);
+}));

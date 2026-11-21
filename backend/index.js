@@ -1,3 +1,5 @@
+import { archive } from './strategy-archive.js';
+
 import { handlePrediction, settlePredictions } from './prediction.js';
 import { handleKalshi, kalshiTick } from './kalshi.js';
 import { handleBtcOptions } from './btc-options.js';
@@ -27,7 +29,7 @@ export { BOT_INDEX_KEY, handleBotIndexReconcile, handleBotMetadata, handleBots, 
 export { MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, USERNAME_RE, constantTimeEqual, derivePasswordHash, randomSaltBase64 } from './auth.js';
 
 const MUTATING_API_PATHS = new Set([
-  '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
+  '/api/strategy-archive', '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync', '/api/trade-journal/passkey',
   '/api/btc-options/owner-link',
 ]);
@@ -68,6 +70,8 @@ export default {
         headers: { 'Content-Type': 'application/json', 'Retry-After': '30', 'Cache-Control': 'no-store' },
       });
     }
+
+    if (url.pathname === '/api/strategy-archive') return archive(request, env);
 
     if (request.method === 'POST' && url.pathname === '/api/register') {
       return handleRegister(request, env);
