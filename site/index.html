@@ -919,6 +919,25 @@
   #news-panel .np-row .np-mono { white-space: normal; }
   #news-panel .np-later { font-size: 0.75rem; color: var(--dim); border-left: 2px solid var(--border); padding-left: 0.5rem; }
   #news-panel .np-price { font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* Critical Design Theory pass: headline first, one glance line, provenance and coverage one click away. */
+  #news-panel .np-title { font-size: 0.95rem; }
+  #news-panel .np-glance { display: flex; flex-wrap: wrap; gap: 0.3rem 0.75rem; align-items: baseline; font-size: 0.8rem; color: var(--fg); }
+  #news-panel .np-when { color: var(--bright); }
+  #news-panel .np-price-chip { font-size: 0.75rem; }
+  #news-panel details.np-prov > summary, #news-panel details.np-coverage-detail > summary {
+    cursor: pointer; color: var(--dim); font-size: 0.75rem; min-height: 24px; }
+  #news-panel details.np-prov[open] > summary, #news-panel details.np-coverage-detail[open] > summary { color: var(--fg); }
+  #news-panel details.np-prov > .np-line, #news-panel details.np-prov > .np-later, #news-panel details.np-prov > .np-price { margin-top: 0.2rem; }
+  #news-panel .np-strip { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: center; margin-bottom: 0.3rem; }
+  #news-panel .np-strip-cells { display: flex; flex-wrap: wrap; gap: 2px; }
+  /* One meaning per colour: trust tones only (no gain/loss green); every cell also carries a glyph. */
+  #news-panel .np-cell { display: inline-block; min-width: 14px; height: 16px; line-height: 16px; text-align: center;
+    font-size: 0.7rem; border-radius: 2px; background: #1c2128; color: var(--fg); }
+  #news-panel .np-cell.np-quiet { color: var(--dim); }
+  #news-panel .np-cell.np-partial, #news-panel .np-cell.np-unknown { color: #e8b339; background: #2d220a; }
+  #news-panel .np-cell.np-pending_availability { color: var(--dim); border: 1px dashed #6e7681; }
+  #news-panel .np-cell-missed { outline: 1px solid #e8b339; }
+  #news-panel .np-strip-text { font-size: 0.78rem; color: var(--fg); }
   @media (max-width: 600px) {
     #news-panel { padding: 0.75rem 16px; }
     /* Coverage rows stack into cards instead of scrolling sideways. */
@@ -1837,7 +1856,7 @@ let timerHandle = null;
 // open. The banner stays here as the section's marker.
 </script>
 <script src="js/news-research.js?v=aac117405484746a"></script>
-<script src="js/news-panel.js?v=c24696f5fad5bc20"></script>
+<script src="js/news-panel.js?v=43bfab3a65126607"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────

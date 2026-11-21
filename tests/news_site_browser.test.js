@@ -132,7 +132,8 @@ const fixture = key => JSON.parse(Q.text(key));
           foreign.push(url.href);
           return route.abort();
         });
-        const text = () => page.locator('#news-panel').innerText();
+        // Provenance and coverage detail sit in collapsed drawers (CDT pass); open them before reading.
+      const text = async () => (await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; })), await page.locator('#news-panel').innerText());
         const state = () => page.getAttribute('#news-panel', 'data-state');
         const waitState = async (want, why) => {
           await page.waitForFunction(w => {

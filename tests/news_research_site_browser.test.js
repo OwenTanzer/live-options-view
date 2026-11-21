@@ -220,7 +220,7 @@ const CASES = [
           await waitState('#news-research', c.state);
           assert.ok(await page.locator('#news-research').isVisible(), `${label}: research visible on the News tab`);
           if (c.panel === 'ready') {
-            const panelText = await page.locator('#news-panel').innerText();
+            const panelText = (await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; })), await page.locator('#news-panel').innerText());
             assert.ok(panelText.includes('prices unavailable'), `${label}: the news views still say prices are unavailable`);
           }
           const text = await page.locator('#news-research').innerText();
