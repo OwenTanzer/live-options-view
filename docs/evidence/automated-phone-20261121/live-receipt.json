@@ -1,0 +1,36 @@
+{
+  "verifiedAt": "2026-11-21T06:56:03.782Z",
+  "revision": "0a3853df0692e8c9bdff762fc0267fc4f9eda447",
+  "environment": {
+    "environment": "production",
+    "isolation": "production",
+    "asset_revision": "0a3853df0692e8c9bdff762fc0267fc4f9eda447",
+    "api_contract": "same-origin-d1-v1",
+    "public_data": "api-binding"
+  },
+  "moduleHashVerified": true,
+  "results": [
+    {
+      "width": 390,
+      "cleanDefault": "floor",
+      "initialChoiceNotPersisted": true,
+      "explicitChoicesSurviveReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "cleanDefault": "cards",
+      "initialChoiceNotPersisted": true,
+      "explicitChoicesSurviveReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    }
+  ]
+}

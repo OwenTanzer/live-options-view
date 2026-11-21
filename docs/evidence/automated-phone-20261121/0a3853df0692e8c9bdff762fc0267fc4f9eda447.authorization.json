@@ -1,0 +1,17 @@
+{
+  "revision": "0a3853df0692e8c9bdff762fc0267fc4f9eda447",
+  "head_tree": "9e547e1176c201fbb3ef4837f2097983d2f774c0",
+  "target": "asset",
+  "stage_path": "/home/runner/work/live-options-view/.deploy-stage",
+  "config_source": "wrangler.assets.toml",
+  "config_sha256": "7b0871da83c2ef6ce618dab9d50b5fd7ef67f9fadf380786275ad04f1ea22b10",
+  "config_root": "/home/runner/work/live-options-view/live-options-view",
+  "web_check_run_id": "44877528477",
+  "web_check_status": "success",
+  "api_check_run_id": "44877528477",
+  "api_check_status": "success",
+  "authorizer": "OwenTanzer",
+  "authorized_at": "2026-11-21T06:55:15.016Z",
+  "superseded_by": null,
+  "authorization_kind": "external-artifact"
+}

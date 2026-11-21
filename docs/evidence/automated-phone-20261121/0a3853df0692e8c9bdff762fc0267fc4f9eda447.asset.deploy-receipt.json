@@ -1,0 +1,8 @@
+{
+  "revision": "0a3853df0692e8c9bdff762fc0267fc4f9eda447",
+  "target": "asset",
+  "command": "wrangler deploy --config '/home/runner/work/live-options-view/.deploy-stage/wrangler.assets.toml' --var 'ASSET_REVISION:0a3853df0692e8c9bdff762fc0267fc4f9eda447'",
+  "executed_at": "2026-11-21T06:55:21.553Z",
+  "web_check_run_id": "44877528477",
+  "api_check_run_id": "44877528477"
+}
