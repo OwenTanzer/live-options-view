@@ -8,6 +8,7 @@ import { handlePaperTrade } from '../backend/paper-trade.js';
 import { exactBtcQuote, btcSession, settleBtcAccount, handleBtcOptions } from '../backend/btc-options.js';
 import { handleLiveQuotes, isPublicBrowserDataKey } from '../backend/browser-data.js';
 import { validateTradeIntent } from '../backend/execution.js';
+import { handleSettle } from '../backend/settlement.js';
 
 const now = Date.parse('2026-11-21T18:00:00Z');
 const sym = 'BTCOPT:' + 'a'.repeat(40);
@@ -39,14 +40,14 @@ async function harness(c = contract) {
     BTC_OPTIONS_USERS: 'fixture', BTC_OPTIONS_ENTRIES: '1' });
   await seedAccounts(env, [{ username: 'fixture', trades: [], balance_cash: 10000 }]);
   await seedSession(env, 'fixture-session', 'fixture');
-  let market = payload(c);
+  let market = payload(c), clock = now;
   const oldFetch = global.fetch, OldDate = Date;
-  global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } };
+  global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
   global.fetch = async url => { assert.equal(new URL(url).pathname, '/btc-options'); return Response.json(market); };
   const order = body => handlePaperTrade(new Request('https://options.moopertonic.net/api/paper-trade', {
     method: 'POST', headers: { Cookie: `${SESSION_COOKIE}=fixture-session`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }), env);
-  return { env, bucket, order, market, store: createStorage(env), restore() { global.fetch = oldFetch; global.Date = OldDate; } };
+  return { env, bucket, order, market, advance(ms) { clock += ms; const stamp = new Date(clock).toISOString(); Object.assign(market.quotes[0], { bid_ts: stamp, ask_ts: stamp, bid_received_ts: stamp, ask_received_ts: stamp }); }, store: createStorage(env), restore() { global.fetch = oldFetch; global.Date = OldDate; } };
 }
 
 test('side freshness/size, identity, session calendar and one-contract limits', () => {
@@ -80,11 +81,13 @@ for (const type of ['call', 'put']) test(`${type}: persisted 500/600 round trip;
     const entry = (await h.store.users.get('fixture')).trades[0];
     assert.equal(entry.cash_delta, -502.5); assert.equal(entry.source_quote.ask_size, 1);
     assert.equal(entry.quote_ts, stamp); assert.equal(entry.contract.type, type);
+    h.advance(5000);
     h.market.quotes[0].bid = 120; h.market.quotes[0].ask = 121;
     const outcomes = await Promise.all([h.order(intent('sell')), h.order(intent('sell'))]);
     assert.deepEqual(outcomes.map(r => r.status).sort(), [201, 400]);
     const reloaded = await createStorage(h.env).users.get('fixture');
     assert.equal(reloaded.trades.length, 2); assert.equal(reloaded.balance_cash, 10095);
+    assert.equal(Date.parse(reloaded.trades[1].quote_ts) - Date.parse(reloaded.trades[0].quote_ts), 5000);
     const b = computeBookFromTrades(reloaded.trades)[sym];
     assert.equal(b.pos, 0); assert.equal(b.realized_gross, 100); assert.equal(b.realized, 95); assert.equal(b.fees, 5);
   } finally { h.restore(); }
@@ -140,5 +143,24 @@ test('anonymous/private authorization and alternate public paths', async () => {
     assert.equal((await handleLiveQuotes(new URL('https://options.moopertonic.net/api/live-quotes?symbols=' + sym), h.env)).status, 403);
     assert.equal(isPublicBrowserDataKey('paper-trades/btc-final/a/2026-11-27.json'), false);
     assert.equal(isPublicBrowserDataKey('intraday/btc/latest.json'), false);
+  } finally { h.restore(); }
+});
+
+test('equity insolvency retains the BTC ledger and pending obligation', async () => {
+  const h = await harness();
+  try {
+    assert.equal((await h.order(intent())).status, 201);
+    await h.store.users.mutate('fixture', record => ({ record: { ...record, trades: [...record.trades,
+      { sym: 'QQQ261120C00001000', side: 'sell', qty: 1, price: 1, strike: 1, type: 'call', exp: '2026-11-20' }] } }));
+    const response = await handleSettle(new Request('https://options.moopertonic.net/api/settle', {
+      method: 'POST', headers: { Cookie: `${SESSION_COOKIE}=fixture-session`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ as_of: '2026-11-21', spot_marks: { '2026-11-20': 1000000 } }),
+    }), h.env);
+    assert.equal(response.status, 410);
+    const record = await h.store.users.get('fixture');
+    assert.equal(record.account_closed, true);
+    assert.equal(computeBookFromTrades(record.trades)[sym].pos, 1);
+    const outcome = await settleBtcAccount(h.env, 'fixture', Date.parse('2026-11-27T16:01:00Z'));
+    assert.deepEqual(outcome.result.pending, [sym]);
   } finally { h.restore(); }
 });

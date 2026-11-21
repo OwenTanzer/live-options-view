@@ -92,5 +92,30 @@ class BtcTests(unittest.TestCase):
         self.assertEqual(self.product.status, 'provider_http_403')
         self.assertEqual(self.product.payload([], [], NOW)['quotes'], [])
 
+    def test_monthly_roll_keeps_exact_held_identity(self):
+        self.product.refresh(self.feed, 'fixture', NOW)
+        held = self.product.payload([], [], NOW)['contracts'][0]
+        self.product.payload([], [held['provider_symbol']], NOW)
+        later = row(90000, 'P', '2026-12-31')
+        later = {k: v.replace('BTCX', 'BTCZ') if isinstance(v, str) else v for k, v in later.items()}
+        future = {**FUTURE, 'symbol': '/BTCZ6', 'expiration-date': '2026-12-31',
+                  'maturity-date': '2026-12-31', 'streamer-symbol': '/BTCZ26:XCME'}
+        def get(url, **kw):
+            return FakeResponse({'items': [later]} if '/futures-option-chains/' in url else future)
+        self.product._get = get
+        self.product.refresh(self.feed, 'fixture', NOW + timedelta(seconds=301))
+        p = self.product.payload([], [held['provider_symbol']], NOW + timedelta(seconds=302))
+        self.assertIn(held['contract_key'], [c['contract_key'] for c in p['contracts']])
+        self.assertNotIn(held['contract_key'], p['entry_keys'])
+        self.assertEqual(self.product.contracts[held['contract_key']], held)
+        self.assertTrue(all(self.product.contracts[k]['exp'] == '2026-12-31' for k in p['entry_keys']))
+
+    def test_subscription_removal_preserves_existing_feed_owners(self):
+        self.feed.set_subscriptions([], ['QQQ', '/BTCX26:XCME'])
+        original = list(self.feed._subs)
+        self.feed.replace_btc_subscriptions(['/BTCX26:XCME', './BTCX26C90000:XCME'])
+        self.feed.replace_btc_subscriptions([])
+        self.assertEqual(self.feed._subs, original)
+
 
 if __name__ == '__main__': unittest.main()
