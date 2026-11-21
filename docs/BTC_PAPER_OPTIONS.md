@@ -69,15 +69,13 @@ state, and every Quote replaces missing sides/sizes rather than carrying them
 forward. Bid/ask exchange times, receipt times, sizes and availability are separate.
 There is no BTC chain archive or KV operation.
 
-`GET /api/btc-options` requires an Options View session. `BTC_OPTIONS_USERS` is a
-comma-separated explicit audience allowlist, to be configured only after licensing
-approval. Holdings never confer quote entitlement: removing a user from this
-allowlist blocks both fresh quote reads and paper execution, while retaining the
-ledger and settlement obligations. `BTC_OPTIONS_ENTRIES=1` independently permits new buys for that
-audience; absent/zero blocks new entries while closes for entitled holders and
-settlement remain enabled. The initial live trial is restricted to the verified
-subscriber's own site account, with no other resident granted access merely
-because they can sign in.
+`GET /api/btc-options` requires a live paper session with an explicit subscriber-owner
+passkey proof. The former `BTC_OPTIONS_USERS` username allowlist is ignored. Public
+registration, a matching name, a journal login cookie, holdings, or an old execution
+receipt never grant access. See [owner linking](#existing-owner-passkey-linking) below.
+Revocation blocks fresh quotes and execution while preserving the stored ledger and
+settlement obligations. `BTC_OPTIONS_ENTRIES=1` independently permits new buys;
+absent/zero blocks new entries while entitled closes and settlement remain enabled.
 The collector route also requires the existing `X-Live-Quote-Key`. The public quote
 route refuses BTC keys/provider future-option symbols. Neither browser-data proxy
 allowlist exposes the chain or settlement records. The disposable preview explicitly
@@ -107,6 +105,97 @@ in-flight responses; account changes clear private quote memory. Held contracts
 refresh even while another chain is visible. Long liquidation uses a fresh executable
 bid; unavailable bids do not fall back to midpoints or snapshots. Aggregate open/total
 PnL shows unavailable when a BTC position cannot be marked.
+
+Bitcoin is a peer in the existing chain selector. `/?chain=BTC` opens it directly
+and preserves the selection through refresh and login. Rows display owned quantity,
+side sizes, freshness and separate **Buy at ask** / **Sell / close at bid** actions.
+These open the existing ticket for review; the row never submits an order itself.
+Unavailable actions have visible reasons, and **Open trade ticket** remains available
+for inspecting a contract. Quotes age out in the UI between polling responses.
+Equity snapshot/session, IV, skew and Historical controls are hidden while Bitcoin
+is active and restored on returning to an equity chain.
+
+Signed-out visitors get **Sign in** to their normal paper account. Signed-in visitors
+without an authorized source remain denied. When owner linking is configured, they
+can deliberately link their existing owner passkey to the displayed current paper
+account for this session. There is no trial username or account-switch recommendation.
+Account switching clears private rows and tickets immediately, and delayed responses
+from the previous account/view cannot restore them. Initial BTC quote loading waits
+for authenticated session verification, independently of equity calibration loading.
+Private BTC fills/source quotes are excluded from the persistent display cache;
+older cached BTC entries are scrubbed on read. Holdings reload from the verified
+account API. Late execution and settlement replies cannot mutate a replacement
+account's displayed book.
+
+### Existing owner passkey linking
+
+This is a separate API/auth release built on the mobile chain repair (#312). It uses
+the already-supported journal WebAuthn credential store and pinned
+`@simplewebauthn/server` verifier, with a new assertion ceremony. Paper accounts remain
+ordinary password accounts. No GitHub sign-in, OAuth client/callback/issuer, provider
+grant exchange, or GitHub-to-paper identity mapping exists in this repository. CLI
+GitHub access is not website identity infrastructure and is not reused.
+
+The only supported principal for the current subscriber feed is the existing
+invitation-provisioned journal **Owen** principal. That fixed server record is not
+a paper username, form value, claimed GitHub handle, or email match. Jayden/Jacob
+journal credentials do not own this subscription. Linking verifies possession and
+user verification of the existing enrolled credential; it never enrolls a new key,
+accepts an invitation, signs into the journal, or reads/reuses a journal session or
+auth secret. [SimpleWebAuthn's verification contract](https://simplewebauthn.dev/docs/packages/server)
+requires the saved challenge, expected RP/origin, credential public key and user verification.
+
+The UI names the current paper account and requires **Link this session with owner
+passkey**. `/api/btc-options/owner-link` accepts JSON POSTs with the exact production
+Origin, rejects cross-site requests, and requires a live non-bot, non-closed paper
+session. A random discoverable challenge reveals no credential/account list and is
+bound in D1 to that session, account, purpose-specific table and configured source.
+It expires in five minutes and is atomically consumed before verification, including
+failed attempts. This prevents replay even for synced passkeys with a zero counter.
+The credential counter compare-and-swap and proof insertion share a D1 transaction;
+session validity is rechecked before inserting the proof. Journal assertions cannot
+be replayed here, or vice versa.
+
+The proof lasts at most eight hours and never beyond the paper session. It survives
+page refresh but not logout/new login. **Unlink Bitcoin data from this session**
+removes it and pending challenges. Existing journal credential revocation, account
+deletion, paper logout, source-binding changes, and the source switch all revoke
+access server-side. Normal login and unverified `/api/me` responses omit BTC fills
+and their source quotes; the stored ledger is retained. The UI reloads that history
+after proof, clears private state on rejection, and ignores an old ceremony after
+an account switch. Public cache/storage is never used for proofs or private quotes.
+
+Release prerequisites (operator-owned; this PR performs none):
+
+1. Confirm that the existing enrolled Owen journal principal is the actual subscriber
+   of the configured collector source, and retain the source/account-specific display
+   rights and quote-verification evidence. Code inspection and fixtures do not prove
+   live enrollment or entitlements. Do not enroll/recover credentials as a shortcut.
+2. Apply additive `backend/migrations/0005_btc_owner_link.sql` after the existing
+   account/session and journal migrations. It creates empty challenge/proof tables
+   and revocation triggers; it seeds no identities or grants and uses no KV.
+3. Through the separately reviewed API release, set `BTC_OWNER_LINK=enabled` and
+   `BTC_OWNER_RIGHTS_RECEIPT` to the retained source-rights receipt reference only
+   after prerequisite 1. These source-level gates are not paper-user allowlists.
+   Proofs are bound to the receipt and `LIVE_QUOTE_ORIGIN`. Missing settings/schema
+   fail closed. This replaces the legacy allowlist; existing paper sessions need
+   deliberate passkey proof. Keep entries separately controlled.
+4. Release compatible assets through the staged lane, then have the owner try
+   `https://options.moopertonic.net/?chain=BTC` in their normal paper account.
+   Verify deny-before-proof, link, refresh, unlink/logout and revocation. Leave
+   #312's independent site-only release available throughout preparation.
+
+Disable `BTC_OWNER_LINK` to withdraw this source immediately. Roll back to a compatible
+denying API/assets revision; do not restore the legacy username grant. Leave the
+additive schema and trading ledger intact. No collector deployment is needed.
+
+**Distinct-user blocker:** the assignment's tastytrade API agreement prohibits
+displaying this subscriber feed to distinct third parties. No provider-authorized
+cross-user grant or existing verifiable user-to-source adapter was found. Ordinary
+users must remain denied. Their own future authorized source would require a real
+provider grant, verified subject/account binding, permitted display scope and an
+isolated source adapter with revocation—not another row granting this shared feed.
+No speculative OAuth, text matching, secret reuse, or generic grant endpoint is added.
 
 ### Execution clocks and raw wire diagnostics
 
@@ -196,7 +285,11 @@ the next scheduled run or authenticated `/api/settle` request. Equity settlement
 legacy default multipliers remain intact. Accounts with a BTC history are retained
 on insolvency so an equity liquidation cannot erase pending BTC obligations.
 
-## Review and rollout controls
+## Original collector and execution-clock rollout
+
+These are the original mixed-product rollout controls. For the separate owner-link
+repair, use the migration/API/asset procedure above; its access policy supersedes
+the original audience allowlist and it does not redeploy the collector.
 
 This is a mixed collector/API/site change. Collector paths and its README are inside
 the main collector's deployment scope: merging can trigger a producer rebuild.
@@ -210,7 +303,7 @@ Do not merge into an active collector session without the current continuity pla
    with entries disabled. No schema, binding or cron change is required by this code.
    Old collectors carry no change evidence, so the new API continues to reject
    their untimed quotes. Old APIs ignore the new evidence and also reject untimed
-   quotes. Ship all three lanes before enabling the owner trial; an old UI cannot
+   quotes. Ship all three lanes before enabling owner acceptance; an old UI cannot
    explain the new clock. Ensure the PR301 subscriber fix is included.
 4. Separately deploy the collector through its existing lane at an authorized safe
    lifecycle boundary. Record existing feed identity, subscription counts and fresh

@@ -12,6 +12,7 @@ import {
 } from './common.js';
 import { createStorage } from './storage.js';
 import { syncBotMembership } from './bots.js';
+import { btcAllowed } from './btc-owner-link.js';
 
 const PBKDF2_ITERATIONS = 100_000;
 export const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
@@ -56,7 +57,8 @@ async function startSession(request, env, record, status, storage = null) {
   const token = crypto.randomUUID();
   await store.sessions.create(token, record.username, SESSION_TTL_SECONDS);
   return jsonResponse(
-    { username: record.username, balance_cash: record.balance_cash, trades: record.trades },
+    { username: record.username, balance_cash: record.balance_cash,
+      trades: record.trades.filter(t => t.instrument_type !== 'futures_option') },
     status,
     { 'Set-Cookie': sessionCookieHeader(request, token, SESSION_TTL_SECONDS) },
   );
@@ -186,7 +188,8 @@ export async function handleMe(request, env) {
   const session = await requireSession(request, env);
   if (!session) return jsonResponse({ error: 'Not logged in' }, 401);
   return jsonResponse(
-    { username: session.username, balance_cash: session.record.balance_cash, trades: session.record.trades,
+    { username: session.username, balance_cash: session.record.balance_cash,
+      trades: await btcAllowed(env, session) ? session.record.trades : session.record.trades.filter(t => t.instrument_type !== 'futures_option'),
       account_closed: session.record.account_closed === true,
       closed_at: session.record.closed_at ?? null, closure_reason: session.record.closure_reason ?? null },
     200,

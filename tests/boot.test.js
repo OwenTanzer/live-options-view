@@ -37,7 +37,7 @@ function makeEl(id) {
 }
 const EL_IDS = ['underlying-select', 'auth-form', 'auth-username', 'auth-password',
   'auth-error', 'auth-submit', 'auth-toggle', 'auth-logout', 'margin-call-continue',
-  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'hist-date'];
+  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'hist-date', 'hist-prev', 'hist-next'];
 
 function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   const els = {};
@@ -67,6 +67,10 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     chainSelection: { symbol: 'QQQ' },
     session: null,
     authMode: 'login',
+    authRevision: 0, sessionVerified: false,
+    readSavedUnderlying: () => 'QQQ',
+    btcOptions: { refresh() {} },
+    closeTicket() {},
     liveQuotes: { _liveQuotes: true },
     liveQuotePoller: null,
     tickerPoller: null,
@@ -89,6 +93,7 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     hideMarginCallScreen: () => { calls.hideMarginCallScreen++; },
     showTab: tab => { calls.showTab.push(tab); },
     loadHistoryDate: value => { calls.loadHistoryDate.push(value); },
+    stepHistoryDate() {},
     setStatus: (a, b) => { calls.setStatus.push([a, b]); },
     loadRanges: async () => { calls.loadRanges++; sandbox.ranges = { '0DTE_Regular': {} }; },
     fetchLatest: async () => { calls.fetchLatest++; },
@@ -107,6 +112,8 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     fetchSqueezeLatest: () => { calls.fetchSqueezeLatest++; },
   };
   const context = vm.createContext(sandbox);
+  const auth = fs.readFileSync(path.join(__dirname, '../site/js/auth.js'), 'utf8');
+  vm.runInContext(auth.slice(auth.indexOf('async function logoutPaperAccount'), auth.indexOf('async function openPaperLogin')), context);
   vm.runInContext(moduleSource, context, { filename: 'site/js/boot.js' });
   const flush = () => new Promise(r => setTimeout(r, 20));
   return { els, calls, pollers, sandbox, context, flush, getTickerSubscribeCb: () => tickerSubscribeCb };

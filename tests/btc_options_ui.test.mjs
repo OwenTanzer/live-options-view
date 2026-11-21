@@ -13,12 +13,14 @@ const q = { symbol: sym, contract: c, available: true, bid: 120, ask: 121,
 const trades = [{ sym, contract: c, instrument_type: 'futures_option', multiplier: 5,
   side: 'buy', qty: 1, price: 100, fees: 2.5 }, { sym, contract: c, instrument_type: 'futures_option',
   multiplier: 5, side: 'sell', qty: 1, price: 120, fees: 2.5 }];
-function el() { return { children: [], hidden: false, textContent: '', classList: { add() {} },
+function el() { return { children: [], dataset: {}, hidden: false, textContent: '', classList: { add() {} }, querySelectorAll() { return []; },
   setAttribute() {}, replaceChildren() { this.children = []; }, appendChild(c) { this.children.push(c); }, append(c) { this.children.push(c); } }; }
-const elements = Object.fromEntries(['btc-select', 'btc-panel', 'btc-chain', 'no-data', 'title'].map(k => [k, el()]));
+const elements = Object.fromEntries(['underlying-select', 'btc-panel', 'btc-chain', 'no-data', 'title', 'paper-hint'].map(k => [k, el()]));
 let resolveRequest, book = {}, ticketClosed = 0;
 const context = vm.createContext({ console, Date: class extends Date { static now() { return now; } },
-  document: { getElementById: id => elements[id], createElement: el },
+  document: { body: el(), getElementById: id => elements[id], createElement: el, querySelectorAll: () => [] },
+  sessionVerified: true, URL, location: { href: 'https://fixture.invalid/' }, history: { replaceState() {} },
+  UNDERLYING_KEY: 'chain_underlying', localStorage: { setItem() {} }, showTab() {},
   session: { username: 'fixture', trades }, ticketEl: null, pendingExecutions: new Set(),
   computeBook: () => book, closeTicket: () => ticketClosed++, clearChain() {}, renderSelectedChain() {}, renderPaper() {},
   setInterval() {}, openTicket() {}, fetch: () => new Promise(resolve => { resolveRequest = resolve; }) });

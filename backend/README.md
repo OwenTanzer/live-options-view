@@ -234,3 +234,10 @@ synthetic acceptance is not licensed capture. No real-money routing exists.
 
 See [implementation, source gaps and staged rollout](../docs/BTC_PAPER_OPTIONS.md).
 The private reader, entry switch and final-mark reader are separate controls.
+The [owner-link release](../docs/BTC_PAPER_OPTIONS.md#existing-owner-passkey-linking)
+uses a fresh assertion by the existing subscriber-owner journal credential to
+authorize the current normal paper session. Journal login does not itself grant
+BTC access. No GitHub website identity provider exists here. The legacy paper
+username allowlist is ignored; unverified sessions and distinct users remain denied.
+Apply additive migration 0005 and verify the source rights receipt before enabling
+the separate API/asset release. This does not require a collector rollout.

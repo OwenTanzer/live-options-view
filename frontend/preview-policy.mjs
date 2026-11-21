@@ -9,6 +9,7 @@ export const API_PATHS = new Set([
   '/api/strategy-archive',
 
   '/api/settle', '/api/live-quotes', '/api/btc-options',
+  '/api/btc-options/owner-link',
   '/api/prediction/markets', '/api/prediction/portfolio', '/api/prediction/archive',
 ]);
 // OI skew meter projection key: prepared, DISABLED (mirrors

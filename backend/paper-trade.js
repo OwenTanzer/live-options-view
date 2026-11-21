@@ -1,5 +1,6 @@
 import { predictionQuote } from './prediction.js';
-import { btcAllowed, fetchBtc, heldBtc, exactBtcQuote } from './btc-options.js';
+import { fetchBtc, heldBtc, exactBtcQuote } from './btc-options.js';
+import { btcAllowed } from './btc-owner-link.js';
 // backend/paper-trade.js (B4) -- paper trading: the /api/paper-trade route,
 // the largest single function in the Worker (304 lines). Moved verbatim
 // from worker.js; the router in worker.js still owns the route table. It
@@ -78,7 +79,7 @@ export async function handlePaperTrade(request, env) {
 
   // The quote source belongs to the approved subscriber. A held position or
   // retried request cannot grant another account access to that source.
-  if (body.instrument_type === 'futures_option' && !btcAllowed(env, session.username)) {
+  if (body.instrument_type === 'futures_option' && !await btcAllowed(env, session)) {
     return jsonResponse({ error: 'BTC options access not enabled' }, 403);
   }
 
@@ -171,7 +172,7 @@ export async function handlePaperTrade(request, env) {
   }
 
   const btc = body.instrument_type === 'futures_option';
-  if (btc && body.side === 'buy' && (!btcAllowed(env, session.username) || env.BTC_OPTIONS_ENTRIES !== '1')) {
+  if (btc && body.side === 'buy' && (!await btcAllowed(env, session) || env.BTC_OPTIONS_ENTRIES !== '1')) {
     return jsonResponse({ error: 'BTC new entries disabled' }, 403);
   }
   if (btc && body.side === 'sell' && !heldBtc(session.record).some(c => c.contract_key === body.sym)) {
@@ -310,6 +311,7 @@ export async function handlePaperTrade(request, env) {
     return jsonResponse({ error: 'Execution lease could not be refreshed' }, 503);
   }
 
+  if (btc && !await btcAllowed(env, session)) return jsonResponse({ error: 'BTC data access revoked' }, 403);
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
     if (existingTrade) {
