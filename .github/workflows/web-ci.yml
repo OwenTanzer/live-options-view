@@ -25,6 +25,7 @@ on:
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
       - "market_data/news/**"
+      - "research/options_replay/**"
   push:
     branches: [master]
     paths:
@@ -47,6 +48,7 @@ on:
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
       - "market_data/news/**"
+      - "research/options_replay/**"
 
 jobs:
   test:
@@ -180,6 +182,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: One Clock Python binding and blind Trainer invariants
+        run: python -m unittest tests.test_one_clock_python tests.test_options_replay
       - name: Collector-to-API and UI BTC fixtures
         # Cross-language fixtures run real FULL wire events through the collector.
         # Importing its package requires the existing producer dependencies.

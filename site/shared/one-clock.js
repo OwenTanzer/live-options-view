@@ -80,7 +80,7 @@ export function selectAsOf(inputs, selection) {
     if (!previous || row.revision > previous.revision) identities.set(key, row);
   }
   return Object.freeze([...identities.values()].sort((a, b) =>
-    a.eventAt - b.eventAt || a.availableAt - b.availableAt || observationKey(a).localeCompare(observationKey(b))));
+    a.eventAt - b.eventAt || a.availableAt - b.availableAt || (observationKey(a)<observationKey(b)?-1:observationKey(a)>observationKey(b)?1:0)));
 }
 
 export function readingAsOf(inputs, selection, { maxAgeMs } = {}) {
