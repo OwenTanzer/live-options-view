@@ -21,6 +21,7 @@ BOT_INDEX_READS = "r2"
 ONE_CLOCK_CATALOG = "enabled"
 # Requires reviewed migrations 0004 and 0010. No second trigger or feed.
 ONE_CLOCK_OBSERVER = "enabled"
+ONE_CLOCK_PUBLICATIONS = "enabled"
 # R2_ORIGIN mirrors backend/common.js (the repo's own public R2 origin).
 R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
 # LIVE_QUOTE_ORIGIN: operator-set from the live Worker env readback before

@@ -1,11 +1,18 @@
 # Immutable publication handoff
 
-This is the dormant first half of a two-PR delivery. It adds a public publication
-contract, bounded consumer and additive migration `0011_one_clock_publications.sql`.
-There is no registered production stream, scheduler hook, environment flag,
-publisher change or automatic migration in this slice. The second PR must prove
-the producer's crash behavior and integrate the existing scheduled observation
-path before activation. Merging this library does not change live capture.
+This handoff uses three separately reviewed PRs. The first supplies the immutable
+contract/consumer and migration `0011_one_clock_publications.sql`. The second adds
+source handoff receipts in `0012_one_clock_handoff.sql` and integration into the
+existing observer invocation, without watched producer changes. The third supplies
+the existing collector's publication adapter and its fault tests. The producer
+contract below is required before activation; merging the API alone does not prove
+those producer guarantees or enable capture.
+
+Publication requires `ONE_CLOCK_PUBLICATIONS=enabled` on the relevant service.
+The API configuration enables its consumer after reviewed schema application;
+the collector defaults off until deliberate enablement. Collector promotion is
+a continuous-service replacement: merging watched files can deploy even while
+publication is disabled. The API/schema release must precede that watched merge.
 
 ## Register once, synchronize through the shared consumer
 
@@ -42,7 +49,7 @@ does not download their bodies: its receipts explicitly say publisher-attested.
 It must never claim full evidence-body verification. The publisher integration
 must create and verify immutable evidence before committing its projection.
 
-## Producer requirements for the second PR
+## Producer commit and recovery
 
 1. Prepare and persist immutable evidence and exact commit bytes before publication.
 2. Create the next sequential entry with `If-None-Match: *`. The commit is the
@@ -53,15 +60,35 @@ must create and verify immutable evidence before committing its projection.
 4. Resolve an ambiguous PUT by checking the original sequence and publication UUID
    before retrying. A competing publisher cannot overwrite that sequence. Do not
    generate a new publication identity merely because an acknowledgement was lost.
-5. Test failures before evidence, before/after commit, before/after head, concurrent
-   publisher collisions, restart, late correction and retraction. Missing or corrupt
-   evidence must not result in a claimed successful publication.
+5. Immutable intent objects bind UUIDs to exact sequence/bytes before commit. Durable
+   per-record heads prevent repeated/decreasing revisions and identity moves from
+   poisoning the consumer log. Repair every committed record head before advancing
+   the stream head. Concurrent writers can collide; they cannot overwrite a commit
+   or silently move an existing intent to a different sequence.
 6. Read actual collector watch settings and lifecycle before merge/promotion. Keep
    the existing process, capture identity and schedule; no duplicate provider feed.
 
 R2 documents atomic create-only conditional writes in its
 [conditional operations contract](https://developers.cloudflare.com/r2/api/s3/conditional-operations/).
-The existing collector's legacy latest/provenance ordering alone is not this contract.
+The collector calls this writer before updating the compatibility `latest.json`.
+If commit cannot be confirmed, latest does not advance and the legacy sidecar
+records `one_clock_commit_failed`. If latest later fails, the immutable commit
+remains valid. CSV and sanitized JSON evidence are content addressed and read
+back before commit; optional non-finite JSON cells become null, with raw CSV
+preserved separately. Price/skew projections require a live, nonfuture selected
+underlier receipt. Snapshot construction remains the event-time basis; provider
+event time is not invented. Python validates the same UTF-16 text bounds as JS
+and normalizes wire timestamps to UTC milliseconds.
+
+The collector uses a separate S3 transport with 1-second connect/read timeouts,
+one SDK attempt, at most 40 requests and a 5-second cooperative wall budget per
+snapshot. Budget checks run before requests and while reading bounded bodies;
+an already-running socket operation may finish after the wall budget. This is
+not an assertion of a hard process-level deadline. Recovery advances the head
+after each repaired entry and examines at most eight entries per call, allowing
+bounded continuation after a lost hint. No new thread, feed or timer is created.
+Counts-only logs report symbol, commit sequence, request count and elapsed time;
+failure is visible without logging credentials, record bodies or transport errors.
 
 ## Bounded consumer and retained history
 
@@ -92,19 +119,65 @@ Physical D1 storage remains finite; monitor capacity rather than pretending an
 append-only audit archive has unlimited storage. See
 [D1 platform limits](https://developers.cloudflare.com/d1/platform/limits/).
 
-The integration must retain collection labels and reconcile legacy/native overlap
-before observer evaluation. Native commits published now cannot backdate old
-archive availability or silently replace recorded event lineage.
+Collection labels are fixed at first receipt. Initial catch-up and old-event
+corrections are backfill; repeated delivery never upgrades them. Native ingestion
+runs once per existing observer invocation even with zero active accounts.
+
+## Source composition and cutover
+
+Each native descriptor declares outputs and an explicit per-output legacy
+adapter supersession map. The evaluator composes every registered source;
+replacing chain/price/skew does not suppress an unrelated news/shortlist adapter.
+Two native owners for the same output/instrument are rejected. Fields and
+instruments join the common rule registry through the descriptor.
+
+Producer start is not the observer cutover. A transaction freezes the source's
+already-retained legacy membership, native sequence and identity/revision mapping.
+Legacy history and collection labels remain unchanged. Matching native baseline
+values alias that retained identity without replacing it. A different qualified
+baseline value or retraction becomes an explicit backfill correction on the
+original legacy ID, available to this observer at cutover. Later native revisions
+use the persisted offset on that same ID. Nonoverlapping native records retain
+their native identity and original receipt/collection. Retries cannot recompute
+offsets from a newer legacy maximum. Queries and writes have explicit record/byte
+bounds and fail without claiming complete evaluation when exceeded.
+
+The account scheduler still evaluates its latest two equity sessions. Older
+corrections are retained and available for as-of reads, but automatic historical
+reevaluation remains open quest work. Results compare each scope's latest native
+receipt with its evaluation receipt and explicitly mark newer unevaluated evidence
+as pending. Existing statistics continue to describe the retained evaluation;
+they are not claimed to incorporate that correction. Cutoff lookups use indexed
+seeks and at most 93 session/instrument scopes per Results request.
 
 ## Release and rollback
 
-Review/test this contract independently; leave it dormant. Apply only migration
-0011 in the second PR's reviewed activation sequence, before enabling its consumer.
-Disable that integration to stop ingestion while preserving retained history.
-Never roll back or rewrite the producer's immutable log. No account, execution,
-settlement, private bucket or Workers KV operation belongs to this library.
+Review/test the exact integration revision independently. Apply only reviewed
+migrations 0011 and 0012 before enabling the API consumer. Promote the compatible
+API before the collector starts native publication. Stage producer enablement
+without a separate restart only if provider readback establishes that capability;
+then deliberately promote the exact reviewed collector revision once. Inspect
+live watch triggers and the active deployment's resolved build manifest. A generic
+service builder field can differ from the resolved Dockerfile build. Verify actual
+replacement timing, health/quote freshness, producer identity and any capture gap.
+Equity close alone is not a maintenance window for the continuous price lane.
+No extra provider feed or parallel publisher process is part of this release.
+
+For rollback, preserve immutable logs, identities and handoff tables. Disabling
+the producer alone leaves native coverage at its last publication; the reader
+reports that time and rule freshness expires normally. It must not silently
+switch to advancing legacy views. Disabling the API native flag after a handoff
+pauses evaluation and displays a current operational notice, while preserving
+historical evaluation receipts. Re-enable the same native consumer to resume.
+A return to legacy evaluation requires a separately reviewed reverse handoff;
+there is no automatic identity reset. No account, execution, settlement, private
+bucket or Workers KV operation belongs to this integration.
 
 Fixture tests cover bounded continuation, missing head hints, old-session
 corrections, retractions, cutoff rewind, corrupt/future/transport reads, transaction
 rollback, competing consumers, identity conflicts, per-stream fairness, byte
-reservation, cursor scope and strict public field/evidence validation.
+reservation, cursor scope and strict public field/evidence validation. Producer
+tests include ambiguous PUT, partial identity repair, restart, collisions, invalid
+revisions, time/request budgets and transport configuration. Cross-language tests
+consume real Python commit bytes in JavaScript and verify handoff corrections,
+unrelated-source composition, rollback fencing and historical pending disclosure.

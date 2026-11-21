@@ -222,6 +222,7 @@ async function readObserved(selection,generation) {
     $('observed-status').textContent=`${result.selection.session} · ${result.selection.instrument} · ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
     $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(r=>`${r.session} ${r.instrument} ${r.coverage.source}: ${r.coverage.reason}; ${r.coverage.pending} pending artifacts, ${r.coverage.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
     $('observed-coverage').textContent+=' '+(observedBody.evaluation.length?observedBody.evaluation.map(r=>`${r.session} ${r.instrument} ${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' '):'No rule-evaluation receipts in the selected scope.');
+    if(observedBody.observerNotice)$('observed-coverage').textContent+=' '+observedBody.observerNotice;
     retainedResults.update({events,rules:observedBody.rules,cutoff:result.selection.cutoff,origin:'recorded',owner:observedBody.owner});
     $('observed-evidence').hidden=true;
   }catch(error){if(observedMode&&generation===observedGeneration){retainedResults.clear({forget:true});$('observed-status').textContent=error.message;}}
