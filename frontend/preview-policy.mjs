@@ -4,6 +4,7 @@ export const API_PATHS = new Set([
   '/api/one-clock/squeeze',
   '/api/one-clock/bots',
   '/api/one-clock/bots/roster',
+  '/api/one-clock/research',
   '/api/register', '/api/login', '/api/logout', '/api/me', '/api/bots',
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/paper-trade',
   '/api/strategy-archive',

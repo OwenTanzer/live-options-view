@@ -19,11 +19,13 @@ The browser's implementation lives separately in [site/](../site).
 
 ## Boundaries worth preserving
 
-### One Clock observer storage (not activated)
+### One Clock observer storage and account service
 
 [`one-clock-observer.js`](one-clock-observer.js) supplies trusted ingestion and
 as-of reads over additive migration `0004_one_clock.sql`. It is deliberately not
-mounted as an unauthenticated ingestion route. An owning adapter must authorize
+mounted as an unauthenticated ingestion route. The authenticated
+`/api/one-clock/research` service activates immutable account rules over the
+public source registry; it accepts no client observation payload. An owning adapter must authorize
 the namespace and source, project an allowlisted payload, prove availability and
 declare prospective/replay/backfill collection before calling it. A namespace is
 an internal access boundary, never a client-supplied substitute for authentication.
@@ -51,7 +53,9 @@ a reader projection, not a durable write on every tick.
 Apply the reviewed additive migration before activating an observer consumer;
 retain current API/assets for rollback and leave new history intact when disabling
 the reader. No migration, active source ingestion or production activation is
-performed by this code change. See [One Clock](../docs/ONE_CLOCK.md) for staged
+implied by merging the code. The account service additionally requires reviewed
+`0010_one_clock_ingestion.sql` and the `ONE_CLOCK_OBSERVER` flag. See
+[One Clock](../docs/ONE_CLOCK.md#account-observation-and-retained-public-ingestion) for staged
 delivery. Tests use the real SQLite engine through the D1 shim, including atomic
 failure, restart, duplicate delivery, late outcome, correction rewind, concurrent
 generation and namespace isolation. D1's batch transaction behavior and service

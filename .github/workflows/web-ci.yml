@@ -190,7 +190,9 @@ jobs:
           node tests/btc_options.test.mjs
           node tests/btc_options_ui.test.mjs
       - name: One Clock Python binding and blind Trainer invariants
-        run: python -m unittest tests.test_one_clock_python tests.test_options_replay
+        run: |
+          python -m unittest tests.test_one_clock_python tests.test_options_replay
+          python scripts/one-clock-calendar.py --check
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
       - name: multi-underlying chain and settlement (#182)
