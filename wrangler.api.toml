@@ -13,6 +13,9 @@ account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 
 [vars]
 BOT_INDEX_READS = "r2"
+# Requires additive 0005_one_clock_catalog.sql before this API revision deploys.
+# Uses the existing cron invocation; no provider feed or new trigger.
+ONE_CLOCK_CATALOG = "enabled"
 # R2_ORIGIN mirrors backend/common.js (the repo's own public R2 origin).
 R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
 # LIVE_QUOTE_ORIGIN: operator-set from the live Worker env readback before
