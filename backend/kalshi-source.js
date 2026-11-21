@@ -113,3 +113,31 @@ export function displayMarket(evidence, now = Date.now()) {
     clock_basis: 'Provider HTTP response time; exchange quote timestamp unavailable',
     comparison: 'No matched options settlement basis for this event; numerical comparison unavailable.' };
 }
+
+// Display-only batch books. Orders still fetch full rules, fee evidence and a
+// fresh sized book through fetchMarket; these rows never authorize a fill.
+export async function chainQuotes(env, markets) {
+  if (!Array.isArray(markets) || markets.length < 1 || markets.length > 16 ||
+      new Set(markets).size !== markets.length || markets.some(m => !ticker(m) ||
+        !Object.keys(SERIES_SUBJECT).some(s => m.startsWith(s + '-')))) throw Error('Invalid chain page');
+  const r = await publicRead(env, '/markets/orderbooks?' + markets.map(m => 'tickers=' + encodeURIComponent(m)).join('&'));
+  if (!Array.isArray(r.data.orderbooks) || r.data.orderbooks.length !== markets.length ||
+      new Set(r.data.orderbooks.map(b => b.ticker)).size !== markets.length ||
+      r.data.orderbooks.some(b => !markets.includes(b.ticker))) throw Error('Book identity mismatch');
+  const quotes = {};
+  for (const row of r.data.orderbooks) {
+    try {
+      const b = kalshiSnapshot(row), yes = b.yes[0], no = b.no[0];
+      if ([...b.yes, ...b.no].some(([p]) => p < 0 || p > 10000) ||
+          (yes && no && yes[0] + no[0] > 10000)) throw Error('Invalid book');
+      quotes[row.ticker] = {
+        YES: { bid: yes ? yes[0]/10000 : null, bid_size: yes?.[1] || 0,
+          ask: no ? (10000-no[0])/10000 : null, ask_size: no?.[1] || 0 },
+        NO: { bid: no ? no[0]/10000 : null, bid_size: no?.[1] || 0,
+          ask: yes ? (10000-yes[0])/10000 : null, ask_size: yes?.[1] || 0 }
+      };
+    } catch { quotes[row.ticker] = null; }
+  }
+  return { quotes, provider_response_ts: r.provider_response_ts, received_at: r.receive_ts,
+    mode: 'display_only', clock_basis: 'Provider HTTP response time; exchange quote timestamp unavailable' };
+}
