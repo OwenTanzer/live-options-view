@@ -1,3 +1,4 @@
+import { ruleFields } from '../shared/strategy-rule.js';
 const $ = (id) => document.getElementById(id);
 const endpoint = '/api/strategy-archive';
 let records = [],
@@ -78,6 +79,14 @@ async function load() {
       linked.get(r.version).push(r);
     }
   options($('family'), [...new Set(versions.map((r) => r.data.family))].sort(), 'All families');
+  for (const key of Object.keys(ruleFields)) {
+    const values = versions.map((v) => v.data.rule?.[key]).filter(Boolean);
+    const select = $('filter-' + key);
+    const previous = select.value;
+    options(select, [...new Set(values)].sort(), 'Any');
+    select.add(new Option('Unknown (undocumented)', '__missing__'));
+    if (previous === '__missing__') select.value = previous;
+  }
   document.querySelector('main').hidden = false;
   axes();
   render();
@@ -98,6 +107,11 @@ function filtered() {
   return versions.filter(
     (v) =>
       (!$('family').value || v.data.family === $('family').value) &&
+      Object.keys(ruleFields).every((key) => {
+        const filter = $('filter-' + key).value,
+          value = v.data.rule?.[key];
+        return !filter || (filter === '__missing__' ? !value : value === filter);
+      }) &&
       (!$('reviewFilter').value ||
         (review(v.id)?.data.decision || 'Awaiting review') === $('reviewFilter').value) &&
       (!$('evidenceFilter').value ||
@@ -185,20 +199,35 @@ function render() {
   $('ranges').textContent = ranges
     .map((r) => r.key + ' ' + (r.min || '−∞') + ' to ' + (r.max || '∞'))
     .join(' · ');
+  const groups = new Map();
   for (const v of list) {
-    const tr = node('tr', null, $('rows')),
-      title = node('td', null, tr);
-    action(title, v.id, () => open(v));
-    node('div', v.data.family, title);
-    const d = v.data;
-    for (const value of [
-      [d.instrument, d.horizon].filter(Boolean).join(' / '),
-      d.signal,
-      d.originator,
-      evidence(v.id).length + ' results · ' + trialSummary(v.id),
-      review(v.id)?.data.decision || 'Awaiting review',
-    ])
-      node('td', value || 'Unknown', tr);
+    const fields = Object.keys(ruleFields).map((key) => v.data.rule?.[key]?.toLowerCase());
+    const identity = fields.every(Boolean) ? JSON.stringify([v.data.family, ...fields]) : v.id;
+    if (!groups.has(identity)) groups.set(identity, []);
+    groups.get(identity).push(v);
+  }
+  for (const group of groups.values()) {
+    const header = node(
+      'th',
+      group[0].data.family + ' · ' + group.length + (group.length === 1 ? ' version' : ' versions'),
+      node('tr', null, $('rows')),
+    );
+    header.colSpan = 6;
+    for (const v of group) {
+      const tr = node('tr', null, $('rows')),
+        title = node('td', null, tr);
+      action(title, v.id, () => open(v));
+      node('div', v.data.family, title);
+      const d = v.data;
+      for (const value of [
+        [d.instrument, d.horizon].filter(Boolean).join(' / '),
+        [d.rule?.entryCondition || 'Unknown entry', d.rule?.exitCondition || 'Unknown exit'].join(' / '),
+        d.originator,
+        evidence(v.id).length + ' results · ' + trialSummary(v.id),
+        review(v.id)?.data.decision || 'Awaiting review',
+      ])
+        node('td', value || 'Unknown', tr);
+    }
   }
   if (!list.length) node('p', 'No matching versions.', $('ranges'));
   showCoverage(list);
@@ -219,7 +248,8 @@ function compare() {
     h = node('tr', null, table);
   ['Changed field', other.id, selected.id].forEach((s) => node('th', s, h));
   const flatten = (d) => ({
-    ...Object.fromEntries(Object.entries(d).filter(([k]) => k !== 'parameters')),
+    ...Object.fromEntries(Object.entries(d).filter(([k]) => k !== 'parameters' && k !== 'rule')),
+    ...Object.fromEntries(Object.entries(ruleFields).map(([key, label]) => [label, d.rule?.[key]])),
     ...Object.fromEntries(Object.entries(d.parameters).map(([k, p]) => ['Parameter · ' + k, p])),
   });
   const left = flatten(other.data),
@@ -239,7 +269,15 @@ function open(v) {
   for (const r of [v, ...related(v.id)]) {
     node('h3', r.kind + ' · ' + r.id, facts);
     node('small', r.created_at + ' UTC · submitted by ' + r.credits.join(', '), facts);
+    if (r.kind === 'version')
+      for (const [key, label] of Object.entries(ruleFields)) {
+        const line = node('div', null, facts);
+        node('strong', label + '  ', line);
+        node('span', r.data.rule?.[key] || 'Unknown', line);
+        $('fork-' + key).value = r.data.rule?.[key] || '';
+      }
     for (const [k, value] of Object.entries(r.data)) {
+      if (k === 'rule') continue;
       const line = node('div', null, facts);
       node('strong', k + '  ', line);
       if (k === 'source' && /^https?:\/\//i.test(value)) {
@@ -296,6 +334,14 @@ function run(fn) {
     }
   };
 }
+for (const [key, label] of Object.entries(ruleFields)) {
+  const select = node('select', null, node('label', label, $('ruleFilters')));
+  select.id = 'filter-' + key;
+  select.onchange = render;
+  const input = node('input', null, node('label', label, $('forkRule')));
+  input.id = 'fork-' + key;
+  input.placeholder = 'Unknown';
+}
 $('family').onchange = () => {
   axes();
   render();
@@ -311,6 +357,7 @@ $('addFilter').onclick = () => {
 };
 $('reset').onclick = () => {
   ranges = [];
+  for (const key of Object.keys(ruleFields)) $('filter-' + key).value = '';
   for (const id of ['min', 'max', 'search', 'family', 'param', 'evidenceFilter', 'reviewFilter'])
     $(id).value = '';
   axes();
@@ -330,6 +377,7 @@ $('batch').value = JSON.stringify(
       originator: 'Source author',
       stage: 'documented',
       source: 'https://example.org/strategy',
+      rule: Object.fromEntries(Object.keys(ruleFields).map((k) => [k, null])),
       parameters: {},
     },
   },
@@ -345,6 +393,9 @@ $('fork').onclick = run(async () => {
     kind: 'version',
     data: {
       ...parent.data,
+      rule: Object.fromEntries(
+        Object.keys(ruleFields).map((key) => [key, $('fork-' + key).value.trim() || null]),
+      ),
       parent: parent.id,
       stage: 'proposed',
       reason: $('forkReason').value,

@@ -72,6 +72,14 @@ try {
   await page.reload();
   await page.locator('#rows button').first().waitFor();
   assert.match(await page.locator('#rows').textContent(), /Chej \(assigned\)/);
+  assert.equal(Object.keys(data.configuration.rule).length, 5);
+  assert.match(await page.locator('#rows').textContent(), /2 versions/);
+  await page.locator('#filter-entryCondition').selectOption(data.configuration.rule.entryCondition);
+  assert.equal(await page.locator('#rows button').count(), 2);
+  await page.locator('#filter-riskReward').selectOption('__missing__');
+  assert.equal(await page.locator('#rows button').count(), 0);
+  await page.locator('#reset').click();
+  assert.equal(await page.locator('#rows button').count(), 2);
   assert.deepEqual(errors, []);
   console.log('PASS: fork, diff, assignment, coverage, hypothesis download and reload');
 } finally {

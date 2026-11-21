@@ -1,3 +1,4 @@
+import { ruleFields } from '../site/shared/strategy-rule.js';
 import { checkOrigin, jsonResponse, readLimited, requireSession } from './common.js';
 
 const idPattern = /^[a-z0-9][a-z0-9._-]{0,95}$/;
@@ -34,6 +35,16 @@ function validate(row) {
     case 'version':
       requireValue(row.version == null, 'Version definition cannot target another version');
       fields(d, ['family', 'originator']);
+      if (d.rule !== undefined) {
+        requireValue(object(d.rule), 'Expected qualitative rule object');
+        for (const [key, value] of Object.entries(d.rule)) {
+          requireValue(Object.hasOwn(ruleFields, key), 'Unknown rule field ' + key);
+          requireValue(
+            value === null || (string(value) && value === value.trim()),
+            'Expected trimmed text or null for ' + key,
+          );
+        }
+      }
       source(d);
       requireValue(['documented', 'proposed'].includes(d.stage), 'Invalid stage');
       requireValue(
@@ -196,6 +207,17 @@ export async function archive(request, env) {
         "COALESCE(a.version,a.id) IN (SELECT id FROM strategy_archive WHERE kind='version' AND json_extract(data,'$.family')=?)",
       );
       bindings.push(family);
+    }
+    for (const key of Object.keys(ruleFields)) {
+      if (!params.has(key)) continue;
+      const value = params.get(key).trim();
+      // Only schema keys enter SQL. A blank query selects undocumented values.
+      const field = `json_extract(data,'$.rule.${key}')`;
+      const condition = value ? field + ' COLLATE NOCASE = ?' : field + ' IS NULL';
+      filters.push(
+        `COALESCE(a.version,a.id) IN (SELECT id FROM strategy_archive WHERE kind='version' AND ${condition})`,
+      );
+      if (value) bindings.push(value);
     }
     const { results } = await env.DB.prepare(
       `SELECT a.*, (SELECT json_group_array(submitter) FROM strategy_archive_credit WHERE record_id=a.id) AS credits FROM strategy_archive a WHERE ${filters.join(' AND ')} ORDER BY seq LIMIT 100`,

@@ -109,5 +109,27 @@ test('two authenticated clients share attribution, forks, trial assignments and 
   assert.equal(rows.filter((r) => r.kind === 'evidence' && r.version === fork.id).length, 0);
   assert.equal(rows.find((r) => r.id === trial.id).data.owner, 'Chej');
   assert.deepEqual(rows.find((r) => r.id === fork.id).credits, ['alice']);
+  const rule = parent.data.rule;
+  assert.equal(Object.keys(rule).length, 5);
+  const query = new URLSearchParams({
+    entryCondition: rule.entryCondition.toUpperCase(),
+    monitoringCadence: rule.monitoringCadence,
+  });
+  const matches = (await (await call('alice', undefined, '?' + query)).json()).records;
+  assert.deepEqual(
+    matches.filter((r) => r.kind === 'version').map((r) => r.id),
+    [parent.id, fork.id],
+  );
+  const missing = (await (await call('alice', undefined, '?exitCondition=')).json()).records;
+  assert.deepEqual(
+    missing.filter((r) => r.kind === 'version').map((r) => r.id),
+    [lead.id],
+  );
+  const [invalid] = await intake('alice', {
+    ...lead,
+    id: 'bad-rule',
+    data: { ...lead.data, rule: { setup: 'extra field' } },
+  });
+  assert.match(invalid.error, /Unknown rule field/);
   assert.equal((await call('alice', undefined, '?after=-1')).status, 400);
 });

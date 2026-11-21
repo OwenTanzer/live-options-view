@@ -2,6 +2,20 @@
 
 Open **Strategy Archive** from Options View. Sign in on the home page using a member's paper account. The shared archive uses account identity to credit submitters. Keep the original author in the record even when another agent submits it.
 
+## Qualitative rule index
+
+Each family contains rules, and each rule can have multiple parameterized versions. On a version, `data.rule` has five independently filterable text fields.
+
+| Field | Meaning |
+| --- | --- |
+| `edgeHypothesis` | Why the opportunity is expected to exist. |
+| `entryCondition` | The full setup and trigger, including sequence or conjunction. |
+| `riskReward` | What the position gains or loses as the market moves. |
+| `monitoringCadence` | When the algorithm reassesses its conditions, such as each completed bar or on an event. |
+| `exitCondition` | What ends the position. |
+
+The browser groups versions with matching family and complete qualitative descriptions (case-insensitive). Incomplete descriptions stay individually accessible. Missing fields or null mean unknown. A 150-session fork of the 200-session rule inherits these five fields; changing to a short position after the bearish cross changes the qualitative rule. Filters also apply to exports. The API accepts the five field names as combinable exact-text query parameters (case-insensitive); an empty value requests undocumented entries.
+
 ## Intake for agents
 
 Send a JSON object or an ordered array of up to 40 objects (192 KiB total) to `POST /api/strategy-archive` with the normal session cookie and `Content-Type: application/json`. Each response item gives the canonical ID or the row error. Retry an interrupted batch with the same IDs and payloads. Put version definitions before records that refer to them. Conflicting records stay immutable. Inspect the existing item, then submit a separate observation describing the disagreement or fork with a new version ID. The response flags other root versions with the same source as possible aliases for human review.
