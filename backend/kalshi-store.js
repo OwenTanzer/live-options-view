@@ -38,7 +38,12 @@ export async function archiveIndex(env) {
   return (await env.DB.prepare('SELECT id, received_at, market, digest FROM kalshi_evidence WHERE account_id = ? ORDER BY received_at DESC LIMIT 100').bind(ACCOUNT).all()).results;
 }
 export async function pruneArchive(env) {
-  // Only expendable observations: immutable fill evidence is embedded in the D1 ledger.
-  await env.DB.prepare('DELETE FROM kalshi_evidence WHERE account_id = ? AND received_at < ?')
-    .bind(ACCOUNT, new Date(Date.now() - 7 * 86400000).toISOString()).run();
+  // A fill's replay remains available as long as its ledger entry references it.
+  const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
+  await env.DB.prepare(`DELETE FROM kalshi_evidence WHERE account_id = ? AND received_at < ?
+    AND id NOT IN (
+      SELECT json_extract(trade.value, '$.provenance.archive.id')
+      FROM users, json_each(users.record, '$.trades') AS trade
+      WHERE users.username = ? AND json_extract(trade.value, '$.provenance.archive.id') IS NOT NULL
+    )`).bind(ACCOUNT, cutoff, ACCOUNT).run();
 }

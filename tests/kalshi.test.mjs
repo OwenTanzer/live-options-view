@@ -5,7 +5,7 @@ import { ACCOUNT, CREDIT_ORIGIN, SITE, OWNER_ID } from '../backend/kalshi-access
 import { kalshiFee, kalshiSnapshot } from '../backend/kalshi-model.js';
 import { fetchMarket, displayMarket, effectiveFee } from '../backend/kalshi-source.js';
 import { quoteEvent, compareEvent } from '../backend/prediction-model.js';
-import { archive, getArchive, budget } from '../backend/kalshi-store.js';
+import { archive, getArchive, budget, pruneArchive } from '../backend/kalshi-store.js';
 import { createStorage } from '../backend/storage.js';
 import worker from '../backend/index.js';
 import { fixture, envFixture, network, request, COOKIE, TICKER } from './helpers/kalshi_fixture.mjs';
@@ -75,7 +75,11 @@ test('synthetic full handler flow: discovery, quote, sized fill, restart retry, 
   assert.equal(detail.quotes.YES.ask,.45); assert.equal(detail.quotes.YES.ask_size,3); assert.equal(detail.exchange_ts,null);
   const b = intent(); const fill = await order(env,b); assert.equal(fill.status,201);
   const d = await fill.json(); assert.equal(d.balance_cash,9998.598); assert.equal(d.trade.fee_units,520);
-  assert.equal(d.trade.provenance.evidence.market.book.exchange_ts,null);
+  assert.equal(d.trade.provenance.book.exchange_ts,null);
+  assert.equal(d.trade.provenance.evidence,undefined);
+  env.DB.db.prepare("UPDATE kalshi_evidence SET received_at = '2000-01-01' WHERE id = ?").run(d.trade.provenance.archive.id);
+  await pruneArchive(env);
+  assert.equal((await getArchive(env,d.trade.provenance.archive.id)).market.rules.market,TICKER);
   const networkBefore=f.requests.length;
   assert.equal((await order(env,b)).status,200);
   assert.equal(f.requests.length,networkBefore+1); // Recheck identity, but never requote/redebit.

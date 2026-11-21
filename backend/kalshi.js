@@ -37,17 +37,23 @@ async function paperOrder(request, env) {
   const receipt = await archive(env, b.market, evidence); // Persistence must succeed before any debit.
   const sym = positionKey(evidence.market.rules, b.outcome);
   const cashUnits = (b.side === 'buy' ? -1 : 1) * quote.price_units * b.qty - quote.fee_units;
+  const { exchange_ts, sequence, clock_basis, request_ts, receive_ts, provider_response_ts } = evidence.market.book;
   const trade = { execution_request_id: b.execution_request_id, execution_id: b.execution_request_id,
     sym, instrument_type: 'prediction', multiplier: 1, underlying: evidence.market.rules.underlying, side: b.side, qty: b.qty,
     price: quote.price_units / 10000, fee_units: quote.fee_units, cash_delta: cashUnits / 10000,
     prediction: quote.prediction, bid: quote.bid, ask: quote.ask, displayed_size: quote.size,
     quote_ts: quote.quoteTs, ts: new Date().toISOString(), status: 'filled', execution_mode: 'paper',
     principal: { provider: 'github', id: OWNER_ID }, account_scope: ACCOUNT,
-    provenance: { archive: receipt, evidence } };
+    provenance: { archive: receipt, book: { exchange_ts, sequence, clock_basis, request_ts, receive_ts, provider_response_ts } } };
   const outcome = await withUserRecord(env, ACCOUNT, current => {
     const old = current.trades.find(t => t.execution_request_id === b.execution_request_id);
     if (old) return sameIntent(old, b) ? { result: { trade: old, balance_cash: current.balance_cash } } : { error: 'Request ID conflict' };
-    if (current.account_closed || current.trades.length >= 1000) return { error: 'Paper account capacity reached' };
+    if (current.account_closed) return { error: 'Paper account closed' };
+    // D1 has a per-row size limit. Reserve ample room for exits/resolutions before
+    // accepting more entries; never silently drop evidence to squeeze in a fill.
+    const nextBytes = new TextEncoder().encode(JSON.stringify({ ...current, trades: [...current.trades, trade] })).length;
+    if (nextBytes > (b.side === 'buy' ? 500000 : 1800000) || current.trades.length >= 1000)
+      return { error: 'Bounded paper trial capacity reached; new entries require a reviewed account rollover' };
     if (quoteEvent(evidence.market, b.outcome, b.side, b.qty, Date.now()).error) return { error: 'Quote expired before ledger commit' };
     const nextChange = Date.parse(evidence.market.rules.fee.next_change);
     if (Number.isFinite(nextChange) && Date.now() >= nextChange) return { error: 'Fee convention changed; refresh' };
@@ -129,7 +135,7 @@ export async function settleKalshiMarket(env, evidence) {
   const resolutions = entries.map(t => ({ id: `kalshi:${raw.ticker}:${revision}`, revision, official: true,
     result: raw.result.toUpperCase(), source: KALSHI_API + `/markets/${raw.ticker}`,
     market_key: marketKey(t.prediction.rules), rule_version: t.prediction.rules.version,
-    exchange_ts: raw.settlement_ts, receive_ts: evidence.receipts[0].receive_ts,
+    exchange_ts: raw.settlement_ts, receive_ts: evidence.receipts[0].receive_ts, closed_at: raw.close_time,
     official_evidence: evidence.receipts[0] }));
   const outcome = await withUserRecord(env, ACCOUNT, r => {
     const resolved = resolvePredictionRecord(r, resolutions);
