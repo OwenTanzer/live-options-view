@@ -924,6 +924,10 @@
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
         const obs = c.observed;
+        if (src.firstObserved !== undefined) {
+          lines.push(c.symbol + (src.firstObserved === null ? " · awaiting first quote or trade" :
+            " · first archived quote or trade " + clock(src.firstObserved) + " ET"));
+        }
         lines.push(
           (c.type === "C" ? "Call" : "Put") + " " + c.symbol + ": recorded prints " + (src.flow ? src.flow.prints ?? "?" : "none") +
             "; inferred buy " + (obs ? obs.B : "—") + ", inferred sell " + (obs ? obs.S : "—") + ", unknown " + (obs ? obs.U : "—") + " contracts",
