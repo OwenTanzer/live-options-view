@@ -1,24 +1,65 @@
 import { createClock,createSourceRegistry } from '../shared/one-clock.js';
 import { archivedChainSource } from '../shared/one-clock-chain-source.js';
+import { botLedgerSource,botInventory } from '../shared/one-clock-bot-source.js';
 import { sessionAt,sessionInstant } from '../shared/one-clock-session.js';
 // Read-only display boundary: never calls fetchLatest, ingestSnapshotQuotes,
 // renderPaper, openTicket, or mutates lastData/session/quote interests.
 const el=id=>document.getElementById(id);
 const registry=createSourceRegistry(); let coverage=null;
 registry.register(archivedChainSource({onCoverage:value=>{coverage=value;}}));
+let botCoverage=null;
+registry.register(botLedgerSource({getBot:()=>el('history-clock-bot').value,onCoverage:value=>{botCoverage=value;}}));
 const today=sessionAt(Date.now());
 el('history-clock-date').value=today;
 const clock=createClock({registry,initial:{mode:'replay',origin:'recorded',session:today,instrument:'QQQ',cutoff:sessionInstant(today,10)}});
+function clearBot(message) {
+  el('history-clock-bot-status').textContent=message;
+  el('history-clock-bot-rows').replaceChildren();el('history-clock-bot-inventory').textContent='';
+}
+async function renderBot() {
+  const selection=clock.snapshot();botCoverage=null;
+  clearBot(el('history-clock-bot').value?'Loading retained receipt pages…':'Select a public bot.');
+  if(!el('history-clock-bot').value) return;
+  try {
+    const result=await clock.read('bot-ledger');if(result.discarded)return;
+    const rows=result.rows,inventory=botInventory(rows,{session:selection.session,complete:botCoverage?.complete===true});
+    const fills=rows.filter(row=>row.details.eventSession===selection.session);
+    el('history-clock-bot-status').textContent=`${fills.length} visible session fills · ${rows.length-fills.length} carried ledger entries · ${botCoverage?.pages??0} pages · ${botCoverage?.complete?'Retained publication receipts complete.':'Publication gaps: opening and current inventory unavailable.'}`;
+    el('history-clock-bot-inventory').textContent=JSON.stringify(inventory,null,2);
+    for(const row of fills.sort((a,b)=>a.eventAt-b.eventAt || a.id.localeCompare(b.id))) {
+      const tr=document.createElement('tr');
+      for(const value of [new Date(row.eventAt).toISOString(),new Date(row.availableAt).toISOString(),row.value.sym,row.value.side,row.value.qty,row.value.price]) {
+        const td=document.createElement('td');td.textContent=String(value);tr.append(td);
+      }
+      el('history-clock-bot-rows').append(tr);
+    }
+  } catch(error) {if(clock.snapshot().generation===selection.generation)clearBot(error.message);}
+}
+el('history-clock-load-bots').onclick=async()=>{
+  const button=el('history-clock-load-bots');button.disabled=true;
+  try {
+    const response=await fetch('/api/one-clock/bots/roster',{credentials:'same-origin',cache:'no-store'});
+    if(!response.ok)throw new Error('Public roster unavailable');
+    const body=await response.json();
+    for(const bot of body.bots??[]) {
+      if(typeof bot!=='string' || [...el('history-clock-bot').options].some(o=>o.value===bot))continue;
+      const option=document.createElement('option');option.value=bot;option.textContent=bot;el('history-clock-bot').append(option);
+    }
+  } catch(error) {clearBot(error.message);} finally {button.disabled=false;}
+};
+el('history-clock-bot').onchange=()=>{clock.select(clock.snapshot());renderBot();};
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();
   el('history-clock-skew').textContent='';el('history-clock-adaptive').textContent='';el('history-clock-evidence').textContent='';
 }
 async function renderSelection() {
+  clearBot('Loading shared cursor…');
   const session=el('history-clock-date').value,instrument=el('history-clock-instrument').value;
   try {
     const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
     const cutoff=sessionInstant(session,h,m,s);
     const selection=clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff});
+    renderBot();
     coverage=null;clear('Loading evidence available at this cursor…');
     const result=await clock.read('chain'); if(result.discarded) return;
     const reading=result.reading,row=reading.row;
@@ -43,6 +84,6 @@ el('history-view').onchange=()=>{
   const active=el('history-view').value==='clock';
   el('history-clock').hidden=!active;el('history-daily').hidden=active;
   if(active) { if(el('hist-date').value) el('history-clock-date').value=el('hist-date').value;renderSelection(); }
-  else clock.select({...clock.snapshot(),mode:'replay'}); // cancel a pending archive response
+  else {clock.select({...clock.snapshot(),mode:'replay'});clearBot('Choose One Clock to read the bot ledger.');} // cancel pending responses
 };
 window.addEventListener('pagehide',()=>clock.dispose());

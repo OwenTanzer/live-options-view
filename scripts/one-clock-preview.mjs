@@ -3,6 +3,7 @@
 import http from 'node:http';
 import { createPreview } from './preview-local.mjs';
 import { handleOneClockChain } from '../backend/one-clock-chain.js';
+import { readBotLedgerPage } from '../backend/one-clock-bots.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
 const preview=createPreview();
 const day='2026-11-09',T=sessionInstant(day,9,30),objects=new Map();
@@ -24,9 +25,20 @@ for(const symbol of ['QQQ','SPY','IBIT']) for(const minute of [0,5]) {
 }
 const bucket={async list({prefix}){return {objects:[...objects.keys()].filter(key=>key.startsWith(prefix)).map(key=>({key})),truncated:false};},
   async get(key){const row=objects.get(key);return row?{...row,size:Buffer.byteLength(row.text),text:async()=>row.text}:null;}};
+const bot='synthetic_bot',trades=[];
+for(let i=0;i<105;i++) {
+  const id=`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`,at=i===0?T-86400000:T+i*1000;
+  const trade={username:bot,status:'filled',execution_request_id:id,ts:new Date(at).toISOString(),
+    sym:'QQQ261113C00660000',underlying:'QQQ',instrument_type:'option',side:i===104?'sell':'buy',qty:i===0?10:i===104?4:1,
+    price:2,strike:660,type:'call',exp:'2026-11-13',multiplier:100};
+  trades.push(trade);objects.set(`paper-trades/requests/${id}.json`,{text:JSON.stringify(trade),uploaded:new Date(at+500),etag:String(i)});
+}
 preview.env.API={fetch:request=>{
   const url=new URL(request.url);
   if(url.pathname==='/api/one-clock/chain')return handleOneClockChain(request,{PAPER_TRADES:bucket},url);
+  if(url.pathname==='/api/one-clock/bots/roster')return Response.json({bots:[bot],membershipBasis:'synthetic-fixture'});
+  if(url.pathname==='/api/one-clock/bots')return readBotLedgerPage(bucket,{trades},{bot,session:day,instrument:url.searchParams.get('instrument'),
+    cutoff:Number(url.searchParams.get('cutoff')),offset:Number(url.searchParams.get('offset')),version:url.searchParams.get('version')}).then(body=>Response.json(body,{status:body.restart?409:200}));
   return new Response('{}',{status:404,headers:{'Content-Type':'application/json'}});
 }};
 const server=http.createServer(async(req,res)=>{
