@@ -112,6 +112,9 @@ test('quote expiry hides prices, opposite sides and unsupported comparison remai
   assert.equal(quoteEvent(m,'YES','sell',2,Date.now()).bid,.4);
   assert.equal(displayMarket(evidence,Date.now()+11000).quotes,null);
   assert.equal(compareEvent(m,null,null,Date.now()).eligible,false);
+  assert.equal(m.rules.published_at,m.book.receive_ts);
+  assert.notEqual(m.rules.published_at,m.rules.market_created_at);
+  assert.equal((await fetchMarket(env,TICKER)).market.rules.version,m.rules.version);
   assert.throws(() => kalshiSnapshot({orderbook_fp:{yes_dollars:[['.40','3']],no_dollars:[]}}));
 }));
 test('concurrent closes serialize, insufficient cash and entry rollback preserve original fill', async () => scenario(async(env)=>{

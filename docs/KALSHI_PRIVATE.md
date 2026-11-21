@@ -88,7 +88,11 @@ tick ranges, exact terms/source and supported taker fees qualify.
 
 The adapter reads market, event, series, event/series fee changes and order book. List
 prices and last-trade prices never become executable quotes. It preserves
-provider payloads privately with request/receive times. The REST order book has
+provider payloads privately with request/receive times. Rule availability is
+conservatively the observation receipt; the original market creation date is
+separate and is never used as proof of a later rule revision's publication.
+The rule content digest excludes the receipt clock, so unchanged terms retain
+their version across observations. The REST order book has
 **no exchange timestamp or sequence**: `exchange_ts` and `sequence` remain null.
 `provider_response_ts` is the HTTP Date, clearly labelled as such. A response
 must arrive within five seconds, have no positive cache Age and have a valid
@@ -194,3 +198,28 @@ as access, preserving D1 data. Restore the same principal and compatible reader
 to resume. Keep credit identity validation working for ordinary entry rollback.
 Asset rollback uses a compatible separated artifact and never rolls back D1,
 erases history or reintroduces the combined Worker/KV.
+
+## Local review receipt — November 21, 2026
+
+- At `37ba9bcdc4430bd777eb6fa6575d27ec568b7c5e`, an isolated LF checkout passed
+  102 tests across the private lane, prediction fixtures/UI, D1, auth/logout,
+  Worker logic, ordinary paper trading, multi-underlying, account closure, BTC
+  options, no-runtime-KV, capture boundary, credit proxy, bounded R2 proxy and
+  settlement cron suites. All thirteen private-lane tests and both rendered
+  phone/desktop workflows passed again after the rule-availability correction.
+- Changed-path checks passed 79/79. `git diff --check` passed. Phone rendering
+  was visually inspected; synthetic evidence is prominently labelled, controls
+  fit the viewport, stale prices disappear and logout clears private content.
+- The isolated asset/preview/deployment run passed 84/88. Four local environment
+  failures remain for final-head CI: `jq` is absent for two selector tests;
+  the historical combined-checkout hash differs under Windows auto-CRLF; port
+  8787 is occupied for the loopback test. An earlier run also saw exact-revision
+  failures while concurrent supervisor commits changed HEAD; the isolated run
+  removed those. No running preview/service was stopped to force a pass.
+- The real public read-only conformance check passed again at 15:56:46 UTC after
+  series fee-change handling was added. No identity was forged, no fill was
+  created, no production DB was touched, and no quote record was printed/saved.
+- This receipt does not attest deployment, credit-origin endpoint availability,
+  a completed owner OAuth round trip, or a production paper fill. Those remain
+  the release supervisor's live acceptance responsibilities. No outward message
+  or Notion update was sent in this implementation pass.

@@ -53,13 +53,17 @@ export async function normalizeMarket(raw, event, series, fees, bookReceipt, ser
     underlying: SERIES_SUBJECT[series.ticker], index: series.settlement_sources.map(x => x.name).join('; '),
     settlement_sources: series.settlement_sources, text: raw.rules_primary + '\n' + (raw.rules_secondary || ''),
     source: series.contract_terms_url, contract_url: series.contract_url,
-    published_at: raw.created_time, cutoff: raw.close_time, window_end: raw.latest_expiration_time,
+    market_created_at: raw.created_time, cutoff: raw.close_time, window_end: raw.latest_expiration_time,
     currency: 'USD', payout_units: 10000, size_increment: 1, void_policy: 'official_only',
     fee_convention: 'kalshi_taker_2026_07_07', fee: effectiveFee(series, fees, raw, Date.parse(bookReceipt.receive_ts), seriesChanges),
     price_ranges: (raw.price_ranges || []).map(p => ({ start: fixed(p.start, 10000), end: fixed(p.end, 10000), step: fixed(p.step, 10000) })),
     early_close_condition: raw.early_close_condition || '', can_close_early: raw.can_close_early === true,
   };
-  const rules = { ...terms, version: await hashSessionToken(JSON.stringify(terms)) };
+  const rules = { ...terms, version: await hashSessionToken(JSON.stringify(terms)),
+    // Conservatively expose these exact terms only from this observation onward.
+    // Market creation is not evidence of when a later rule revision was published.
+    published_at: bookReceipt.receive_ts,
+    rule_clock_basis: 'observed availability; provider rule publication timestamp unavailable' };
   validateRules(rules);
   const b = { ...kalshiSnapshot(bookReceipt.data), synchronized: true, gap: false,
     // The REST response has no exchange quote timestamp or sequence. Do not invent either.
