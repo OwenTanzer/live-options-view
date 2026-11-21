@@ -5,6 +5,7 @@ import { makeStorage } from './helpers/d1_shim.mjs';
 import { advanceSourceCatalog,publicationCatalogPage,CATALOG_PAGE_SIZE } from '../backend/one-clock-source-catalog.js';
 import { squeezeCatalog,advanceOneClockCatalogs } from '../backend/one-clock-catalog-sources.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
+import { readSqueezePublications } from '../backend/one-clock-squeeze.js';
 const T=sessionInstant('2026-11-09',12),old=T-86400000,now=T+86400000;
 async function setup(t) {const db=makeStorage();t.after(()=>db.db.close());await db.exec(fs.readFileSync(new URL('../backend/migrations/0005_one_clock_catalog.sql',import.meta.url),'utf8'));return db;}
 function object(i,kind='started',at=T) {
@@ -28,10 +29,46 @@ test('resumable catalog exceeds lifetime 2000 keys while per-day query stays bou
   assert.equal(r2.calls.length,21);assert.equal(db.raw('SELECT count(*) n FROM one_clock_catalog_entries')[0].n,2004);
   const page=await publicationCatalogPage(db,squeezeCatalog,{start:sessionInstant('2026-11-09',0),cutoff:T+5000});
   assert.equal(page.truncated,false);assert.equal(page.objects.length,2);assert.equal(page.completeThrough,now);
+  const dayPlan=db.raw('EXPLAIN QUERY PLAN SELECT record_group FROM one_clock_catalog_entries INDEXED BY one_clock_catalog_time WHERE source=? AND uploaded_at>=? AND uploaded_at<=? LIMIT ?',squeezeCatalog.id,T,T+5000,61);
+  assert.match(dayPlan.map(r=>r.detail).join(' '),/SEARCH.*one_clock_catalog_time.*uploaded_at>.*uploaded_at</);
+  const gapPlan=db.raw('EXPLAIN QUERY PLAN SELECT record_group FROM one_clock_catalog_gaps WHERE source=? AND bucket IN (?,?) LIMIT ?',squeezeCatalog.id,'0:0','1:0',21);
+  assert.match(gapPlan.map(r=>r.detail).join(' '),/SEARCH.*source=\? AND bucket=\?/);
+  assert.ok([...dayPlan,...gapPlan].every(r=>!r.detail.includes('SCAN')));
   // A restart uses the persisted state; completed cycles safely rescan for
   // new UUIDs that sort before the previous cursor, without duplicate entries.
   const next=await advanceSourceCatalog(db,r2,squeezeCatalog,{now:now+1000});assert.equal(next.cycleComplete,false);
   assert.equal(db.raw('SELECT count(*) n FROM one_clock_catalog_entries')[0].n,2004);
+});
+test('old missing-start and reverse-order attempts retain direct-reader gaps',async t=>{
+  for(const objects of [[object(1,'finished',old)], [object(1,'finished',old),object(1,'started',old+1)]]) {
+    const db=await setup(t),r2=bucket(objects);await advanceSourceCatalog(db,r2,squeezeCatalog,{now});
+    const scope={session:'2026-11-09',instrument:'ABC',cutoff:T};
+    const catalog=await publicationCatalogPage(db,squeezeCatalog,{start:sessionInstant(scope.session,0),cutoff:T});
+    const direct=await readSqueezePublications({list:async()=>({objects,truncated:false})},scope);
+    const indexed=await readSqueezePublications(r2,scope,{catalog});
+    assert.equal(direct.coverage.reason,'unresolved-publication-attempt');
+    assert.equal(indexed.coverage.reason,direct.coverage.reason);
+  }
+});
+test('interval lookup agrees with direct qualification across randomized boundaries and late receipts',async t=>{
+  const db=await setup(t);let seed=42;
+  const random=()=>{seed=(seed*1664525+1013904223)>>>0;return seed;};
+  const all=[];
+  for(let i=0;i<16;i++)for(const kind of ['started','finished','failed'])if(random()%3)all.push(object(i,kind,old+random()%100));
+  const selected=all.filter(o=>!o.key.endsWith('/finished.json')),r2=bucket(selected);
+  await advanceSourceCatalog(db,r2,squeezeCatalog,{now});
+  const unresolved=objects=>{
+    const groups=new Map();for(const o of objects){const identity=squeezeCatalog.classify(o.key),group=groups.get(identity.group)??{};group[identity.kind]=o.uploaded.getTime();groups.set(identity.group,group);}
+    return [...groups].filter(([,a])=>a.started===undefined || a.finished===undefined || a.started>a.finished || a.failed!==undefined).map(([id])=>id).sort();
+  };
+  for(const late of [false,true]) {
+    if(late){selected.push(...all.filter(o=>o.key.endsWith('/finished.json')));await advanceSourceCatalog(db,r2,squeezeCatalog,{now:now+1});}
+    for(let offset=-1;offset<=101;offset++) {
+      const cutoff=old+offset,catalog=await publicationCatalogPage(db,squeezeCatalog,{start:old+1000,cutoff});
+      assert.equal(catalog.truncated,false);
+      assert.deepEqual(unresolved(catalog.objects),unresolved(selected.filter(o=>o.uploaded.getTime()<=cutoff)),`offset ${offset}, late ${late}`);
+    }
+  }
 });
 test('catalog checkpoint and entries roll back atomically; retry does not skip a page',async t=>{
   const db=await setup(t),r2=bucket([object(1),object(1,'finished')]);db.flags.failAfterRuns=2;

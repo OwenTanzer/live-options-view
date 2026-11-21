@@ -19,3 +19,10 @@ CREATE TABLE IF NOT EXISTS one_clock_catalog_entries (
 );
 CREATE INDEX IF NOT EXISTS one_clock_catalog_time ON one_clock_catalog_entries(source,uploaded_at,record_group);
 CREATE INDEX IF NOT EXISTS one_clock_catalog_group ON one_clock_catalog_entries(source,record_group,record_kind,uploaded_at);
+-- Dyadic interval decomposition supports bounded point queries without scanning
+-- completed history or expanding long gaps into one record per calendar day.
+CREATE TABLE IF NOT EXISTS one_clock_catalog_gaps (
+  source TEXT NOT NULL, bucket TEXT NOT NULL, record_group TEXT NOT NULL,
+  PRIMARY KEY(source,bucket,record_group)
+);
+CREATE INDEX IF NOT EXISTS one_clock_catalog_gap_group ON one_clock_catalog_gaps(source,record_group);
