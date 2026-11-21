@@ -8,7 +8,7 @@ import math
 import threading
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -84,6 +84,8 @@ class BtcOptions:
         self.status = 'uninitialized'
         self.subscription_count = 0
         self._worker = None
+        self.display_checked = {}
+        self.display_prices = {}
 
     def _read(self, path, token):
         r = self._get(API + path, headers={'Authorization': 'Bearer ' + token,
@@ -102,9 +104,44 @@ class BtcOptions:
         # it reuses credentials/connection and never authenticates independently.
         if self._worker is not None and self._worker.is_alive():
             return
-        self._worker = threading.Thread(target=self.refresh, args=(feed, token, now),
+        self._worker = threading.Thread(target=self._refresh_cycle, args=(feed, token, now),
                                         name='btc-discovery', daemon=True)
         self._worker.start()
+
+    def _refresh_cycle(self, feed, token, now):
+        self.refresh(feed, token, now)
+        # One bounded REST batch for inspected contracts. Snapshot marks and
+        # prices are display-only and never enter the executable quote map.
+        with self._lock:
+            keys = [k for k in dict.fromkeys(self.viewport_keys) if k in self.listed and
+                    (k not in self.display_checked or (now - self.display_checked[k]).total_seconds() >= 30)][:BUDGET]
+            symbols = {self.contracts[k]['provider_symbol']: k for k in keys}
+            self.display_checked.update(dict.fromkeys(keys, now))
+        if not keys:
+            return
+        try:
+            query = urlencode([('future-option', symbol) for symbol in symbols])
+            rows = self._read('/market-data/by-type?' + query, token)['items']
+            prices = {}
+            for row in rows:
+                key = symbols.get(row.get('symbol'))
+                if key is None or not instant(row.get('updated-at')):
+                    continue
+                snapshot = {'as_of': row['updated-at']}
+                for side in ('bid', 'ask', 'mark'):
+                    try:
+                        value = float(row.get(side))
+                    except (ValueError, TypeError):
+                        continue
+                    if math.isfinite(value) and value > 0:
+                        snapshot[side] = value
+                prices[key] = snapshot
+            with self._lock:
+                for k in keys:
+                    self.display_prices.pop(k, None)
+                self.display_prices.update(prices)
+        except (ValueError, KeyError, requests.RequestException):
+            pass  # The stream and its independent freshness checks remain available.
 
     def refresh(self, feed, token, now):
         """Called by price lane; discovery failure never tears down its feed."""
@@ -156,6 +193,8 @@ class BtcOptions:
                 if due:
                     self.listed = {k for k, c in resolved.items() if c['provider_symbol'] in chain_symbols
                                    and instant(c['stops_trading_at']) > now}
+                    self.display_prices = {k: v for k, v in self.display_prices.items() if k in self.listed}
+                    self.display_checked = {k: v for k, v in self.display_checked.items() if k in self.listed}
                     self.expiries = sorted({resolved[k]['exp'] for k in self.listed})
                 prior = {k: c for k, c in self.contracts.items()
                          if c['provider_symbol'] in self.held or k in self.listed}
@@ -241,7 +280,9 @@ class BtcOptions:
                     q[side + '_received_ts'] = raw.get(side + '_ts')
                     q[side + '_change'] = raw.get(side + '_change')
                 quotes.append(q)
-            return {'contracts': contracts, 'quotes': quotes, 'entry_keys': self.entries,
+            return {'display_prices': {c['contract_key']: self.display_prices[c['contract_key']] for c in contracts
+                                       if c['contract_key'] in self.display_prices},
+                    'contracts': contracts, 'quotes': quotes, 'entry_keys': self.entries,
                     'unavailable': unavailable, 'session': session(now), 'source_status': self.status,
                     'expiries': self.expiries,
                     'expiry': getattr(self, 'expiry', None), 'center': getattr(self, 'center', None),

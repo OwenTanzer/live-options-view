@@ -21,6 +21,7 @@ try {
     const page = await context.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(now => {
+      delete URLSearchParams.prototype.size; // Older Safari still supports toString().
       const D = Date; window.fixtureClock = now;
       window.Date = class extends D { constructor(...args) { super(...(args.length ? args : [window.fixtureClock])); } static now() { return window.fixtureClock; } };
     }, scenario.now);
@@ -118,16 +119,22 @@ try {
           if (outage) return new Response('', { status: 503 });
           const month = u.searchParams.get('expiry') === months[1] ? 1 : 0;
           const contracts = listings[month];
+          const display_prices = { [contracts[0].contract_key]: { mark: 50700, as_of: new Date(scenario.now).toISOString() } };
           const keys = new Set((u.searchParams.get('symbols') || '').split(','));
-          const quotes = contracts.filter(c => keys.has(c.contract_key)).map(c => ({
+          const quotes = contracts.filter(c => keys.has(c.contract_key) && c !== contracts[0]).map(c => ({
             ...scenario.payload.quotes[0], contract: c, symbol: c.contract_key,
             ask_ts: new Date(scenario.now).toISOString(), ask_received_ts: new Date(scenario.now).toISOString()
           }));
-          return Response.json({ ...scenario.payload, contracts, quotes, entry_keys: contracts.map(c => c.contract_key),
+          quotes.push({ ...scenario.payload.quotes[0], symbol: contracts[0].contract_key, contract: contracts[0], bid: 0, ask: 0 });
+          return Response.json({ ...scenario.payload, display_prices, contracts, quotes, entry_keys: contracts.map(c => c.contract_key),
             expiry: months[month], expiries: months, subscribed_keys: quotes.map(q => q.symbol),
             center: marketCenter ? 59000 : 113000, center_from_future: marketCenter });
         };
         try {
+          await page.addInitScript(() => {
+            const interval = window.setInterval.bind(window);
+            window.setInterval = (fn, ms, ...args) => ms === 5000 ? 0 : interval(fn, ms, ...args);
+          });
           await page.reload();
           const rows = page.locator('.btc-strike-row');
           await page.waitForFunction(() => document.querySelectorAll('.btc-strike-row').length === 207);
@@ -140,6 +147,7 @@ try {
           for (const row of [rows.first(), rows.last()]) {
             await row.scrollIntoViewIfNeeded();
             const top = await row.evaluate(el => el.getBoundingClientRect().top);
+            await page.waitForFunction(key => btcOptions.quotes.has(key), await row.locator('.btc-contract').last().getAttribute('data-symbol'));
             await page.evaluate(() => btcOptions.refresh());
             assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
             outage = true;
@@ -148,11 +156,14 @@ try {
             outage = false;
             await page.evaluate(() => btcOptions.refresh());
             assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
-            const leg = row.locator('.btc-contract').first();
+            const leg = row.locator('.btc-contract').last();
             await leg.locator('.btc-buy').click();
             assert.equal(await page.locator('#trade-ticket').getAttribute('data-btc'), await leg.getAttribute('data-symbol'));
             await page.evaluate(() => closeTicket());
           }
+          assert.equal(await rows.first().locator('.btc-reference-mark').first().isVisible(), true);
+          assert.equal(await rows.first().locator('.btc-reference-mark').first().textContent(), 'Mark 50,700*');
+          assert.equal(await rows.first().locator('.btc-buy').first().isDisabled(), true);
           marketCenter = false;
           await page.getByLabel('Standard monthly expiry').selectOption(months[1]);
           await page.waitForFunction(exp => btcOptions.data.expiry === exp, months[1]);
