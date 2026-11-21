@@ -85,6 +85,7 @@ jobs:
         run: |
           node tests/prediction.test.mjs
           node tests/prediction_ui.test.mjs
+          node --test tests/kalshi.test.mjs
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: D1 account/session storage (#208)
