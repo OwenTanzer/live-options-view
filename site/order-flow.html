@@ -578,7 +578,8 @@
         rowH = narrow ? 30 : 34,
         top = 50,
         h = top + Math.max(1, rows.length) * rowH + 8,
-        d = devicePixelRatio || 1;
+        // A full expiry can exceed a phone's canvas allocation at native pixel density.
+        d = Math.min(devicePixelRatio || 1, 8192 / h, Math.sqrt(12000000 / (Math.max(w, 1) * h)));
       pc.style.height = h + "px";
       if (pc.width !== Math.round(w * d) || pc.height !== Math.round(h * d)) {
         pc.width = Math.round(w * d);
@@ -924,6 +925,10 @@
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
         const obs = c.observed;
+        if (src.firstObserved !== undefined) {
+          lines.push(c.symbol + (src.firstObserved === null ? " · awaiting first quote or trade" :
+            " · first archived quote or trade " + clock(src.firstObserved) + " ET"));
+        }
         lines.push(
           (c.type === "C" ? "Call" : "Put") + " " + c.symbol + ": recorded prints " + (src.flow ? src.flow.prints ?? "?" : "none") +
             "; inferred buy " + (obs ? obs.B : "—") + ", inferred sell " + (obs ? obs.S : "—") + ", unknown " + (obs ? obs.U : "—") + " contracts",

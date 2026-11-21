@@ -27,7 +27,11 @@ export default {
     }
     const url = new URL(request.url);
     let response;
-    if (url.pathname.startsWith('/credit-tape/')) {
+    if (url.pathname === '/credit-tape') {
+      if (preview || url.origin !== 'https://options.moopertonic.net') response = error('Not found', 404);
+      else if (!['GET', 'HEAD'].includes(request.method)) response = error('Method not allowed', 405);
+      else response = new Response(null, {status: 308, headers: {Location: '/credit-tape/'}});
+    } else if (url.pathname.startsWith('/credit-tape/')) {
       response = preview ? error('Not available in preview', 404) : await delegate(env.API, request);
     } else if (url.pathname === '/__environment') {
       if (request.method !== 'GET') return error('Method not allowed', 405);
