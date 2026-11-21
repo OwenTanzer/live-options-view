@@ -11,6 +11,12 @@ export const BOT_LEDGER_PAGE = 40;
 const MAX_TRADES = 10000, MAX_RECEIPT = 65536;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const stamp = value => { try { return instant(value); } catch { return null; } };
+function tradeInstrument(t) {
+  const named=typeof t?.underlying==='string' && /^[A-Z/][A-Z0-9/._-]{0,39}$/.test(t.underlying)?t.underlying:null;
+  const occ=typeof t?.sym==='string'?/^([A-Z]+)\d{6}[CP]\d{8}$/.exec(t.sym):null;
+  if(occ && named && occ[1]!==named)return null;
+  return named ?? occ?.[1] ?? (t?.instrument_type==='share' && typeof t.sym==='string' && /^[A-Z]{1,10}$/.test(t.sym)?t.sym:null);
+}
 function publicFill(t) {
   if (!t || (t.status && t.status !== 'filled') || !['buy','sell'].includes(t.side) ||
       !Number.isSafeInteger(t.qty) || t.qty <= 0 || !Number.isFinite(t.price) || t.price < 0 ||
@@ -30,7 +36,7 @@ export async function readBotLedgerPage(bucket, record, {bot,session,instrument,
   // Do not page the current-day roster's last 100 fills. Retain prior sessions
   // for opening inventory and partial reductions. Filter future events first.
   const candidates=record.trades.filter(t=>stamp(t?.ts)!==null && stamp(t.ts)<=cutoff &&
-    (t.underlying===instrument || (typeof t.sym==='string' && (t.sym===instrument || t.sym.startsWith(instrument)))));
+    (tradeInstrument(t)===instrument || tradeInstrument(t)===null));
   const revision=await hashSessionToken(JSON.stringify(candidates));
   if (version!==null && version!==revision) return {restart:true};
   if(offset>candidates.length) throw new Error('invalid page');
@@ -39,7 +45,7 @@ export async function readBotLedgerPage(bucket, record, {bot,session,instrument,
     const value=publicFill(t), id=t.execution_request_id ?? t.execution_id;
     // Settlements/legacy entries without retained terminal receipts are gaps;
     // their event timestamp is never substituted for publication evidence.
-    if (!value || value.underlying!==instrument || typeof id!=='string' || !UUID.test(id)) {complete=false;continue;}
+    if (!value || value.underlying!==instrument || tradeInstrument(t)!==instrument || typeof id!=='string' || !UUID.test(id)) {complete=false;continue;}
     const object=await bucket.get(`paper-trades/requests/${id}.json`);
     if(!object || !Number.isSafeInteger(object.size) || object.size>MAX_RECEIPT || !object.etag) {complete=false;continue;}
     const availableAt=stamp(object.uploaded?.toISOString());

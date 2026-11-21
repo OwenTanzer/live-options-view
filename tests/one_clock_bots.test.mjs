@@ -66,6 +66,17 @@ test('continuations bind to the eligible ledger while future appended entries ca
   db.record.trades[0].price=3;
   assert.deepEqual(await readBotLedgerPage(db.bucket,db.record,{...scope,offset:first.next,version:first.version}),{restart:true});
 });
+test('unknown instrument is a coverage gap and midnight publication is inclusively visible',async()=>{
+  const db=fixture(1),t=db.record.trades[0];
+  db.record.trades.push({ts:new Date(T-86400000).toISOString(),side:'buy',qty:10,price:2});
+  assert.equal((await readBotLedgerPage(db.bucket,db.record,scope)).coverage.complete,false);
+  db.record.trades.pop();
+  t.ts=new Date(T-86400000).toISOString();
+  const object=db.objects.get(`paper-trades/requests/${t.execution_request_id}.json`);
+  object.text=JSON.stringify(t);object.uploaded=new Date(sessionInstant(session,0));
+  const result=await readBotLedgerPage(db.bucket,db.record,scope);
+  assert.equal(botInventory(result.rows,{session,complete:true}).opening[0].qty,1);
+});
 test('route validates scope before storage and rejects private/hidden accounts without reading receipts',async()=>{
   const forbidden=new Proxy({},{get(){throw new Error('must not access storage');}});
   for(const query of ['bot=../private','bot=crassus_test&session=2026-11-09&instrument=QQQ&cutoff=1',new URLSearchParams({...scope,offset:40})]) {

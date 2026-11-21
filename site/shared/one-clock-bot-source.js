@@ -33,7 +33,7 @@ export function botInventory(rows,{session,complete}) {
   const opening=new Map(),current=new Map();
   const add=(map,row)=>map.set(row.value.sym,(map.get(row.value.sym)??0)+(row.value.side==='buy'?1:-1)*row.value.qty);
   const start=sessionInstant(session,0,0,0);
-  for(const row of rows) {add(current,row);if(row.eventAt<start && row.availableAt<start)add(opening,row);}
+  for(const row of rows) {add(current,row);if(row.eventAt<start && row.availableAt<=start)add(opening,row);}
   const output=map=>[...map].filter(([,qty])=>qty!==0).sort(([a],[b])=>a.localeCompare(b)).map(([sym,qty])=>({sym,qty}));
   return {opening:output(opening),current:output(current)};
 }
