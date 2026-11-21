@@ -2,6 +2,7 @@ import { handlePrediction, settlePredictions } from './prediction.js';
 import { handleKalshi, kalshiTick } from './kalshi.js';
 import { handleBtcOptions } from './btc-options.js';
 import { handleOneClockChain } from './one-clock-chain.js';
+import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -32,6 +33,8 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
     if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
+    if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
+    if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
