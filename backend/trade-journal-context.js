@@ -28,6 +28,8 @@
 import { jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
 import { JOURNAL_TZ, authorizeJournalViewer, etDate, loadPosition } from './trade-journal.js';
+import { journalCutoff,journalScope } from './one-clock-journal.js';
+import { readArchivedChain } from './one-clock-chain.js';
 
 export const CONTEXT_VERSION = 'ctx-v4';
 export const MAX_SNAPSHOTS = 40;
@@ -414,6 +416,26 @@ export async function positionContext(env, position, { day = etDate(position.ope
 const POSITION_ID = /^pos:[0-9a-f]{16}$/;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+// A qualified snapshot at the selected cutoff, never the retrospective cache
+// or sampling plan. Missing contracts remain gaps, even if a later cache has them.
+export async function journalContextAsOf(env,position,day,cutoff) {
+  if(position.legs)return {position_id:position.position_id,day,legs:await Promise.all(
+    position.legs.map(leg=>journalContextAsOf(env,leg,day,cutoff)))};
+  const instrument=position.contract.underlying;
+  const base={position_id:position.position_id,day,cutoff,view:'recorded-as-of',cached:false,
+    underlying:null,option:null,gaps:[],notes:['Only a publication-qualified snapshot at the cutoff is shown.']};
+  if(!['QQQ','SPY','IBIT'].includes(instrument))return {...base,gaps:[`${instrument}: no qualified archive adapter`]};
+  const result=await readArchivedChain(env.PAPER_TRADES,{session:day,instrument,cutoff});
+  const row=result.rows[0];if(!row)return {...base,gaps:[`${instrument}: ${result.coverage.reason}`],coverage:result.coverage};
+  const at=new Date(row.eventAt).toISOString(),price=row.value.underlying_price;
+  const occ=position.contract.occ_symbol?.replaceAll(' ','');
+  const quote=occ?row.value.rows.find(r=>r.OptionSymbol?.replaceAll(' ','')===occ):null;
+  return {...base,available_at:row.availableAt,coverage:result.coverage,
+    underlying:price>0?{source:row.evidence,segments:[{kind:'points',points:[[at,price]]}]}:null,
+    option:quote && quote.Bid!==null && quote.Ask!==null && quote.Bid>=0 && quote.Ask>=quote.Bid?{source:row.evidence,segments:[{kind:'points',points:[[at,quote.Bid,quote.Ask]]}]}:null,
+    gaps:quote?[]:[`${occ??instrument}: no qualified exact-contract quote`]};
+}
+
 export async function handleTradeJournalContext(request, env, url) {
   const auth = await authorizeJournalViewer(request, env);
   if (auth.response) return auth.response;
@@ -421,9 +443,11 @@ export async function handleTradeJournalContext(request, env, url) {
   if (!POSITION_ID.test(id)) return jsonResponse({ error: 'position_id must look like pos:<16 hex>' }, 400);
   const day = url.searchParams.get('date');
   if (day != null && !ISO_DAY.test(day)) return jsonResponse({ error: 'date must be YYYY-MM-DD' }, 400);
-  const position = await loadPosition(env.DB, id);
+  let cutoff;try{cutoff=journalCutoff(url);if(cutoff!==null&&!day)throw new Error('date required with cutoff');if(day)journalScope(day,cutoff);}catch(error){return jsonResponse({error:error.message},400);}
+  const position = await loadPosition(env.DB, id,cutoff);
   if (!position) return jsonResponse({ error: 'unknown position' }, 404);
   if (!position.supported) return jsonResponse({ error: 'position has no readable fills', reason: position.unsupported_reason }, 409);
+  if(cutoff!==null)return jsonResponse(await journalContextAsOf(env,position,day,cutoff),200);
   // Reads keep working while the cutover fence is armed; only the cache write is withheld.
   const fenced = await cutoverFenceActive(env);
   const ctx = await positionContext(env, position, { day: day ?? undefined, writeCache: !fenced });

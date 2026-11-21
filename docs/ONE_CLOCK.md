@@ -336,3 +336,32 @@ version mismatch, stale coverage, and automatic continuation recovery. Source
 indexing creates no event registrations or trading decisions. Additional sources
 reuse this scheduler and transactional service; no source-specific timer or
 manual daily index is part of the extension contract.
+
+## Private journal recorded replay
+
+The journal retains its dedicated passkey authorization on every data route.
+`cutoff` selects the latest private D1 payload committed by that instant before
+any fill filtering, totals, context sampling or response. Additive migration
+`0007_one_clock_journal.sql` seeds current payloads at migration time and captures
+subsequent content/status changes transactionally with the existing importer.
+It never backdates availability to a Notion edit or broker timestamp; old payloads
+not previously retained are unavailable. There is no new sync timer or Notion write.
+
+The private page registers one journal adapter with the shared clock. Its recorded
+view excludes later executions, revisions, closure, fees and free-text retrospective
+notes. Current and recorded projections share the same average-cost book calculation.
+Combination legs project separately; an expiration without a retained intraday time
+is applied only after its entire New York date, once the payload is available.
+Recorded context bypasses the full-session cache and sampling plan, reading only
+the existing publication-qualified chain adapter at the selected cutoff. This is
+one snapshot, not a complete premium path; missing exact contracts remain gaps.
+The explicit Full retrospective remains the rollback display. Sync is disabled
+while viewing recorded history so its current summary cannot leak into that view.
+
+Apply only reviewed migration 0007 before releasing this API. Rolling back the
+API/assets leaves additive private history retained. It does not affect account
+execution, passkeys, public bot identity, settlement or event-observer activation.
+Trainer forward-only/blind-date integration remains a separate open slice.
+Validation uses synthetic private revisions, fees/partials/expiry/combinations,
+auth-before-read and context-cache exclusion, response races and browser rewind.
+No private production journal payload is needed for those checks.

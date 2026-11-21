@@ -69,6 +69,8 @@ svg{display:block;width:100%}
 <header>
   <h1>Trade journal</h1>
   <label class="note">Date (America/New_York) <input type="date" id="day"></label>
+  <label class="note">View <select id="journal-view"><option value="retrospective">Full retrospective</option><option value="recorded">Recorded as of</option></select></label>
+  <label class="note">Cutoff ET <input type="time" id="journal-cutoff" value="10:00" step="1"></label>
   <button id="load">Load</button>
   <button id="sync">Sync from Notion</button>
   <button id="lock">Sign out</button>
@@ -99,8 +101,11 @@ svg{display:block;width:100%}
 <div id="tip"></div>
 </div>
 <script src="js/journal-passkeys.js"></script>
-<script src="js/trade-journal-loads.js?v=9fddd06fc47afd8d"></script>
-<script>
+<script src="js/trade-journal-loads.js?v=06f9691b764c09a6"></script>
+<script type="module">
+import { createClock,createSourceRegistry } from './shared/one-clock.js';
+import { journalSource } from './shared/one-clock-journal-source.js';
+import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
 (() => {
   const TZ = 'America/New_York';
   const fT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -115,8 +120,20 @@ svg{display:block;width:100%}
   // Day-list and context responses are tied to their requested date and load
   // generation (js/trade-journal-loads.js), so a late response for another day
   // or an earlier load can never replace the current selection.
-  const loads = createTradeJournalLoads(url => fetch(url, { credentials: 'same-origin', cache: 'no-store' })
-    .then(r => r.json().catch(() => ({})).then(body => ({ ok: r.ok, status: r.status, body }))));
+  let journalBody;
+  const registry=createSourceRegistry();registry.register(journalSource({onBody:body=>{journalBody=body;}}));
+  const clock=createClock({registry,initial:{mode:'replay',origin:'recorded',session:sessionAt(Date.now()),instrument:'JOURNAL',cutoff:Date.now()}});
+  const loads = createTradeJournalLoads(async url => {
+    if(url.startsWith('/api/trade-journal?') && new URL(url,location.origin).searchParams.has('cutoff')) {
+      try {
+        const result=await clock.read('private-journal');
+        if(result.discarded)return {ok:false,status:409,body:{error:'Selection changed'}};
+        return {ok:true,status:200,body:{...journalBody,positions:result.rows.map(row=>row.value)}};
+      } catch(error){return {ok:false,status:error.status??503,body:{error:error.message}};}
+    }
+    const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});
+    return {ok:response.ok,status:response.status,body:await response.json().catch(()=>({}))};
+  });
   const shownDate = () => (data ? data.date : $('day').value);
   const dayInNY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
   $('day').value = dayInNY.format(new Date());
@@ -129,6 +146,7 @@ svg{display:block;width:100%}
     const off = (12 - +fH.format(noon)) * 3600e3; return Date.parse(day + 'T00:00:00Z') + (h * 60 + m) * 60e3 + off; };
 
   function showSync(sync) {
+    if(!sync){$('syncinfo').textContent=`Recorded as of ${fDT.format(data.cutoff)} ET. Unretained earlier revisions are unavailable.`;return;}
     const parts = [sync.last_success_at ? `Last successful sync ${fDT.format(T(sync.last_success_at))} ET` : 'Never synced'];
     if (sync.scan_in_progress) parts.push(`<span class="bad">Scan in progress since ${fDT.format(T(sync.scan_in_progress.started_at))} ET (${sync.scan_in_progress.query_complete ? 'listing done, bodies pending' : 'listing not finished'}); sync again to continue</span>`);
     if (sync.last_error) parts.push(`<span class="bad">Last read failed ${fDT.format(T(sync.last_error.at))} ET: ${esc(sync.last_error.message)}</span>`);
@@ -137,20 +155,34 @@ svg{display:block;width:100%}
 
   async function load() {
     $('msg').innerHTML = '';
-    const res = await loads.loadDay($('day').value);
+    let cutoff=null;
+    try {
+      if($('journal-view').value==='recorded') {
+        const parts=$('journal-cutoff').value.split(':').map(Number);
+        if(parts.length<2)throw new Error('Choose a cutoff time');
+        cutoff=sessionInstant($('day').value,parts[0],parts[1],parts[2]??0);
+      }
+      // Every load invalidates the preceding source generation, including a
+      // switch back to the explicit full retrospective.
+      clock.select({session:$('day').value,instrument:'JOURNAL',mode:'replay',origin:'recorded',cutoff:cutoff??sessionInstant($('day').value,16)});
+    } catch(error){$('msg').textContent=error.message;return false;}
+    const res = await loads.loadDay($('day').value,cutoff);
     if (res.stale) return false;                                       // a later day load superseded this one
     if (res.status === 401) { $('access').hidden = false; $('journal').hidden = true; return false; }
     $('journal').hidden = false;
     const body = res.body || {};
     if (!res.ok) { $('msg').innerHTML = `<div class="banner">${esc(body.error || `HTTP ${res.status}`)}</div>`; return false; }
     data = { ...body, date: res.date };
+    $('sync').disabled=cutoff!==null;
     selected = new Set(data.positions.map(p => p.position_id));       // open with every position selected
     showSync(data.sync);
+    if(data.view==='retrospective')$('syncinfo').textContent+=' · Full retrospective: later fills and revisions included.';
     render();
     return true;
   }
 
   async function sync() {
+    if(data?.view==='recorded-as-of'){$('msg').textContent='Switch to Full retrospective to sync the current journal.';return;}
     $('sync').disabled = true;
     try {
       const res = await fetch('/api/trade-journal/sync', { method: 'POST', credentials: 'same-origin' });
@@ -202,8 +234,8 @@ svg{display:block;width:100%}
       return `<div class="pos ${on ? 'on' : ''}" data-id="${esc(p.position_id)}"><input type="checkbox" ${on ? 'checked' : ''} aria-label="select ${esc(label(p))}">
         <span><b>${esc(label(p))}</b> <span class="note">· ${esc(orders(p))}</span> ${flags}</span><span><button data-only="${esc(p.position_id)}">Only</button></span>
         <span class="m">${fDT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fDT.format(T(p.closed_ts)) : ''}${p.expired_on ? ' · expired worthless ' + esc(p.expired_on) : ''} · ${fillsOnDay(p).length} fills on this date · position ${pnl}
-        · journal edited ${fDT.format(T(p.source_last_edited))} · read ${fDT.format(T(p.app_read_at))} · <a href="${esc(p.journal_url)}" target="_blank" rel="noopener">row</a></span></div>`;
-    }).join('') : '<div class="note">No journal positions have an execution on this date.</div>';
+        ${p.source_last_edited?' · journal edited '+fDT.format(T(p.source_last_edited)):''} · recorded ${fDT.format(T(p.app_read_at))}${p.journal_url?' · <a href="'+esc(p.journal_url)+'" target="_blank" rel="noopener">row</a>':''}</span></div>`;
+    }).join('') : '<div class="note">'+(data.view==='recorded-as-of'?'No eligible position was retained by this cutoff. Unretained earlier history is unavailable.':'No journal positions have an execution on this date.')+'</div>';
     $('unsupcard').hidden = !data.unsupported.length;
     $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
     $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
