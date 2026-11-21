@@ -79,7 +79,7 @@ export async function handlePaperTrade(request, env) {
 
   // The quote source belongs to the approved subscriber. A held position or
   // retried request cannot grant another account access to that source.
-  if (body.instrument_type === 'futures_option' && !await btcAllowed(env, session)) {
+  if (body.instrument_type === 'futures_option' && !await btcAllowed(env, session, request)) {
     return jsonResponse({ error: 'BTC options access not enabled' }, 403);
   }
 
@@ -172,7 +172,7 @@ export async function handlePaperTrade(request, env) {
   }
 
   const btc = body.instrument_type === 'futures_option';
-  if (btc && body.side === 'buy' && (!await btcAllowed(env, session) || env.BTC_OPTIONS_ENTRIES !== '1')) {
+  if (btc && body.side === 'buy' && (!await btcAllowed(env, session, request) || env.BTC_OPTIONS_ENTRIES !== '1')) {
     return jsonResponse({ error: 'BTC new entries disabled' }, 403);
   }
   if (btc && body.side === 'sell' && !heldBtc(session.record).some(c => c.contract_key === body.sym)) {
@@ -311,7 +311,7 @@ export async function handlePaperTrade(request, env) {
     return jsonResponse({ error: 'Execution lease could not be refreshed' }, 503);
   }
 
-  if (btc && !await btcAllowed(env, session)) return jsonResponse({ error: 'BTC data access revoked' }, 403);
+  if (btc && !await btcAllowed(env, session, request)) return jsonResponse({ error: 'BTC data access revoked' }, 403);
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
     if (existingTrade) {

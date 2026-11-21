@@ -11,6 +11,8 @@ import { handleLiveQuotes, isPublicBrowserDataKey } from '../backend/browser-dat
 import { validateTradeIntent } from '../backend/execution.js';
 import { handleSettle } from '../backend/settlement.js';
 import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
+import { handleBtcOwnerLink } from '../backend/btc-owner-link.js';
+import { CREDIT_ORIGIN, OWNER_ID } from '../backend/kalshi-access.js';
 
 const now = Date.parse('2026-11-21T18:00:00Z');
 const sym = 'BTCOPT:' + 'a'.repeat(40);
@@ -248,6 +250,32 @@ test('revoked display access denies fresh quotes and execution even for holders'
     assert.equal((await h.order(intent('sell'))).status, 403);
     assert.equal(calls, 0);
     assert.equal(computeBookFromTrades((await h.store.users.get('fixture')).trades)[sym].pos, 1);
+  } finally { h.restore(); }
+});
+
+test('verified GitHub ordinary paper session reads, buys and closes; revoked identity cannot submit or replay', async () => {
+  const h = await harness(); let owner = true;
+  try {
+    await h.env.DB.prepare('DELETE FROM btc_owner_sessions').run();
+    global.fetch = async url => String(url).startsWith(CREDIT_ORIGIN)
+      ? Response.json({ github_id: owner ? OWNER_ID : OWNER_ID+1 }) : Response.json(h.market);
+    const headers = { Cookie: 'session=fixture-session; __Host-cds-session=synthetic_github_0123456789',
+      Origin: 'https://options.moopertonic.net', 'Content-Type': 'application/json' };
+    const link = await handleBtcOwnerLink(new Request('https://options.moopertonic.net/api/btc-options/owner-link', {
+      method: 'POST', headers, body: JSON.stringify({ action: 'github', confirm: true, paper_account: 'fixture' }),
+    }), h.env);
+    assert.equal(link.status, 200);
+    const read = () => handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', { headers }), h.env);
+    const order = body => handlePaperTrade(new Request('https://options.moopertonic.net/api/paper-trade', {
+      method: 'POST', headers, body: JSON.stringify(body),
+    }), h.env);
+    assert.equal((await read()).status, 200);
+    const buy = intent(); assert.equal((await order(buy)).status, 201);
+    owner = false; assert.equal((await read()).status, 403);
+    assert.equal((await order(buy)).status, 403, 'receipt replay must reauthorize');
+    assert.equal((await order(intent('sell'))).status, 403);
+    owner = true; assert.equal((await order(intent('sell'))).status, 201);
+    assert.equal((await h.store.users.get('fixture')).trades.length, 2);
   } finally { h.restore(); }
 });
 

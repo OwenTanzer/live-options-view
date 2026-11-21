@@ -15,6 +15,12 @@ const btcOptions = {
   },
   async refresh() {
     this.syncSession();
+    // Choosing BTC / submitting ordinary login deliberately binds only this
+    // paper session when the existing server-verified GitHub owner is present.
+    if (this.active && sessionVerified && session && typeof btcOwnerLink !== 'undefined') {
+      await btcOwnerLink.github(true);
+      this.syncSession();
+    }
     const hasHoldings = session && Object.values(computeBook()).some(b => b.instrument_type === 'futures_option' && b.pos > 0);
     if (!sessionVerified || !session || (!this.active && !hasHoldings)) { this.quotes.clear(); this.render(); return; }
     const generation = this.generation, request = ++this.request, username = session.username;
@@ -178,6 +184,12 @@ const btcOptions = {
       if (signedIn) {
         status.appendChild(element('p', '', 'This subscriber feed cannot be shared with other users. A paper username or journal login alone does not grant access.'));
         if (this.ownerLinkAvailable) {
+          const github = element('a', 'btc-github-login', 'Sign in with GitHub');
+          github.href = '/credit-tape/auth/login?return=btc'; status.appendChild(github);
+          const check = element('button', 'btc-github-check', 'Use verified GitHub for this paper session');
+          check.type = 'button'; check.disabled = btcOwnerLink.busy;
+          check.onclick = async () => { await btcOwnerLink.github(); await this.refresh(); }; status.appendChild(check);
+          status.appendChild(element('p', '', `GitHub verification applies only to your current paper account “${session.username}”. Your balances and sessions stay separate.`));
           status.appendChild(element('p', '', `If you own this subscription, link your existing enrolled owner passkey to paper account “${session.username}” for this session only. This does not sign you into the journal.`));
           const link = element('button', 'btc-owner-link', 'Link this session with owner passkey');
           link.type = 'button'; link.disabled = btcOwnerLink.busy; link.onclick = () => btcOwnerLink.link(); status.appendChild(link);
@@ -186,6 +198,9 @@ const btcOptions = {
       } else {
         const login = element('button', 'btc-login', 'Sign in');
         login.type = 'button'; login.onclick = () => openPaperLogin(); status.appendChild(login);
+        const github = element('a', 'btc-github-login', 'Sign in with GitHub');
+        github.href = '/credit-tape/auth/login?return=btc'; status.appendChild(github);
+        status.appendChild(element('p', '', 'Then sign in to your normal paper account. An already verified owner needs no extra passkey step.'));
       }
       return;
     }

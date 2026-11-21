@@ -1,5 +1,6 @@
 import { jsonResponse, readJsonBody, requireSession } from './common.js';
 import { accountId, hashSessionToken } from './storage.js';
+import { ownerIdentity, OWNER_ID, SITE } from './kalshi-access.js';
 
 const RP = 'options.moopertonic.net', ORIGIN = 'https://' + RP;
 const denied = () => jsonResponse({ error: 'Owner verification failed. No access was linked.' }, 403);
@@ -15,7 +16,7 @@ export function ownerLinkAvailable(env) {
 export async function ownerSourceBinding(env) {
   return hashSessionToken(JSON.stringify(['btc-owner-v1', env.LIVE_QUOTE_ORIGIN, env.BTC_OWNER_RIGHTS_RECEIPT]));
 }
-export async function btcAllowed(env, session) {
+export async function btcAllowed(env, session, request) {
   if (!ownerLinkAvailable(env) || !session?.token || session.record?.is_bot || session.record?.account_closed) return false;
   try {
     const proof = await env.DB.prepare(`SELECT 1 AS allowed FROM btc_owner_sessions p
@@ -26,8 +27,22 @@ export async function btcAllowed(env, session) {
       AND p.expires>? AND s.expires_at>? AND m.member='Owen' AND m.public_key IS NOT NULL`)
       .bind(await hashSessionToken(session.token), accountId(session.username), await ownerSourceBinding(env),
         Math.floor(Date.now()/1000), Math.floor(Date.now()/1000)).first();
-    return !!proof;
-  } catch { return false; } // Missing migration/source fails closed; no legacy allowlist.
+    if (proof) return true;
+  } catch { /* No passkey proof; the independent GitHub path must still verify. */ }
+  if (!request || new URL(request.url).origin !== SITE || env.ENVIRONMENT === 'preview' || env.ISOLATION !== undefined) return false;
+  try {
+    const readProof = async () => env.DB.prepare(`SELECT 1 AS allowed FROM btc_github_sessions p
+      JOIN sessions s ON s.token_hash=p.token_hash AND s.username=p.username
+      JOIN users u ON u.username=p.username
+      WHERE p.token_hash=? AND p.username=? AND p.source_binding=? AND p.github_id=?
+      AND p.disabled=0 AND p.expires>? AND s.expires_at>?`)
+      .bind(await hashSessionToken(session.token), accountId(session.username), await ownerSourceBinding(env), OWNER_ID,
+        Math.floor(Date.now()/1000), Math.floor(Date.now()/1000)).first();
+    // The binding is not authentication. Never cache a positive upstream verdict.
+    if (!await readProof() || (await ownerIdentity(request))?.github_id !== OWNER_ID) return false;
+    // Recheck after upstream I/O so concurrent logout/unlink/expiry wins.
+    return ownerLinkAvailable(env) && !!await readProof();
+  } catch { return false; }
 }
 
 export async function handleBtcOwnerLink(request, env) {
@@ -48,9 +63,26 @@ export async function handleBtcOwnerLink(request, env) {
         db.prepare('DELETE FROM btc_owner_challenges WHERE token_hash=?').bind(tokenHash),
         db.prepare('DELETE FROM btc_owner_sessions WHERE token_hash=?').bind(tokenHash),
       ]);
+      // Tombstone prevents an automatic refresh/reload from undoing deliberate unlink.
+      await db.prepare(`INSERT INTO btc_github_sessions(token_hash,username,github_id,source_binding,expires,disabled)
+        VALUES(?,?,?,?,0,1) ON CONFLICT(token_hash) DO UPDATE SET disabled=1,expires=0`)
+        .bind(tokenHash, username, OWNER_ID, await ownerSourceBinding(env)).run();
       return jsonResponse({ ok: true });
     }
     if (!ownerLinkAvailable(env)) return jsonResponse({ error: 'Owner linking is not available for this source' }, 503);
+    if (body?.action === 'github') {
+      if (env.ENVIRONMENT === 'preview' || env.ISOLATION !== undefined || body.confirm !== true || body.paper_account !== session.username) return denied();
+      const previous = await db.prepare('SELECT disabled FROM btc_github_sessions WHERE token_hash=?').bind(tokenHash).first();
+      if (body.automatic === true && previous?.disabled) return denied();
+      if ((await ownerIdentity(request))?.github_id !== OWNER_ID) return denied();
+      const saved = await db.prepare(`INSERT INTO btc_github_sessions(token_hash,username,github_id,source_binding,expires,disabled)
+        SELECT token_hash,username,?,?,MIN(expires_at,?),0 FROM sessions
+        WHERE token_hash=? AND username=? AND expires_at>?
+        ON CONFLICT(token_hash) DO UPDATE SET source_binding=excluded.source_binding,expires=excluded.expires,disabled=0
+        WHERE ?=0 OR btc_github_sessions.disabled=0`)
+        .bind(OWNER_ID, await ownerSourceBinding(env), now+8*3600, tokenHash, username, now, body.automatic === true ? 1 : 0).run();
+      return saved.meta.changes === 1 ? jsonResponse({ ok: true, linked: true }) : denied();
+    }
     if (body?.confirm !== true || !['options', 'verify'].includes(body?.action)) return denied();
     const binding = await ownerSourceBinding(env);
     const { generateAuthenticationOptions, verifyAuthenticationResponse } = await import('@simplewebauthn/server');

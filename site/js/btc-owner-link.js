@@ -1,12 +1,30 @@
 // Deliberate assertion with an existing passkey; never enroll or read cookies.
 const btcOwnerLink = {
-  busy: false, message: '',
+  busy: false, message: '', autoRevision: null,
   async post(body) {
     const response = await fetch('/api/btc-options/owner-link', { method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const result = await response.json();
     if (!response.ok) throw Error(result.error || 'Owner verification unavailable');
     return result;
+  },
+  async github(automatic = false) {
+    if (this.busy || !sessionVerified || !session) return false;
+    const revision = authRevision, current = session;
+    if (automatic && this.autoRevision === revision) return false;
+    this.autoRevision = revision;
+    this.busy = true;
+    try {
+      await this.post({ action: 'github', confirm: true, automatic, paper_account: current.username });
+      if (authRevision !== revision || session !== current) return false;
+      this.message = '';
+      await refreshSessionFromServer();
+      renderAuthGate(); renderPaper();
+      return true;
+    } catch (error) {
+      if (!automatic && authRevision === revision && session === current) this.message = error.message;
+      return false;
+    } finally { this.busy = false; }
   },
   async link() {
     if (this.busy || !sessionVerified || !session) return;
@@ -48,3 +66,12 @@ const btcOwnerLink = {
     finally { this.busy = false; btcOptions.render(); }
   },
 };
+// A restored page must not paint an old private account/identity snapshot while
+// the current paper and GitHub sessions are being checked again.
+window.addEventListener('pageshow', event => {
+  if (!event.persisted) return;
+  authRevision++; sessionVerified = false;
+  if (session) session.trades = (session.trades || []).filter(t => t.instrument_type !== 'futures_option');
+  btcOptions.syncSession(); closeTicket(); renderPaper();
+  // index.html's existing BFCache handler reloads and verifies both sessions.
+});

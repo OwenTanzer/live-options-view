@@ -369,7 +369,7 @@ export async function handleSettle(request, env) {
 
   const btc = await settleBtcAccount(env, session.username);
   if (btc.error) return jsonResponse({ error: 'BTC settlement pending retry' }, 503);
-  const allowed = await btcAllowed(env, session);
+  const allowed = await btcAllowed(env, session, request);
   return jsonResponse({ ...kvOutcome.result, settled: [...kvOutcome.result.settled, ...(allowed ? btc.result.settled : [])],
     pending_btc: allowed ? btc.result.pending : [], balance_cash: btc.result.balance_cash }, 200);
 }

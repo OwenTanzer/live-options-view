@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { handleKalshi, kalshiTick, settleKalshiMarket } from '../backend/kalshi.js';
 import { ACCOUNT, CREDIT_ORIGIN, SITE, OWNER_ID } from '../backend/kalshi-access.js';
 import { kalshiFee, kalshiSnapshot } from '../backend/kalshi-model.js';
-import { fetchMarket, displayMarket, effectiveFee } from '../backend/kalshi-source.js';
+import { fetchMarket, displayMarket, effectiveFee, publicRead } from '../backend/kalshi-source.js';
 import { quoteEvent, compareEvent } from '../backend/prediction-model.js';
 import { archive, getArchive, budget, pruneArchive } from '../backend/kalshi-store.js';
 import { createStorage } from '../backend/storage.js';
@@ -17,6 +17,19 @@ async function scenario(fn) {
 }
 const intent = (changes = {}) => ({ execution_request_id: crypto.randomUUID(), market: TICKER, side: 'buy', outcome: 'YES', qty: 3, ...changes });
 const order = (env, b) => handleKalshi(request('paper', b), env);
+
+test('Cloudflare public read uses manual redirects and refuses redirects or non-200 success', async t => {
+  const env = envFixture(); let status = 302, location = 'https://other.invalid';
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(options.redirect, 'manual');
+    return Response.json({}, { status, headers: { ...(location ? { Location: location } : {}), Date: new Date().toUTCString() } });
+  });
+  try {
+    for (status of [201, 301, 302, 303, 307, 308, 401]) await assert.rejects(publicRead(env, '/markets/fixture'));
+    status = 200; await assert.rejects(publicRead(env, '/markets/fixture'));
+    location = null; assert.deepEqual((await publicRead(env, '/markets/fixture')).data, {});
+  } finally { env.DB.db.close(); }
+});
 
 test('official July 2026 fee formula fixtures: centicent rounding, quantity and series multiplier', () => {
   const fee = { type: 'quadratic', multiplier: '1' };
@@ -63,7 +76,7 @@ test('owner introspection forwards only opaque session; disabled and preview nev
   assert.equal((await r.json()).enabled,false); assert.match(r.headers.get('Cache-Control'),/private, no-store/);
   assert.deepEqual(Object.keys(f.requests[0].options.headers).sort(),['Accept','Cookie']);
   assert.equal(f.requests[0].options.headers.Cookie,COOKIE);
-  assert.equal(f.requests[0].options.redirect,'error');
+  assert.equal(f.requests[0].options.redirect,'manual');
   assert.equal((await handleKalshi(request('market',{market:TICKER}),env)).status,503);
   await kalshiTick(env); assert.equal(f.requests.filter(x=>!x.url.startsWith(CREDIT_ORIGIN)).length,0);
   env.ENVIRONMENT='preview'; assert.equal((await handleKalshi(request('status'),env)).status,404);

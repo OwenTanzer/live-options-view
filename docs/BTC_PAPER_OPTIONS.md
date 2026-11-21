@@ -69,8 +69,8 @@ state, and every Quote replaces missing sides/sizes rather than carrying them
 forward. Bid/ask exchange times, receipt times, sizes and availability are separate.
 There is no BTC chain archive or KV operation.
 
-`GET /api/btc-options` requires a live paper session with an explicit subscriber-owner
-passkey proof. The former `BTC_OPTIONS_USERS` username allowlist is ignored. Public
+`GET /api/btc-options` requires a live paper session bound to the verified subscriber-owner
+GitHub identity or an explicit owner passkey proof. The former `BTC_OPTIONS_USERS` username allowlist is ignored. Public
 registration, a matching name, a journal login cookie, holdings, or an old execution
 receipt never grant access. See [owner linking](#existing-owner-passkey-linking) below.
 Revocation blocks fresh quotes and execution while preserving the stored ledger and
@@ -129,12 +129,11 @@ account's displayed book.
 
 ### Existing owner passkey linking
 
-This is a separate API/auth release built on the mobile chain repair (#312). It uses
+This fallback API/auth flow is included with the mobile chain repair (#312). It uses
 the already-supported journal WebAuthn credential store and pinned
 `@simplewebauthn/server` verifier, with a new assertion ceremony. Paper accounts remain
-ordinary password accounts. No GitHub sign-in, OAuth client/callback/issuer, provider
-grant exchange, or GitHub-to-paper identity mapping exists in this repository. CLI
-GitHub access is not website identity infrastructure and is not reused.
+ordinary password accounts. PR #310 subsequently supplied real GitHub owner verification;
+the primary path below reuses that fixed service. CLI credentials are never reused.
 
 The only supported principal for the current subscriber feed is the existing
 invitation-provisioned journal **Owen** principal. That fixed server record is not
@@ -179,7 +178,7 @@ Release prerequisites (operator-owned; this PR performs none):
    after prerequisite 1. These source-level gates are not paper-user allowlists.
    Proofs are bound to the receipt and `LIVE_QUOTE_ORIGIN`. Missing settings/schema
    fail closed. This replaces the legacy allowlist; existing paper sessions need
-   deliberate passkey proof. Keep entries separately controlled.
+   GitHub binding or deliberate passkey proof. Keep entries separately controlled.
 4. Release compatible assets through the staged lane, then have the owner try
    `https://options.moopertonic.net/?chain=BTC` in their normal paper account.
    Verify deny-before-proof, link, refresh, unlink/logout and revocation. Leave
@@ -196,6 +195,44 @@ users must remain denied. Their own future authorized source would require a rea
 provider grant, verified subject/account binding, permitted display scope and an
 isolated source adapter with revocation—not another row granting this shared feed.
 No speculative OAuth, text matching, secret reuse, or generic grant endpoint is added.
+
+### Existing GitHub owner and normal paper sessions
+
+PR #310 introduced `ownerIdentity()` in `backend/kalshi-access.js`. It forwards only
+the existing opaque Credit Tape session to the fixed HTTPS identity endpoint and
+accepts exactly numeric GitHub subject `125096971`. The shared verifier now uses
+Cloudflare-supported `redirect: 'manual'`, rejects every redirect/Location response
+and any status other than 200, bounds JSON, checks its content type, and fails closed
+on wrong/expired identity or transport errors. Kalshi public reads use the same
+supported redirect discipline. There is no new OAuth app, credential, key or issuer.
+
+Selecting BTC or submitting ordinary paper login checks this already-established
+GitHub identity without prompting for another authentication factor. A same-origin
+JSON POST explicitly binds that current paper account/session, checking the displayed
+account against the authenticated session as a race guard (never as identity proof).
+The binding stores only the paper session hash, account ID, numeric GitHub subject,
+source binding and expiry. It confers no authority by itself: quote reads, history,
+buy/close submission and receipt replay revalidate the fixed upstream. There is no
+positive identity cache or cross-session binding. Source rights gates still apply.
+The passkey ceremony above remains available when GitHub is unavailable.
+
+The phone UI offers **Sign in with GitHub** through the existing gateway route
+`/credit-tape/auth/login?return=btc`. A short-lived HttpOnly navigation hint returns
+an approved callback from the fixed Credit Tape landing page to `/?chain=BTC`.
+It is not OAuth state, identity, a session, or an arbitrary return URL; the existing
+upstream retains all OAuth approval and callback validation. If ordinary paper login
+is still needed, the BTC selection remains visible. If both sessions are already
+verified, the chain and actions load without a passkey or extra confirmation step.
+
+Apply additive `0007_btc_github_link.sql` alongside the documented account/journal
+and owner-link migrations before the separate protected API/assets release. It
+seeds no users or grants. Logout/account deletion clears bindings. **Unlink** leaves
+a session-scoped disabled marker so refresh cannot silently relink; the explicit
+**Use verified GitHub for this paper session** action can restore it after a fresh
+upstream check. Proof expiry, revoked GitHub sessions, changed source rights and
+different people remain denied. Other paper sessions and the separate Kalshi ledger
+retain their own balances and history. No production migration or release is performed
+by the implementation/tests.
 
 ### Execution clocks and raw wire diagnostics
 

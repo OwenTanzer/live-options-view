@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { accountId, hashSessionToken } from '../../backend/storage.js';
 import { ownerSourceBinding } from '../../backend/btc-owner-link.js';
 export function setupBtcOwner(env) {
-  for (const file of ['0003_trade_journal.sql', '0005_btc_owner_link.sql']) {
+  for (const file of ['0003_trade_journal.sql', '0005_btc_owner_link.sql', '0007_btc_github_link.sql']) {
     env.DB.db.exec(readFileSync(new URL('../../backend/migrations/' + file, import.meta.url), 'utf8'));
   }
   env.BTC_OWNER_LINK = 'enabled';
