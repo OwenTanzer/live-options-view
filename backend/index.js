@@ -1,4 +1,10 @@
 import { archive } from './strategy-archive.js';
+
+import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleBtcOptions } from './btc-options.js';
+import { handleOneClockChain } from './one-clock-chain.js';
+import { handleOneClockSqueeze } from './one-clock-squeeze.js';
+import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
@@ -27,6 +33,10 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
+    if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
+    if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
+    if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
@@ -81,6 +91,8 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/bot-index/reconcile') {
       return handleBotIndexReconcile(request, env);    }
 
+    if (request.method === 'GET' && url.pathname.startsWith('/api/prediction/')) return handlePrediction(request, env, url);
+
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return handleMe(request, env);
     }
@@ -111,6 +123,8 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/trade-journal/sync') {
       return handleTradeJournalSync(request, env);
     }
+
+    if (request.method === 'GET' && url.pathname === '/api/btc-options') return handleBtcOptions(request, env);
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
       return handleLiveQuotes(url, env);
@@ -158,6 +172,12 @@ export default {
       console.log(JSON.stringify({ event: 'settlement_skipped_cutover_fence' }));
       outcome.completed({ no_op_reason: 'cutover_fence' });
       return;
+    }
+    const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
+    // The 24/7 event clock must not broaden legacy equity settlement hours.
+    if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {
+      outcome.completed({ no_op_reason: 'outside_equity_session' }); return;
     }
     ctx.waitUntil(settleAllBots(env).then(
       summary => { outcome.completed(summary); },

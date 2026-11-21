@@ -11,17 +11,21 @@ const read = f => readFileSync(resolve(ROOT, f), 'utf8');
 const cronLines = text => text.split(/\r?\n/).map(l => l.trim()).filter(l => /^crons\s*=/.test(l));
 const triggerTables = text => text.split(/\r?\n/).filter(l => l.trim() === '[triggers]').length;
 
-test('API config owns exactly one weekday settlement trigger, MON-FRI', () => {
+test('API config owns exactly one 24/7 event settlement trigger', () => {
   const api = read('wrangler.api.toml');
   assert.equal(triggerTables(api), 1);
   const lines = cronLines(api);
   assert.equal(lines.length, 1);
   const crons = JSON.parse(lines[0].replace(/^crons\s*=\s*/, ''));
-  assert.deepEqual(crons, ['*/15 12-23 * * MON-FRI']);
+  assert.deepEqual(crons, ['*/15 * * * *']);
   const [minute, hour, dom, month, dow] = crons[0].split(' ');
-  assert.equal(minute, '*/15'); assert.equal(hour, '12-23');
+  assert.equal(minute, '*/15'); assert.equal(hour, '*');
   assert.equal(dom, '*'); assert.equal(month, '*');
-  assert.doesNotMatch(dow, /\d/, 'day-of-week must use names, never numbers');
+  assert.equal(dow, '*');
+  const handler = read('backend/index.js');
+  assert.match(handler, /clock.getUTCDay\(\) === 0/);
+  assert.match(handler, /clock.getUTCDay\(\) === 6/);
+  assert.match(handler, /clock.getUTCHours\(\) < 12/);
 });
 
 test('asset config adds no duplicate trigger', () => {

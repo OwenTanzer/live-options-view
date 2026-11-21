@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
       - "frontend/**"
       - "tests/**"
@@ -28,6 +29,7 @@ on:
     branches: [master]
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
       - "frontend/**"
       - "tests/**"
@@ -65,6 +67,10 @@ jobs:
         run: npm ci --prefix backend --ignore-scripts
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
+      - name: One Clock source and cursor contract
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
@@ -73,6 +79,12 @@ jobs:
         run: node --test tests/r2_proxy_bounded.test.js
       - name: historical archive loading
         run: node tests/historical_archive.test.js
+      - name: Prediction market fixture acceptance
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: |
+          node tests/prediction.test.mjs
+          node tests/prediction_ui.test.mjs
       - name: worker logic
         run: node tests/worker_logic.test.js
       - name: D1 account/session storage (#208)
@@ -164,6 +176,16 @@ jobs:
         run: node tests/squeeze_scanner_display.test.js
       - name: squeeze scanner panel
         run: node tests/squeeze_panel.test.js
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Collector-to-API and UI BTC fixtures
+        # Cross-language fixtures run real FULL wire events through the collector.
+        # Importing its package requires the existing producer dependencies.
+        run: |
+          pip install -r deployment/python/requirements.txt
+          node tests/btc_options.test.mjs
+          node tests/btc_options_ui.test.mjs
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
       - name: multi-underlying chain and settlement (#182)
@@ -172,12 +194,14 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/settlement_cron_outcome.test.mjs
-      - name: API settlement cron schedule (MON-FRI)
+      - name: API settlement cron schedule (24/7 events, guarded equities)
         run: node --test tests/api_cron_schedule.test.mjs
       - name: Install browser test dependencies
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: BTC monthly mobile fixture workflow
+        run: node tests/btc_options_browser.test.mjs
       - name: Disposable preview rendered workflow (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
@@ -188,6 +212,19 @@ jobs:
         run: |
           node --test tests/strategy_archive.test.mjs
           node tests/strategy_archive_browser.mjs
+
+      - name: Prediction desktop and mobile fixture workflow (#293)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+          PREDICTION_EVIDENCE_DIR: ${{ runner.temp }}/prediction-browser-evidence
+        run: node tests/prediction_browser.test.mjs
+      - name: Retain prediction rendered acceptance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/prediction-browser-evidence
+          if-no-files-found: ignore
       - name: Private journal passkey enrollment and sign-in
         run: node tests/journal_passkeys_browser.mjs
       - name: Reference OI skew desktop and mobile browser workflow

@@ -1,3 +1,5 @@
+import { predictionQuote } from './prediction.js';
+import { btcAllowed, fetchBtc, heldBtc, exactBtcQuote } from './btc-options.js';
 // backend/paper-trade.js (B4) -- paper trading: the /api/paper-trade route,
 // the largest single function in the Worker (304 lines). Moved verbatim
 // from worker.js; the router in worker.js still owns the route table. It
@@ -72,6 +74,12 @@ export async function handlePaperTrade(request, env) {
   const validationError = validateTradeIntent(body);
   if (validationError) {
     return new Response(validationError, { status: 400 });
+  }
+
+  // The quote source belongs to the approved subscriber. A held position or
+  // retried request cannot grant another account access to that source.
+  if (body.instrument_type === 'futures_option' && !btcAllowed(env, session.username)) {
+    return jsonResponse({ error: 'BTC options access not enabled' }, 403);
   }
 
   const executionId = body.execution_request_id;
@@ -162,17 +170,29 @@ export async function handlePaperTrade(request, env) {
       closure_reason: session.record.closure_reason }, 403);
   }
 
+  const btc = body.instrument_type === 'futures_option';
+  if (btc && body.side === 'buy' && (!btcAllowed(env, session.username) || env.BTC_OPTIONS_ENTRIES !== '1')) {
+    return jsonResponse({ error: 'BTC new entries disabled' }, 403);
+  }
+  if (btc && body.side === 'sell' && !heldBtc(session.record).some(c => c.contract_key === body.sym)) {
+    return jsonResponse({ error: 'No held BTC contract' }, 400);
+  }
   let quotePayload;
+  let eventQuote;
   try {
-    const quoteResponse = await fetchLiveQuotes([body.sym], env);
-    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
-    quotePayload = await quoteResponse.json();
+    if (body.instrument_type === 'prediction') {
+      eventQuote = await predictionQuote(env, body);
+    } else {
+      const quoteResponse = await (btc ? fetchBtc(env, session.record, [body.sym]) : fetchLiveQuotes([body.sym], env));
+      if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
+      quotePayload = await quoteResponse.json();
+    }
   } catch (error) {
     return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
   }
   const quoteReceivedAt = new Date();
 
-  const quoteResult = exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
+  const quoteResult = eventQuote ?? exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
@@ -180,6 +200,7 @@ export async function handlePaperTrade(request, env) {
   const executedAt = new Date();
   const priceResult = executionPriceForOrder(quoteResult, body);
   const common = {
+    ...(quoteResult.prediction ? { prediction: quoteResult.prediction, fee_units: quoteResult.fee_units } : {}),
     execution_id: executionId,
     execution_request_id: executionId,
     ts: executedAt.toISOString(),
@@ -188,7 +209,7 @@ export async function handlePaperTrade(request, env) {
     bid_ts: quoteResult.bidTs,
     ask_ts: quoteResult.askTs,
     sym: body.sym,
-    underlying: /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
+    underlying: quoteResult.underlying ?? /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
     instrument_type: body.instrument_type ?? 'option',
     multiplier: quoteResult.multiplier,
     strike: quoteResult.strike,
@@ -202,6 +223,9 @@ export async function handlePaperTrade(request, env) {
     bid: quoteResult.bid,
     ask: quoteResult.ask,
     username: session.username,
+    ...(btc ? { contract: quoteResult.contract, source_quote: quoteResult.source_quote,
+      quote_clock_basis: quoteResult.quote_clock_basis, quote_source_ts: quoteResult.quote_source_ts,
+      fees: quoteResult.fees, fee_model: quoteResult.fee_model, underlying: '/BTC' } : {}),
   };
   const candidate = Object.freeze(priceResult.error
     ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
@@ -246,6 +270,11 @@ export async function handlePaperTrade(request, env) {
   let cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+  if (trade.instrument_type === 'prediction') {
+    const units = quoteResult.price_units * trade.qty;
+    cashDelta = ((trade.side === 'buy' ? -units : units) - trade.fee_units) / 10000;
+  }
+  if (btc) { cashDelta -= trade.fees; trade = { ...trade, cash_delta: cashDelta }; }
   // Financing is charged only when closing a leveraged share position. The
   // loan is the negative cash created by the entry; one annual rate and the
   // elapsed calendar days are enough for this single-position paper bot.
@@ -286,7 +315,15 @@ export async function handlePaperTrade(request, env) {
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
+    if (btc) {
+      if (exactBtcQuote(quotePayload, body, Date.now()).error) return { error: 'quote_expired' };
+      const book = computeBookFromTrades(record.trades);
+      const held = book[trade.sym];
+      if (trade.side === 'buy' && !held?.pos && Object.values(book).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).length >= 64) return { error: 'position_budget' };
+      if (held?.pos && JSON.stringify(held.contract) !== JSON.stringify(trade.contract)) return { error: 'metadata_changed' };
+    }
     if (record.account_closed) return { error: 'account_closed' };
+    if (trade.instrument_type === 'prediction' && (Date.now() >= Date.parse(trade.prediction.rules.cutoff) || Date.now() - Date.parse(trade.quote_ts) > 15000)) return { error: 'stale_prediction' };
     if (trade.side === 'buy' && (record.balance_cash < 0 || -cashDelta > record.balance_cash)) {
       const marginLimit = Number(record.paper_margin_limit ?? 1);
       const book = computeBookFromTrades(record.trades);
@@ -305,17 +342,26 @@ export async function handlePaperTrade(request, env) {
         return { error: 'insufficient_balance' };
       }
     }
-    if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
+    if (['share', 'prediction', 'futures_option'].includes(trade.instrument_type) && trade.side === 'sell') {
       const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;
       if (held < trade.qty) return { error: 'insufficient_position' };
     }
-    const balance_cash = record.balance_cash + cashDelta;
+    const balance_cash = trade.instrument_type === 'prediction'
+      ? (Math.round(record.balance_cash * 10000) + Math.round(cashDelta * 10000)) / 10000
+      : record.balance_cash + cashDelta;
     return {
       record: { ...record, balance_cash, trades: [...record.trades, trade] },
       result: { trade, balance_cash },
     };
   });
 
+  if (['quote_expired', 'metadata_changed', 'position_budget'].includes(kvOutcome.error)) {
+    const rejection = { ...common, error: kvOutcome.error, status: 'rejected', http_status: 409 };
+    try {
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch { return jsonResponse({ error: 'Rejection could not be recorded' }, 503); }
+  }
   if (kvOutcome.error === 'insufficient_balance' || kvOutcome.result?.balance_rejection) {
     const rejection = Object.freeze(kvOutcome.result?.balance_rejection ?? {
       ...common,
@@ -340,10 +386,10 @@ export async function handlePaperTrade(request, env) {
       return jsonResponse({ error: 'Account closure rejection could not be recorded' }, 503);
     }
   }
-  if (kvOutcome.error === 'insufficient_position') {
+  if (kvOutcome.error === 'insufficient_position' || kvOutcome.error === 'stale_prediction') {
     const rejection = Object.freeze({
       ...common,
-      error: 'Cannot sell more shares than are held',
+      error: kvOutcome.error === 'stale_prediction' ? 'Prediction book expired before execution' : 'Cannot sell more units than are held',
       status: 'rejected',
       http_status: 400,
     });

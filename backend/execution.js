@@ -1,3 +1,4 @@
+import { exactBtcQuote, BTC_KEY } from './btc-options.js';
 // backend/execution.js (B4) -- execution: trade-intent validation, the R2
 // reservation-lease machinery (reserve/renew/finalize + expiry), and the
 // exact-quote pricers (share + contract). Moved verbatim from worker.js;
@@ -27,13 +28,14 @@ export function validateTradeIntent(body) {
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.execution_request_id)) {
     return 'execution_request_id must be a UUID';
   }
-  if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > MAX_STRING_LEN) {
+  if (typeof body.sym !== 'string' || !body.sym.trim() || body.sym.length > (body.instrument_type === 'prediction' ? 512 : MAX_STRING_LEN)) {
     return 'sym must be a non-empty string';
   }
   const instrumentType = body.instrument_type ?? 'option';
-  if (instrumentType !== 'option' && instrumentType !== 'share') {
-    return 'instrument_type must be "option" or "share"';
+  if (!['option', 'share', 'futures_option', 'prediction'].includes(instrumentType)) {
+    return 'instrument_type must be option, share, futures_option or prediction';
   }
+  if (instrumentType === 'futures_option' && (!BTC_KEY.test(body.sym) || body.qty !== 1)) return 'BTC monthly orders require an exact key and one contract';
   if (instrumentType === 'share' && !TRADEABLE_SHARE_SYMBOLS.has(body.sym)) {
     return 'share symbol is not in the tradeable equity list';
   }
@@ -160,6 +162,7 @@ export async function quoteProviderErrorResponse(response) {
   );
 }
 export function exactExecutionQuote(payload, intent, nowMs) {
+  if (intent.instrument_type === 'futures_option') return exactBtcQuote(payload, intent, nowMs);
   if ((intent.instrument_type ?? 'option') === 'share') {
     return exactShareQuote(payload, intent.sym, intent.side, nowMs);
   }

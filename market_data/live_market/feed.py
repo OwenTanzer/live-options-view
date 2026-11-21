@@ -18,6 +18,7 @@ from typing import Optional
 import websocket
 
 from .config import log
+from .btc_quote_clock import BtcQuoteClock
 
 # -- DXLink websocket feed ----------------------------------------------------
 
@@ -45,6 +46,10 @@ class DXLinkFeed:
         self._ready = threading.Event()
         self._subs: list[dict] = []
         self._pending_option_subs: list[dict] = []
+        self._btc_symbols = set()
+        self._btc_option_symbols = set()
+        self._btc_owned = set()
+        self._btc_clock = BtcQuoteClock()
         self._subscription_error: Optional[str] = None
         self._subscribed          = False
         self._timesale_symbols: list[str] = []
@@ -103,6 +108,30 @@ class DXLinkFeed:
                 self._flush_pending_option_subscriptions_locked()
         return len(additions)
 
+    def replace_btc_subscriptions(self, symbols, option_symbols=()):
+        """Replace only this private product's Quote events; preserve price/equity lanes."""
+        wanted = set(symbols)
+        if len(wanted) > 65:
+            raise ValueError("BTC subscription budget exceeded")
+        with self._lock:
+            known = {(e["type"], e["symbol"]) for e in self._subs}
+            removed = self._btc_owned - wanted
+            added = {s for s in wanted if ("Quote", s) not in known}
+            remove = [{"type": "Quote", "symbol": s} for s in removed]
+            add = [{"type": "Quote", "symbol": s} for s in added]
+            if self._subscribed and (remove or add):
+                self._send({"type": "FEED_SUBSCRIPTION", "channel": 1,
+                            "reset": False, "remove": remove, "add": add})
+            self._subs = [e for e in self._subs if not (e["type"] == "Quote" and e["symbol"] in removed)] + add
+            for symbol in removed:
+                self._state.pop(symbol, None)
+                self._btc_clock.forget(symbol)
+            for symbol in wanted - self._btc_symbols:
+                self._btc_clock.forget(symbol)
+            self._btc_owned = (self._btc_owned - removed) | added
+            self._btc_symbols = wanted
+            self._btc_option_symbols = set(option_symbols) & wanted
+
     def _flush_pending_option_subscriptions_locked(self):
         while self._pending_option_subs:
             batch = self._pending_option_subs[:200]
@@ -130,6 +159,17 @@ class DXLinkFeed:
     def get_state(self) -> dict[str, dict]:
         with self._lock:
             return {k: dict(v) for k, v in self._state.items()}
+
+    def get_btc_diagnostics(self) -> dict:
+        with self._lock:
+            return self._btc_clock.diagnostics()
+
+    def get_btc_snapshot(self):
+        """Read readiness, quote state and connection epoch atomically."""
+        with self._lock:
+            ready = self._connected and self._authorized and self._channel_open
+            state = {k: dict(self._state[k]) for k in self._btc_symbols if k in self._state} if ready else {}
+            return ready, state, self._btc_clock.diagnostics()
 
     def get_health(self) -> dict:
         with self._lock:
@@ -177,6 +217,7 @@ class DXLinkFeed:
         with self._lock:
             self._authorized = False
             self._channel_open = False
+            self._btc_clock.reset()
             self._last_error = f"dxlink_auth_rejected: {message}"[:200]
             if expired:
                 self._auth_fail_count = max(self._auth_fail_count + 1,
@@ -249,6 +290,9 @@ class DXLinkFeed:
                 pass
             return
         with self._lock:
+            for symbol in self._btc_symbols:
+                self._state.pop(symbol, None)
+            self._btc_clock.reset()
             self._connected = True
             # A silent redial skips _on_close, so clear the previous connection's
             # auth/channel state here; health must not report a dead login.
@@ -343,7 +387,7 @@ class DXLinkFeed:
                 "type": "FEED_SETUP", "channel": 1,
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
-                    "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"],
+                    "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime", "bidSize", "askSize"],
                     "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice", "prevDayId"],
                     "Trade":    ["eventType", "eventSymbol", "dayVolume", "price", "time"],
                     "TradeETH": ["eventType", "eventSymbol", "price", "time"],
@@ -660,6 +704,8 @@ class DXLinkFeed:
         if not isinstance(data, list):
             return
         now = datetime.now(timezone.utc)
+        with self._lock:
+            self._btc_clock.next_frame()
         for event in data:
             if not isinstance(event, dict):
                 continue
@@ -685,6 +731,15 @@ class DXLinkFeed:
                         self._quote_time_counts["with_provider_time"] += 1
                     else:
                         self._quote_time_counts["without_provider_time"] += 1
+                    if sym in self._btc_symbols:
+                        # Replace both sides, including missing prices/sizes. Never
+                        # carry a withdrawn side forward as executable liquidity.
+                        sizes = {side: self._to_float(event.get(side + 'Size')) for side in ('bid', 'ask')}
+                        observation = self._btc_clock.observe(sym, event, now, {'bid': b, 'ask': a}, sizes,
+                                                             diagnostic=sym in self._btc_option_symbols)
+                        s.update(bid=b, ask=a, bid_size=sizes['bid'], ask_size=sizes['ask'],
+                                 bid_ts=now.isoformat(), ask_ts=now.isoformat(), **observation)
+                        continue
                     if b is not None:
                         s["bid"] = b
                         s["bid_ts"] = now.isoformat()
@@ -733,6 +788,7 @@ class DXLinkFeed:
     def _on_error(self, ws, error):
         with self._lock:
             self._last_error = str(error)
+            self._btc_clock.reset()
         log.error(f"DXLink error: {error}")
 
     def _on_close(self, ws, code, msg):
@@ -742,6 +798,7 @@ class DXLinkFeed:
             self._authorized   = False
             self._channel_open = False
             self._last_close_code = code
+            self._btc_clock.reset()
             if never_authorized:
                 self._auth_fail_count += 1
                 fail_count = self._auth_fail_count

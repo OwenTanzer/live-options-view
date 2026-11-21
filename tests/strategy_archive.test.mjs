@@ -8,7 +8,7 @@ import { makeStorage } from './helpers/d1_shim.mjs';
 async function fixture() {
   const DB = makeStorage();
   DB.db.exec(
-    readFileSync(new URL('../backend/migrations/0004_strategy_archive.sql', import.meta.url), 'utf8'),
+    readFileSync(new URL('../backend/migrations/0005_strategy_archive.sql', import.meta.url), 'utf8'),
   );
   // The shim uses a single synchronous SQLite connection. D1 serializes
   // transactions; run each batch in one synchronous transaction here too.

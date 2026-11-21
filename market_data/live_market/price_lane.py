@@ -93,6 +93,11 @@ class PriceLane:
                  cadence_secs: float = PRICES_SECS):
         self._token_manager = token_manager
         self._quote_registry = quote_registry
+        self._btc = None
+        if os.environ.get("BTC_OPTIONS_ENABLED") == "1" and quote_registry is not None:
+            from .btc_options import BtcOptions
+            self._btc = BtcOptions()
+            quote_registry.btc = self._btc
         self._s3 = s3
         self._writer_id = writer_id or new_writer_id()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -190,6 +195,11 @@ class PriceLane:
             self._ensure_feed()
             self._reconcile_contracts(now, now_et)
             self._keep_feed_alive()
+            if self._btc is not None:
+                try:
+                    self._btc.schedule_refresh(self._feed, self._resolution_token(now), now)
+                except Exception:
+                    self._btc.status = "subscription_unavailable"
             published = self._publish_once(now, now_et, calendar, summary)
             self._published_rows = published
             if self._rolling is not None:

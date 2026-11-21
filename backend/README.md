@@ -18,6 +18,44 @@ The browser's implementation lives separately in [site/](../site).
 
 ## Boundaries worth preserving
 
+### One Clock observer storage (not activated)
+
+[`one-clock-observer.js`](one-clock-observer.js) supplies trusted ingestion and
+as-of reads over additive migration `0004_one_clock.sql`. It is deliberately not
+mounted as an unauthenticated ingestion route. An owning adapter must authorize
+the namespace and source, project an allowlisted payload, prove availability and
+declare prospective/replay/backfill collection before calling it. A namespace is
+an internal access boundary, never a client-supplied substitute for authentication.
+
+Rule versions and observation revisions are immutable. Source observations,
+event/outcome revisions, source checkpoint and batch receipt commit in one D1
+batch. A generation trigger rejects concurrent stale evaluations; retry with the
+same batch identity after rereading state. A failed batch rolls back completely.
+There are no Workers KV, provider-feed, account-execution or settlement calls.
+`observedEventsAsOf` filters observer revision time as well as source cohort and
+session, so later corrections do not appear on rewind. First ingestion retains
+its collection mode; backfill cannot silently become a prospective observation.
+Each saved event also carries `lineage.inputs` (current and anchor receipts)
+and `lineage.outcomes` (baseline and endpoint receipts plus measurement collection).
+A prospective trigger can have a backfilled outcome; consumers must retain both
+labels. Receipt times and original collection modes survive repeated delivery.
+
+Bounds: 500 observations per delivery, 10,000 observation revisions per scoped
+session and 100 registered versions per namespace. Exceeding a bound fails before
+checkpoint commit; it is not a partial-success receipt. Integrations must establish
+their workload against these bounds and preserve opaque source cursors rather
+than infer completeness from the latest timestamp. Counting ongoing matches is
+a reader projection, not a durable write on every tick.
+
+Apply the reviewed additive migration before activating an observer consumer;
+retain current API/assets for rollback and leave new history intact when disabling
+the reader. No migration, active source ingestion or production activation is
+performed by this code change. See [One Clock](../docs/ONE_CLOCK.md) for staged
+delivery. Tests use the real SQLite engine through the D1 shim, including atomic
+failure, restart, duplicate delivery, late outcome, correction rewind, concurrent
+generation and namespace isolation. D1's batch transaction behavior and service
+limits are documented by [Cloudflare](https://developers.cloudflare.com/d1/platform/limits/).
+
 The live-quote route proxies the collector's in-memory feed. Archive reads use
 stored R2 artifacts; the public site's archive-base selection is explained in
 [Architecture](../ARCHITECTURE.md#browser-and-data-boundaries).
@@ -33,8 +71,9 @@ must not silently disappear from the roster. The dated
 [cutover record](../site/operations/2026-09-28-bot-index-cutover.md) preserves rollout
 evidence. Do not replay its migration steps as routine startup instructions.
 
-The settlement cron runs every fifteen minutes during hours 12–23 UTC on weekdays,
-even with no browser open. Browser-triggered and scheduled settlement can obtain
+The single settlement cron runs every fifteen minutes, 24/7. Prediction outcomes
+are swept independently of browser activity; the legacy equity sweep remains
+guarded to hours 12–23 UTC on weekdays. Browser-triggered and scheduled settlement can obtain
 spot marks differently. Source availability and closed-account policy are
 separate questions; a successful sweep is not proof that every historical mark
 exists. See the [system map](../ARCHITECTURE.md#following-one-value).
@@ -152,3 +191,45 @@ Never put private positions, credentials or screenshots in a release artifact.
    Review any cache removal separately. The source requires no reversal.
 
 [Strategy Archive](../docs/STRATEGY_ARCHIVE.md) documents shared strategy records, membership, agent intake, review and release order.
+
+
+## Prediction markets (#293)
+
+`prediction.js` extends the authenticated paper ledger with long-only YES/NO
+positions, reciprocal server prices, explicit fees, quote provenance and official
+resolution/correction entries. Keys include provider, environment, series,
+market and outcome. Original option/share records retain their interpretation.
+The existing paper-trade reservations, leases and serialized D1 mutations remain
+authoritative. Cash deltas use 1/10000 USD units. Corrections are immutable cash
+adjustments; a negative balance blocks subsequent entries. Accounts with event
+history are retained on legacy insolvency so corrections cannot be erased.
+
+GET `/api/prediction/markets`, `/archive?batch=SHA256` and `/portfolio` require
+an Options View session on every request and return no-store. The portfolio
+continues during display rollback or feed outages. Private evidence uses a new
+read-only `PREDICTION_DATA` R2 binding, never the public capture bucket or KV.
+No production binding is configured here. Select `PREDICTION_ENVIRONMENT` and a
+reviewed `PREDICTION_RIGHTS_RECEIPT` before attaching a licensed demo/production
+source. Display and buys each need their own `PREDICTION_DISPLAY=enabled` and
+`PREDICTION_ENTRIES=enabled`. Sales and settlement ignore the entry switch.
+Fixtures additionally require `ENVIRONMENT=preview` and `ISOLATION=disposable`.
+The local preview supplies synthetic books through a separate binding.
+
+The 24/7 sweep scans D1 users, including humans and closed accounts, and reads
+the private official-resolution index. Missing/disputed/unofficial outcomes stay
+pending. Delisted terms persist in fills. Later revisions adjust amounts already
+paid. The first rule supports entry-premium refunds on voids (fees retained) and
+fixed per-contract fees. Another convention must be implemented before enabling
+that series. This complete sweep suits the current small roster; a bounded D1
+due queue is required before substantially scaling accounts. The serving caps
+of 200 markets and 10,000 resolutions fail closed.
+
+Run `node tests/prediction.test.mjs` plus the paper, worker, storage, closure,
+multi-underlying, cron and boundary suites. See the independent
+[producer/release guide](../market_data/prediction/README.md). A permitted
+production event/quote/paper-fill/reload/resolution receipt remains outstanding;
+synthetic acceptance is not licensed capture. No real-money routing exists.
+## Bitcoin monthly paper product
+
+See [implementation, source gaps and staged rollout](../docs/BTC_PAPER_OPTIONS.md).
+The private reader, entry switch and final-mark reader are separate controls.
