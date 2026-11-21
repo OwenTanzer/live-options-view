@@ -1381,7 +1381,36 @@
   #btc-panel .btc-ticket { width:100%; }
   #btc-panel .btc-github-login { display:inline-block; padding:10px; min-height:44px; color:#79c0ff; }
   body[data-chain="BTC"] #underlying-select { border-color:#79c0ff; }
-  @media (max-width:360px) { .btc-sides { grid-template-columns:1fr; } }
+  .btc-series { border:1px solid var(--border); border-radius:6px; margin:6px 0; overflow:hidden; }
+  .btc-series h3 { padding:6px; font-size:.72rem; font-weight:500; }
+  .btc-chain-head, .btc-strike-row { display:grid; grid-template-columns:minmax(0,1fr) 62px minmax(0,1fr); align-items:center; text-align:center; }
+  .btc-chain-head { background:var(--panel); font-size:.8rem; font-weight:600; padding:4px 0; }
+  .btc-chain-columns { display:grid; grid-template-columns:1fr 1fr 62px 1fr 1fr; text-align:center; font-size:.68rem; color:#a3adb7; padding:3px 0; }
+  .btc-strike-row { border-top:1px solid var(--border); min-height:52px; }
+  .btc-strike { font-size:.76rem; font-variant-numeric:tabular-nums; }
+  .btc-contract { min-width:0; position:relative; padding:0 0 8px; margin:0; border:0; border-radius:0; }
+  .btc-sides { gap:0; margin:0; }
+  .btc-position { font-size:10px; position:absolute; bottom:1px; left:4px; }
+  #btc-panel .btc-sides button { width:100%; border:0; border-radius:0; background:transparent; padding:4px 1px; font-size:.76rem; font-variant-numeric:tabular-nums; }
+  #btc-panel .btc-buy:not(:disabled) { color:#7ee787; background:#123321; }
+  #btc-panel .btc-sell:not(:disabled) { color:#ffa198; background:#331c20; }
+  #btc-panel .btc-sides button:disabled { color:#a3adb7; opacity:1; text-decoration:underline dotted; text-underline-offset:3px; }
+  #btc-panel .btc-ticket { position:absolute; bottom:0; right:0; width:auto; padding:0 5px; min-height:16px; line-height:16px; border:0; background:transparent; color:#a3adb7; }
+  .btc-empty { color:#6e7681; }
+  .btc-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; min-height:0; }
+  .btc-status { padding:4px 0; border:0; margin:0; background:transparent; }
+  .btc-status p { margin:4px 0; font-size:.72rem; }
+  #btc-panel .btc-owner-unlink { min-height:24px; padding:2px 5px; font-size:.68rem; }
+  body[data-chain="BTC"] #header { gap:8px; margin:4px 0; }
+  body[data-chain="BTC"] #title { font-size:.82rem; }
+  body[data-chain="BTC"] #btc-panel { padding:0; margin:4px 0; }
+  .btc-ticket-details { font-size:.75rem; max-width:320px; line-height:1.4; margin-top:6px; }
+  @media(max-width:650px) {
+    body[data-chain="BTC"] { padding:8px; }
+    body[data-chain="BTC"] #tab-bar { gap:2px; margin-bottom:6px; }
+    body[data-chain="BTC"] #tab-bar .analysis-link { display:none; }
+    body[data-chain="BTC"] #tab-bar .tab-btn { padding:8px; font-size:.72rem; }
+  }
   #trade-ticket { max-width:calc(100vw - 16px); }
   #trade-ticket .t-row { flex-wrap:wrap; }
 </style>
@@ -1924,7 +1953,7 @@ let timerHandle = null;
 </script>
 <script src="js/trade-ticket.js?v=139825bda8755a1b"></script>
 <script src="js/btc-owner-link.js?v=c4ef6c2534eaf95b"></script>
-<script src="js/btc-options.js?v=c28fb235331380b2"></script>
+<script src="js/btc-options.js?v=92fc32a398e025ac"></script>
 <script>
 
 // ── data fetch cycle ──────────────────────────────────────────────────────────

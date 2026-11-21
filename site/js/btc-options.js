@@ -139,12 +139,22 @@ const btcOptions = {
   openContract(e, c, action) {
     openTicket(e, { OptionSymbol: c.contract_key, Strike: c.strike, Type: c.type,
       Expiration: c.exp, instrument_type: 'futures_option', contract: c });
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button'; dismiss.className = 'btc-dismiss'; dismiss.textContent = 'Close ticket';
+    dismiss.onclick = () => closeTicket(); ticketEl.appendChild(dismiss);
     this.refreshTicket();
     if (action) ticketEl.querySelector('.btn-' + action).focus();
   },
   refreshTicket() {
     const sym = ticketEl?.dataset?.btc;
     if (!sym) return;
+    // Dismissing the review surface does not cancel an in-flight request.
+    const dismiss = ticketEl.querySelector('.btc-dismiss');
+    if (dismiss) { dismiss.disabled = false; dismiss.title = pendingExecutions.has(sym) ? 'Close ticket; submitted request continues' : 'Close ticket'; }
+    let details = ticketEl.querySelector('.btc-ticket-details');
+    if (!details) { details = document.createElement('p'); details.className = 'btc-ticket-details'; ticketEl.appendChild(details); }
+    const q = this.quotes.get(sym);
+    details.textContent = `1 contract = 5 BTC. Premium ×5 + $2.50 fee per side. Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
     for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
       const px = this.side(sym, side), button = ticketEl.querySelector('.btn-' + action);
       const reason = this.reason(sym, action);
@@ -160,7 +170,10 @@ const btcOptions = {
         const price = this.side(sym, side), reason = this.reason(sym, action);
         const button = row.querySelector('.btc-' + action);
         button.disabled = !!reason || price == null;
-        button.textContent = `${action === 'buy' ? 'Buy at ask' : 'Sell / close at bid'}${price == null ? '' : ' $' + price.toFixed(2)}`;
+        const q = this.quotes.get(sym), raw = q?.[side];
+        button.textContent = Number.isFinite(raw) ? raw.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+        button.setAttribute('aria-label', `${action === 'buy' ? 'Buy at ask' : 'Sell / close at bid'} ${q?.contract.type || ''} ${q?.contract.strike || ''}: ${button.textContent}${reason ? ' · ' + reason : ''}`);
+        button.title = reason || this.clockLabel(sym, side);
         row.querySelector('.btc-' + action + '-reason').textContent = reason || 'Opens ticket · 1 contract';
         row.querySelector('.btc-' + side + '-time').textContent = this.clockLabel(sym, side);
       }
@@ -209,39 +222,65 @@ const btcOptions = {
       if (this.error) { const retry = element('button', '', 'Retry quotes'); retry.onclick = () => this.refresh(); status.appendChild(retry); }
       return;
     }
-    status.appendChild(element('p', '', `${data.session} · Simulated trading · ${data.fee_model || '$2.50 per contract per side'}`));
-    status.appendChild(element('p', '', 'Premiums are USD per bitcoin. One contract = 5 BTC. Buy at ask; close owned contracts at bid.'));
+    status.appendChild(element('p', '', `${data.session} · Paper · USD/BTC · Ask buys / bid closes`));
     if (typeof btcOwnerLink !== 'undefined') {
-      const unlink = element('button', 'btc-owner-unlink', 'Unlink Bitcoin data from this session');
+      const unlink = element('button', 'btc-owner-unlink', 'Unlink data');
       unlink.type = 'button'; unlink.disabled = btcOwnerLink.busy; unlink.onclick = () => btcOwnerLink.unlink(); status.appendChild(unlink);
       if (btcOwnerLink.message) status.appendChild(element('p', 'btc-link-status', btcOwnerLink.message));
     }
-    for (const c of (data.contracts || []).sort((a, b) => a.strike - b.strike || a.type.localeCompare(b.type))) {
+    const groups = new Map();
+    for (const c of [...(data.contracts || [])].sort((a, b) => a.exp.localeCompare(b.exp) || a.future_month.localeCompare(b.future_month) || a.future_symbol.localeCompare(b.future_symbol) || a.strike - b.strike || a.type.localeCompare(b.type))) {
+      const key = JSON.stringify([c.exp, c.future_month, c.future_symbol]);
+      if (!groups.has(key)) groups.set(key, { contract: c, strikes: new Map() });
+      const strikes = groups.get(key).strikes;
+      if (!strikes.has(c.strike)) strikes.set(c.strike, {});
+      strikes.get(c.strike)[c.type] = c;
+    }
+    const leg = (c, type) => {
+      if (!c) { const empty = element('div', 'btc-empty', '—'); empty.setAttribute('aria-label', `No ${type} contract at this strike`); return empty; }
       const q = this.quotes.get(c.contract_key), row = element('article', 'btc-contract', '');
       row.dataset.symbol = c.contract_key;
-      row.appendChild(element('h3', '', `$${c.strike.toLocaleString()} ${c.type.toUpperCase()}`));
-      row.appendChild(element('p', '', `${c.future_symbol} · expires ${c.exp} · 5 BTC / contract`));
+      row.dataset.type = c.type;
       const held = computeBook()[c.contract_key]?.pos || 0;
-      row.appendChild(element('p', 'btc-position', held > 0 ? `Owned: ${held} contract${held === 1 ? '' : 's'}` : 'No open position'));
+      const position = element('span', 'btc-position', held > 0 ? `Owned: ${held}` : 'No open position');
+      if (!held) position.className += ' btc-sr';
+      row.appendChild(position);
       const sides = element('div', 'btc-sides', '');
-      for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
+      for (const [action, side] of [['sell', 'bid'], ['buy', 'ask']]) {
         const cell = element('div', 'btc-side', ''), button = element('button', 'btc-' + action, '');
         button.dataset.btcAction = action; button.dataset.symbol = c.contract_key;
-        button.onclick = e => this.openContract(e, c, action);
+        button.onclick = e => { if (!this.reason(c.contract_key, action) && this.side(c.contract_key, side) != null) this.openContract(e, c, action); };
         cell.appendChild(button);
-        cell.appendChild(element('p', '', `${side} size ${q?.[side + '_size'] ?? '—'}${this.side(c.contract_key, side) == null ? '' : ' · $' + (q[side] * 5).toFixed(2) + ' / contract'}`));
-        cell.appendChild(element('p', 'btc-freshness btc-' + side + '-time', ''));
-        const reason = element('p', 'btc-reason btc-' + action + '-reason', '');
+        cell.appendChild(element('span', 'btc-sr btc-freshness btc-' + side + '-time', ''));
+        const reason = element('span', 'btc-sr btc-reason btc-' + action + '-reason', '');
         reason.id = `btc-${action}-${c.contract_key}`;
         button.setAttribute('aria-describedby', reason.id);
         cell.appendChild(reason);
         sides.appendChild(cell);
       }
       row.appendChild(sides);
-      const ticket = element('button', 'btc-ticket', 'Open trade ticket');
+      const ticket = element('button', 'btc-ticket', '⋯');
+      ticket.setAttribute('aria-label', `Open ${c.type} ${c.strike} ticket and quote details`);
       ticket.dataset.btcAction = 'ticket'; ticket.dataset.symbol = c.contract_key;
       ticket.onclick = e => this.openContract(e, c);
-      row.appendChild(ticket); root.appendChild(row);
+      row.appendChild(ticket); return row;
+    };
+    for (const { contract: c, strikes } of groups.values()) {
+      const group = element('section', 'btc-series', '');
+      group.appendChild(element('h3', '', `${c.exp} · ${c.future_symbol} · ${c.future_month}`));
+      const heading = element('div', 'btc-chain-head', '');
+      for (const text of ['Calls', 'Strike', 'Puts']) heading.appendChild(element('span', '', text));
+      group.appendChild(heading);
+      const columns = element('div', 'btc-chain-columns', '');
+      for (const text of ['Bid', 'Ask', '', 'Bid', 'Ask']) columns.appendChild(element('span', '', text));
+      group.appendChild(columns);
+      for (const [strike, pair] of strikes) {
+        const row = element('div', 'btc-strike-row', ''); row.dataset.strike = strike;
+        row.appendChild(leg(pair.call, 'call'));
+        row.appendChild(element('strong', 'btc-strike', strike.toLocaleString('en-US')));
+        row.appendChild(leg(pair.put, 'put')); group.appendChild(row);
+      }
+      root.appendChild(group);
     }
     if (!data.contracts?.length) root.append('No verified standard monthly contracts available.');
     this.updateActions();

@@ -8,6 +8,16 @@ local candidate tests do not establish deployment or live acceptance.
 
 ## Source and identity
 
+The BTC phone view pairs calls (left) and puts (right) around a shared strike,
+grouped by expiration and futures month/symbol. Numeric bid and ask cells open
+the existing close and buy ticket respectively; bids require an owned contract.
+Missing legs remain visible as a dash. Disabled cells retain their last numeric
+quote, a dotted underline, and accessible denial reason; the detail button opens
+the ticket with current size, cost, ownership and clock/denial explanations.
+Eligibility still uses the independent source/observed-side and receipt clocks.
+The production-entry compact-chain fixture measures complete strike bounding
+rectangles at 320/375/390 by 667 pixels and checks both option sides and actions.
+
 The collector uses its existing production tastytrade read token and price-lane
 DXLink connection. `GET /futures-option-chains/BTC` supplies instrument definitions;
 `GET /instruments/futures/{symbol}` verifies the deliverable, expiration and five
