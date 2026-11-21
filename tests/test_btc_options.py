@@ -144,6 +144,33 @@ class BtcTests(unittest.TestCase):
         self.feed.replace_btc_subscriptions([])
         self.assertEqual(self.feed._subs, original)
 
+    def test_wire_diagnostics_exclude_future_and_equity_quotes(self):
+        self.product.refresh(self.feed, 'fixture', NOW)
+        c = self.product.payload([], [], NOW)['contracts'][0]
+        events = [{'eventType': 'Quote', 'eventSymbol': symbol, 'bidPrice': 1, 'askPrice': 2,
+                   'bidSize': 1, 'askSize': 1, 'bidTime': 0, 'askTime': None}
+                  for symbol in ('QQQ', FUTURE['streamer-symbol'], c['streamer_symbol'])]
+        self.feed._ingest(events)
+        diag = self.product.payload([], [], NOW)['wire_time_diagnostics']
+        self.assertEqual(diag['scope'], 'btc_option_quotes')
+        self.assertEqual(diag['quote_events'], 1)
+        self.assertEqual(diag['fields'], {'bidTime': {'number:zero': 1}, 'askTime': {'null': 1}})
+        self.assertNotIn('wire_time_diagnostics', self.feed.get_health())
+
+    def test_error_and_auth_rejection_invalidate_btc_epoch(self):
+        self.product.refresh(self.feed, 'fixture', NOW)
+        for invalidate in (lambda: self.feed._on_error(None, 'fixture transport error'),
+                           lambda: self.feed._record_auth_rejection('fixture rejection')):
+            self.feed._connected = self.feed._authorized = self.feed._channel_open = True
+            c = self.product.payload([], [], NOW)['contracts'][0]
+            event = {'eventType': 'Quote', 'eventSymbol': c['streamer_symbol'],
+                     'bidPrice': 1, 'askPrice': 2, 'bidSize': 1, 'askSize': 1}
+            self.feed._ingest([event])
+            before = self.feed.get_btc_diagnostics()['stream_epoch']
+            invalidate()
+            self.assertNotEqual(before, self.feed.get_btc_diagnostics()['stream_epoch'])
+            self.assertFalse(self.product.payload([c['contract_key']], [], NOW)['quotes'][0]['available'])
+
 
 class ObservedClockTests(unittest.TestCase):
     def setUp(self):
