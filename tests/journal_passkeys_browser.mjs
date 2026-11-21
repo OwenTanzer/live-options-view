@@ -10,7 +10,7 @@ const origin = 'https://options.moopertonic.net';
 const db = new FakeD1();
 db.db.exec(FakeD1.schemaSql());
 db.db.exec(readFileSync(new URL('../backend/migrations/0003_trade_journal.sql',import.meta.url),'utf8'));
-db.db.exec(readFileSync(new URL('../backend/migrations/0008_one_clock_journal.sql',import.meta.url),'utf8'));
+db.db.exec(readFileSync(new URL('../backend/migrations/0009_one_clock_journal.sql',import.meta.url),'utf8'));
 const browser = await chromium.launch({channel:'chromium',headless:true});
 try {
   for (const member of ['Owen','Jayden','Jacob']) {

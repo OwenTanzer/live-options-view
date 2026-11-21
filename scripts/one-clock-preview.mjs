@@ -15,7 +15,7 @@ import { handleTradeJournalContext } from '../backend/trade-journal-context.js';
 const preview=createPreview();
 const day='2026-11-09',T=sessionInstant(day,9,30),objects=new Map();
 const journalDb=makeStorage();
-for(const name of ['0003_trade_journal.sql','0008_one_clock_journal.sql'])await journalDb.exec(fs.readFileSync(new URL('../backend/migrations/'+name,import.meta.url),'utf8'));
+for(const name of ['0003_trade_journal.sql','0009_one_clock_journal.sql'])await journalDb.exec(fs.readFileSync(new URL('../backend/migrations/'+name,import.meta.url),'utf8'));
 await seedJournalSession(journalDb,'synthetic-preview');
 const journalInstrument={underlying:'QQQ',instrument_type:'option',multiplier:100,occ_symbol:'QQQ261109C00660000',strike:660,option_type:'call'};
 const journalPosition={position_id:'pos:0123456789abcdef',supported:true,owner:'SYNTHETIC',contract:journalInstrument,
