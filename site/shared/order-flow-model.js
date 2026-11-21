@@ -82,6 +82,14 @@
     for (const row of (feed && feed.rows) || []) {
       if (!contracts.has(row.symbol) && parseSymbol(row.symbol)) contracts.set(row.symbol, { ...parseSymbol(row.symbol), flow: null });
     }
+    for (const [symbol, from] of Object.entries(session?.added || {})) {
+      const parsed = parseSymbol(symbol);
+      if (!parsed) continue;
+      const contract = contracts.get(symbol) || { ...parsed, flow: null };
+      contract.coverageFrom = from;
+      if (from != null && !contract.flow) contract.flow = { B: 0, S: 0, U: 0, prints: 0 };
+      contracts.set(symbol, contract);
+    }
     const snapT = chain ? Date.parse(chain.timestamp) : NaN;
     const age = Number.isFinite(snapT) ? now - snapT : null;
     const usable = age != null && age >= 0 && age <= X.OF_SNAPSHOT_MAX_AGE_MS;
@@ -89,7 +97,7 @@
     const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
     const rows = [...contracts.values()].map((c) => {
       const cr = usable ? chainRows.get(c.symbol) : null;
-      return { symbol: c.symbol, strike: c.strike, type: c.type, multiplier, flow: c.flow,
+      return { symbol: c.symbol, strike: c.strike, type: c.type, multiplier, flow: c.flow, coverageFrom: c.coverageFrom,
         oi: cr ? finite(cr.OpenInterest) : null, oiFirstSeen: null, gamma: cr ? finite(cr.Gamma) : null,
         spot: cr ? finite(cr.UnderlyingPrice ?? chain.underlying_price) : null };
     });

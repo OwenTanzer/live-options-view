@@ -9,11 +9,15 @@ Two products share one signing pass:
   unarchived restart interval are published as gaps, never as zero flow.
 """
 from collections import deque
+from contextlib import closing
 from datetime import datetime, timezone
 import gzip
 import json
 import logging
 import re
+import sqlite3
+from tempfile import TemporaryDirectory
+from pathlib import Path
 from threading import Lock
 from zoneinfo import ZoneInfo
 
@@ -55,6 +59,7 @@ class Session:
     def __init__(self, day):
         self.day = day
         self.contracts = {}
+        self.added = {}
         self.seen = {}
         self.first = self.last = None
         self.gaps = []
@@ -73,7 +78,7 @@ class Session:
         self.last = row["t"] if self.last is None else max(self.last, row["t"])
 
     def snapshot(self):
-        return dict(day=self.day, first=self.first, last=self.last, prints=self.prints,
+        return dict(day=self.day, added=dict(self.added), first=self.first, last=self.last, prints=self.prints,
                     contracts={s: dict(zip(("B", "S", "U", "prints"), v)) for s, v in sorted(self.contracts.items())},
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
@@ -123,6 +128,18 @@ class RecentPrints:
         option = OPTION.fullmatch(symbol)
         if not option:
             return
+        if event["type"] == "subscription_added":
+            session = self._session_for(_ms(receipt))
+            if session is not None:
+                with self.lock:
+                    session.added.setdefault(symbol, None)
+                    self.version += 1
+            return
+        if (self.session and symbol in self.session.added and self.session.added[symbol] is None
+                and event["type"] in {"quote", "timesale"} and receipt):
+            with self.lock:
+                self.session.added[symbol] = _ms(receipt)
+                self.version += 1
         if event["type"] == "quote":
             self.quotes[symbol] = event
             return
@@ -164,7 +181,7 @@ class RecentPrints:
             self.version += 1
 
     def rebuild(self, client, bucket, prefix, local_segments=(), now=None, session_open=None):
-        """Replay this session's archived segments (R2, then unuploaded local spool) before capture.
+        """Replay remote and local session segments in receipt order before capture.
 
         Overlapping events are dropped by identity. When capture starts after the open,
         the interval from the later of the open and the last archived receipt to the
@@ -185,14 +202,31 @@ class RecentPrints:
                     break
             sources = [lambda k=k: client.get_object(Bucket=bucket, Key=k)["Body"].read() for k in sorted(keys)]
             sources += [lambda p=p: p.read_bytes() for p in sorted(local_segments)]
-            for read in sources:
-                for line in gzip.decompress(read()).splitlines():
-                    event = json.loads(line)
-                    self.observe(event)
-                    receipt = event.get("collector_receipt_timestamp")
-                    if receipt and (last_receipt is None or receipt > last_receipt):
+            # Owner IDs are random, and uploaded/local segments can overlap.
+            # Sort on disk to keep a full session out of Python memory. Preserve
+            # line order for tied receipts; source order is a deterministic final
+            # tie-break, never the primary chronology. Exact copies deduplicate
+            # here (including quotes/gaps); print identities still deduplicate in
+            # observe(), so distinct sequences with identical times/prices survive.
+            with TemporaryDirectory(prefix="gex-rebuild-") as temp:
+                with closing(sqlite3.connect(str(Path(temp) / "events.sqlite"))) as db:
+                    db.execute("PRAGMA temp_store=FILE")
+                    db.execute("CREATE TABLE events (receipt TEXT, payload TEXT, UNIQUE(receipt, payload))")
+                    for read in sources:
+                        for line in gzip.decompress(read()).splitlines():
+                            event = json.loads(line)
+                            stamp = event.get("collector_receipt_timestamp") or event.get("receipt_timestamp")
+                            parsed = datetime.fromisoformat(stamp)
+                            if parsed.tzinfo is None:
+                                raise ValueError("archive receipt must include timezone")
+                            receipt = parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+                            payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                            db.execute("INSERT OR IGNORE INTO events VALUES (?, ?)", (receipt, payload))
+                        segments += 1
+                    db.commit()
+                    for receipt, payload in db.execute("SELECT receipt, payload FROM events ORDER BY receipt, rowid"):
+                        self.observe(json.loads(payload))
                         last_receipt = receipt
-                segments += 1
             status = "rebuilt"
         except Exception as exc:  # incomplete history must stay visible, never fatal to capture
             logging.warning("Order-flow session rebuild failed: %s", type(exc).__name__)

@@ -243,6 +243,7 @@
       ><b class="unknown">· Unknown side</b><span>○ Call　◇ Put</span
       ><span>Area = contracts</span><span class="gap">▨ No coverage</span>
     </div>
+    <div id="live-context" hidden></div>
     <span id="fresh"></span>
     <canvas
       aria-label="Prints by time and strike over the last minute to the displayed time. Select a print or strike to inspect it."
@@ -448,6 +449,8 @@
       const extra = [];
       if (live() && feed && feed.session && feed.rows)
         extra.push("plot shows latest " + feed.rows.length.toLocaleString() + " of " + feed.session.prints.toLocaleString() + " session prints");
+      if (live() && Object.keys(feed?.session?.added || {}).length)
+        extra.push("Intraday additions show flow since first observation; earlier trading is unknown. Select a strike for contract start times.");
       return R.freshnessText(v, clock, extra);
     }
 
@@ -473,8 +476,22 @@
       const strikes = view && view.strikes.length
         ? view.strikes.map((s) => s.strike)
         : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
-      const high = strikes[0],
-        low = strikes[strikes.length - 1];
+      const market = live() ? chain?.underlying_market : null;
+      const quoteAge = end - Date.parse(market?.spot_ts);
+      const spot = market?.symbol === "QQQ" && Number.isFinite(market.spot) && market.spot > 0 &&
+        quoteAge >= 0 && quoteAge <= 120000 ? market.spot : null;
+      const highestStrike = strikes[0], lowestStrike = strikes[strikes.length - 1];
+      const high = spot == null ? highestStrike : Math.max(highestStrike ?? spot, spot),
+        low = spot == null ? lowestStrike : Math.min(lowestStrike ?? spot, spot);
+      const context = el("live-context");
+      context.hidden = !live();
+      if (live()) {
+        const quote = spot == null ? "Fresh QQQ quote unavailable" :
+          "QQQ $" + spot.toFixed(2) + " at " + clock(Date.parse(market.spot_ts)) + " ET";
+        const range = strikes.length ? "recorded strikes $" + lowestStrike + "–$" + highestStrike : "no recorded strikes";
+        const outside = strikes.length && spot != null && (spot < lowestStrike || spot > highestStrike);
+        context.textContent = quote + " · " + range + (outside ? " · spot outside coverage" : "");
+      }
       const strikeY = (strike) =>
         high === low ? (top + bottom) / 2 : bottom - ((bottom - top) * (strike - low)) / (high - low);
       ctx.font = "11px monospace";
@@ -534,11 +551,27 @@
         ctx.textAlign = "left";
         hits.push({ x, y, p, r: Math.max(8, p.type === "C" ? r : k) });
       }
+      if (spot != null) {
+        const y = strikeY(spot);
+        ctx.fillStyle = "#f2c96b";
+        ctx.textAlign = "right";
+        ctx.fillText("QQQ $" + spot.toFixed(2) + " ◂", right, y - 3);
+        ctx.textAlign = "left";
+      }
       for (const s of strikes) strikeHits.push({ y: strikeY(s), strike: s });
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + " · " + visible.length + " prints in view";
+      let displayStatus = status;
+      if (live() && status === "Print feed available") {
+        const received = feed?.lastReceived;
+        const age = Date.now() - received;
+        const current = Number.isFinite(received) && age >= 0 && age <= 15000;
+        displayStatus = (current ? "Receiving" : "Stale") + (Number.isFinite(received)
+          ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");
+        if (!feed?.session) displayStatus += " · no session history published";
+      }
+      el("state").textContent = displayStatus + " · " + visible.length + " prints in view";
       if (forceTable || performance.now() - tableAt > 1000) {
         el("fresh").textContent = freshnessText(view);
         el("profile-summary").textContent = PF.profileSummary(view, part(), scale, selected, clock, money);
@@ -708,7 +741,7 @@
         let y = null;
         for (let k = 0; k < ks.length - 1; k++)
           if (spot <= ks[k] && spot >= ks[k + 1]) y = top + k * rowH + rowH / 2 + ((ks[k] - spot) / (ks[k] - ks[k + 1])) * rowH;
-        const label = "QQQ " + spot.toFixed(2) + (y == null ? (spot > ks[0] ? " ▲ above range" : " ▼ below range") : "");
+        const label = (live() ? "Chain QQQ " : "QQQ ") + spot.toFixed(2) + (y == null ? (spot > ks[0] ? " ▲ above range" : " ▼ below range") : "");
         if (y == null) y = spot > ks[0] ? top - 2 : bottom - 2;
         g.setLineDash([4, 3]);
         g.strokeStyle = "#f2c96b";
@@ -923,6 +956,9 @@
       const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (live() ? "live" : "archive replay") + ")"];
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
+        if (src.coverageFrom !== undefined)
+          lines.push(c.symbol + (src.coverageFrom == null ? " · awaiting first observation" :
+            " · covered from " + clock(src.coverageFrom) + " ET; earlier flow unknown"));
         const obs = c.observed;
         lines.push(
           (c.type === "C" ? "Call" : "Put") + " " + c.symbol + ": recorded prints " + (src.flow ? src.flow.prints ?? "?" : "none") +
@@ -1122,9 +1158,7 @@
             feed = r.json;
             liveRows = feed.rows.slice().sort((a, b) => a.t - b.t);
             received = feed.lastReceived;
-            const age = received == null ? Infinity : Date.now() - received;
-            status = (age > 15000 ? "Stale" : "Receiving") + (received ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");
-            if (!feed.session) status += " · no session history published";
+            status = "Print feed available";
           }
         } catch (e) {
           if (gen === generation) status = "Disconnected" + (received ? " · last print " + clock(received) + " ET" : "");

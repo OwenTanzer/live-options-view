@@ -23,13 +23,17 @@
       const f = s.flow[p], t = s.total[p], c = s.concentration;
       const conc = c.value == null ? gap('no coverage')
         : unsigned(c.value) + (c.covered < c.of ? ' ' + partial(c, 'OI or gamma') : '');
+      const additions = view.contracts?.filter(c => c.strike === s.strike && c.coverageFrom !== undefined) || [];
+      const pending = additions.some(c => c.coverageFrom === null);
+      const allPending = additions.length === s.contracts.length && additions.length && additions.every(c => c.coverageFrom === null);
+      const note = additions.length ? (pending ? ' · awaiting contract data' : ' · since added') : '';
       const flow = f.base == null ? gap('no coverage') : money(f.base) + (f.covered < f.of ? ' ' + partial(f, 'gamma or spot') : '');
-      const total = t.low == null ? gap('no coverage')
+      const total = additions.length ? gap('withheld: missing opening history') : t.low == null ? gap('no coverage')
         : t.covered < t.of ? gap(`withheld: ${t.covered}/${t.of} contracts covered`, 'Total range needs OI, gamma and flow for every contract at this strike')
           : money(t.low) + ' … ' + money(t.high);
       return `<tr tabindex="0" data-strike="${s.strike}" class="${selected === s.strike ? 'sel' : ''}">
-            <td>${s.strike}</td>
-            <td><span class="buy">${s.observed.B.toLocaleString()}</span> / <span class="sell">${s.observed.S.toLocaleString()}</span> / <span class="unknown">${s.observed.U.toLocaleString()}</span></td>
+            <td>${s.strike}${note}</td>
+            <td>${allPending ? "—" : `<span class="buy">${s.observed.B.toLocaleString()}</span> / <span class="sell">${s.observed.S.toLocaleString()}</span> / <span class="unknown">${s.observed.U.toLocaleString()}</span>`}</td>
             <td>${conc}</td>
             <td>${flow}</td>
             <td>${f.base == null ? '—' : money(f.low) + ' … ' + money(f.high) + (f.uncertain ? ' · sign uncertain' : '')}</td>

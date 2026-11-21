@@ -64,3 +64,22 @@ test('no print yet after the open is incomplete; before the open it is not', () 
   assert.equal(M.liveAt(feed(s), null, OPEN + 5 * 60000).coverage.incomplete, true);
   assert.equal(M.liveAt(feed(s), null, OPEN - 60000).coverage.incomplete, false);
 });
+
+test('intraday additions distinguish pending, observed zero, and partial-day flow', () => {
+  const call = 'QQQ260925C00745000', put = 'QQQ260925P00745000';
+  const now = OPEN + 60000;
+  const currentChain = chain(now, [call, put].map(OptionSymbol =>
+    ({OptionSymbol, Gamma: 0.02, OpenInterest: 10, UnderlyingPrice: 745})));
+  const state = session({contracts: {}, added: {[call]: null, [put]: null}});
+  const view = () => M.liveAt(feed(state), currentChain, now);
+  assert.match(R.ladderRowsHtml(view(), 1), /awaiting contract data.*?<\/td>\s*<td>—/s);
+  state.added[call] = now - 2000;
+  assert.equal(view().strikes[0].flow[1].covered, 1);
+  assert.equal(view().strikes[0].flow[1].base, 0);
+  state.added[put] = now - 1000;
+  state.contracts[call] = {B: 2, S: 0, U: 0, prints: 1};
+  const row = view().strikes[0];
+  assert.ok(row.flow[1].base < 0);
+  assert.equal(row.total[1].low, null);
+  assert.match(R.ladderRowsHtml(view(), 1), /since added.*withheld: missing opening history/s);
+});

@@ -316,10 +316,14 @@ def main(
         if datetime.now(timezone.utc) >= lease_confirmed_until_ref["value"]:
             lease_loss_reason.setdefault("reason", "ownership_uncertain")
             lease_lost_event.set()
+        adaptive_args = {}
+        if primary.underlying == "QQQ" and primary.universe.get("listed_qqq_pairs"):
+            from .adaptive import AdaptiveQQQ
+            adaptive_args["adaptive"] = AdaptiveQQQ(router, primary, recent, settings.strike_count, stream_info)
         capture_result = capture_session(
             client, router.symbols, stream_spool, stream_stats, session_close, settings.max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
-            result=capture_result, recent=recent,
+            result=capture_result, recent=recent, **adaptive_args,
             session_open=session_open,
         )
     except Exception as exc:
@@ -339,6 +343,8 @@ def main(
         pass
 
 
+    if recent.session and recent.session.added:
+        stream_info["qqq_added_first_observed_ms"] = dict(recent.session.added)
     finished_at = utc_now()
     opening_ready = capture_result.opening_stream_ready_at
     effective_late_start_seconds = max(

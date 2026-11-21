@@ -2442,5 +2442,61 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertTrue(callable(collector_run.finalize_run))
 
 
+
+
+class AdaptiveQQQTests(unittest.TestCase):
+    def test_same_socket_expansion_first_observation_and_restart(self):
+        from market_data.tradier.adaptive import AdaptiveQQQ
+        from market_data.tradier.lanes import StreamRouter
+        from market_data.tradier.recent import RecentPrints
+
+        t = 1795105797000
+        stamp = datetime.fromtimestamp(t / 1000, timezone.utc).isoformat()
+        def legs(strike):
+            return [f"QQQ261119{kind}{strike * 1000:08d}" for kind in "CP"]
+        pairs = {str(k): legs(k) for k in (661, 662, 669, 670)}
+        opening = ["QQQ", *legs(669), *legs(670)]
+        primary = types.SimpleNamespace(symbols=opening, universe={"listed_qqq_pairs": pairs}, spool=Mock())
+        other = types.SimpleNamespace(symbols=["SPY"], underlying="SPY")
+        router = StreamRouter([primary, other])
+        recent = RecentPrints()
+        info = {}
+        adaptive = AdaptiveQQQ(router, primary, recent, 2, info)
+        quote = dict(type="quote", symbol="QQQ", bid=661.9, ask=662.1, biddate=t, askdate=t,
+                     collector_receipt_timestamp=stamp)
+        socket = Mock()
+        module = types.SimpleNamespace(create_connection=Mock(return_value=socket), WebSocketException=OSError)
+        with patch.dict(sys.modules, websocket=module), adaptive.open("fixture-session"):
+            adaptive.follow(dict(quote, askdate=t-120001), t)
+            adaptive.follow(dict(quote, bid=664), t)
+            self.assertEqual(socket.send.call_count, 1)
+            adaptive.follow(quote, t)
+            adaptive.follow(quote, t+5001)
+            self.assertEqual(module.create_connection.call_count, 1)
+            self.assertEqual(socket.send.call_count, 2)
+            first, second = [json.loads(c.args[0]) for c in socket.send.call_args_list]
+            self.assertEqual(first["sessionid"], second["sessionid"])
+            self.assertEqual(set(second["symbols"]), set(opening + ["SPY"] + legs(661) + legs(662)))
+            self.assertEqual(router.lanes_for({"symbol": legs(662)[0]}), [primary])
+            self.assertEqual(router.lanes_for({"symbol": "SPY"}), [other])
+        symbol = legs(662)[0]
+        self.assertIsNone(recent.payload()["session"]["added"][symbol])
+        observed = dict(quote, symbol=symbol)
+        recent.observe(observed)
+        self.assertEqual(recent.payload()["session"]["added"][symbol], t)
+        self.assertIsNone(recent.payload()["session"]["added"][legs(662)[1]])
+        archive = [c.args[0] for c in primary.spool.write.call_args_list] + [observed]
+        storage = Mock()
+        storage.list_objects_v2.return_value = {"Contents": [{"Key": "day/part.ndjson.gz"}]}
+        storage.get_object.return_value = {"Body": io.BytesIO(gzip.compress(
+            b"\n".join(json.dumps(e).encode() for e in archive)))}
+        restored = RecentPrints()
+        restored.rebuild(storage, "bucket", "day", now=datetime.fromtimestamp(t/1000+10, timezone.utc))
+        self.assertEqual(restored.payload()["session"]["added"], recent.payload()["session"]["added"])
+        restarted = StreamRouter([primary, other])
+        AdaptiveQQQ(restarted, primary, restored, 2, {})
+        self.assertEqual(set(restarted.symbols), set(second["symbols"]))
+
+
 if __name__ == "__main__":
     unittest.main()
