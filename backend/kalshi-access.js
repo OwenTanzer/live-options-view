@@ -22,11 +22,14 @@ export async function ownerIdentity(request) {
   const cookies = (request.headers.get('Cookie') || '').split(';').map(x => x.trim())
     .filter(x => x.startsWith('__Host-cds-session='));
   if (cookies.length !== 1 || !/^__Host-cds-session=[A-Za-z0-9_.~-]{16,512}$/.test(cookies[0])) return null;
-  const response = await fetch(CREDIT_ORIGIN + '/api/private/identity', {
-    method: 'GET', headers: { Cookie: cookies[0], Accept: 'application/json' },
-    redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) return null;
-  const data = JSON.parse(await readLimited(response, 1024));
-  return data.github_id === OWNER_ID ? { github_id: OWNER_ID, account_id: ACCOUNT } : null;
+  try {
+    const response = await fetch(CREDIT_ORIGIN + '/api/private/identity', {
+      method: 'GET', headers: { Cookie: cookies[0], Accept: 'application/json' },
+      redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(5000),
+    });
+    if (response.status !== 200 || response.redirected || response.headers.has('Location') ||
+        response.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/json') return null;
+    const data = JSON.parse(await readLimited(response, 1024));
+    return data?.github_id === OWNER_ID ? { github_id: OWNER_ID, account_id: ACCOUNT } : null;
+  } catch { return null; } // Transport, oversized/malformed JSON and expired identity fail closed.
 }

@@ -1358,7 +1358,30 @@
 .iv-pop canvas{display:block;width:100%;height:78px}.iv-pop small{color:var(--dim);line-height:1.4}
 @media(max-width:650px){#qqq-iv{flex-basis:100%}}
   #btc-panel { padding: 12px; max-width: 100%; }
-  .btc-contract { display:block; white-space:pre-line; text-align:left; width:100%; max-width:680px; padding:10px; margin:6px 0; overflow-wrap:anywhere; }
+  body[data-chain="BTC"] :is(#price, #price-age, #tier-badge, #vwap-rvol, #momentum, #chain-note, #qqq-iv,
+    #status-bar, #cal-error, #oi-skew-meter, #spy-oi-skew-meter, #ibit-oi-skew-meter,
+    #price-strip, #steo-panel, #no-data, #heatmap-wrap, #tab-history, #footer) { display:none !important; }
+  body[data-chain="BTC"] #paper-panel h3 { flex-wrap:wrap; }
+  body[data-chain="BTC"] #user-bar { flex-wrap:wrap; overflow-wrap:anywhere; max-width:100%; }
+  #btc-panel { max-width:860px; margin:12px 0; }
+  #btc-panel[hidden] { display:none; }
+  #btc-panel button { font:inherit; color:var(--bright); background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; min-height:44px; cursor:pointer; }
+  #btc-panel button:focus-visible { outline:2px solid #79c0ff; outline-offset:2px; }
+  #btc-panel button:disabled { opacity:.55; cursor:default; }
+  .btc-status, .btc-contract { border:1px solid var(--border); border-radius:8px; background:var(--panel); padding:12px; margin-bottom:10px; overflow-wrap:anywhere; }
+  .btc-status p, .btc-contract p { margin:6px 0; font-size:.82rem; line-height:1.45; }
+  .btc-contract h3 { font-size:1rem; color:var(--bright); }
+  .btc-position { color:#79c0ff; }
+  .btc-sides { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
+  .btc-side { min-width:0; }
+  #btc-panel .btc-buy { border-color:#238636; width:100%; }
+  #btc-panel .btc-sell { border-color:#da3633; width:100%; }
+  .btc-reason { color:#d2a85b; min-height:2.5em; }
+  .btc-freshness { color:#a3adb7; }
+  #btc-panel .btc-ticket { width:100%; }
+  #btc-panel .btc-github-login { display:inline-block; padding:10px; min-height:44px; color:#79c0ff; }
+  body[data-chain="BTC"] #underlying-select { border-color:#79c0ff; }
+  @media (max-width:360px) { .btc-sides { grid-template-columns:1fr; } }
   #trade-ticket { max-width:calc(100vw - 16px); }
   #trade-ticket .t-row { flex-wrap:wrap; }
 </style>
@@ -1390,8 +1413,8 @@
     <option value="QQQ">QQQ</option>
     <option value="SPY">SPY</option>
     <option value="IBIT">IBIT</option>
+    <option value="BTC">Bitcoin</option>
   </select>
-  <button id="btc-select" type="button" aria-pressed="false">Bitcoin futures options</button>
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
   <span id="price-age" class="chain-snapshot" role="status"></span>
@@ -1883,7 +1906,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/paper-trading.js?v=6d7d92a9b8898eae"></script>
+<script src="js/paper-trading.js?v=b8b51de30bd7b55a"></script>
 <script>
 
 // ── auth ───────────────────────────────────────────────────────────────────────
@@ -1891,7 +1914,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/auth.js?v=a0d0bd5712695f86"></script>
+<script src="js/auth.js?v=04caee94e896af21"></script>
 <script>
 
 // ── trade ticket popover ──────────────────────────────────────────────────────
@@ -1900,7 +1923,8 @@ let timerHandle = null;
 // the section's marker.
 </script>
 <script src="js/trade-ticket.js?v=139825bda8755a1b"></script>
-<script src="js/btc-options.js?v=1f5ed20c3c10073f"></script>
+<script src="js/btc-owner-link.js?v=c4ef6c2534eaf95b"></script>
+<script src="js/btc-options.js?v=c28fb235331380b2"></script>
 <script>
 
 // ── data fetch cycle ──────────────────────────────────────────────────────────
@@ -1910,7 +1934,7 @@ let timerHandle = null;
 // stays here as the section's marker.
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
-<script src="js/data-fetch-cycle.js?v=137d3c337e3408d1"></script>
+<script src="js/data-fetch-cycle.js?v=5d9d7450db0e394b"></script>
 <script src="js/oi-skew-meter.js?v=2090f692184a9d86"></script>
 <script src="js/reference-oi-skew-meters.js?v=afd0f36529d824e6"></script>
 <script>
@@ -2002,5 +2026,5 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/boot.js?v=1e989badc98b9da1"></script>
+<script src="js/boot.js?v=af41c43df8d0ac40"></script>
 <script type="module" src="js/one-clock-history.js"></script></body></html>

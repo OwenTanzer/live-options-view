@@ -1,3 +1,4 @@
+import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +11,8 @@ import { handleLiveQuotes, isPublicBrowserDataKey } from '../backend/browser-dat
 import { validateTradeIntent } from '../backend/execution.js';
 import { handleSettle } from '../backend/settlement.js';
 import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
+import { handleBtcOwnerLink } from '../backend/btc-owner-link.js';
+import { CREDIT_ORIGIN, OWNER_ID } from '../backend/kalshi-access.js';
 
 const now = Date.parse('2026-11-21T18:00:00Z');
 const sym = 'BTCOPT:' + 'a'.repeat(40);
@@ -38,9 +41,11 @@ class Bucket {
 async function harness(c = contract) {
   const bucket = new Bucket();
   const env = withD1({ PAPER_TRADES: bucket, LIVE_QUOTE_ORIGIN: 'https://fixture.invalid', LIVE_QUOTE_KEY: 'fixture',
-    BTC_OPTIONS_USERS: 'fixture', BTC_OPTIONS_ENTRIES: '1' });
+    BTC_OPTIONS_ENTRIES: '1' });
   await seedAccounts(env, [{ username: 'fixture', trades: [], balance_cash: 10000 }]);
   await seedSession(env, 'fixture-session', 'fixture');
+  setupBtcOwner(env);
+  await seedBtcOwnerSession(env, 'fixture-session', 'fixture');
   let market = payload(c), clock = now;
   const oldFetch = global.fetch, OldDate = Date;
   global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
@@ -223,7 +228,7 @@ test('anonymous/private authorization and alternate public paths', async () => {
   try {
     const url = 'https://options.moopertonic.net/api/btc-options';
     assert.equal((await handleBtcOptions(new Request(url), h.env)).status, 401);
-    h.env.BTC_OPTIONS_USERS = '';
+    h.env.BTC_OWNER_LINK = 'disabled';
     assert.equal((await handleBtcOptions(new Request(url, { headers: { Cookie: `${SESSION_COOKIE}=fixture-session` } }), h.env)).status, 403);
     assert.equal((await handleLiveQuotes(new URL('https://options.moopertonic.net/api/live-quotes?symbols=' + sym), h.env)).status, 403);
     assert.equal(isPublicBrowserDataKey('paper-trades/btc-final/a/2026-11-27.json'), false);
@@ -235,7 +240,7 @@ test('revoked display access denies fresh quotes and execution even for holders'
   const h = await harness();
   try {
     assert.equal((await h.order(intent())).status, 201);
-    h.env.BTC_OPTIONS_USERS = '';
+    h.env.BTC_OWNER_LINK = 'disabled';
     let calls = 0;
     global.fetch = async () => { calls++; throw Error('No provider call after revocation'); };
     const response = await handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', {
@@ -245,6 +250,32 @@ test('revoked display access denies fresh quotes and execution even for holders'
     assert.equal((await h.order(intent('sell'))).status, 403);
     assert.equal(calls, 0);
     assert.equal(computeBookFromTrades((await h.store.users.get('fixture')).trades)[sym].pos, 1);
+  } finally { h.restore(); }
+});
+
+test('verified GitHub ordinary paper session reads, buys and closes; revoked identity cannot submit or replay', async () => {
+  const h = await harness(); let owner = true;
+  try {
+    await h.env.DB.prepare('DELETE FROM btc_owner_sessions').run();
+    global.fetch = async url => String(url).startsWith(CREDIT_ORIGIN)
+      ? Response.json({ github_id: owner ? OWNER_ID : OWNER_ID+1 }) : Response.json(h.market);
+    const headers = { Cookie: 'session=fixture-session; __Host-cds-session=synthetic_github_0123456789',
+      Origin: 'https://options.moopertonic.net', 'Content-Type': 'application/json' };
+    const link = await handleBtcOwnerLink(new Request('https://options.moopertonic.net/api/btc-options/owner-link', {
+      method: 'POST', headers, body: JSON.stringify({ action: 'github', confirm: true, paper_account: 'fixture' }),
+    }), h.env);
+    assert.equal(link.status, 200);
+    const read = () => handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', { headers }), h.env);
+    const order = body => handlePaperTrade(new Request('https://options.moopertonic.net/api/paper-trade', {
+      method: 'POST', headers, body: JSON.stringify(body),
+    }), h.env);
+    assert.equal((await read()).status, 200);
+    const buy = intent(); assert.equal((await order(buy)).status, 201);
+    owner = false; assert.equal((await read()).status, 403);
+    assert.equal((await order(buy)).status, 403, 'receipt replay must reauthorize');
+    assert.equal((await order(intent('sell'))).status, 403);
+    owner = true; assert.equal((await order(intent('sell'))).status, 201);
+    assert.equal((await h.store.users.get('fixture')).trades.length, 2);
   } finally { h.restore(); }
 });
 

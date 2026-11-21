@@ -53,6 +53,8 @@ async function fetchLatest() {
     if (typeof noteOiSkewRefreshFailure === 'function') noteOiSkewRefreshFailure(chainState.QQQ.error);
   }
 
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) return;
+  if (selectedRequest !== latestSelectedRequest) return;
   if (token.symbol !== 'QQQ') {
     const other = await fetchChain(token.symbol);
     // The selection changed while this was in flight: drop the reply rather
@@ -60,6 +62,7 @@ async function fetchLatest() {
     // fetchLatest for the same selection supersedes this one too.
     if (selectedRequest !== latestSelectedRequest) return;
     if (!chainSelection.accepts(token)) return;
+    if (typeof btcOptions !== 'undefined' && btcOptions.active) return;
     if (other.data) {
       chainState[token.symbol] = { data: other.data, error: null };
       // Interests first: the quote cache only keeps wanted (visible) symbols.
@@ -79,6 +82,7 @@ async function fetchLatest() {
 }
 
 function selectedChainData() {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) return null;
   return chainState[chainSelection.symbol]?.data ?? null;
 }
 
@@ -104,6 +108,7 @@ function clearChain(message) {
 }
 
 function renderChainTitle(symbol) {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) { btcOptions.header(); return; }
   const data = chainState[symbol]?.data;
   const expiry = data?.expiration;
   document.getElementById('title').textContent = `${symbol} ${expiry ? (expiry === data.date ? '0DTE' : `exp ${expiry}`) : 'Options'} Live OI`;
@@ -143,8 +148,16 @@ function renderSelectedChain() {
 }
 
 function selectUnderlying(symbol) {
-  if (typeof btcOptions !== 'undefined' && btcOptions.active) btcOptions.select(false);
-  if (!chainSelection.select(symbol)) return;
+  if (symbol === 'BTC') {
+    latestSelectedRequest++;
+    btcOptions.select(true);
+    updateQuoteInterests();
+    return;
+  }
+  const wasBtc = typeof btcOptions !== 'undefined' && btcOptions.active;
+  if (wasBtc) btcOptions.select(false);
+  if (!chainSelection.select(symbol) && !wasBtc) return;
+  if (typeof btcOptions !== 'undefined') btcOptions.saveSelection(chainSelection.symbol);
   if (typeof closeTicket === 'function') closeTicket();
   try { localStorage.setItem(UNDERLYING_KEY, chainSelection.symbol); } catch (e) {}
   // Clear immediately so nothing from the previous underlying stays on screen

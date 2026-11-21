@@ -29,14 +29,19 @@
     const submitBtn = document.getElementById('auth-submit');
     errorEl.textContent = '';
     submitBtn.disabled = true;
+    const revision = ++authRevision;
     try {
-      session = await submitAuth(username, password);
+      const result = await submitAuth(username, password);
+      if (revision !== authRevision) return;
+      session = result;
+      sessionVerified = true;
       cacheSessionDisplay();
       document.getElementById('auth-form').reset();
       renderAuthGate();
       updateQuoteInterests();
       renderPaper();
       renderSelectedChain();
+      btcOptions.refresh();
     } catch (error) {
       errorEl.textContent = error.message;
     } finally {
@@ -47,13 +52,7 @@
     authMode = authMode === 'login' ? 'register' : 'login';
     renderAuthGate();
   };
-  document.getElementById('auth-logout').onclick = async () => {
-    try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
-    session = null;
-    try { localStorage.removeItem(SESSION_CACHE_KEY); } catch (e) {}
-    renderAuthGate();
-    renderSelectedChain();
-  };
+  document.getElementById('auth-logout').onclick = logoutPaperAccount;
   document.getElementById('margin-call-continue').onclick = hideMarginCallScreen;
 
   document.getElementById('tab-live').onclick    = () => showTab('live');
@@ -64,12 +63,18 @@
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
   document.getElementById('hist-prev').onclick = () => stepHistoryDate(-1);
   document.getElementById('hist-next').onclick = () => stepHistoryDate(1);
+  if (readSavedUnderlying() === 'BTC') selectUnderlying('BTC');
+  // Private BTC access must not wait for unrelated equity calibration requests.
+  const sessionReady = refreshSessionFromServer().then(() => {
+    renderAuthGate();
+    btcOptions.refresh();
+  });
 
   setStatus('', 'Loading calibration data…');
   await loadRanges();
 
   setStatus('', 'Fetching live snapshot…');
-  await Promise.all([fetchLatest(), fetchPrices(), fetchSpyHealth(), refreshSessionFromServer()]);
+  await Promise.all([fetchLatest(), fetchPrices(), fetchSpyHealth(), sessionReady]);
   renderAuthGate();
   updateQuoteInterests();
   if (session) renderPaper();

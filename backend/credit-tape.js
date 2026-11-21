@@ -4,6 +4,7 @@ function error(message, status) {
 const CREDIT_ORIGIN = 'https://prolific-essence-production.up.railway.app';
 const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/table.css', '/credit-tape/table.js',
   '/credit-tape/auth/login', '/credit-tape/auth/callback', '/credit-tape/auth/logout']);
+const returnCookie = age => `__Host-btc-return=${age ? 'btc' : ''}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
 
 export async function creditTape(request) {
   const url = new URL(request.url);
@@ -31,6 +32,19 @@ export async function creditTape(request) {
   }
   for (const cookie of upstream.headers.getSetCookie()) {
     if (/^__Host-cds-(session|flow)=/.test(cookie)) outgoing.append('Set-Cookie', cookie);
+  }
+  // Fixed navigation hint only, never OAuth state or an identity claim. The
+  // trusted upstream still owns approval/state/callback/session validation.
+  if (url.pathname.endsWith('/login')) {
+    outgoing.append('Set-Cookie', returnCookie(url.search === '?return=btc' ? 600 : 0));
+  }
+  if (url.pathname.endsWith('/callback')) {
+    const returnToBtc = (request.headers.get('Cookie') || '').split(';').some(c => c.trim() === '__Host-btc-return=btc');
+    const location = upstream.headers.get('Location');
+    const target = location ? new URL(location, url.origin) : null;
+    if (returnToBtc && [302,303].includes(upstream.status) && target?.origin === url.origin &&
+        target.pathname === '/credit-tape/' && !target.search && !target.hash) outgoing.set('Location', '/?chain=BTC');
+    outgoing.append('Set-Cookie', returnCookie(0));
   }
   return new Response(upstream.body, {status: upstream.status, headers: outgoing});
 }

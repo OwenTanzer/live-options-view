@@ -1,3 +1,4 @@
+import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 // Local disposable full-page mobile flow. No provider network or credentials.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -6,7 +7,7 @@ import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const preview = createPreview();
-preview.apiEnv.BTC_OPTIONS_USERS = 'btc_reader';
+setupBtcOwner(preview.apiEnv);
 preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
 const cases = Object.fromEntries(btcClockScenarios().map(s => [s.name, s]));
 let market = cases.snapshot.payload, clock = cases.snapshot.now;
@@ -36,6 +37,11 @@ try {
     const r = route.request(); assert.equal(new URL(r.url()).origin, LOCAL_ORIGIN);
     const response = await preview.fetch(new Request(r.url(), { method: r.method(), headers: await r.allHeaders(),
       ...(r.postDataBuffer() ? { body: r.postDataBuffer() } : {}) }));
+    // Synthetic fixture proof; the separate owner-link suite exercises real WebAuthn.
+    if (['/api/login','/api/register'].includes(new URL(r.url()).pathname) && response.ok && r.postDataJSON()?.username === 'btc_reader') {
+      const token = response.headers.get('Set-Cookie').split(';')[0].slice('session='.length);
+      await seedBtcOwnerSession(preview.apiEnv, token, 'btc_reader');
+    }
     await route.fulfill({ status: response.status, body: Buffer.from(await response.arrayBuffer()), headers: Object.fromEntries(response.headers) });
   });
   await page.goto(LOCAL_ORIGIN);
@@ -44,8 +50,8 @@ try {
   await page.locator('#auth-password').fill('fixture-password');
   await page.locator('#auth-submit').click();
   await page.waitForFunction(() => document.querySelector('#user-name').textContent === 'btc_reader');
-  await page.locator('#btc-select').click();
-  await page.locator('.btc-contract').click();
+  await page.locator('#underlying-select').selectOption('BTC');
+  await page.locator('.btc-ticket').click();
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'initial snapshot cannot fill');
   await phase('replay');
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'unchanged replay cannot fill');
@@ -61,7 +67,7 @@ try {
   await page.reload();
   await page.evaluate(clock => { window.fixtureClock = clock; }, clock);
   await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('BUY 1'));
-  await page.locator('#btc-select').click();
+  await page.locator('#underlying-select').selectOption('BTC');
   await page.locator('.btc-contract').waitFor();
   await phase('aged_replay');
   assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/);
@@ -73,7 +79,7 @@ try {
   assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/, 'returning side starts a new baseline');
   await phase('close_bid');
   assert.match(await page.locator('#paper-positions').textContent(), /600.00 liquidation/);
-  await page.locator('.btc-contract').click();
+  await page.locator('.btc-ticket').click();
   const box = await page.locator('#trade-ticket').boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
   await page.locator('#trade-ticket .btn-sell').click();
@@ -84,8 +90,8 @@ try {
   await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('SELL 1'));
   assert.match(await page.locator('#paper-log-body').textContent(), /fee \$2.50/);
   assert.match(await page.locator('#paper-log-body').textContent(), /observed side change \(not exchange time\)/);
-  await page.locator('#btc-select').click();
-  await page.locator('.btc-contract').click();
+  await page.locator('#underlying-select').selectOption('BTC');
+  await page.locator('.btc-ticket').click();
   await phase('disconnected');
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true);
   await phase('reconnect_snapshot');
