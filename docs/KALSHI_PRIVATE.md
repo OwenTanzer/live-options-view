@@ -223,3 +223,13 @@ erases history or reintroduces the combined Worker/KV.
   a completed owner OAuth round trip, or a production paper fill. Those remain
   the release supervisor's live acceptance responsibilities. No outward message
   or Notion update was sent in this implementation pass.
+
+## Sign-in return
+
+Kalshi starts the shared GitHub login in the same tab with `?return=kalshi`.
+The API proxy records a ten-minute HttpOnly, Secure, SameSite=Lax navigation
+hint using the existing desk-return cookie. Only fixed `kalshi` and `btc` keys
+map to local destinations; a plain Credit Tape login clears the hint and
+returns to `/credit-tape/`. Callback denial is never rewritten. The upstream
+service still owns OAuth state, PKCE, owner authorization and session creation.
+Callback and logout clear the hint. No upstream service restart is required.
