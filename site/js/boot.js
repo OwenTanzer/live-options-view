@@ -62,6 +62,8 @@
   document.getElementById('tab-squeeze').onclick = () => showTab('squeeze');
   document.getElementById('tab-news').onclick    = () => showTab('news');
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
+  document.getElementById('hist-prev').onclick = () => stepHistoryDate(-1);
+  document.getElementById('hist-next').onclick = () => stepHistoryDate(1);
 
   setStatus('', 'Loading calibration data…');
   await loadRanges();

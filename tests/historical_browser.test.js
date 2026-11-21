@@ -48,6 +48,18 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
     assert.ok(await page.locator('#hist-sidebar').isVisible());
     await page.waitForFunction(()=>document.querySelectorAll('.similar-row').length===1);
     assert.equal(await page.locator('#widget-intraday-label').textContent(),'2026-10-27');
+    const sessionButton = page.locator('#hist-strip button[data-date="2026-10-26"]');
+    await sessionButton.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#hist-date').value === '2026-10-26');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-date')), '2026-10-26',
+      'keyboard selection retains focus on the archived session button');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-date')), '2026-10-27');
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(() => document.querySelector('#hist-strip-wrap').getBoundingClientRect().right <= innerWidth),
+      'session navigation fits a 390px viewport');
+    if (process.env.HIST_EVIDENCE) await page.screenshot({path:process.env.HIST_EVIDENCE,fullPage:true});
     await page.locator('#hist-date').selectOption('2026-10-26');
     await page.waitForFunction(expected => document.querySelector('#hist-status').textContent === expected,
       'Trade date 2026-10-26' + staleWarning);

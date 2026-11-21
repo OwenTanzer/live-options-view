@@ -80,6 +80,80 @@ function archiveStaleState(newestDateStr, today) {
   return { stale: tradingDaysOld > 5, tradingDaysOld };
 }
 
+// ── session strip (Critical Design Theory pass, Nov 2026) ─────────────────
+// The archive is bounded time, so it gets a shape: one cell per weekday from
+// the first archived date to the newest, a row per month. A filled cell is an
+// archived session you can open; a hollow cell is a weekday with no archive.
+// The browser has no holiday calendar, so a hollow cell is labelled "no
+// archive (a market holiday or a missing capture)", never guessed either way.
+// The <select> stays as the accessible, keyboard-complete control; the strip
+// and the prev/next buttons drive it.
+const HIST_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function buildHistStripModel(dates) {
+  const have = new Set(dates);
+  const sorted = [...have].sort();
+  if (!sorted.length) return [];
+  const months = [];
+  const end = new Date(`${sorted[sorted.length - 1]}T00:00:00Z`);
+  for (let d = new Date(`${sorted[0]}T00:00:00Z`); d <= end; d = new Date(d.getTime() + 86400000)) {
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const iso = d.toISOString().slice(0, 10);
+    const key = iso.slice(0, 7);
+    if (!months.length || months[months.length - 1].key !== key) {
+      months.push({ key, label: `${HIST_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`, days: [], archived: 0 });
+    }
+    const m = months[months.length - 1];
+    const archived = have.has(iso);
+    m.days.push({ date: iso, archived });
+    if (archived) m.archived++;
+  }
+  return months;
+}
+
+function renderHistStrip(selected) {
+  const strip = document.getElementById('hist-strip');
+  if (!strip) return;
+  const active = document.activeElement;
+  const focusedDate = active && strip.contains && strip.contains(active)
+    ? active.getAttribute('data-date') : null;
+  const months = buildHistStripModel(histManifestDates);
+  strip.innerHTML = months.map(m => `<div class="hs-month"><span class="hs-label">${m.label}</span><span class="hs-cells">` +
+    m.days.map(d => d.archived
+      ? `<button type="button" class="hs-cell${d.date === selected ? ' hs-sel' : ''}" data-date="${d.date}" title="${d.date}" aria-label="Open ${d.date}"${d.date === selected ? ' aria-current="date"' : ''}></button>`
+      : `<span class="hs-cell hs-gap" title="${d.date}: no archive (a market holiday or a missing capture)"></span>`).join('') +
+    `</span><span class="hs-count">${m.archived}/${m.days.length}</span></div>`).join('');
+  // Rendering replaces the cells; keep keyboard navigation at the same session.
+  if (focusedDate) {
+    const replacement = [...strip.querySelectorAll('button[data-date]')]
+      .find(button => button.getAttribute('data-date') === focusedDate);
+    if (replacement) replacement.focus({ preventScroll: true });
+  }
+  strip.onclick = e => {
+    const t = e && e.target && e.target.closest ? e.target.closest('button[data-date]') : null;
+    if (t) selectHistoryDate(t.getAttribute('data-date'));
+  };
+  const i = histManifestDates.indexOf(selected);
+  const prev = document.getElementById('hist-prev');
+  const next = document.getElementById('hist-next');
+  if (prev) prev.disabled = i <= 0;
+  if (next) next.disabled = i < 0 || i >= histManifestDates.length - 1;
+}
+
+function selectHistoryDate(dateStr) {
+  if (!histManifestDates.includes(dateStr)) return;
+  const sel = document.getElementById('hist-date');
+  if (sel) sel.value = dateStr;
+  loadHistoryDate(dateStr);
+}
+
+function stepHistoryDate(delta) {
+  const sel = document.getElementById('hist-date');
+  const i = histManifestDates.indexOf(sel && sel.value);
+  const j = i + delta;
+  if (i >= 0 && j >= 0 && j < histManifestDates.length) selectHistoryDate(histManifestDates[j]);
+}
+
 function resetHistoryView(message) {
   document.getElementById('hist-heatmap-wrap').classList.add('hidden');
   document.getElementById('hist-sidebar').classList.add('hidden');
@@ -97,6 +171,7 @@ async function loadHistoryManifest(today = new Date()) {
   const sel = document.getElementById('hist-date');
   sel.innerHTML = '';
   sel.disabled = true;
+  renderHistStrip(null);
   resetHistoryView('Loading archive index…');
   setHistStatus('Loading archive index…');
   try {
@@ -164,6 +239,7 @@ async function fetchChainCsv(dateStr) {
 // oversight.
 async function loadHistoryDate(dateStr) {
   const request = ++histRequest;
+  renderHistStrip(dateStr);
   setHistStatus(`Loading ${dateStr}…`);
   resetHistoryView(`Loading ${dateStr}…`);
   try {
