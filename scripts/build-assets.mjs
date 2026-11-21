@@ -6,6 +6,12 @@ import { resolve, relative, extname, dirname, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url';
 import { stampHtml } from './stamp-build.mjs';
 export const ROOT = fileURLToPath(new URL('../', import.meta.url));
+export const DIRECT_ASSET_PATHS = ['/js/*', '/shared/*', '/shared.js', '/squeeze-calendar.json'];
+function directAssetHeaders(revision) {
+  return DIRECT_ASSET_PATHS.map(path =>
+    path + '\n  X-Options-Environment: production\n  X-Asset-Revision: ' + revision + '\n'
+  ).join('\n');
+}
 export const FLOOR = '90cdc56c207ad0c733bb2f1b1bb15d995472bf47';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const ASSET_EXTENSIONS = new Set(['.html', '.js', '.css', '.json', '.svg', '.png', '.jpg', '.jpeg', '.ico', '.woff', '.woff2', '.txt', '.webp']);
@@ -40,6 +46,7 @@ export function buildAssets({ root = ROOT, out, revision, now = new Date() }) {
     if (name === 'index.html') writeFileSync(dest, stampHtml(readFileSync(resolve(root, 'site', name), 'utf8'), revision, now).html);
     else cpSync(resolve(root, 'site', name), dest);
   }
+  writeFileSync(resolve(output, 'site/_headers'), directAssetHeaders(revision));
   for (const name of ['frontend/worker.mjs', 'frontend/preview-policy.mjs']) {
     mkdirSync(dirname(resolve(output, name)), { recursive: true });
     cpSync(resolve(root, name), resolve(output, name));
@@ -66,6 +73,11 @@ export function verifyArtifact(out, reference = null) {
   const names = filesUnder(dir).filter(p => p !== 'release.json');
   if (JSON.stringify(names) !== JSON.stringify(Object.keys(manifest.files).sort())) throw new Error('Artifact inventory mismatch');
   for (const name of names) {
+    if (name === 'site/_headers') {
+      if (lstatSync(resolve(dir, name)).isSymbolicLink() || readFileSync(resolve(dir, name), 'utf8') !== directAssetHeaders(manifest.revision) ||
+          sha(directAssetHeaders(manifest.revision)) !== manifest.files[name]) throw new Error('Invalid direct asset headers');
+      continue;
+    }
     if (!(name.startsWith('site/') && ASSET_EXTENSIONS.has(extname(name))) &&
         !['frontend/worker.mjs', 'frontend/preview-policy.mjs'].includes(name)) throw new Error(`Operational payload refused: ${name}`);
     if (lstatSync(resolve(dir, name)).isSymbolicLink() || sha(readFileSync(resolve(dir, name))) !== manifest.files[name]) throw new Error(`Hash mismatch: ${name}`);

@@ -65,7 +65,10 @@ test('release/rollback staging changes only asset target and never executes a pr
   assert.equal(plan.state,'prepared-not-approved-not-deployed');
   assert.deepEqual(verifyArtifact(resolve(stage,'payload')),before);
   const config=readFileSync(resolve(stage,'wrangler.assets.toml'),'utf8');
-  assert.match(config,/run_worker_first = true/);assert.match(config,/payload\/frontend\/worker.mjs/);
+  assert.ok(config.includes('run_worker_first = ["/*","!/js/*","!/shared/*","!/shared.js","!/squeeze-calendar.json"]'));
+  assert.throws(() => validateAssetConfig(config.replace('!/shared/*','!/api/*'),before));
+  assert.ok(readFileSync(resolve(stage,'payload/site/_headers'),'utf8').includes('X-Asset-Revision: '+before.revision));
+  assert.match(config,/payload\/frontend\/worker.mjs/);
   assert.doesNotMatch(config,/\[\[(r2_buckets|d1_databases|kv_namespaces)\]\]/);
   assert.match(config,/\[triggers\]\s*crons\s*=\s*\[\s*\]/);
   assert.throws(()=>prepareRelease({artifact:old,out:resolve(old,'nested')}),/outside artifact/);

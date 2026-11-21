@@ -365,6 +365,7 @@ function setTradePending(pending, message = '') {
 // long / intrinsic-value short logic the server ports), so a normal render
 // cycle with nothing expired never makes a network call.
 let settling = false;
+let lastEmptySettlement = null;
 
 function hasExpiredPositions() {
   if (Object.values(computeBook()).some(b => b.instrument_type === 'futures_option' && b.pos > 0 && Date.now() >= Date.parse(b.contract?.expires_at))) return true;
@@ -376,13 +377,17 @@ function hasExpiredPositions() {
 async function settleExpired() {
   if (!session || settling || !hasExpiredPositions()) return;
   const settlingSession = session;
+  const body = JSON.stringify({ as_of: lastDataDate || new Date().toISOString().slice(0, 10), spot_marks: spotMarks });
+  const tradeCount = session.trades.length;
+  if (lastEmptySettlement?.session === session && lastEmptySettlement.body === body &&
+      lastEmptySettlement.tradeCount === tradeCount && Date.now() < lastEmptySettlement.retryAt) return;
   settling = true;
   try {
     const response = await fetch('/api/settle', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: lastDataDate || new Date().toISOString().slice(0, 10), spot_marks: spotMarks }),
+      body,
     });
     const result = await response.json().catch(() => ({}));
     if (session !== settlingSession) return;
@@ -391,6 +396,9 @@ async function settleExpired() {
       return;
     }
     if (!response.ok) return; // transient failure -- retried on the next render cycle
+    if (Array.isArray(result.settled) && result.settled.length === 0) {
+      lastEmptySettlement = { session, body, tradeCount, retryAt: Date.now() + 60_000 };
+    }
     if (result.settled?.length) {
       session.trades.push(...result.settled);
       session.balance_cash = result.balance_cash;

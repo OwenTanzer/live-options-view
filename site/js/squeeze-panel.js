@@ -36,7 +36,7 @@ async function fetchSqueezeLatest() {
     const cacheBust = squeezeNow();
     const urls = ['latest.json', 'latest-attempt.json', 'latest-schedule.json']
       .map(name => `${base}/${name}?_=${cacheBust}`);
-    urls.push(`/squeeze-calendar.json?_=${cacheBust}`);
+    if (!squeezeCalendar) urls.push(`/squeeze-calendar.json?_=${cacheBust}`);
     const values = await Promise.all(urls.map(async url => {
       const response = await fetch(url, { cache: 'no-store' });
       if (response.status === 404) return null;
@@ -45,6 +45,7 @@ async function fetchSqueezeLatest() {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid scanner response');
       return value;
     }));
+    if (urls.length === 3) values.push(squeezeCalendar);
     const published = values[0];
     if (published && (!['complete', 'empty'].includes(published.status) ||
         !Array.isArray(published.candidates) || published.candidates.length > 10 ||

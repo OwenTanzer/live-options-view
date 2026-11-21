@@ -58,6 +58,7 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
   assert.ok(calls.filter(([u]) => !u.startsWith('/squeeze-calendar')).every(([u])=>u.includes('/v1/scheduled/')));
   assert.ok(calls.every(([,o])=>o.cache==='no-store'));
   panel.now='2026-09-23T16:12:00Z';
+  const calendarReads = calls.filter(([url]) => url.startsWith('/squeeze-calendar')).length;
   for (const status of ['missed','interrupted','claimed']) {
     responses['latest-schedule.json']=response({status,scheduled_for:'2026-09-23T16:00:00Z'});
     await panel.fetchSqueezeLatest();
@@ -65,6 +66,7 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
     assert.match(el('squeeze-warning').textContent,status==='claimed'?/awaiting publication/:new RegExp(status));
     assert.match(el('squeeze-tbody').innerHTML,/AAA/);
   }
+  assert.equal(calls.filter(([url]) => url.startsWith('/squeeze-calendar')).length, calendarReads);
   responses['latest-schedule.json']=response({status:'finished',acquisition_status:'partial',scheduled_for:'2026-09-23T16:00:00Z'});
   responses['latest-attempt.json']=response({status:'partial',started_at:'2026-09-23T16:00:02Z'});
   await panel.fetchSqueezeLatest();assert.match(el('squeeze-warning').textContent,/partial/);

@@ -19,7 +19,7 @@ ENVIRONMENT = "production"
 directory = "payload/site"
 binding = "ASSETS"
 # Reserved API/data requests must execute gateway code, not asset fallback.
-run_worker_first = true
+run_worker_first = ["/*","!/js/*","!/shared/*","!/shared.js","!/squeeze-calendar.json"]
 
 [[services]]
 binding = "API"
