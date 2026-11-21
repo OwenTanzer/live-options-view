@@ -13,4 +13,4 @@ CREATE TABLE IF NOT EXISTS kalshi_evidence (
   PRIMARY KEY (account_id, id)
 );
 CREATE INDEX IF NOT EXISTS kalshi_evidence_time ON kalshi_evidence(account_id, received_at);
--- Retention is explicit and bounded; fills retain their original evidence inline.
+-- Retention is explicit and bounded; fill references pin their original archived evidence.
