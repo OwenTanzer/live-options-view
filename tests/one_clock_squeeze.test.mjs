@@ -99,6 +99,14 @@ test('started-only, failed-after-pointer and unknown terminal state cannot certi
     const result=await readSqueezePublications(a.bucket,scope());assert.equal(result.rows.length,0,kind);assert.equal(result.coverage.publicationComplete,false,kind);
   }
 });
+test('equal publication milliseconds collapse to the producer winner, not UUID sort order',async()=>{
+  const a=fixture({run:'99999999-9999-4999-8999-999999999999',started:T-2000,receiptAt:T+2500});
+  const b=fixture({started:T-1000,listed:false,status:'empty',receiptAt:T+2500});
+  for(const [key,value] of b.objects)a.objects.set(key,value);
+  const selection={...scope(),origin:'recorded'},result=await readSqueezePublications(a.bucket,selection);
+  assert.equal(result.rows.length,1);
+  assert.equal(readingAsOf(result.rows,selection,{maxAgeMs:86400000}).row.value.listed,false);
+});
 test('shared shortlist transport deduplicates and discards late scope responses',async()=>{
   let release,called=false,calls=0;const db=fixture(),registry=createSourceRegistry();
   registry.register(squeezeSource({onCoverage:()=>called=true,fetchImpl:async()=>{calls++;await new Promise(resolve=>release=resolve);return Response.json(await readSqueezePublications(db.bucket,scope()));}}));

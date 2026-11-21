@@ -84,7 +84,12 @@ export async function readSqueezePublications(bucket,{session,instrument,cutoff}
     a.details.runId<b.details.runId?-1:a.details.runId>b.details.runId?1:0;
   let winner=null;const states=[];
   for(const row of rows.sort((a,b)=>a.availableAt-b.availableAt || order(a,b))) {
-    if(!winner || order(row,winner)>0){states.push(row);winner=row;}
+    if(!winner || order(row,winner)>0){
+      // The common selector re-sorts equal instants by identity. At one
+      // millisecond there is only one observable pointer state: its winner.
+      if(states.at(-1)?.availableAt===row.availableAt)states.pop();
+      states.push(row);winner=row;
+    }
   }
   return {rows:qualified?states:[],coverage:{...coverage,publicationComplete:qualified,gets,bytes,reason:qualified?(states.length?null:'no-published-run'):'unqualified-publication'}};
 }
