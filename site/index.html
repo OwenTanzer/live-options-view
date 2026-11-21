@@ -1658,7 +1658,8 @@
   <section id="history-clock" hidden aria-label="One Clock historical replay">
     <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
       <label>Session <input id="history-clock-date" type="date" required></label>
-      <label>Instrument <select id="history-clock-instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label>
+      <label>Instrument <input id="history-clock-instrument" value="QQQ" list="history-clock-instruments" pattern="[A-Z][A-Z0-9.\-]{0,14}" maxlength="15" required></label>
+      <datalist id="history-clock-instruments"><option value="QQQ"><option value="SPY"><option value="IBIT"></datalist>
       <label>Cursor (New York) <input id="history-clock-time" type="time" step="1" value="10:00:00" required></label>
       <button type="submit">Show at cursor</button>
     </form>
@@ -1667,6 +1668,11 @@
     <p>Anchored bot signal: historical publication unavailable. A replay reading is not a recorded bot decision.</p>
     <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
     <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <section aria-label="Published Squeeze shortlist at shared cursor">
+      <h3>Published Squeeze shortlist</h3>
+      <p id="history-clock-shortlist-status" role="status">Choose a cursor to check retained publications.</p>
+      <pre id="history-clock-shortlist-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    </section>
     <section aria-label="Bot ledger at shared cursor">
       <h3>PAPER bot ledger at this cursor</h3>
       <label>Public bot <select id="history-clock-bot"><option value="">Select a bot</option></select></label>

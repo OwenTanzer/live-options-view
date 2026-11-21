@@ -1,6 +1,7 @@
 // No backend imports or configurable network destinations in the asset gateway.
 export const API_PATHS = new Set([
   '/api/one-clock/chain',
+  '/api/one-clock/squeeze',
   '/api/one-clock/bots',
   '/api/one-clock/bots/roster',
   '/api/register', '/api/login', '/api/logout', '/api/me', '/api/bots',
