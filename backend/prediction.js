@@ -4,6 +4,7 @@ import { marketKey, positionKey, quoteEvent, validateRules, UNIT } from './predi
 
 export function predictionNamespace(env) {
   const mode = env.PREDICTION_ENVIRONMENT;
+  if (mode === 'production') throw Error('Production research requires the private Kalshi principal route');
   if (!['fixtures', 'demo', 'production'].includes(mode)) throw Error('Prediction environment unavailable');
   if (mode === 'fixtures' && !(env.ENVIRONMENT === 'preview' && env.ISOLATION === 'disposable')) throw Error('Fixtures require disposable preview');
   if (mode !== 'fixtures' && !env.PREDICTION_RIGHTS_RECEIPT) throw Error('Source rights unavailable');
@@ -92,7 +93,7 @@ export function resolvePredictionRecord(record, resolutions, now = Date.now()) {
     const paid = previous.reduce((s, t) => s + (t.payout_units ?? 0), 0);
     const delta = target - paid;
     const trade = { execution_request_id: `resolve:${sym}:${r.revision}`, execution_id: `resolve:${sym}:${r.revision}`,
-      sym, instrument_type: 'prediction', multiplier: 1, underlying: 'BTC', prediction: meta,
+      sym, instrument_type: 'prediction', multiplier: 1, underlying: meta.rules.underlying, prediction: meta,
       side: 'sell', qty: previous.length ? 0 : qty, price: previous.length ? 0 : target / qty / UNIT,
       status: 'filled', ts: new Date(now).toISOString(), resolution: r,
       resolution_cost_units: cost, payout_units: delta, ...(previous.length ? { adjustment_units: delta } : {}) };

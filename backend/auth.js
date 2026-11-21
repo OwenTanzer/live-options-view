@@ -162,7 +162,7 @@ export async function handleLogin(request, env) {
 
   const storage = createStorage(env);
   const record = await storage.users.get(username);
-  if (!record) return jsonResponse({ error: 'Invalid username or password' }, 401);
+  if (!record || record.auth_kind === 'credit_identity') return jsonResponse({ error: 'Invalid username or password' }, 401);
 
   const candidateHash = await derivePasswordHash(password, record.salt, record.iterations);
   if (!constantTimeEqual(candidateHash, record.hash)) {

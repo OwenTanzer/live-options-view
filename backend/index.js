@@ -1,4 +1,5 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleKalshi, kalshiTick } from './kalshi.js';
 import { handleBtcOptions } from './btc-options.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -28,6 +29,7 @@ const MUTATING_API_PATHS = new Set([
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
@@ -163,6 +165,7 @@ export default {
       return;
     }
     const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.KALSHI_PERSONAL_ENABLED === '1') ctx.waitUntil(kalshiTick(env).catch(() => { console.error('kalshi_private_sweep_failed'); }));
     if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
     // The 24/7 event clock must not broaden legacy equity settlement hours.
     if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {
