@@ -44,8 +44,8 @@ try {
   await page.locator('#auth-password').fill('fixture-password');
   await page.locator('#auth-submit').click();
   await page.waitForFunction(() => document.querySelector('#user-name').textContent === 'btc_reader');
-  await page.locator('#btc-select').click();
-  await page.locator('.btc-contract').click();
+  await page.locator('#underlying-select').selectOption('BTC');
+  await page.locator('.btc-ticket').click();
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'initial snapshot cannot fill');
   await phase('replay');
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'unchanged replay cannot fill');
@@ -61,7 +61,7 @@ try {
   await page.reload();
   await page.evaluate(clock => { window.fixtureClock = clock; }, clock);
   await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('BUY 1'));
-  await page.locator('#btc-select').click();
+  await page.locator('#underlying-select').selectOption('BTC');
   await page.locator('.btc-contract').waitFor();
   await phase('aged_replay');
   assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/);
@@ -73,7 +73,7 @@ try {
   assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/, 'returning side starts a new baseline');
   await phase('close_bid');
   assert.match(await page.locator('#paper-positions').textContent(), /600.00 liquidation/);
-  await page.locator('.btc-contract').click();
+  await page.locator('.btc-ticket').click();
   const box = await page.locator('#trade-ticket').boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
   await page.locator('#trade-ticket .btn-sell').click();
@@ -84,8 +84,8 @@ try {
   await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('SELL 1'));
   assert.match(await page.locator('#paper-log-body').textContent(), /fee \$2.50/);
   assert.match(await page.locator('#paper-log-body').textContent(), /observed side change \(not exchange time\)/);
-  await page.locator('#btc-select').click();
-  await page.locator('.btc-contract').click();
+  await page.locator('#underlying-select').selectOption('BTC');
+  await page.locator('.btc-ticket').click();
   await phase('disconnected');
   assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true);
   await phase('reconnect_snapshot');

@@ -108,6 +108,26 @@ refresh even while another chain is visible. Long liquidation uses a fresh execu
 bid; unavailable bids do not fall back to midpoints or snapshots. Aggregate open/total
 PnL shows unavailable when a BTC position cannot be marked.
 
+Bitcoin is a peer in the existing chain selector. `/?chain=BTC` opens it directly
+and preserves the selection through refresh and login. Rows display owned quantity,
+side sizes, freshness and separate **Buy at ask** / **Sell / close at bid** actions.
+These open the existing ticket for review; the row never submits an order itself.
+Unavailable actions have visible reasons, and **Open trade ticket** remains available
+for inspecting a contract. Quotes age out in the UI between polling responses.
+Equity snapshot/session, IV, skew and Historical controls are hidden while Bitcoin
+is active and restored on returning to an equity chain.
+
+Signed-out visitors get **Sign in**. A signed-in account refused by the BTC API gets
+**Switch paper account**; both lead to the existing login form in login mode, retain
+Bitcoin selection and grant no access. Use the pre-existing entitled paper account.
+Account switching clears private rows and tickets immediately, and delayed responses
+from the previous account/view cannot restore them. Initial BTC quote loading waits
+for authenticated session verification, independently of equity calibration loading.
+Private BTC fills/source quotes are excluded from the persistent display cache;
+older cached BTC entries are scrubbed on read. Holdings reload from the verified
+account API. Late execution and settlement replies cannot mutate a replacement
+account's displayed book.
+
 ### Execution clocks and raw wire diagnostics
 
 `bid_ts` / `ask_ts` remain provider side times, never synthesized from receipt.

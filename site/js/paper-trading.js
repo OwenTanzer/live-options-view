@@ -29,10 +29,19 @@ const SESSION_CACHE_KEY = 'paperbook_session_cache';
 // resolves. Never treated as authoritative -- always overwritten by the next
 // server response.
 function cacheSessionDisplay() {
-  try { localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(session)); } catch (e) {}
+  try { localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(sessionDisplayOnly(session))); } catch (e) {}
+}
+function sessionDisplayOnly(record) {
+  // Private BTC quotes and fills must come from the verified current session,
+  // not a previous account's persistent display cache.
+  return record ? { ...record, trades: (record.trades || []).filter(t => t.instrument_type !== 'futures_option') } : null;
 }
 function readSessionDisplayCache() {
-  try { return JSON.parse(localStorage.getItem(SESSION_CACHE_KEY)); } catch (e) { return null; }
+  try {
+    const display = sessionDisplayOnly(JSON.parse(localStorage.getItem(SESSION_CACHE_KEY)));
+    localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(display)); // Scrub older BTC cache entries too.
+    return display;
+  } catch (e) { return null; }
 }
 
 function newExecutionRequestId() {
@@ -84,6 +93,10 @@ let lastDataDate = null;
 const UNDERLYING_KEY = 'chain_underlying';
 const NO_DATA_TEXT = document.getElementById('no-data')?.textContent || 'No live data yet.';
 function readSavedUnderlying() {
+  if (typeof location !== 'undefined') {
+    const linked = new URLSearchParams(location.search).get('chain');
+    if (['QQQ', 'SPY', 'IBIT', 'BTC'].includes(linked)) return linked;
+  }
   try { return localStorage.getItem(UNDERLYING_KEY) || 'QQQ'; } catch (e) { return 'QQQ'; }
 }
 const chainSelection = new ChainSelection(readSavedUnderlying());
@@ -279,6 +292,7 @@ async function executeTrade(info, side, qty, orderType = 'market', limitPrice = 
     return;
   }
   if (pendingExecutions.has(info.sym) || !session) return;
+  const submittingSession = session;
   pendingExecutions.add(info.sym);
   setTradePending(true, `Submitting ${normalized.value.order_type} order...`);
   let trade;
@@ -301,6 +315,7 @@ async function executeTrade(info, side, qty, orderType = 'market', limitPrice = 
   } finally {
     pendingExecutions.delete(info.sym);
   }
+  if (session !== submittingSession) return; // An old account's fill must not populate its replacement.
   session.trades.push(trade);
   session.balance_cash = trade.balance_cash;
   announceOrderStatus(`Filled ${trade.order_type || 'market'} order ${trade.order_id || executionRequestId}.`, 'success');
@@ -360,6 +375,7 @@ function hasExpiredPositions() {
 
 async function settleExpired() {
   if (!session || settling || !hasExpiredPositions()) return;
+  const settlingSession = session;
   settling = true;
   try {
     const response = await fetch('/api/settle', {
@@ -369,6 +385,7 @@ async function settleExpired() {
       body: JSON.stringify({ as_of: lastDataDate || new Date().toISOString().slice(0, 10), spot_marks: spotMarks }),
     });
     const result = await response.json().catch(() => ({}));
+    if (session !== settlingSession) return;
     if (response.status === 410) {
       showMarginCallScreen(result.reason || 'A settlement obligation exceeded the account balance');
       return;

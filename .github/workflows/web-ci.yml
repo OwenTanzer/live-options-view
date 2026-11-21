@@ -201,7 +201,9 @@ jobs:
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
       - name: BTC monthly mobile fixture workflow
-        run: node tests/btc_options_browser.test.mjs
+        run: |
+          node tests/btc_options_browser.test.mjs
+          node tests/btc_mobile_chain.test.mjs
       - name: Disposable preview rendered workflow (#225)
         env:
           NODE_OPTIONS: --experimental-sqlite
