@@ -60,6 +60,7 @@ class Session:
         self.day = day
         self.contracts = {}
         self.added = {}
+        self.rejected = {}
         self.seen = {}
         self.first = self.last = None
         self.gaps = []
@@ -78,7 +79,7 @@ class Session:
         self.last = row["t"] if self.last is None else max(self.last, row["t"])
 
     def snapshot(self):
-        return dict(day=self.day, added=dict(self.added), first=self.first, last=self.last, prints=self.prints,
+        return dict(day=self.day, added=dict(self.added), rejected=dict(self.rejected), first=self.first, last=self.last, prints=self.prints,
                     contracts={s: dict(zip(("B", "S", "U", "prints"), v)) for s, v in sorted(self.contracts.items())},
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
@@ -110,7 +111,7 @@ class RecentPrints:
 
     def _observe(self, event):
         receipt = event.get("collector_receipt_timestamp")
-        if self.open_gap is not None and receipt and (self.open_gap["start"] is None
+        if self.open_gap is not None and receipt and not event.get("type", "").startswith("subscription_") and (self.open_gap["start"] is None
                                                       or _ms(receipt) > self.open_gap["start"]):
             with self.lock:
                 self.open_gap["end"] = _ms(receipt)
@@ -128,11 +129,16 @@ class RecentPrints:
         option = OPTION.fullmatch(symbol)
         if not option:
             return
-        if event["type"] == "subscription_added":
+        if event["type"] in {"subscription_added", "subscription_rejected"}:
             session = self._session_for(_ms(receipt))
             if session is not None:
                 with self.lock:
-                    session.added.setdefault(symbol, None)
+                    if event["type"] == "subscription_rejected":
+                        if session.added.get(symbol) is None:
+                            session.added.pop(symbol, None)
+                            session.rejected[symbol] = _ms(receipt)
+                    elif symbol not in session.rejected:
+                        session.added.setdefault(symbol, None)
                     self.version += 1
             return
         if (self.session and symbol in self.session.added and self.session.added[symbol] is None

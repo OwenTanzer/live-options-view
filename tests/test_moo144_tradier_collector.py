@@ -2495,7 +2495,60 @@ class AdaptiveQQQTests(unittest.TestCase):
         self.assertEqual(restored.payload()["session"]["added"], recent.payload()["session"]["added"])
         restarted = StreamRouter([primary, other])
         AdaptiveQQQ(restarted, primary, restored, 2, {})
-        self.assertEqual(set(restarted.symbols), set(second["symbols"]))
+        self.assertEqual(set(restarted.symbols), set(opening + ["SPY", symbol]))
+
+    def test_rejected_addition_is_excluded_on_reconnect_and_after_archive_rebuild(self):
+        from market_data.tradier.adaptive import AdaptiveQQQ
+        from market_data.tradier.lanes import StreamRouter
+        from market_data.tradier.recent import RecentPrints
+
+        t = 1795105797000
+        now = datetime.fromtimestamp(t / 1000, timezone.utc)
+        stamp = now.isoformat()
+        def legs(strike):
+            return [f"QQQ261119{side}{strike * 1000:08d}" for side in "CP"]
+        def quote(strike, elapsed=0):
+            return dict(type="quote", symbol="QQQ", bid=strike, ask=strike,
+                        biddate=t+elapsed, askdate=t+elapsed, collector_receipt_timestamp=stamp)
+        opening = ["QQQ", *legs(670)]
+        primary = types.SimpleNamespace(symbols=opening, spool=Mock(), universe={
+            "listed_qqq_pairs": {str(k): legs(k) for k in (661, 662, 670)}})
+        recent = RecentPrints()
+        router = StreamRouter([primary])
+        follower = AdaptiveQQQ(router, primary, recent, 1, {})
+        socket = Mock()
+        module = types.SimpleNamespace(create_connection=Mock(return_value=socket), WebSocketException=OSError)
+        trade = dict(type="timesale", symbol=legs(670)[0], date=t, seq=1, size=1, last=1,
+                     collector_receipt_timestamp=stamp)
+        with patch.dict(sys.modules, websocket=module), patch("market_data.tradier.adaptive.utc_now", return_value=stamp):
+            socket.recv.return_value = '{"error":"subscription rejected"}'
+            with self.assertRaises(requests.ConnectionError), follower.open("one") as stream:
+                follower.follow(quote(662), t)
+                next(stream)
+            socket.recv.return_value = json.dumps(trade)
+            with follower.open("two") as stream:
+                self.assertEqual(json.loads(socket.send.call_args.args[0])["symbols"], opening)
+                fresh = json.loads(next(stream))
+                primary.spool.write(fresh)
+                recent.observe(fresh)
+                self.assertEqual(recent.session.prints, 1)
+        records = [call.args[0] for call in primary.spool.write.call_args_list]
+        storage = Mock()
+        storage.list_objects_v2.return_value = {"Contents": [{"Key":"day/a.ndjson.gz"}]}
+        storage.get_object.return_value = {"Body":io.BytesIO(gzip.compress(
+            b"\n".join(json.dumps(row).encode() for row in records)))}
+        restored = RecentPrints()
+        restored.rebuild(storage, "bucket", "day", now=now)
+        self.assertEqual(restored.session.rejected, dict.fromkeys(legs(662), t))
+        self.assertEqual(restored.session.prints, 1)
+        follower = AdaptiveQQQ(StreamRouter([primary]), primary, restored, 1, {})
+        with patch.dict(sys.modules, websocket=module), follower.open("three"):
+            follower.follow(quote(662), t)
+            self.assertEqual(json.loads(socket.send.call_args.args[0])["symbols"], opening)
+            follower.follow(quote(661, 6000), t+6000)
+            self.assertEqual(json.loads(socket.send.call_args.args[0])["symbols"], opening + legs(661))
+            restored.observe(dict(quote(661), symbol=legs(661)[0]))
+            self.assertEqual(restored.payload()["session"]["added"][legs(661)[0]], t)
 
 
 if __name__ == "__main__":

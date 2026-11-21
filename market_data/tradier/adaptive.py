@@ -5,7 +5,7 @@ import math
 
 import requests
 
-from ._probe import parse_epoch_ms
+from ._probe import parse_epoch_ms, utc_now
 
 
 class AdaptiveQQQ:
@@ -19,13 +19,34 @@ class AdaptiveQQQ:
         self.next_check = 0
         self.socket = None
         restored = recent.session.added if recent.session else {}
-        self.register(restored)
+        self.attempted = set(restored)
+        if recent.session:
+            self.attempted.update(recent.session.rejected)
+        self.pending = set()
+        self.latest_request = set()
+        self.register(symbol for symbol, observed in restored.items() if observed is not None)
 
     def register(self, symbols):
         for symbol in symbols:
             if symbol not in self.router.by_symbol:
                 self.router.by_symbol[symbol] = self.primary
                 self.router.symbols.append(symbol)
+        self.stream_info["subscribed_symbols"] = len(self.router.symbols)
+
+    def drop_unobserved(self, *, rejected=False):
+        session = self.recent.session
+        for symbol in sorted(self.pending):
+            if session and session.added.get(symbol) is not None:
+                continue
+            if rejected and symbol in self.latest_request:
+                marker = dict(type="subscription_rejected", symbol=symbol,
+                              collector_receipt_timestamp=utc_now())
+                self.primary.spool.write(marker)
+                self.recent.observe(marker)
+            self.router.by_symbol.pop(symbol, None)
+            self.router.symbols.remove(symbol)
+        self.pending.clear()
+        self.latest_request.clear()
         self.stream_info["subscribed_symbols"] = len(self.router.symbols)
 
     def subscribe(self):
@@ -43,6 +64,7 @@ class AdaptiveQQQ:
         except websocket.WebSocketException as exc:
             raise requests.ConnectionError("Tradier market socket interrupted") from exc
         finally:
+            self.drop_unobserved()
             if self.socket is not None:
                 self.socket.close()
                 self.socket = None
@@ -61,6 +83,7 @@ class AdaptiveQQQ:
                         pass  # Capture retains malformed lines in the archive.
                     else:
                         if isinstance(payload, dict) and "error" in payload:
+                            self.drop_unobserved(rejected=True)
                             raise requests.ConnectionError("Tradier rejected the market subscription")
                 yield line
 
@@ -76,10 +99,16 @@ class AdaptiveQQQ:
             t is None or not 0 <= now - t <= 120000 for t in stamps
         ):
             return
+        # Allow only one unproven expansion on the wire. A heartbeat or
+        # traffic on the old band says nothing about the added symbols.
+        if self.latest_request and not any(
+            self.recent.session.added.get(symbol) is not None for symbol in self.latest_request
+        ):
+            return
         self.next_check = now + 5000
         spot = (bid + ask) / 2
         nearest = sorted(self.pairs, key=lambda k: (abs(k - spot), k))[:self.count]
-        new = [s for k in nearest for s in self.pairs[k] if s not in self.router.by_symbol]
+        new = [s for k in nearest for s in self.pairs[k] if s not in self.router.by_symbol and s not in self.attempted]
         if not new:
             return
         for symbol in new:
@@ -87,5 +116,8 @@ class AdaptiveQQQ:
                           collector_receipt_timestamp=event["collector_receipt_timestamp"])
             self.primary.spool.write(marker)
             self.recent.observe(marker)
+        self.attempted.update(new)
+        self.pending.update(new)
+        self.latest_request = set(new)
         self.register(new)
         self.subscribe()
