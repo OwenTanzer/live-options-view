@@ -94,7 +94,7 @@ test('pause and replacement preserve closing scopes before outage recovery runs'
   // Remove only disposable fixture jobs to model the same outage for replacement.
   await DB.prepare('DELETE FROM one_clock_evaluation_work').run();
   assert.equal((await call('alice',{action:'activate',ruleId:'replacement',version:2})).status,200);
-  assert.deepEqual(DB.raw('SELECT session,instrument FROM one_clock_evaluation_work ORDER BY session,instrument'),[
+  assert.deepEqual(DB.raw('SELECT session,instrument FROM one_clock_evaluation_work ORDER BY session,instrument').map(r=>({...r})),[
     {session:'2026-11-20',instrument:'QQQ'},{session:'2026-11-20',instrument:'SPY'},
     {session:'2026-11-23',instrument:'QQQ'},{session:'2026-11-23',instrument:'SPY'}]);
 });
