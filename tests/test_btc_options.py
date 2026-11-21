@@ -125,6 +125,28 @@ class BtcTests(unittest.TestCase):
         self.assertEqual([c['strike'] for c in result['contracts']], [85000])
         self.assertIn(held['contract_key'], result['subscribed_keys'])
 
+    def test_inspected_snapshot_is_display_only(self):
+        from urllib.parse import parse_qs, urlsplit
+        self.product.refresh(self.feed, 'fixture', NOW)
+        contract = next(iter(self.product.contracts.values()))
+        key = contract['contract_key']
+        batches = []
+        def snapshot(path, token):
+            batches.append(parse_qs(urlsplit(path).query))
+            return {'items': [
+                {'symbol': contract['provider_symbol'], 'bid': '1.5', 'ask': 'NaN',
+                 'mark': '1.75', 'updated-at': NOW.isoformat()},
+                {'symbol': 'unrequested', 'bid': '999', 'updated-at': NOW.isoformat()}]}
+        self.product._read = snapshot
+        self.product.payload([key], [], NOW, expiry='front')
+        self.product._refresh_cycle(self.feed, 'fixture', NOW)
+        self.product._refresh_cycle(self.feed, 'fixture', NOW)
+        self.assertEqual(batches, [{'future-option': [contract['provider_symbol']]}])
+        d = self.product.payload([key], [], NOW, expiry='front')
+        self.assertEqual(d['display_prices'], {key: {'bid': 1.5, 'mark': 1.75, 'as_of': NOW.isoformat()}})
+        self.assertIsNone(d['quotes'][0]['bid'])
+        self.assertFalse(d['quotes'][0]['available'])
+
     def test_reconnect_invalidates_and_missing_side_does_not_carry(self):
         self.product.refresh(self.feed, 'fixture', NOW)
         c = self.product.payload([], [], NOW)['quotes'][0]['contract']

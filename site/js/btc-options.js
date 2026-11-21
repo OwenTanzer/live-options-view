@@ -13,6 +13,22 @@ const btcOptions = {
     document.getElementById('btc-chain').replaceChildren();
     this.render();
   },
+  visibleSymbols() {
+    const rows = [...document.querySelectorAll('.btc-contract')];
+    const visible = rows.filter(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+    }).map(el => el.dataset.symbol);
+    if (ticketEl?.dataset.btc) visible.unshift(ticketEl.dataset.btc);
+    return [...new Set(visible)].slice(0, 64).join(',');
+  },
+  requestVisible() {
+    if (!this.active || !this.data || this.access) return;
+    clearTimeout(this.scrollTimer);
+    this.scrollTimer = setTimeout(() => {
+      if (this.active && this.data && this.visibleSymbols() !== this.requestedWindow) this.refresh();
+    }, 200);
+  },
   async refresh() {
     this.syncSession();
     // Choosing BTC / submitting ordinary login deliberately binds only this
@@ -27,13 +43,11 @@ const btcOptions = {
     try {
       const query = new URLSearchParams();
       if (this.active) query.set('expiry', this.expiry || 'front');
-      const visible = [...document.querySelectorAll('.btc-contract')].filter(el => {
-        const rect = el.getBoundingClientRect();
-        return rect.bottom > 0 && rect.top < window.innerHeight;
-      }).map(el => el.dataset.symbol);
-      if (ticketEl?.dataset.btc) visible.unshift(ticketEl.dataset.btc);
-      if (visible.length) query.set('symbols', [...new Set(visible)].slice(0, 64).join(','));
-      const response = await fetch('/api/btc-options' + (query.size ? '?' + query : ''), { credentials: 'same-origin', cache: 'no-store' });
+      const visible = this.visibleSymbols();
+      this.requestedWindow = visible;
+      if (visible) query.set('symbols', visible);
+      const search = query.toString();
+      const response = await fetch('/api/btc-options' + (search ? '?' + search : ''), { credentials: 'same-origin', cache: 'no-store' });
       const data = response.ok ? await response.json() : await response.json().catch(() => ({}));
       if (generation !== this.generation || request !== this.request || session?.username !== username) return;
       this.quotes.clear();
@@ -50,6 +64,7 @@ const btcOptions = {
       this.data = data;
       for (const q of data.quotes || []) this.quotes.set(q.symbol, q);
       this.render();
+      this.requestVisible();
       this.refreshTicket();
       renderPaper();
     } catch (error) {
@@ -165,6 +180,12 @@ const btcOptions = {
     if (!details) { details = document.createElement('p'); details.className = 'btc-ticket-details'; ticketEl.appendChild(details); }
     const q = this.quotes.get(sym);
     details.textContent = `1 contract = 5 BTC. Premium ×5 + $2.50 fee per side. Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
+    const snapshot = this.data?.display_prices?.[sym];
+    if (snapshot) {
+      const values = ['bid', 'ask', 'mark'].filter(side => Number.isFinite(snapshot[side]))
+        .map(side => side + ' ' + snapshot[side].toLocaleString('en-US', {maximumFractionDigits: 2})).join(' · ');
+      if (values) details.textContent += ` Tastytrade snapshot at ${snapshot.as_of}: ${values}.`;
+    }
     for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
       const px = this.side(sym, side), button = ticketEl.querySelector('.btn-' + action);
       const reason = this.reason(sym, action);
@@ -188,19 +209,32 @@ const btcOptions = {
     const count = listed.filter(c => subscribed.has(c.contract_key)).length;
     const fresh = listed.filter(c => ['ask', 'bid'].some(side => this.side(c.contract_key, side) != null)).length;
     label.textContent = ` ${listed.length} listed · ${count} subscribed · ${fresh} fresh`;
+    if (Object.keys(this.data.display_prices || {}).length) label.textContent += ' · * snapshot';
   },
   updateActions() {
     const book = computeBook();
     for (const row of document.querySelectorAll('.btc-contract')) {
       const sym = row.dataset.symbol;
+      const snapshot = this.data?.display_prices?.[sym];
+      const quote = this.quotes.get(sym);
+      const mark = row.querySelector('.btc-reference-mark');
+      const hasBook = ['bid', 'ask'].some(side => (Number.isFinite(quote?.[side]) && quote[side] > 0) || Number.isFinite(snapshot?.[side]));
+      mark.hidden = hasBook || !Number.isFinite(snapshot?.mark);
+      if (!mark.hidden) {
+        mark.textContent = 'Mark ' + snapshot.mark.toLocaleString('en-US', {maximumFractionDigits: 2}) + '*';
+        mark.title = 'Tastytrade snapshot ' + snapshot.as_of;
+      }
       for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
         const price = this.side(sym, side), reason = this.reason(sym, action, book);
         const button = row.querySelector('.btc-' + action);
         button.disabled = !!reason || price == null;
-        const q = this.quotes.get(sym), raw = q?.[side];
-        button.textContent = Number.isFinite(raw) ? raw.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+        const q = quote;
+        const streamed = Number.isFinite(q?.[side]) && q[side] > 0;
+        const useSnapshot = !streamed && Number.isFinite(snapshot?.[side]);
+        const raw = streamed ? q[side] : snapshot?.[side];
+        button.textContent = Number.isFinite(raw) ? raw.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (useSnapshot ? '*' : '') : '—';
         button.setAttribute('aria-label', `${action === 'buy' ? 'Buy at ask' : 'Sell / close at bid'} ${q?.contract.type || ''} ${q?.contract.strike || ''}: ${button.textContent}${reason ? ' · ' + reason : ''}`);
-        button.title = reason || this.clockLabel(sym, side);
+        button.title = useSnapshot ? 'Tastytrade snapshot ' + snapshot.as_of : reason || this.clockLabel(sym, side);
         row.querySelector('.btc-' + action + '-reason').textContent = reason || 'Opens ticket · 1 contract';
         row.querySelector('.btc-' + side + '-time').textContent = this.clockLabel(sym, side);
       }
@@ -313,6 +347,7 @@ const btcOptions = {
         sides.appendChild(cell);
       }
       row.appendChild(sides);
+      row.appendChild(element('span', 'btc-reference-mark', ''));
       const ticket = element('button', 'btc-ticket', '⋯');
       ticket.setAttribute('aria-label', `Open ${c.type} ${c.strike} ticket and quote details`);
       ticket.dataset.btcAction = 'ticket'; ticket.dataset.symbol = c.contract_key;
@@ -349,5 +384,6 @@ const btcOptions = {
     if (focused) [...root.querySelectorAll('[data-btc-action]')].find(el => el.dataset.symbol === focused.symbol && el.dataset.btcAction === focused.btcAction)?.focus({ preventScroll: true });
   },
 };
+document.addEventListener?.('scroll', () => btcOptions.requestVisible(), { capture: true, passive: true });
 setInterval(() => btcOptions.refresh(), 5000);
 setInterval(() => btcOptions.updateActions(), 1000);
