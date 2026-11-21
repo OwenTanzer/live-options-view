@@ -39,6 +39,7 @@ export function network(f) {
     else if (path.startsWith('/events/fee_changes')) data = f.fees;
     else if (path.startsWith('/events?')) data = { events: path.includes('series_ticker=KXHIGHNY') ? [f.event] : [], cursor: '' };
     else if (path.startsWith('/events/')) data = { event: f.event };
+    else if (path.startsWith('/series/fee_changes')) data = { series_fee_change_arr: [] };
     else if (path.startsWith('/series/')) data = { series: f.series };
     else throw Error('Unexpected source route');
     return Response.json(data, { headers: { Date: new Date(Date.now() + f.dateOffset).toUTCString(), ...(f.age ? { Age: f.age } : {}) } });

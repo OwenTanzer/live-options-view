@@ -86,7 +86,7 @@ No volume threshold excludes small contracts. Unsupported contract shapes stay
 non-executable: only USD 1, non-provisional, non-multivariate binaries, known
 tick ranges, exact terms/source and supported taker fees qualify.
 
-The adapter reads market, event, series, event fee changes and order book. List
+The adapter reads market, event, series, event/series fee changes and order book. List
 prices and last-trade prices never become executable quotes. It preserves
 provider payloads privately with request/receive times. The REST order book has
 **no exchange timestamp or sequence**: `exchange_ts` and `sequence` remain null.
@@ -159,7 +159,7 @@ New buys also stop before the account reaches 500 KB, preserving exit headroom
 under D1's per-row limit. Full fill provenance survives observation pruning.
 Plan a deliberate account rollover when trial capacity is reached, never reset
 cash or erase prior fills as routine cleanup. Budgets persist across tabs/restarts.
-Cron uses at most twelve provider reads per tick; it captures only while enabled.
+Cron uses at most fourteen provider reads per tick; it captures only while enabled.
 No existing producer, capture universe or provider subscription is touched.
 
 ## Checks and rollback

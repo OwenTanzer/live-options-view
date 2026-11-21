@@ -24,10 +24,12 @@ export async function publicRead(env, path) {
     provider_response_ts: new Date(date).toISOString(), path };
 }
 
-export function effectiveFee(series, changes, market, now) {
+export function effectiveFee(series, changes, market, now, seriesChanges = { series_fee_change_arr: [] }) {
   if (!Array.isArray(changes?.event_fee_changes) || changes.cursor) throw Error('Incomplete event fee evidence');
   let type = series.fee_type, multiplier = series.fee_multiplier;
   const history = changes.event_fee_changes;
+  if (!Array.isArray(seriesChanges.series_fee_change_arr) || seriesChanges.series_fee_change_arr.some(x =>
+      x.series_ticker !== series.ticker || !Number.isFinite(Date.parse(x.scheduled_ts)))) throw Error('Invalid series fee schedule');
   if (history.some(x => x.event_ticker !== market.event_ticker || x.series_ticker !== series.ticker ||
       !Number.isFinite(Date.parse(x.scheduled_ts)))) throw Error('Invalid fee history');
   const latest = history.filter(x => Date.parse(x.scheduled_ts) <= now).sort((a,b) => Date.parse(b.scheduled_ts) - Date.parse(a.scheduled_ts))[0];
@@ -36,9 +38,11 @@ export function effectiveFee(series, changes, market, now) {
   if (multiplier === null || multiplier === undefined) throw Error('Unknown fee multiplier');
   return { type, multiplier: String(multiplier), role: 'taker', rounding: 'ceil_0.0001_USD',
     schedule: 'https://kalshi.com/docs/kalshi-fee-schedule.pdf', effective: '2026-07-07',
-    next_change: history.filter(x => Date.parse(x.scheduled_ts) > now).sort((a,b) => Date.parse(a.scheduled_ts) - Date.parse(b.scheduled_ts))[0]?.scheduled_ts ?? null };
+    next_change: [...history, ...seriesChanges.series_fee_change_arr,
+      ...(market.fee_waiver_expiration_time ? [{ scheduled_ts: market.fee_waiver_expiration_time }] : [])]
+      .filter(x => Date.parse(x.scheduled_ts) > now).sort((a,b) => Date.parse(a.scheduled_ts) - Date.parse(b.scheduled_ts))[0]?.scheduled_ts ?? null };
 }
-export async function normalizeMarket(raw, event, series, fees, bookReceipt) {
+export async function normalizeMarket(raw, event, series, fees, bookReceipt, seriesChanges) {
   if (!ticker(raw?.ticker) || raw.event_ticker !== event.event_ticker || event.series_ticker !== series.ticker ||
       !Object.hasOwn(SERIES_SUBJECT, series.ticker) || raw.market_type !== 'binary' || raw.mve_collection_ticker ||
       raw.is_provisional === true || fixed(raw.notional_value_dollars, 10000) !== 10000 ||
@@ -51,7 +55,7 @@ export async function normalizeMarket(raw, event, series, fees, bookReceipt) {
     source: series.contract_terms_url, contract_url: series.contract_url,
     published_at: raw.created_time, cutoff: raw.close_time, window_end: raw.latest_expiration_time,
     currency: 'USD', payout_units: 10000, size_increment: 1, void_policy: 'official_only',
-    fee_convention: 'kalshi_taker_2026_07_07', fee: effectiveFee(series, fees, raw, Date.parse(bookReceipt.receive_ts)),
+    fee_convention: 'kalshi_taker_2026_07_07', fee: effectiveFee(series, fees, raw, Date.parse(bookReceipt.receive_ts), seriesChanges),
     price_ranges: (raw.price_ranges || []).map(p => ({ start: fixed(p.start, 10000), end: fixed(p.end, 10000), step: fixed(p.step, 10000) })),
     early_close_condition: raw.early_close_condition || '', can_close_early: raw.can_close_early === true,
   };
@@ -69,14 +73,15 @@ export async function fetchMarket(env, market) {
   if (raw?.ticker !== market || !ticker(raw.event_ticker)) throw Error('Market identity mismatch');
   const er = await publicRead(env, `/events/${raw.event_ticker}`), event = er.data.event;
   if (event?.event_ticker !== raw.event_ticker || !Object.hasOwn(SERIES_SUBJECT, event.series_ticker)) throw Error('Event identity mismatch');
-  const [sr, fr, br] = await Promise.all([
+  const [sr, fr, br, sc] = await Promise.all([
     publicRead(env, `/series/${event.series_ticker}`),
     publicRead(env, `/events/fee_changes?event_ticker=${encodeURIComponent(raw.event_ticker)}&limit=100`),
     publicRead(env, `/markets/${market}/orderbook?depth=10`),
+    publicRead(env, `/series/fee_changes?series_ticker=${encodeURIComponent(event.series_ticker)}`),
   ]);
-  const normalized = await normalizeMarket(raw, event, sr.data.series, fr.data, br);
+  const normalized = await normalizeMarket(raw, event, sr.data.series, fr.data, br, sc.data);
   return { schema: 'kalshi.private.evidence.v1', source: 'public_kalshi_rest', environment: 'production',
-    market: normalized, receipts: [mr, er, sr, fr, br] };
+    market: normalized, receipts: [mr, er, sr, fr, br, sc] };
 }
 export async function discover(env) {
   // Sample distinct subjects before adding city temperature series; keep the catalog bounded.
