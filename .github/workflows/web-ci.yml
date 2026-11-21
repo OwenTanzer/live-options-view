@@ -65,6 +65,8 @@ jobs:
         run: npm ci --prefix backend --ignore-scripts
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
+      - name: One Clock source and cursor contract
+        run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap

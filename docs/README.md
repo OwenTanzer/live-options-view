@@ -4,6 +4,10 @@
 
 ## Internal specifications
 
+[One Clock](ONE_CLOCK.md) records the shared source/cursor contract, eight-PR
+implementation plan and source migration inventory. Its status distinguishes
+implemented foundations from reader activation and live evidence.
+
 [docs/specs](specs/README.md) holds the maintained repository-only product contracts: SPY collection, OA-203 qualified returns, active lookup, multi-session windows and cross-market overview. Paths named in code spans inside those specifications are repository-relative unless stated otherwise. The former root compatibility pointers are retired; use these maintained paths for new references. A specification's status is not evidence of a deployment.
 
 The [collector guide](../market_data/live_market/README.md), [backend guide](../backend/README.md) and [Tradier operations](../market_data/tradier/OPERATIONS.md) explain current implementation and operations. [Historical records](HISTORY.md) link to immutable pre-cleanup design and rollout documents. Keep subsystem documentation with its subsystem: [Crassus](../crassus/README.md), [Market MCP](../market_mcp/README.md), [synthetic days](../research/synthetic_days/README.md), [completed studies](../research/README.md#archived-studies) and [archived news prototype](HISTORY.md#archived-prototypes).
