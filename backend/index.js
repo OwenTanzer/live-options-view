@@ -8,6 +8,7 @@ import { handleOneClockChain } from './one-clock-chain.js';
 import { handleOneClockSqueeze } from './one-clock-squeeze.js';
 import { advanceOneClockCatalogs } from './one-clock-catalog-sources.js';
 import { handleOneClockResearch,advanceOneClockResearch } from './one-clock-research.js';
+import { handleOneClockResults } from './one-clock-results.js';
 import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -44,6 +45,7 @@ export default {
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
     if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
     if (url.pathname === '/api/one-clock/research') return handleOneClockResearch(request,env,url);
+    if (url.pathname === '/api/one-clock/results') return handleOneClockResults(request,env,url);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {

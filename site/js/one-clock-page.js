@@ -1,6 +1,8 @@
 import { createClock, createSourceRegistry, selectAsOf,observation } from '../shared/one-clock.js';
-import { eventRule, saveRule, evaluateEvents, aggregateEvents } from '../shared/one-clock-events.js';
+import { eventRule, saveRule, evaluateEvents } from '../shared/one-clock-events.js';
 import { demoRules, demoRows, demoStart, demoClose, demoSelection, demoSources } from '../shared/one-clock-demo.js';
+import {createResultsView} from './one-clock-results-view.js';
+import {ruleKey} from '../shared/one-clock-results.js';
 
 const $ = id => document.getElementById(id);
 const storageKey = 'one-clock.rules.v1';
@@ -21,6 +23,13 @@ const registry = createSourceRegistry();
 for (const source of demoSources) registry.register({ ...source, version: 'fixture-1', owner: 'offline demo',
   maxAgeMs: 150000, read: async () => demoRows.filter(r => r.source === source.id) });
 const clock = createClock({ registry, initial: { ...demoSelection, mode: 'replay', cutoff: demoStart + 301000 } });
+const fixtureResults=createResultsView({container:$('stats'),stats:$('stats'),ledger:$('ledger'),fixture:true,
+  onFilter:()=>{selectedId=null;$('event-evidence').hidden=true;$('selected-event').textContent='Choose an occurrence in the filtered table to inspect its evidence.';},
+  onInspect:event=>{selectedId=event.id;render();},onReplay:event=>{selectedId=event.id;$('result-scope').value='cursor';setCursor(event.triggeredAt);}});
+const retainedResults=createResultsView({container:$('observed-stats'),stats:$('observed-stats'),ledger:$('observed-ledger'),
+  onFilter:()=>{$('observed-evidence').hidden=true;},
+  onInspect:event=>{$('observed-evidence').hidden=false;$('observed-evidence').textContent=JSON.stringify(event,null,2);},
+  onReplay:event=>{location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(event.triggeredAt)})+'#history-clock';}});
 
 function option(value, label = value) { const el = document.createElement('option'); el.value = value; el.textContent = label; return el; }
 function selectControl(label, name, options, value) {
@@ -58,7 +67,7 @@ function condition(c = { source: 'skew', field: 'imbalance', op: '>=', value: 0.
 function outcome(o = { id: `outcome-${crypto.randomUUID()}`, source: 'price', field: 'spot', measure: 'return', horizonMs: 900000, toleranceMs: 150000, maxAgeMs: 150000 }) {
   const row = document.createElement('div'); row.className = 'outcome'; row.dataset.id = o.id;
   row.append(...sourceFields(o.source,o.field),
-    selectControl('Measure', 'measure', [['return','Return (%)'],['change','Change'],['value','Endpoint value']], o.measure),
+    selectControl('Measure', 'measure', [['return','Return (%)'],['change','Change'],['value','Endpoint value'],['category','Endpoint category']], o.measure),
     inputControl('Horizon (minutes)', 'horizonMs', o.horizonMs / 60000, 'number'),
     inputControl('Tolerance (seconds)', 'toleranceMs', o.toleranceMs / 1000, 'number'), removeButton(row),
     inputControl('Baseline maximum age (seconds)', 'maxAgeMs', o.maxAgeMs / 1000, 'number'));
@@ -114,7 +123,6 @@ function showResults(active) {
 }
 function status(message, error = false) { $('form-status').textContent = message; $('form-status').classList.toggle('error', error); }
 function time(ms) { return new Date(ms).toISOString().slice(11,19); }
-function formatted(value) { return value == null ? '—' : value.toFixed(3); }
 function render() {
   const at = clock.snapshot();
   $('cursor-time').textContent = time(at.cutoff) + ' UTC';
@@ -122,25 +130,11 @@ function render() {
   const selection = { ...at, instrument: $('result-instrument').value, cutoff: full ? demoClose + 1000 : at.cutoff };
   const events = evaluateEvents({ rule: currentRule, observations: demoRows, selection, sessionClose: demoClose });
   const outcomeId = $('outcome-choice').value;
-  const outcomeSpec = currentRule.outcomes.find(o => o.id === outcomeId);
-  const formatOutcome = value => formatted(value) + (value != null && outcomeSpec?.measure === 'return' ? '%' : '');
-  const stats = aggregateEvents(events, outcomeId);
   $('rule-description').textContent = `${currentRule.name} · ${selection.instrument} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · synthetic data only`;
   $('replay-description').textContent = `SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
   const sameSkew = currentRule.conditions.some(c => c.source === 'skew' && c.field === 'imbalance' && !c.relativeToAnchor && c.op === '>=' && c.value > 0);
   $('comparison-note').textContent = sameSkew && currentRule.combine === 'all' ? 'A positive same-input skew trigger necessarily agrees with a meter that labels every positive imbalance call-heavy. Disagreement is impossible for that pairing; these results do not compare independent signals.' : 'Descriptive observations only. No predictive conclusion is implied.';
-  $('stats').replaceChildren(...[['Occurrences',stats.occurrences],['Sessions',stats.sessions],['Measured',stats.measured],['Pending',stats.pending],['Missing',stats.missing],['Mean',formatOutcome(stats.mean)]].map(([name,value]) => {
-    const box = document.createElement('div'); box.className = 'stat'; const strong = document.createElement('strong'); strong.textContent = value;
-    const label = document.createElement('span'); label.textContent = name; box.append(strong,label); return box;
-  }));
-  $('ledger').replaceChildren(...events.map(event => {
-    const tr = document.createElement('tr'); const out = event.outcomes.find(o => o.id === outcomeId);
-    for (const value of [time(event.triggeredAt),`v${event.ruleVersion}`,event.matchingObservations,out ? out.state === 'measured' ? formatOutcome(out.value) : out.state : 'Tracked']) {
-      const td = document.createElement('td'); td.textContent = value; tr.append(td);
-    }
-    const td = document.createElement('td'); const button = document.createElement('button'); button.textContent = 'Replay trigger';
-    button.onclick = () => { selectedId = event.id; $('result-scope').value = 'cursor'; setCursor(event.triggeredAt); }; td.append(button); tr.append(td); return tr;
-  }));
+  fixtureResults.update({events,rules:[currentRule],cutoff:selection.cutoff,origin:'synthetic',outcome:outcomeId?{ruleKey:ruleKey(currentRule),id:outcomeId}:null});
   $('empty-state').textContent = events.length ? '' : 'No occurrences at this cutoff for the selected class and instrument.';
   const selected = events.find(e => e.id === selectedId);
   $('event-evidence').hidden = !selected;
@@ -175,10 +169,11 @@ async function loadAccount() {
     formFields.set(source,fields);if(!sources.some(([id])=>id===source))sources.push([source,source]);
   }
   for(const id of ['instrument','observed-instrument']) {
-    const selected=$(id).value;$(id).replaceChildren(...accountState.instruments.map(value=>option(value)));
+    const selected=$(id).value;$(id).replaceChildren(...(id==='observed-instrument'?[option('ALL','All instruments')]:[]),...accountState.instruments.map(value=>option(value)));
     if(accountState.instruments.includes(selected))$(id).value=selected;
   }
   if(!$('observed-day').value)$('observed-day').value=accountState.defaultSession;
+  if(!$('observed-end').value)$('observed-end').value=accountState.defaultSession;
   return accountState;
 }
 $('account-save').onclick=async()=>{
@@ -205,7 +200,8 @@ $('account-reopen').onclick=async()=>{
 };
 registry.register({id:'observed-events',version:'1',owner:'authenticated observer',maxAgeMs:86400000,
   async read({session,instrument,cutoff,signal}) {
-    const response=await fetch('/api/one-clock/research?'+new URLSearchParams({session,instrument,cutoff:String(cutoff)}),{signal,credentials:'same-origin',cache:'no-store'});
+    const [from,to]=session.split('/');
+    const response=await fetch('/api/one-clock/results?'+new URLSearchParams({from,to,instrument,cutoff:String(cutoff)}),{signal,credentials:'same-origin',cache:'no-store'});
     const body=await response.json();if(!response.ok)throw new Error(body.error??'Observer read failed');
     if(body.session!==session||body.instrument!==instrument||body.cutoff!==cutoff||!Array.isArray(body.events))throw new Error('Observer scope mismatch');
     const rows=body.events.map(event=>observation({source:'observed-events',id:event.id,revision:event.observerRevision,
@@ -220,27 +216,19 @@ async function readObserved(selection,generation) {
     $('observed-cutoff').value=new Date(cutoff).toISOString().slice(0,19);
     clock.select({...selection,cutoff});
     $('observed-status').textContent='Reading retained evidence…';
-    $('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
+    retainedResults.clear();$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
     const result=await clock.read('observed-events');if(result.discarded||!observedMode||generation!==observedGeneration)return;
-    const events=result.rows.map(r=>r.value),outcomes=events.flatMap(e=>e.outcomes);
+    const events=result.rows.map(r=>r.value);
     $('observed-status').textContent=`${result.selection.session} · ${result.selection.instrument} · ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
-    $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(c=>`${c.source}: ${c.reason}; ${c.pending} pending artifacts, ${c.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
-    $('observed-coverage').textContent+=' '+(observedBody.evaluation??[]).map(r=>`${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' ');
-    $('observed-stats').textContent=`${new Set(events.map(e=>e.session)).size} sessions · ${outcomes.filter(o=>o.state==='measured').length} measured outcomes · ${outcomes.filter(o=>o.state==='pending').length} pending · ${outcomes.filter(o=>o.state==='missing').length} missing`;
-    $('observed-ledger').replaceChildren(...events.map(event=>{
-      const tr=document.createElement('tr');
-      for(const value of [`${event.ruleId} v${event.ruleVersion}`,new Date(event.triggeredAt).toISOString(),new Date(event.recordedAt).toISOString(),event.collection,
-        event.outcomes.map(o=>`${o.id}: ${o.state==='measured'?formatted(o.value):o.state}`).join('; ')||'Tracking only']) {const td=document.createElement('td');td.textContent=value;tr.append(td);}
-      const td=document.createElement('td'),button=document.createElement('button');button.textContent='Inspect receipt';button.onclick=()=>{
-        $('observed-evidence').hidden=false;$('observed-evidence').textContent=JSON.stringify({triggeredAt:event.triggeredAt,recordedAt:event.recordedAt,inputs:event.inputEvidence,outcomes:event.outcomes,lineage:event.lineage},null,2);
-      };td.append(button);tr.append(td);return tr;
-    }));
+    $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(r=>`${r.session} ${r.instrument} ${r.coverage.source}: ${r.coverage.reason}; ${r.coverage.pending} pending artifacts, ${r.coverage.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
+    $('observed-coverage').textContent+=' '+(observedBody.evaluation.length?observedBody.evaluation.map(r=>`${r.session} ${r.instrument} ${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' '):'No rule-evaluation receipts in the selected scope.');
+    retainedResults.update({events,rules:observedBody.rules,cutoff:result.selection.cutoff,origin:'recorded',owner:observedBody.owner});
     $('observed-evidence').hidden=true;
-  }catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
+  }catch(error){if(observedMode&&generation===observedGeneration){retainedResults.clear({forget:true});$('observed-status').textContent=error.message;}}
 }
 function commitObserved(live) {
   const generation=++observedGeneration;clearInterval(timer);timer=null;
-  observedSelection=Object.freeze({session:$('observed-day').value,instrument:$('observed-instrument').value,
+  observedSelection=Object.freeze({session:$('observed-day').value+'/'+$('observed-end').value,instrument:$('observed-instrument').value,
     mode:live?'live':'replay',origin:'recorded',cutoff:live?Date.now():Date.parse($('observed-cutoff').value+'Z')});
   const selection=observedSelection;
   readObserved(selection,generation);
@@ -250,7 +238,7 @@ $('show-observed').onclick=async()=>{
   const generation=++observedGeneration;observedSelection=null;
   observedMode=true;clearInterval(timer);timer=null;$('builder').hidden=true;$('results').hidden=true;document.querySelector('.replay').hidden=true;$('observed-results').hidden=false;
   $('show-observed').setAttribute('aria-pressed','true');$('show-builder').setAttribute('aria-pressed','false');$('show-results').setAttribute('aria-pressed','false');
-  document.querySelector('.notice').hidden=true;$('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
+  document.querySelector('.notice').hidden=true;retainedResults.clear();$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
   try{await loadAccount();if(!observedMode||generation!==observedGeneration)return;commitObserved(true);}catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
 };
 $('observed-read').onclick=()=>commitObserved(false);

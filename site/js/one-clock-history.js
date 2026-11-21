@@ -3,6 +3,7 @@ import { archivedChainSource } from '../shared/one-clock-chain-source.js';
 import { botLedgerSource,botInventory } from '../shared/one-clock-bot-source.js';
 import { squeezeSource } from '../shared/one-clock-squeeze-source.js';
 import { sessionAt,sessionInstant } from '../shared/one-clock-session.js';
+import {replaySelection} from '../shared/one-clock-replay-link.js';
 // Read-only display boundary: never calls fetchLatest, ingestSnapshotQuotes,
 // renderPaper, openTicket, or mutates lastData/session/quote interests.
 const el=id=>document.getElementById(id);
@@ -96,7 +97,7 @@ function renderSelection() {
   try {
     const session=el('history-clock-date').value,instrument=el('history-clock-instrument').value;
     const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
-    const cutoff=sessionInstant(session,h,m,s);
+    const cutoff=sessionInstant(session,h,m,Math.floor(s),Math.round((s%1)*1000));
     return renderCommitted(clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff}));
   } catch(error) {clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
 }
@@ -108,3 +109,14 @@ el('history-view').onchange=()=>{
   else {clock.select({...clock.snapshot(),mode:'replay'});clearBot('Choose One Clock to read the bot ledger.');clearShortlist('Choose One Clock to read publications.');} // cancel pending responses
 };
 window.addEventListener('pagehide',()=>clock.dispose());
+try {
+  const linked=replaySelection(location.search);
+  if(linked) {
+    showTab('history');el('history-view').value='clock';el('history-clock').hidden=false;el('history-daily').hidden=true;
+    el('history-clock-date').value=linked.session;el('history-clock-instrument').value=linked.instrument;
+    const local=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(linked.cutoff);
+    el('history-clock-time').step='0.001';el('history-clock-time').value=local+'.'+String(linked.cutoff%1000).padStart(3,'0');
+    const note=document.createElement('p');note.textContent='Source replay at the event trigger. An observer receipt can be retained later; this source view does not move its recorded receipt into the past. Unavailable source evidence remains unavailable.';
+    el('history-clock-form').after(note);renderCommitted(clock.select(linked));
+  }
+}catch(error){clear(error.message);}

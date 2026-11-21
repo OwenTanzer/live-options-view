@@ -5,6 +5,7 @@ import {createPreview} from './preview-local.mjs';
 import {makeStorage} from '../tests/helpers/d1_shim.mjs';
 import {createStorage} from '../backend/storage.js';
 import {handleOneClockResearch} from '../backend/one-clock-research.js';
+import {handleOneClockResults} from '../backend/one-clock-results.js';
 import {registerObservedRule,observeBatch} from '../backend/one-clock-observer.js';
 import {observerSessions,equitySession} from '../backend/one-clock-calendar.js';
 import {demoRows,demoRules,demoStart} from '../site/shared/one-clock-demo.js';
@@ -21,9 +22,9 @@ const server=http.createServer(async(req,res)=>{
     if(req.headers.host!==`localhost:${server.address().port}`||req.headers.origin&&req.headers.origin!==expected||!['GET','POST'].includes(req.method)){res.writeHead(403);res.end();return;}
     const url=new URL(req.url,'http://localhost:8787');
     let response;
-    if(url.pathname==='/api/one-clock/research') {
+    if(['/api/one-clock/research','/api/one-clock/results'].includes(url.pathname)) {
       let body='',bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>16384)throw new Error('fixture body bound');body+=chunk;}
-      response=await handleOneClockResearch(new Request(url,{method:req.method,headers:{Cookie:'session=disposable-fixture',Origin:'http://localhost:8787','Content-Type':'application/json'},...(req.method==='POST'?{body}:{})}),env,url);
+      response=await (url.pathname.endsWith('/results')?handleOneClockResults:handleOneClockResearch)(new Request(url,{method:req.method,headers:{Cookie:'session=disposable-fixture',Origin:'http://localhost:8787','Content-Type':'application/json'},...(req.method==='POST'?{body}:{})}),env,url);
     } else {
       if(req.method!=='GET'){res.writeHead(403);res.end();return;}
       response=await preview.fetch(new Request(url));

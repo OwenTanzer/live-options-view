@@ -41,7 +41,7 @@ export function eventRule(input) {
     text(o.id, 'outcome id'); text(o.source, 'outcome source'); fieldName(o.field);
     if (ids.has(o.id)) throw new Error('duplicate outcome id');
     ids.add(o.id);
-    if (!['return', 'change', 'value'].includes(o.measure)) throw new Error('invalid measure');
+    if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
   return immutable(rule);
@@ -165,14 +165,16 @@ function measureOutcome(event, outcome, rows, selection, close) {
   const base = { id: outcome.id, targetAt, value: null, measuredAt: null, availableAt: null, evidence: null };
   if (targetAt > close) return { ...base, state: cutoff >= close ? 'missing' : 'pending', reason: cutoff >= close ? 'session-closed-before-horizon' : null };
   const baseline = event.baselines[outcome.id].value;
-  if (outcome.measure !== 'value' && (baseline === null || (outcome.measure === 'return' && baseline === 0))) {
+  if (['return','change'].includes(outcome.measure) && (baseline === null || (outcome.measure === 'return' && baseline === 0))) {
     return { ...base, state: 'missing', reason: 'trigger-baseline-unavailable' };
   }
   const eligible = rows.filter(r => r.source === outcome.source);
-  const row = eligible.find(r => r.eventAt >= targetAt && r.eventAt <= deadline && numeric(field(r.value, outcome.field)));
+  const validValue = value => numeric(value) || outcome.measure === 'category' && ['string','boolean'].includes(typeof value);
+  const row = eligible.find(r => r.eventAt >= targetAt && r.eventAt <= deadline && validValue(field(r.value, outcome.field)));
   if (!row) return { ...base, state: cutoff > deadline ? 'missing' : 'pending', reason: cutoff > deadline ? 'no-qualified-endpoint' : null };
   const endpoint = field(row.value, outcome.field);
   const value = outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
+  if(outcome.measure!=='category'&&!numeric(value))return {...base,state:'missing',reason:'nonfinite-measurement'};
   return { ...base, state: 'measured', value, measuredAt: row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
 }
 

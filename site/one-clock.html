@@ -31,8 +31,8 @@
   <section id="observed-results" hidden aria-labelledby="observed-title">
     <h2 id="observed-title">Observed Results</h2>
     <p>Recorded public evidence, collected periodically. Source publication time and the time this observer retained it are different. Every row and outcome below must have been retained by the selected cutoff.</p>
-    <div class="toolbar"><label>Session (New York)<input id="observed-day" type="date"></label><label>Instrument<select id="observed-instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label><label>As of (UTC)<input id="observed-cutoff" type="datetime-local" step="1"></label><button id="observed-read">Read cutoff</button><button id="observed-live">Live · now</button></div>
-    <p class="muted">Changes to the date, instrument or cutoff apply when you choose Read cutoff or Live.</p><p id="observed-status" role="status"></p><p id="observed-coverage" class="muted"></p>
+    <div class="toolbar"><label>From session (New York)<input id="observed-day" type="date"></label><label>Through session<input id="observed-end" type="date"></label><label>Instrument<select id="observed-instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label><label>As of (UTC)<input id="observed-cutoff" type="datetime-local" step="1"></label><button id="observed-read">Read cutoff</button><button id="observed-live">Live · now</button></div>
+    <p class="muted">Load up to 31 calendar days. Dates, instruments and cutoff apply when you choose Read cutoff or Live; filters apply immediately to the loaded occurrence table.</p><p id="observed-status" role="status"></p><p id="observed-coverage" class="muted"></p>
     <div id="observed-stats" class="stats"></div>
     <div class="table-wrap"><table><thead><tr><th>Event / version</th><th>Trigger (UTC)</th><th>Retained (UTC)</th><th>Collection</th><th>Outcomes</th><th>Evidence</th></tr></thead><tbody id="observed-ledger"></tbody></table></div>
     <pre id="observed-evidence" hidden></pre>
@@ -42,7 +42,7 @@
     <div class="toolbar"><label>Results instrument<select id="result-instrument"></select></label><label>Outcome<select id="outcome-choice"></select></label><label>View<select id="result-scope"><option value="cursor">Follow replay cursor</option><option value="full">Full session · retrospective</option></select></label></div>
     <p id="rule-description"></p><p id="comparison-note" class="muted"></p>
     <div id="stats" class="stats" aria-live="polite"></div>
-    <div class="table-wrap"><table><thead><tr><th>Trigger (UTC)</th><th>Rule</th><th>Matching observations</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody id="ledger"></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Class / version</th><th>Trigger (UTC)</th><th>Session</th><th>Collection</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody id="ledger"></tbody></table></div>
     <p id="empty-state"></p>
   </section>
   <section class="replay" aria-labelledby="replay-title"><div class="section-head"><h2 id="replay-title">Session replay</h2><strong id="cursor-time"></strong></div>
@@ -51,7 +51,7 @@
     <svg id="session-strip" viewBox="0 0 900 100" role="img" aria-label="Observed skew through the cursor"></svg>
     <p id="selected-event" aria-live="polite">Choose an occurrence to inspect its trigger evidence.</p><pre id="event-evidence" hidden></pre>
   </section>
-  <footer>Definitions are saved in this browser. Export JSON to retain a portable copy. <a href="https://claude.ai/artifact/DYV8n2FjbrsmP4ytcs9g6Y">Nov. 9 reconstructed prototype</a> is a separate historical demonstration.</footer>
+  <footer>Local definitions are saved in this browser; Save to account retains an immutable account version. Export JSON for a portable copy. <a href="https://claude.ai/artifact/DYV8n2FjbrsmP4ytcs9g6Y">Nov. 9 reconstructed prototype</a> is a separate historical demonstration.</footer>
 </main>
 <script type="module" src="/js/one-clock-page.js"></script>
 </body></html>
