@@ -165,7 +165,10 @@ jobs:
       - name: squeeze scanner panel
         run: node tests/squeeze_panel.test.js
       - name: BTC monthly paper execution and private UI
+        # Cross-language fixtures run real FULL wire events through the collector.
+        # Importing its package requires the existing producer dependencies.
         run: |
+          pip install -r deployment/python/requirements.txt
           node tests/btc_options.test.mjs
           node tests/btc_options_ui.test.mjs
       - name: paper trading workflow

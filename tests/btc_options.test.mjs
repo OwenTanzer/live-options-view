@@ -9,6 +9,7 @@ import { exactBtcQuote, btcSession, settleBtcAccount, handleBtcOptions } from '.
 import { handleLiveQuotes, isPublicBrowserDataKey } from '../backend/browser-data.js';
 import { validateTradeIntent } from '../backend/execution.js';
 import { handleSettle } from '../backend/settlement.js';
+import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 
 const now = Date.parse('2026-11-21T18:00:00Z');
 const sym = 'BTCOPT:' + 'a'.repeat(40);
@@ -43,7 +44,11 @@ async function harness(c = contract) {
   let market = payload(c), clock = now;
   const oldFetch = global.fetch, OldDate = Date;
   global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
-  global.fetch = async url => { assert.equal(new URL(url).pathname, '/btc-options'); return Response.json(market); };
+  global.fetch = async (url, options) => {
+    assert.equal(new URL(url).pathname, '/btc-options');
+    assert.equal(options.redirect, 'manual'); // Supported by workerd; never forward the private origin key.
+    return Response.json(market);
+  };
   const order = body => handlePaperTrade(new Request('https://options.moopertonic.net/api/paper-trade', {
     method: 'POST', headers: { Cookie: `${SESSION_COOKIE}=fixture-session`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }), env);
@@ -69,6 +74,66 @@ test('side freshness/size, identity, session calendar and one-contract limits', 
   assert.equal(btcSession(Date.parse('2026-11-23T22:01:00Z')), 'maintenance');
   assert.equal(btcSession(Date.parse('2026-11-23T22:02:00Z')), 'open');
   assert.equal(btcSession(Date.parse('2026-07-20T21:01:00Z')), 'maintenance');
+});
+
+test('real collector wire scenarios enforce changed-side clocks and provenance', () => {
+  for (const s of btcClockScenarios()) {
+    const row = s.payload.quotes[0];
+    for (const action of ['buy', 'sell']) {
+      const result = exactBtcQuote(s.payload, { sym: row.symbol, side: action }, s.now);
+      assert.equal(!result.error, s[action], `${s.name}/${action}: ${result.error}`);
+      if (s[action]) {
+        const side = action === 'buy' ? 'ask' : 'bid';
+        assert.equal(result.quote_clock_basis, 'observed_side_change');
+        assert.equal(result.quote_source_ts, null);
+        assert.equal(result.quoteTs, row[side + '_change'].at);
+        assert.equal(result.source_quote[side + '_ts'], null);
+      }
+    }
+  }
+});
+
+test('fallback rejects forged, mismatched, stale and future evidence', () => {
+  const s = btcClockScenarios().find(s => s.name === 'ask_price');
+  const edits = [
+    q => { q.ask_change = null; },
+    q => { q.ask_change.schema = 'receipt'; },
+    q => { q.stream_epoch = 'b'.repeat(32); },
+    q => { q.ask_change.previous_price = q.ask; q.ask_change.previous_size = q.ask_size; },
+    q => { q.ask_change.price += 1; },
+    q => { q.ask_change.size += 1; },
+    q => { q.ask_change.sequence = q.ask_change.previous_sequence; },
+    q => { q.ask_change.baseline_sequence = 0; },
+    q => { q.ask_change.baseline_at = q.ask_change.at; },
+    q => { q.ask_change.previous_received_at = q.ask_change.at; },
+    q => { q.ask_change.at = new Date(s.now + 2000).toISOString(); },
+    q => { q.ask_received_ts = new Date(s.now - 16000).toISOString(); },
+    q => { q.ask_received_ts = new Date(s.now + 2000).toISOString(); },
+    q => { q.ask_ts = new Date(s.now - 16000).toISOString(); },
+    q => { q.ask_ts = new Date(s.now + 2000).toISOString(); },
+    q => { q.ask_ts = 'invalid'; },
+  ];
+  for (const edit of edits) {
+    const p = structuredClone(s.payload); edit(p.quotes[0]);
+    assert.ok(exactBtcQuote(p, { sym: p.quotes[0].symbol, side: 'buy' }, s.now).error, String(edit));
+  }
+});
+
+test('observed execution clock and full change evidence survive D1 reload', async () => {
+  const s = btcClockScenarios().find(s => s.name === 'ask_price');
+  const h = await harness(s.payload.quotes[0].contract);
+  try {
+    h.advance(s.now - now);
+    Object.assign(h.market, s.payload);
+    const response = await h.order(intent('buy', { sym: s.payload.quotes[0].symbol }));
+    assert.equal(response.status, 201, await response.clone().text());
+    const entry = (await createStorage(h.env).users.get('fixture')).trades[0];
+    assert.equal(entry.quote_clock_basis, 'observed_side_change');
+    assert.equal(entry.quote_source_ts, null);
+    assert.equal(entry.quote_ts, s.payload.quotes[0].ask_change.at);
+    assert.deepEqual(entry.source_quote, s.payload.quotes[0]);
+    assert.equal(entry.cash_delta, -502.5);
+  } finally { h.restore(); }
 });
 
 for (const type of ['call', 'put']) test(`${type}: persisted 500/600 round trip; duplicates and concurrent closes`, async () => {

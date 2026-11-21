@@ -46,12 +46,35 @@ const btcOptions = {
       this.refresh();
     } else renderSelectedChain();
   },
+  clock(q, side, now = Date.now()) {
+    const receipt = Date.parse(q[side + '_received_ts']);
+    const fresh = t => Number.isFinite(t) && now - t >= -1000 && now - t <= 15000;
+    if (!fresh(receipt)) return null;
+    const source = q[side + '_ts'];
+    if (source != null) return fresh(Date.parse(source)) ? { at: source, basis: 'provider' } : null;
+    const c = q[side + '_change'];
+    if (!c || c.schema !== 'observed_side_change.v1' || !/^[0-9a-f]{32}$/.test(q.stream_epoch || '') ||
+        c.stream_epoch !== q.stream_epoch) return null;
+    const ts = Date.parse(c.at), baseline = Date.parse(c.baseline_at), prior = Date.parse(c.previous_received_at);
+    if (!fresh(ts) || !Number.isFinite(baseline) || !Number.isFinite(prior) ||
+        !(baseline <= prior && prior < ts && ts <= receipt)) return null;
+    if (![c.baseline_sequence, c.previous_sequence, c.sequence].every(Number.isSafeInteger) ||
+        !(0 < c.baseline_sequence && c.baseline_sequence <= c.previous_sequence && c.previous_sequence < c.sequence)) return null;
+    if (![c.previous_price, c.previous_size, c.price, c.size].every(v => Number.isFinite(v) && v >= 0) ||
+        c.price !== q[side] || c.size !== q[side + '_size'] ||
+        (c.previous_price === c.price && c.previous_size === c.size)) return null;
+    return { at: c.at, basis: 'observed_side_change' };
+  },
+  clockLabel(symbol, side) {
+    const q = this.quotes.get(symbol), clock = q && this.clock(q, side);
+    return clock ? `${clock.basis === 'provider' ? 'provider side time' : 'observed side change'} · ${Math.max(0, Math.floor((Date.now() - Date.parse(clock.at)) / 1000))}s`
+      : 'waiting for a fresh timed side or observed side change';
+  },
   side(symbol, side) {
     const q = this.quotes.get(symbol), now = Date.now();
     if (!q?.available || this.data?.session !== 'open') return null;
-    const stamps = [q[side + '_ts'], q[side + '_received_ts']].map(Date.parse);
-    if (stamps.some(t => !Number.isFinite(t) || now - t > 15000 || now - t < -1000)) return null;
-    if (!(q[side] > 0 && q[side + '_size'] >= 1) || (q.bid != null && q.ask != null && q.bid > q.ask)) return null;
+    if (!this.clock(q, side, now)) return null;
+    if (!(Number.isFinite(q[side]) && q[side] > 0 && Number.isFinite(q[side + '_size']) && q[side + '_size'] >= 1) || (q.bid != null && q.ask != null && q.bid > q.ask)) return null;
     if (now >= Date.parse(q.contract.stops_trading_at)) return null;
     return q[side];
   },
@@ -64,6 +87,7 @@ const btcOptions = {
       const px = this.side(sym, side), button = ticketEl.querySelector('.btn-' + action);
       button.disabled = pendingExecutions.has(sym) || px == null || (action === 'buy' ? !this.data?.entries_enabled : held < 1);
       button.textContent = `${action === 'buy' ? 'Buy' : 'Sell'} 1 @ ${px == null ? 'unavailable' : '$' + px.toFixed(2) + '/BTC ($' + (px * 5).toFixed(2) + ')'}`;
+      button.title = this.clockLabel(sym, side);
     }
   },
   render() {
@@ -71,15 +95,14 @@ const btcOptions = {
     const data = this.data, root = document.getElementById('btc-chain');
     root.replaceChildren();
     const status = document.createElement('p');
-    status.textContent = `${data.session} · ${data.source_status} · Simulated fills. ${data.fee_model}. ${data.entries_enabled ? '' : 'New entries disabled.'}`;
+    status.textContent = `${data.session} · ${data.source_status} · Simulated fills. ${data.fee_model}. When provider side time is missing, execution requires an observed price or size change after the initial snapshot. Observation time is not exchange time. ${data.entries_enabled ? '' : 'New entries disabled.'}`;
     root.appendChild(status);
     for (const c of (data.contracts || []).sort((a, b) => a.strike - b.strike || a.type.localeCompare(b.type))) {
       const q = this.quotes.get(c.contract_key), button = document.createElement('button');
       button.className = 'btc-contract';
       const label = side => {
         const price = this.side(c.contract_key, side);
-        const stamp = Date.parse(q?.[side + '_ts']);
-        return `${side} ${price == null ? 'unavailable' : '$' + price.toFixed(2) + '/BTC · $' + (price * 5).toFixed(2) + '/contract'} · size ${q?.[side + '_size'] ?? '—'} · ${Number.isFinite(stamp) ? Math.max(0, Math.floor((Date.now() - stamp) / 1000)) + 's' : 'untimed'}`;
+        return `${side} ${price == null ? 'unavailable' : '$' + price.toFixed(2) + '/BTC · $' + (price * 5).toFixed(2) + '/contract'} · size ${q?.[side + '_size'] ?? '—'} · ${this.clockLabel(c.contract_key, side)}`;
       };
       button.textContent = `${c.future_symbol} (${c.future_month}) · expires ${c.exp} · ${c.strike} ${c.type}\n${label('bid')}\n${label('ask')}`;
       button.onclick = e => { openTicket(e, { OptionSymbol: c.contract_key, Strike: c.strike,

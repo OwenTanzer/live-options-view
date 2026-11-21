@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from market_data.live_market.btc_options import BtcOptions, normalize, session, BUDGET
 from market_data.live_market.feed import DXLinkFeed
+from market_data.live_market.btc_quote_clock import BtcQuoteClock, source_time, raw_time_class
 
 NOW = datetime(2026, 11, 21, 18, tzinfo=timezone.utc)
 FUTURE = {'symbol': '/BTCX6', 'expiration-date': '2026-11-27',
@@ -142,6 +143,91 @@ class BtcTests(unittest.TestCase):
         self.feed.replace_btc_subscriptions(['/BTCX26:XCME', './BTCX26C90000:XCME'])
         self.feed.replace_btc_subscriptions([])
         self.assertEqual(self.feed._subs, original)
+
+
+class ObservedClockTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = BtcQuoteClock()
+
+    def observe(self, sec, bid=99, ask=100, bid_size=2, ask_size=1, event=None, next_frame=True):
+        if next_frame: self.clock.next_frame()
+        return self.clock.observe('fixture', event or {}, NOW + timedelta(seconds=sec),
+                                  {'bid': bid, 'ask': ask}, {'bid': bid_size, 'ask': ask_size})
+
+    def test_raw_time_types_and_explicit_units(self):
+        for value in (int(NOW.timestamp() * 1000), str(int(NOW.timestamp() * 1000)), NOW.isoformat(),
+                      '2026-11-21T10:00:00-08:00'):
+            self.assertEqual(datetime.fromisoformat(source_time(value)), NOW)
+        for value in (None, True, False, 0, '0', -1, 'NaN', 'Infinity', {}, [], 'bad', '2026-11-21T18:00:00'):
+            self.assertIsNone(source_time(value), repr(value))
+        for event, expected in [({}, 'absent'), ({'bidTime': None}, 'null'), ({'bidTime': 0}, 'number:zero'),
+                                ({'bidTime': '0'}, 'string:zero'), ({'bidTime': True}, 'boolean'),
+                                ({'bidTime': NOW.isoformat()}, 'string:iso_time'), ({'bidTime': {}}, 'other')]:
+            self.assertEqual(raw_time_class(event, 'bidTime'), expected)
+            self.observe(0, event=event)
+        diag = self.clock.diagnostics()
+        self.assertEqual(diag['quote_events'], 7)
+        self.assertEqual(diag['fields']['askTime'], {'absent': 7})
+        self.assertEqual(sum(diag['fields']['bidTime'].values()), 7)
+        self.assertNotIn('fixture', str(diag))  # no symbols, prices or raw values
+
+    def test_baseline_duplicate_and_executed_side_only(self):
+        self.assertIsNone(self.observe(0)['ask_change'])
+        self.assertIsNone(self.observe(1)['ask_change'])
+        changed = self.observe(2, bid=98)
+        self.assertIsNone(changed['ask_change'])
+        self.assertEqual(changed['bid_change']['previous_price'], 99)
+        self.assertEqual(changed['bid_change']['baseline_sequence'], 1)
+        repeated = self.observe(3, bid=98)
+        self.assertEqual(repeated['bid_change'], changed['bid_change'])
+        size = self.observe(4, bid=98, ask_size=2)['ask_change']
+        self.assertEqual(size['previous_price'], size['price'])
+        self.assertNotEqual(size['previous_size'], size['size'])
+
+    def test_missing_side_same_frame_and_clock_rollback_require_new_baseline(self):
+        self.observe(0)
+        self.assertIsNone(self.observe(1, ask=101, next_frame=False)['ask_change'])
+        self.assertIsNotNone(self.observe(2, ask=102)['ask_change'])
+        self.assertIsNone(self.observe(3, ask_size=None)['ask_change'])
+        self.assertIsNone(self.observe(4)['ask_change'])
+        self.assertIsNone(self.observe(3, ask=101)['ask_change'])
+        self.assertIsNone(self.observe(5, ask=101)['ask_change'])
+        self.assertIsNotNone(self.observe(6, ask=102)['ask_change'])
+
+    def test_reconnect_and_resubscribe_do_not_compare_with_old_state(self):
+        self.observe(0)
+        first = self.observe(1, ask=101)
+        self.clock.reset()
+        after = self.observe(2, ask=102)
+        self.assertNotEqual(after['btc_stream_epoch'], first['btc_stream_epoch'])
+        self.assertIsNone(after['ask_change'])
+        self.assertIsNone(self.observe(3, ask=102)['ask_change'])
+        self.assertIsNotNone(self.observe(4, ask=103)['ask_change'])
+        self.clock.forget('fixture')
+        self.assertIsNone(self.observe(5, ask=104)['ask_change'])
+
+    def test_source_time_cannot_be_evaded_by_unchanged_untimed_replay(self):
+        self.observe(0)
+        changed = self.observe(1, ask=101, event={'askTime': 1})
+        self.assertIsNotNone(changed['ask_observed_at'])
+        self.assertIsNone(changed['ask_change'])
+        self.assertIsNone(self.observe(2, ask=101)['ask_change'])
+        self.assertIsNotNone(self.observe(3, ask=102)['ask_change'])
+
+    def test_real_feed_payload_connection_epoch_and_diagnostics(self):
+        from helpers.btc_clock_fixture import scenarios
+        cases = {s['name']: s['payload'] for s in scenarios()}
+        row = lambda name: cases[name]['quotes'][0]
+        self.assertIsNone(row('snapshot')['ask_ts'])
+        self.assertIsNone(row('snapshot')['ask_change'])
+        self.assertIsNotNone(row('ask_price')['ask_change'])
+        self.assertEqual(row('aged_replay')['ask_change'], row('ask_price')['ask_change'])
+        self.assertNotEqual(row('aged_replay')['ask_received_ts'], row('ask_price')['ask_received_ts'])
+        self.assertFalse(row('disconnected')['available'])
+        self.assertIsNone(row('reconnect_snapshot')['ask_change'])
+        self.assertNotEqual(row('reconnect_snapshot')['stream_epoch'], row('close_bid')['stream_epoch'])
+        self.assertEqual(cases['reconnect_ask_size']['wire_time_diagnostics']['fields'],
+                         {'bidTime': {'number:zero': 3}, 'askTime': {'string:zero': 3}})
 
 
 if __name__ == '__main__': unittest.main()
