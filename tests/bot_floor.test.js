@@ -74,6 +74,18 @@ const { createHash } = require('node:crypto');
       get view() { return bfView; } };`)(...names.map(n => scope[n]));
 
   assert.equal(floor.view, 'cards', 'cards stay the default view');
+  for (const phone of [false, true]) {
+    for (const saved of [null, 'cards', 'floor', 'lanes', 'invalid']) {
+      const writes = [];
+      const initScope = { ...scope,
+        matchMedia: query => { assert.equal(query, '(max-width: 600px)'); return { matches: phone }; },
+        localStorage: { getItem: () => saved, setItem: (...args) => writes.push(args) },
+      };
+      const view = new Function(...Object.keys(initScope), source + '\nreturn bfView;')(...Object.values(initScope));
+      assert.equal(view, ['cards', 'floor', 'lanes'].includes(saved) ? saved : phone ? 'floor' : 'cards');
+      assert.deepEqual(writes, [], 'initial defaults must not masquerade as explicit choices');
+    }
+  }
   assert.equal(floor.bfContract('QQQ261120P00609500', -2), 'QQQ 609.5P ×2');
   assert.equal(floor.bfContract('IBIT261120C00058000'), 'IBIT 58C');
   assert.equal(floor.bfEtMinutes(Date.parse('2026-07-01T13:30:00Z')), 9 * 60 + 30, 'EDT open');
