@@ -57,21 +57,16 @@ export async function fetchBtc(env, record, symbols = []) {
 export async function handleBtcOptions(request, env) {
   const session = await requireSession(request, env);
   if (!session) return jsonResponse({ error: 'Sign in required' }, 401);
-  // Existing holders retain management when entries/read discovery is disabled.
-  const held = heldBtc(session.record);
-  if (!btcAllowed(env, session.username) && !held.length) return jsonResponse({ error: 'BTC options access not enabled' }, 403);
+  // Holdings are not a market-data entitlement. Entries may be disabled
+  // independently while an entitled owner continues to manage positions.
+  if (!btcAllowed(env, session.username)) return jsonResponse({ error: 'BTC options access not enabled' }, 403);
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
   try {
     const response = await fetchBtc(env, session.record, symbols);
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
-    const entries = btcAllowed(env, session.username) && env.BTC_OPTIONS_ENTRIES === '1';
-    const allowed = new Set(held.map(c => c.contract_key));
-    if (!btcAllowed(env, session.username)) {
-      data.contracts = (data.contracts || []).filter(c => allowed.has(c.contract_key));
-      data.quotes = (data.quotes || []).filter(q => allowed.has(q.symbol));
-    }
+    const entries = env.BTC_OPTIONS_ENTRIES === '1';
     return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: BTC_FEE,
       fee_model: 'Simulated $2.50 per contract per side; $0 expiration fee' }, 200);
   } catch { return jsonResponse({ error: 'BTC source unavailable' }, 503); }

@@ -75,6 +75,12 @@ export async function handlePaperTrade(request, env) {
     return new Response(validationError, { status: 400 });
   }
 
+  // The quote source belongs to the approved subscriber. A held position or
+  // retried request cannot grant another account access to that source.
+  if (body.instrument_type === 'futures_option' && !btcAllowed(env, session.username)) {
+    return jsonResponse({ error: 'BTC options access not enabled' }, 403);
+  }
+
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
   let reserved;
