@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import gateway from '../frontend/worker.mjs';
 import { createPreview, fixtureNetwork, LOCAL_ORIGIN } from '../scripts/preview-local.mjs';
+import { predictionQuote } from '../backend/prediction.js';
+
+test('disposable prediction publication precedes an execution cutoff across an async millisecond boundary',async t=>{
+  const realNow=Date.now,cutoff=realNow();let now=cutoff;Date.now=()=>now;
+  const preview=createPreview();t.after(()=>{preview.close();Date.now=realNow;});
+  now=cutoff+1;
+  const result=await predictionQuote(preview.apiEnv,{sym:'event:kalshi:fixtures:BTC-THRESHOLD:BTC-100K:YES',side:'buy',qty:3},cutoff);
+  assert.equal(result.error,undefined);assert.equal(result.ask,0.45);
+});
 import { publicReadAllowed, API_PATHS } from '../frontend/preview-policy.mjs';
 import { createStorage } from '../backend/storage.js';
 const request = (path, { method = 'GET', body, cookie, origin = LOCAL_ORIGIN, headers = {} } = {}) => new Request(LOCAL_ORIGIN + path, {
