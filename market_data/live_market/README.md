@@ -74,6 +74,24 @@ provisioning; credentials do not belong in documentation or logs. Fixture checks
 are inventoried in [Collector CI](../../.github/workflows/collector-ci.yml).
 Historical design details remain linked from [documentation history](../../docs/HISTORY.md).
 
+## One Clock immutable publication
+
+`ONE_CLOCK_PUBLICATIONS=enabled` opts the existing snapshot writer into
+[`one_clock.py`](one_clock.py) and [`publications.py`](publications.py). It writes
+verified immutable evidence, an intent and a sequential commit before updating
+the existing latest view. A failed commit leaves latest unchanged and records an
+explicit provenance gap. Native publication does not add a feed, timer or thread.
+The dedicated S3 transport has bounded requests/time and socket timeouts; latency
+and failure counts are logged without payloads. Other collector transports keep
+their existing configuration.
+
+The compatible API and reviewed migrations must precede producer enablement.
+The continuous price lane makes a watched merge/redeployment a real service
+replacement even outside equity hours. Verify provider triggers, build manifest,
+replacement timing and capture gap before claiming a completed rollout. See
+[publication and handoff contract](../../docs/ONE_CLOCK_PUBLICATIONS.md) for
+identity recovery, cross-language validation, source composition and rollback.
+
 ## Private Bitcoin monthly quote lane
 
 [btc_options.py](btc_options.py) optionally shares the continuous price-lane feed.

@@ -32,11 +32,13 @@ from .quotes import LiveQuoteRegistry, _observed_spy_price_with_basis, _older_ob
 from .state import Counters, QQQ_SESSION, _last_prices
 
 
-def make_s3():
+def make_s3(*, publication=False):
+    from botocore.config import Config
     return boto3.client(
         "s3", endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"], region_name="auto",
+        **({"config": Config(connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 1})} if publication else {}),
     )
 
 

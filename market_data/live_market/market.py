@@ -22,6 +22,7 @@ from ..overview.readings import build_snapshot_readings, finish_publication, rea
 from . import market_signals as ms
 from .config import (
     ET,
+    ONE_CLOCK_PUBLICATIONS,
     MOMENTUM_LOOKBACK_MINUTES,
     MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
     MOMENTUM_NEUTRAL_BAND_PCT,
@@ -607,6 +608,24 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     if us.symbol != "QQQ":
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
+
+    if ONE_CLOCK_PUBLICATIONS:
+        from .one_clock import publish_snapshot
+        try:
+            # Authoritative immutable commit precedes the mutable compatibility
+            # view. A crash after this point is recovered by sequence, not by
+            # guessing whether latest.json happened to be updated.
+            publication = publish_snapshot(s3, R2_BUCKET, payload, csv_buf.getvalue().encode())
+            provenance["one_clock_publication"] = publication
+            payload["one_clock_publication"] = publication
+        except Exception:
+            provenance["publication"] = {"status": "archived_unpublished", "reason": "one_clock_commit_failed"}
+            finish_publication(readings, published_at=None, status="archived_unpublished", reason="one_clock_commit_failed")
+            provenance["market_readings_digest"] = readings_digest(readings)
+            _put_snapshot_provenance(s3, provenance)
+            counters.inc_failure()
+            log.error("Immutable One Clock commit failed; latest view not advanced")
+            raise
 
     try:
         s3.put_object(

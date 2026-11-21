@@ -32,6 +32,7 @@ log = logging.getLogger("collector")
 # -- config -------------------------------------------------------------------
 
 ET              = pytz.timezone("America/New_York")
+ONE_CLOCK_PUBLICATIONS = os.getenv("ONE_CLOCK_PUBLICATIONS", "disabled") == "enabled"
 TASTY_BASE      = "https://api.tastyworks.com"
 TICKER          = "QQQ"
 # Underlyings with their own 0DTE chain, snapshot, indicators and archive
