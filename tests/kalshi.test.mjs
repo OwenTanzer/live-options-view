@@ -147,3 +147,31 @@ test('private archive integrity, account separation and persistent request budge
   await budget(env,'test',1,60000); await assert.rejects(()=>budget(env,'test',1,60000));
   assert.equal(env.DB.db.prepare('SELECT COUNT(*) AS n FROM kalshi_evidence WHERE account_id != ?').get(ACCOUNT).n,0);
 }));
+test('official early settlement pays promptly without rewriting the original scheduled cutoff', async () => scenario(async(env,f)=>{
+  await order(env,intent());
+  const before=await createStorage(env).users.get(ACCOUNT), original=structuredClone(before.trades[0]);
+  f.raw.status='finalized'; f.raw.result='yes'; f.raw.close_time=new Date(Date.now()-10000).toISOString();
+  f.raw.settlement_ts=new Date(Date.now()-1000).toISOString(); f.raw.settlement_value_dollars='1.0000';
+  const outcome=await settleKalshiMarket(env,{receipts:[{data:{market:f.raw},receive_ts:new Date().toISOString()}]});
+  assert.equal(outcome.adjustments,1);
+  const after=await createStorage(env).users.get(ACCOUNT);
+  assert.deepEqual(after.trades[0],original); assert.equal(after.balance_cash,10001.598);
+}));
+test('non-weather selected binary uses its subject, same conservative liquidity and official settlement rules', async () => scenario(async(env,f)=>{
+  f.raw.ticker='KXELONMARS-SYNTHETIC'; f.raw.event_ticker='KXELONMARS';
+  f.event.event_ticker=f.raw.event_ticker; f.event.series_ticker='KXELONMARS'; f.series.ticker='KXELONMARS';
+  f.book.orderbook_fp.no_dollars[0][1]='1.99';
+  const m=(await fetchMarket(env,f.raw.ticker)).market;
+  assert.equal(m.rules.rule_type,'official_event_binary'); assert.equal(m.rules.underlying,'SPACE');
+  assert.equal(quoteEvent(m,'YES','buy',1,Date.now()).size,1);
+  assert.ok(quoteEvent(m,'YES','buy',2,Date.now()).error);
+}));
+test('failed evidence persistence never debits; revoked identity cannot replay a known fill', async () => scenario(async(env,f)=>{
+  // Exhaust the persistent observation budget before an attempted fill.
+  env.DB.db.prepare('INSERT INTO kalshi_budget VALUES (?, ?, ?, ?)').run(ACCOUNT,'archive',Math.floor(Date.now()/86400000),400);
+  assert.equal((await order(env,intent())).status,503);
+  const record=await createStorage(env).users.get(ACCOUNT); assert.equal(record.balance_cash,10000); assert.equal(record.trades.length,0);
+  env.DB.db.prepare('DELETE FROM kalshi_budget WHERE scope = ?').run('archive');
+  const b=intent(); assert.equal((await order(env,b)).status,201);
+  f.identity=OWNER_ID+1; assert.equal((await order(env,b)).status,401);
+}));
