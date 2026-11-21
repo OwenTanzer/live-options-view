@@ -953,8 +953,16 @@
     margin-bottom: 0.7rem;
   }
   #squeeze-warning.hidden { display: none; }
-  #squeeze-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
-  #squeeze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  #squeeze-claim { color: var(--fg); font-size: 0.8rem; margin: 0 0 4px; }
+  #squeeze-about { margin: 0 0 0.9rem; }
+  /* Sized to its content (five to ten rows, six columns), not stretched across the wall. */
+  #squeeze-table { width: 100%; max-width: 860px; border-collapse: collapse; font-size: 0.85rem; }
+  .squeeze-score { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .squeeze-score-missing { color: var(--dim); }
+  /* One hue, lightness fixed: length carries the value, so the bar never borrows the gain/loss colours. */
+  .squeeze-bar { display: inline-block; vertical-align: middle; width: 64px; height: 6px; margin-right: 8px;
+    background: #21262d; border-radius: 3px; overflow: hidden; }
+  .squeeze-bar > span { display: block; height: 100%; background: #8fb8de; }
   #squeeze-table th {
     text-align: right;
     color: var(--dim);
@@ -1640,16 +1648,24 @@
 
   <div id="squeeze-header">
     <span id="squeeze-title">Ranked Candidates</span>
+    <span id="squeeze-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
     <span id="squeeze-status" data-state="fallback">—</span>
   </div>
+  <p id="squeeze-claim">Experimental ranking · scores 0–1 · not a squeeze probability</p>
   <div id="squeeze-warning" class="hidden"></div>
-  <div id="squeeze-hint">
+  <details class="truth-about" id="squeeze-about"><summary>About this reading</summary>
+  <p id="squeeze-hint">
     Experimental short-squeeze scanner (<a href="https://linear.app/objecta/issue/OA-191" target="_blank" rel="noopener">OA-191</a>),
     an independently maintained producer (<a href="https://github.com/OwenTanzer/short-squeeze-scanner" target="_blank" rel="noopener">source</a>) --
     this page only displays what it publishes. Scores are experimental screening
     measures, not calibrated squeeze probabilities. Updates at 9 a.m. and noon New York time on exchange session days; 20-candidate pilot. Historical outcomes and research
     comparisons are archived separately and not shown here.
-  </div>
+  </p>
+  <p>Each score is the scanner's weighted mean of components it clamps to 0–1, so the bars share one fixed 0–1 scale.
+    Combined is a blend of factor and options scores; when no usable options chain was found, options reads
+    "unavailable" and combined falls back to the factor score. A longer bar ranks higher on this screen; it is not a
+    larger chance of a squeeze.</p>
+  </details>
   <table id="squeeze-table">
     <caption id="squeeze-caption"></caption>
     <thead>
@@ -1694,7 +1710,7 @@
 // relying on the user finding a hard-refresh. BUILD_ID is stamped by the deploy
 // workflow (sed-replaced from the literal placeholder below); left as the
 // placeholder in local/dev checkouts, where it harmlessly never mismatches.
-const BUILD_ID = "__BUILD_ID__";
+const BUILD_ID = "be36ce5-20261121034943";
 
 function checkForNewBuild() {
   fetch(`${location.pathname}?_=${Date.now()}`, { cache: 'no-store' })
@@ -1829,7 +1845,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/squeeze-panel.js?v=482ae52ec5b1fae1"></script>
+<script src="js/squeeze-panel.js?v=c6408fcc55edf18a"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────

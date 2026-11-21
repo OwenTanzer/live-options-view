@@ -46,6 +46,9 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
   assert.equal(el('squeeze-status').dataset.state,'live');
   assert.match(el('squeeze-tbody').innerHTML,/AAA/);
   assert.match(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  // Scores are bars on the scanner's fixed 0-1 scale, with the number kept beside them.
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:56%"><\/span><\/span><span class="squeeze-num">0\.560</);
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:60%">/);
   assert.equal(el('squeeze-warning').textContent,'');
   assert.ok(calls.filter(([u]) => !u.startsWith('/squeeze-calendar')).every(([u])=>u.includes('/v1/scheduled/')));
   assert.ok(calls.every(([,o])=>o.cache==='no-store'));
