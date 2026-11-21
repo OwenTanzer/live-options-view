@@ -291,3 +291,48 @@ integrations. News must reuse its collector/archive revision and classification
 rules; its publication mode is expressly retrospective. Credit must retain the
 owner gate and cannot reuse the public market projection route. Scanner active
 snapshots and finalized best-later-exit reports are distinct source products.
+
+## Automatic publication catalog
+
+`one-clock-source-catalog.js` is the shared metadata ingestion/checkpoint service.
+Descriptors in `one-clock-catalog-sources.js` supply one source id, version,
+owner, fixed R2 prefix and native key-to-group/kind mapping (one each of
+`started`, `finished`, `failed` per publication attempt). The service performs
+one 100-object page per registered source per existing API cron invocation.
+It reads metadata only and never writes R2 or contacts a market provider.
+Entries and continuation commit in one D1 transaction; generation conflicts
+roll back the entire page. Failed pages retry their checkpoint; three consecutive
+listing failures restart the scan automatically while retaining all catalog
+records and the last completed coverage watermark. Completed scans repeat, so
+new UUID keys sorting before a prior cursor are discovered without manual indexes.
+
+The watermark is the **start** of the last completed full scan. A query after
+that watermark is `catalog-catching-up`, not a false complete history. Queries
+use a bounded upload-time range and an indexed interval lookup to select the
+requested day's attempts plus older unresolved/failed attempts, including
+finished receipts without a start and reversed receipt order. Gap intervals are
+decomposed into disjoint dyadic millisecond buckets; a cutoff uses 54 bucket
+lookups without scanning completed history or future attempts. Each affected
+group replaces its spans inside the same transaction as the entries/checkpoint,
+using one JSON insert (not one statement per span). At most 301 statements and
+212 spans per group are needed per 100-object page. Completed prior days do not consume today's
+20-group read budget. The existing content verifier still reads exact immutable
+objects, checks hashes, and gates every byte by publication time; indexing never
+upgrades a missing publication to fact. Source gaps remain explicit.
+
+The API flag `ONE_CLOCK_CATALOG=enabled` selects this index. Apply only the
+reviewed additive `0005_one_clock_catalog.sql` before deploying that API revision;
+it changes no account/journal tables, R2 artifacts, capture process or cron
+expression. The existing cutover fence skips indexing as well as settlement.
+Catalog failures are isolated from settlement. Roll back to the prior API
+revision to restore the bounded direct reader; retain additive index tables.
+Observer rules/events in `0004` are a separate activation and remain dormant.
+
+Validation includes 2,004 lifetime objects with a two-object session query and
+SQLite query-plan checks for indexed range/bucket searches, randomized
+direct-qualification parity at every boundary before and after late receipts,
+transaction rollback/restart, concurrent pages, unknown metadata, descriptor
+version mismatch, stale coverage, and automatic continuation recovery. Source
+indexing creates no event registrations or trading decisions. Additional sources
+reuse this scheduler and transactional service; no source-specific timer or
+manual daily index is part of the extension contract.

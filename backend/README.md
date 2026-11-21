@@ -15,6 +15,7 @@ The browser's implementation lives separately in [site/](../site).
 | Quote-backed execution and request records | [execution.js](execution.js), [paper-trade.js](paper-trade.js) |
 | Expiration settlement and scheduled sweep | [settlement.js](settlement.js) |
 | Shared helpers | [common.js](common.js) |
+| Owen-only Kalshi research, D1 archive and paper ledger | [kalshi.js](kalshi.js), [release and identity contract](../docs/KALSHI_PRIVATE.md) |
 
 ## Boundaries worth preserving
 

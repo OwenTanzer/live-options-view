@@ -94,7 +94,7 @@ export async function requireSession(request, env, storage = null) {
   const session = await store.sessions.get(token);
   if (!session) return null;
   const record = await store.users.get(session.username);
-  if (!record) return null;
+  if (!record || record.auth_kind === 'credit_identity') return null;
   return { token, username: record.username ?? session.username, record };
 }
 // Applies `mutate(record)` to an account record and writes the result back.

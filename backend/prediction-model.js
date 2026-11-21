@@ -1,4 +1,5 @@
 // Versioned, venue-neutral binary evidence. Monetary units are 1/10000 USD.
+import { validateKalshiRules, validTick, kalshiFee } from './kalshi-model.js';
 export const UNIT = 10000;
 export function marketKey(r) {
   return [r.provider, r.environment, r.series, r.market].map(encodeURIComponent).join(':');
@@ -8,6 +9,7 @@ export function validateRules(r) {
   for (const k of ['provider', 'environment', 'series', 'event', 'market', 'version', 'index', 'text', 'source', 'fee_convention']) {
     if (typeof r?.[k] !== 'string' || !r[k] || r[k].length > 10000) throw Error(`Invalid rule ${k}`);
   }
+  if (['official_weather_binary', 'official_event_binary'].includes(r.rule_type)) return validateKalshiRules(r);
   if (!['fixtures', 'demo', 'production'].includes(r.environment) || r.rule_type !== 'above_threshold' ||
       r.underlying !== 'BTC' || r.currency !== 'USD' || r.payout_units !== UNIT ||
       !Number.isFinite(r.threshold) || r.threshold <= 0 || typeof r.inclusive !== 'boolean' ||
@@ -25,24 +27,34 @@ export function quoteEvent(m, outcome, side, qty, now) {
   const b = m.book, r = m.rules;
   if (!b?.synchronized || b.gap) return fail('Book is unsynchronized');
   if (m.status !== 'open' || now >= Date.parse(r.cutoff)) return fail('Market is closed or halted');
-  for (const t of [b.exchange_ts, b.receive_ts, r.published_at]) {
+  const rest = ['official_weather_binary', 'official_event_binary'].includes(r.rule_type) && b.clock_basis === 'provider_http_date';
+  if (['official_weather_binary', 'official_event_binary'].includes(r.rule_type) && !rest) return fail('Unsupported live quote clock');
+  const quoteTime = rest ? b.provider_response_ts : b.exchange_ts;
+  if (rest && (b.exchange_ts !== null || !Number.isFinite(Date.parse(b.request_ts)) ||
+      Date.parse(b.receive_ts) - Date.parse(b.request_ts) > 5000 ||
+      Date.parse(b.receive_ts) < Date.parse(b.request_ts))) return fail('Invalid REST snapshot clock');
+  for (const t of [quoteTime, b.receive_ts, r.published_at]) {
     const ms = Date.parse(t);
     if (!Number.isFinite(ms) || ms > now) return fail('Future or invalid evidence');
   }
-  if (now - Date.parse(b.exchange_ts) > 15000 || now - Date.parse(b.receive_ts) > 15000) return fail('Book is stale');
+  if (now - Date.parse(quoteTime) > (rest ? 10000 : 15000) || now - Date.parse(b.receive_ts) > (rest ? 10000 : 15000)) return fail('Book is stale');
   const yes = b.yes?.[0], no = b.no?.[0];
   if (!yes || !no) return fail('Missing book side');
-  for (const level of [yes, no]) if (!Number.isSafeInteger(level[0]) || level[0] < 0 || level[0] > UNIT || level[0] % r.tick_units || !Number.isSafeInteger(level[1]) || level[1] <= 0) return fail('Invalid book level');
+  for (const level of [yes, no]) if (!Number.isSafeInteger(level[0]) || level[0] < 0 || level[0] > UNIT || !validTick(r, level[0]) || !Number.isSafeInteger(level[1]) || level[1] <= 0) return fail('Invalid book level');
   if (yes[0] + no[0] > UNIT) return fail('Crossed book');
   const own = outcome === 'YES' ? yes : no, opposite = outcome === 'YES' ? no : yes;
   const size = side === 'buy' ? opposite[1] : own[1];
   if (!Number.isSafeInteger(qty) || qty < 1 || qty > size) return fail('Insufficient displayed size');
+  const price = side === 'buy' ? UNIT - opposite[0] : own[0];
+  if (!validTick(r, price)) return fail('Unsupported executable tick');
   return { bid: own[0] / UNIT, ask: (UNIT - opposite[0]) / UNIT,
+    bid_size: own[1], ask_size: opposite[1],
     price_units: side === 'buy' ? UNIT - opposite[0] : own[0], size,
-    fee_units: r.fee_units * qty, multiplier: 1, underlying: r.underlying,
-    strike: r.threshold, type: outcome, exp: null, quoteTs: b.exchange_ts,
-    bidTs: b.exchange_ts, askTs: b.exchange_ts,
-    prediction: { rules: r, outcome, sequence: b.sequence, receive_ts: b.receive_ts, exchange_ts: b.exchange_ts } };
+    fee_units: rest ? kalshiFee(price, qty, r.fee) : r.fee_units * qty, multiplier: 1, underlying: r.underlying,
+    strike: r.threshold, type: outcome, exp: null, quoteTs: quoteTime,
+    bidTs: quoteTime, askTs: quoteTime,
+    prediction: { rules: r, outcome, sequence: b.sequence, receive_ts: b.receive_ts, exchange_ts: b.exchange_ts,
+      ...(rest ? { clock_basis: b.clock_basis, provider_response_ts: b.provider_response_ts, request_ts: b.request_ts } : {}) } };
 }
 
 // Both receive and exchange times must be at/before the One Clock cursor.
@@ -54,6 +66,7 @@ export function compareEvent(m, options, spot, cursor) {
   const available = x => x && ['exchange_ts', 'receive_ts'].every(k => Number.isFinite(Date.parse(x[k])) && Date.parse(x[k]) <= cursor);
   if (!available(m.book) || !available(options) || !available(spot) || Date.parse(m.rules.published_at) > cursor) result.reasons.push('Evidence unavailable at cursor');
   const r = m.rules;
+  if (r.rule_type !== 'above_threshold') result.reasons.push('No comparable options settlement basis for this event');
   if (spot?.underlying !== r.underlying || spot?.index !== r.index || spot?.currency !== r.currency || !(spot?.price > 0)) result.reasons.push('Mismatched spot context');
   for (const k of ['underlying', 'index', 'window_start', 'window_end', 'inclusive', 'currency']) if (options?.[k] !== r[k]) result.reasons.push(`Mismatched ${k}`);
   if (options?.settlement_basis !== 'spot' || options?.basis !== 0 || options?.expiry !== r.window_end) result.reasons.push('Mismatched expiry or futures/spot basis');
