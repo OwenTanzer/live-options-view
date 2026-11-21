@@ -366,7 +366,29 @@ while viewing recorded history so its current summary cannot leak into that view
 Apply only reviewed migration 0009 before releasing this API. Rolling back the
 API/assets leaves additive private history retained. It does not affect account
 execution, passkeys, public bot identity, settlement or event-observer activation.
-Trainer forward-only/blind-date integration remains a separate open slice.
+Trainer forward-only/blind-date integration is described below.
 Validation uses synthetic private revisions, fees/partials/expiry/combinations,
 auth-before-read and context-cache exclusion, response races and browser rewind.
 No private production journal payload is needed for those checks.
+
+## Trainer source eligibility
+
+The Python binding in `research/options_replay/one_clock.py` implements the same
+envelope and as-of revision contract as the JS core. Both consume
+`tests/fixtures/one_clock_contract.json`; equal-time identity ordering is explicit
+UTF-16 code-unit order rather than host locale. Trainer adapts each immutable pack
+once, indexes latest eligible readings at publication boundaries in linear storage,
+and keeps its own server clock, dwell, reset attempts, fees, ledger and reveal.
+Board, charts, candles, volume and price marks use the same eligible source rows.
+Publication delay never refreshes observation age or creates a tradable old quote.
+
+Legacy archive/event-tape playback is explicitly reconstructed availability, with
+the existing snapshot-boundary assumption visible. It is not evidence of historical
+public availability. Simulation stays synthetic; explicit recorded sources with
+missing availability remain unavailable. Source dates/keys and all future payloads
+remain on the server until reveal. No global scrub control is added.
+
+Trainer deployment is separate from API/assets: preserve both QQQ/SPY stores,
+resume states and gateway identity, verify service activity, then update the reviewed
+consumer files through their existing lifecycle. No producer restart, new feed,
+archive write or rewrite of saved decision-state hashes belongs to this slice.

@@ -110,6 +110,7 @@ details summary { cursor: pointer; }
   <div id="msg" role="status" aria-live="polite"></div>
   <div id="saves" aria-live="polite"></div>
   <div id="simbanner" class="banner"></div>
+  <p id="clockbasis" class="muted"></p>
   <div id="game" style="display:none">
     <div class="banner" id="banner" role="alert"></div>
     <div class="grid">
@@ -339,6 +340,7 @@ function render() {
   $("idle").style.display = "none"; $("game").style.display = "";
   const s = V.session, q = V.quotes, done = s.closed || s.revealed;
   $("clock").textContent = s.time_of_day;
+  $("clockbasis").textContent = s.clock_origin === "recorded" ? "Availability follows the publication times supplied by this source." : s.clock_origin === "synthetic" ? "Synthetic availability; generated observations remain separate from historical evidence." : "Historical quotes with reconstructed availability. Legacy packs assume availability at each snapshot boundary.";
   const sim = s.mode === "simulation" ? s.simulation : null, sb = $("simbanner");
   if (sim) { sb.className = "banner on"; sb.innerHTML = `<b>SIMULATION: a generated session, not a historical day.</b> Seed ${sim.seed} · generator ${esc(sim.generator_version)} · inputs ${esc(sim.inputs_digest)} ·
       <b>provisional quotes</b> (model output, not recorded market quotes; ${sim.generator_version === "sim-v2"

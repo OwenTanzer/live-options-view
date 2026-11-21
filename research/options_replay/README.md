@@ -38,6 +38,27 @@ collectors.
 
 ## Rules
 
+One Clock supplies the source eligibility contract underneath the Trainer's own
+forward-only clock. The Python binding and browser/Worker core run the same
+availability, correction, retraction, cohort and ordering fixtures. Board,
+charts, volume, last consistent price and fills use the eligible snapshot;
+stepping waits for a declared publication boundary when it is later than the
+snapshot. Freshness still measures snapshot age, not arrival age. Hidden dates,
+reveal, fees, resets and the saved paper ledger retain their existing controls.
+
+Legacy archive/event-tape packs explicitly use **reconstructed availability**:
+their model assumes each snapshot became available at its own boundary, without
+claiming proof of historical publication. Generated sessions stay synthetic.
+A source can declare `clock_origin: "recorded"` with per-snapshot `available_s`
+(New York seconds from midnight); missing or null publication times then remain
+unavailable. Optional `observation_id`, `revision`, and `retracted` carry corrections.
+These internal times, dates and source identities are not exposed before reveal.
+No global replay cursor can move the Trainer backwards or place live orders.
+
+This is a consumer-only change. Deploy through the Trainer's existing service
+lifecycle; do not restart an active training session or any market producer to
+test it. Existing saved fills and decision-state hashes are not rewritten.
+
 | Rule | Implementation |
 |---|---|
 | Day pool | NYSE sessions, with a quote at most 150 s old for ≥ 90 % of the regular session (from the listing). Of 25 sampled snapshots, ≥ 90 % must pass the parity consistency check (`qualify.py`). A day is checked again snapshot-by-snapshot at load; it is refused if quotes would be live for < 85 % of the session or dark for > 15 min. |
