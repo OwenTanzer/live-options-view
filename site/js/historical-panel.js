@@ -114,12 +114,21 @@ function buildHistStripModel(dates) {
 function renderHistStrip(selected) {
   const strip = document.getElementById('hist-strip');
   if (!strip) return;
+  const active = document.activeElement;
+  const focusedDate = active && strip.contains && strip.contains(active)
+    ? active.getAttribute('data-date') : null;
   const months = buildHistStripModel(histManifestDates);
   strip.innerHTML = months.map(m => `<div class="hs-month"><span class="hs-label">${m.label}</span><span class="hs-cells">` +
     m.days.map(d => d.archived
       ? `<button type="button" class="hs-cell${d.date === selected ? ' hs-sel' : ''}" data-date="${d.date}" title="${d.date}" aria-label="Open ${d.date}"${d.date === selected ? ' aria-current="date"' : ''}></button>`
       : `<span class="hs-cell hs-gap" title="${d.date}: no archive (a market holiday or a missing capture)"></span>`).join('') +
     `</span><span class="hs-count">${m.archived}/${m.days.length}</span></div>`).join('');
+  // Rendering replaces the cells; keep keyboard navigation at the same session.
+  if (focusedDate) {
+    const replacement = [...strip.querySelectorAll('button[data-date]')]
+      .find(button => button.getAttribute('data-date') === focusedDate);
+    if (replacement) replacement.focus({ preventScroll: true });
+  }
   strip.onclick = e => {
     const t = e && e.target && e.target.closest ? e.target.closest('button[data-date]') : null;
     if (t) selectHistoryDate(t.getAttribute('data-date'));
