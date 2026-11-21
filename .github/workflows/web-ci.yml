@@ -164,7 +164,10 @@ jobs:
         run: node tests/squeeze_scanner_display.test.js
       - name: squeeze scanner panel
         run: node tests/squeeze_panel.test.js
-      - name: BTC monthly paper execution and private UI
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Collector-to-API and UI BTC fixtures
         # Cross-language fixtures run real FULL wire events through the collector.
         # Importing its package requires the existing producer dependencies.
         run: |

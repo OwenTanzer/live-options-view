@@ -47,6 +47,7 @@ class DXLinkFeed:
         self._subs: list[dict] = []
         self._pending_option_subs: list[dict] = []
         self._btc_symbols = set()
+        self._btc_option_symbols = set()
         self._btc_owned = set()
         self._btc_clock = BtcQuoteClock()
         self._subscription_error: Optional[str] = None
@@ -107,7 +108,7 @@ class DXLinkFeed:
                 self._flush_pending_option_subscriptions_locked()
         return len(additions)
 
-    def replace_btc_subscriptions(self, symbols):
+    def replace_btc_subscriptions(self, symbols, option_symbols=()):
         """Replace only this private product's Quote events; preserve price/equity lanes."""
         wanted = set(symbols)
         if len(wanted) > 65:
@@ -129,6 +130,7 @@ class DXLinkFeed:
                 self._btc_clock.forget(symbol)
             self._btc_owned = (self._btc_owned - removed) | added
             self._btc_symbols = wanted
+            self._btc_option_symbols = set(option_symbols) & wanted
 
     def _flush_pending_option_subscriptions_locked(self):
         while self._pending_option_subs:
@@ -733,7 +735,8 @@ class DXLinkFeed:
                         # Replace both sides, including missing prices/sizes. Never
                         # carry a withdrawn side forward as executable liquidity.
                         sizes = {side: self._to_float(event.get(side + 'Size')) for side in ('bid', 'ask')}
-                        observation = self._btc_clock.observe(sym, event, now, {'bid': b, 'ask': a}, sizes)
+                        observation = self._btc_clock.observe(sym, event, now, {'bid': b, 'ask': a}, sizes,
+                                                             diagnostic=sym in self._btc_option_symbols)
                         s.update(bid=b, ask=a, bid_size=sizes['bid'], ask_size=sizes['ask'],
                                  bid_ts=now.isoformat(), ask_ts=now.isoformat(), **observation)
                         continue

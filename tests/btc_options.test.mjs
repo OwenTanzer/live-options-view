@@ -76,6 +76,26 @@ test('side freshness/size, identity, session calendar and one-contract limits', 
   assert.equal(btcSession(Date.parse('2026-07-20T21:01:00Z')), 'maintenance');
 });
 
+test('private collector redirects fail closed without following another origin', async () => {
+  const h = await harness();
+  try {
+    let calls = 0;
+    global.fetch = async (url, options) => {
+      calls++;
+      assert.equal(options.redirect, 'manual');
+      assert.equal(new URL(url).origin, h.env.LIVE_QUOTE_ORIGIN);
+      return new Response(null, { status: 302, headers: { Location: 'https://other.invalid/redirect' } });
+    };
+    const response = await handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', {
+      headers: { Cookie: `${SESSION_COOKIE}=fixture-session` },
+    }), h.env);
+    assert.equal(response.status, 503);
+    assert.equal((await h.order(intent())).status, 503);
+    assert.equal(calls, 2);
+    assert.equal((await h.store.users.get('fixture')).trades.length, 0);
+  } finally { h.restore(); }
+});
+
 test('real collector wire scenarios enforce changed-side clocks and provenance', () => {
   for (const s of btcClockScenarios()) {
     const row = s.payload.quotes[0];

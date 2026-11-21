@@ -189,7 +189,7 @@ class BtcOptions:
         streams = [c['streamer_symbol'] for c in chosen]
         if active and active[0].get('future_streamer_symbol'):
             streams.append(active[0]['future_streamer_symbol'])
-        self.feed.replace_btc_subscriptions(streams)
+        self.feed.replace_btc_subscriptions(streams, option_symbols=[c['streamer_symbol'] for c in chosen])
         self.selected = {c['contract_key'] for c in chosen}
         self.subscription_count = len(chosen)
 

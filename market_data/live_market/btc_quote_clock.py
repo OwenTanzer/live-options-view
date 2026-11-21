@@ -66,13 +66,15 @@ class BtcQuoteClock:
     def next_frame(self):
         self.sequence += 1
 
-    def observe(self, symbol, event, now, prices, sizes):
-        self.events += 1
+    def observe(self, symbol, event, now, prices, sizes, diagnostic=True):
+        if diagnostic:
+            self.events += 1
         state = self.sides.setdefault(symbol, {})
         result = {'btc_stream_epoch': self.epoch}
         for side in ('bid', 'ask'):
             field = side + 'Time'
-            self.counts[field][raw_time_class(event, field)] += 1
+            if diagnostic:
+                self.counts[field][raw_time_class(event, field)] += 1
             result[side + '_observed_at'] = source_time(event.get(field))
             pair = (prices[side], sizes[side])
             complete = all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in pair)
@@ -107,6 +109,6 @@ class BtcQuoteClock:
         return result
 
     def diagnostics(self):
-        return {'schema': 'btc_wire_time_counts.v1', 'stream_epoch': self.epoch,
+        return {'schema': 'btc_wire_time_counts.v1', 'scope': 'btc_option_quotes', 'stream_epoch': self.epoch,
                 'frames': self.sequence, 'quote_events': self.events,
                 'fields': {field: dict(counts) for field, counts in self.counts.items()}}
