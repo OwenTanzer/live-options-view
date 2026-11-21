@@ -9,8 +9,21 @@ import { Collector, replay, fixed } from '../market_data/prediction/collector.mj
 import { withD1, seedAccounts, seedSession } from './helpers/test_env.mjs';
 import { createStorage } from '../backend/storage.js';
 import worker from '../backend/index.js';
+import { createPreview } from '../scripts/preview-local.mjs';
 
 const now = Date.now(), iso = n => new Date(n).toISOString();
+test('human preview has stable day-long terms and isolated account storage', async () => {
+  const first = createPreview(), second = createPreview();
+  try {
+    const catalog = async p => (await p.apiEnv.PREDICTION_DATA.get('prediction/v1/fixtures/current.json')).json();
+    const market = (await catalog(first)).markets[0];
+    assert.ok(Date.parse(market.rules.cutoff) - Date.now() > 23 * 60 * 60 * 1000);
+    assert.deepEqual((await catalog(first)).markets[0].rules, market.rules);
+    await seedAccounts(first.apiEnv, [{ username: 'isolated', balance_cash: 100, trades: [] }]);
+    assert.equal(await createStorage(second.apiEnv).users.get('isolated'), null);
+    assert.equal(first.apiEnv.PREDICTION_ENVIRONMENT, 'fixtures');
+  } finally { first.close(); second.close(); }
+});
 import { fixture } from './fixtures/prediction.mjs';
 
 class Bucket {

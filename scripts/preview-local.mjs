@@ -76,6 +76,9 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
   const apiEnv = withD1({ PAPER_TRADES: bucket, BOT_INDEX_READS: 'r2',
     LIVE_QUOTE_ORIGIN: 'https://preview-quotes.invalid', LIVE_QUOTE_KEY: 'fixture-not-a-secret' });
   const predictionMarket = predictionFixture();
+  // Stable terms for the lifetime of this disposable session, with enough time
+  // for a human to sign in, inspect the rules and trade. Never move a held
+  // contract's deadline forward on refresh.
   const fixtureDeadline = new Date(Date.now() + 7 * 86400000).toISOString();
   Object.assign(predictionMarket.rules, { cutoff: fixtureDeadline, window_start: fixtureDeadline, window_end: fixtureDeadline });
   // Separate disposable prediction binding; never aliases capture/operational R2.

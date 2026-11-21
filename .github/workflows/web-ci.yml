@@ -76,6 +76,8 @@ jobs:
       - name: historical archive loading
         run: node tests/historical_archive.test.js
       - name: Prediction market fixture acceptance
+        env:
+          NODE_OPTIONS: --experimental-sqlite
         run: |
           node tests/prediction.test.mjs
           node tests/prediction_ui.test.mjs
@@ -188,6 +190,10 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node tests/preview_browser.test.mjs
+      - name: Prediction desktop and mobile fixture workflow (#293)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/prediction_browser.test.mjs
       - name: Private journal passkey enrollment and sign-in
         run: node tests/journal_passkeys_browser.mjs
       - name: Reference OI skew desktop and mobile browser workflow

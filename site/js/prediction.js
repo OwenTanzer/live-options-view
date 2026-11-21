@@ -45,6 +45,9 @@
       el('portfolio').textContent = p.positions.map(p => `${p.sym}: ${p.pos} held · liquidation ${money(p.liquidation_value)}${p.mark_reason ? ` (${p.mark_reason})` : ''} · realized net ${money(p.realized)}`).join('\n') || 'No prediction positions.';
       el('history').textContent = JSON.stringify(p.trades, null, 2);
       catalog = await api('/api/prediction/markets'); render();
+      const environment = el('environment');
+      if (environment) environment.textContent = catalog.markets.some(m => m.rules.environment === 'fixtures')
+        ? 'Synthetic practice data · disposable account funds · no live market feed. This session resets when the preview restarts.' : '';
       el('status').textContent = `${catalog.markets.length} events · refreshed ${new Date().toLocaleTimeString()}. Quotes are checked again by the server.`;
     } catch (e) { el('status').textContent = e.message; }
   }
