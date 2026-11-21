@@ -10,7 +10,7 @@ Validation:
 - `node tests/bots_panel.test.js`: passed.
 - Chromium: 20 combinations at 390, 600, 601 and 1440px with no saved choice, each of three explicit modes, and invalid storage. Each performed actual Cards/Session lanes/Floor switching and reloads: 60 switch/reload checks passed, zero page errors. Initial selection was verified before opening Automated; 390px Floor has no horizontal overflow. [Machine-readable receipt](receipt.json).
 - Exact-HEAD asset build and artifact verification passed.
-- [Required Web CI](https://github.com/OwenTanzer/live-options-view/actions/runs/44876463089): consult the recorded final result in the return/checkpoint.
+- [Required Web CI](https://github.com/OwenTanzer/live-options-view/actions/runs/44876463089): completed successfully for exact candidate `b01aa4326774e675070d81ca88b5b4813c6304c8`.
 
 The screenshots use locally served candidate assets and a single read-only snapshot of the existing public `/api/bots` roster. They are local rendering evidence, not a production deployment or bot-health claim. No production writes or auth operations were performed.
 
