@@ -224,7 +224,7 @@ upstream retains all OAuth approval and callback validation. If ordinary paper l
 is still needed, the BTC selection remains visible. If both sessions are already
 verified, the chain and actions load without a passkey or extra confirmation step.
 
-Apply additive `0007_btc_github_link.sql` alongside the documented account/journal
+Apply additive `0008_btc_github_link.sql` alongside the documented account/journal
 and owner-link migrations before the separate protected API/assets release. It
 seeds no users or grants. Logout/account deletion clears bindings. **Unlink** leaves
 a session-scoped disabled marker so refresh cannot silently relink; the explicit

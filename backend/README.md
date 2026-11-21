@@ -241,5 +241,5 @@ BTC access. The existing Credit Tape GitHub verifier from #310 also binds the ow
 current normal paper session, revalidating numeric identity on each private request.
 The legacy paper
 username allowlist is ignored; unverified sessions and distinct users remain denied.
-Apply additive migrations 0005 and 0007 and verify the source rights receipt before enabling
+Apply additive migrations 0005 and 0008 and verify the source rights receipt before enabling
 the separate API/asset release. This does not require a collector rollout.
