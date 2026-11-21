@@ -40,6 +40,9 @@ export function validateAssetConfig(config, manifest) {
   }
   const routing = fields.get('assets.run_worker_first');
   if (routing !== true && !Array.isArray(routing)) throw new Error('Asset config requires explicit gateway routing');
+  if (Array.isArray(routing) && !manifest.files?.['site/_headers']) {
+    throw new Error('Direct asset routing requires revision headers in the artifact; select its compatible gateway config');
+  }
   // Omission can preserve an old combined Worker's cron during cutover.
   const crons=fields.get('triggers.crons');
   if(!Array.isArray(crons)||crons.length!==0)throw new Error('Asset config requires explicit empty triggers.crons');

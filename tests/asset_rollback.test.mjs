@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { buildAssets, verifyArtifact, FLOOR, ROOT } from '../scripts/build-assets.mjs';
@@ -72,6 +72,17 @@ test('release/rollback staging changes only asset target and never executes a pr
   assert.doesNotMatch(config,/\[\[(r2_buckets|d1_databases|kv_namespaces)\]\]/);
   assert.match(config,/\[triggers\]\s*crons\s*=\s*\[\s*\]/);
   assert.throws(()=>prepareRelease({artifact:old,out:resolve(old,'nested')}),/outside artifact/);
+});
+test('pre-direct-routing artifacts need their original all-gateway config',()=>{
+  const {old,current,before} = artifacts();
+  delete before.files['site/_headers'];
+  unlinkSync(resolve(old,'site/_headers'));
+  writeFileSync(resolve(old,'release.json'), JSON.stringify(before));
+  assert.deepEqual(verifyArtifact(old),before);
+  const {root,out} = configFixture();
+  assert.throws(()=>prepareRelease({artifact:old,current,out}),/requires revision headers/);
+  assert.equal(existsSync(out),false);
+  assert.equal(prepareRelease({artifact:old,current,out,configRoot:root}).asset_revision,before.revision);
 });
 test('rollback refuses tampered payload and unmanifested operational file',()=>{
   const {old,current}=artifacts();
