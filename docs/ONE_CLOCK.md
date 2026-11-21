@@ -200,3 +200,43 @@ Zero Workers KV operations applies to every path, including retry/backfill and
 rollback. Follow [SITE_RELEASES](SITE_RELEASES.md) and
 [RELEASE_BOUNDARIES](RELEASE_BOUNDARIES.md). A merge is not deployment; a release
 is not proof of natural market observations. Zero events is a valid launch.
+
+## Bot fill reader (PR 5, consumer slice)
+
+The Historical One Clock view reads a selected public PAPER bot at the same
+instrument/session/cursor as the chain. The names-only roster is explicitly
+current membership; it excludes the same hidden strategies as `/api/bots` and
+never sends current balances, closures, fills, aliases or strategy state to replay.
+The adapter pages the complete retained D1 trade ledger, not the roster's last
+100 session fills. Each page examines at most 40 terminal R2 receipts (64 KiB
+each), from a ledger bounded to 10,000 entries; no listing or writes. Future
+event rows are excluded before pagination. Continuations bind to the eligible
+ledger version, so edits require a clean reload and future appends do not alter
+an earlier replay. R2 terminal upload times gate visibility; bodies uploaded
+after the cursor are not read. Receipt owner and the complete public fill
+projection must match the D1 entry. Public identities are hashes, not request IDs.
+
+Prior-session entries retain their original event session as carry evidence in
+the requested replay scope. Opening quantity means known at New York midnight;
+current quantity includes only cursor-visible receipts. Quantity inventory has
+no inferred marks, cash, fees, strategy attribution or P&L. Missing/oversized/
+mismatched receipts, including legacy settlements without receipts, invalidate
+both inventory totals; visible fills remain inspectable. Page/budget failures
+do not display partial totals. Current record closure is not historical closure.
+
+The November 21 public roster contained 34 accounts across smoke/Phelps,
+Canopus, Looking Glass, QQQ/IBIT/SPY OI variants, max-pain, momentum, put/call,
+QQQ gated strangle, SPY SMA200 and Trump variants. This adapter uses the roster
+contract rather than an embedded list. Decision, no-trade, failure and historical
+strategy-assignment publication remain **unavailable**, not inferred from fills.
+The private Crassus decision archive is in a separate bucket; the latest public
+OI projection drops intermediate decisions. A durable generic producer handoff
+and observer activation remain open, separately from this read-only consumer.
+
+Rollback: choose Daily retrospective or leave the bot unselected; existing live
+Automated and execution paths are untouched. Release API before assets through
+the exact-revision gates. `one_clock_bots.test.mjs` covers 105 fills, overnight
+carry, partial exits, publication rewind, gaps, privacy and pagination races.
+The read-only preview offers `synthetic_bot` at Nov 9 09:35 (104 session fills,
+10 opening contracts and 109 current contracts); rewind before 09:30 removes
+session fills while retaining the known carry.
