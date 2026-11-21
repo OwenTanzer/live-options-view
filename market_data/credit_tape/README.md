@@ -108,3 +108,10 @@ SHA-256 and parsed reports commit together. Health at `/healthz/collector` inclu
 TREU listing time, file receipt time, pending files, failures and archived report count.
 The publisher's listed HTTP transport does not provide TLS source authentication.
 A healthy poll during a closed session does not establish a new publication.
+
+The default signed-in table combines the latest DTCC archive window and TREU
+reports by first-seen time. The existing TREU bookmark preselects Tradeweb in
+the publisher filter. Select an instrument to expand its report, or use Optional
+columns to compare execution time, publication time, price, action and report
+ID across rows. Show more reports reveals additional matches in increments of
+100 within the window (up to 500 DTCC events and 500 TREU reports).

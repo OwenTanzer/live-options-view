@@ -323,6 +323,29 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"TREU-ONLY", sample_page)
         self.assertNotIn(b"FIXTURE1", sample_page)
 
+        import sqlite3
+        import zlib
+        from market_data.credit_tape import treu
+        db = sqlite3.connect(self.archive / treu.DATABASE)
+        try:
+            treu.initialize(db)
+            report = dict(sample_event, id="TREU-LIVE", first_seen="2099-01-01T00:00:03Z",
+                          record={"Instrument identification code": "ID-UK", "Price": "99.7"})
+            db.execute("INSERT INTO reports(event) VALUES(?)", (zlib.compress(json.dumps(report).encode()),))
+            db.commit()
+        finally:
+            db.close()
+        unified = self.get(port, page, host, session)[1]
+        self.assertIn(b"FIXTURE1", unified)
+        self.assertLess(unified.index(b"TREU-LIVE"), unified.index(b"FIXTURE1"))
+        self.assertIn(b"<dt>Price</dt><dd>99.7</dd>", unified)
+        self.assertNotIn(b"TREU-ONLY", unified)
+        focused = self.get(port, page + "?view=treu", host, session)[1]
+        self.assertIn(b'data-publisher-filter="Tradeweb"', focused)
+        self.assertIn(b"FIXTURE1", focused)
+        self.assertNotIn(b"TREU-LIVE", self.get(port, page, host)[1])
+
+
         self.assertIn(b"5M+", body)
         self.assertIn("no-store", response.getheader("Cache-Control"))
         with (self.archive / "events.jsonl").open("ab") as f:

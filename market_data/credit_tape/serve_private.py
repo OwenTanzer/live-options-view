@@ -248,7 +248,9 @@ def panel_event(line, seq):
     if ev.get("source") == "tradeweb-uk-mtf-treu":
         aliases = {"notionalAmountLeg1": "Notional amount", "notionalCurrencyLeg1": "Notional currency",
                    "productName": "Instrument identification code", "expirationDate": "Maturity date of the contract",
-                   "price": "Price"}
+                   "price": "Price", "priceNotation": "Price notation", "priceCurrency": "Price currency",
+                   "executionVenue": "Venue of execution", "instrumentIdType": "Instrument identification code type",
+                   "reportFlags": "Flags", "upfront": "Upfront payment", "spread": "Spread"}
     for k, alias in aliases.items():
         v = rec.get(k, rec.get(alias))
         if v not in (None, ""):
@@ -548,12 +550,14 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                             return self.reply(200, gzip.decompress(match[0]), "text/csv", headers=[
                                 ("Content-Disposition", f'attachment; filename="{name}"'),
                                 ("X-Original-SHA256", digest)])
+                    events, cursor = read_table_window(sample if sample_view else settings.archive)
+                    if has_treu and not sample_view:
                         rows = treu.window(settings.archive, MAX_ROWS)
-                        events = [panel_event(line, seq) for seq, line in rows]
-                        cursor = rows[-1][0] if rows else 0
-                    else:
-                        events, cursor = read_table_window(sample if sample_view else settings.archive)
-                    return self.reply(200, render_table(events, cursor, has_sample, sample_view, has_treu, treu_view), "text/html; charset=utf-8")
+                        events.extend(panel_event(line, seq) for seq, line in rows)
+                        events.sort(key=lambda event: event.get("first_seen") or "")
+                        cursor = f"{cursor}-{rows[-1][0] if rows else 0}"
+                    return self.reply(200, render_table(events, cursor, has_sample, sample_view,
+                                                        has_treu, treu_view), "text/html; charset=utf-8")
                 if site and url.path in ("/table.css", "/table.js"):
                     kind = "text/css" if url.path.endswith(".css") else "text/javascript"
                     return self.reply(200, (STATIC / url.path[1:]).read_bytes(), kind)
