@@ -127,7 +127,8 @@ PREVIEW_ACCEPTANCE_INPUTS = (
 #: Paths that belong to the operational API service and never to the artifact.
 #: The design says so twice: "Asset artifact excludes backend/producers", and
 #: "`backend/**` is API-only; no asset release imports it".
-API_INPUTS = ("backend/**",)
+API_INPUTS = ("backend/**", "site/shared/one-clock.js",
+              "site/shared/one-clock-events.js", "site/shared/one-clock-session.js")
 
 #: Files whose change alters how either artifact is built or promoted. Editing
 #: one is a reviewed mixed change, not a routine release of either artifact.

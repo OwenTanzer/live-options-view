@@ -154,6 +154,44 @@ cursor.
 
 ## Verification and release
 
+The Historical tab now has an explicit **One Clock · as of cursor** reader,
+alongside the original daily retrospective view. `/api/one-clock/chain` accepts
+only session, QQQ/SPY/IBIT instrument and epoch-millisecond cutoff. It derives
+fixed intraday keys, reads at most two 1,000-object index pages and twelve
+candidate sidecars (at most twelve CSVs), with 1 MiB/object, 4 MiB total and
+2,000 CSV-row bounds. An incomplete index is unavailable, never sampled as
+complete. Results contain only allowlisted market fields. No storage writes,
+account access, new capture, latest-snapshot fallback or cron is introduced.
+
+The returned current CSV and sidecar versions must both have been uploaded by
+the cursor, and the sidecar must report a published snapshot. Their ETags bind
+the evidence identity; source publication and current archive-revision times
+remain separate. Replaced objects cannot reconstruct earlier bytes. A missing
+sidecar remains unavailable. The readings digest is retained as provenance,
+not claimed verified; the sidecar has no CSV-byte digest. Published reference
+skew and reconstructed IBIT adaptive skew use the same eligible parent snapshot.
+Historical anchored bot state remains explicitly unavailable because the runner
+projection is latest-only, not a historical publication ledger.
+
+This is a read-only Historical consumer: it never writes `lastData`, quote
+interests, paper state or execution caches. Existing live capture/execution
+paths keep their cadence; their display synchronization remains a subsequent
+integration check, not an implication of adding this replay reader. Selecting
+the daily view cancels the pending replay response and restores the original
+reader. API deployment must precede asset activation; an old API returns an
+explicit unavailable/error state, never substituted live data. Rollback can
+select the daily view or restore the previous separated asset artifact; the
+additive read-only endpoint may remain during an asset rollback.
+
+`node --experimental-sqlite scripts/one-clock-preview.mjs` starts a read-only
+loopback fixture preview on a free port, prints its URL, and denies mutations.
+Its Nov. 9 synthetic QQQ/SPY/IBIT snapshots become eligible at 09:30:01.500 and
+09:35:01.500 New York. It reuses the preview gateway/CSP and cannot access
+production capture. Browser QA verified eligible chain/reference skew, rewind
+before availability, reconstructed IBIT adaptive output and daily-view rollback.
+The existing optional Playwright test was unavailable locally; use CUA for
+browser verification. The standard loopback test requires its own free port8787.
+
 Run `node --test tests/one_clock*.test.mjs`, the existing no-runtime-KV guard,
 and `python tests/test_changed_paths.py`; integrations also run their owning
 reader suites. The foundation tests require no network or storage bindings.

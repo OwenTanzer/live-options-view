@@ -1630,6 +1630,25 @@
 </div>
 
 <div id="history-panel" class="hidden">
+  <div style="margin:12px 0;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+    <label>Historical view <select id="history-view"><option value="daily">Daily archive · retrospective</option><option value="clock">One Clock · as of cursor</option></select></label>
+    <a href="/one-clock.html">Event Builder and Results</a>
+  </div>
+  <section id="history-clock" hidden aria-label="One Clock historical replay">
+    <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+      <label>Session <input id="history-clock-date" type="date" required></label>
+      <label>Instrument <select id="history-clock-instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label>
+      <label>Cursor (New York) <input id="history-clock-time" type="time" step="1" value="10:00:00" required></label>
+      <button type="submit">Show at cursor</button>
+    </form>
+    <p id="history-clock-status" role="status">Choose a session and cursor.</p>
+    <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
+    <p>Anchored bot signal: historical publication unavailable. A replay reading is not a recorded bot decision.</p>
+    <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
+    <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+  </section>
+  <div id="history-daily">
+  <p>Daily retrospective archive. These full-session values do not follow an intraday cursor.</p>
 
   <div id="hist-header">
     <span id="hist-title">Historical OI</span>
@@ -1681,6 +1700,7 @@
     </div>
   </div>
 
+</div> <!-- /history-daily -->
 </div> <!-- /history-panel -->
 
 <div id="bots-panel" class="hidden">
@@ -1966,4 +1986,5 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/boot.js?v=1e989badc98b9da1"></script></body></html>
+<script src="js/boot.js?v=1e989badc98b9da1"></script>
+<script type="module" src="js/one-clock-history.js"></script></body></html>
