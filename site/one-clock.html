@@ -28,14 +28,14 @@
   </section>
   <section id="results" aria-labelledby="results-title" hidden>
     <div class="section-head"><h2 id="results-title">Event Results</h2><label>Event class and version<select id="result-version"></select></label></div>
-    <div class="toolbar"><label>Outcome<select id="outcome-choice"></select></label><label>View<select id="result-scope"><option value="cursor">Follow replay cursor</option><option value="full">Full session · retrospective</option></select></label></div>
+    <div class="toolbar"><label>Results instrument<select id="result-instrument"></select></label><label>Outcome<select id="outcome-choice"></select></label><label>View<select id="result-scope"><option value="cursor">Follow replay cursor</option><option value="full">Full session · retrospective</option></select></label></div>
     <p id="rule-description"></p><p id="comparison-note" class="muted"></p>
     <div id="stats" class="stats" aria-live="polite"></div>
     <div class="table-wrap"><table><thead><tr><th>Trigger (UTC)</th><th>Rule</th><th>Matching observations</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody id="ledger"></tbody></table></div>
     <p id="empty-state"></p>
   </section>
   <section class="replay" aria-labelledby="replay-title"><div class="section-head"><h2 id="replay-title">Session replay</h2><strong id="cursor-time"></strong></div>
-    <p class="muted">SYN-1 · QQQ · synthetic clock in UTC. Counts and outcomes follow this cursor.</p>
+    <p id="replay-description" class="muted">SYN-1 · QQQ · synthetic clock in UTC. Counts and outcomes follow this cursor.</p>
     <div class="replay-controls"><button id="play" aria-pressed="false">Play</button><label class="slider-label">Replay cursor<input type="range" id="cursor" min="0" max="3601" step="1" value="301"></label></div>
     <svg id="session-strip" viewBox="0 0 900 100" role="img" aria-label="Observed skew through the cursor"></svg>
     <p id="selected-event" aria-live="polite">Choose an occurrence to inspect its trigger evidence.</p><pre id="event-evidence" hidden></pre>

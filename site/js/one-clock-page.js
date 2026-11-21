@@ -96,6 +96,7 @@ function openRule(rule) {
   updateOutcomes(); render();
 }
 function updateOutcomes() {
+  $('result-instrument').replaceChildren(...currentRule.instruments.map(v => option(v)));
   $('outcome-choice').replaceChildren(...currentRule.outcomes.map(o => option(o.id, `${o.field} · ${o.horizonMs / 60000} min · ${o.measure}`)));
   if (!currentRule.outcomes.length) $('outcome-choice').append(option('', 'Tracking only'));
 }
@@ -110,13 +111,14 @@ function render() {
   const at = clock.snapshot();
   $('cursor-time').textContent = time(at.cutoff) + ' UTC';
   const full = $('result-scope').value === 'full';
-  const selection = { ...at, instrument: $('instrument').value, cutoff: full ? demoClose + 1000 : at.cutoff };
+  const selection = { ...at, instrument: $('result-instrument').value, cutoff: full ? demoClose + 1000 : at.cutoff };
   const events = evaluateEvents({ rule: currentRule, observations: demoRows, selection, sessionClose: demoClose });
   const outcomeId = $('outcome-choice').value;
   const outcomeSpec = currentRule.outcomes.find(o => o.id === outcomeId);
   const formatOutcome = value => formatted(value) + (value != null && outcomeSpec?.measure === 'return' ? '%' : '');
   const stats = aggregateEvents(events, outcomeId);
-  $('rule-description').textContent = `${currentRule.name} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · synthetic data only`;
+  $('rule-description').textContent = `${currentRule.name} · ${selection.instrument} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · synthetic data only`;
+  $('replay-description').textContent = `SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
   const sameSkew = currentRule.conditions.some(c => c.source === 'skew' && c.field === 'imbalance' && !c.relativeToAnchor && c.op === '>=' && c.value > 0);
   $('comparison-note').textContent = sameSkew && currentRule.combine === 'all' ? 'A positive same-input skew trigger necessarily agrees with a meter that labels every positive imbalance call-heavy. Disagreement is impossible for that pairing; these results do not compare independent signals.' : 'Descriptive observations only. No predictive conclusion is implied.';
   $('stats').replaceChildren(...[['Occurrences',stats.occurrences],['Sessions',stats.sessions],['Measured',stats.measured],['Pending',stats.pending],['Missing',stats.missing],['Mean',formatOutcome(stats.mean)]].map(([name,value]) => {
@@ -137,7 +139,7 @@ function render() {
   $('event-evidence').textContent = selected ? selected.inputEvidence.map(input =>
     `${input.source} / ${input.id}\nObserved ${time(input.eventAt)} · available ${time(input.availableAt)} UTC\nValue: ${input.value}${input.anchor == null ? '' : ' · anchor: ' + input.anchor}\nSource: ${input.evidence}`).join('\n\n') : '';
   $('selected-event').textContent = selected ? `Trigger ${time(selected.triggeredAt)} · ${selected.origin} · v${selected.ruleVersion}. Evidence below follows the selected results view.` : 'Choose an occurrence to inspect its trigger evidence.';
-  const visible = selectAsOf(demoRows.filter(r => r.source === 'skew'), at);
+  const visible = selectAsOf(demoRows.filter(r => r.source === 'skew'), { ...at, instrument: selection.instrument });
   const points = visible.map(r => `${(r.eventAt-demoStart)/3600000*900},${90-r.value.imbalance*180}`).join(' ');
   const line = document.createElementNS('http://www.w3.org/2000/svg','polyline');
   line.setAttribute('points',points); line.setAttribute('fill','none'); line.setAttribute('stroke','#c8e49a'); line.setAttribute('stroke-width','2');
@@ -167,7 +169,7 @@ $('export-rule').onclick = () => {
   } catch(e) { status(e.message,true); }
 };
 $('result-version').onchange = () => { const rule=choose($('result-version').value); openRule(rule); $('versions').value=key(rule); };
-$('outcome-choice').onchange=render; $('result-scope').onchange=render;
+$('outcome-choice').onchange=render; $('result-scope').onchange=render; $('result-instrument').onchange=render;
 $('play').onclick = () => {
   if (timer) { clearInterval(timer); timer=null; } else timer=setInterval(() => {
     const next=Math.min(demoClose+1000,clock.snapshot().cutoff+60000); setCursor(next);

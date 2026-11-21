@@ -76,6 +76,14 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
     if (!arrivals.has(row.availableAt)) arrivals.set(row.availableAt, []);
     arrivals.get(row.availableAt).push(row);
   }
+  // Freshness changes even when no feed publishes. Evaluate integer-millisecond
+  // expiry boundaries so an unrelated stream cannot change reset semantics.
+  const boundaries = new Set(arrivals.keys());
+  for (const row of rows) for (const condition of rule.conditions) {
+    if (row.source !== condition.source) continue;
+    const expires = row.eventAt + condition.maxAgeMs + 1;
+    if (Number.isSafeInteger(expires) && expires > row.availableAt && expires <= cutoff) boundaries.add(expires);
+  }
   const bySource = new Map();
   const latest = new Map();
   const compare = (a, b) => a.eventAt - b.eventAt || a.availableAt - b.availableAt || observationKey(a).localeCompare(observationKey(b));
@@ -99,19 +107,21 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   let bullish = false;
   let active = null;
   let previousSignature = null;
-  for (const at of [...arrivals.keys()].sort((a, b) => a - b)) {
+  for (const at of [...boundaries].sort((a, b) => a - b)) {
     if (at > close) break; // Late publication may score an outcome, not create a post-close trigger.
-    for (const row of arrivals.get(at)) ingest(row);
+    for (const row of arrivals.get(at) ?? []) ingest(row);
     const values = rule.conditions.map(c => {
       const reading = readingAt(c.source, at, c.maxAgeMs);
       const raw = reading.row ? field(reading.row.value, c.field) : undefined;
       const anchorKey = JSON.stringify([c.source, c.field]);
-      if (reading.state === 'fresh' && numeric(raw) && !anchors.has(anchorKey)) anchors.set(anchorKey, raw);
-      const value = c.relativeToAnchor && numeric(raw) ? raw - anchors.get(anchorKey) : raw;
+      if (reading.state === 'fresh' && numeric(raw) && !anchors.has(anchorKey)) anchors.set(anchorKey, { value: raw, evidence: evidence(reading.row) });
+      const anchor = anchors.get(anchorKey);
+      const value = c.relativeToAnchor && numeric(raw) ? raw - anchor?.value : raw;
       const known = reading.state === 'fresh' && value !== undefined && value !== null &&
         (c.op === '==' || numeric(value));
       return { known, matches: known && OPS[c.op](value, c.value), value,
-        anchor: c.relativeToAnchor ? anchors.get(anchorKey) : null, row: reading.row };
+        anchor: c.relativeToAnchor ? anchor?.value : null,
+        anchorEvidence: c.relativeToAnchor ? anchor?.evidence ?? null : null, row: reading.row };
     });
     const matches = rule.combine === 'all' ? values.every(v => v.known && v.matches) : values.some(v => v.known && v.matches);
     // Three-valued logic: false AND unknown is false; true OR unknown is true.
@@ -131,7 +141,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
       }));
       active = { id, ruleId: rule.id, ruleVersion: rule.version, session: selection.session,
         instrument: selection.instrument, origin: selection.origin, triggeredAt: at,
-        inputEvidence: values.map(v => ({ ...evidence(v.row), value: v.value, anchor: v.anchor })),
+        inputEvidence: values.map(v => ({ ...evidence(v.row), value: v.value, anchor: v.anchor, anchorEvidence: v.anchorEvidence })),
         baselines, matchingObservations: 0 };
       events.push(active);
     }

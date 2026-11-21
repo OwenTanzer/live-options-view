@@ -106,6 +106,31 @@ test('invalid rules fail before evaluation', () => {
   }
 });
 
+test('sparse feeds reset on expiry independently of unrelated arrivals and rewind', () => {
+  const rule = { ...demoRules[0], missingInput: 'reset', outcomes: [],
+    conditions: [{ source: 'skew', field: 'imbalance', op: '>', value: 0, maxAgeMs: 1000 }] };
+  const first = { ...demoRows[0], source: 'skew', id: 'first', eventAt: demoStart,
+    availableAt: demoStart, value: { imbalance: 1 } };
+  const second = { ...first, id: 'second', eventAt: demoStart + 10000, availableAt: demoStart + 10000 };
+  const unrelated = { ...first, source: 'unrelated', id: 'news', eventAt: demoStart + 5000, availableAt: demoStart + 5000 };
+  const sparse = [first, second];
+  for (const cutoff of [demoStart, demoStart + 1000, demoStart + 1001, demoStart + 9999, demoStart + 10000]) {
+    assert.deepEqual(run(cutoff, rule, sparse), run(cutoff, rule, [...sparse, unrelated]));
+  }
+  assert.equal(run(demoStart + 10000, rule, sparse).length, 2);
+  assert.equal(run(demoStart + 9999, rule, sparse).length, 1);
+  assert.equal(run(demoStart + 10000, { ...rule, missingInput: 'hold' }, sparse).length, 1);
+});
+
+test('relative conditions retain the exact anchor identity and publication evidence', () => {
+  const trigger = run(demoStart + 301000)[0];
+  const anchored = trigger.inputEvidence.find(e => e.anchor !== null);
+  assert.equal(anchored.anchor, 0.12);
+  assert.equal(anchored.anchorEvidence.id, 'skew-0');
+  assert.equal(anchored.anchorEvidence.availableAt, demoStart + 1000);
+  assert.equal(anchored.anchorEvidence.revision, 1);
+});
+
 test('summary uses measured denominator, with empty and all-pending states', () => {
   assert.deepEqual(aggregateEvents([], 'spot-15m'), { occurrences: 0, sessions: 0, measured: 0,
     pending: 0, missing: 0, mean: null, median: null, values: [] });
