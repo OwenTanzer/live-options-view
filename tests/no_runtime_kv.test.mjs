@@ -20,6 +20,22 @@ const read = (relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8');
 
 const TOKEN = 'recovery-token';
 
+test('all serving and staged configurations exclude KV bindings', () => {
+  for (const name of ['wrangler.assets.toml', 'wrangler.api.toml', 'wrangler.preview.toml']) {
+    if (!fs.existsSync(path.join(ROOT, name))) continue;
+    assert.doesNotMatch(read(name), /\[\[(?:env\.[^.]+\.)?kv_namespaces\]\]/, name);
+  }
+});
+
+test('One Clock modules have no storage or recovery dependencies', () => {
+  const files = fs.readdirSync(path.join(ROOT, 'site/shared')).filter(name => name.startsWith('one-clock') && /\.m?js$/.test(name));
+  assert.ok(files.length > 0);
+  for (const name of files) {
+    const source = read(path.join('site/shared', name));
+    assert.doesNotMatch(source, /(?:env\.(?:USERS|SESSIONS)|\bKVNamespace\b|(?:from|import).*\b(?:storage|recovery|migrate)\b)/, name);
+  }
+});
+
 function tripwire(binding) {
   const fail = () => { throw new Error(`KV ${binding} reached from the normal Worker`); };
   return new Proxy({}, { get: fail });
