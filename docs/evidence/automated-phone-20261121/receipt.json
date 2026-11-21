@@ -1,0 +1,225 @@
+{
+  "at": "2026-11-21T06:37:48.838Z",
+  "results": [
+    {
+      "width": 390,
+      "saved": null,
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 390,
+      "saved": "cards",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 390,
+      "saved": "floor",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 390,
+      "saved": "lanes",
+      "initial": "lanes",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 390,
+      "saved": "invalid",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 600,
+      "saved": null,
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 600,
+      "saved": "cards",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 600,
+      "saved": "floor",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 600,
+      "saved": "lanes",
+      "initial": "lanes",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 600,
+      "saved": "invalid",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 601,
+      "saved": null,
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 601,
+      "saved": "cards",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 601,
+      "saved": "floor",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 601,
+      "saved": "lanes",
+      "initial": "lanes",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 601,
+      "saved": "invalid",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "saved": null,
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "saved": "cards",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "saved": "floor",
+      "initial": "floor",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "saved": "lanes",
+      "initial": "lanes",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    },
+    {
+      "width": 1440,
+      "saved": "invalid",
+      "initial": "cards",
+      "persistedAfterReload": [
+        "cards",
+        "lanes",
+        "floor"
+      ],
+      "errors": []
+    }
+  ]
+}
