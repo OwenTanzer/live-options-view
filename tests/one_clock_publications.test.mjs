@@ -111,3 +111,21 @@ test('rewritten commit upload order is rejected, and missing next sequence is ne
   const first=await run(db,b);assert.equal(first.processed,1);assert.equal(first.reason,'blocked-entry');
   b.objects.delete(second);const tail=await run(db,b);assert.equal(tail.reason,'tail-at-check');assert.equal(tail.nextSequence,2);assert.equal(tail.final,false);
 });
+
+test('large session pages use an index tuple seek without sorting; identity check reads only latest revision',async t=>{
+  const db=await setup(t),b=bucket();
+  for(let i=0;i<2050;i++)await b.add([input('tick'+i)]);
+  while((await run(db,b,{now:T+100000})).reason==='budget'){}
+  let after=null,total=0;do{const p=await page(db,{after});total+=p.rows.length;after=p.next;}while(after);
+  assert.equal(total,2050);
+  const query=db.queries.find(q=>q.startsWith('SELECT sequence,source,record_id,payload,received_at '));
+  const plan=db.raw('EXPLAIN QUERY PLAN '+query,'fixture/QQQ',day,'QQQ',T+100000,T+100000,1000,'price','native:fixture/QQQ:tick999',101).map(r=>r.detail).join('\n');
+  assert.match(plan,/SEARCH.*one_clock_publication_record_page/);assert.match(plan,/received_at/);assert.doesNotMatch(plan,/TEMP B-TREE|SCAN one_clock_publication_records/);
+  const latest=`SELECT session,instrument,revision FROM one_clock_publication_records WHERE stream=? AND source=? AND record_id=? ORDER BY revision DESC LIMIT 1`;
+  const identityPlan=db.raw('EXPLAIN QUERY PLAN '+latest,'fixture/QQQ','price','native:fixture/QQQ:tick0').map(r=>r.detail).join('\n');
+  assert.match(identityPlan,/SEARCH.*stream=\? AND source=\? AND record_id=\?/);assert.doesNotMatch(identityPlan,/TEMP B-TREE|SCAN/);
+  const trigger=db.raw("SELECT sql FROM sqlite_master WHERE name='one_clock_publication_record_identity'")[0].sql;
+  assert.match(trigger,/ORDER BY revision DESC LIMIT 1/);
+  assert.throws(()=>db.raw('UPDATE one_clock_publication_records SET received_at=available_at-1'),/immutable/);
+  assert.throws(()=>db.raw('UPDATE one_clock_publication_entries SET payload=?','{}'),/immutable/);
+});

@@ -71,14 +71,16 @@ export async function publicationRowsPage(db,descriptor,{instrument,session,cuto
   const stream=publicationStream(descriptor,instrument);cutoff=instant(cutoff);bounded(limit,100);
   if(!validSession(session))throw new Error('publication session');
   const scope=JSON.stringify([stream,session,cutoff]);
-  if(after&&(after.scope!==scope||!Number.isSafeInteger(after.sequence)||after.sequence<1||typeof after.source!=='string'||typeof after.id!=='string'))throw new Error('publication page cursor');
-  const args=[stream,session,instrument,cutoff,cutoff,cutoff,after?.sequence??0,after?.sequence??0,after?.source??'',after?.source??'',after?.id??'',limit+1];
-  const query=`FROM one_clock_publication_records WHERE stream=? AND session=? AND instrument=? AND received_at<=? AND available_at<=? AND event_at<=?
-    AND (sequence>? OR (sequence=? AND (source>? OR (source=? AND record_id>?)))) ORDER BY sequence,source,record_id LIMIT ?`;
+  if(after&&(after.scope!==scope||!Number.isSafeInteger(after.receivedAt)||after.receivedAt<1e12||!Number.isSafeInteger(after.sequence)||after.sequence<1||typeof after.source!=='string'||typeof after.id!=='string'))throw new Error('publication page cursor');
+  const args=[stream,session,instrument,cutoff,after?.receivedAt??0,after?.sequence??0,after?.source??'',after?.id??'',limit+1];
+  // Ingestion guarantees eventAt <= availableAt <= receivedAt. Seek by the
+  // complete indexed tuple, not a filter that scans/sorts the entire session.
+  const query=`FROM one_clock_publication_records INDEXED BY one_clock_publication_record_page WHERE stream=? AND session=? AND instrument=? AND received_at<=?
+    AND (received_at,sequence,source,record_id)>(?,?,?,?) ORDER BY received_at,sequence,source,record_id LIMIT ?`;
   const sizes=(await stmt(db,'SELECT length(CAST(payload AS BLOB)) AS n '+query,...args).all()).results;
   if(sizes.reduce((n,r)=>n+r.n,0)>2*1024*1024)throw new Error('publication page byte bound');
   const records=(await stmt(db,'SELECT sequence,source,record_id,payload,received_at '+query,...args).all()).results;
   if(records.reduce((n,r)=>n+byteLength(r.payload),0)>2*1024*1024)throw new Error('publication page byte bound');
   const rows=records.slice(0,limit),last=rows.at(-1);
-  return {rows:rows.map(r=>({row:JSON.parse(r.payload),receivedAt:r.received_at})),next:records.length>limit?{scope,sequence:last.sequence,source:last.source,id:last.record_id}:null};
+  return {rows:rows.map(r=>({row:JSON.parse(r.payload),receivedAt:r.received_at})),next:records.length>limit?{scope,receivedAt:last.received_at,sequence:last.sequence,source:last.source,id:last.record_id}:null};
 }

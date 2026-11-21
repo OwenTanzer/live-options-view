@@ -12,20 +12,26 @@ WHEN NEW.generation<>OLD.generation+1 OR NEW.next_sequence<OLD.next_sequence OR 
 BEGIN SELECT RAISE(ABORT,'publication generation conflict'); END;
 CREATE TABLE IF NOT EXISTS one_clock_publication_entries (
   stream TEXT NOT NULL, sequence INTEGER NOT NULL, publication_id TEXT NOT NULL,
-  digest TEXT NOT NULL, available_at INTEGER NOT NULL, received_at INTEGER NOT NULL, payload TEXT NOT NULL,
+  digest TEXT NOT NULL, available_at INTEGER NOT NULL, received_at INTEGER NOT NULL CHECK(received_at>=available_at), payload TEXT NOT NULL,
   PRIMARY KEY(stream,sequence), UNIQUE(stream,publication_id)
 );
 CREATE TABLE IF NOT EXISTS one_clock_publication_records (
   stream TEXT NOT NULL, source TEXT NOT NULL, record_id TEXT NOT NULL, revision INTEGER NOT NULL,
   session TEXT NOT NULL, instrument TEXT NOT NULL, event_at INTEGER NOT NULL,
-  available_at INTEGER NOT NULL, received_at INTEGER NOT NULL, sequence INTEGER NOT NULL,
-  payload TEXT NOT NULL, PRIMARY KEY(stream,source,record_id,revision)
+  available_at INTEGER NOT NULL CHECK(available_at>=event_at), received_at INTEGER NOT NULL CHECK(received_at>=available_at), sequence INTEGER NOT NULL,
+  payload TEXT NOT NULL, PRIMARY KEY(stream,source,record_id,revision),
+  FOREIGN KEY(stream,sequence) REFERENCES one_clock_publication_entries(stream,sequence)
 );
+CREATE TRIGGER IF NOT EXISTS one_clock_publication_entries_immutable BEFORE UPDATE ON one_clock_publication_entries
+BEGIN SELECT RAISE(ABORT,'immutable publication entry'); END;
+CREATE TRIGGER IF NOT EXISTS one_clock_publication_records_immutable BEFORE UPDATE ON one_clock_publication_records
+BEGIN SELECT RAISE(ABORT,'immutable publication record'); END;
 CREATE INDEX IF NOT EXISTS one_clock_publication_record_scope ON one_clock_publication_records(session,instrument,received_at);
-CREATE INDEX IF NOT EXISTS one_clock_publication_record_page ON one_clock_publication_records(stream,session,instrument,sequence,source,record_id);
+CREATE INDEX IF NOT EXISTS one_clock_publication_record_page ON one_clock_publication_records(stream,session,instrument,received_at,sequence,source,record_id);
 CREATE TRIGGER IF NOT EXISTS one_clock_publication_record_identity BEFORE INSERT ON one_clock_publication_records
-WHEN EXISTS(SELECT 1 FROM one_clock_publication_records WHERE stream=NEW.stream AND source=NEW.source AND record_id=NEW.record_id
-  AND (session<>NEW.session OR instrument<>NEW.instrument OR revision>=NEW.revision))
+WHEN EXISTS(SELECT 1 FROM (SELECT session,instrument,revision FROM one_clock_publication_records
+  WHERE stream=NEW.stream AND source=NEW.source AND record_id=NEW.record_id ORDER BY revision DESC LIMIT 1) latest
+  WHERE latest.session<>NEW.session OR latest.instrument<>NEW.instrument OR latest.revision>=NEW.revision)
 BEGIN SELECT RAISE(ABORT,'publication record revision conflict'); END;
 CREATE TABLE IF NOT EXISTS one_clock_publication_status (
   stream TEXT NOT NULL, generation INTEGER NOT NULL, checked_at INTEGER NOT NULL,
