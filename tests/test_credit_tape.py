@@ -678,6 +678,7 @@ class ReleaseReadinessTests(unittest.TestCase):
                "CREDIT_TAPE_GITHUB_CLIENT_ID": "cid", "CREDIT_TAPE_GITHUB_CLIENT_SECRET": "secret",
                "CREDIT_TAPE_GITHUB_ALLOWED_IDS": "42", "PORT": "0"}
         with mock.patch.object(service.capture, "run", side_effect=RuntimeError("replay backfill worker failed: x")), \
+                mock.patch.object(service.treu, "run", side_effect=lambda archive, stop: stop.wait()), \
                 mock.patch.object(service.signal, "signal"), mock.patch("builtins.print"):
             (self.archive / "vol").mkdir()
             self.assertEqual(service.main(env, is_mount=lambda p: True), 1)

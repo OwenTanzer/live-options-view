@@ -93,7 +93,9 @@ def main(env=os.environ, is_mount=os.path.ismount) -> int:
           f"(archive_id {ident['archive_id']}, volume {volume.volume_root(env)}), "
           f"panel on :{srv.server_port} for {settings.origin} ({len(settings.allowed_ids)} allowed ids)", flush=True)
     while not stop.wait(1.0):
-        if not worker.is_alive():
+        if not worker.is_alive() or not uk_worker.is_alive():
+            failed.setdefault("error", "collector worker exited")
+            stop.set()
             break
     worker.join(timeout=interval + 90)  # finish the current pass; commits are crash-safe regardless
     uk_worker.join(timeout=20)
