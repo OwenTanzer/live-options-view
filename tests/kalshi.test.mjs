@@ -61,7 +61,7 @@ test('all endpoints deny anonymous, ordinary sessions, spoofed identities, other
   for (const id of [OWNER_ID+1, String(OWNER_ID), null]) {
     f.identity = id;
     for (const p of paths) assert.equal((await worker.fetch(request(p),env)).status,401);
-    for (const p of ['discover','market','paper']) assert.equal((await worker.fetch(request(p,{}),env)).status,401);
+    for (const p of ['discover','market','paper','quotes']) assert.equal((await worker.fetch(request(p,{}),env)).status,401);
   }
   f.identity = OWNER_ID;
   for (const origin of ['https://live-options-view.otmooper12.workers.dev','https://live-options-api.otmooper12.workers.dev','http://options.moopertonic.net'])
@@ -202,4 +202,25 @@ test('edge requests expose redirects to callers and reject them without followin
   assert.equal((await handleKalshi(request('status'), env)).status, 401);
   await assert.rejects(fetchMarket(env, TICKER), /source unavailable/);
   assert.equal(calls.length, 2);
+}));
+
+test('chain batch displays sized complementary books without authorizing fills', async () => scenario(async (env,f) => {
+  const response=await handleKalshi(request('quotes',{markets:[TICKER]}),env);
+  assert.equal(response.status,200);
+  const d=await response.json(); assert.equal(d.mode,'display_only');
+  assert.deepEqual(d.quotes[TICKER],{YES:{bid:.4,bid_size:3,ask:.45,ask_size:3},NO:{bid:.55,bid_size:3,ask:.6,ask_size:3}});
+  assert.equal(f.requests.filter(r=>r.url.includes('/markets/orderbooks?')).length,1);
+  const p=await (await handleKalshi(request('portfolio'),env)).json(); assert.equal(p.trades.length,0);
+  f.book.orderbook_fp.no_dollars=[];
+  const one=await (await handleKalshi(request('quotes',{markets:[TICKER]}),env)).json();
+  assert.equal(one.quotes[TICKER].YES.ask,null); assert.equal(one.quotes[TICKER].YES.bid,.4);
+  f.book.orderbook_fp.no_dollars=[['0.7000','4.00']];
+  const crossed=await (await handleKalshi(request('quotes',{markets:[TICKER]}),env)).json();
+  assert.equal(crossed.quotes[TICKER],null);
+}));
+test('chain batch refuses unsupported, repeated and oversized page inputs', async () => scenario(async (env,f) => {
+  for(const markets of [[],[TICKER,TICKER],['OTHER-99'],['KXHIGHNY-../secret'],Array(17).fill(TICKER)]) {
+    assert.notEqual((await handleKalshi(request('quotes',{markets}),env)).status,200);
+  }
+  assert.equal(f.requests.filter(r=>r.url.includes('/markets/orderbooks?')).length,0);
 }));

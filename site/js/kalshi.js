@@ -1,91 +1,194 @@
 const $ = id => document.getElementById(id);
 const money = n => '$' + Number(n).toFixed(4);
-let catalog = [], selected = null, current = null, pendingIntent = null, entries = false;
+const cents = n => n == null ? '—' : Number((n * 100).toFixed(2)) + '¢';
+const PAGE = 12;
+let catalog = [], positions = [], rows = [], page = 0, entries = false, enabled = false;
+let generation = 0, book = null, quoteBusy = false, orderBusy = false, auto = true, lastActivity = Date.now();
+const intents = new Map(), quantities = new Map();
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 async function api(path, body) {
-  const r = await fetch('/api/kalshi/' + path, { credentials: 'same-origin', cache: 'no-store',
-    ...(body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+  const r = await fetch('/api/kalshi/' + path, { credentials:'same-origin', cache:'no-store',
+    ...(body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {}) });
   const d = await r.json();
-  if (!r.ok) { if (r.status === 401 || r.status === 403) clearPrivate(); throw Error(d.error || 'Request failed'); }
+  if (!r.ok) { if ([401,403].includes(r.status)) clearPrivate(); throw Error(d.error || 'Request failed'); }
   return d;
 }
 function clearPrivate() {
-  catalog = []; selected = current = pendingIntent = null; $('workspace').hidden = true;
-  for (const id of ['markets','positions','fills','replay','archive-list','quotes','rules','receipt','cash','health']) $(id).replaceChildren();
-  $('submit').disabled = true;
+  generation++; enabled = false; catalog = []; positions = []; rows = []; book = null; intents.clear();
+  $('workspace').hidden = true; $('login').hidden = false; $('detail').hidden = true;
+  for (const id of ['markets','positions','fills','replay','archive-list','rules','receipt','cash','health']) $(id).replaceChildren();
 }
-async function run(action) { try { await action(); } catch(e) { $('status').textContent = e.message; } }
-function card(text, description, action) {
-  const c = document.createElement('article'); c.className = 'card';
-  const h = document.createElement('strong'); h.textContent = text; c.append(h);
-  const p = document.createElement('p'); p.textContent = description; c.append(p);
-  if (action) { const b = document.createElement('button'); b.textContent = 'Inspect terms and fresh book'; b.onclick = () => run(action); c.append(b); }
-  return c;
+async function run(fn) { try { await fn(); } catch (e) { $('status').textContent = e.message; } }
+function held(market, outcome) {
+  return positions.find(p => p.prediction.rules.market === market && p.prediction.outcome === outcome)?.pos || 0;
 }
-function list() {
-  const term = $('search').value.toLowerCase(); $('markets').replaceChildren();
-  for (const m of catalog.filter(x => JSON.stringify(x).toLowerCase().includes(term))) {
-    $('markets').append(card(m.title + ' · ' + m.outcome,
-      `${m.category} | ${m.series} · closes ${new Date(m.cutoff).toLocaleString()} · 24h volume ${m.volume_24h ?? 'unknown'} · open interest ${m.open_interest ?? 'unknown'}`,
-      async () => { selected = m.ticker; await refresh(); $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
-  }
+function filtered() {
+  const term = $('search').value.toLowerCase();
+  return catalog.filter(m => (!$('category').value || m.category === $('category').value) &&
+    [m.title,m.outcome,m.category,m.ticker].join(' ').toLowerCase().includes(term));
 }
 function fresh() {
-  return current?.quotes && Date.now() - Date.parse(current.provider_response_ts) <= 10000 &&
-    Date.now() >= Date.parse(current.received_at) && Date.now() < Date.parse(current.rules.cutoff);
+  const t = Date.parse(book?.provider_response_ts), received = Date.parse(book?.received_at);
+  return !document.hidden && Number.isFinite(t) && Date.now() >= received && Date.now() - t <= 10000;
 }
-function paintQuote() {
+function paint() {
   const ok = fresh();
-  $('submit').disabled = !ok || ($('side').value === 'buy' && !entries);
-  if (!current) return;
-  $('quotes').textContent = ok ? ['YES','NO'].map(k => {
-    const q = current.quotes[k]; return `${k}: bid ${money(q.bid)} × ${q.bid_size}, ask ${money(q.ask)} × ${q.ask_size}`;
-  }).join(' / ') : current.reason || 'Book expired. Prices hidden; get a fresh book.';
+  for(const id of ['search','category','check','discover']) $(id).disabled=orderBusy;
+  $('refresh').disabled=orderBusy || quoteBusy;
+  $('prev').disabled=orderBusy || page===0;
+  $('next').disabled=orderBusy || (page+1)*PAGE>=filtered().length;
+
+  for (const row of rows) {
+    const qty = Number(row.input.value), validQty = Number.isSafeInteger(qty) && qty > 0 && qty <= 10000;
+    const open = Date.now() < Date.parse(row.market.cutoff);
+    for (const control of row.controls) {
+      const q = ok ? book.quotes[row.market.ticker]?.[control.outcome] : null;
+      const price = q?.[control.side === 'buy' ? 'ask' : 'bid'];
+      const size = q?.[control.side === 'buy' ? 'ask_size' : 'bid_size'] || 0;
+      control.price.textContent = cents(price);
+      control.size.textContent = size ? size.toLocaleString() + ' available' : 'No quote';
+      control.button.disabled = orderBusy || !open || !validQty || price == null || size < qty ||
+        (control.side === 'buy' ? !entries : held(row.market.ticker,control.outcome) < qty);
+      control.button.setAttribute('aria-label', (control.side === 'buy' ? 'Buy ' : 'Sell ') + control.outcome + ' ' + row.market.title);
+      if (control.side === 'sell' && !held(row.market.ticker,control.outcome)) control.size.textContent = 'None held';
+    }
+  }
+  if (quoteBusy) $('clock').textContent = 'Updating prices…';
+  else if (ok) $('clock').textContent = 'Book ' + new Date(book.provider_response_ts).toLocaleTimeString() + ' · auto refresh';
+  else $('clock').textContent = auto ? 'Prices expired · refreshing…' : 'Prices paused · Refresh prices to resume';
 }
-async function refresh() {
-  current = null; $('quotes').textContent = 'Fetching a fresh executable book…'; $('submit').disabled = true;
-  const d = await api('market', { market: selected }); current = d;
-  $('detail').hidden = false; $('title').textContent = d.rules.title;
-  $('clock').textContent = `${d.clock_basis}. Provider ${d.provider_response_ts}; received ${d.received_at}.`;
-  $('rules').textContent = JSON.stringify(d.rules, null, 2); $('comparison').textContent = d.comparison; paintQuote();
+function list() {
+  generation++; book = null; quoteBusy = false;
+  const all = filtered(); page = Math.max(0,Math.min(page,Math.ceil(all.length/PAGE)-1));
+  const visible = all.slice(page*PAGE,(page+1)*PAGE); rows = []; $('markets').replaceChildren();
+  $('count').textContent = all.length + ' contracts'; $('page').textContent = all.length ? (page*PAGE+1) + '–' + (page*PAGE+visible.length) + ' of ' + all.length : '0';
+  $('prev').disabled = page === 0; $('next').disabled = (page+1)*PAGE >= all.length;
+  if (!visible.length) $('markets').append(el('p','empty','No matching contracts. Try another search or update markets.'));
+  for (const m of visible) {
+    const node = el('article','contract'); node.dataset.market = m.ticker;
+    const identity = el('div','identity'); identity.append(el('h3','',m.title+(m.outcome&&!m.title.includes(m.outcome)?' · '+m.outcome:'')));
+    const meta = el('div','meta',m.category + ' · ' + new Date(m.cutoff).toLocaleDateString());
+    const terms = el('button','terms','Terms'); terms.onclick = () => run(() => details(m)); meta.append(terms); identity.append(meta); node.append(identity);
+    const label = el('label','quantity','Qty'); const input = el('input'); input.type='number'; input.min='1'; input.max='10000'; input.step='1';
+    input.value=quantities.get(m.ticker) || '1'; input.setAttribute('aria-label','Quantity for '+m.title);
+    input.oninput=()=>{ quantities.set(m.ticker,input.value); paint(); }; label.append(input);
+    const row = {market:m,input,controls:[]};
+    for (const outcome of ['YES','NO']) {
+      const side = el('div','side '+outcome.toLowerCase()); const title = el('div','side-title');
+      title.append(el('span','',outcome),el('span','',held(m.ticker,outcome) ? held(m.ticker,outcome)+' held' : '')); side.append(title);
+      for (const action of ['buy','sell']) {
+        const button=el('button','quote '+action), price=el('strong','','—'), size=el('small','','Loading');
+        button.append(el('small','',action==='buy'?'BUY · ASK':'SELL · BID'),price,size); button.disabled=true;
+        button.onclick=()=>run(()=>trade(row,outcome,action)); side.append(button);
+        row.controls.push({button,price,size,outcome,side:action});
+      }
+      node.append(side);
+    }
+    node.append(label); rows.push(row); $('markets').append(node);
+  }
+  paint();
+}
+async function loadQuotes() {
+  if (!enabled || document.hidden || quoteBusy || !rows.length || orderBusy) return;
+  const g=generation, markets=rows.map(r=>r.market.ticker); quoteBusy=true; paint();
+  try {
+    const result=await api('quotes',{markets});
+    if (g!==generation) return;
+    book=result; auto=true; $('status').textContent='Private personal research enabled';
+  } catch(e) {
+    if(g===generation){ book=null; auto=false; $('status').textContent='Prices unavailable. '+e.message; }
+  } finally { if(g===generation){ quoteBusy=false; paint(); } }
 }
 async function portfolio() {
-  const d = await api('portfolio'); $('cash').textContent = `Paper cash ${money(d.balance_cash)} · separate from Options View and Kalshi balances`;
-  $('positions').replaceChildren();
-  for (const p of Object.values(d.positions)) if (p.pos) $('positions').append(card(p.prediction.rules.title + ' · ' + p.prediction.outcome,
-    `${p.pos} held · cost ${money(p.avg)} each · no stale liquidation mark`, async () => { selected = p.prediction.rules.market; await refresh(); }));
-  $('fills').textContent = JSON.stringify(d.trades, null, 2);
-  $('health').textContent = d.health ? JSON.stringify(d.health) : 'Background observations begin after a market is selected.';
+  const g=generation, d=await api('portfolio'); if(g!==generation) return;
+  positions=Object.values(d.positions).filter(p=>p.pos>0);
+  $('cash').textContent=Number(d.balance_cash).toLocaleString('en-US',{style:'currency',currency:'USD'}); $('held').textContent=positions.reduce((sum,p)=>sum+p.pos,0);
+  $('position-count').textContent='('+positions.length+')'; $('positions').replaceChildren();
+  for(const p of positions) {
+    const node=el('div','position'), text=el('div'); text.append(el('strong','',p.prediction.rules.title),
+      el('p','',p.pos+' '+p.prediction.outcome+' held · average '+cents(p.avg)));
+    const button=el('button','','Show in chain'); button.onclick=()=>run(async()=>{
+      $('category').value=''; $('search').value=p.prediction.rules.market; page=0; list(); await loadQuotes(); $('markets').scrollIntoView({block:'start'});
+    }); node.append(text,button); $('positions').append(node);
+    if(!catalog.some(m=>m.ticker===p.prediction.rules.market)) catalog.push({
+      ticker:p.prediction.rules.market,title:p.prediction.rules.title,category:p.prediction.rules.category,
+      cutoff:p.prediction.rules.cutoff,outcome:p.prediction.outcome
+    });
+  }
+  if(!positions.length) $('positions').append(el('p','empty','No open positions.'));
+  $('fills').textContent=JSON.stringify(d.trades,null,2);
+  $('health').textContent=d.health ? JSON.stringify(d.health) : '';
+}
+async function trade(row,outcome,side) {
+  if(orderBusy) return;
+  const control=row.controls.find(c=>c.outcome===outcome&&c.side===side); paint();
+  if(control.button.disabled) return;
+  const intent={market:row.market.ticker,outcome,side,qty:Number(row.input.value)}, key=JSON.stringify(intent);
+  if(!intents.has(key)) intents.set(key,crypto.randomUUID());
+  const g=generation; orderBusy=true; paint(); $('receipt').textContent='Placing paper '+side+'…';
+  try {
+    const d=await api('paper',{...intent,execution_request_id:intents.get(key)});
+    if(g!==generation) return;
+    intents.delete(key);
+    $('receipt').textContent='Paper '+side+': '+d.trade.qty+' '+outcome+' at '+cents(d.trade.price)+
+      ' · fees '+money(d.trade.fee_units/10000)+' · Receipt '+d.trade.execution_id;
+    await portfolio();
+    if(g===generation) list();
+  } catch(e) {
+    if(g===generation) $('receipt').textContent=e.message+' Retry the same action to reuse its receipt ID.';
+    throw e;
+  } finally { orderBusy=false; paint(); }
+  await loadQuotes();
+}
+async function details(m) {
+  const g=generation, d=await api('market',{market:m.ticker}); if(g!==generation) return;
+  $('title').textContent=m.title+' · terms'; $('rules').textContent=JSON.stringify(d.rules,null,2);
+  $('comparison').textContent=d.comparison; $('detail').hidden=false; $('detail').open=true;
+  $('detail').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function categories() {
+  $('category').replaceChildren(new Option('All categories',''));
+  for(const c of [...new Set(catalog.map(m=>m.category))].sort()) $('category').add(new Option(c,c));
 }
 async function check() {
-  clearPrivate();
-  const s = await api('status'); $('status').textContent = s.status; entries = s.entries;
-  if (!s.enabled) return;
-  $('workspace').hidden = false; const d = await api('markets'); catalog = d.markets; $('scope').textContent = d.scope; list(); await portfolio();
+  clearPrivate(); const g=generation,s=await api('status'); if(g!==generation) return;
+  $('status').textContent=s.status; entries=s.entries; if(!s.enabled) return;
+  enabled=true; auto=true; lastActivity=Date.now(); $('workspace').hidden=false; $('login').hidden=true;
+  let d=await api('markets'); if(g!==generation) return;
+  if(!d.markets.length) { d=await api('discover',{}); if(g!==generation) return; }
+  catalog=d.markets; $('scope').textContent=d.scope; await portfolio(); if(g!==generation) return;
+  categories(); page=0; list(); await loadQuotes();
 }
-$('check').onclick = () => run(check);
-$('discover').onclick = () => run(async () => { const d = await api('discover', {}); catalog = d.markets; $('scope').textContent = d.scope; list(); });
-$('search').oninput = list; $('refresh').onclick = () => run(refresh); $('side').onchange = paintQuote;
-$('ticket').onsubmit = e => { e.preventDefault(); run(async () => {
-  $('submit').disabled = true;
-  const intent = { market: selected, outcome: $('outcome').value, side: $('side').value, qty: Number($('qty').value) };
-  if (!pendingIntent || JSON.stringify(pendingIntent.intent) !== JSON.stringify(intent)) pendingIntent = { intent, id: crypto.randomUUID() };
-  const d = await api('paper', { ...intent, execution_request_id: pendingIntent.id }); pendingIntent = null;
-  $('receipt').textContent = `Paper fill: ${d.trade.qty} ${d.trade.prediction.outcome} at ${money(d.trade.price)}, fees ${money(d.trade.fee_units / 10000)}. Receipt ${d.trade.execution_id}.`;
-  current = null; $('quotes').textContent = 'Order recorded. Get a fresh book for the next order.'; await portfolio();
-}); };
-$('archives').onclick = () => run(async () => {
-  const d = await api('archive'); $('archive-list').replaceChildren();
-  for (const a of d.archives) { const b = document.createElement('button'); b.textContent = `${a.received_at} · ${a.market}`;
-    b.onclick = () => run(async () => { const r = await api('archive?id=' + encodeURIComponent(a.id));
-      $('replay').textContent = 'ARCHIVED OBSERVATION — not executable\n' + JSON.stringify(r.evidence, null, 2); }); $('archive-list').append(b); }
+$('check').onclick=()=>run(check);
+$('refresh').onclick=()=>{lastActivity=Date.now();auto=true;run(loadQuotes);};
+$('discover').onclick=()=>run(async()=>{
+  if(orderBusy) return;
+  const g=generation,d=await api('discover',{}); if(g!==generation) return;
+  catalog=d.markets; $('scope').textContent=d.scope; await portfolio(); if(g!==generation) return;
+  categories(); page=0; list(); await loadQuotes();
 });
-$('logout').onclick = () => run(async () => {
-  clearPrivate(); await fetch('/credit-tape/auth/logout', { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'manual' });
-  const check = await fetch('/api/kalshi/status', { credentials: 'same-origin', cache: 'no-store' });
-  if (check.status !== 401) throw Error('Sign-out was not confirmed. Close this page and sign out from Credit Tape.');
-  $('status').textContent = 'Signed out. Private records cleared from this page.';
+let searchTimer;
+function changePage() { page=0; list(); clearTimeout(searchTimer); searchTimer=setTimeout(()=>run(loadQuotes),300); }
+$('search').oninput=changePage; $('category').onchange=changePage;
+$('prev').onclick=()=>run(async()=>{page--;list();await loadQuotes();});
+$('next').onclick=()=>run(async()=>{page++;list();await loadQuotes();});
+$('archives').onclick=()=>run(async()=>{
+  const g=generation,d=await api('archive'); if(g!==generation)return; $('archive-list').replaceChildren();
+  for(const a of d.archives){const b=el('button','',a.received_at+' · '+a.market); b.onclick=()=>run(async()=>{
+    const g=generation,r=await api('archive?id='+encodeURIComponent(a.id)); if(g===generation)$('replay').textContent='ARCHIVED OBSERVATION — not executable\n'+JSON.stringify(r.evidence,null,2);
+  });$('archive-list').append(b);}
 });
-setInterval(paintQuote, 500);
-document.addEventListener('visibilitychange', () => { if (document.hidden) { current = null; $('quotes').textContent = 'Refresh the book after returning to this page.'; $('submit').disabled = true; } });
-window.addEventListener('pageshow', e => { if (e.persisted) run(check); });
+$('logout').onclick=()=>run(async()=>{
+  clearPrivate(); await fetch('/credit-tape/auth/logout',{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'manual'});
+  const r=await fetch('/api/kalshi/status',{credentials:'same-origin',cache:'no-store'});
+  if(r.status!==401)throw Error('Sign-out was not confirmed. Sign out from Credit Tape.');
+  $('status').textContent='Signed out. Private records cleared from this page.';
+});
+for(const event of ['pointerdown','keydown'])document.addEventListener(event,()=>{lastActivity=Date.now();});
+setInterval(()=>{if(Date.now()-lastActivity>300000)auto=false;paint();},500);
+setInterval(()=>{if(auto&&enabled&&!document.hidden)run(loadQuotes);},10000);
+document.addEventListener('visibilitychange',()=>{
+  book=null; paint(); if(!document.hidden&&enabled){lastActivity=Date.now();auto=true;run(loadQuotes);}
+});
+window.addEventListener('pageshow',e=>{if(e.persisted)run(check);});
 run(check);

@@ -1,6 +1,6 @@
 import { ACCOUNT, OWNER_ID, SITE, configured, ownerIdentity, privateJSON } from './kalshi-access.js';
 import { archive, archiveIndex, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
-import { discover, fetchMarket, displayMarket, publicRead, KALSHI_API } from './kalshi-source.js';
+import { discover, fetchMarket, displayMarket, chainQuotes, publicRead, KALSHI_API } from './kalshi-source.js';
 import { computeBookFromTrades, readJsonBody, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
 import { quoteEvent, marketKey, positionKey } from './prediction-model.js';
@@ -76,7 +76,7 @@ export async function handleKalshi(request, env) {
   if (request.headers.get('Origin') && request.headers.get('Origin') !== SITE ||
       request.method === 'POST' && request.headers.get('Origin') !== SITE) return privateJSON({ error: 'Forbidden origin' }, 403);
   const routes = new Map([['/api/kalshi/status','GET'], ['/api/kalshi/markets','GET'], ['/api/kalshi/market','POST'],
-    ['/api/kalshi/portfolio','GET'], ['/api/kalshi/paper','POST'], ['/api/kalshi/archive','GET'], ['/api/kalshi/discover','POST']]);
+    ['/api/kalshi/quotes','POST'], ['/api/kalshi/portfolio','GET'], ['/api/kalshi/paper','POST'], ['/api/kalshi/archive','GET'], ['/api/kalshi/discover','POST']]);
   if (!routes.has(url.pathname)) return privateJSON({ error: 'Not found' }, 404);
   if (routes.get(url.pathname) !== request.method) return privateJSON({ error: 'Method not allowed' }, 405);
   try {
@@ -94,6 +94,12 @@ export async function handleKalshi(request, env) {
       const result = await discover(env);
       await writeState(env, 'discovery', result);
       return privateJSON(result);
+    }
+    if (url.pathname === '/api/kalshi/quotes') {
+      const body = await readJsonBody(request);
+      if (body.error) return privateJSON({ error: body.error }, 400);
+      await budget(env, 'chain-quotes', 10, 60000);
+      return privateJSON(await chainQuotes(env, body.body?.markets));
     }
     if (url.pathname === '/api/kalshi/market') {
       const body = await readJsonBody(request);

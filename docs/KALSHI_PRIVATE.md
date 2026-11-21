@@ -233,3 +233,29 @@ map to local destinations; a plain Credit Tape login clears the hint and
 returns to `/credit-tape/`. Callback denial is never rewritten. The upstream
 service still owns OAuth state, PKCE, owner authorization and session creation.
 Callback and logout clear the hint. No upstream service restart is required.
+
+## Contract chain
+
+The owner desk shows a 12-contract page with YES/NO bids, asks and whole-contract
+sizes in cents. YES is green; NO is red. Each row has quantity and direct paper
+buy/sell buttons. Sell is enabled only for sufficient held quantity; all actions
+also require a fresh, open, sized display book. The server independently fetches
+rules, fees and a fresh execution book for every new order. A display response
+never authorizes a fill. Unknown-response retries keep their execution ID.
+
+`POST /api/kalshi/quotes` accepts at most 16 distinct supported tickers and uses
+one [batch book request](https://docs.kalshi.com/api-reference/market/get-multiple-market-orderbooks).
+Identity, same-origin and maintenance fences apply before the route. Response
+identities must match exactly; malformed/crossed books yield unavailable rows.
+Missing sides stay unavailable; they never become zero-priced quotes. Decimal
+sizes round down using the existing adapter. This read does not archive every
+chain page or change the background selected market.
+
+The visible page refreshes every ten seconds, pauses while hidden or after five
+minutes without interaction, and stops automatic retries after errors. Refresh
+prices resumes it. Display prices expire after ten seconds and disappear on tab
+hiding. Limits are ten chain requests/minute plus the unchanged global provider
+60/minute and 2,000/day caps. Existing account/order limits, fee checks, owner
+identity, archive/settlement writes, and paper-only execution remain unchanged.
+No producer, schema or credential changes. Deploy the API first, then assets;
+old assets remain compatible with the new API. Roll back assets independently.
