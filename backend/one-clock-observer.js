@@ -41,26 +41,41 @@ export async function observeBatch(db, input) {
     if (row.source !== source || row.session !== selection.session || row.instrument !== selection.instrument || row.origin !== selection.origin) throw new Error('observation outside authorized batch scope');
     if (row.availableAt !== null && row.availableAt > cutoff) throw new Error('observation has not arrived');
   }
-  const batchDigest = await digest(canonical({ source,cursor,selection,sessionClose:close,collection,observations:incoming }));
+  const batchDigest = await digest(canonical({ source,cursor,selection,sessionClose:close,collection,observations:incoming,
+    ...(input.sourceRecords?{sourceRecords:input.sourceRecords,activationWindows:input.activationWindows,ruleKeys:input.ruleKeys}:{}) }));
   const priorReceipt = await bind(db,'SELECT * FROM one_clock_receipts WHERE namespace=? AND batch_id=?',namespace,batchId).first();
   if (priorReceipt) {
     if (priorReceipt.digest !== batchDigest) throw new Error('batch identity reused with different contents');
-    return { duplicate: true, generation: priorReceipt.generation };
+    return { duplicate: true, generation: priorReceipt.generation,statements:0 };
   }
   const state = await bind(db,'SELECT * FROM one_clock_state WHERE namespace=?',namespace).first();
   if (state && cutoff < state.cutoff) throw new Error('observer cannot rewind; use as-of reads');
-  const stored = await list(bind(db,'SELECT * FROM one_clock_observations WHERE namespace=? AND session=? AND instrument=? AND origin=? LIMIT 10001',...scopeArgs(namespace,selection)));
+  // The active public service supplies one shared, already-scoped ingestion
+  // snapshot. Legacy trusted callers retain their namespace-local storage.
+  const stored = input.sourceRecords ?? await list(bind(db,'SELECT * FROM one_clock_observations WHERE namespace=? AND session=? AND instrument=? AND origin=? LIMIT 10001',...scopeArgs(namespace,selection)));
+  if(!Array.isArray(stored)||stored.length>10000)throw new Error('source record bound');
+  for(const record of stored) {
+    const row=observation(JSON.parse(record.payload));
+    if(row.session!==selection.session||row.instrument!==selection.instrument||row.origin!==selection.origin||record.received_at>cutoff)throw new Error('stored record outside scope');
+  }
   if (new Set([...stored.map(r => revisionKey(JSON.parse(r.payload))), ...incoming.map(revisionKey)]).size > 10000) throw new Error('session exceeds the 10000-record evaluation bound; partition the source view');
-  const rules = await list(bind(db,'SELECT * FROM one_clock_rules WHERE namespace=? LIMIT 101',namespace));
+  let rules = await list(bind(db,'SELECT * FROM one_clock_rules WHERE namespace=? LIMIT 101',namespace));
   if (rules.length > 100) throw new Error('namespace exceeds the 100-rule evaluation bound');
-  const existing = await list(bind(db,'SELECT * FROM one_clock_events WHERE namespace=? AND session=? AND instrument=? AND origin=? LIMIT 10001',...scopeArgs(namespace,selection)));
+  let existing = await list(bind(db,'SELECT * FROM one_clock_events WHERE namespace=? AND session=? AND instrument=? AND origin=? LIMIT 10001',...scopeArgs(namespace,selection)));
   if (existing.length > 10000) throw new Error('event scope exceeds evaluation bound');
+  if(input.ruleKeys) {
+    const keys=new Set(input.ruleKeys);
+    rules=rules.filter(r=>keys.has(JSON.stringify([r.rule_id,r.version])));
+    existing=existing.filter(r=>{const e=JSON.parse(r.payload);return keys.has(JSON.stringify([e.ruleId,e.ruleVersion]));});
+  }
   const history = stored.map(r => JSON.parse(r.payload));
   const receiptByRecord = new Map(stored.map(r => [revisionKey(JSON.parse(r.payload)),r]));
   for (const row of incoming) if (!receiptByRecord.has(revisionKey(row))) receiptByRecord.set(revisionKey(row),{ collection, received_at:cutoff });
   const current = new Map();
   for (const registered of rules) {
-    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection,sessionClose:close });
+    const activationWindows=input.activationWindows?.[JSON.stringify([registered.rule_id,registered.version])];
+    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection,sessionClose:close,
+      activationWindows:input.activationWindows?(activationWindows??[]):undefined });
     for (const event of events) {
       const key = await digest(event.id);
       const { matchingObservations, ...stable } = event; // Counts remain a projection, not a write per tick.
@@ -115,8 +130,9 @@ export async function observeBatch(db, input) {
   statements.push(bind(db,`INSERT INTO one_clock_checkpoints(namespace,source,cursor,updated_at) VALUES(?,?,?,?)
     ON CONFLICT(namespace,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`,namespace,source,cursor,cutoff));
   statements.push(bind(db,'INSERT INTO one_clock_receipts(namespace,batch_id,digest,generation,committed_at) VALUES(?,?,?,?,?)',namespace,batchId,batchDigest,generation,cutoff));
+  if(statements.length>(input.maxStatements??900))throw new Error('evaluation statement budget');
   await db.batch(statements);
-  return { duplicate:false,generation,events:current.size };
+  return { duplicate:false,generation,events:current.size,statements:statements.length };
 }
 
 export async function observedEventsAsOf(db, { namespace, selection }) {

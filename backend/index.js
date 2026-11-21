@@ -7,6 +7,7 @@ import { handleBtcOwnerLink } from './btc-owner-link.js';
 import { handleOneClockChain } from './one-clock-chain.js';
 import { handleOneClockSqueeze } from './one-clock-squeeze.js';
 import { advanceOneClockCatalogs } from './one-clock-catalog-sources.js';
+import { handleOneClockResearch,advanceOneClockResearch } from './one-clock-research.js';
 import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -42,6 +43,7 @@ export default {
     if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
     if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
+    if (url.pathname === '/api/one-clock/research') return handleOneClockResearch(request,env,url);
     if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
@@ -184,6 +186,7 @@ export default {
     // Reuse the existing invocation. Catalog failures do not block settlement;
     // metadata reads and additive D1 checkpoints never execute a trade.
     if(env.ONE_CLOCK_CATALOG==='enabled')ctx.waitUntil(advanceOneClockCatalogs(env,{now:Date.now()}));
+    if(env.ONE_CLOCK_OBSERVER==='enabled')ctx.waitUntil(advanceOneClockResearch(env,{now:Date.now()}).catch(()=>console.error('one_clock_observer_failed')));
     if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
     // The 24/7 event clock must not broaden legacy equity settlement hours.
     if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {

@@ -1,6 +1,6 @@
 # One Clock implementation and extension contract
 
-Status: shared clock, offline authoring/replay and durable observer storage implemented; no production observer activation. Inventory baseline: master
+Status: shared clock, offline authoring/replay, durable observer storage and account-scoped public observer service implemented. Release requires the reviewed migrations and separate API/assets procedures below. Inventory baseline: master
 `dba3304`, November 21, 2026. Repository findings below do not establish live
 deployment, archive completeness or a source's historical availability.
 
@@ -23,6 +23,85 @@ reason. Each integration includes its own compatibility and rollback checks;
 PR 8 must not become a gate holding already qualified readers. Missing archive
 evidence blocks that source's historical lane, not the usable instrument.
 
+## Account observation and retained public ingestion
+
+`/api/one-clock/research` derives its namespace from the authenticated human
+account. GET reopens immutable definitions or reads one session/instrument as of
+an explicit cutoff. POST saves a version or activates/pauses it with server times,
+origin checks and the existing write fence. Neither arbitrary observations nor
+private sources can be submitted. Activation intervals are retained separately;
+pausing stops new triggers while existing outcomes continue. Switching a version
+ends the old interval. This access does not authorize journal, credit or Kalshi.
+
+The initial source registry supports recorded underlying prices and published
+reference skew from QQQ/SPY/IBIT chain artifacts. The source descriptor supplies
+its instruments, fields, version, owner, normalizer and revision policy; the
+Builder obtains fields from this registry. New sources do not create an account-
+specific reader, cutoff implementation or timer. Squeeze and remaining inputs
+are not yet enabled for this observer; their separate replay readers remain.
+
+The existing 15-minute API invocation runs bounded, shared ingestion before
+account evaluation. It rotates two account/session/instrument jobs and up to four
+rule versions per job, with an aggregate 800 evaluation-statement budget and a
+single-rule retry when a group exceeds that budget. Failed rules retain an
+as-of attempt receipt and advance the rotation; other rules can continue. A
+depleted invocation budget defers work without recording a false rule failure. At most two public scope
+reads occur, each with two 1,000-object metadata pages, 20 artifact pairs,
+4 MiB of bodies and 1 MiB per object. Accounts in the same scope reuse the read.
+Initial/older unprocessed evidence is labelled backfill, never upgraded by retry.
+Catch-up and tenant rotation add delay; this is periodic archive observation,
+not a claim of instant alerts or a complete source event stream.
+
+Each fixed-day metadata rescan discovers late keys before an earlier cursor.
+Both CSV and sidecar ETag/upload times identify a retained artifact revision;
+stable source record IDs and increasing observer-retained revisions support
+corrections and reversion to previously seen bytes. The two source clocks,
+publication and actual observer receipt, remain separate. SQL generation checks
+commit observations, coverage and version progress atomically. Processing time
+never rewinds when old evidence arrives. Rule evaluation starts only after all
+configured source pages in that scope are caught up; a failed source does not
+stall unrelated scopes. Sources and rules are bounded at 2,000 retained artifact
+versions and 10,000 normalized records per session, 100 rule versions per account,
+1,000 activation intervals per account, 100 simultaneously active accounts and
+1,000 active rule versions. Exceeding a bound reports failure without a false
+completion checkpoint.
+
+The latest two NYSE sessions are revisited. Jobs recover directly from active
+definitions after missed sessions. Activation gates rising-edge admission before
+the once-per-session quota; anchors and condition state retain eligible session
+history, so activation itself does not manufacture an edge. Older sessions remain provisional:
+arbitrarily late changes and versions overwritten between polls cannot be
+recovered automatically. Existing retained versions are preserved. A native,
+immutable publication outbox from each existing publisher remains the durable
+successor for complete, low-latency handoff; no second capture owner is added.
+The calendar is an explicit NYSE policy exported from the existing producer
+library for 2024–2030, with early closes. Unknown dates fail closed, and CI checks
+calendar parity. Updating its policy uses `scripts/one-clock-calendar.py`.
+
+The Builder's **Save to account**, **Observe saved version**, and **Pause
+observation** controls are distinct from local synthetic fixture saves.
+**Observed Results** follows the shared cursor, includes observer receipt gating,
+retains trigger/endpoint collection lineage, and exposes coverage independently
+from zero events. Per-rule attempts distinguish evaluated, failed and not-yet-
+evaluated states at the selected cutoff. Live refresh retains the committed
+session and instrument; draft edits apply only through Read cutoff or Live.
+Inspecting a receipt does not manufacture a source replay at an
+earlier time. Full historical replay linkage, rich aggregate filters/comparisons,
+remaining source migrations and native publication handoff are still open.
+
+Release: independently review and apply only `0004_one_clock.sql` then
+`0010_one_clock_ingestion.sql`; deploy API with `ONE_CLOCK_OBSERVER=enabled`, then
+the staged assets. With no activated definitions, the service performs no source
+reads. Roll back to the prior separated API/assets or disable the observer flag;
+retain new tables and evidence. Existing producers, gateway identities, account
+execution and settlement ownership are unchanged. No KV operations.
+
+`node scripts/one-clock-observer-preview.mjs` runs the actual account APIs against
+an in-memory store and synthetic records on an isolated loopback port. Its fixed
+fixture identity exists only in that harness. Browser checks exercised account
+save/activate/pause and two recorded fixture occurrences rewinding to one pending
+occurrence, then zero before the trigger receipt. This is not live source proof.
+
 ## One adapter, shared selection
 
 The offline instrument is `/one-clock.html`. Its bundled SYN-1 records are
@@ -40,17 +119,19 @@ availability, tolerance and session close. A late eligible endpoint can change a
 missing outcome to measured without changing the trigger identity; the durable
 observer must preserve that as an attributed revision. The same pure evaluator
 accepts an entire archive or only records that have arrived. No strategy or order
-execution runs from this page. D1 persistence, live activation, source ingestion,
-full categorical/comparison statistics and reader migrations are later slices.
+execution runs from this page. Account persistence and periodic public-source
+activation are described above; full categorical/comparison statistics and
+remaining reader migrations are subsequent slices.
 
 The observer storage in `backend/one-clock-observer.js` reuses this evaluator.
 It atomically commits observations, event/outcome history and source checkpoints
 to D1 with optimistic generation protection and exact batch-id retry receipts.
 The additive migration and trusted boundary are described in the
 [backend guide](../backend/README.md#one-clock-observer-storage-not-activated).
-It has no public ingestion route or running source consumer yet. Controlled
-recordings test parity and restart; production source activation and natural
-event/outcome receipts remain outstanding.
+It has no client ingestion route. The account service uses shared public
+ingestion and activation windows. Controlled recordings test parity and restart;
+production activation and natural event/outcome receipts need their own release
+evidence and are not inferred from fixture success.
 
 `site/shared/one-clock.js` has no network, storage or timer. The application
 owns one clock for a view and registers source adapters once. A live refresh

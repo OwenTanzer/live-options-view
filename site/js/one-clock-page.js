@@ -1,4 +1,4 @@
-import { createClock, createSourceRegistry, selectAsOf } from '../shared/one-clock.js';
+import { createClock, createSourceRegistry, selectAsOf,observation } from '../shared/one-clock.js';
 import { eventRule, saveRule, evaluateEvents, aggregateEvents } from '../shared/one-clock-events.js';
 import { demoRules, demoRows, demoStart, demoClose, demoSelection, demoSources } from '../shared/one-clock-demo.js';
 
@@ -15,6 +15,8 @@ let currentRule = versions[0];
 let timer = null;
 let selectedId = null;
 let previewing = false;
+let observedMode=false,accountState=null,observedBody=null;
+let observedGeneration=0,observedSelection=null;
 const registry = createSourceRegistry();
 for (const source of demoSources) registry.register({ ...source, version: 'fixture-1', owner: 'offline demo',
   maxAgeMs: 150000, read: async () => demoRows.filter(r => r.source === source.id) });
@@ -35,11 +37,12 @@ function inputControl(label, name, value, type = 'text') {
 }
 function removeButton(row) { const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Remove'; button.onclick = () => row.remove(); return button; }
 const sources = registry.list().map(id => [id, registry.get(id).label]);
+const formFields=new Map(demoSources.map(source=>[source.id,source.fields]));
 function sourceFields(source, field) {
   const sourceControl = selectControl('Input', 'source', sources, source);
-  const fieldControl = selectControl('Field', 'field', Object.entries(registry.get(source).fields), field);
+  const fieldControl = selectControl('Field', 'field', Object.entries(formFields.get(source)??{}), field);
   sourceControl.querySelector('select').onchange = event => {
-    const fields = Object.entries(registry.get(event.target.value).fields);
+    const fields = Object.entries(formFields.get(event.target.value)??{});
     fieldControl.querySelector('select').replaceChildren(...fields.map(([id,label]) => option(id,label)));
   };
   return [sourceControl,fieldControl];
@@ -101,6 +104,11 @@ function updateOutcomes() {
   if (!currentRule.outcomes.length) $('outcome-choice').append(option('', 'Tracking only'));
 }
 function showResults(active) {
+  observedGeneration++;observedSelection=null;
+  if(observedMode){observedMode=false;clearInterval(timer);timer=null;clock.select({...demoSelection,mode:'replay',cutoff:demoStart+301000});}
+  $('observed-results').hidden=true;document.querySelector('.replay').hidden=false;
+  $('show-observed').setAttribute('aria-pressed','false');
+  document.querySelector('.notice').hidden=false;
   $('builder').hidden = active; $('results').hidden = !active;
   $('show-builder').setAttribute('aria-pressed', String(!active)); $('show-results').setAttribute('aria-pressed', String(active));
 }
@@ -154,6 +162,99 @@ $('new-rule').onclick = () => {
   openRule({ id: crypto.randomUUID(), version: 1, name:'', instruments:['QQQ'], combine:'all', transition:'rising', missingInput:'hold', conditions:[], outcomes:[] });
   status('New event class. Add conditions and optional outcomes, then preview or save.');
 };
+// Server-account controls reuse the Builder definition. Source metadata can add
+// fields here without adding another timer, cursor or private ingestion route.
+async function accountRequest(body) {
+  const response=await fetch('/api/one-clock/research',{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',
+    ...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
+  const result=await response.json();if(!response.ok)throw new Error(result.error??`Observer request failed (${response.status})`);return result;
+}
+async function loadAccount() {
+  accountState=await accountRequest();
+  for(const [source,fields] of Object.entries(accountState.sources)) {
+    formFields.set(source,fields);if(!sources.some(([id])=>id===source))sources.push([source,source]);
+  }
+  for(const id of ['instrument','observed-instrument']) {
+    const selected=$(id).value;$(id).replaceChildren(...accountState.instruments.map(value=>option(value)));
+    if(accountState.instruments.includes(selected))$(id).value=selected;
+  }
+  if(!$('observed-day').value)$('observed-day').value=accountState.defaultSession;
+  return accountState;
+}
+$('account-save').onclick=async()=>{
+  try {
+    const state=await loadAccount(),draft=formRule();
+    const version=Math.max(0,...versions.filter(r=>r.id===draft.id).map(r=>r.version),...state.rules.filter(r=>r.rule.id===draft.id).map(r=>r.rule.version))+1;
+    const {rule}=await accountRequest({action:'save',rule:{...draft,version}});
+    versions.push(rule);currentRule=rule;versionOptions();openRule(rule);
+    try{localStorage.setItem(storageKey,JSON.stringify(versions));}catch{/* account save remains durable */}
+    status(`Saved ${rule.name} v${rule.version} to your account. Choose Observe saved version to activate it.`);
+  }catch(error){status(error.message,true);}
+};
+for(const [id,action] of [['account-activate','activate'],['account-pause','deactivate']])$(id).onclick=async()=>{
+  try{const result=await accountRequest({action,ruleId:editing.id,version:editing.version});status(result.active?'Observation activated for this immutable version. Collection follows the periodic service cadence.':'Observation paused. Already-triggered outcomes continue to mature.');}
+  catch(error){status(error.message,true);}
+};
+$('account-reopen').onclick=async()=>{
+  try {
+    const state=await loadAccount(),saved=state.rules.map(r=>r.rule);
+    versions=[...versions.filter(r=>!saved.some(s=>key(s)===key(r))),...saved];
+    if(saved.length){currentRule=saved.at(-1);versionOptions();openRule(currentRule);}
+    status(`Loaded ${saved.length} account definitions. Select a saved definition and Reopen.`);
+  }catch(error){status(error.message,true);}
+};
+registry.register({id:'observed-events',version:'1',owner:'authenticated observer',maxAgeMs:86400000,
+  async read({session,instrument,cutoff,signal}) {
+    const response=await fetch('/api/one-clock/research?'+new URLSearchParams({session,instrument,cutoff:String(cutoff)}),{signal,credentials:'same-origin',cache:'no-store'});
+    const body=await response.json();if(!response.ok)throw new Error(body.error??'Observer read failed');
+    if(body.session!==session||body.instrument!==instrument||body.cutoff!==cutoff||!Array.isArray(body.events))throw new Error('Observer scope mismatch');
+    const rows=body.events.map(event=>observation({source:'observed-events',id:event.id,revision:event.observerRevision,
+      session,instrument,origin:'recorded',eventAt:event.triggeredAt,availableAt:event.recordedAt,evidence:event.id,value:event}));
+    if(!signal.aborted)observedBody=body;return rows;
+  }});
+async function readObserved(selection,generation) {
+  const live=selection.mode==='live';
+  try {
+    if(!observedMode||generation!==observedGeneration)return;
+    const cutoff=live?Date.now():selection.cutoff;
+    $('observed-cutoff').value=new Date(cutoff).toISOString().slice(0,19);
+    clock.select({...selection,cutoff});
+    $('observed-status').textContent='Reading retained evidence…';
+    $('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
+    const result=await clock.read('observed-events');if(result.discarded||!observedMode||generation!==observedGeneration)return;
+    const events=result.rows.map(r=>r.value),outcomes=events.flatMap(e=>e.outcomes);
+    $('observed-status').textContent=`${result.selection.session} · ${result.selection.instrument} · ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
+    $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(c=>`${c.source}: ${c.reason}; ${c.pending} pending artifacts, ${c.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
+    $('observed-coverage').textContent+=' '+(observedBody.evaluation??[]).map(r=>`${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' ');
+    $('observed-stats').textContent=`${new Set(events.map(e=>e.session)).size} sessions · ${outcomes.filter(o=>o.state==='measured').length} measured outcomes · ${outcomes.filter(o=>o.state==='pending').length} pending · ${outcomes.filter(o=>o.state==='missing').length} missing`;
+    $('observed-ledger').replaceChildren(...events.map(event=>{
+      const tr=document.createElement('tr');
+      for(const value of [`${event.ruleId} v${event.ruleVersion}`,new Date(event.triggeredAt).toISOString(),new Date(event.recordedAt).toISOString(),event.collection,
+        event.outcomes.map(o=>`${o.id}: ${o.state==='measured'?formatted(o.value):o.state}`).join('; ')||'Tracking only']) {const td=document.createElement('td');td.textContent=value;tr.append(td);}
+      const td=document.createElement('td'),button=document.createElement('button');button.textContent='Inspect receipt';button.onclick=()=>{
+        $('observed-evidence').hidden=false;$('observed-evidence').textContent=JSON.stringify({triggeredAt:event.triggeredAt,recordedAt:event.recordedAt,inputs:event.inputEvidence,outcomes:event.outcomes,lineage:event.lineage},null,2);
+      };td.append(button);tr.append(td);return tr;
+    }));
+    $('observed-evidence').hidden=true;
+  }catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
+}
+function commitObserved(live) {
+  const generation=++observedGeneration;clearInterval(timer);timer=null;
+  observedSelection=Object.freeze({session:$('observed-day').value,instrument:$('observed-instrument').value,
+    mode:live?'live':'replay',origin:'recorded',cutoff:live?Date.now():Date.parse($('observed-cutoff').value+'Z')});
+  const selection=observedSelection;
+  readObserved(selection,generation);
+  if(live)timer=setInterval(()=>readObserved(selection,generation),60000);
+}
+$('show-observed').onclick=async()=>{
+  const generation=++observedGeneration;observedSelection=null;
+  observedMode=true;clearInterval(timer);timer=null;$('builder').hidden=true;$('results').hidden=true;document.querySelector('.replay').hidden=true;$('observed-results').hidden=false;
+  $('show-observed').setAttribute('aria-pressed','true');$('show-builder').setAttribute('aria-pressed','false');$('show-results').setAttribute('aria-pressed','false');
+  document.querySelector('.notice').hidden=true;$('observed-ledger').replaceChildren();$('observed-stats').textContent='';$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
+  try{await loadAccount();if(!observedMode||generation!==observedGeneration)return;commitObserved(true);}catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
+};
+$('observed-read').onclick=()=>commitObserved(false);
+$('observed-live').onclick=()=>commitObserved(true);
 $('preview-rule').onclick = () => { try { currentRule = formRule(); previewing = true; updateOutcomes(); render(); showResults(true); } catch(e) { status(e.message,true); } };
 $('rule-form').onsubmit = event => {
   event.preventDefault();
