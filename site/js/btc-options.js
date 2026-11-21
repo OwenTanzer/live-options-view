@@ -1,12 +1,14 @@
 // Authenticated, memory-only product view. Never ingested as an equity snapshot.
 const btcOptions = {
   active: false, generation: 0, request: 0, quotes: new Map(), data: null,
-  owner: null, error: null, access: null,
+  owner: null, error: null, access: null, ownerLinkAvailable: false,
   syncSession() {
     const username = sessionVerified ? session?.username || null : null;
     if (username === this.owner) return;
     this.owner = username; this.generation++; this.request++;
     this.quotes.clear(); this.data = null; this.error = null; this.access = null;
+    this.ownerLinkAvailable = false;
+    if (typeof btcOwnerLink !== 'undefined') btcOwnerLink.message = '';
     if (ticketEl?.dataset?.btc) closeTicket();
     document.getElementById('btc-chain').replaceChildren();
     this.render();
@@ -22,7 +24,12 @@ const btcOptions = {
       if (generation !== this.generation || request !== this.request || session?.username !== username) return;
       this.quotes.clear();
       if (!response.ok) {
+        this.ownerLinkAvailable = data.owner_link_available === true;
         this.access = response.status === 401 ? 'signin' : response.status === 403 ? 'unauthorized' : null;
+        if (this.access) {
+          session.trades = (session.trades || []).filter(t => t.instrument_type !== 'futures_option');
+          if (ticketEl?.dataset?.btc) closeTicket();
+        }
         throw new Error(data.error || 'BTC source unavailable');
       }
       this.error = null; this.access = null;
@@ -110,7 +117,7 @@ const btcOptions = {
   reason(symbol, action) {
     const side = action === 'buy' ? 'ask' : 'bid', q = this.quotes.get(symbol);
     if (!sessionVerified || !session) return 'Sign in to trade';
-    if (this.access) return 'Switch to your entitled paper account';
+    if (this.access) return 'No authorized data source for this session';
     if (pendingExecutions.has(symbol)) return 'Order pending';
     if (action === 'sell' && !(computeBook()[symbol]?.pos >= 1)) return 'No position to close';
     if (action === 'buy' && !this.data?.entries_enabled) return 'New entries disabled';
@@ -166,11 +173,20 @@ const btcOptions = {
     status.setAttribute('role', 'status');
     root.appendChild(status);
     if (!sessionVerified || !session || this.access) {
-      const wrong = sessionVerified && session && this.access !== 'signin';
-      status.appendChild(element('p', '', wrong ? 'This paper account is not enabled for Bitcoin options.' : 'Sign in to view and paper trade Bitcoin options.'));
-      status.appendChild(element('p', '', 'Use your existing entitled paper account. Creating an account does not grant market-data access.'));
-      const login = element('button', 'btc-login', wrong ? 'Switch paper account' : 'Sign in');
-      login.type = 'button'; login.onclick = () => openPaperLogin(); status.appendChild(login);
+      const signedIn = sessionVerified && session && this.access !== 'signin';
+      status.appendChild(element('p', '', signedIn ? 'This paper session has no authorized Bitcoin data source.' : 'Sign in to your normal paper account to continue.'));
+      if (signedIn) {
+        status.appendChild(element('p', '', 'This subscriber feed cannot be shared with other users. A paper username or journal login alone does not grant access.'));
+        if (this.ownerLinkAvailable) {
+          status.appendChild(element('p', '', `If you own this subscription, link your existing enrolled owner passkey to paper account “${session.username}” for this session only. This does not sign you into the journal.`));
+          const link = element('button', 'btc-owner-link', 'Link this session with owner passkey');
+          link.type = 'button'; link.disabled = btcOwnerLink.busy; link.onclick = () => btcOwnerLink.link(); status.appendChild(link);
+          status.appendChild(element('p', 'btc-link-status', btcOwnerLink.message));
+        } else status.appendChild(element('p', '', 'Owner linking is not available for this source. No authorized cross-user source is configured.'));
+      } else {
+        const login = element('button', 'btc-login', 'Sign in');
+        login.type = 'button'; login.onclick = () => openPaperLogin(); status.appendChild(login);
+      }
       return;
     }
     if (!data) {
@@ -180,6 +196,11 @@ const btcOptions = {
     }
     status.appendChild(element('p', '', `${data.session} · Simulated trading · ${data.fee_model || '$2.50 per contract per side'}`));
     status.appendChild(element('p', '', 'Premiums are USD per bitcoin. One contract = 5 BTC. Buy at ask; close owned contracts at bid.'));
+    if (typeof btcOwnerLink !== 'undefined') {
+      const unlink = element('button', 'btc-owner-unlink', 'Unlink Bitcoin data from this session');
+      unlink.type = 'button'; unlink.disabled = btcOwnerLink.busy; unlink.onclick = () => btcOwnerLink.unlink(); status.appendChild(unlink);
+      if (btcOwnerLink.message) status.appendChild(element('p', 'btc-link-status', btcOwnerLink.message));
+    }
     for (const c of (data.contracts || []).sort((a, b) => a.strike - b.strike || a.type.localeCompare(b.type))) {
       const q = this.quotes.get(c.contract_key), row = element('article', 'btc-contract', '');
       row.dataset.symbol = c.contract_key;

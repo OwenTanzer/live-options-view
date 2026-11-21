@@ -1,4 +1,5 @@
 import { settleBtcAccount } from './btc-options.js';
+import { btcAllowed } from './btc-owner-link.js';
 // backend/settlement.js (B4) -- settlement: the pure pricing/validation
 // functions (this slice), plus the settlement machinery and the /api/settle
 // route (slice e). Moved verbatim from worker.js; the entry re-exports the
@@ -368,6 +369,7 @@ export async function handleSettle(request, env) {
 
   const btc = await settleBtcAccount(env, session.username);
   if (btc.error) return jsonResponse({ error: 'BTC settlement pending retry' }, 503);
-  return jsonResponse({ ...kvOutcome.result, settled: [...kvOutcome.result.settled, ...btc.result.settled],
-    pending_btc: btc.result.pending, balance_cash: btc.result.balance_cash }, 200);
+  const allowed = await btcAllowed(env, session);
+  return jsonResponse({ ...kvOutcome.result, settled: [...kvOutcome.result.settled, ...(allowed ? btc.result.settled : [])],
+    pending_btc: allowed ? btc.result.pending : [], balance_cash: btc.result.balance_cash }, 200);
 }

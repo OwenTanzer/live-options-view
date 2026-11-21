@@ -1,5 +1,6 @@
 import { handlePrediction, settlePredictions } from './prediction.js';
 import { handleBtcOptions } from './btc-options.js';
+import { handleBtcOwnerLink } from './btc-owner-link.js';
 import { handleOneClockChain } from './one-clock-chain.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -24,6 +25,7 @@ export { MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, USERNAME_RE, constantTimeEqual, der
 const MUTATING_API_PATHS = new Set([
   '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
   '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync', '/api/trade-journal/passkey',
+  '/api/btc-options/owner-link',
 ]);
 
 export default {
@@ -116,6 +118,7 @@ export default {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/btc-options') return handleBtcOptions(request, env);
+    if (url.pathname === '/api/btc-options/owner-link') return handleBtcOwnerLink(request, env);
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
       return handleLiveQuotes(url, env);
