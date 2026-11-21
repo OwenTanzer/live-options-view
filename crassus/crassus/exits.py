@@ -28,7 +28,13 @@ strategy having to change:
   no contract multiplier enters the threshold arithmetic.
 * **Triggers** are inclusive at the boundary: `pnl_pct >= profit_target_pct` and
   `pnl_pct <= stop_loss_pct`. A position sitting exactly on its threshold has
-  reached it; the alternative makes the boundary depend on float noise.
+  reached it; the alternative makes the boundary depend on float noise. The
+  comparison is therefore made in exact decimal arithmetic on the quoted
+  values (`_threshold_reached`): in binary floats a bid of exactly 65% of a
+  cent-denominated basis computes to e.g. -0.3499999999999999 for basis 1.40 /
+  bid 0.91 and would miss a -35% stop (16 of the 100 exact-cent 65% pairs up
+  to $20.00 do). The threshold price itself is recorded as
+  `exit_threshold_price` so overshoot past it is auditable.
 
 Precedence, highest first, is fixed here and documented for review:
 
@@ -70,6 +76,7 @@ import logging
 import math
 import os
 from dataclasses import asdict, dataclass
+from fractions import Fraction
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -80,7 +87,7 @@ from .strategy import Decision, StrategyContext
 log = logging.getLogger("crassus.exits")
 
 STRATEGY_ID = "exit_policy"
-STRATEGY_VERSION = "1.1.0"
+STRATEGY_VERSION = "1.2.0"
 
 #: Strategies whose exits this layer owns by default: the signal-reversal
 #: option books. `smoke_*` is excluded deliberately -- it is a pipeline
@@ -362,6 +369,13 @@ class Candidate:
                 policy.stop_loss_pct if self.trigger == "protective_stop"
                 else policy.profit_target_pct
             ),
+            # The price the threshold corresponds to for this position's own
+            # basis; liquidation_price below it is overshoot (gap, latency).
+            "exit_threshold_price": round(threshold_price(
+                self.cost_basis,
+                policy.stop_loss_pct if self.trigger == "protective_stop"
+                else policy.profit_target_pct,
+                self.quantity), 6),
             "exit_phelps_window": self.window_state,
             # The account's server-side identity, so a durable ledger row can
             # reconstruct this exit's cooldown after a corrupt or lost state
@@ -371,14 +385,39 @@ class Candidate:
         }
 
 
+def _exact(value: float) -> Fraction:
+    """The decimal a float was written as (`repr` round-trips), exactly."""
+    return Fraction(repr(float(value)))
+
+
+def threshold_price(cost_basis: float, fraction: float, quantity: int) -> float:
+    """The liquidation price at which `pnl_pct` equals `fraction`.
+
+    Long: basis * (1 + fraction); short: basis * (1 - fraction). For a -0.35
+    stop on a long that is 65% of the position's own entry basis.
+    """
+    sign = 1 if quantity > 0 else -1
+    return float(_exact(cost_basis) * (1 + sign * _exact(fraction)))
+
+
+def _threshold_reached(cost_basis: float, price: float, quantity: int, fraction: float) -> bool:
+    """`pnl_pct(...) <= fraction` (stops, fraction < 0) or `>= fraction`
+    (targets, fraction > 0), decided exactly rather than in binary floats."""
+    basis, px, f = _exact(cost_basis), _exact(price), _exact(fraction)
+    change = (px - basis) / basis if quantity > 0 else (basis - px) / basis
+    return change <= f if f < 0 else change >= f
+
+
 def _classify(position: Any, quote: Any, policy: ExitPolicy) -> Candidate | None:
     price = liquidation_price(quote, position.quantity)
     if price is None or position.average_cost <= 0:
         return None
     change = pnl_pct(position.average_cost, price, position.quantity)
-    if change <= policy.stop_loss_pct:
+    if _threshold_reached(position.average_cost, price, position.quantity, policy.stop_loss_pct):
         trigger = "protective_stop"
-    elif policy.profit_target_pct is not None and change >= policy.profit_target_pct:
+    elif (policy.profit_target_pct is not None
+          and _threshold_reached(position.average_cost, price, position.quantity,
+                                 policy.profit_target_pct)):
         trigger = "profit_target"
     else:
         return None
