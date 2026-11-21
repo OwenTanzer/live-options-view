@@ -57,7 +57,7 @@ async function renderShortlist(selection) {
     const result=await clock.read('shortlist');if(result.discarded)return;
     const row=result.reading.row;
     el('history-clock-shortlist-status').textContent=row
-      ? `${selection.instrument}: ${row.value.listed?'on the published top-ten shortlist, rank '+row.value.rank:'not in this published top-ten shortlist'} · run finished ${new Date(row.eventAt).toISOString()} · available ${new Date(row.availableAt).toISOString()}.`
+      ? `${selection.instrument}: ${row.value.listed?'on the published top-ten shortlist, rank '+row.value.rank:'not in this published top-ten shortlist'} · run finished ${new Date(row.details.finishedAt).toISOString()} · publication proven ${new Date(row.availableAt).toISOString()}.`
       : 'No qualified publication at this cursor. Missing coverage is not an observed absence.';
     el('history-clock-shortlist-evidence').textContent=JSON.stringify({...(row?{value:row.value,evidence:row.evidence,details:row.details}:{}),coverage:shortlistCoverage},null,2);
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}

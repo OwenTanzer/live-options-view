@@ -41,9 +41,10 @@ const squeezeResults=JSON.stringify([{ticker:'ABC',comparison_eligible:true,rank
 const squeezeManifest=JSON.stringify({schema_version:1,run_id:squeezeRun,started_at:new Date(T-60000).toISOString(),finished_at:new Date(T).toISOString(),status:'complete',scoring:{version:'synthetic-fixture'},
   files:{'results.json':{sha256:hash(squeezeResults),bytes:Buffer.byteLength(squeezeResults)}}});
 for(const [key,text] of [[squeezeBase+'/results.json',squeezeResults],[squeezeBase+'/manifest.json',squeezeManifest],
+  [`squeeze-scanner/v1/scheduled/publication-attempts/${squeezeRun}/22222222-2222-4222-8222-222222222222/started.json`,JSON.stringify({run_id:squeezeRun,at:new Date(T+100).toISOString()})],
   [squeezeBase+'/COMMITTED.json',JSON.stringify({run_id:squeezeRun,manifest_sha256:hash(squeezeManifest)})],
   [`squeeze-scanner/v1/scheduled/publication-attempts/${squeezeRun}/22222222-2222-4222-8222-222222222222/finished.json`,JSON.stringify({run_id:squeezeRun,archive:squeezeBase,archive_verified:true,latest:'advanced',at:new Date(T+1000).toISOString()})]]) {
-  objects.set(key,{text,uploaded:new Date(T+1500),etag:hash(text)});
+  objects.set(key,{text,uploaded:new Date(key.endsWith('/started.json')?T+100:T+1500),etag:hash(text)});
 }
 preview.env.API={fetch:request=>{
   const url=new URL(request.url);

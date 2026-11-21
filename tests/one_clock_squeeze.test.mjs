@@ -4,20 +4,21 @@ import { createHash } from 'node:crypto';
 import { readSqueezePublications,handleOneClockSqueeze } from '../backend/one-clock-squeeze.js';
 import { squeezeSource } from '../site/shared/one-clock-squeeze-source.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
-import { createClock,createSourceRegistry } from '../site/shared/one-clock.js';
+import { createClock,createSourceRegistry,readingAsOf } from '../site/shared/one-clock.js';
 import { evaluateEvents } from '../site/shared/one-clock-events.js';
 const session='2026-11-09',T=sessionInstant(session,9,30),prefix='squeeze-scanner/v1/scheduled/';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const scope=(cutoff=T+5000,instrument='ABC')=>({session,instrument,cutoff});
-function fixture({listed=true,status='complete',latest='advanced'}={}) {
-  const run='11111111-1111-4111-8111-111111111111',attempt='22222222-2222-4222-8222-222222222222',base=prefix+'runs/'+run;
+function fixture({listed=true,status='complete',latest='advanced',run='11111111-1111-4111-8111-111111111111',started=T-60000,finished=T,published=T+2000,receiptAt=T+2500}={}) {
+  const attempt='22222222-2222-4222-8222-222222222222',base=prefix+'runs/'+run;
   const key=prefix+`publication-attempts/${run}/${attempt}/finished.json`;
   const results=JSON.stringify(listed?[{ticker:'ABC',comparison_eligible:true,ranks:{combined:1},scores:{combined:.7,factor:.8,options:.6},private:'must-not-leak'}]:[]);
-  const manifest=JSON.stringify({schema_version:1,run_id:run,started_at:new Date(T-60000).toISOString(),finished_at:new Date(T).toISOString(),status,
+  const manifest=JSON.stringify({schema_version:1,run_id:run,started_at:new Date(started).toISOString(),finished_at:new Date(finished).toISOString(),status,
     scoring:{version:'baseline-60-40-v1'},files:{'results.json':{sha256:hash(results),bytes:Buffer.byteLength(results)}}});
-  const objects=new Map([[base+'/results.json',{text:results,at:T+500}],[base+'/manifest.json',{text:manifest,at:T+1000}],
-    [base+'/COMMITTED.json',{text:JSON.stringify({run_id:run,manifest_sha256:hash(manifest)}),at:T+1500}],
-    [key,{text:JSON.stringify({at:new Date(T+2000).toISOString(),run_id:run,archive:base,archive_verified:true,latest}),at:T+2500}]]);
+  const objects=new Map([[base+'/results.json',{text:results,at:finished+500}],[base+'/manifest.json',{text:manifest,at:finished+1000}],
+    [base+'/COMMITTED.json',{text:JSON.stringify({run_id:run,manifest_sha256:hash(manifest)}),at:finished+1500}],
+    [key.replace('finished.json','started.json'),{text:JSON.stringify({at:new Date(finished+100).toISOString(),run_id:run}),at:finished+100}],
+    [key,{text:JSON.stringify({at:new Date(published).toISOString(),run_id:run,archive:base,archive_verified:true,latest}),at:receiptAt}]]);
   const calls=[];
   const bucket={async list(){calls.push('list');return {objects:[...objects].map(([key,r])=>({key,uploaded:new Date(r.at)})),truncated:false};},
     async get(key){calls.push(key);const r=objects.get(key);return r?{size:Buffer.byteLength(r.text),uploaded:new Date(r.at),etag:hash(r.text),text:async()=>r.text}:null;}};
@@ -37,7 +38,7 @@ test('absence requires a qualified published run; unavailable is not an empty sh
   assert.equal(empty.rows[0].value.listed,false);
   for(const latest of ['unchanged','not_eligible'])assert.equal((await readSqueezePublications(fixture({latest}).bucket,scope())).rows.length,0);
   const db=fixture();db.objects.delete(db.key);
-  const missing=await readSqueezePublications(db.bucket,scope());assert.equal(missing.rows.length,0);assert.equal(missing.coverage.reason,'no-published-run');
+  const missing=await readSqueezePublications(db.bucket,scope());assert.equal(missing.rows.length,0);assert.equal(missing.coverage.reason,'unresolved-publication-attempt');
 });
 test('publication with missing/mismatched retained evidence fails closed rather than falling back',async()=>{
   for(const mutation of ['digest','owner','future','bad-score','missing']) {
@@ -76,6 +77,27 @@ test('same evaluator counts first shortlist appearance once and rewinds before p
   const run=cutoff=>evaluateEvents({rule,observations:rows,selection:{...scope(cutoff),origin:'recorded'},sessionClose:sessionInstant(session,16)});
   assert.equal(run(T+2499).length,0);assert.equal(run(T+2500).length,1);assert.equal(run(T+5000).length,1);
   assert.equal(run(T+2500)[0].triggeredAt,T+2500);
+});
+test('overlapping scan finishes and delayed terminal receipts obey producer started/run pointer order',async()=>{
+  for(const delayed of [false,true]) {
+    const a=fixture({started:T,finished:T+3000,published:T+4000,receiptAt:T+(delayed?10000:4500)});
+    const b=fixture({run:'33333333-3333-4333-8333-333333333333',listed:false,status:'empty',started:T+1000,finished:T+2000,published:T+5000,receiptAt:T+5500});
+    for(const [key,value] of b.objects)a.objects.set(key,value);
+    const selection={...scope(T+11000),origin:'recorded'},result=await readSqueezePublications(a.bucket,selection);
+    assert.equal(result.coverage.publicationComplete,true);
+    assert.equal(readingAsOf(result.rows,selection,{maxAgeMs:86400000}).row.value.listed,false);
+    assert.equal(result.rows.length,delayed?1:2);
+  }
+});
+test('started-only, failed-after-pointer and unknown terminal state cannot certify an old shortlist',async()=>{
+  for(const kind of ['started','failed','unknown']) {
+    const a=fixture(),b=fixture({run:'33333333-3333-4333-8333-333333333333',listed:false,started:T+500,finished:T+1000,published:T+3000,receiptAt:T+3500});
+    if(kind!=='unknown')b.objects.delete(b.key);
+    if(kind==='failed')b.objects.set(b.key.replace('finished.json','failed.json'),{text:JSON.stringify({error_type:'WriteError'}),at:T+3500});
+    if(kind==='unknown')b.objects.get(b.key).text=b.objects.get(b.key).text.replace('advanced','unrecognized');
+    for(const [key,value] of b.objects)a.objects.set(key,value);
+    const result=await readSqueezePublications(a.bucket,scope());assert.equal(result.rows.length,0,kind);assert.equal(result.coverage.publicationComplete,false,kind);
+  }
 });
 test('shared shortlist transport deduplicates and discards late scope responses',async()=>{
   let release,called=false,calls=0;const db=fixture(),registry=createSourceRegistry();

@@ -270,6 +270,22 @@ The original Squeeze tab remains the independent current reader/rollback.
 This slice does not claim Nov 9 real Squeeze coverage. Its fixture has ABC first
 published at 09:30:01.500 New York; earlier replay is unavailable, QQQ has a
 qualified absence after publication, and the chain still works independently.
+The observation's event time is the conservative proven publication-state time;
+scan start/finish are retained separately. State advances preserve the producer's
+exact `(started_at, run_id)` ordering, including overlapping finishes and delayed
+terminal receipts. Started-only or failed attempts may conceal a pointer advance
+and therefore make coverage unavailable; an unknown terminal status also fails.
+
+The two listing pages are a **lifetime namespace bound**, not a daily partition.
+This first reader deliberately fails closed beyond that bound. Before claiming
+automatic source scaling, add the generic durable publication catalog to observer
+ingestion: persist verified source identity/revision, publication time and session,
+resume listing with transactional checkpoints, and query the session index here.
+New source descriptors must reuse that catalog rather than raise list limits or
+require manual daily indexes. This remains open integration work, not a finished
+scalability claim. Interrupted publisher attempts likewise need verified recovery
+evidence; do not delete them or infer successful publication during repair.
+
 News, Order Flow/gamma, credit and scanner readers remain separate open source
 integrations. News must reuse its collector/archive revision and classification
 rules; its publication mode is expressly retrospective. Credit must retain the
