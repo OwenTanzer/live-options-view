@@ -14,15 +14,19 @@ export function journalCutoff(url,now=Date.now()) {
 }
 const keep=(value,fields)=>Object.fromEntries(fields.filter(k=>value[k]!==undefined).map(k=>[k,value[k]]));
 export function projectJournalPosition(position,cutoff) {
-  if(!position.supported)return null;
   const base=keep(position,['position_id','journal_page_id','journal_url','actor_kind','owner','account','mode','strategy_id']);
+  if(!position.supported)return {...base,supported:false,executions:[],gaps:[],
+    ...keep(position,['trade_date','contract_text','unsupported_reason'])};
   if(position.legs) {
     const legs=position.legs.map(p=>projectJournalPosition(p,cutoff)).filter(Boolean);
     if(!legs.length)return null;
     const executions=legs.flatMap(p=>p.executions).sort((a,b)=>a.ts.localeCompare(b.ts)||a.execution_id.localeCompare(b.execution_id));
     const closed=legs.every(p=>p.closed),sum=field=>round(legs.reduce((n,p)=>n+(p[field]??0),0),6);
+    const closeDay=closed?legs.map(p=>p.expired_on??sessionAt(Date.parse(p.closed_ts))).sort().at(-1):null;
+    const expired=closed&&legs.some(p=>p.expired_on===closeDay);
     return {...base,supported:true,legs,contract:legs[0].contract,executions,n_fills:executions.length,
-      opened_ts:executions[0].ts,closed_ts:closed?executions.at(-1).ts:null,closed,
+      opened_ts:executions[0].ts,closed_ts:closed&&!expired?executions.at(-1).ts:null,closed,
+      ...(expired?{expired_on:closeDay}:{}),
       gross_pnl:closed?sum('gross_pnl'):null,net_pnl:closed?sum('net_pnl'):null,
       fees:sum('fees'),realized_gross_pnl:sum('realized_gross_pnl'),open_cost_basis:sum('open_cost_basis'),
       open_qty:legs.reduce((n,p)=>n+Math.abs(p.open_qty),0),open_side:closed?null:'across legs',
@@ -62,7 +66,7 @@ export async function journalSnapshots(db,{cutoff,positionId=null,pageId=null}) 
   });
 }
 export function journalScope(day,cutoff) {
-  if(cutoff!==null && sessionAt(cutoff)!==day)throw new Error('cutoff must fall on selected New York date');
+  if(cutoff!==null && sessionAt(cutoff)<day)throw new Error('cutoff cannot precede the selected journal date');
   // Also validates the calendar date, including in retrospective mode.
   sessionInstant(day,0);
 }

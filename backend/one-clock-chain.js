@@ -63,7 +63,10 @@ function readingProjection(reading,{cutoff,instrument,csvKey,eventAt}) {
 export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
   if(!validSession(session) || !Object.hasOwn(PREFIX,instrument)) throw new Error('invalid archive scope');
   cutoff=instant(cutoff);
-  if(sessionAt(cutoff)!==session) throw new Error('cutoff outside session date');
+  // The archive partition remains the event day. A private journal can ask
+  // what was known about that day at a later cutoff (including late receipts).
+  // The public route below retains its same-day scope contract.
+  if(sessionAt(cutoff)<session) throw new Error('cutoff precedes session date');
   const prefix=PREFIX[instrument]+session.replaceAll('-','')+'/snapshot_';
   const candidates=[]; let cursor,lists=0,bytes=0,gets=0,complete=false;
   do {

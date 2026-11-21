@@ -426,11 +426,11 @@ export async function journalContextAsOf(env,position,day,cutoff) {
     underlying:null,option:null,gaps:[],notes:['Only a publication-qualified snapshot at the cutoff is shown.']};
   if(!['QQQ','SPY','IBIT'].includes(instrument))return {...base,gaps:[`${instrument}: no qualified archive adapter`]};
   const result=await readArchivedChain(env.PAPER_TRADES,{session:day,instrument,cutoff});
-  const row=result.rows[0];if(!row)return {...base,gaps:[`${instrument}: ${result.coverage.reason}`],coverage:result.coverage};
+  const row=result.rows[0];if(!row)return {...base,gaps:[`${instrument}: ${result.coverage.reason}`],coverage:[],sourceCoverage:result.coverage};
   const at=new Date(row.eventAt).toISOString(),price=row.value.underlying_price;
   const occ=position.contract.occ_symbol?.replaceAll(' ','');
   const quote=occ?row.value.rows.find(r=>r.OptionSymbol?.replaceAll(' ','')===occ):null;
-  return {...base,available_at:row.availableAt,coverage:result.coverage,
+  return {...base,available_at:row.availableAt,coverage:['One qualified snapshot; not a complete premium path.'],sourceCoverage:result.coverage,
     underlying:price>0?{source:row.evidence,segments:[{kind:'points',points:[[at,price]]}]}:null,
     option:quote && quote.Bid!==null && quote.Ask!==null && quote.Bid>=0 && quote.Ask>=quote.Bid?{source:row.evidence,segments:[{kind:'points',points:[[at,quote.Bid,quote.Ask]]}]}:null,
     gaps:quote?[]:[`${occ??instrument}: no qualified exact-contract quote`]};

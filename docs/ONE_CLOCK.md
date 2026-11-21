@@ -352,9 +352,14 @@ view excludes later executions, revisions, closure, fees and free-text retrospec
 notes. Current and recorded projections share the same average-cost book calculation.
 Combination legs project separately; an expiration without a retained intraday time
 is applied only after its entire New York date, once the payload is available.
+The selected journal date and as-of date are separate, so a prior day's expiry
+can appear once known without assigning it the last fill's date. Unsupported
+eligible revisions remain visible outside the financial totals.
 Recorded context bypasses the full-session cache and sampling plan, reading only
 the existing publication-qualified chain adapter at the selected cutoff. This is
 one snapshot, not a complete premium path; missing exact contracts remain gaps.
+For a later as-of date the reader keeps the original event-day prefix and gates
+publication by the later cutoff; it does not substitute future-session quotes.
 The explicit Full retrospective remains the rollback display. Sync is disabled
 while viewing recorded history so its current summary cannot leak into that view.
 

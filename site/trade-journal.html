@@ -70,6 +70,7 @@ svg{display:block;width:100%}
   <h1>Trade journal</h1>
   <label class="note">Date (America/New_York) <input type="date" id="day"></label>
   <label class="note">View <select id="journal-view"><option value="retrospective">Full retrospective</option><option value="recorded">Recorded as of</option></select></label>
+  <label class="note">As-of date ET <input type="date" id="journal-asof-date"></label>
   <label class="note">Cutoff ET <input type="time" id="journal-cutoff" value="10:00" step="1"></label>
   <button id="load">Load</button>
   <button id="sync">Sync from Notion</button>
@@ -137,6 +138,8 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   const shownDate = () => (data ? data.date : $('day').value);
   const dayInNY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
   $('day').value = dayInNY.format(new Date());
+  $('journal-asof-date').value=$('day').value;
+  $('day').addEventListener('change',()=>{$('journal-asof-date').value=$('day').value;});
   const fillsOnDay = p => p.executions.filter(e => dayInNY.format(T(e.ts)) === shownDate());
   const ctxOf = p => loads.context(shownDate(), p.position_id) || { loading: true };
 
@@ -160,7 +163,7 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
       if($('journal-view').value==='recorded') {
         const parts=$('journal-cutoff').value.split(':').map(Number);
         if(parts.length<2)throw new Error('Choose a cutoff time');
-        cutoff=sessionInstant($('day').value,parts[0],parts[1],parts[2]??0);
+        cutoff=sessionInstant($('journal-asof-date').value,parts[0],parts[1],parts[2]??0);
       }
       // Every load invalidates the preceding source generation, including a
       // switch back to the explicit full retrospective.

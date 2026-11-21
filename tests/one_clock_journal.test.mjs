@@ -5,7 +5,7 @@ import { makeStorage } from './helpers/d1_shim.mjs';
 import { seedJournalSession } from './helpers/journal-session.mjs';
 import { journalSnapshots,projectJournalPosition,journalCutoff } from '../backend/one-clock-journal.js';
 import { journalDay,handleTradeJournalDay,handleTradeJournalRow } from '../backend/trade-journal.js';
-import { handleTradeJournalContext } from '../backend/trade-journal-context.js';
+import { handleTradeJournalContext,journalContextAsOf } from '../backend/trade-journal-context.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
 import { createClock,createSourceRegistry } from '../site/shared/one-clock.js';
 import { journalSource } from '../site/shared/one-clock-journal-source.js';
@@ -54,6 +54,41 @@ test('combinations filter each leg, and expiration has no inferred intraday time
   const expiry={...a,executions:a.executions.slice(0,1),expired_on:day};
   assert.equal(projectJournalPosition(expiry,T).open_qty,2);
   assert.equal(projectJournalPosition(expiry,sessionInstant('2026-11-10',0)).gross_pnl,-600);
+});
+test('unsupported eligible revisions remain explicit and exclude financial totals',async t=>{
+  const db=await setup(t);
+  await record(db,{position_id:id,supported:false,trade_date:day,contract_text:'QQQ combination',unsupported_reason:'Unreadable leg',report:'future essay'},T);
+  const result=await journalDay(db,day,T);
+  assert.equal(result.positions.length,0);assert.equal(result.unsupported.length,1);
+  assert.equal(result.unsupported[0].unsupported_reason,'Unreadable leg');assert.equal(result.unsupported[0].report,undefined);
+});
+test('day route admits later cutoff and attributes single and combination expiry to expiry day',async t=>{
+  const tomorrow=sessionInstant('2026-11-10',0),prior=sessionInstant('2026-11-08',10);
+  const expired={...position([fill('buy',2,3,prior)]),expired_on:day};
+  const sold=position([fill('buy',1,2,prior),fill('sell',1,3,T)]);
+  for(const [p,net] of [[expired,-600.5],[{...expired,legs:[expired,expired]},-1201],[{...expired,legs:[expired,sold]},-501.5]]) {
+    const db=await setup(t);await seedJournalSession(db,'test');await record(db,p,T);
+    const url=new URL(`https://example.test/api/trade-journal?date=${day}&cutoff=${tomorrow}`);
+    const response=await handleTradeJournalDay(new Request(url,{headers:{Cookie:'__Host-journal=test'}}),{DB:db},url);
+    assert.equal(response.status,200);const result=await response.json();
+    assert.equal(result.positions.length,1);assert.equal(result.positions[0].expired_on,day);
+    assert.equal(result.positions[0].closed_ts,null);assert.equal(result.totals.closed_positions,1);
+    assert.equal(result.totals.net,net);
+  }
+});
+test('exact option context renders compatible coverage and gates later publication without changing event-day partition',async()=>{
+  const published=sessionInstant('2026-11-10',0),key='intraday/20261109/snapshot_100000000000.csv';
+  const meta={schema_version:'snapshot_provenance.v1',snapshot_key:key,symbol:'QQQ',constructed_at:new Date(T).toISOString(),
+    latest_published_at:new Date(published).toISOString(),publication:{status:'published'}};
+  const csv='Strike,Type,OpenInterest,Expiration,UnderlyingPrice,OptionSymbol,Bid,Ask\n600,call,10,2026-11-09,600,QQQ261109C00600000,1,2';
+  const bucket={async list({prefix}){assert.equal(prefix,'intraday/20261109/snapshot_');return {objects:[{key:key.replace('.csv','.provenance.json')}],truncated:false};},
+    async get(k){const text=k.endsWith('.csv')?csv:JSON.stringify(meta);return {etag:k,uploaded:new Date(published),size:Buffer.byteLength(text),text:async()=>text};}};
+  const p=projectJournalPosition(position([fill('buy',1,2,T)]),T);
+  let context=await journalContextAsOf({PAPER_TRADES:bucket},p,day,published-1);assert.equal(context.option,null);
+  context=await journalContextAsOf({PAPER_TRADES:bucket},p,day,published);
+  assert.equal(context.option.segments[0].points[0][1],1);
+  assert.equal(context.available_at,published);assert.doesNotThrow(()=>[...context.notes,...context.coverage].join(' '));
+  assert.equal(context.option.segments[0].points[0][0],new Date(T).toISOString());
 });
 test('private routes authorize before any history, cache or archive read',async()=>{
   const env={DB:{prepare(){throw new Error('unauthenticated storage read');}}};
