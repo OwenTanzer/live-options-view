@@ -15,6 +15,9 @@ import requests
 API = 'https://api.tastyworks.com'
 BUDGET = 64
 WINDOW_STRIKES = 11
+SNAPSHOT_BATCH_SIZE = 64
+SNAPSHOT_BATCHES_PER_CYCLE = 4
+SNAPSHOT_MIN_AGE_SECONDS = 30
 
 
 def instant(value):
@@ -110,38 +113,46 @@ class BtcOptions:
 
     def _refresh_cycle(self, feed, token, now):
         self.refresh(feed, token, now)
-        # One bounded REST batch for inspected contracts. Snapshot marks and
-        # prices are display-only and never enter the executable quote map.
+        # Read every listed expiry independently of browser activity. Oldest
+        # attempts go first so repeated provider omissions cannot starve a month.
         with self._lock:
-            keys = [k for k in dict.fromkeys(self.viewport_keys) if k in self.listed and
-                    (k not in self.display_checked or (now - self.display_checked[k]).total_seconds() >= 30)][:BUDGET]
-            symbols = {self.contracts[k]['provider_symbol']: k for k in keys}
-            self.display_checked.update(dict.fromkeys(keys, now))
-        if not keys:
-            return
-        try:
-            query = urlencode([('future-option', symbol) for symbol in symbols])
-            rows = self._read('/market-data/by-type?' + query, token)['items']
-            prices = {}
-            for row in rows:
-                key = symbols.get(row.get('symbol'))
-                if key is None or not instant(row.get('updated-at')):
-                    continue
-                snapshot = {'as_of': row['updated-at']}
-                for side in ('bid', 'ask', 'mark'):
-                    try:
-                        value = float(row.get(side))
-                    except (ValueError, TypeError):
-                        continue
-                    if math.isfinite(value) and value > 0:
-                        snapshot[side] = value
-                prices[key] = snapshot
+            never = datetime.min.replace(tzinfo=timezone.utc)
+            due = sorted((self.display_checked.get(k, never), self.contracts[k]['exp'],
+                          self.contracts[k]['provider_symbol'], k) for k in self.listed
+                         if k not in self.display_checked or
+                         (now - self.display_checked[k]).total_seconds() >= SNAPSHOT_MIN_AGE_SECONDS)
+        limit = SNAPSHOT_BATCH_SIZE * SNAPSHOT_BATCHES_PER_CYCLE
+        for start in range(0, min(len(due), limit), SNAPSHOT_BATCH_SIZE):
+            symbols = {symbol: key for _, _, symbol, key in due[start:start + SNAPSHOT_BATCH_SIZE]}
             with self._lock:
-                for k in keys:
-                    self.display_prices.pop(k, None)
-                self.display_prices.update(prices)
-        except (ValueError, KeyError, requests.RequestException):
-            pass  # The stream and its independent freshness checks remain available.
+                self.display_checked.update(dict.fromkeys(symbols.values(), now))
+            try:
+                self._read_display_batch(symbols, token)
+            except (ValueError, KeyError, requests.RequestException):
+                # Preserve the previous timestamped batch on a failed request.
+                break
+
+    def _read_display_batch(self, symbols, token):
+        query = urlencode([('future-option', symbol) for symbol in symbols])
+        rows = self._read('/market-data/by-type?' + query, token)['items']
+        prices = {}
+        for row in rows:
+            key = symbols.get(row.get('symbol'))
+            if key is None or not instant(row.get('updated-at')):
+                continue
+            snapshot = {'as_of': row['updated-at']}
+            for side in ('bid', 'ask', 'mark'):
+                try:
+                    value = float(row.get(side))
+                except (ValueError, TypeError):
+                    continue
+                if math.isfinite(value) and value > 0:
+                    snapshot[side] = value
+            prices[key] = snapshot
+        with self._lock:
+            for k in symbols.values():
+                self.display_prices.pop(k, None)
+            self.display_prices.update(prices)
 
     def refresh(self, feed, token, now):
         """Called by price lane; discovery failure never tears down its feed."""

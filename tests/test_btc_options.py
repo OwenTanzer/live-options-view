@@ -125,7 +125,7 @@ class BtcTests(unittest.TestCase):
         self.assertEqual([c['strike'] for c in result['contracts']], [85000])
         self.assertIn(held['contract_key'], result['subscribed_keys'])
 
-    def test_inspected_snapshot_is_display_only(self):
+    def test_full_snapshot_is_display_only(self):
         from urllib.parse import parse_qs, urlsplit
         self.product.refresh(self.feed, 'fixture', NOW)
         contract = next(iter(self.product.contracts.values()))
@@ -138,14 +138,36 @@ class BtcTests(unittest.TestCase):
                  'mark': '1.75', 'updated-at': NOW.isoformat()},
                 {'symbol': 'unrequested', 'bid': '999', 'updated-at': NOW.isoformat()}]}
         self.product._read = snapshot
-        self.product.payload([key], [], NOW, expiry='front')
         self.product._refresh_cycle(self.feed, 'fixture', NOW)
         self.product._refresh_cycle(self.feed, 'fixture', NOW)
-        self.assertEqual(batches, [{'future-option': [contract['provider_symbol']]}])
+        self.assertEqual(len(batches), 1)
+        self.assertCountEqual(batches[0]['future-option'], [r['symbol'] for r in self.rows])
         d = self.product.payload([key], [], NOW, expiry='front')
         self.assertEqual(d['display_prices'], {key: {'bid': 1.5, 'mark': 1.75, 'as_of': NOW.isoformat()}})
         self.assertIsNone(d['quotes'][0]['bid'])
         self.assertFalse(d['quotes'][0]['available'])
+
+    def test_all_listings_swept_and_revisited_without_a_viewer(self):
+        from urllib.parse import parse_qs, urlsplit
+        self.rows = [row(80000 + i, side) for i in range(180) for side in ('C', 'P')]
+        self.product.refresh(self.feed, 'fixture', NOW)
+        batches = []
+        def snapshot(path, token):
+            symbols = parse_qs(urlsplit(path).query)['future-option']
+            batches.append(symbols)
+            return {'items': [{'symbol': symbol, 'bid': '4.0', 'updated-at': NOW.isoformat()}
+                              for symbol in symbols]}
+        self.product._read = snapshot
+        for seconds in (0, 10):
+            self.product._refresh_cycle(self.feed, 'fixture', NOW + timedelta(seconds=seconds))
+        self.assertEqual(self.product.viewport_keys, ())
+        self.assertEqual([len(b) for b in batches], [64, 64, 64, 64, 64, 40])
+        self.assertEqual(set(self.product.display_prices), self.product.listed)
+        self.product._refresh_cycle(self.feed, 'fixture', NOW + timedelta(seconds=40))
+        self.assertEqual(batches[0], batches[6])
+        first_load = self.product.payload([], [], NOW + timedelta(seconds=41), expiry='front')
+        self.assertEqual(len(first_load['display_prices']), 360)
+        self.assertEqual(first_load['subscription_count'], 22)
 
     def test_reconnect_invalidates_and_missing_side_does_not_carry(self):
         self.product.refresh(self.feed, 'fixture', NOW)
