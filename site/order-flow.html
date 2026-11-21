@@ -162,6 +162,33 @@
     .profile-legend span {
       flex: 1 1 260px;
     }
+    /* The in-sight key: short glyph + word items that sit on one or two lines. */
+    .profile-legend.key {
+      gap: 4px 18px;
+      font-size: 13px;
+      color: #e8f0ed;
+    }
+    .profile-legend.key span {
+      flex: 0 1 auto;
+    }
+    details.about {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #c1cdd0;
+    }
+    details.about > summary {
+      cursor: pointer;
+      min-height: 24px;
+      color: #aabbbf;
+    }
+    details.about[open] > summary {
+      color: #e8f0ed;
+    }
+    details.about ul {
+      margin: 4px 0 0;
+      padding-left: 18px;
+      line-height: 1.5;
+    }
     #heatmap {
       height: auto;
       margin-top: 4px;
@@ -243,13 +270,25 @@
     <h2 id="profile-title">Strike profile</h2>
     <span id="profile-scale"></span>
     <div id="profile-range" class="gap" hidden><span id="profile-range-message" role="status"></span><details><summary>About this range</summary>This profile covers the strikes present in the selected snapshot.</details></div>
-    <div class="profile-legend">
-      <span><b class="sell">◀ negative</b> / <b class="buy">positive ▶</b> estimated flow gamma: bar = dealer flow S−B at the selected participation; participation scales flow only</span>
-      <span><b class="unknown">▬</b> neutral bar: the scenario endpoints cross zero, so the sign is not determined</span>
-      <span>├┤ both scenario endpoints (unknowns to buyers … to sellers); scenarios, not confidence intervals</span>
-      <span class="muted">▮ settled OI concentration, $ per 1% QQQ, unsigned; settled OI is not known dealer inventory</span>
-      <span class="gap">▨ missing or stale input, never drawn as zero; k/n = contracts covered</span>
+    <!-- Critical Design Theory: the key stays in sight as glyphs + short words; the sentences that
+         explain each mark move into "About this reading", unchanged in substance. -->
+    <div class="profile-legend key">
+      <span><b class="sell">◀ negative</b> / <b class="buy">positive ▶</b> est. flow gamma</span>
+      <span><b class="unknown">▬</b> sign not determined</span>
+      <span>├┤ scenario endpoints</span>
+      <span class="muted">▮ settled OI, unsigned</span>
+      <span class="gap">▨ no coverage, never zero</span>
     </div>
+    <details class="about">
+      <summary>About this reading</summary>
+      <ul>
+        <li><b class="sell">◀ negative</b> / <b class="buy">positive ▶</b> estimated flow gamma: bar = dealer flow S−B at the selected participation; participation scales flow only.</li>
+        <li><b class="unknown">▬</b> neutral bar: the scenario endpoints cross zero, so the sign is not determined.</li>
+        <li>├┤ both scenario endpoints (unknowns to buyers … to sellers); scenarios, not confidence intervals.</li>
+        <li>▮ settled OI concentration, $ per 1% QQQ, unsigned; settled OI is not known dealer inventory.</li>
+        <li>▨ missing or stale input, never drawn as zero; k/n = contracts covered.</li>
+      </ul>
+    </details>
     <canvas
       id="profile"
       tabindex="0"
@@ -260,15 +299,25 @@
     <p id="profile-summary" class="notes"></p>
     <h2 id="heatmap-title">Estimated flow gamma by time and strike</h2>
     <span id="heatmap-scale" class="mono-note"></span>
-    <div class="profile-legend">
-      <span><b class="buy">green positive</b> / <b class="sell">red negative</b> estimated flow gamma (dealer S−B at the selected participation); colour strength = size of the estimate on the labelled scale</span>
-      <span><b>Colour shows the estimate, not confidence:</b> a strong colour can still have an undetermined sign when its scenario endpoints cross zero (see the selected-cell readout or the grey-out option)</span>
-      <span class="gap">▨ missing or stale input in that cell, never drawn as zero</span>
-      <span>blank right of the white cursor: after the displayed time, not shown</span>
-      <span class="gap">┅ QQQ spot from each cell's chain snapshot; breaks where the chain is missing or stale</span>
-      <span>□ outlined cell = selected strike at the displayed time; its scenarios and coverage are listed below</span>
-      <span><label><input type="checkbox" id="hm-uncertain" /> Grey out cells whose scenario endpoints cross zero (sign not determined)</label></span>
+    <div class="profile-legend key">
+      <span><b class="buy">positive</b> / <b class="sell">negative</b> est. flow gamma · strength = size</span>
+      <span class="gap">▨ no coverage, never zero</span>
+      <span class="gap">┅ QQQ spot</span>
+      <span>│ displayed time</span>
+      <span>□ selected</span>
+      <span><label><input type="checkbox" id="hm-uncertain" /> Grey out cells whose sign is not determined</label></span>
     </div>
+    <details class="about">
+      <summary>About this reading</summary>
+      <ul>
+        <li><b class="buy">green positive</b> / <b class="sell">red negative</b> estimated flow gamma (dealer S−B at the selected participation); colour strength = size of the estimate on the labelled scale.</li>
+        <li><b>Colour shows the estimate, not confidence:</b> a strong colour can still have an undetermined sign when its scenario endpoints cross zero (see the selected-cell readout or the grey-out option).</li>
+        <li>▨ missing or stale input in that cell, never drawn as zero.</li>
+        <li>Blank right of the white cursor: after the displayed time, not shown.</li>
+        <li>┅ QQQ spot from each cell's chain snapshot; breaks where the chain is missing or stale.</li>
+        <li>□ outlined cell = selected strike at the displayed time; its scenarios and coverage are listed below.</li>
+      </ul>
+    </details>
     <canvas
       id="heatmap"
       tabindex="0"
@@ -294,6 +343,8 @@
         <tbody id="ladder"></tbody>
       </table>
     </div>
+    <details class="about method">
+    <summary>How these numbers are made</summary>
     <p class="notes">
       Prints are recorded trades. Buy and sell are inferred aggressor sides
       (quote midpoint within one second, else tick rule); unknown volume is
@@ -309,6 +360,7 @@
       older than two minutes or a missing field is shown as no coverage, never
       as zero. Only the captured contracts are covered.
     </p>
+    </details>
   </main>
   <script src="./shared/order-flow-exposure.js"></script>
   <script src="./shared/order-flow-model.js"></script>
