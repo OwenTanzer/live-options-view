@@ -473,3 +473,44 @@ Trainer deployment is separate from API/assets: preserve both QQQ/SPY stores,
 resume states and gateway identity, verify service activity, then update the reviewed
 consumer files through their existing lifecycle. No producer restart, new feed,
 archive write or rewrite of saved decision-state hashes belongs to this slice.
+
+
+## Results across retained sessions
+
+The authenticated `/api/one-clock/results` reader loads an explicit range of at
+most 31 calendar days and one or all registered public instruments. Latest
+retained event revisions, source coverage and rule attempts are gated by the
+same cutoff. A result exceeding 10,000 occurrences or 4 MiB of retained payloads fails
+explicitly before payload retrieval; the complete response is capped at 8 MiB.
+No silent truncation or complete-statistics claim is made. Private namespaces are selected
+from the session, never from query parameters. Historical revisions survive
+later retractions. The separate synthetic fixture remains a separate cohort.
+
+`site/shared/one-clock-results.js` projects one filtered occurrence table. Class,
+version, instrument, collection, outcome state and text search affect that table
+and every count/statistic together. Measurement choices include the rule-local
+outcome and horizon; pooling requires the same source, field, measure, horizon,
+tolerance and maximum age. Incompatible/absent measurements are explicitly
+unscored. Numeric summaries use measured outcomes for mean, median and histogram;
+categorical endpoints retain boolean/string/number types and use measured
+outcomes for counts and rates. Pending/missing rows never enter a denominator.
+
+Configured comparisons report occurrence-weighted A-minus-B mean differences
+(or a chosen category-rate difference in percentage points). One influence sum
+per session preserves covariance between groups sharing a session. The standard
+error uses G/(G-1) times the sum of squared session influence differences. Both
+groups need two measured sessions to estimate between-session uncertainty;
+descriptive estimates are still available earlier. No significance verdict,
+confidence interval or predictive claim is emitted. Independent sessions are an
+assumption; few sessions, serial dependence and adaptive exploration remain
+limitations. This is a direct session-cluster sandwich calculation, following
+the clustering principle described by [Cameron and Miller (2015)](https://facultysites.dss.ucdavis.edu/research/Cameron_Miller_JHR_2015_February.pdf),
+not an assertion that market sessions satisfy its assumptions.
+
+Live refresh retains committed dates/instruments and current filters. Replay
+links carry an exact millisecond trigger cursor to the read-only Historical
+view, without passing archived data into trading globals. A source replay does
+not pretend a later observer receipt existed at trigger time. Missing source
+evidence is shown as unavailable. Roll back this Results API and asset slice
+together to the compatible observer release; it adds no schema migration,
+publisher, cron or KV operation.

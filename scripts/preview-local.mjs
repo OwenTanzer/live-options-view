@@ -89,7 +89,10 @@ export function createPreview({ assetRoot = resolve(ROOT, 'site'), revision = 'l
     PREDICTION_ENVIRONMENT: 'fixtures', PREDICTION_DISPLAY: 'enabled', PREDICTION_ENTRIES: 'enabled',
     PREDICTION_DATA: { async get(key) {
       if (key !== 'prediction/v1/fixtures/current.json') return null;
-      return { json: async () => ({ schema: 'prediction.catalog.v1', markets: [{ ...predictionMarket, book: { ...predictionMarket.book, exchange_ts: new Date().toISOString(), receive_ts: new Date().toISOString() } }] }) };
+      // Model an already-published synthetic snapshot, not a quote created
+      // after execution captured its cutoff before this asynchronous read.
+      const publishedAt = new Date(Date.now() - 1000).toISOString();
+      return { json: async () => ({ schema: 'prediction.catalog.v1', markets: [{ ...predictionMarket, book: { ...predictionMarket.book, exchange_ts: publishedAt, receive_ts: publishedAt } }] }) };
     } } });
   apiEnv.ASSETS = { fetch: async () => new Response('Unknown API route', { status: 404 }) };
   const docs = fixtureDocuments();

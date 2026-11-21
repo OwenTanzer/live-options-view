@@ -150,3 +150,22 @@ export async function observedEventsAsOf(db, { namespace, selection }) {
   return rows.filter(r=>r.state==='active').map(row=>({ ...JSON.parse(row.payload),
     observerRevision:row.revision,recordedAt:row.recorded_at,correctionBatch:row.batch_id }));
 }
+
+export async function observedEventsRangeAsOf(db,{namespace,from,to,instruments,cutoff}) {
+  boundedText(namespace,'namespace');instant(cutoff);
+  if(!Array.isArray(instruments)||instruments.length<1||instruments.length>3)throw new Error('result instrument bound');
+  // Drive from the session scope index, then look up one eligible revision per
+  // occurrence. Unrelated historical sessions are not scanned for a range read.
+  const scope=`FROM one_clock_events e INDEXED BY one_clock_event_scope
+    CROSS JOIN one_clock_event_history h ON h.namespace=e.namespace AND h.event_id=e.event_id
+    WHERE e.namespace=? AND e.session>=? AND e.session<=? AND e.instrument IN (${instruments.map(()=>'?').join(',')}) AND e.origin='recorded'
+    AND h.revision=(SELECT MAX(h2.revision) FROM one_clock_event_history h2 WHERE h2.namespace=e.namespace AND h2.event_id=e.event_id AND h2.recorded_at<=?)
+    ORDER BY e.session,e.event_id LIMIT 10001`;
+  const args=[namespace,from,to,...instruments,cutoff];
+  const size=await bind(db,`SELECT COUNT(*) AS n,COALESCE(SUM(bytes),0) AS bytes FROM (SELECT length(CAST(h.payload AS BLOB)) AS bytes ${scope})`,...args).first();
+  if(size.n>10000||size.bytes>4*1024*1024)throw new Error('result exceeds scope byte/occurrence bound; choose fewer sessions');
+  const rows=await list(bind(db,`SELECT h.* ${scope}`,...args));
+  if(rows.reduce((n,r)=>n+new TextEncoder().encode(r.payload).byteLength,0)>4*1024*1024)throw new Error('result exceeds scope byte bound; choose fewer sessions');
+  if(rows.length>10000)throw new Error('result exceeds scope bound; choose fewer sessions');
+  return rows.filter(r=>r.state==='active').map(row=>({...JSON.parse(row.payload),observerRevision:row.revision,recordedAt:row.recorded_at,correctionBatch:row.batch_id}));
+}
