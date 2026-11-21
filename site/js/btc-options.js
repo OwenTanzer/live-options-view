@@ -26,7 +26,7 @@ const btcOptions = {
     const generation = this.generation, request = ++this.request, username = session.username;
     try {
       const query = new URLSearchParams();
-      if (this.expiry) query.set('expiry', this.expiry);
+      if (this.active) query.set('expiry', this.expiry || 'front');
       const visible = [...document.querySelectorAll('.btc-contract')].filter(el => {
         const rect = el.getBoundingClientRect();
         return rect.bottom > 0 && rect.top < window.innerHeight;
@@ -34,7 +34,7 @@ const btcOptions = {
       if (ticketEl?.dataset.btc) visible.unshift(ticketEl.dataset.btc);
       if (visible.length) query.set('symbols', [...new Set(visible)].slice(0, 64).join(','));
       const response = await fetch('/api/btc-options' + (query.size ? '?' + query : ''), { credentials: 'same-origin', cache: 'no-store' });
-      const data = await response.json();
+      const data = response.ok ? await response.json() : await response.json().catch(() => ({}));
       if (generation !== this.generation || request !== this.request || session?.username !== username) return;
       this.quotes.clear();
       if (!response.ok) {
@@ -54,7 +54,9 @@ const btcOptions = {
       renderPaper();
     } catch (error) {
       if (generation !== this.generation || request !== this.request) return;
-      this.quotes.clear(); this.data = null;
+      this.quotes.clear();
+      if (this.access) this.data = null;
+      else if (this.data) this.data = { ...this.data, quotes: [], subscribed_keys: [], session: 'unavailable' };
       this.error = error.message;
       this.render();
       this.refreshTicket(); renderPaper();
@@ -128,12 +130,12 @@ const btcOptions = {
     return q[side];
   },
   mark(symbol) { return this.side(symbol, 'bid'); },
-  reason(symbol, action) {
+  reason(symbol, action, book) {
     const side = action === 'buy' ? 'ask' : 'bid', q = this.quotes.get(symbol);
     if (!sessionVerified || !session) return 'Sign in to trade';
     if (this.access) return 'No authorized data source for this session';
     if (pendingExecutions.has(symbol)) return 'Order pending';
-    if (action === 'sell' && !(computeBook()[symbol]?.pos >= 1)) return 'No position to close';
+    if (action === 'sell' && !((book || computeBook())[symbol]?.pos >= 1)) return 'No position to close';
     if (action === 'buy' && !this.data?.entries_enabled) return 'New entries disabled';
     if (action === 'buy' && !this.data?.entry_keys?.includes(symbol)) return 'Not in active monthly series';
     if (!q || !q.available) return 'Quote unavailable';
@@ -171,19 +173,28 @@ const btcOptions = {
       button.title = reason || this.clockLabel(sym, side);
     }
   },
+  centerRows(root, data) {
+    const rows = [...root.querySelectorAll('.btc-strike-row')];
+    const nearest = rows.reduce((a, b) => Math.abs(a.dataset.strike - data.center) <= Math.abs(b.dataset.strike - data.center) ? a : b);
+    nearest.scrollIntoView({ block: 'center' });
+    this.pendingCenterY = data.center_from_future === false ? window.scrollY : null;
+  },
   updateCoverage(listed) {
     const label = document.querySelector('.btc-coverage');
     if (!label) return;
+    const status = document.querySelector('.btc-status p');
+    status.textContent = this.error || `${this.data.session} · Paper · USD/BTC · Ask buys / bid closes`;
     const subscribed = new Set(this.data.subscribed_keys);
     const count = listed.filter(c => subscribed.has(c.contract_key)).length;
     const fresh = listed.filter(c => ['ask', 'bid'].some(side => this.side(c.contract_key, side) != null)).length;
     label.textContent = ` ${listed.length} listed · ${count} subscribed · ${fresh} fresh`;
   },
   updateActions() {
+    const book = computeBook();
     for (const row of document.querySelectorAll('.btc-contract')) {
       const sym = row.dataset.symbol;
       for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
-        const price = this.side(sym, side), reason = this.reason(sym, action);
+        const price = this.side(sym, side), reason = this.reason(sym, action, book);
         const button = row.querySelector('.btc-' + action);
         button.disabled = !!reason || price == null;
         const q = this.quotes.get(sym), raw = q?.[side];
@@ -205,11 +216,20 @@ const btcOptions = {
     const listed = (data?.contracts || []).filter(c => !data.expiry || c.exp === data.expiry);
     const book = computeBook();
     const layout = JSON.stringify([this.owner, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
+    const sameExpiry = data?.expiry && root.dataset.expiry === data.expiry && root.querySelector('.btc-series');
     if (data && root.dataset.layout === layout && root.querySelector('.btc-series')) {
       this.updateActions();
       this.updateCoverage(listed);
+      if (this.pendingCenterY != null && window.scrollY !== this.pendingCenterY) this.pendingCenterY = null;
+      if (this.pendingCenterY != null && data.center_from_future) this.centerRows(root, data);
       return;
     }
+    const anchor = sameExpiry && [...root.querySelectorAll('.btc-strike-row')].find(row => {
+      const rect = row.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < window.innerHeight;
+    });
+    const anchorTop = anchor && anchor.getBoundingClientRect().top;
+    root.dataset.expiry = data?.expiry || '';
     root.dataset.layout = layout;
     root.replaceChildren();
     const element = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; el.textContent = text; return el; };
@@ -275,7 +295,7 @@ const btcOptions = {
       const q = this.quotes.get(c.contract_key), row = element('article', 'btc-contract', '');
       row.dataset.symbol = c.contract_key;
       row.dataset.type = c.type;
-      const held = computeBook()[c.contract_key]?.pos || 0;
+      const held = book[c.contract_key]?.pos || 0;
       const position = element('span', 'btc-position', held > 0 ? `Owned: ${held}` : 'No open position');
       if (!held) position.className += ' btc-sr';
       row.appendChild(position);
@@ -319,9 +339,12 @@ const btcOptions = {
     if (!data.contracts?.length) root.append('No verified standard monthly contracts available.');
     this.updateActions();
     this.updateCoverage(listed);
-    if (data.center && listed.length) {
-      const rows = [...root.querySelectorAll('.btc-strike-row')];
-      rows.reduce((a, b) => Math.abs(a.dataset.strike - data.center) <= Math.abs(b.dataset.strike - data.center) ? a : b).scrollIntoView({block: 'center'});
+    if (!sameExpiry) {
+      this.pendingCenterY = null;
+      if (data.center && listed.length) this.centerRows(root, data);
+    } else if (anchor) {
+      const replacement = root.querySelector(`.btc-strike-row[data-strike="${anchor.dataset.strike}"]`);
+      if (replacement) window.scrollBy(0, replacement.getBoundingClientRect().top - anchorTop);
     }
     if (focused) [...root.querySelectorAll('[data-btc-action]')].find(el => el.dataset.symbol === focused.symbol && el.dataset.btcAction === focused.btcAction)?.focus({ preventScroll: true });
   },

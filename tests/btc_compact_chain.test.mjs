@@ -104,6 +104,67 @@ try {
           assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
         }
       }
+      if (width === 375) {
+        // Exercise the ordinary signed-in API and polling path at production chain size.
+        const months = ['2026-11-27', '2026-12-24'];
+        const listings = months.map((exp, month) => Array.from({ length: 414 }, (_, i) => ({
+          ...scenario.payload.contracts[0], exp, strike: 10000 + Math.floor(i / 2) * 1000,
+          type: i % 2 ? 'put' : 'call', contract_key: 'BTCOPT:' + (month * 414 + i).toString(16).padStart(40, '0')
+        })));
+        let outage = false, marketCenter = false;
+        global.fetch = async (url, opts) => {
+          const u = new URL(url);
+          if (u.pathname !== '/btc-options') return fixtureNetwork(url, opts);
+          if (outage) return new Response('', { status: 503 });
+          const month = u.searchParams.get('expiry') === months[1] ? 1 : 0;
+          const contracts = listings[month];
+          const keys = new Set((u.searchParams.get('symbols') || '').split(','));
+          const quotes = contracts.filter(c => keys.has(c.contract_key)).map(c => ({
+            ...scenario.payload.quotes[0], contract: c, symbol: c.contract_key,
+            ask_ts: new Date(scenario.now).toISOString(), ask_received_ts: new Date(scenario.now).toISOString()
+          }));
+          return Response.json({ ...scenario.payload, contracts, quotes, entry_keys: contracts.map(c => c.contract_key),
+            expiry: months[month], expiries: months, subscribed_keys: quotes.map(q => q.symbol),
+            center: marketCenter ? 59000 : 113000, center_from_future: marketCenter });
+        };
+        try {
+          await page.reload();
+          const rows = page.locator('.btc-strike-row');
+          await page.waitForFunction(() => document.querySelectorAll('.btc-strike-row').length === 207);
+          assert.deepEqual(new Set(await page.locator('.btc-contract').evaluateAll(els => els.map(el => el.dataset.symbol))),
+            new Set(listings[0].map(c => c.contract_key)));
+          marketCenter = true;
+          await page.evaluate(() => btcOptions.refresh());
+          const center = await rows.nth(49).boundingBox();
+          assert.ok(center.y >= 0 && center.y + center.height <= 667);
+          for (const row of [rows.first(), rows.last()]) {
+            await row.scrollIntoViewIfNeeded();
+            const top = await row.evaluate(el => el.getBoundingClientRect().top);
+            await page.evaluate(() => btcOptions.refresh());
+            assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
+            outage = true;
+            await page.evaluate(() => btcOptions.refresh());
+            assert.equal(await row.locator('.btc-buy').first().isDisabled(), true);
+            outage = false;
+            await page.evaluate(() => btcOptions.refresh());
+            assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
+            const leg = row.locator('.btc-contract').first();
+            await leg.locator('.btc-buy').click();
+            assert.equal(await page.locator('#trade-ticket').getAttribute('data-btc'), await leg.getAttribute('data-symbol'));
+            await page.evaluate(() => closeTicket());
+          }
+          marketCenter = false;
+          await page.getByLabel('Standard monthly expiry').selectOption(months[1]);
+          await page.waitForFunction(exp => btcOptions.data.expiry === exp, months[1]);
+          await rows.first().scrollIntoViewIfNeeded();
+          const top = await rows.first().evaluate(el => el.getBoundingClientRect().top);
+          marketCenter = true;
+          await page.evaluate(() => btcOptions.refresh());
+          assert.equal(await rows.first().evaluate(el => el.getBoundingClientRect().top), top);
+        } finally {
+          global.fetch = async (url, opts) => new URL(url).pathname === '/btc-options' ? Response.json(scenario.payload) : fixtureNetwork(url, opts);
+        }
+      }
       assert.deepEqual(errors,[]);
       console.log(`PASS ${width}x667: ${rects.filter(r=>r.complete).length} COMPLETE distinct strike rows, paired calls/puts, correct buy/owned close tickets, stale denial, empty legs, no overflow`);
     } finally { await context.close(); preview.close(); }
