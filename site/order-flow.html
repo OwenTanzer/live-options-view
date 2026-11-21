@@ -101,6 +101,12 @@
     footer {
       border-top: 1px solid #314047;
     }
+    #strike-nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; background: #091115; border-block: 1px solid #405359; }
+    #strike-nav[hidden], #sim-jump[hidden] { display: none; }
+    #strike-range { font-variant-numeric: tabular-nums; }
+    #strike-nav button[aria-pressed="true"] { color: #62e3bd; border-color: #62e3bd; }
+    #strike-nav input { width: clamp(80px, 18vw, 220px); }
+    body.strike-navigation canvas:first-of-type { touch-action: none; }
     #state,
     #fresh {
       font-family: monospace;
@@ -221,6 +227,7 @@
         <select id="source">
           <option value="live">Live</option>
           <option value="replay">Archive replay</option>
+          <option value="simulation">Simulation · 30-point move</option>
         </select></label
       ><span id="state" role="status"></span
       ><label
@@ -244,6 +251,14 @@
       ><span>Area = contracts</span><span class="gap">▨ No coverage</span>
     </div>
     <span id="fresh"></span>
+    <div id="strike-nav" hidden aria-label="Strike navigation">
+      <button id="follow-spot" aria-pressed="true">Follow QQQ</button>
+      <label>Strike <input id="strike-center" type="range" min="0" max="0" value="0" /></label>
+      <button id="zoom-out" aria-label="Zoom out to more strikes">−</button>
+      <button id="zoom-in" aria-label="Zoom in to fewer strikes">+</button>
+      <span id="strike-range"></span>
+      <button id="sim-jump" hidden>Move QQQ $30</button>
+    </div>
     <canvas
       aria-label="Prints by time and strike over the last minute to the displayed time. Select a print or strike to inspect it."
     ></canvas
@@ -363,6 +378,8 @@
     </details>
   </main>
   <script src="./shared/order-flow-exposure.js"></script>
+  <script src="./shared/order-flow-window.js"></script>
+  <script src="./shared/order-flow-simulation.js"></script>
   <script src="./shared/order-flow-model.js"></script>
   <script src="./shared/order-flow-render.js"></script>
   <script src="./shared/order-flow-profile.js"></script>
@@ -411,7 +428,48 @@
       dirty = true,
       tableAt = 0,
       forceTable = true;
-    const live = () => el("source").value === "live";
+    const live = () => el("source").value !== "replay";
+    const simulation = () => el("source").value === "simulation";
+    const strikeWindow = createStrikeWindow();
+    const simScale = PF.liveScale(null);
+    let allPrices = [], windowView = null, simStep = 0;
+    function repaint() { dirty = forceTable = true; }
+    function simulationTick() {
+      ({feed, chain} = simulateOrderFlow(simStep, Date.now()));
+      liveRows = feed.rows;
+      status = "Simulated market";
+      repaint();
+    }
+    el("sim-jump").onclick = () => { simStep = simStep % 60 < 30 ? 30 : 0; simulationTick(); };
+    el("follow-spot").onclick = () => { strikeWindow.resume(); selected = null; el("details").textContent = "Tap a print or a strike to inspect it."; repaint(); };
+    el("strike-center").oninput = e => { strikeWindow.goTo(allPrices[allPrices.length - 1 - Number(e.target.value)]); repaint(); };
+    el("zoom-in").onclick = () => { strikeWindow.zoom(-1); repaint(); };
+    el("zoom-out").onclick = () => { strikeWindow.zoom(1); repaint(); };
+    function navigateWheel(e) {
+      if (!live() || !allPrices.length || !e.deltaY) return;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) strikeWindow.zoom(Math.sign(e.deltaY));
+      else strikeWindow.pan(Math.sign(e.deltaY) * Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 45))));
+      repaint();
+    }
+    for (const chart of [canvas, el("profile")]) chart.addEventListener("wheel", navigateWheel, {passive:false});
+    let drag = null, suppressTap = false;
+    canvas.addEventListener("pointerdown", e => {
+      if (!live() || !e.isPrimary || e.button !== 0) return;
+      suppressTap = false;
+      drag = {y: e.clientY, center: windowView?.center, id: e.pointerId};
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener("pointermove", e => {
+      if (!drag || e.pointerId !== drag.id || drag.center == null) return;
+      const pixels = e.clientY - drag.y;
+      if (Math.abs(pixels) < 6 && !suppressTap) return;
+      suppressTap = true;
+      const offset = Math.round(pixels * (windowView.prices.length - 1) / Math.max(1, canvas.clientHeight - 66));
+      strikeWindow.goTo(allPrices[Math.max(0, Math.min(allPrices.length - 1, drag.center - offset))]);
+      repaint();
+    });
+    canvas.addEventListener("lostpointercapture", () => { drag = null; });
     const part = () => Number(el("participation").value);
     const clock = (t) =>
       new Date(t).toLocaleTimeString("en-US", {
@@ -470,9 +528,23 @@
         bottom = h - 36,
         start = end - 60000,
         visible = visiblePrints(start, end);
-      const strikes = view && view.strikes.length
+      allPrices = view && view.strikes.length
         ? view.strikes.map((s) => s.strike)
         : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
+      const spot = live() && view?.snapshot && !view.snapshot.stale ? chain?.underlying_price : null;
+      windowView = live() ? strikeWindow.update(allPrices, spot) : null;
+      const strikes = windowView ? windowView.prices : allPrices;
+      if (windowView) {
+        el("follow-spot").setAttribute("aria-pressed", String(windowView.follow));
+        const slider = el("strike-center");
+        slider.max = Math.max(0, allPrices.length - 1);
+        slider.value = allPrices.length - 1 - (windowView.center || 0);
+        slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
+        el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
+        el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
+        el("strike-range").textContent = strikes.length ? (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
+          " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
+      }
       const high = strikes[0],
         low = strikes[strikes.length - 1];
       const strikeY = (strike) =>
@@ -509,7 +581,13 @@
         ctx.fillStyle = "#f2c96b22";
         ctx.fillRect(x0, top - 10, Math.max(2, x1 - x0), bottom - top + 20);
       }
+      if (Number.isFinite(spot) && spot >= low && spot <= high) {
+        const y = strikeY(spot);
+        ctx.strokeStyle = "#f2c96b"; ctx.setLineDash([4, 3]); ctx.beginPath();
+        ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke(); ctx.setLineDash([]);
+      }
       for (const p of visible) {
+        if (p.strike < low || p.strike > high) continue;
         const x = left + ((right - left) * (p.t - start)) / 60000,
           y = strikeY(p.strike),
           a = 8 * p.size,
@@ -538,14 +616,14 @@
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + " · " + visible.length + " prints in view";
+      el("state").textContent = status + " · " + hits.length + " prints in view";
       if (forceTable || performance.now() - tableAt > 1000) {
         el("fresh").textContent = freshnessText(view);
         el("profile-summary").textContent = PF.profileSummary(view, part(), scale, selected, clock, money);
         el("heatmap-cell").textContent = heatCellText();
         const focused = document.activeElement?.dataset?.strike;
         renderTable();
-        if (focused) el("ladder").querySelector(`tr[data-strike="${focused}"]`)?.focus();
+        if (focused) el("ladder").querySelector(`tr[data-strike="${focused}"]`)?.focus({preventScroll:true});
         tableAt = performance.now();
         forceTable = false;
       }
@@ -560,21 +638,26 @@
         return;
       }
       const day = feed && feed.session && feed.session.day;
-      const s = view ? liveScale.update(view, day, Date.now()) : null;
+      const s = view ? (simulation() ? simScale : liveScale).update(view, day, Date.now()) : null;
       scale = s || { flow: 0, conc: 0 };
       el("profile-scale").textContent = s
-        ? "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
+        ? simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
         : "Scale: waiting for session history";
     }
 
     // Enlarged, zero-centred strike profile at the displayed time (Brian, step 1).
+    function displayedView() {
+      if (!view || !windowView) return view;
+      const visible = new Set(windowView.prices);
+      return {...view, strikes: view.strikes.filter(s => visible.has(s.strike))};
+    }
     function drawProfile() {
       const pc = el("profile"),
         g = pc.getContext("2d"),
         w = pc.clientWidth,
         narrow = w < 560,
         p = part(),
-        rows = PF.profileRows(view, p, scale),
+        rows = PF.profileRows(displayedView(), p, scale),
         rowH = narrow ? 30 : 34,
         top = 50,
         h = top + Math.max(1, rows.length) * rowH + 8,
@@ -701,9 +784,9 @@
         // The collector fixes the day's contracts at the open, so a large move
         // can leave spot outside every recorded strike. Say so in words, not
         // only as a small label on the chart's edge.
-        if (spot > ks[0] || spot < ks[ks.length - 1]) {
+        if (spot > allPrices[0] || spot < allPrices.at(-1)) {
           el("profile-range-message").textContent = "QQQ " + spot.toFixed(2) + " is " + (spot > ks[0] ? "above" : "below") +
-            " every strike in this snapshot (" + ks[ks.length - 1] + "–" + ks[0] + ").";
+            " every strike in this snapshot (" + allPrices.at(-1) + "–" + allPrices[0] + ").";
           rangeNote.hidden = false;
         }
         let y = null;
@@ -912,11 +995,15 @@
         p = part();
       el("table-title").textContent =
         "Estimated dealer gamma by strike at " + clock(end) + " ET · " + (p === 1 ? "100%" : "50%") + " passive participation";
-      body.innerHTML = R.ladderRowsHtml(view, p, selected);
+      body.innerHTML = R.ladderRowsHtml(displayedView(), p, selected);
       if (selected != null) inspect(selected, false);
     }
 
     function inspect(strike, announce = true) {
+      if (live() && announce && windowView) {
+        strikeWindow.goTo(windowView.prices.includes(strike) ? allPrices[windowView.center] : strike);
+        repaint();
+      }
       selected = strike;
       if (!view) return;
       const s = view.strikes.find((r) => r.strike === strike);
@@ -1000,6 +1087,7 @@
       }
     };
     canvas.onclick = (e) => {
+      if (suppressTap) { suppressTap = false; return; }
       const b = canvas.getBoundingClientRect(),
         cx = e.clientX - b.left,
         cy = e.clientY - b.top;
@@ -1092,10 +1180,25 @@
       selected = null;
       dirty = forceTable = true;
       const isLive = live();
+      strikeWindow.reset();
+      windowView = null; allPrices = [];
+      el("strike-nav").hidden = !isLive;
+      el("sim-jump").hidden = !simulation();
+      document.body.classList.toggle("strike-navigation", isLive);
       document.querySelector("footer").style.display = isLive ? "none" : "flex";
       el("mode").textContent = isLive ? "QQQ · Live feed" : "Archive replay · September 25, 2026";
       el("details").textContent = "Tap a print or a strike to inspect it.";
-      history.replaceState(null, "", isLive ? "?source=live" : "?source=replay");
+      history.replaceState(null, "", "?source=" + el("source").value);
+      if (simulation()) {
+        el("mode").textContent = "QQQ · Simulation";
+        simStep = 0; simulationTick();
+        const advance = () => {
+          if (generation !== gen) return;
+          simStep++; simulationTick(); timers.push(setTimeout(advance, 1500));
+        };
+        timers.push(setTimeout(advance, 1500));
+        return;
+      }
       if (!isLive) {
         status = "Loading archive";
         try {
@@ -1158,7 +1261,8 @@
       readFeed();
       readChain();
     }
-    el("source").value = new URLSearchParams(location.search).get("source") === "replay" ? "replay" : "live";
+    const initialSource = new URLSearchParams(location.search).get("source");
+    el("source").value = ["simulation", "replay"].includes(initialSource) ? initialSource : "live";
     el("source").onchange = changeSource;
     window.addEventListener("resize", () => (dirty = true));
     changeSource();
