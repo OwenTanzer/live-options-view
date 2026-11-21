@@ -306,6 +306,23 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"<tbody><tr", body)
         self.assertIn(b"FIXTURE1", body)
+
+        sample_url = page + "?view=treu-sample"
+        self.assertEqual(self.get(port, sample_url, host, session)[0], 404)
+        sample_dir = self.archive / "samples" / "treu"
+        sample_dir.mkdir(parents=True)
+        sample_event = {"kind": "publication", "id": "TREU-ONLY", "publisher": "Tradeweb",
+                        "channel": "TREU", "source": "tradeweb-uk-mtf-treu", "jurisdiction": "UK",
+                        "qualification": "Unclassified sample"}
+        (sample_dir / "events.jsonl").write_text(json.dumps(sample_event) + "\n")
+        self.assertNotIn(b"TREU-ONLY", self.get(port, sample_url, host)[1])
+        live_page = self.get(port, page, host, session)[1]
+        self.assertIn(b"?view=treu-sample", live_page)
+        self.assertNotIn(b"TREU-ONLY", live_page)
+        sample_page = self.get(port, sample_url, host, session)[1]
+        self.assertIn(b"TREU-ONLY", sample_page)
+        self.assertNotIn(b"FIXTURE1", sample_page)
+
         self.assertIn(b"5M+", body)
         self.assertIn("no-store", response.getheader("Cache-Control"))
         with (self.archive / "events.jsonl").open("ab") as f:

@@ -50,7 +50,7 @@ SITE_PREFIX = "/credit-tape"
 SESSION_COOKIE = "__Host-cds-session"
 FLOW_COOKIE = "__Host-cds-flow"
 GITHUB_ISSUER = "https://github.com/login/oauth"
-RAW_REF = re.compile(r"^[a-z0-9-]{1,40}/raw/\d{4}-\d{2}-\d{2}/[0-9A-Za-z.+_-]{1,80}\.(json\.gz|zip)$")
+RAW_REF = re.compile(r"^[a-z0-9-]{1,40}/raw/\d{4}-\d{2}-\d{2}/[0-9A-Za-z.+_-]{1,80}\.(json\.gz|csv\.gz|zip)$")
 # Slice CSV headers -> the ticker's field names used by the panel summary.
 CSV_ALIASES = {"notionalAmountLeg1": "Notional amount-Leg 1", "notionalCurrencyLeg1": "Notional currency-Leg 1",
                "underlierIDLeg1": "Underlier ID-Leg 1", "underlyingAssetName": "Underlying Asset Name",
@@ -242,7 +242,12 @@ def panel_event(line, seq):
     rec = ev.pop("record", None) or {}
     ev["seq"] = seq
     summary = {}
-    for k, alias in CSV_ALIASES.items():
+    aliases = CSV_ALIASES
+    if ev.get("source") == "tradeweb-uk-mtf-treu":
+        aliases = {"notionalAmountLeg1": "Notional amount", "notionalCurrencyLeg1": "Notional currency",
+                   "productName": "Instrument identification code", "expirationDate": "Maturity date of the contract",
+                   "price": "Price"}
+    for k, alias in aliases.items():
         v = rec.get(k, rec.get(alias))
         if v not in (None, ""):
             summary[k] = v
@@ -513,8 +518,13 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             q = parse_qs(url.query)
             try:
                 if site and url.path == "/":
-                    events, cursor = read_table_window(settings.archive)
-                    return self.reply(200, render_table(events, cursor), "text/html; charset=utf-8")
+                    sample = settings.archive / "samples" / "treu"
+                    has_sample = (sample / "events.jsonl").is_file()
+                    sample_view = q.get("view") == ["treu-sample"]
+                    if sample_view and not has_sample:
+                        return self.reply(404, b"Sample unavailable")
+                    events, cursor = read_table_window(sample if sample_view else settings.archive)
+                    return self.reply(200, render_table(events, cursor, has_sample, sample_view), "text/html; charset=utf-8")
                 if site and url.path in ("/table.css", "/table.js"):
                     kind = "text/css" if url.path.endswith(".css") else "text/javascript"
                     return self.reply(200, (STATIC / url.path[1:]).read_bytes(), kind)
@@ -531,9 +541,10 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                     ref = q.get("ref", [""])[0]
                     blob = read_raw(settings.archive, ref)
                     is_zip = ref.endswith(".zip")
-                    return self.reply(200, blob, "application/zip" if is_zip else "application/json", headers=[
+                    media = "text/csv" if ref.endswith(".csv.gz") else "application/json"
+                    return self.reply(200, blob, "application/zip" if is_zip else media, headers=[
                         ("X-Original-SHA256", hashlib.sha256(blob).hexdigest()),
-                        ("Content-Disposition", f'{"attachment" if is_zip else "inline"}; filename="{Path(ref).name if is_zip else Path(ref).name[:-3]}"')])
+                        ("Content-Disposition", f'{"attachment" if is_zip or ref.endswith(".csv.gz") else "inline"}; filename="{Path(ref).name if is_zip else Path(ref).name[:-3]}"')])
                 if url.path == "/api/export":
                     blob = export_events(settings.archive, q.get("from", [""])[0], q.get("to", [""])[0])
                     return self.reply(200, blob, "application/x-ndjson", headers=[

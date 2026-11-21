@@ -27,8 +27,8 @@
       const notional = [s.notionalAmountLeg1, s.notionalCurrencyLeg1].filter(Boolean).join(" ");
       tr.append(
         cell(t(ev.first_seen)),
-        cell(`${ev.source.replace("dtcc-", "").replace("-credits", "").toUpperCase()} · ${ev.jurisdiction}${ev.route ? " · " + ev.route : ""}`),
-        cell(ev.action + (ev.restored ? " (backfill · restored)" : ev.replay ? " (replay)" : ev.backfill ? " (backfill)" : ""),
+        cell(`${ev.publisher || ev.source} · ${ev.jurisdiction}${ev.channel ? " · " + ev.channel : ""}${ev.qualification ? " · " + ev.qualification : ""}${ev.route ? " · " + ev.route : ""}`),
+        cell((ev.action || "—") + (ev.restored ? " (backfill · restored)" : ev.replay ? " (replay)" : ev.backfill ? " (backfill)" : ""),
              ev.backfill || ev.replay ? "dim" : ""),
         cell(t(ev.execution_ts)),
         cell(t(ev.dissemination_ts)),

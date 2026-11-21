@@ -1,4 +1,5 @@
 const q = document.querySelector('#q');
+const publisher = document.querySelector('#pub');
 const channel = document.querySelector('#ch');
 const action = document.querySelector('#act');
 let rows = [];
@@ -6,7 +7,8 @@ function filter() {
   const terms = q.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
   let count = 0;
   for (const {row, text} of rows) {
-    row.hidden = Boolean((channel.value && row.dataset.channel !== channel.value) ||
+    row.hidden = Boolean((publisher.value && row.dataset.publisher !== publisher.value) ||
+      (channel.value && row.dataset.channel !== channel.value) ||
       (action.value && row.dataset.action !== action.value) || !terms.every(term => text.includes(term)));
     if (!row.hidden) count++;
   }
@@ -17,7 +19,7 @@ function index() {
   rows = [...document.querySelectorAll('tbody tr')].map(row => ({
     row, text: ([...row.cells].map(c => c.innerText).join(' ') + ' ' + row.dataset.search).toLowerCase()
   }));
-  for (const [select, key] of [[channel, 'channel'], [action, 'action']]) {
+  for (const [select, key] of [[publisher, 'publisher'], [channel, 'channel'], [action, 'action']]) {
     const saved = select.value;
     const values = new Set(rows.map(item => item.row.dataset[key]));
     if (saved) values.add(saved);
@@ -30,7 +32,7 @@ async function refresh() {
   if (!document.hidden) {
     const status = document.querySelector('#status');
     try {
-      const response = await fetch('/credit-tape/', {cache:'no-store',redirect:'error'});
+      const response = await fetch('/credit-tape/' + location.search, {cache:'no-store',redirect:'error'});
       if (!response.ok) throw new Error();
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
       const main = doc.querySelector('main[data-cursor]');
@@ -54,6 +56,7 @@ async function refresh() {
   setTimeout(refresh, 60000);
 }
 q.addEventListener('input', filter);
+publisher.addEventListener('change', filter);
 channel.addEventListener('change', filter);
 action.addEventListener('change', filter);
 document.querySelector('#controls').hidden = false;
