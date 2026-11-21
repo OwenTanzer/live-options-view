@@ -6,17 +6,19 @@ import { validSession,sessionAt } from '../site/shared/one-clock-session.js';
 import { registerObservedRule,observeBatch,observedEventsAsOf } from './one-clock-observer.js';
 import { ingestPublicSource,ingestedAsOf } from './one-clock-ingestion.js';
 import { publicIngestionSources } from './one-clock-ingestion-sources.js';
+import {advanceNativePublications,nativePublicationSources,nativeScopeRecords,retainNativeCoverage,nativeHandoffExists} from './one-clock-publication-sources.js';
+import {handoffSource} from './one-clock-handoff.js';
 import { equitySession,observerSessions } from './one-clock-calendar.js';
 const stmt=(db,sql,...args)=>db.prepare(sql).bind(...args);
 const list=async s=>(await s.all()).results;
-export const researchFields=Object.freeze(Object.assign({},...publicIngestionSources.map(source=>source.fields)));
-const instruments=[...new Set(publicIngestionSources.flatMap(source=>source.instruments))];
+export const researchFields=Object.freeze(Object.assign({},...nativePublicationSources.map(s=>Object.fromEntries(Object.entries(s.outputs).map(([source,fields])=>[source,Object.fromEntries(Object.keys(fields).map(field=>[field,s.fields?.[source]?.[field]??field]))]))),...publicIngestionSources.map(source=>source.fields)));
+const instruments=[...new Set([...publicIngestionSources,...nativePublicationSources].flatMap(source=>source.instruments))];
 function validatedRule(input) {
   const rule=eventRule(input);
   if(rule.id.length>100||rule.name.length>120||rule.instruments.length>3||rule.instruments.some(i=>!instruments.includes(i)))throw new Error('unsupported rule scope');
   for(const c of [...rule.conditions,...rule.outcomes]) {
     if(!Object.hasOwn(researchFields,c.source)||!Object.hasOwn(researchFields[c.source],c.field))throw new Error('This input is not yet available to the public observer.');
-    if(rule.instruments.some(instrument=>!publicIngestionSources.some(source=>source.outputs.includes(c.source)&&source.instruments.includes(instrument))))throw new Error('Input unavailable for a selected instrument');
+    if(rule.instruments.some(instrument=>![...publicIngestionSources,...nativePublicationSources].some(source=>(Array.isArray(source.outputs)?source.outputs.includes(c.source):Object.hasOwn(source.outputs,c.source))&&source.instruments.includes(instrument))))throw new Error('Input unavailable for a selected instrument');
     if(c.maxAgeMs>86400000||(c.horizonMs??0)>86400000||(c.toleranceMs??0)>86400000)throw new Error('rule time bound');
   }
   return rule;
@@ -96,9 +98,13 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
   }
 }
 
-export async function advanceOneClockResearch(env,{now=Date.now(),sources=publicIngestionSources}={}) {
+export async function advanceOneClockResearch(env,{now=Date.now(),sources=publicIngestionSources,publicationSources=nativePublicationSources}={}) {
   if(env.ONE_CLOCK_OBSERVER!=='enabled')return [];
   const db=env.DB,[day,previous]=observerSessions(now);
+  if(env.ONE_CLOCK_PUBLICATIONS!=='enabled'&&await nativeHandoffExists(db))return [{state:'paused',reason:'Native handoff history exists. Re-enable its consumer or perform an explicit reverse handoff before legacy evaluation.'}];
+  // Capture progress is independent of how many accounts have active rules.
+  // Existing invocation only; no additional feed, schedule or tenant ingestion.
+  const publicationProgress=await advanceNativePublications(env,{now,descriptors:publicationSources});
   // Keep pending measurements after deactivation. Existing intervals retain
   // history; they never cause the evaluator to retract an old accepted event.
   // Recover from the capped active set, not lifetime definition history.
@@ -119,10 +125,29 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
     try {
       const key=JSON.stringify([job.session,job.instrument]);
       if(!reads.has(key))reads.set(key,(async()=>{
-        const coverage=[];
-        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument)))coverage.push(await ingestPublicSource(db,env.PAPER_TRADES,adapter,{session:job.session,instrument:job.instrument,now,
-          collection:job.session===day?'prospective':'backfill'}));
-        return {coverage,records:await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now})};
+        const coverage=[],owners=new Map();
+        if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
+          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
+            currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
+          if(!native)continue;
+          coverage.push(native.coverage);await retainNativeCoverage(db,native.coverage);
+          if(!native.coverage.indexComplete)continue;
+          for(const source of Object.keys(descriptor.outputs)) {
+            if(owners.has(source))throw new Error('multiple native source owners');
+            owners.set(source,{descriptor,native});
+          }
+        }
+        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument))) {
+          if(adapter.outputs.every(source=>owners.get(source)?.descriptor.supersedes?.[source]===adapter.id))continue;
+          coverage.push(await ingestPublicSource(db,env.PAPER_TRADES,adapter,{session:job.session,instrument:job.instrument,now,collection:job.session===day?'prospective':'backfill'}));
+        }
+        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
+        const records=legacy.filter(r=>!owners.has(r.source));
+        for(const [source,{descriptor,native}] of owners) {
+          if(!descriptor.supersedes?.[source]&&legacy.some(r=>r.source===source))throw new Error('native source needs explicit supersession');
+          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now}));
+        }
+        return {coverage,records};
       })());
       const data=await reads.get(key);
       if(data.coverage.some(c=>!c.indexComplete||c.pending>0)) {

@@ -1,7 +1,7 @@
 // Dormant library: the owning integration supplies registered public streams.
 // No timers, active registry, scheduler hook, credentials or KV operations.
 import {instant} from '../site/shared/one-clock.js';
-import {validSession} from '../site/shared/one-clock-session.js';
+import {validSession,sessionAt} from '../site/shared/one-clock-session.js';
 import {PUBLICATION_LIMITS,publicationStream,publicationKey,decodePublication} from './one-clock-publication-contract.js';
 const stmt=(db,sql,...args)=>db.prepare(sql).bind(...args);
 const encoder=new TextEncoder();
@@ -45,8 +45,10 @@ export async function ingestPublicationStream(db,bucket,descriptor,{instrument,n
   // entries, corrections and checkpoint changes commit atomically with CAS.
   for(const entry of completed) {
     statements.push(stmt(db,'INSERT INTO one_clock_publication_entries(stream,sequence,publication_id,digest,available_at,received_at,payload) VALUES(?,?,?,?,?,?,?)',stream,entry.sequence,entry.publicationId,entry.digest,entry.availableAt,now,entry.payload));
+    const currentSession=descriptor.sessionBasis==='new-york'?sessionAt(now):new Date(now).toISOString().slice(0,10);
+    const rows=entry.rows.map(row=>({...row,details:{...row.details,observerCollection:prior&&row.availableAt>prior.updated_at&&row.eventAt>prior.updated_at&&row.session===currentSession?'prospective':'backfill'}}));
     statements.push(stmt(db,`INSERT INTO one_clock_publication_records(stream,source,record_id,revision,session,instrument,event_at,available_at,received_at,sequence,payload)
-      SELECT ?,json_extract(value,'$.source'),json_extract(value,'$.id'),json_extract(value,'$.revision'),json_extract(value,'$.session'),json_extract(value,'$.instrument'),json_extract(value,'$.eventAt'),json_extract(value,'$.availableAt'),?,?,value FROM json_each(?)`,stream,now,entry.sequence,JSON.stringify(entry.rows)));
+      SELECT ?,json_extract(value,'$.source'),json_extract(value,'$.id'),json_extract(value,'$.revision'),json_extract(value,'$.session'),json_extract(value,'$.instrument'),json_extract(value,'$.eventAt'),json_extract(value,'$.availableAt'),?,?,value FROM json_each(?)`,stream,now,entry.sequence,JSON.stringify(rows)));
   }
   await db.batch(statements);
   return coverage;

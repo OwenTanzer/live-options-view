@@ -3,8 +3,9 @@ import {instant} from '../site/shared/one-clock.js';
 import {validSession,sessionAt,sessionInstant} from '../site/shared/one-clock-session.js';
 import {equitySession} from './one-clock-calendar.js';
 import {publicIngestionSources} from './one-clock-ingestion-sources.js';
+import {nativePublicationSources,markPendingNativeEvidence,nativeHandoffExists} from './one-clock-publication-sources.js';
 import {observedEventsRangeAsOf} from './one-clock-observer.js';
-const instruments=[...new Set(publicIngestionSources.flatMap(s=>s.instruments))];
+const instruments=[...new Set([...publicIngestionSources,...nativePublicationSources].flatMap(s=>s.instruments))];
 const query=(db,sql,...args)=>db.prepare(sql).bind(...args).all().then(r=>r.results);
 
 export async function handleOneClockResults(request,env,url=new URL(request.url)) {
@@ -38,7 +39,10 @@ export async function handleOneClockResults(request,env,url=new URL(request.url)
         evaluation.push(byAttempt.get(JSON.stringify([session,instrument,rule.id,rule.version]))??{session,instrument,rule_id:rule.id,version:rule.version,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'});
       }
     }
-    const body=JSON.stringify({owner:auth.username,session:from+'/'+to,instrument,cutoff,events,rules:definitions,coverage:coverage.map(r=>({...r,coverage:JSON.parse(r.coverage)})),evaluation,origin:'recorded'});
+    const paused=env.ONE_CLOCK_PUBLICATIONS!=='enabled'&&await nativeHandoffExists(db);
+    const currentEvaluation=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation,cutoff):evaluation;
+    const observerNotice=paused?'Current service state: native observation is paused. Historical receipts and retained results are unchanged; an explicit reverse handoff is required before legacy evaluation.':null;
+    const body=JSON.stringify({owner:auth.username,session:from+'/'+to,instrument,cutoff,events,rules:definitions,coverage:coverage.map(r=>({...r,coverage:JSON.parse(r.coverage)})),evaluation:currentEvaluation,observerNotice,origin:'recorded'});
     if(new TextEncoder().encode(body).byteLength>8*1024*1024)throw new Error('Result scope exceeds response byte bound; choose fewer sessions.');
     return new Response(body,{headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   }catch(error){

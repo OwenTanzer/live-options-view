@@ -61,6 +61,14 @@ failure, restart, duplicate delivery, late outcome, correction rewind, concurren
 generation and namespace isolation. D1's batch transaction behavior and service
 limits are documented by [Cloudflare](https://developers.cloudflare.com/d1/platform/limits/).
 
+Native public ingestion additionally requires reviewed migrations `0011` and
+`0012` and `ONE_CLOCK_PUBLICATIONS=enabled`. It runs in the same observer invocation,
+independently of account count. Source-specific handoffs preserve legacy identities
+and collection lineage; disabling native ingestion after cutover pauses evaluation
+instead of implicitly resetting to legacy identities. Older native corrections
+are retained and Results disclose pending reevaluation; automatic historical
+reevaluation remains separate work. See the [publication contract](../docs/ONE_CLOCK_PUBLICATIONS.md).
+
 The live-quote route proxies the collector's in-memory feed. Archive reads use
 stored R2 artifacts; the public site's archive-base selection is explained in
 [Architecture](../ARCHITECTURE.md#browser-and-data-boundaries).
