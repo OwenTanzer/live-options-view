@@ -91,15 +91,17 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   const db=env.DB,[day,previous]=observerSessions(now);
   // Keep pending measurements after deactivation. Existing intervals retain
   // history; they never cause the evaluator to retract an old accepted event.
-  // Recover directly from definitions after any number of missed invocations.
+  // Recover from the capped active set, not lifetime definition history.
+  // CROSS JOIN preserves the indexed active-first plan. Paused definitions
+  // already retain their activation-created jobs for maturing same-day outcomes.
   // Existing jobs are excluded before LIMIT so recovery progresses fairly.
   await stmt(db,`INSERT INTO one_clock_evaluation_work(namespace,session,instrument)
-    SELECT DISTINCT r.namespace,d.value,i.value FROM one_clock_rules r
-    JOIN one_clock_activations a ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
+    SELECT DISTINCT r.namespace,d.value,i.value FROM one_clock_activations a INDEXED BY one_clock_one_active_version
+    CROSS JOIN one_clock_rules r ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
     JOIN json_each(r.payload,'$.instruments') i JOIN json_each(json_array(?,?)) d
-    WHERE a.started_at<=MIN(?,CASE WHEN d.value=? THEN ? ELSE ? END) AND (a.ended_at IS NULL OR a.ended_at>=?)
+    WHERE a.ended_at IS NULL AND a.started_at<=MIN(?,CASE WHEN d.value=? THEN ? ELSE ? END)
     AND NOT EXISTS(SELECT 1 FROM one_clock_evaluation_work w WHERE w.namespace=r.namespace AND w.session=d.value AND w.instrument=i.value)
-    ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,equitySession(day).close,equitySession(previous).close,equitySession(previous).open).run();
+    ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,equitySession(day).close,equitySession(previous).close).run();
   // Two accounts/four rules each per invocation; shared source reads are memoized.
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
   const reads=new Map(),results=[];let statementBudget=800;
