@@ -90,3 +90,19 @@ test('Kalshi login uses the same tab and an allowlisted return key', async () =>
   assert.match(link, /\?return=kalshi"/);
   assert.doesNotMatch(link, /target=/);
 });
+
+test('TREU table and validated original CSV reference reach the fixed credit origin', async t => {
+  let forwarded;
+  t.mock.method(globalThis, 'fetch', async url => {
+    forwarded = new URL(url).search;
+    return new Response('fixture', {headers: {'Content-Disposition': 'attachment', 'X-Original-SHA256': 'fixture'}});
+  });
+  const base = 'https://options.moopertonic.net/credit-tape/';
+  for (const query of ['?view=treu', '?view=treu-sample', '?view=treu&file=UK_TREU_20261120_1730.csv&sha=' + 'a'.repeat(64)]) {
+    const response = await creditTape(new Request(base + query));
+    assert.equal(forwarded, query);
+    assert.equal(response.headers.get('Content-Disposition'), 'attachment');
+  }
+  await creditTape(new Request(base + '?view=treu&unexpected=1'));
+  assert.equal(forwarded, '');
+});

@@ -22,13 +22,17 @@ export async function creditTape(request) {
   const cookies = (request.headers.get('Cookie') || '').split(';').map(value => value.trim())
     .filter(value => /^__Host-cds-(session|flow)=/.test(value));
   if (cookies.length) headers.set('Cookie', cookies.join('; '));
-  const query = url.pathname.endsWith('/callback') ? url.search : '';
+  let query = url.pathname.endsWith('/callback') ? url.search : '';
+  if (url.pathname === '/credit-tape/' &&
+      /^\?view=(?:treu-sample|treu(?:&file=UK_TREU_\d{8}_\d{4}\.csv&sha=[a-f0-9]{64})?)$/.test(url.search)) {
+    query = url.search;
+  }
   const upstream = await fetch(CREDIT_ORIGIN + url.pathname + query, {
     method: request.method, headers, redirect: 'manual', cache: 'no-store'
   });
   const outgoing = new Headers({'Cache-Control': 'private, no-store', 'Vary': 'Cookie'});
   for (const name of ['Content-Type', 'Content-Security-Policy', 'X-Content-Type-Options',
-    'Referrer-Policy', 'X-Frame-Options', 'Location']) {
+    'Referrer-Policy', 'X-Frame-Options', 'Location', 'Content-Disposition', 'X-Original-SHA256']) {
     if (upstream.headers.has(name)) outgoing.set(name, upstream.headers.get(name));
   }
   for (const cookie of upstream.headers.getSetCookie()) {
