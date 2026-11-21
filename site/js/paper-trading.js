@@ -502,7 +502,9 @@ function renderPaper() {
       const market = t.bid != null && t.ask != null ? ` [${fmtQ(t.bid)} × ${fmtQ(t.ask)}]` : '';
       const order = t.order_type === 'limit' ? ` limit ${fmtQ(t.limit_price)}` : ' market';
       const orderId = t.order_id ? ` · order ${t.order_id}` : '';
-      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${instrumentLabel(t)} @ ${fmtQ(t.price)}${market} ·${order}${orderId}${t.note ? ` (${t.note})` : ''}${t.instrument_type === 'futures_option' ? ` · simulated · cash ${fmtMoney(t.cash_delta)} · fee $${t.fees.toFixed(2)} · source ${escapeHtml(t.quote_ts || t.settlement_mark?.published_at || '—')} · sizes ${t.source_quote?.bid_size ?? '—'} × ${t.source_quote?.ask_size ?? '—'}` : ''}</div>`;
+      const btcClock = t.settlement_mark ? 'official final published' : t.quote_clock_basis === 'observed_side_change'
+        ? 'observed side change (not exchange time)' : t.quote_clock_basis === 'provider' ? 'provider side time' : 'legacy source time';
+      return `<div>${time} ET · ${t.side.toUpperCase()} ${t.qty} ${instrumentLabel(t)} @ ${fmtQ(t.price)}${market} ·${order}${orderId}${t.note ? ` (${t.note})` : ''}${t.instrument_type === 'futures_option' ? ` · simulated · cash ${fmtMoney(t.cash_delta)} · fee $${t.fees.toFixed(2)} · ${btcClock} ${escapeHtml(t.quote_ts || t.settlement_mark?.published_at || '—')} · sizes ${t.source_quote?.bid_size ?? '—'} × ${t.source_quote?.ask_size ?? '—'}` : ''}</div>`;
     }).join('') || '<div>No trades yet.</div>';
 
   document.getElementById('user-name').textContent = session.username;

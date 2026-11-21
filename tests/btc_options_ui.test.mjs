@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { computeBookFromTrades } from '../backend/common.js';
+import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 
 const now = Date.parse('2026-11-21T18:00:00Z'), sym = 'BTCOPT:' + 'a'.repeat(40);
 const c = { future_symbol: '/BTCX6', future_month: '2026-11', contract_key: sym, strike: 90000,
@@ -50,3 +51,14 @@ const server = computeBookFromTrades(trades)[sym];
 for (const field of ['pos', 'avg', 'realized', 'realized_gross', 'fees', 'open_fees']) assert.equal(client[field], server[field], field);
 assert.equal(client.realized, 95);
 console.log('PASS BTC UI side availability, selection races, held refresh and client/server fee parity');
+
+for (const s of btcClockScenarios()) {
+  context.Date = class extends Date { static now() { return s.now; } };
+  btc.data = s.payload;
+  const row = s.payload.quotes[0]; btc.quotes.set(row.symbol, row);
+  for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
+    assert.equal(btc.side(row.symbol, side) != null, s[action], `${s.name}/${side}`);
+    if (s[action]) assert.match(btc.clockLabel(row.symbol, side), /observed side change/);
+  }
+}
+console.log('PASS actual collector wire scenarios agree with UI eligibility and provenance');

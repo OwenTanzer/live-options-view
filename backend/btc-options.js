@@ -24,6 +24,29 @@ export function validBtcContract(c, key = c?.contract_key) {
     /^\d{4}-\d{2}-\d{2}$/.test(c.exp) && Number.isFinite(Date.parse(c.expires_at)) &&
     Number.isFinite(Date.parse(c.stops_trading_at));
 }
+export function btcExecutionClock(row, side, now = Date.now()) {
+  const receipt = Date.parse(row[side + '_received_ts']);
+  const fresh = t => Number.isFinite(t) && now - t >= -1000 && now - t <= 15000;
+  if (!fresh(receipt)) return null;
+  const source = row[side + '_ts'];
+  // A present stale/future source time cannot be bypassed via the fallback.
+  if (source != null) {
+    const ts = Date.parse(source);
+    return fresh(ts) ? { at: source, source_at: source, basis: 'provider' } : null;
+  }
+  const c = row[side + '_change'];
+  if (!c || c.schema !== 'observed_side_change.v1' || !/^[0-9a-f]{32}$/.test(row.stream_epoch || '') ||
+      c.stream_epoch !== row.stream_epoch) return null;
+  const ts = Date.parse(c.at), baseline = Date.parse(c.baseline_at), prior = Date.parse(c.previous_received_at);
+  if (!fresh(ts) || !Number.isFinite(baseline) || !Number.isFinite(prior) ||
+      !(baseline <= prior && prior < ts && ts <= receipt)) return null;
+  if (![c.baseline_sequence, c.previous_sequence, c.sequence].every(Number.isSafeInteger) ||
+      !(0 < c.baseline_sequence && c.baseline_sequence <= c.previous_sequence && c.previous_sequence < c.sequence)) return null;
+  if (![c.previous_price, c.previous_size, c.price, c.size].every(v => Number.isFinite(v) && v >= 0) ||
+      c.price !== row[side] || c.size !== row[side + '_size'] ||
+      (c.previous_price === c.price && c.previous_size === c.size)) return null;
+  return { at: c.at, source_at: null, basis: 'observed_side_change' };
+}
 export function exactBtcQuote(payload, intent, now = Date.now()) {
   const row = payload?.quotes?.find(q => q.symbol === intent.sym);
   const c = row?.contract;
@@ -33,14 +56,14 @@ export function exactBtcQuote(payload, intent, now = Date.now()) {
   if (now >= Date.parse(c.stops_trading_at)) return fail('Contract expired');
   if (intent.side === 'buy' && !payload.entry_keys?.includes(intent.sym)) return fail('Contract is not in the active monthly series');
   const side = intent.side === 'buy' ? 'ask' : 'bid';
-  const ts = Date.parse(row[side + '_ts']);
-  const receipt = Date.parse(row[side + '_received_ts']);
-  if (![ts, receipt].every(t => Number.isFinite(t) && now - t >= -1000 && now - t <= 15000)) return fail('Executable side is stale or untimed');
+  const clock = btcExecutionClock(row, side, now);
+  if (!clock) return fail('Executable side is stale or untimed');
   if (!(Number.isFinite(row[side]) && row[side] > 0 && Number.isFinite(row[side + '_size']) && row[side + '_size'] >= 1)) return fail('Executable side has no price or size');
   if (Number.isFinite(row.bid) && Number.isFinite(row.ask) && row.bid > row.ask) return fail('Crossed book');
   if (row.available !== true) return fail('Quote unavailable after disconnect or maintenance');
   return { bid: row.bid, ask: row.ask, strike: c.strike, type: c.type, exp: c.exp, multiplier: 5,
-    contract: structuredClone(c), quoteTs: row[side + '_ts'], bidTs: row.bid_ts, askTs: row.ask_ts,
+    contract: structuredClone(c), quoteTs: clock.at, quote_clock_basis: clock.basis,
+    quote_source_ts: clock.source_at, bidTs: row.bid_ts, askTs: row.ask_ts,
     source_quote: structuredClone(row), fees: BTC_FEE, fee_model: 'btc-paper-flat-2.50-per-side-v1' };
 }
 export function heldBtc(record) {
@@ -52,26 +75,21 @@ export async function fetchBtc(env, record, symbols = []) {
   url.searchParams.set('symbols', symbols.join(','));
   url.searchParams.set('held', JSON.stringify(heldBtc(record).map(c => c.provider_symbol)));
   return fetch(url, { headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY },
-    redirect: 'error', signal: AbortSignal.timeout(10000), cf: { cacheTtl: 0, cacheEverything: false } });
+    redirect: 'manual', signal: AbortSignal.timeout(10000), cf: { cacheTtl: 0, cacheEverything: false } });
 }
 export async function handleBtcOptions(request, env) {
   const session = await requireSession(request, env);
   if (!session) return jsonResponse({ error: 'Sign in required' }, 401);
-  // Existing holders retain management when entries/read discovery is disabled.
-  const held = heldBtc(session.record);
-  if (!btcAllowed(env, session.username) && !held.length) return jsonResponse({ error: 'BTC options access not enabled' }, 403);
+  // Holdings are not a market-data entitlement. Entries may be disabled
+  // independently while an entitled owner continues to manage positions.
+  if (!btcAllowed(env, session.username)) return jsonResponse({ error: 'BTC options access not enabled' }, 403);
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
   try {
     const response = await fetchBtc(env, session.record, symbols);
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
-    const entries = btcAllowed(env, session.username) && env.BTC_OPTIONS_ENTRIES === '1';
-    const allowed = new Set(held.map(c => c.contract_key));
-    if (!btcAllowed(env, session.username)) {
-      data.contracts = (data.contracts || []).filter(c => allowed.has(c.contract_key));
-      data.quotes = (data.quotes || []).filter(q => allowed.has(q.symbol));
-    }
+    const entries = env.BTC_OPTIONS_ENTRIES === '1';
     return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: BTC_FEE,
       fee_model: 'Simulated $2.50 per contract per side; $0 expiration fee' }, 200);
   } catch { return jsonResponse({ error: 'BTC source unavailable' }, 503); }

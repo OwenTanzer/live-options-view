@@ -189,7 +189,7 @@ class BtcOptions:
         streams = [c['streamer_symbol'] for c in chosen]
         if active and active[0].get('future_streamer_symbol'):
             streams.append(active[0]['future_streamer_symbol'])
-        self.feed.replace_btc_subscriptions(streams)
+        self.feed.replace_btc_subscriptions(streams, option_symbols=[c['streamer_symbol'] for c in chosen])
         self.selected = {c['contract_key'] for c in chosen}
         self.subscription_count = len(chosen)
 
@@ -205,9 +205,7 @@ class BtcOptions:
             selected = getattr(self, 'selected', set())
             contracts = [self.contracts[k] for k in selected if k in self.contracts]
             requested = symbols or [c['contract_key'] for c in contracts]
-            health = self.feed.get_health() if self.feed else {}
-            ready = all(health.get(k) for k in ('connected', 'authorized', 'channel_open'))
-            state = self.feed.get_state() if ready else {}
+            ready, state, diagnostics = self.feed.get_btc_snapshot() if self.feed else (False, {}, {})
             quotes, unavailable = [], {}
             for key in requested:
                 c = self.contracts.get(key)
@@ -216,14 +214,18 @@ class BtcOptions:
                     continue
                 raw = state.get(c['streamer_symbol'], {})
                 q = {'symbol': key, 'contract': c, 'source': 'tastytrade/dxlink',
-                     'available': ready and session(now) == 'open'}
+                     'stream_epoch': raw.get('btc_stream_epoch'),
+                     'available': ready and session(now) == 'open'
+                     and raw.get('btc_stream_epoch') == diagnostics.get('stream_epoch')}
                 for side in ('bid', 'ask'):
                     q[side] = raw.get(side)
                     q[side + '_size'] = raw.get(side + '_size')
                     q[side + '_ts'] = raw.get(side + '_observed_at')
                     q[side + '_received_ts'] = raw.get(side + '_ts')
+                    q[side + '_change'] = raw.get(side + '_change')
                 quotes.append(q)
             return {'contracts': contracts, 'quotes': quotes, 'entry_keys': self.entries,
                     'unavailable': unavailable, 'session': session(now), 'source_status': self.status,
                     'subscription_count': self.subscription_count, 'subscription_budget': BUDGET,
+                    'wire_time_diagnostics': diagnostics,
                     'server_ts': now.isoformat()}
