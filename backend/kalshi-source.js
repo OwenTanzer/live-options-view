@@ -13,7 +13,7 @@ export async function publicRead(env, path) {
   await budget(env, 'provider-day', 2000, 86400000);
   await budget(env, 'provider-minute', 60, 60000);
   const start = Date.now();
-  const response = await fetch(KALSHI_API + path, { method: 'GET', cache: 'no-store', redirect: 'error',
+  const response = await fetch(KALSHI_API + path, { method: 'GET', cache: 'no-store', redirect: 'manual',
     headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(5000) });
   if (!response.ok) throw Error('Kalshi public source unavailable');
   const data = JSON.parse(await readLimited(response, 1000000));

@@ -63,7 +63,7 @@ test('owner introspection forwards only opaque session; disabled and preview nev
   assert.equal((await r.json()).enabled,false); assert.match(r.headers.get('Cache-Control'),/private, no-store/);
   assert.deepEqual(Object.keys(f.requests[0].options.headers).sort(),['Accept','Cookie']);
   assert.equal(f.requests[0].options.headers.Cookie,COOKIE);
-  assert.equal(f.requests[0].options.redirect,'error');
+  assert.equal(f.requests[0].options.redirect,'manual');
   assert.equal((await handleKalshi(request('market',{market:TICKER}),env)).status,503);
   await kalshiTick(env); assert.equal(f.requests.filter(x=>!x.url.startsWith(CREDIT_ORIGIN)).length,0);
   env.ENVIRONMENT='preview'; assert.equal((await handleKalshi(request('status'),env)).status,404);
@@ -177,4 +177,16 @@ test('failed evidence persistence never debits; revoked identity cannot replay a
   env.DB.db.prepare('DELETE FROM kalshi_budget WHERE scope = ?').run('archive');
   const b=intent(); assert.equal((await order(env,b)).status,201);
   f.identity=OWNER_ID+1; assert.equal((await order(env,b)).status,401);
+}));
+
+test('edge requests expose redirects to callers and reject them without following', async () => scenario(async env => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    assert.equal(options.redirect, 'manual');
+    calls.push(url);
+    return new Response(null, { status: 302, headers: { Location: 'https://example.invalid/' } });
+  };
+  assert.equal((await handleKalshi(request('status'), env)).status, 401);
+  await assert.rejects(fetchMarket(env, TICKER), /source unavailable/);
+  assert.equal(calls.length, 2);
 }));
