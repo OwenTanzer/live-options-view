@@ -979,6 +979,12 @@
   #squeeze-table.squeeze-stale tbody { filter: saturate(0.3); }
   #squeeze-table.squeeze-stale #squeeze-caption { color: #e8c84b; }
   .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
+  @media (max-width: 600px) {
+    #squeeze-table { table-layout: fixed; min-width: 0; font-size: 0.76rem; }
+    #squeeze-table th, #squeeze-table td { padding: 5px 3px; overflow-wrap: anywhere; }
+    #squeeze-table .squeeze-score { white-space: normal; }
+    .squeeze-bar { display: block; width: 32px; margin: 0 0 3px auto; }
+  }
   .squeeze-new-badge {
     background: #167a3f;
     color: #fff;
@@ -1845,7 +1851,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/squeeze-panel.js?v=c6408fcc55edf18a"></script>
+<script src="js/squeeze-panel.js?v=73884d45dae17759"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────

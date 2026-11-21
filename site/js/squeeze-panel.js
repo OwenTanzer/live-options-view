@@ -100,9 +100,10 @@ function renderSqueezePanel() {
     // Keep the last-rendered table rather than blanking it on a transient
     // fetch error -- the same "don't paint over good data" rule
     // renderBots' roster-error handling follows.
-    statusEl.textContent = `scanner unavailable — ${squeezeError} · showing last known`;
-    statusEl.dataset.state = 'stale';
-    renderSqueezeTruth('stale', 'scanner unreachable');
+    statusEl.textContent = `scanner unavailable — ${squeezeError}` + (squeezePointer ? ' · showing last known' : ' · no scan available');
+    statusEl.dataset.state = squeezePointer ? 'stale' : 'unavailable';
+    renderSqueezeTruth(squeezePointer ? 'stale' : 'unavailable', 'scanner unreachable');
+    if (!squeezePointer) tbody.innerHTML = '<tr><td colspan="6" class="squeeze-empty">Scan unavailable. Retry when the scanner can be reached.</td></tr>';
     return;
   }
 

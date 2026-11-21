@@ -42,6 +42,11 @@ const finished = {run_id:'morning',status:'finished',acquisition_status:'complet
 const reset = () => { responses = {'latest.json':response(morning),'latest-attempt.json':response(morning),
   'latest-schedule.json':response(finished),'squeeze-calendar.json':response(calendar)}; };
 (async () => {
+  responses = { 'latest.json': new Error('offline') };
+  await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state, 'unavailable');
+  assert.doesNotMatch(el('squeeze-status').textContent, /showing last known/);
+  assert.match(el('squeeze-tbody').innerHTML, /Scan unavailable/);
   reset(); await panel.fetchSqueezeLatest();
   assert.equal(el('squeeze-status').dataset.state,'live');
   assert.match(el('squeeze-tbody').innerHTML,/AAA/);
