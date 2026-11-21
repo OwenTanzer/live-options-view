@@ -99,6 +99,21 @@ async function runScheduled(env) {
   return { waits, lines, records: outcomeRecords(lines) };
 }
 
+test('catalog failure cannot block or alter the settlement outcome',async()=>{
+  const env=await envWith([]);env.ONE_CLOCK_CATALOG='enabled';
+  const {records,waits,lines}=await runScheduled(env);
+  assert.equal(waits.length,2);
+  assert.equal(assertEnvelope(records).phase,'completed');
+  assert.ok(lines.some(line=>line.text.includes('one_clock_catalog_failed')));
+});
+test('cutover fence prevents catalog scheduling as well as settlement',async()=>{
+  const env=await envWith([]);env.ONE_CLOCK_CATALOG='enabled';
+  await env.DB.prepare('INSERT INTO migration_state(name,value) VALUES(?,?)').bind('fence',JSON.stringify({armed:true})).run();
+  const {records,waits,lines}=await runScheduled(env);
+  assert.equal(waits.length,0);assert.equal(assertEnvelope(records).no_op_reason,'cutover_fence');
+  assert.equal(lines.some(line=>line.text.includes('one_clock_catalog_failed')),false);
+});
+
 function assertEnvelope(records) {
   assert.equal(records.length, 2, 'exactly one invoked and one terminal record');
   const [first, last] = records;

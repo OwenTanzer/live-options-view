@@ -24,7 +24,7 @@ export function fixture() {
 export function envFixture() {
   const env = withD1({ KALSHI_PERSONAL_ENABLED: '1', KALSHI_ENTRIES: '1',
     PAPER_TRADES: new Proxy({}, { get() { throw Error('Kalshi must not touch R2'); } }) });
-  env.DB.db.exec(readFileSync(new URL('../../backend/migrations/0005_kalshi_private.sql', import.meta.url), 'utf8'));
+  env.DB.db.exec(readFileSync(new URL('../../backend/migrations/0006_kalshi_private.sql', import.meta.url), 'utf8'));
   return env;
 }
 export function network(f) {

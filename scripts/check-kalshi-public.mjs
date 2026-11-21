@@ -5,7 +5,7 @@ import { FakeD1 } from '../tests/helpers/d1_shim.mjs';
 import { discover, fetchMarket, displayMarket } from '../backend/kalshi-source.js';
 if (process.argv.slice(2).join(' ') !== '--personal-read-only') throw Error('Use --personal-read-only only under the member’s explicit source-read authority');
 const db=new FakeD1();
-db.db.exec(readFileSync(new URL('../backend/migrations/0005_kalshi_private.sql',import.meta.url),'utf8'));
+db.db.exec(readFileSync(new URL('../backend/migrations/0006_kalshi_private.sql',import.meta.url),'utf8'));
 try {
   const env={DB:db,KALSHI_PERSONAL_ENABLED:'1'}, d=await discover(env);
   const m=d.markets[0]; if(!m) throw Error('No supported open markets in bounded discovery');

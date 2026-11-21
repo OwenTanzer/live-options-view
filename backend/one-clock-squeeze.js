@@ -3,6 +3,8 @@
 import { jsonResponse } from './common.js';
 import { instant,observation } from '../site/shared/one-clock.js';
 import { validSession,sessionAt,sessionInstant } from '../site/shared/one-clock-session.js';
+import { publicationCatalogPage } from './one-clock-source-catalog.js';
+import { squeezeCatalog } from './one-clock-catalog-sources.js';
 const PREFIX='squeeze-scanner/v1/scheduled/';
 const UUID='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const RECEIPT=new RegExp('^'+PREFIX+'publication-attempts/('+UUID+')/('+UUID+')/(started|finished|failed)\\.json$');
@@ -11,10 +13,10 @@ async function hash(text) {
   const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
   return [...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('');
 }
-export async function readSqueezePublications(bucket,{session,instrument,cutoff}) {
+export async function readSqueezePublications(bucket,{session,instrument,cutoff},{catalog=null}={}) {
   const start=sessionInstant(session,0),candidates=[],attempts=new Map();let cursor,complete=false,lists=0,gets=0,bytes=0,indexQualified=true;
   do {
-    const page=await bucket.list({prefix:PREFIX+'publication-attempts/',limit:1000,...(cursor?{cursor}:{})});lists++;
+    const page=catalog??await bucket.list({prefix:PREFIX+'publication-attempts/',limit:1000,...(cursor?{cursor}:{})});lists++;
     for(const item of page.objects) {
       const match=RECEIPT.exec(item.key),at=stamp(item.uploaded?.toISOString());
       if(match && at===null)indexQualified=false;
@@ -25,9 +27,10 @@ export async function readSqueezePublications(bucket,{session,instrument,cutoff}
     }
     complete=!page.truncated;cursor=page.truncated?page.cursor:null;
   }while(cursor && lists<2);
-  const coverage={indexComplete:complete,publicationComplete:false,lists,gets,bytes,
-    basis:'successful-publication-receipt',origin:'recorded',reason:null};
-  if(!complete || !indexQualified || candidates.length>20)return {rows:[],coverage:{...coverage,reason:!indexQualified?'publication-time-unavailable':!complete?'publication-index-bound':'publication-candidate-bound'}};
+  const coverage={indexComplete:complete,publicationComplete:false,lists:catalog?0:lists,indexQueries:catalog?1:0,gets,bytes,
+    basis:'successful-publication-receipt',origin:'recorded',reason:null,
+    indexBasis:catalog?'durable-session-catalog':'bounded-direct-list',catalogCompleteThrough:catalog?.completeThrough??null};
+  if(!complete || !indexQualified || candidates.length>20)return {rows:[],coverage:{...coverage,reason:catalog?.reason??(!indexQualified?'publication-time-unavailable':!complete?'publication-index-bound':'publication-candidate-bound')}};
   // The pointer is advanced BEFORE finished.json is written. An interrupted
   // or failed publication may therefore have changed it. Older unresolved
   // attempts remain a conservative gap; don't guess that they were harmless.
@@ -101,6 +104,9 @@ export async function handleOneClockSqueeze(request,env,url) {
        !validSession(scope.session) || !/^[A-Z][A-Z0-9.-]{0,14}$/.test(scope.instrument??'') ||
        sessionAt(instant(scope.cutoff))!==scope.session || scope.cutoff>Date.now()+60000)throw new Error();
   }catch{return jsonResponse({error:'invalid shortlist scope'},400);}
-  try {return jsonResponse(await readSqueezePublications(env.PAPER_TRADES,scope),200);}
+  try {
+    const catalog=env.ONE_CLOCK_CATALOG==='enabled'?await publicationCatalogPage(env.DB,squeezeCatalog,{start:sessionInstant(scope.session,0),cutoff:scope.cutoff}):null;
+    return jsonResponse(await readSqueezePublications(env.PAPER_TRADES,scope,{catalog}),200);
+  }
   catch{return jsonResponse({error:'Shortlist publication unavailable or exceeded bounded read budget'},503);}
 }

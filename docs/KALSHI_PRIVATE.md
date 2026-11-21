@@ -49,7 +49,7 @@ No bare Wrangler deploy, combined Worker, collector restart or Railway change.
    Source declares `DB` → `live-options`, database ID
    `94c7c9ad-228b-471b-b760-48cd18c58d1b`. That is repository configuration;
    the supervisor must compare the current provider binding before migration.
-2. Apply `backend/migrations/0005_kalshi_private.sql` once to that DB through
+2. Apply `backend/migrations/0006_kalshi_private.sql` once to that DB through
    the supervisor's authorized migration procedure. It adds only private
    evidence/state/budget tables. Existing accounts/sessions remain intact.
 3. Independently verify credit-origin identity introspection: Owen numeric ID,
