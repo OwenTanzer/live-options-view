@@ -25,6 +25,7 @@ on:
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
       - "market_data/news/**"
+      - "research/options_replay/**"
   push:
     branches: [master]
     paths:
@@ -47,6 +48,7 @@ on:
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
       - "market_data/news/**"
+      - "research/options_replay/**"
 
 jobs:
   test:
@@ -187,6 +189,8 @@ jobs:
           pip install -r deployment/python/requirements.txt
           node tests/btc_options.test.mjs
           node tests/btc_options_ui.test.mjs
+      - name: One Clock Python binding and blind Trainer invariants
+        run: python -m unittest tests.test_one_clock_python tests.test_options_replay
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
       - name: multi-underlying chain and settlement (#182)

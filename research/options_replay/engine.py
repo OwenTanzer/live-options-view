@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Callable
 
 from archive import SYMBOL, MAX_QUOTE_AGE_S, contract_strike, quote_usable
+from one_clock import TrainerSource
 
 MULTIPLIER = 100
 DEFAULT_FEE = 0.65          # USD per contract per side; shown everywhere it applies
@@ -79,7 +80,7 @@ class StaleError(ReplayError):
 def explain(code: str, snap: dict | None, age: int | None) -> tuple[str, str]:
     """(short label, plain-language sentence) for a disabled-board reason code."""
     if code == "no_snapshot":
-        return "no data yet", "Nothing has been recorded yet at this time of day."
+        return "no eligible data", "No eligible snapshot is available at this replay time."
     if code == "gap":
         return "data gap", (f"The latest recorded snapshot is {age}s old (limit {MAX_QUOTE_AGE_S}s); "
                             "the collector recorded nothing newer, so its quotes are no longer current.")
@@ -117,7 +118,7 @@ class ReplaySession:
         self.id = session_id or secrets.token_urlsafe(9)
         self.pack = pack
         self.snaps = pack["snapshots"]
-        self.times = [s["t"] for s in self.snaps]
+        self.source = TrainerSource(pack, SYMBOL)
         self.open_s, self.close_s = pack["open_s"], pack["close_s"]
         rng = rng or random.Random()
         if start_s is None:
@@ -156,8 +157,8 @@ class ReplaySession:
     # -- quotes at the clock ---------------------------------------------
 
     def _snap_index(self, t: int) -> int | None:
-        i = bisect.bisect_right(self.times, t) - 1
-        return i if i >= 0 else None
+        row = self.source.latest(t)
+        return row["value"] if row else None
 
     def board_state(self, t: int | None = None) -> tuple[dict | None, str | None, int | None]:
         """(snapshot, disabled_reason_code, age_s) governing quotes at time t."""
@@ -169,7 +170,7 @@ class ReplaySession:
         age = t - snap["t"]
         if age > MAX_QUOTE_AGE_S:
             return snap, "gap", age
-        if t - snap.get("content_t", snap["t"]) > MAX_QUOTE_AGE_S:
+        if t - self.source.content_time(t) > MAX_QUOTE_AGE_S:
             return snap, "frozen", age
         if not snap["ok"]:
             return snap, snap["reason"], age
@@ -179,8 +180,9 @@ class ReplaySession:
         """Past intervals in [open, until] where the board was disabled, with reasons.
         Evaluated only at snapshot boundaries and age cut-offs at or before `until`."""
         points = {self.open_s, until}
+        points.update(t for t in self.source.ready if self.open_s <= t <= until)
         for s in self.snaps:
-            for p in (s["t"], s["t"] + MAX_QUOTE_AGE_S + 1, s.get("content_t", s["t"]) + MAX_QUOTE_AGE_S + 1):
+            for p in (s["t"], s["t"] + MAX_QUOTE_AGE_S + 1):
                 if self.open_s <= p <= until:
                     points.add(p)
         pts = sorted(points)
@@ -197,18 +199,18 @@ class ReplaySession:
         return out
 
     def _last_consistent_spot(self, t: int) -> float | None:
-        i = self._snap_index(t)
-        while i is not None and i >= 0:
-            if self.snaps[i]["ok"]:
+        for row in reversed(self.source.at(t)):
+            i = row["value"]
+            if i is not None and self.snaps[i]["ok"]:
                 return self.snaps[i]["spot"]
-            i -= 1
         return None
 
     def _next_bar_after(self, t: int) -> int | None:
-        i = bisect.bisect_right(self.times, t)
-        while i < len(self.times) and self.times[i] < self.open_s:
+        times = self.source.ready
+        i = bisect.bisect_right(times, t)
+        while i < len(times) and times[i] < self.open_s:
             i += 1
-        return self.times[i] if i < len(self.times) and self.times[i] < self.close_s else None
+        return times[i] if i < len(times) and times[i] < self.close_s else None
 
     # -- player view (no date-bearing fields) ------------------------------
 
@@ -232,7 +234,8 @@ class ReplaySession:
                 rows.append(row)
         dark = self.dark_stretches(self.clock)
         current_dark = dark[-1] if (code and dark and dark[-1]["end"] >= self.clock) else None
-        series = [[s["t"], s["spot"]] for s in self.snaps
+        eligible = [self.snaps[row["value"]] for row in self.source.at(self.clock) if row["value"] is not None]
+        series = [[s["t"], s["spot"]] for s in eligible
                   if s["ok"] and self.open_s - 300 <= s["t"] <= self.clock]
         nxt = self._next_bar_after(self.clock)
         return {
@@ -251,6 +254,8 @@ class ReplaySession:
                 "has_next_bar": nxt is not None or self.clock < self.close_s,
                 "min_dwell_ms": int(MIN_DWELL_S * 1000),
                 "mode": self.pack.get("mode", "replay"),
+                "clock_origin": self.source.origin,
+                "availability_basis": self.source.basis,
                 "simulation": ({"seed": self.pack["sim"]["seed"],
                                 "generator_version": self.pack["sim"]["generator_version"],
                                 "inputs_digest": self.pack["sim"]["inputs_digest"][:12],
@@ -260,9 +265,9 @@ class ReplaySession:
                        "detail": detail, "age_s": age,
                        "since": hhmmss(current_dark["start"]) if current_dark else None,
                        "snapshot_time": hhmmss(snap["t"]) if snap else None},
-            "sample_candles": [[sn["t"], *sn["ohlc"]] for sn in self.snaps if (self.revealed or sn["t"] <= self.clock) and sn.get("ohlc")] if self.pack.get("event_tape") else [],
+            "sample_candles": [[sn["t"], *sn["ohlc"]] for sn in (self.snaps if self.revealed else eligible) if sn.get("ohlc")] if self.pack.get("event_tape") else [],
             "symbol": SYMBOL,
-            "volume": [[s["t"], s["volume"]] for s in self.snaps if s["t"] <= self.clock and s.get("volume") is not None],
+            "volume": [[s["t"], s["volume"]] for s in eligible if s.get("volume") is not None],
             "volume_unit": self.pack.get("volume_unit", "option contracts"),
             "spot": {"now": spot, "last": self._last_consistent_spot(self.clock), "series": series},
             "dark": dark,
