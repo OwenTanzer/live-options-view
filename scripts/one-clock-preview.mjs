@@ -11,11 +11,12 @@ for(const symbol of ['QQQ','SPY','IBIT']) for(const minute of [0,5]) {
   const key=prefix+'20261109/snapshot_093'+minute+'00000000.csv';
   const at=T+minute*60000,spot=symbol==='IBIT'?40:660;
   const rows=['Strike,Type,OpenInterest,Expiration,UnderlyingPrice,Bid,Ask'];
-  for(const strike of [spot-2,spot-1,spot,spot+1,spot+2]) for(const type of ['call','put']) rows.push(`${strike},${type},${type==='call'?100:50},${day},${spot},1,2`);
+  for(const strike of [spot-2,spot-1,spot,spot+1,spot+2]) for(const type of ['call','put']) rows.push(`${strike},${type},${type==='call'?100:50},${symbol==='IBIT'?'2026-11-13':day},${spot},1,2`);
   objects.set(key,{text:rows.join('\n'),uploaded:new Date(at+500),etag:'csv-'+symbol+minute});
   const meta={schema_version:'snapshot_provenance.v1',snapshot_key:key,symbol,constructed_at:new Date(at).toISOString(),
     latest_published_at:new Date(at+1000).toISOString(),publication:{status:'published'},market_readings:[{
       schema_version:'market_reading.v1',reading_id:'reference_oi_skew',symbol,observed_at:new Date(at).toISOString(),
+      input:{snapshot_key:key,snapshot_key_status:'valid',snapshot_timestamp:new Date(at).toISOString()},
       published_at:new Date(at+1000).toISOString(),publication:{status:'published'},interpretation:{kind:'reference'},
       status:{code:'ok'},freshness:{status:'live'},values:{imbalance_ratio:1/3,near_money_call_oi:500,near_money_put_oi:250,band_strikes:5},
       calculation:{version:'reference_oi_skew.v1',parameters:{near_money_pct:0.02}}}]};

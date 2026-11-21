@@ -27,7 +27,7 @@ async function renderSelection() {
     // Existing read-only renderer and calculations, same eligible parent record.
     buildHeatmapRows(el('history-clock-rows'),data,relativeOiRanges(data.rows));
     const raw=describeReferenceOiSkew(data,selection.cutoff);
-    el('history-clock-status').textContent=`${instrument} · ${session} · cursor ${el('history-clock-time').value} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). Read-only replay.`;
+    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${el('history-clock-time').value} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). Read-only replay.`;
     el('history-clock-skew').textContent=`Published reference skew: ${raw.text} · ${raw.availability==='live'?'fresh at cursor':raw.availability}. ${raw.detail}`;
     if(instrument==='IBIT') {
       const adaptive=computeAdaptiveOiSkew(data.rows,data.underlying_price);

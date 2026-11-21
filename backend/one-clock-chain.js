@@ -31,19 +31,30 @@ export function projectChainCsv(text,instrument,session) {
     if(raw.Symbol && raw.Symbol!==instrument) throw new Error('wrong underlying');
     const row=Object.fromEntries(numbers.map(name=>[name,finite(raw[name])]));
     if(!(row.Strike>0) || row.OpenInterest===null || row.OpenInterest<0) throw new Error('invalid strike or interest');
+    let optionSymbol=null;
+    if(raw.OptionSymbol) {
+      const compact=raw.OptionSymbol.replaceAll(' ','');
+      const occ=/^([A-Z]+)(\d{6})([CP])(\d{8})$/.exec(compact);
+      const expiry=raw.Expiration.slice(2).replaceAll('-','');
+      if(!occ || occ[1]!==instrument || occ[2]!==expiry || occ[3]!==({call:'C',put:'P'})[raw.Type] || Math.abs(Number(occ[4])/1000-row.Strike)>1e-9) throw new Error('contract identity mismatch');
+      optionSymbol=raw.OptionSymbol;
+    }
     return {...row,Type:raw.Type,Expiration:raw.Expiration,Symbol:instrument,
-      OptionSymbol: typeof raw.OptionSymbol==='string' && new RegExp(`^${instrument}\\s*\\d{6}[CP]\\d{8}$`).test(raw.OptionSymbol) ? raw.OptionSymbol : null};
+      OptionSymbol:optionSymbol};
   });
 }
-function readingProjection(reading,cutoff) {
+function readingProjection(reading,{cutoff,instrument,csvKey,eventAt}) {
   if(reading?.schema_version!=='market_reading.v1' || reading.reading_id!=='reference_oi_skew' || reading.interpretation?.kind!=='reference' || reading.publication?.status!=='published') return null;
   const published=stamp(reading.published_at);
   if(published===null || published>cutoff) return null;
+  if(reading.symbol!==instrument || reading.input?.snapshot_key!==csvKey || reading.input?.snapshot_key_status!=='valid' || stamp(reading.input?.snapshot_timestamp)!==eventAt) return null;
   if([reading.observed_at,reading.calculated_at].some(value=>value!=null && (stamp(value)===null || stamp(value)>cutoff))) return null;
   const short=value=>typeof value==='string'?value.slice(0,200):null;
+  const iso=value=>stamp(value)===null?null:new Date(stamp(value)).toISOString();
   return {schema_version:reading.schema_version,reading_id:reading.reading_id,symbol:short(reading.symbol),
-    interpretation:{kind:'reference'},published_at:published,observed_at:stamp(reading.observed_at),
-    calculated_at:stamp(reading.calculated_at),publication:{status:'published'},
+    interpretation:{kind:'reference'},published_at:iso(published),observed_at:iso(reading.observed_at),
+    calculated_at:iso(reading.calculated_at),publication:{status:'published'},
+    input:{snapshot_key:csvKey,snapshot_key_status:'valid',snapshot_timestamp:iso(eventAt)},
     calculation:{version:short(reading.calculation?.version),parameters:{near_money_pct:finite(reading.calculation?.parameters?.near_money_pct)}},
     status:{code:short(reading.status?.code),reason:short(reading.status?.reason)},
     freshness:{status:short(reading.freshness?.status)},
@@ -87,18 +98,18 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
     const csvAt=stamp(csv.object.uploaded?.toISOString());
     if(csvAt===null || csvAt>cutoff || !csv.object.etag || !meta.object.etag) continue;
     const availableAt=Math.max(eventAt,published,metaAt,csvAt);
-    const chain=projectChainCsv(csv.text,instrument,session);
-    const rows=chain.filter(row=>row.Expiration===session);
-    if(!rows.length) continue;
-    const payload={symbol:instrument,date:session,expiration:session,timestamp:new Date(eventAt).toISOString(),
+    const rows=projectChainCsv(csv.text,instrument,session);
+    const expirations=[...new Set(rows.map(row=>row.Expiration))];
+    if(expirations.length!==1 || expirations[0]<session || (instrument!=='IBIT' && expirations[0]!==session)) continue;
+    const payload={symbol:instrument,date:session,expiration:expirations[0],timestamp:new Date(eventAt).toISOString(),
       snapshot_time:new Date(eventAt).toISOString(),snapshot_key:csvKey,
       underlying_price:rows.find(r=>r.UnderlyingPrice>0)?.UnderlyingPrice??null,rows,
-      market_readings:(Array.isArray(p.market_readings)?p.market_readings:[]).map(r=>readingProjection(r,cutoff)).filter(Boolean)};
+      market_readings:(Array.isArray(p.market_readings)?p.market_readings:[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)};
     const row=observation({source:'chain',id:`${csvKey}@${csv.object.etag}:${meta.object.etag}`,revision:1,
       session,instrument,origin:'recorded',eventAt,availableAt,evidence:csvKey,value:payload,
       details:{sidecar:candidate.key,publicationAt:published,archiveRevisionAt:Math.max(metaAt,csvAt),
         observationBasis:'snapshot-construction',availabilityBasis:'archived-object-revision',
-        digestVerification:'not-verified',sourceDigest:p.market_readings_digest??null}});
+        digestVerification:'not-verified',sourceDigest:typeof p.market_readings_digest==='string' && /^[0-9a-f]{64}$/.test(p.market_readings_digest)?p.market_readings_digest:null}});
     return {rows:[row],coverage:{...coverage,gets,bytes,reason:null}};
   }
   return {rows:[],coverage:{...coverage,gets,bytes,reason:candidates.length>MAX_CANDIDATES?'candidate-bound':'no-qualified-snapshot'}};

@@ -204,6 +204,7 @@ read out of the script itself, are what the classifier applies:
 | Change | Payload | Tooling | Contract | Config | Acceptance | API | Shared |
 |---|---|---|---|---|---|---|---|
 | `site/**` with an allowed extension | yes | no | no | no | yes | no | no |
+| `site/shared/one-clock.js`, `one-clock-events.js`, `one-clock-session.js` | yes | no | no | no | yes | yes | no |
 | Markdown under `site/` or `frontend/` | prose | no | no | no | no | no | no |
 | `frontend/worker.mjs`, `frontend/preview-policy.mjs` | yes | no | no | no | yes | no | no |
 | any other file under `frontend/` | no | no | no | no | no | no | no |

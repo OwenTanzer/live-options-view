@@ -10,6 +10,7 @@ const csv='Strike,Type,OpenInterest,Expiration,UnderlyingPrice,OptionSymbol,Bid,
 const meta={schema_version:'snapshot_provenance.v1',snapshot_key:csvKey,symbol:'QQQ',constructed_at:new Date(T).toISOString(),
   latest_published_at:new Date(T+1000).toISOString(),publication:{status:'published'},private:'secret',
   market_readings:[{schema_version:'market_reading.v1',reading_id:'reference_oi_skew',symbol:'QQQ',
+    input:{snapshot_key:csvKey,snapshot_key_status:'valid',snapshot_timestamp:new Date(T).toISOString()},
     published_at:new Date(T+1000).toISOString(),observed_at:new Date(T).toISOString(),publication:{status:'published'},
     interpretation:{kind:'reference',account_alias:'must-not-leak'},status:{code:'ok'},freshness:{status:'live'},
     calculation:{version:'reference_oi_skew.v1',parameters:{near_money_pct:0.02,secret:'private'}},
@@ -80,4 +81,36 @@ test('shared adapter reuses one request across readers and discards late respons
 test('CSV projection rejects malformed numeric data rather than treating absence as zero',()=>{
   assert.throws(()=>projectChainCsv(csv.replace('call,100','call,'),'QQQ',session));
   assert.throws(()=>projectChainCsv(csv.replace('660,call','-1,call'),'QQQ',session));
+  for(const changed of [csv.replace('QQQ261109C','SPY261109C'),csv.replace('QQQ261109C','QQQ261113C'),
+    csv.replace('QQQ261109C','QQQ261109P'),csv.replace('C00660000','C00661000'),csv.replace('QQQ261109C00660000','malformed')]) {
+    assert.throws(()=>projectChainCsv(changed,'QQQ',session),/contract identity/);
+  }
+});
+
+test('source digest is a bounded hash or null, never an arbitrary public payload',async()=>{
+  for(const digest of [{private_ledger:'secret'},'secret','a'.repeat(100000)]) {
+    const result=await readArchivedChain(storage({[metaKey]:{text:JSON.stringify({...meta,market_readings_digest:digest})}}),scope());
+    assert.equal(result.rows[0].details.sourceDigest,null);
+    assert.equal(JSON.stringify(result).includes('secret'),false);
+  }
+});
+
+test('published skew must identify the exact eligible parent snapshot',async()=>{
+  for(const patch of [{symbol:'SPY'},{input:null},{input:{...meta.market_readings[0].input,snapshot_key:'another.csv'}},
+    {input:{...meta.market_readings[0].input,snapshot_timestamp:new Date(T-60000).toISOString()}}]) {
+    const changed={...meta,market_readings:[{...meta.market_readings[0],...patch}]};
+    const result=await readArchivedChain(storage({[metaKey]:{text:JSON.stringify(changed)}}),scope());
+    assert.equal(result.rows.length,1);assert.deepEqual(result.rows[0].value.market_readings,[]);
+  }
+});
+
+test('IBIT retains its source-selected upcoming expiry rather than imposing zero DTE',async()=>{
+  const db=storage(),ibitCsv=csvKey.replace('intraday/','intraday/ibit/'),ibitMeta=ibitCsv.replace('.csv','.provenance.json');
+  db.records.set(ibitCsv,{text:csv.replaceAll('2026-11-09','2026-11-13').replaceAll('QQQ261109','IBIT261113'),uploaded:T+500,etag:'ibitcsv'});
+  db.records.set(ibitMeta,{text:JSON.stringify({...meta,symbol:'IBIT',snapshot_key:ibitCsv,market_readings:[]}),uploaded:T+1500,etag:'ibitmeta'});
+  const result=await readArchivedChain(db,scope(T+2000,'IBIT'));
+  assert.equal(result.rows.length,1);assert.equal(result.rows[0].value.expiration,'2026-11-13');
+  assert.equal(result.rows[0].session,'2026-11-09');
+  db.records.get(ibitCsv).text+='\n660,call,1,2026-11-20,661,IBIT261120C00660000,1,2,secret';
+  assert.equal((await readArchivedChain(db,scope(T+2000,'IBIT'))).rows.length,0);
 });
