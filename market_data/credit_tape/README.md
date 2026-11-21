@@ -78,3 +78,33 @@ the private raw archive (or a separate **private** R2 bucket, never `qqq-options
 and never KV), its own GitHub OAuth app and env (`CREDIT_TAPE_*`). No dependency on, or
 writes to, the options collector, Worker, D1 or existing buckets. Rollback = stop the
 service; the archive volume is retained.
+
+## Tradeweb UK sample preview
+
+Run `python -m market_data.credit_tape.treu_sample UK_TREU_YYYYMMDD_HHMM.csv new-preview-directory`
+on one retained TREU minute CSV. Point the local panel at the new archive using the local
+command above. Each report is labelled Tradeweb / UK / TREU and unclassified, including
+records outside credit. The archive preserves the original CSV, its hash, source row index,
+transaction ID, execution time and publication time. First seen is the offline import time.
+The sample importer has no network access and requires a new destination. The production
+collector continues to use its configured DTCC routes.
+
+For a side-by-side review with a DTCC archive, create its `samples` directory and
+use `samples/treu` as the new import destination. The signed-in Options View table
+then links to the Tradeweb sample window. The live window and its health and export
+remain scoped to the collector archive. Run the importer on a private archive copy
+for local review. A saved sample does not establish recurring coverage.
+
+## Production Tradeweb UK MTF
+The service polls the official TREU delayed post-trade minute directory every minute.
+The authenticated table links to `/credit-tape/?view=treu`. This view includes all
+published instrument types. Match an authoritative identifier before attributing any
+report to a specific credit index. Tradeweb delays these files at least 15 minutes
+from initial publication. Individual trades may have additional deferrals.
+
+The private volume holds `tradeweb-treu.sqlite3`, separate from the DTCC journal.
+Discovery records pending file versions before download. The original compressed CSV,
+SHA-256 and parsed reports commit together. Health at `/healthz/collector` includes
+TREU listing time, file receipt time, pending files, failures and archived report count.
+The publisher's listed HTTP transport does not provide TLS source authentication.
+A healthy poll during a closed session does not establish a new publication.
