@@ -1,8 +1,11 @@
 // Read-only, disposable browser fixture on a separate loopback port. Reuses
 // the normal preview gateway/CSP, but never offers account mutations here.
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { createPreview } from './preview-local.mjs';
 import { handleOneClockChain } from '../backend/one-clock-chain.js';
+import { readBotLedgerPage } from '../backend/one-clock-bots.js';
+import { handleOneClockSqueeze } from '../backend/one-clock-squeeze.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
 const preview=createPreview();
 const day='2026-11-09',T=sessionInstant(day,9,30),objects=new Map();
@@ -22,11 +25,34 @@ for(const symbol of ['QQQ','SPY','IBIT']) for(const minute of [0,5]) {
       calculation:{version:'reference_oi_skew.v1',parameters:{near_money_pct:0.02}}}]};
   objects.set(key.replace('.csv','.provenance.json'),{text:JSON.stringify(meta),uploaded:new Date(at+1500),etag:'meta-'+symbol+minute});
 }
-const bucket={async list({prefix}){return {objects:[...objects.keys()].filter(key=>key.startsWith(prefix)).map(key=>({key})),truncated:false};},
+const bucket={async list({prefix}){return {objects:[...objects.keys()].filter(key=>key.startsWith(prefix)).map(key=>({key,uploaded:objects.get(key).uploaded})),truncated:false};},
   async get(key){const row=objects.get(key);return row?{...row,size:Buffer.byteLength(row.text),text:async()=>row.text}:null;}};
+const bot='synthetic_bot',trades=[];
+for(let i=0;i<105;i++) {
+  const id=`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`,at=i===0?T-86400000:T+i*1000;
+  const trade={username:bot,status:'filled',execution_request_id:id,ts:new Date(at).toISOString(),
+    sym:'QQQ261113C00660000',underlying:'QQQ',instrument_type:'option',side:i===104?'sell':'buy',qty:i===0?10:i===104?4:1,
+    price:2,strike:660,type:'call',exp:'2026-11-13',multiplier:100};
+  trades.push(trade);objects.set(`paper-trades/requests/${id}.json`,{text:JSON.stringify(trade),uploaded:new Date(at+500),etag:String(i)});
+}
+const hash=text=>createHash('sha256').update(text).digest('hex');
+const squeezeRun='11111111-1111-4111-8111-111111111111',squeezeBase='squeeze-scanner/v1/scheduled/runs/'+squeezeRun;
+const squeezeResults=JSON.stringify([{ticker:'ABC',comparison_eligible:true,ranks:{combined:1},scores:{combined:.7,factor:.8,options:.6}}]);
+const squeezeManifest=JSON.stringify({schema_version:1,run_id:squeezeRun,started_at:new Date(T-60000).toISOString(),finished_at:new Date(T).toISOString(),status:'complete',scoring:{version:'synthetic-fixture'},
+  files:{'results.json':{sha256:hash(squeezeResults),bytes:Buffer.byteLength(squeezeResults)}}});
+for(const [key,text] of [[squeezeBase+'/results.json',squeezeResults],[squeezeBase+'/manifest.json',squeezeManifest],
+  [`squeeze-scanner/v1/scheduled/publication-attempts/${squeezeRun}/22222222-2222-4222-8222-222222222222/started.json`,JSON.stringify({run_id:squeezeRun,at:new Date(T+100).toISOString()})],
+  [squeezeBase+'/COMMITTED.json',JSON.stringify({run_id:squeezeRun,manifest_sha256:hash(squeezeManifest)})],
+  [`squeeze-scanner/v1/scheduled/publication-attempts/${squeezeRun}/22222222-2222-4222-8222-222222222222/finished.json`,JSON.stringify({run_id:squeezeRun,archive:squeezeBase,archive_verified:true,latest:'advanced',at:new Date(T+1000).toISOString()})]]) {
+  objects.set(key,{text,uploaded:new Date(key.endsWith('/started.json')?T+100:T+1500),etag:hash(text)});
+}
 preview.env.API={fetch:request=>{
   const url=new URL(request.url);
   if(url.pathname==='/api/one-clock/chain')return handleOneClockChain(request,{PAPER_TRADES:bucket},url);
+  if(url.pathname==='/api/one-clock/squeeze')return handleOneClockSqueeze(request,{PAPER_TRADES:bucket},url);
+  if(url.pathname==='/api/one-clock/bots/roster')return Response.json({bots:[bot],membershipBasis:'synthetic-fixture'});
+  if(url.pathname==='/api/one-clock/bots')return readBotLedgerPage(bucket,{trades},{bot,session:day,instrument:url.searchParams.get('instrument'),
+    cutoff:Number(url.searchParams.get('cutoff')),offset:Number(url.searchParams.get('offset')),version:url.searchParams.get('version')}).then(body=>Response.json(body,{status:body.restart?409:200}));
   return new Response('{}',{status:404,headers:{'Content-Type':'application/json'}});
 }};
 const server=http.createServer(async(req,res)=>{

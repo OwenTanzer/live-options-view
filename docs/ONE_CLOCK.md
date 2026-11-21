@@ -200,3 +200,94 @@ Zero Workers KV operations applies to every path, including retry/backfill and
 rollback. Follow [SITE_RELEASES](SITE_RELEASES.md) and
 [RELEASE_BOUNDARIES](RELEASE_BOUNDARIES.md). A merge is not deployment; a release
 is not proof of natural market observations. Zero events is a valid launch.
+
+## Bot fill reader (PR 5, consumer slice)
+
+The Historical One Clock view reads a selected public PAPER bot at the same
+instrument/session/cursor as the chain. The names-only roster is explicitly
+current membership; it excludes the same hidden strategies as `/api/bots` and
+never sends current balances, closures, fills, aliases or strategy state to replay.
+The adapter pages the complete retained D1 trade ledger, not the roster's last
+100 session fills. Each page examines at most 40 terminal R2 receipts (64 KiB
+each), from a ledger bounded to 10,000 entries; no listing or writes. Future
+event rows are excluded before pagination. Continuations bind to the eligible
+ledger version, so edits require a clean reload and future appends do not alter
+an earlier replay. R2 terminal upload times gate visibility; bodies uploaded
+after the cursor are not read. Receipt owner and the complete public fill
+projection must match the D1 entry. Public identities are hashes, not request IDs.
+
+Prior-session entries retain their original event session as carry evidence in
+the requested replay scope. Opening quantity means known at New York midnight;
+current quantity includes only cursor-visible receipts. Quantity inventory has
+no inferred marks, cash, fees, strategy attribution or P&L. Missing/oversized/
+mismatched receipts, including legacy settlements without receipts, invalidate
+both inventory totals; visible fills remain inspectable. Page/budget failures
+do not display partial totals. Current record closure is not historical closure.
+
+The November 21 public roster contained 34 accounts across smoke/Phelps,
+Canopus, Looking Glass, QQQ/IBIT/SPY OI variants, max-pain, momentum, put/call,
+QQQ gated strangle, SPY SMA200 and Trump variants. This adapter uses the roster
+contract rather than an embedded list. Decision, no-trade, failure and historical
+strategy-assignment publication remain **unavailable**, not inferred from fills.
+The private Crassus decision archive is in a separate bucket; the latest public
+OI projection drops intermediate decisions. A durable generic producer handoff
+and observer activation remain open, separately from this read-only consumer.
+
+Rollback: choose Daily retrospective or leave the bot unselected; existing live
+Automated and execution paths are untouched. Release API before assets through
+the exact-revision gates. `one_clock_bots.test.mjs` covers 105 fills, overnight
+carry, partial exits, publication rewind, gaps, privacy and pagination races.
+The read-only preview offers `synthetic_bot` at Nov 9 09:35 (104 session fills,
+10 opening contracts and 109 current contracts); rewind before 09:30 removes
+session fills while retaining the known carry.
+
+## Public evidence: Squeeze publication reader (PR 6, first slice)
+
+Historical One Clock accepts any ticker; chain coverage remains independently
+limited to QQQ/SPY/IBIT. The registered `shortlist` adapter shares the committed
+cursor, request cancellation and immutable envelope. Its fields are published
+top-ten membership/rank and three producer scores. Missing evidence is not a
+negative membership observation. The same event evaluator tests a first-per-
+session appearance rule, separate from the skew class.
+
+`/api/one-clock/squeeze` reads only the existing scheduled producer namespace.
+It requires an immutable finished publication receipt whose `latest` result is
+`advanced`, matching run/commit identities, a verified manifest hash and verified
+results bytes/hash. It applies the producer's comparison-eligible, rank-sorted
+top-ten policy. Execution completion or an archive-only/superseded run cannot
+establish appearance. Availability conservatively includes the terminal receipt
+and all retained object upload times. A later overwritten object cannot supply
+earlier evidence. The projection contains no future outcomes or arbitrary report
+fields; full input archives are not sent to the browser.
+
+Bounds: two 1,000-object listing pages, 20 finished-publication candidates per
+selected day/cursor, 1 MiB per object, 4 MiB total bodies. Incomplete listing,
+unknown upload time, unmatched publication, hash failure or missing qualifying
+object makes the source unavailable; it does not select an older run as current.
+No KV, storage writes, extra producer, provider connection or scheduling change.
+The original Squeeze tab remains the independent current reader/rollback.
+
+This slice does not claim Nov 9 real Squeeze coverage. Its fixture has ABC first
+published at 09:30:01.500 New York; earlier replay is unavailable, QQQ has a
+qualified absence after publication, and the chain still works independently.
+The observation's event time is the conservative proven publication-state time;
+scan start/finish are retained separately. State advances preserve the producer's
+exact `(started_at, run_id)` ordering, including overlapping finishes and delayed
+terminal receipts. Started-only or failed attempts may conceal a pointer advance
+and therefore make coverage unavailable; an unknown terminal status also fails.
+
+The two listing pages are a **lifetime namespace bound**, not a daily partition.
+This first reader deliberately fails closed beyond that bound. Before claiming
+automatic source scaling, add the generic durable publication catalog to observer
+ingestion: persist verified source identity/revision, publication time and session,
+resume listing with transactional checkpoints, and query the session index here.
+New source descriptors must reuse that catalog rather than raise list limits or
+require manual daily indexes. This remains open integration work, not a finished
+scalability claim. Interrupted publisher attempts likewise need verified recovery
+evidence; do not delete them or infer successful publication during repair.
+
+News, Order Flow/gamma, credit and scanner readers remain separate open source
+integrations. News must reuse its collector/archive revision and classification
+rules; its publication mode is expressly retrospective. Credit must retain the
+owner gate and cannot reuse the public market projection route. Scanner active
+snapshots and finalized best-later-exit reports are distinct source products.
