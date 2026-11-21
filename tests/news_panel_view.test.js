@@ -96,6 +96,31 @@ test('timing, revisions, later context and stale prices are shown', () => {
   assert.ok(text.includes('Since the last observed run'));
 });
 
+test('headline first: a glance line in sight, provenance and coverage detail one click away', () => {
+  const root = render(oil);
+  const inDetails = n => { for (let p = n.parent; p; p = p.parent) if (p.tagName === 'DETAILS') return true; return false; };
+  const rows = root.byClass('np-row');
+  assert.ok(rows.length > 0);
+  for (const r of rows) {
+    const glance = r.byClass('np-glance');
+    assert.equal(glance.length, 1);
+    assert.ok(!inDetails(glance[0]), 'the glance line is not hidden');
+    assert.match(glance[0].textContent, / UTC/);
+    assert.match(glance[0].textContent, /price (missing|stale|matched)/);
+    const prov = r.byClass('np-prov');
+    assert.equal(prov.length, 1);
+    assert.equal(prov[0].tagName, 'DETAILS');
+    assert.ok(prov[0].textContent.includes('observed '), 'provenance is kept, not deleted');
+  }
+  const cov = root.byClass('np-coverage')[0];
+  const cells = cov.byClass('np-cell');
+  assert.equal(cells.length, oil.coverage.segments.length, 'one strip cell per span');
+  assert.ok(cells.every(c => !inDetails(c)));
+  assert.ok(cov.byClass('np-strip-text')[0].textContent.startsWith('Coverage: '));
+  assert.ok(cov.byClass('np-table').every(inDetails), 'the coverage table sits in the drawer');
+  assert.ok(cov.byClass('np-strip-text')[0].textContent.includes('missed interval'), 'a missed interval stays in sight');
+});
+
 test('no span in the fixture is called quiet, and an empty page never is', () => {
   for (const page of Object.values(pages)) {
     assert.ok(!render(page).textContent.includes('Observed, no items'), page.mode + '/' + page.stream);

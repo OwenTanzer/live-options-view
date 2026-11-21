@@ -331,6 +331,17 @@
   function coverage(doc, page) {
     var cov = page.coverage;
     var box = el(doc, 'section', 'np-coverage');
+    // Critical Design Theory (truth at the right depth): the coverage audit is
+    // the pipeline's state, not the news. In the line of sight it is one thin
+    // strip -- a cell per span, glyph + colour per state, quiet only where the
+    // builder said quiet -- and a one-line count. The full table, sources and
+    // facts sit one click away in the drawer below, unchanged.
+    add(box, coverageStrip(doc, cov));
+    var drawer = el(doc, 'details', 'np-coverage-detail');
+    add(drawer, el(doc, 'summary', null, 'Coverage detail (' + cov.stream_scope + ')'));
+    add(box, drawer);
+    var outer = box;
+    box = drawer;
     add(box, el(doc, 'h3', null, 'News coverage (' + cov.stream_scope + ')'));
     add(box, el(doc, 'p', 'np-note', cov.note));
     if (cov.quiet_blocked_by && cov.quiet_blocked_by.length) {
@@ -382,7 +393,37 @@
       });
     });
     if (facts.firstChild) add(box, facts);
-    return box;
+    return outer;
+  }
+
+  var STRIP_GLYPH = { quiet: '·', covered: '●', partial: '◐', unknown: '○', pending_availability: '○' };
+  function coverageStrip(doc, cov) {
+    var wrap = el(doc, 'div', 'np-strip');
+    var cells = el(doc, 'div', 'np-strip-cells');
+    cells.setAttribute('role', 'img');
+    var counts = {};
+    cov.segments.forEach(function (seg) {
+      var key = seg.quiet ? 'quiet' : seg.state;
+      counts[key] = (counts[key] || 0) + 1;
+      var c = el(doc, 'span', 'np-cell np-' + key, STRIP_GLYPH[key] || '?');
+      if (seg.missed_interval) c.className += ' np-cell-missed';
+      c.setAttribute('title', hms(seg.start) + ' → ' + hms(seg.end) + ' UTC: ' + segmentText(seg));
+      add(cells, c);
+    });
+    var order = ['covered', 'quiet', 'partial', 'unknown', 'pending_availability'];
+    var words = { covered: 'covered', quiet: 'observed, no items', partial: 'partial', unknown: 'unknown',
+      pending_availability: 'pending availability' };
+    var parts = order.filter(function (k) { return counts[k]; }).map(function (k) { return counts[k] + ' ' + words[k]; });
+    Object.keys(counts).forEach(function (k) { if (order.indexOf(k) === -1) parts.push(counts[k] + ' ' + k); });
+    var missed = cov.segments.filter(function (seg) { return seg.missed_interval; }).length;
+    if (missed) parts.push(missed + ' missed interval' + (missed === 1 ? '' : 's'));
+    if (cov.tail) parts.push('not yet observed since ' + hms(cov.tail.start));
+    var summary = cov.segments.length
+      ? 'Coverage: ' + cov.segments.length + ' spans · ' + parts.join(' · ')
+      : 'Coverage unknown: no observed run in this window';
+    cells.setAttribute('aria-label', summary);
+    add(wrap, cells, el(doc, 'span', 'np-strip-text', summary));
+    return wrap;
   }
 
   function priceText(p) {
@@ -409,6 +450,22 @@
     }
     if (r.title_truncated) add(title, badge(doc, 'title truncated', 'dim'));
     add(card, title);
+    // One line in the line of sight: when, who, which instrument, price state.
+    // Everything else about the row's provenance is one click away.
+    var glance = el(doc, 'div', 'np-glance');
+    add(glance, el(doc, 'span', 'np-mono np-when', hms(r.event_at) + ' UTC'));
+    add(glance, el(doc, 'span', null, r.outlet || r.source_id));
+    add(glance, badge(doc, 'instrument: ' + (r.instruments.mapping === 'unknown' ? 'unmapped' : r.instruments.mapping), 'dim'));
+    add(glance, el(doc, 'span', 'np-price-chip np-price-' + r.price.status,
+      r.price.status === 'missing' || !r.price.record ? 'price missing' : 'price ' + r.price.status +
+        (r.price.record && r.price.record.synthetic ? ' · SYNTHETIC' : '')));
+    if (r.later_context && (r.later_context.revisions_after_event || []).length) add(glance, badge(doc, 'revised later', 'dim'));
+    add(card, glance);
+    var prov = el(doc, 'details', 'np-prov');
+    add(prov, el(doc, 'summary', null, 'Provenance'));
+    add(card, prov);
+    var cardOuter = card;
+    card = prov;
     var line = el(doc, 'div', 'np-line');
     add(line, el(doc, 'span', null, (r.outlet ? r.outlet + ' · ' : '') + r.source_id));
     add(line, el(doc, 'span', 'np-mono', 'event ' + t(r.event_at) + ' (' + r.event_basis + ')'));
@@ -427,7 +484,6 @@
     var retro = cls && cls.timing !== 'at_event';
     add(ctx, el(doc, 'span', null, !cls ? 'unclassified at event' : retro ? 'streams at event: not known' :
       'streams at event: ' + (cls.stream_memberships.join(', ') || 'none')));
-    add(ctx, badge(doc, 'instrument: ' + (r.instruments.mapping === 'unknown' ? 'unmapped' : r.instruments.mapping), 'dim'));
     add(card, ctx);
     var lc = r.later_context;
     var later = [];
@@ -443,7 +499,7 @@
     if (lc.stream_membership_removed_at) later.push('left the stream ' + hms(lc.stream_membership_removed_at));
     if (later.length) add(card, el(doc, 'div', 'np-later', 'Later context (not known at event): ' + later.join(' · ')));
     add(card, el(doc, 'div', 'np-price np-price-' + r.price.status, priceText(r.price)));
-    return card;
+    return cardOuter;
   }
 
   function rowsSection(doc, page, sourceFilter, onFilter) {

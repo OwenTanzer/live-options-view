@@ -134,7 +134,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
             const t = (await page.locator('#news-panel').innerText()).slice(0, 300);
             throw new Error(`${label}: data-state ${s} (wanted ${stage.expect}): ${t}`);
           });
-          const text = await page.locator('#news-panel').innerText();
+          const text = (await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; })), await page.locator('#news-panel').innerText());
           const keys = news.map(n => n.key);
           if (stage.expect === 'ready') {
             assert.equal(await page.getAttribute('#news-panel', 'data-page'), stage.first_page, `${label}: first page`);

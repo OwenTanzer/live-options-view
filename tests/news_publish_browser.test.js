@@ -62,7 +62,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
         await page.selectOption('select[aria-label^="View"]', key);
         await page.waitForFunction(k => document.querySelector('#news-panel').getAttribute('data-page') === k, key);
       };
-      const text = () => page.locator('#news-panel').innerText();
+      // Provenance and coverage detail sit in collapsed drawers (CDT pass); open them before reading.
+      const text = async () => (await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; })), await page.locator('#news-panel').innerText());
 
       for (const key of ['news/v1/views/collector/oil/2026-11-09/page-0001.json',
         'news/v1/views/archive/ai_buildout/2026-11-09/page-0001.json']) {

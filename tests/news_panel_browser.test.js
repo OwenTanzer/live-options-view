@@ -89,7 +89,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
           await page.screenshot({ path: path.join(EVIDENCE, `${name}-${label}.png`), fullPage: true });
         }
       };
-      const text = () => page.locator('#news-panel').innerText();
+      // Provenance and coverage detail sit in collapsed drawers (CDT pass); open them before reading.
+      const text = async () => (await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; })), await page.locator('#news-panel').innerText());
 
       // m3: the committed fixture, collector/oil.
       await open('m3');
@@ -131,6 +132,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
       // delayed: archive mode, a row event at 10:12 in a span with no new observations.
       await open('delayed');
       await pick('news/v1/views/archive/oil/2026-11-09/page-0001.json');
+      await page.evaluate(() => document.querySelectorAll('#news-panel details').forEach(d => { d.open = true; }));
       const segs = await page.locator('tr.np-seg').evaluateAll(rs => rs.map(r => [r.getAttribute('data-quiet'), r.innerText]));
       assert.deepEqual(segs.map(s => s[0]), ['false', 'true', 'false'], `${name} delayed quiet flags`);
       assert.ok(segs[2][1].includes('0 new observed · 1 events'), `${name} delayed counts`);
