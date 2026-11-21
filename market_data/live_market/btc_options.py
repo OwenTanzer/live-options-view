@@ -33,17 +33,20 @@ def session(now):
         ct.weekday() == 5 and 120 <= minute < 240) else 'open'
 
 
+def is_standard_monthly(row):
+    product = row.get('future-option-product') or {}
+    return (product.get('code') == 'BTC' and product.get('exchange') == 'CME'
+            and product.get('expiration-type') == 'End-Of-Month')
+
+
 def normalize(row, future):
     """Fail closed if monthly/exercise/deliverable facts are missing."""
     try:
-        product = row['future-option-product']
         exp = row['expiration-date']
         strike = float(row['strike-price'])
         if (row['root-symbol'] != '/BTC' or row['exchange'] != 'CME'
-                or product['expiration-type'].lower() not in ('regular', 'monthly')
-                or row['exercise-style'].lower() != 'european'
+                or not is_standard_monthly(row)
                 or row['settlement-type'].lower() != 'future'
-                or row.get('is-exercisable-weekly') is True
                 or row['option-type'] not in ('C', 'P')
                 or not math.isfinite(strike) or strike <= 0
                 or future['symbol'] != row['underlying-symbol']
@@ -58,7 +61,7 @@ def normalize(row, future):
                 'security_id': row.get('security-id'),
                 'streamer_symbol': row['streamer-symbol'], 'future_symbol': future['symbol'],
                 'future_streamer_symbol': future.get('streamer-symbol'),
-                'future_month': future.get('maturity-date', exp)[:7], 'future_expiry': exp,
+                'future_month': (future.get('maturity-date') or exp)[:7], 'future_expiry': exp,
                 'exp': exp, 'expires_at': row['expires-at'], 'stops_trading_at': row['stops-trading-at'],
                 'strike': strike, 'type': 'call' if row['option-type'] == 'C' else 'put', 'multiplier': 5}
     except (KeyError, TypeError, ValueError):
@@ -131,7 +134,7 @@ class BtcOptions:
                     raise ValueError('chain_page_budget')
             for symbol in missing[:4]:
                 rows.append(self._read('/instruments/future-options/' + quote(symbol, safe=''), token))
-            monthly = [r for r in rows if r.get('future-option-product', {}).get('expiration-type', '').lower() in ('regular', 'monthly')]
+            monthly = [r for r in rows if is_standard_monthly(r)]
             nearest = min((r.get('expiration-date', '') for r in monthly if instant(r.get('stops-trading-at')) and instant(r['stops-trading-at']) > now), default=None)
             rows = [r for r in monthly if r.get('expiration-date') == nearest or r.get('symbol') in held_snapshot]
             futures, resolved, closing_only = {}, {}, set()

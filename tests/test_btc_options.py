@@ -7,13 +7,13 @@ from market_data.live_market.feed import DXLinkFeed
 
 NOW = datetime(2026, 11, 21, 18, tzinfo=timezone.utc)
 FUTURE = {'symbol': '/BTCX6', 'expiration-date': '2026-11-27',
-          'maturity-date': '2026-11-27', 'notional-multiplier': '5', 'streamer-symbol': '/BTCX26:XCME'}
+          'maturity-date': None, 'notional-multiplier': '5', 'streamer-symbol': '/BTCX26:XCME'}
 
 
 def row(strike=90000, side='C', expiry='2026-11-27'):
     return {'symbol': f'./BTCX6 BTCX6 {expiry}{side}{strike}', 'root-symbol': '/BTC',
-            'exchange': 'CME', 'exercise-style': 'European', 'settlement-type': 'Future',
-            'future-option-product': {'expiration-type': 'Regular'}, 'underlying-symbol': '/BTCX6',
+            'exchange': 'CME', 'exercise-style': 'American', 'is-exercisable-weekly': True, 'settlement-type': 'Future',
+            'future-option-product': {'expiration-type': 'End-Of-Month', 'code': 'BTC', 'exchange': 'CME'}, 'underlying-symbol': '/BTCX6',
             'streamer-symbol': f'./BTCX26{side}{strike}:XCME', 'expiration-date': expiry,
             'expires-at': expiry + 'T16:00:00Z', 'stops-trading-at': expiry + 'T16:00:00Z',
             'strike-price': str(strike), 'option-type': side}
@@ -45,7 +45,7 @@ class BtcTests(unittest.TestCase):
         c = normalize(row(), FUTURE)
         self.assertEqual(c['multiplier'], 5)
         self.assertEqual(c, normalize(row(), FUTURE))
-        for changed in [{'root-symbol': '/MBT'}, {'exercise-style': 'American'},
+        for changed in [{'root-symbol': '/MBT'}, {'future-option-product': {'expiration-type': 'End-Of-Month', 'code': 'MBT', 'exchange': 'CME'}},
                         {'future-option-product': {'expiration-type': 'Weekly'}},
                         {'streamer-symbol': 'guess'}, {'option-type': 'X'}]:
             self.assertIsNone(normalize({**row(), **changed}, FUTURE))
