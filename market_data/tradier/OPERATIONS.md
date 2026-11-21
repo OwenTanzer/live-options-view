@@ -91,3 +91,7 @@ change unrelated services. An interrupted session remains partial.
 Historical rollout receipts and the detailed original IBIT proposal are available
 in [documentation history](../../docs/HISTORY.md). Past acceptance appointments
 are not current pending tasks.
+
+## Full-chain transport
+
+With MOO144_QQQ_OPENING_STRIKES=all the shared collector sends the persisted QQQ and admitted optional symbols in one WebSocket subscription. Reconnects reuse the same symbol list. Numeric widths keep the HTTP transport. The session opening map lists each selected QQQ contract and its first archived quote or trade receipt, or null until observed. A same-day restart preserves the saved opening selection. To roll back before a fresh session restore the prior pinned image and width 37. Never shrink or rewrite a persisted live universe.

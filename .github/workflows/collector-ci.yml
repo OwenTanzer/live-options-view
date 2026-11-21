@@ -5,7 +5,7 @@ name: Collector suite
 # the same required workflow.
 on:
   push:
-    branches: [master, release/gex-tradier-only-20261119, release/qqq-opening-20261119]
+    branches: [master, release/gex-tradier-only-20261119, release/qqq-opening-20261119, release/qqq-full-websocket-20261121]
     paths:
       - "market_data/**"
       - "deployment/python/**"

@@ -164,6 +164,7 @@ def main(
     lease_expires_at = datetime.fromisoformat(lease["expires_at"])
     configured_stream = {
         "shared_stream": True,
+        "transport": "websocket" if settings.qqq_opening_strikes == "all" else "http",
         "underlyings": [lane.underlying for lane in lanes],
         "lease_key": lease_key(run_date),
     }
@@ -228,6 +229,7 @@ def main(
     router = StreamRouter(active)
     stream_info = {
         "shared_stream": True,
+        "transport": "websocket" if settings.qqq_opening_strikes == "all" else "http",
         "underlyings": [lane.underlying for lane in lanes],
         "active_underlyings": [lane.underlying for lane in active],
         "unavailable_underlyings": {lane.underlying: lane.unavailable_reason
@@ -315,7 +317,7 @@ def main(
     health_thread = threading.Thread(target=health_publisher, daemon=True)
     health_thread.start()
 
-    recent = RecentPrints()
+    recent = RecentPrints(primary.universe.get("option_symbols", ()))
     # Restore this session's order-flow accumulation from the archive before new
     # prints arrive; overlaps deduplicate by identity and gaps stay visible.
     recent.rebuild(r2, bucket, primary.prefix, local_segments=primary.reconciliation.get("resume", ()),
@@ -330,7 +332,7 @@ def main(
         capture_result = capture_session(
             client, router.symbols, stream_spool, stream_stats, session_close, settings.max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
-            result=capture_result, recent=recent,
+            result=capture_result, recent=recent, full_chain=settings.qqq_opening_strikes == "all",
             session_open=session_open,
         )
     except Exception as exc:

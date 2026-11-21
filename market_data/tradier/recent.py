@@ -83,7 +83,8 @@ class Session:
 
 
 class RecentPrints:
-    def __init__(self):
+    def __init__(self, opening_symbols=()):
+        self.opening = dict.fromkeys(opening_symbols)
         self.quotes = {}
         self.previous = {}
         self.rows = deque(maxlen=2048)
@@ -127,6 +128,11 @@ class RecentPrints:
         option = OPTION.fullmatch(symbol)
         if not option:
             return
+        if (symbol in self.opening and self.opening[symbol] is None
+                and receipt and event["type"] in {"quote", "timesale"}):
+            with self.lock:
+                self.opening[symbol] = _ms(receipt)
+                self.version += 1
         if event["type"] == "quote":
             self.quotes[symbol] = event
             return
@@ -239,6 +245,8 @@ class RecentPrints:
         with self.lock:
             rows = list(self.rows)
             session = self.session.snapshot() if self.session else None
+            if session is not None and self.opening:
+                session["opening"] = dict(self.opening)
         return dict(lastReceived=rows[-1]["t"] if rows else None, cap=self.rows.maxlen, rows=rows, session=session)
 
     def publish(self, client, bucket, stop, lost):

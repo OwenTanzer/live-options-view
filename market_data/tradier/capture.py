@@ -12,17 +12,63 @@ import json
 import os
 import threading
 import time
+from contextlib import closing, contextmanager
 from collections import Counter
 from datetime import datetime
 from typing import Callable
 
 import requests
+import websocket
 
 from . import config
 from ._probe import STREAM, Tradier, is_retryable, parse_epoch_ms, stream_payload, utc_now
 from .config import ET
 from .spool import SegmentSpool, SpoolExhausted
 from .stats import BoundedStats
+
+
+def _websocket_lines(socket):
+    while True:
+        frame = socket.recv()
+        if not frame:
+            raise requests.ConnectionError("Tradier market socket closed")
+        for line in frame.splitlines():
+            if isinstance(line, bytes):
+                line = line.decode("utf-8", "replace")
+            if '"error"' in line:
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    pass  # The capture loop archives malformed payloads.
+                else:
+                    if isinstance(message, dict) and "error" in message:
+                        raise requests.ConnectionError("Tradier rejected the market subscription")
+            yield line
+
+
+@contextmanager
+def market_lines(client, symbols, session_id, full_chain):
+    if full_chain:
+        try:
+            with closing(websocket.create_connection(
+                "wss://ws.tradier.com/v1/markets/events", timeout=15
+            )) as socket:
+                socket.send(json.dumps(dict(symbols=symbols, sessionid=session_id,
+                                            filter=["quote", "timesale"], validOnly=False,
+                                            advancedDetails=True)))
+                yield _websocket_lines(socket)
+        except websocket.WebSocketBadStatusException as exc:
+            response = requests.Response()
+            response.status_code = exc.status_code
+            raise requests.HTTPError("Tradier WebSocket handshake failed", response=response) from None
+        except websocket.WebSocketException:
+            raise requests.ConnectionError("Tradier market socket interrupted") from None
+        return
+    with client.session.get(STREAM, params=stream_payload(symbols, session_id), stream=True,
+                            timeout=(15, 10)) as response:
+        response.raise_for_status()
+        chunked = getattr(response, "headers", {}).get("Transfer-Encoding", "").lower() == "chunked"
+        yield response.iter_lines(chunk_size=16384 if chunked else 1, decode_unicode=True)
 
 
 class CaptureResult:
@@ -50,6 +96,7 @@ def capture_session(
     result: CaptureResult | None = None,
     session_open: datetime | None = None,
     recent=None,
+    full_chain: bool = False,
 ) -> CaptureResult:
     """Run the stream-read loop until session close, a lost lease, or an
     exhausted spool.
@@ -86,12 +133,8 @@ def capture_session(
         phase = "create_session"
         try:
             session_id = client.create_market_session()
-            payload = stream_payload(symbols, session_id)
             phase = "connect"
-            with client.session.get(
-                STREAM, params=payload, stream=True, timeout=(15, 10)
-            ) as response:
-                response.raise_for_status()
+            with market_lines(client, symbols, session_id, full_chain) as lines:
                 phase = "read"
                 connected_at = now_et() if session_open is not None else None
                 if result.stream_connected_at is None:
@@ -99,11 +142,7 @@ def capture_session(
                 # Readiness belongs to this connection, never an old one that
                 # disconnected before the open. A 200 response alone is insufficient.
                 connection_ready_at = None
-                # urllib3 yields each HTTP chunk as soon as it arrives. Avoid
-                # decoding a byte at a time during opening bursts. Unframed
-                # responses retain the original low-volume boundary behavior.
-                chunked = getattr(response, "headers", {}).get("Transfer-Encoding", "").lower() == "chunked"
-                for line in response.iter_lines(chunk_size=16384 if chunked else 1, decode_unicode=True):
+                for line in lines:
                     observed_at = now_et()
                     if stop_requested() or observed_at >= session_close:
                         break

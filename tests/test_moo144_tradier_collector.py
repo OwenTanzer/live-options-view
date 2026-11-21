@@ -2442,5 +2442,23 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertTrue(callable(collector_run.finalize_run))
 
 
+class FullChainTransportTests(unittest.TestCase):
+    def test_reconnect_resubscribes_same_full_list_and_closes_each_socket(self):
+        from market_data.tradier.capture import market_lines
+        symbols = ["QQQ", "IBIT"] + [f"QQQ261123C{strike*1000:08d}" for strike in range(400, 802)]
+        bad, good = Mock(), Mock()
+        bad.recv.return_value = '{"error":"refused"}'
+        good.recv.return_value = b'{"type":"quote"}\n{"type":"timesale"}'
+        with patch("market_data.tradier.capture.websocket.create_connection", side_effect=[bad, good]):
+            with self.assertRaises(requests.ConnectionError), market_lines(Mock(), symbols, "one", True) as lines:
+                next(lines)
+            with market_lines(Mock(), symbols, "two", True) as lines:
+                self.assertEqual([json.loads(next(lines))["type"] for _ in range(2)], ["quote", "timesale"])
+        for sock, session in ((bad, "one"), (good, "two")):
+            self.assertEqual(json.loads(sock.send.call_args.args[0]), dict(
+                symbols=symbols, sessionid=session, filter=["quote", "timesale"], validOnly=False, advancedDetails=True))
+            sock.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

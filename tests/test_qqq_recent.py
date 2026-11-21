@@ -41,6 +41,15 @@ class RecentTests(unittest.TestCase):
         self.assertEqual(saved["rows"],list(feed.rows))
         self.assertEqual(saved["lastReceived"],ts+2000)
 
+    def test_opening_selection_keeps_unobserved_leg_after_replay(self):
+        call, put = "QQQ261123C00610000", "QQQ261123P00610000"
+        feed = recent.RecentPrints([call, put])
+        day = datetime(2026, 11, 23, 15, tzinfo=timezone.utc)
+        feed.session = recent.Session("2026-11-23")
+        feed.observe(dict(type="quote", symbol=call, collector_receipt_timestamp=day.isoformat()))
+        self.assertEqual(feed.payload()["session"]["opening"], {call: int(day.timestamp()*1000), put: None})
+        self.assertEqual(feed.payload()["session"]["contracts"], {})
+
     def test_sequence_set_is_exact_out_of_order(self):
         seen = recent.SeqSet()
         self.assertEqual([seen.add(n) for n in (5, 3, 4, 6, 5, 3, 9, 7, 8, 2)],
