@@ -65,11 +65,15 @@ async function renderShortlist(selection) {
 }
 function renderCommitted(selection) {
   const flow = el('history-order-flow-link');
-  flow.hidden = false;
-  flow.href = '/order-flow.html?' + new URLSearchParams({
-    one_clock_session: selection.session, one_clock_instrument: selection.instrument,
-    one_clock_at: String(selection.cutoff)
-  });
+  flow.hidden = selection.instrument !== 'QQQ';
+  if (flow.hidden) {
+    flow.removeAttribute('href');
+  } else {
+    flow.href = '/order-flow.html?' + new URLSearchParams({
+      one_clock_session: selection.session, one_clock_instrument: selection.instrument,
+      one_clock_at: String(selection.cutoff)
+    });
+  }
   renderBot();
   renderShortlist(selection);
   return renderChain(selection);

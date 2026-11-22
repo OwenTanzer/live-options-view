@@ -1,5 +1,6 @@
 // Run from the repo root with Playwright installed. Serve tracked fixture assets in-process.
 import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
 
@@ -84,6 +85,34 @@ try {
     assert.deepEqual(unexpected, []);
     await page.close();
   }
+  const history = await browser.newPage();
+  await history.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== origin) return route.abort();
+    if (url.pathname.startsWith('/api/')) return route.fulfill({status: 404, json: {}});
+    const file = url.pathname === '/' ? '/index.html' : url.pathname;
+    if (!/^\/(?:[\w.-]+\/)*[\w.-]+\.(?:js|css|html)$/.test(file)) return route.abort();
+    try {
+      return await route.fulfill({path: fileURLToPath(new URL('../site' + file, import.meta.url))});
+    } catch {
+      return route.abort();
+    }
+  });
+  await history.goto(link().replace('/order-flow.html?', '/?') + '#history-clock');
+  const outgoing = history.locator('#history-order-flow-link');
+  await outgoing.waitFor({state:'visible'});
+  const submit = history.locator('#history-clock-form button[type=submit]');
+  const instrument = history.locator('#history-clock-instrument');
+  await instrument.fill('AAPL');
+  await submit.click();
+  await history.getByText('Chain archive is available for QQQ, SPY and IBIT. Other sources keep their own coverage.').waitFor();
+  assert.ok(await outgoing.isHidden(), 'AAPL has no Order Flow archive');
+  assert.equal(await outgoing.getAttribute('href'), null);
+  await instrument.fill('QQQ');
+  await submit.click();
+  await outgoing.waitFor({state:'visible'});
+  assert.equal(new URL(await outgoing.getAttribute('href'), origin).searchParams.get('one_clock_at'), String(archiveCutoff));
+  await history.close();
   console.log('Order Flow shared cursor passed desktop and mobile archive and simulation checks.');
 } finally {
   await browser.close();
