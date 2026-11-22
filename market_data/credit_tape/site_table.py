@@ -34,7 +34,7 @@ def amount(raw):
             return format((n / divisor).normalize(), "f") + unit + ("+" if value.endswith("+") else "")
 
 
-def render_table(events, cursor, has_sample=False, sample_view=False, has_treu=False, treu_view=False):
+def render_table(events, cursor, has_sample=False, sample_view=False, has_treu=False, treu_view=False, replay=None):
     rows = []
     anchors = {}
     for ev in reversed(events):
@@ -54,7 +54,7 @@ def render_table(events, cursor, has_sample=False, sample_view=False, has_treu=F
         name = s.get("underlyingAssetName") or s.get("underlierIDLeg1") or product or s.get("productName") or "—"
         detail = " · ".join(str(v) for v in (product if product != name else "", s.get("expirationDate")) if v)
         raw_link = ""
-        if ev.get("source") == "tradeweb-uk-mtf-treu" and "#" in (ev.get("raw_ref") or ""):
+        if replay is None and ev.get("source") == "tradeweb-uk-mtf-treu" and "#" in (ev.get("raw_ref") or ""):
             filename, _, digest = ev["raw_ref"].partition("#")
             raw_link = (f'<a href="?view=treu&amp;file={h(filename)}&amp;sha={h(digest)}">'
                         f'Original CSV · row {int(ev["row_index"])+1}</a>')
@@ -96,11 +96,20 @@ def render_table(events, cursor, has_sample=False, sample_view=False, has_treu=F
         switch_view = ('<a href="/credit-tape/">Return to live tape</a>' if sample_view else
                        '<a href="/credit-tape/?view=treu-sample">Tradeweb UK sample</a>')
     title = "Tradeweb UK sample" if sample_view else "Credit tape"
+    mode = "replay" if replay else "live"
+    if replay:
+        cutoff, older_bytes, older_seq = replay
+        stamp = datetime.fromtimestamp(cutoff / 1000, ZoneInfo("UTC")).isoformat(timespec="milliseconds")
+        title = "Credit tape replay"
+        switch_view = f'<p>First-seen reconstruction through {stamp}. Times describe capture. Counts cover this archive page.</p>'
+        if older_bytes or older_seq:
+            switch_view += f'<a href="?one_clock_at={cutoff}&amp;end={older_bytes}&amp;seq={older_seq}">Read older archive page</a>'
+        switch_view += ' <a href="/credit-tape/">Return to live tape</a>'
     notices = len(events) - len(rows)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Credit tape · Options View</title>
 <link rel="stylesheet" href="/credit-tape/table.css"><script defer src="/credit-tape/table.js"></script></head>
-<body><main data-cursor="{h(cursor)}" data-publisher-filter="{'Tradeweb' if treu_view else ''}"><header><a href="/">Options View</a><h1>{title}</h1>{switch_view}
+<body><main data-cursor="{h(cursor)}" data-mode="{mode}" data-publisher-filter="{'Tradeweb' if treu_view else ''}"><header><a href="/">Options View</a><h1>{title}</h1>{switch_view}
 <p>{len(rows)} reports · {notices} archive notices in the current window</p>
 <small>Select an instrument for details. Tradeweb includes unclassified instruments. First seen in Pacific time. K = thousand, M = million, B = billion. + marks a capped lower bound.</small></header>
 <nav aria-label="Time index">{links}</nav>

@@ -340,6 +340,35 @@ class ServerTests(unittest.TestCase):
         self.assertLess(unified.index(b"TREU-LIVE"), unified.index(b"FIXTURE1"))
         self.assertIn(b"<dt>Price</dt><dd>99.7</dd>", unified)
         self.assertNotIn(b"TREU-ONLY", unified)
+        cutoff = 4070908801000  # 2099-01-01T00:00:01.000Z
+        replay = page + "replay?one_clock_at="
+        gated = self.get(port, replay + str(cutoff), host)[1]
+        self.assertIn(b"Sign in with GitHub", gated)
+        self.assertNotIn(b"FIXTURE1", gated)
+        before = self.get(port, replay + str(cutoff - 1), host, session)[1]
+        self.assertNotIn(b"FIXTURE1", before)
+        at = self.get(port, replay + str(cutoff), host, session)[1]
+        self.assertIn(b"FIXTURE1", at)
+        self.assertIn(b'data-mode="replay"', at)
+        self.assertNotIn(b"TREU-LIVE", at)
+        after = self.get(port, replay + str(cutoff + 2000), host, session)[1]
+        self.assertIn(b"TREU-LIVE", after)
+        self.assertNotIn(b"TREU-ONLY", after)
+        self.assertEqual(self.get(port, replay + str(cutoff) + "&view=live", host, session)[0], 400)
+        with mock.patch.object(sp, "MAX_ROWS", 1):
+            tape = self.archive / "events.jsonl"
+            split = tape.stat().st_size
+            with tape.open("a") as handle:
+                handle.write(json.dumps({"kind": "publication", "id": "LATER",
+                                         "first_seen": "2099-01-01T10:00:00Z"}) + "\n")
+            newest = self.get(port, replay + str(cutoff), host, session)[1]
+            self.assertNotIn(b"LATER", newest)
+            self.assertIn(f"&amp;end={split}&amp;seq=0".encode(), newest)
+            older = self.get(port, replay + str(cutoff) + f"&end={split}&seq=0", host, session)[1]
+            self.assertIn(b"FIXTURE1", older)
+            self.assertNotIn(b"older archive page", older)
+            with tape.open("r+b") as handle:
+                handle.truncate(split)
         focused = self.get(port, page + "?view=treu", host, session)[1]
         self.assertIn(b'data-publisher-filter="Tradeweb"', focused)
         self.assertIn(b"FIXTURE1", focused)
