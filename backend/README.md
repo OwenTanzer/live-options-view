@@ -255,3 +255,7 @@ The legacy paper
 username allowlist is ignored; unverified sessions and distinct users remain denied.
 Apply additive migrations 0005 and 0008 and verify the source rights receipt before enabling
 the separate API/asset release. This does not require a collector rollout.
+
+### One Clock historical corrections
+
+Apply additive migration `0013_one_clock_reevaluation.sql` before releasing this API revision. It adds an insert trigger to the existing native publication transaction. Each affected session and instrument receives a durable generation. The existing observer invocation indexes older activations and retained publications in pages of 24, then distributes work to overlapping saved rule versions, including paused versions. It reserves the existing two evaluation slots for current and historical work. Results compare the generation visible at the selected cutoff with the rule’s successful evaluation receipt. Incomplete bootstrap, failed rules and pending corrections retain their own status. Reverting the API to its previous compatible revision stops processing the historical queue; immutable evidence and additive schema remain available for a forward retry. No new cron or capture process is required.

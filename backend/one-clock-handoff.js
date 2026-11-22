@@ -10,7 +10,7 @@ function chunks(rows) {
   if(chunk.length)output.push(JSON.stringify(chunk));return output;
 }
 
-export async function handoffSource(db,descriptor,native,legacy,{source,session,instrument,cutoff}) {
+export async function handoffSource(db,descriptor,native,legacy,{source,session,instrument,cutoff,snapshotCutoff=cutoff}) {
   const stream=publicationStream(descriptor,instrument),adapter=descriptor.supersedes?.[source];
   if(!adapter)return native.records.filter(r=>r.source===source);
   const scope=[stream,session,instrument,source];
@@ -21,7 +21,7 @@ export async function handoffSource(db,descriptor,native,legacy,{source,session,
     // Read generation before the snapshot. The INSERT trigger checks it inside
     // the freezing transaction, rejecting a concurrent legacy ingestion commit.
     const work=await stmt(db,'SELECT generation FROM one_clock_ingestion_work WHERE source=? AND session=? AND instrument=?',adapter,session,instrument).first();
-    const legacyQuery="FROM one_clock_ingested WHERE source=? AND session=? AND instrument=? AND origin='recorded' AND received_at<=? LIMIT 10001",legacyArgs=[source,session,instrument,cutoff];
+    const legacyQuery="FROM one_clock_ingested WHERE source=? AND session=? AND instrument=? AND origin='recorded' AND received_at<=? LIMIT 10001",legacyArgs=[source,session,instrument,snapshotCutoff];
     const sizes=await list(stmt(db,'SELECT length(CAST(payload AS BLOB)) n '+legacyQuery,...legacyArgs));
     if(sizes.length>10000||sizes.reduce((n,r)=>n+r.n,0)>8*1024*1024)throw new Error('legacy handoff snapshot bound');
     const retained=await list(stmt(db,'SELECT * '+legacyQuery,...legacyArgs)),heads=new Map(),baselines=new Map();
@@ -44,8 +44,8 @@ export async function handoffSource(db,descriptor,native,legacy,{source,session,
   }
   if(handoff.legacy_adapter!==adapter||handoff.cutover_at>cutoff)throw new Error('source handoff scope');
   const identities=new Map((await list(stmt(db,'SELECT * FROM one_clock_handoff_identities WHERE handoff_id=? LIMIT 10001',handoff.id))).map(r=>[r.original_id,r]));
-  const from=`FROM one_clock_handoff_records h CROSS JOIN one_clock_ingested r ON r.source=? AND r.session=? AND r.instrument=? AND r.origin='recorded' AND r.record_id=h.record_id AND r.revision=h.revision WHERE h.handoff_id=? LIMIT 10001`;
-  const args=[source,session,instrument,handoff.id];
+  const from=`FROM one_clock_handoff_records h CROSS JOIN one_clock_ingested r ON r.source=? AND r.session=? AND r.instrument=? AND r.origin='recorded' AND r.record_id=h.record_id AND r.revision=h.revision WHERE h.handoff_id=? AND r.received_at<=? LIMIT 10001`;
+  const args=[source,session,instrument,handoff.id,snapshotCutoff];
   const sizes=await list(stmt(db,'SELECT length(CAST(r.payload AS BLOB)) n '+from,...args));
   if(sizes.length>10000||sizes.reduce((n,r)=>n+r.n,0)>8*1024*1024||identities.size>10000)throw new Error('handoff scope bound');
   const result=await list(stmt(db,'SELECT r.* '+from,...args));
