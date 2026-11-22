@@ -23,6 +23,7 @@ try {
     await cdp.send('WebAuthn.addVirtualAuthenticator',{options:{protocol:'ctap2',transport:'internal',
       hasResidentKey:true,hasUserVerification:true,isUserVerified:true,automaticPresenceSimulation:true}});
     let replay, carriedCookie;
+    const journalReads = [];
     await page.route('**/*',async route=>{
       const r=route.request(), url=new URL(r.url());
       assert.equal(url.origin,origin);
@@ -35,6 +36,9 @@ try {
       const req=new Request(r.url(),{method:r.method(),headers,body:r.postData() ?? undefined});
       if(r.postDataJSON()?.action==='verify' && !r.postDataJSON().invite) replay=req.clone();
       const resp=await worker.fetch(req,{DB:db});
+      if (r.method() === 'GET' && url.pathname === '/api/trade-journal') {
+        journalReads.push({date:url.searchParams.get('date'), cutoff:url.searchParams.get('cutoff'), status:resp.status});
+      }
       if (resp.status===401 && r.method()==='POST') console.log(member,'auth request denied:',r.postDataJSON()?.action);
       if(resp.headers.get('Set-Cookie')?.startsWith('__Host-journal=')) carriedCookie=resp.headers.get('Set-Cookie').split(';')[0];
       return route.fulfill({status:resp.status,headers:Object.fromEntries(resp.headers),body:await resp.text()});
@@ -44,13 +48,11 @@ try {
     await page.goto(origin+'/trade-journal.html?'+query);
     await page.locator('#access summary').click();
     await page.locator('#invitation').fill(invite);
-    const acceptedRead = page.waitForResponse(response => {
-      const url = new URL(response.url());
-      return url.pathname === '/api/trade-journal' && url.searchParams.get('cutoff') === String(cutoff) && response.ok();
-    });
+    const linkedRead = {date:'2026-11-09', cutoff:String(cutoff), status:200};
+    const beforeEnrollment = journalReads.length;
     await page.click('#enroll');
-    await acceptedRead;
     await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
+    assert.deepEqual(journalReads.slice(beforeEnrollment),[linkedRead]);
     assert.equal(await page.locator('#journal-view').inputValue(),'recorded');
     assert.equal(await page.locator('#day').inputValue(),'2026-11-09');
     assert.equal(await page.locator('#journal-cutoff').inputValue(),'09:30:01.523');
@@ -58,8 +60,20 @@ try {
     assert.equal(repeat.status,401);
     await page.click('#lock');
     await page.locator('#access:not([hidden])').waitFor();
+    const beforeSignIn = journalReads.length;
     await page.click('#unlock');
     await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
+    assert.deepEqual(journalReads.slice(beforeSignIn),[linkedRead]);
+    const beforeInvalid = journalReads.length;
+    await page.goto(origin+'/trade-journal.html?one_clock_session=2026-11-09');
+    await page.getByText('Invalid event replay link.',{exact:true}).waitFor();
+    assert.equal(journalReads.length,beforeInvalid);
+    await page.goto(origin+'/trade-journal.html');
+    await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
+    assert.equal(await page.locator('#journal-view').inputValue(),'retrospective');
+    assert.deepEqual(journalReads.slice(beforeInvalid),[
+      {date:await page.locator('#day').inputValue(), cutoff:null, status:200}
+    ]);
     assert.equal((await worker.fetch(replay,{DB:db})).status,401);
     await db.prepare('DELETE FROM trade_journal_members WHERE member=?').bind(member).run();
     await db.prepare('INSERT OR IGNORE INTO trade_journal_members(member,invite_hash,invite_until) VALUES (?,?,unixepoch()+604800)').bind(member,hash).run();
