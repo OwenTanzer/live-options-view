@@ -15,7 +15,7 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const prior=await stmt(db,'SELECT * FROM one_clock_ingestion_work WHERE source=? AND session=? AND instrument=?',...args).first();
   const versions=(await stmt(db,'SELECT artifact,version,status FROM one_clock_ingestion_versions WHERE source=? AND session=? AND instrument=? LIMIT 2001',...args).all()).results;
   if(versions.length>INGESTION_LIMITS.versions)throw new Error('source revision bound');
-  const index=await adapter.discover(bucket,{session,instrument,cutoff:now});
+  const index=await adapter.discover(bucket,{session,instrument,cutoff:now},db);
   if(!Array.isArray(index.artifacts)||index.artifacts.length>1000)throw new Error('source index bound');
   const known=new Set(versions.map(v=>JSON.stringify([v.artifact,v.version])));
   const candidates=index.artifacts.filter(v=>!known.has(JSON.stringify([v.key,v.version])));
@@ -25,7 +25,9 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const half=INGESTION_LIMITS.artifacts/2;
   const work=[...candidates.slice(0,half),...candidates.slice(Math.max(half,candidates.length-half))];
   let bytes=0,gets=0;
+  const sharedObjects=new Map();
   const readBucket={async get(key) {
+    if(adapter.reuseObjects && sharedObjects.has(key))return sharedObjects.get(key);
     const object=await bucket.get(key);gets++;
     if(!object)return null;
     if(!Number.isSafeInteger(object.size)||object.size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
@@ -34,7 +36,9 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     if(size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
     if(bytes+size>INGESTION_LIMITS.bytes)throw new IngestionBudget('source byte budget');
     bytes+=size;
-    return {size,etag:object.etag,uploaded:object.uploaded,text:async()=>text};
+    const retained={size,etag:object.etag,uploaded:object.uploaded,text:async()=>text};
+    if(adapter.reuseObjects)sharedObjects.set(key,retained);
+    return retained;
   }};
   const completed=[],rows=[];
   if(index.complete)for(const artifact of work) {
@@ -58,8 +62,8 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const coverage={source:adapter.id,adapterVersion:adapter.version,session,instrument,updatedAt:now,
     indexComplete:index.complete,pending:candidates.length-completed.length,processed:completed.length,
     gets,bytes,retainedVersions:versions.length+completed.length,
-    gaps:versions.filter(v=>v.status==='gap').length+completed.filter(v=>!v.result.rows.length).length,
-    final:false,reason:!index.complete?'metadata-index-bound':candidates.length>completed.length?'catching-up':'periodic-archive-observation',
+    gaps:versions.filter(v=>v.status==='gap').length+completed.filter(v=>v.result.gap||!v.result.rows.length).length,
+    final:false,...(index.through==null?{}:{through:index.through}),reason:!index.complete?(index.reason??'metadata-index-bound'):candidates.length>completed.length?'catching-up':'periodic-archive-observation',
     limitations:['No producer finality guarantee. Older sessions may receive late evidence.',
       'Versions overwritten between polls cannot be reconstructed. Retained versions remain available.']};
   const generation=(prior?.generation??0)+1;
@@ -67,7 +71,7 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     ON CONFLICT(source,session,instrument) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at,coverage=excluded.coverage`,...args,generation,now,JSON.stringify(coverage))];
   statements.push(stmt(db,'INSERT INTO one_clock_ingestion_history(source,session,instrument,generation,recorded_at,coverage) VALUES(?,?,?,?,?,?)',...args,generation,now,JSON.stringify(coverage)));
   for(const {artifact,result} of completed)statements.push(stmt(db,`INSERT INTO one_clock_ingestion_versions(source,session,instrument,artifact,version,received_at,status,detail) VALUES(?,?,?,?,?,?,?,?)`,
-    ...args,artifact.key,artifact.version,now,result.rows.length?'retained':'gap',result.reason??''));
+    ...args,artifact.key,artifact.version,now,result.rows.length&&!result.gap?'retained':'gap',result.reason??''));
   for(const row of rows)statements.push(stmt(db,`INSERT INTO one_clock_ingested(source,session,instrument,origin,record_id,revision,event_at,available_at,received_at,collection,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
     row.source,row.session,row.instrument,row.origin,row.id,row.revision,row.eventAt,row.availableAt,now,
     collection==='prospective'&&(!prior||row.availableAt<=prior.updated_at)?'backfill':collection,canonical(row)));
