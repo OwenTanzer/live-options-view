@@ -480,8 +480,8 @@ function renderPaper() {
         html += `<tr>
           <td>${instrumentLabel(b, sym)}</td>
           <td>${b.pos > 0 ? '+' : ''}${b.pos}</td>
-          <td>${fmtQ(b.avg)}${btc ? `/BTC · $${(b.avg * 5 * b.pos + b.open_fees).toFixed(2)} basis` : ''}</td>
-          <td>${mark != null ? fmtQ(mark) + (btc ? `/BTC · $${(mark * 5 * b.pos).toFixed(2)} liquidation before exit fee` : '') : (btc ? 'Exit unavailable / settlement pending' : '—')}</td>
+          <td>${fmtQ(b.avg)}${btc ? `/BTC · $${(b.avg * (b.contract?.multiplier ?? b.multiplier ?? 5) * b.pos + b.open_fees).toFixed(2)} basis` : ''}</td>
+          <td>${mark != null ? fmtQ(mark) + (btc ? `/BTC · $${(mark * (b.contract?.multiplier ?? b.multiplier ?? 5) * b.pos).toFixed(2)} liquidation before exit fee` : '') : (btc ? 'Exit unavailable / settlement pending' : '—')}</td>
           <td class="${pnl != null ? pnlClass(pnl) : ''}">${pnl != null ? fmtMoney(pnl) : '—'}</td>
           <td><button class="paper-btn" data-sym="${sym}">close</button></td>
         </tr>`;
