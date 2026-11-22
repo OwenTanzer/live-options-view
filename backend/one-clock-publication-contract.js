@@ -40,7 +40,7 @@ export async function decodePublication(bytes,{descriptor,instrument,sequence,pr
   }
   const identities=new Set(),rows=entry.records.map(record=>{
     only(record,['source','id','revision','session','eventAt','value']);
-    if(!Object.hasOwn(descriptor.outputs,record.source)||!validSession(record.session))throw new Error('publication output scope');
+    if(!Object.hasOwn(descriptor.outputs,record.source)||!(descriptor.instrumentsByOutput?.[record.source]??descriptor.instruments).includes(instrument)||!validSession(record.session))throw new Error('publication output scope');
     const fields=descriptor.outputs[record.source];
     const eventAt=instant(record.eventAt),session=descriptor.sessionBasis==='new-york'?sessionAt(eventAt):new Date(eventAt).toISOString().slice(0,10);
     if(session!==record.session||eventAt>availableAt)throw new Error('publication event scope');

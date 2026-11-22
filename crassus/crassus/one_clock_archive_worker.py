@@ -96,13 +96,18 @@ class ArchiveProjection:
 
 
 def from_environment(archive,state_dir):
-    if archive is None:
+    if archive is None or os.environ.get("CRASSUS_ONE_CLOCK_PUBLICATION") == "disabled":
         return None
     prefix = "CRASSUS_ONE_CLOCK_PUBLIC_"
     names = ("ACCOUNT_ID","ACCESS_KEY_ID","SECRET_ACCESS_KEY","BUCKET")
     values = {name:os.environ.get(prefix+name,"").strip() for name in names}
     if not any(values.values()):
-        return None
+        # This is the bucket-scoped public writer already used by the meter.
+        # An explicitly supplied override must validate on its own.
+        from .oi_skew_publisher import config_from_environment
+        values, reason = config_from_environment()
+        if values is None:
+            return None
     if (not all(values.values()) or len(values["ACCOUNT_ID"]) != 32 or
             any(c not in "0123456789abcdef" for c in values["ACCOUNT_ID"]) or
             values["BUCKET"] == archive.bucket or

@@ -8,6 +8,7 @@ export const collectorPublication=Object.freeze({id:'collector-chain',owner:'mar
   instruments:['QQQ','SPY','IBIT'],outputs:{price:{spot:'number'},skew:{imbalance:'number',strikes:'number',callOI:'number',putOI:'number'}}});
 export const botAuditPublication = Object.freeze({
   id: 'bot-audit', owner: 'crassus', audience: 'public', sessionBasis: 'new-york',
+  instrumentsByOutput: {'bot-anchored-skew':['QQQ']},
   instruments: ['QQQ', 'SPY', 'IBIT'],
   outputs: {
     'bot-decision': {bot:'string', outcome:'string', action:'string', inputAgeMs:'number'},

@@ -4,6 +4,8 @@ import json
 import unittest
 from pathlib import Path
 import tempfile
+import os
+from unittest.mock import patch
 from types import SimpleNamespace
 import uuid
 
@@ -73,6 +75,21 @@ class PublicDecisions(unittest.TestCase):
             state.unlink()
             self.assertTrue(worker.step())
             self.assertEqual(public.objects,before)
+
+    def test_existing_public_credential_fallback_and_override_isolation(self):
+        from crassus.crassus.one_clock_archive_worker import from_environment
+        owner=SimpleNamespace(bucket="private")
+        settings={"ACCOUNT_ID":"a"*32,"BUCKET":"public","ACCESS_KEY_ID":"p","SECRET_ACCESS_KEY":"s"}
+        env={"CRASSUS_OI_SKEW_PUBLIC_"+k:v for k,v in settings.items()}
+        with patch.dict(os.environ,env,clear=True), patch("crassus.crassus.oi_skew_publisher._r2_client") as client:
+            self.assertEqual(from_environment(owner,Path("/tmp")).bucket,"public")
+            client.assert_called_once_with(settings)
+            os.environ["CRASSUS_ONE_CLOCK_PUBLIC_BUCKET"]="partial"
+            self.assertIsNone(from_environment(owner,Path("/tmp")))
+            os.environ.pop("CRASSUS_ONE_CLOCK_PUBLIC_BUCKET")
+            os.environ["CRASSUS_ONE_CLOCK_PUBLICATION"]="disabled"
+            self.assertIsNone(from_environment(owner,Path("/tmp")))
+        self.assertIsNone(project(decision("ibit_execution","oi_skew_ibit_adaptive")))
 
     def test_projection_and_time(self):
         record=decision()

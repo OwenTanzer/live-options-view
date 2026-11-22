@@ -19,7 +19,7 @@ function validatedRule(input) {
   if(rule.id.length>100||rule.name.length>120||rule.instruments.length>3||rule.instruments.some(i=>!instruments.includes(i)))throw new Error('unsupported rule scope');
   for(const c of [...rule.conditions,...rule.outcomes]) {
     if(!Object.hasOwn(researchFields,c.source)||!Object.hasOwn(researchFields[c.source],c.field))throw new Error('This input is not yet available to the public observer.');
-    if(rule.instruments.some(instrument=>![...publicIngestionSources,...nativePublicationSources].some(source=>(Array.isArray(source.outputs)?source.outputs.includes(c.source):Object.hasOwn(source.outputs,c.source))&&source.instruments.includes(instrument))))throw new Error('Input unavailable for a selected instrument');
+    if(rule.instruments.some(instrument=>![...publicIngestionSources,...nativePublicationSources].some(source=>(Array.isArray(source.outputs)?source.outputs.includes(c.source):Object.hasOwn(source.outputs,c.source))&&(source.instrumentsByOutput?.[c.source]??source.instruments).includes(instrument))))throw new Error('Input unavailable for a selected instrument');
     if(c.maxAgeMs>86400000||(c.horizonMs??0)>86400000||(c.toleranceMs??0)>86400000)throw new Error('rule time bound');
   }
   return rule;
