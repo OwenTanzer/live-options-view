@@ -63,7 +63,17 @@ async function renderShortlist(selection) {
     el('history-clock-shortlist-evidence').textContent=JSON.stringify({...(row?{value:row.value,evidence:row.evidence,details:row.details}:{}),coverage:shortlistCoverage},null,2);
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}
 }
-function renderCommitted(selection) { renderBot();renderShortlist(selection);return renderChain(selection); }
+function renderCommitted(selection) {
+  const flow = el('history-order-flow-link');
+  flow.hidden = false;
+  flow.href = '/order-flow.html?' + new URLSearchParams({
+    one_clock_session: selection.session, one_clock_instrument: selection.instrument,
+    one_clock_at: String(selection.cutoff)
+  });
+  renderBot();
+  renderShortlist(selection);
+  return renderChain(selection);
+}
 el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();
