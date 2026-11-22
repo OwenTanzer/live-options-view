@@ -7,10 +7,14 @@ const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/replay', '/credit-t
 const RETURN_PATHS = new Map([['btc', '/?chain=BTC'], ['kalshi', '/kalshi.html']]);
 const REPLAY_QUERY = /^\?one_clock_at=([1-9]\d{12})(?:&end=(\d{1,16})&seq=(\d{1,16}))?$/;
 function replayHint(query) {
+  const kalshi = /^\?return=kalshi&one_clock_at=([1-9]\d{12})$/.exec(query);
+  if (kalshi) return 'kalshi.' + kalshi[1];
   const match = REPLAY_QUERY.exec(query);
   return match && ['credit', ...match.slice(1).filter(Boolean)].join('.');
 }
 function returnPath(hint) {
+  const kalshi = /^kalshi\.([1-9]\d{12})$/.exec(hint);
+  if (kalshi) return '/kalshi.html?one_clock_at=' + kalshi[1];
   const match = /^credit\.([1-9]\d{12})(?:\.(\d{1,16})\.(\d{1,16}))?$/.exec(hint);
   if (!match) return RETURN_PATHS.get(hint);
   return '/credit-tape/replay?one_clock_at=' + match[1] + (match[2] ? '&end=' + match[2] + '&seq=' + match[3] : '');
