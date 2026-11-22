@@ -41,3 +41,16 @@ test('HTTP read is identity-scoped, private, and independent of live quote or or
   assert.ok(html.includes(key)); assert.ok(!html.includes('12345')); assert.ok(!html.includes(id));
   assert.equal((await read('token','POST')).status,405);
 });
+
+test('receipt pages detect a changed candidate set and retain CME contract identity',async()=>{
+  const cme='BTCOPT:'+'c'.repeat(40);
+  const cmeContract={contract_key:cme,instrument_type:'futures_option',product:'/BTC',series:'monthly',
+    exchange:'CME',multiplier:5,type:'put',strike:90000,provider_symbol:'CME fixture',streamer_symbol:'BTC:XCME',
+    future_symbol:'/BTCZ6',future_expiry:'2026-11-27',exp:'2026-11-27',expires_at:'2026-11-27T16:00:00Z',
+    stops_trading_at:'2026-11-27T16:00:00Z'};
+  const owner={...record,trades:[{...trade,sym:cme}]};
+  const cmeReceipt={...receipt,sym:cme,source_quote:{...receipt.source_quote,contract:cmeContract,symbol:cme}};
+  const first=await privateBitcoinPage(bucket(cmeReceipt),owner,uploaded,0);
+  assert.equal(first.rows[0].venue,'CME');
+  assert.equal((await privateBitcoinPage(bucket(cmeReceipt),{...owner,trades:[]},uploaded,0,first.version)).restart,true);
+});
