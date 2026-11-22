@@ -39,7 +39,7 @@ export async function handleBotDecisions(request,env,url) {
   const cutoff=Number(q.get('cutoff')), after=q.get('after');
   if([...q.keys()].some(k=>!['bot','session','instrument','cutoff','after'].includes(k)||q.getAll(k).length!==1)
      || !BOT_USERNAME_RE.test(bot??'') || !validSession(session) || !['QQQ','SPY','IBIT'].includes(instrument)
-     || !Number.isSafeInteger(cutoff) || cutoff<1e12 || cutoff>Date.now()+60000 || sessionAt(cutoff)!==session
+     || !Number.isSafeInteger(cutoff) || cutoff<1e12 || cutoff>Date.now()+60000 || sessionAt(cutoff)<session
      || (after!==null && !HASH.test(after))) return jsonResponse({error:'invalid decision scope'},400);
   try {
     if (!(await botUsernames(env)).includes(bot)) return jsonResponse({error:'Public bot unavailable'},404);

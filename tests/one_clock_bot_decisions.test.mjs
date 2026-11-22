@@ -2,13 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
+import {createStorage} from '../backend/storage.js';
 import {makeStorage} from './helpers/d1_shim.mjs';
 import {ingestPublicationStream} from '../backend/one-clock-publications.js';
 import {botAuditPublication} from '../backend/one-clock-publication-sources.js';
 import {handleBotDecisions,readBotDecisions} from '../backend/one-clock-bot-decisions.js';
 import {botDecisionSource} from '../site/shared/one-clock-bot-decisions.js';
 
-const T=Date.parse('2026-11-20T15:02:00Z');
+// Friday decisions reach the consumer on Saturday.
+const T=Date.parse('2026-11-21T15:02:00Z');
 const scope={bot:'crassus_oiskew',instrument:'QQQ',session:'2026-11-20',cutoff:T,after:null};
 test('private fixture goes through unchanged producer and real consumer, before/at receipt and on rewind',async t=>{
   const cmd=`import sys, json, hashlib
@@ -30,6 +32,21 @@ print(json.dumps({k:v.decode() for k,v in public.objects.items() if '/entries/' 
   const bucket={async get(key){if(!entries[key])return null;const wire=new TextEncoder().encode(entries[key]);return {size:wire.length,uploaded:new Date(T-2000),arrayBuffer:async()=>wire.buffer};}};
   await ingestPublicationStream(db,bucket,botAuditPublication,{instrument:'QQQ',now:T});
   assert.deepEqual((await readBotDecisions(db,{...scope,cutoff:T-1})).rows,[]);
+  const env={DB:db,BOT_INDEX_READS:'legacy'},store=createStorage(env);
+  await store.users.insert(scope.bot,{username:scope.bot,is_bot:true,strategy_id:'oi_skew_qqq',version:0});
+  await store.botMarkers.put(scope.bot,{username:scope.bot});
+  const route=async cutoff=>{
+    const query=new URLSearchParams({bot:scope.bot,instrument:scope.instrument,session:scope.session,cutoff});
+    const url=new URL('https://test/api/one-clock/bot-decisions?'+query);
+    return handleBotDecisions(new Request(url),env,url);
+  };
+  t.mock.method(Date,'now',()=>T+86400000);
+  assert.equal((await route(Date.parse('2026-11-19T15:00:00Z'))).status,400);
+  for(const [cutoff,expected] of [[T-1,0],[T,2],[T+86400000,2],[T-1,0]]) {
+    const response=await route(cutoff);
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).rows.length,expected);
+  }
   const data=await readBotDecisions(db,scope);
   assert.equal(data.rows.length,2);assert.equal(data.next,null);
   assert.equal(data.rows.find(r=>r.value.outcome==='no_trade').details.anchor.anchor,0.1);
