@@ -61,6 +61,20 @@ producer product. A missing current-day snapshot never selects yesterday.
 This tool is an undeployed review candidate: the producer publication gate,
 remote retention policy and live client verification remain outstanding.
 
+For One Clock replay, pass `as_of_ms` (UTC epoch milliseconds) to
+`return_rankings` with an explicit session, or to `active_rankings` with a
+session and sweep number. The pinned sweep path skips moving latest/attempt
+pointers. Each required body must have qualifying evidence for that exact
+revision, including later detail pages. For the fixed public archive, the R2
+HTTP response must supply one strong ETag and a Last-Modified date; the conservative
+availability bound is the following whole second. The producer’s own
+`published_at` can precede the upload. The envelope carries per-member
+digests, availability bounds and the latest bound of the selected members.
+A rebuilt or untimed revision yields a coverage gap. Filesystem modification
+times have no publication meaning. Active ranks measure freshness against the
+chosen cursor, while final ranks remain retrospective. Omitting `as_of_ms`
+preserves the existing tools’ behavior.
+
 The smoke client includes standard `_meta` and verifies text/structured results
 agree. Stdout contains only newline-delimited JSON-RPC server messages.
 

@@ -25,7 +25,16 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function permitted(key) {
   if (typeof key !== 'string' || !KEY.test(key)) throw new DataError('invalid_reference', 'Artifact is outside the market allowlist.');
 }
-function publicRead(key, remaining, timeout, request = https.get) {
+function revisionReceipt(headers) {
+  const etag = headers.etag, modified = headers['last-modified'];
+  if (typeof etag !== 'string' || !/^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag) ||
+      typeof modified !== 'string') return null;
+  const stamp = Date.parse(modified);
+  if (!Number.isFinite(stamp) || new Date(stamp).toUTCString() !== modified) return null;
+  // The origin date is precise to seconds, rounded down.
+  return {etag, availableAt:stamp + 1000};
+}
+function publicRead(key, remaining, timeout, request = https.get, onResponse = () => {}) {
   permitted(key);
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -37,6 +46,7 @@ function publicRead(key, remaining, timeout, request = https.get) {
         res.destroy(); req.destroy();
         return;
       }
+      onResponse(res.headers || {});
       let size = 0; const chunks = [];
       res.on('data', chunk => {
         size += chunk.length;
@@ -102,14 +112,21 @@ class Source {
   query() {
     const started = Date.now(); let requests = 0, bytes = 0;
     const evidence = [];
+    let cutoff = null;
     const get = async (key, pathSymbol = null) => {
       permitted(key);
       if (++requests > LIMITS.requests) throw new DataError('excessive_request', 'Query request limit exceeded.', key);
       const remainingMs = LIMITS.timeout_ms - (Date.now() - started);
       if (remainingMs <= 0) throw new DataError('upstream_timeout', 'Query deadline exceeded.', key);
       const cap = Math.min(LIMITS.artifact_bytes, LIMITS.query_bytes - bytes);
-      let raw;
-      if (this.reader) raw = Buffer.from(await this.reader(key));
+      let raw, availableAt = null, entityTag = null;
+      if (this.reader) {
+        const result = await this.reader(key);
+        if (result && Object.hasOwn(result, 'bytes') && Object.hasOwn(result, 'availableAt')) {
+          raw = Buffer.from(result.bytes);
+          availableAt = result.availableAt;
+        } else raw = Buffer.from(result);
+      }
       else if (this.directory) {
         try {
           const root = await fs.realpath(this.directory);
@@ -127,12 +144,22 @@ class Source {
           if (e instanceof DataError) throw e;
           throw new DataError(e.code === 'ENOENT' ? 'missing_artifact' : 'upstream_failure', 'Local artifact could not be read.', key);
         }
-      } else raw = await publicRead(key, cap, remainingMs);
+      } else raw = await publicRead(key, cap, remainingMs, https.get, headers => {
+        const receipt = revisionReceipt(headers);
+        if (receipt) {availableAt = receipt.availableAt; entityTag = receipt.etag;}
+      });
       if (raw.length > cap) throw new DataError('excessive_response', 'Artifact or query byte limit exceeded.', key);
       bytes += raw.length;
+      if (cutoff !== null && (!Number.isSafeInteger(availableAt) || availableAt < 1e12 || availableAt > cutoff))
+        throw new DataError('unavailable_at_cursor', 'This retained revision has no qualifying availability evidence at the requested cutoff.', key);
       const entry = { locator: key, link: this.mode === 'public_anonymous' ? ORIGIN + '/' + key : null,
         retrieval_time: new Date().toISOString(), bytes: raw.length, retrieved_sha256: hash(raw),
         checksum_verification: 'not_verified_against_producer' };
+      if (cutoff !== null) {
+        entry.available_by_ms = availableAt;
+        if (entityTag !== null) entry.etag = entityTag;
+        entry.availability_basis = this.reader ? 'injected_fixture_receipt' : 'origin_last_modified_upper_bound';
+      }
       evidence.push(entry);
       if (pathSymbol !== null && key.startsWith('oa203/windows/oa203-windows-v1/weekly_') && key.endsWith('/paths.csv.gz')) {
         const path = await selectWeeklyPath(raw, pathSymbol, key, started + LIMITS.timeout_ms, LIMITS.query_bytes - bytes);
@@ -147,7 +174,7 @@ class Source {
       }
       return raw.toString('utf8');
     };
-    return { evidence, get, json: async key => {
+    return { evidence, get, atCutoff(value) { cutoff = value; }, json: async key => {
       const text = await get(key);
       try { return JSON.parse(text); }
       catch { throw new DataError('incompatible_schema', 'Artifact is not valid JSON.', key); }
@@ -160,6 +187,6 @@ class Source {
 function errorRecord(e, key = null) {
   return { code: e.code || 'incompatible_schema', message: e instanceof DataError ? e.message : 'Artifact does not satisfy the supported contract.', locator: e.key || key };
 }
-module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, errorRecord };
+module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, revisionReceipt, errorRecord };
 
 
