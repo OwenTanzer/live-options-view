@@ -80,7 +80,7 @@ export function followNews({container, research, panel, fetchJson, mountLive, da
   const live = document.createElement('div');
   const replay = document.createElement('div');
   container.append(live, replay);
-  let generation = 0, showing, liveMounted = false;
+  let generation = 0, showing, scope;
   let cache = new Map(), lease, expiryTimer;
   function refreshControl(reason) {
     generation++;
@@ -98,23 +98,37 @@ export function followNews({container, research, panel, fetchJson, mountLive, da
     if (showing === 'replay' && lease && !lease()) refreshControl('News archive expired at this cursor.');
   }
   for (const event of ['pageshow','online']) events.addEventListener(event, checkLease);
-  document.addEventListener('visibilitychange', checkLease);
-  function cached(key) {
+  function visibilityChanged() {
+    change(dashboard.snapshot());
+  }
+  new MutationObserver(visibilityChanged).observe(container, {attributes: true, attributeFilter: ['class']});
+  document.addEventListener('visibilitychange', visibilityChanged);
+  function cached(key, signal) {
+    if (signal.aborted) return Promise.reject(signal.reason);
     const current = cache;
-    if (!current.has(key)) current.set(key, fetchJson(key).catch(error => {current.delete(key); throw error;}));
+    if (!current.has(key)) current.set(key, fetchJson(key, signal).catch(error => {current.delete(key); throw error;}));
     return current.get(key);
   }
   async function change(selection) {
-    if (showing === 'live' && selection.mode === 'live') return;
+    const next = document.hidden || container.classList.contains('hidden') ? 'hidden' : selection.mode;
+    if (next === showing && next !== 'replay') return;
     const ticket = ++generation;
-    showing = selection.mode;
-    live.hidden = showing !== 'live';
-    replay.hidden = showing === 'live';
-    if (research) research.hidden = showing !== 'live';
-    if (showing === 'live') {
+    if (next !== showing) {
+      scope?.abort();
       clearTimeout(expiryTimer);
+      cache = new Map();
       lease = null;
-      if (!liveMounted) {liveMounted = true; await mountLive(live);}
+      live.replaceChildren();
+      replay.replaceChildren();
+      showing = next;
+      scope = next === 'hidden' ? null : new AbortController();
+    }
+    live.hidden = showing !== 'live';
+    replay.hidden = showing !== 'replay';
+    if (research) research.hidden = showing !== 'live';
+    if (showing === 'hidden') return;
+    if (showing === 'live') {
+      await mountLive(live, scope.signal);
       return;
     }
     replay.textContent = 'Reading archived headlines…';
@@ -125,7 +139,8 @@ export function followNews({container, research, panel, fetchJson, mountLive, da
       expiryTimer = setTimeout(checkLease, panel.LEASE_MS + 1);
     }
     try {
-      const result = await archiveNews(selection, cached, panel, lease);
+      const signal = scope.signal;
+      const result = await archiveNews(selection, key => cached(key, signal), panel, lease);
       if (ticket !== generation) return;
       if (!lease()) { checkLease(); return; }
       const heading = document.createElement('p');

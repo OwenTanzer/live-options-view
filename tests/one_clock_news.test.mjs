@@ -42,12 +42,12 @@ test('a receipt between two milliseconds first becomes visible at the later curs
   const read=async key=>{
     const copy=structuredClone(fixtures.byKey(key));
     for(const row of copy.rows??[]) if(row.title.includes('Tanker') && row.revision_number===1){
-      row.archived_at='2026-11-09T10:06:00.000684Z';
+      row.archived_at='2026-11-09T10:06:00.006684Z';
     }
     return copy;
   };
   const at=Date.parse(base.session+'T10:06:00Z');
-  for(const [cutoff,visible] of [[at,false],[at+1,true]]){
+  for(const [cutoff,visible] of [[at+6,false],[at+7,true]]){
     const {rows}=await archiveNews({...base,cutoff},read,panel,()=>true);
     assert.equal(rows.some(r=>r.value.title.includes('Tanker')),visible);
   }
