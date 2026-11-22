@@ -47,11 +47,40 @@ class ThemeMapping(unittest.TestCase):
             "U.S. Treasury announces auction of bills and notes",
             "Auction of bills and notes announced by U.S. Treasury",
             "Demand for 2-year notes sold by U.S. Treasury grows",
+            "U.S. Treasury issues notes",
+            "United States Treasury sells bills",
+            "US Treasury auctions bonds",
+            "Notes issued by U.S. Treasury draw demand",
+            "U.S. Treasury 13-week bills attract buyers",
+            "U.S. Treasury's 2-year notes draw demand",
         ):
             with self.subTest(title=title):
                 result = self.classify(self.headline(title))
                 self.assertEqual(["treasury_financing"], result["theme_mapping"]["themes"])
                 self.assertEqual(["TLT"], result["instruments"])
+
+    def test_nearby_unrelated_financing_stays_unknown(self):
+        for title in (
+            "U.S. Treasury sanctions cybercriminals; city debt climbs",
+            "U.S. Treasury sues an auction house over sanctions breach",
+            "Court auction proceeds awarded after lawsuit against U.S. Treasury",
+            "U.S. Treasury announces sanctions; city auctions bonds",
+            "U.S. Treasury notes city debt issuance",
+            "U.S. Treasury bills contractor; 2-year notes sold by city",
+            "U.S. Treasury discusses city bond auction",
+            "Auction of notes announced by city; U.S. Treasury comments",
+            "U.S. Treasury announces auction house sanctions",
+        ):
+            with self.subTest(title=title):
+                obs = self.headline(title)
+                before = copy.deepcopy(obs)
+                result = self.classify(obs)
+                self.assertEqual("unknown", result["instrument_mapping"])
+                self.assertEqual([], result["instruments"])
+                self.assertEqual([], result["theme_mapping"]["matches"])
+                self.assertEqual(before, obs)
+                for key, value in result["theme_mapping"]["attribution"].items():
+                    self.assertEqual(obs[key], value)
 
     def test_fed_label_asserts_topic_only_without_new_subjects(self):
         result = self.classify(self.headline("Federal Reserve reports a cybersecurity incident"))

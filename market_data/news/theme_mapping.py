@@ -9,22 +9,35 @@ from pathlib import Path
 
 from .normalize import canonical_json, sha256_hex
 
-VERSION = "fed-treasury-v2"
+VERSION = "fed-treasury-v3"
 # Frozen policy: later source enablement must not silently expand this pilot.
 SOURCE_IDS = ("ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch")
 # Explicit US institutions only. Bare 'fed', 'Treasury', Powell, rates and debt
 # are ambiguous. Patterns describe topics, including negation/speculation.
-# Notes/bills alone can be verbs. Require another financing term or a numeric
-# security tenor (e.g. 13-week bills, 2-year notes), not merely their presence.
-_FINANCING = (r"(?:auctions?|debt|bonds?|refunding|borrowing|general account|TGA|deficits?|"
-              r"\d+[- ](?:week|month|year) (?:notes?|bills?))")
+# No proximity windows: the institution must own the instrument phrase or be
+# the issuer in an explicit financing template. Uncertain syntax stays unknown.
+_TREASURY = r"(?:U\.?S\.?|United States) Treasury"
+_SECURITY = r"(?:\d+[- ](?:week|month|year) )?(?:bills?|notes?|bonds?)"
+_SECURITIES = rf"{_SECURITY}(?: and {_SECURITY})?"
+_AUCTION = rf"(?:{_SECURITIES} auctions?|auctions? of {_SECURITIES})"
+_OWNED = (rf"(?:\d+[- ](?:week|month|year) (?:bills?|notes?)|bonds?|"
+          rf"(?:bills?|notes?) (?:yields?|auctions?|issuance)|"
+          rf"(?:quarterly )?refunding|debt issuance|general account)")
 RULES = (
     # An institution/topic mention, not a verified policy action or sentiment.
     ("fed_topic", r"\b(?:Federal Reserve|FOMC|Federal Open Market Committee)\b",
      ("QQQ", "SPY", "TLT")),
-    ("treasury_financing", rf"\b(?:U\.?S\.?|United States) Treasury\b.{{0,100}}\b{_FINANCING}\b",
+    ("treasury_financing", rf"\b{_TREASURY}(?:['’]s)? {_OWNED}\b",
      ("TLT",)),
-    ("treasury_financing", rf"\b{_FINANCING}\b.{{0,100}}\b(?:U\.?S\.?|United States) Treasury\b",
+    ("treasury_financing", rf"\b{_TREASURY} (?:sells|issues|auctions) {_SECURITIES}\b",
+     ("TLT",)),
+    ("treasury_financing", rf"\b{_TREASURY} announces (?:{_AUCTION}|(?:quarterly )?refunding)\b",
+     ("TLT",)),
+    ("treasury_financing", rf"\b{_SECURITIES} (?:sold|issued|auctioned) by {_TREASURY}\b",
+     ("TLT",)),
+    ("treasury_financing", rf"\b{_AUCTION} announced by {_TREASURY}\b",
+     ("TLT",)),
+    ("treasury_financing", rf"\bdebt issuance by {_TREASURY}\b",
      ("TLT",)),
 )
 DIGEST = sha256_hex(canonical_json({
