@@ -195,13 +195,15 @@ async function accountRequest(body) {
 }
 async function loadAccount() {
   accountState=await accountRequest();
-  for(const [source,fields] of Object.entries(accountState.sources)) {
-    formFields.set(source,fields);if(!sources.some(([id])=>id===source))sources.push([source,source]);
+  if (!archiveMode) {
+    for (const [source,fields] of Object.entries(accountState.sources)) {
+      formFields.set(source,fields);
+      if(!sources.some(([id])=>id===source))sources.push([source,source]);
+    }
   }
-  for(const id of ['instrument','observed-instrument']) {
+  for(const id of archiveMode ? ['observed-instrument'] : ['instrument','observed-instrument']) {
     const selected=$(id).value;$(id).replaceChildren(...(id==='observed-instrument'?[option('ALL','All instruments')]:[]),...accountState.instruments.map(value=>option(value)));
     if(accountState.instruments.includes(selected))$(id).value=selected;
-    if(archiveMode && id==='instrument')$(id).replaceChildren(option('QQQ'));
   }
   if(!$('observed-day').value)$('observed-day').value=accountState.defaultSession;
   if(!$('observed-end').value)$('observed-end').value=accountState.defaultSession;
