@@ -14,6 +14,7 @@ const btcOptions = {
     this.render();
   },
   visibleSymbols() {
+    if (this.product === 'usdc') return ticketEl?.dataset?.btc || '';
     const rows = [...document.querySelectorAll('.btc-contract')];
     const visible = rows.filter(el => {
       const rect = el.getBoundingClientRect();
@@ -239,7 +240,8 @@ const btcOptions = {
       for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
         const price = this.side(sym, side), reason = this.reason(sym, action, book);
         const button = row.querySelector('.btc-' + action);
-        button.disabled = !!reason || price == null;
+        const reviewQuote = this.product === 'usdc' && Number.isFinite(snapshot?.[side]) && snapshot[side] > 0;
+        button.disabled = !(reviewQuote || (!reason && price != null));
         const q = quote;
         const streamed = Number.isFinite(q?.[side]) && q[side] > 0;
         const useSnapshot = !streamed && Number.isFinite(snapshot?.[side]);
@@ -332,7 +334,7 @@ const btcOptions = {
     }
     if (data.expiries?.length) {
       const picker = element('select', '', '');
-      picker.setAttribute('aria-label', 'Bitcoin option expiry');
+      picker.setAttribute('aria-label', this.product === 'usdc' ? 'USDC option expiry' : 'Standard monthly expiry');
       for (const expiry of data.expiries) picker.add(new Option(expiry, expiry));
       picker.value = data.expiry;
       picker.onchange = () => { this.expiry = picker.value; this.refresh(); };
@@ -360,7 +362,7 @@ const btcOptions = {
       for (const [action, side] of [['sell', 'bid'], ['buy', 'ask']]) {
         const cell = element('div', 'btc-side', ''), button = element('button', 'btc-' + action, '');
         button.dataset.btcAction = action; button.dataset.symbol = c.contract_key;
-        button.onclick = e => { if (!this.reason(c.contract_key, action) && this.side(c.contract_key, side) != null) this.openContract(e, c, action); };
+        button.onclick = e => { if (this.product === 'usdc' || (!this.reason(c.contract_key, action) && this.side(c.contract_key, side) != null)) this.openContract(e, c, action); };
         cell.appendChild(button);
         cell.appendChild(element('span', 'btc-sr btc-freshness btc-' + side + '-time', ''));
         const reason = element('span', 'btc-sr btc-reason btc-' + action + '-reason', '');
