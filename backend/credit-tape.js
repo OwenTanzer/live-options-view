@@ -2,9 +2,23 @@ function error(message, status) {
   return new Response(message, {status, headers: {'Cache-Control': 'private, no-store'}});
 }
 const CREDIT_ORIGIN = 'https://prolific-essence-production.up.railway.app';
-const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/table.css', '/credit-tape/table.js',
+const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/replay', '/credit-tape/table.css', '/credit-tape/table.js',
   '/credit-tape/auth/login', '/credit-tape/auth/callback', '/credit-tape/auth/logout']);
 const RETURN_PATHS = new Map([['btc', '/?chain=BTC'], ['kalshi', '/kalshi.html']]);
+const REPLAY_QUERY = /^\?one_clock_at=([1-9]\d{12})(?:&end=(\d{1,16})&seq=(\d{1,16}))?$/;
+function replayHint(query) {
+  const kalshi = /^\?return=kalshi&one_clock_at=([1-9]\d{12})$/.exec(query);
+  if (kalshi) return 'kalshi.' + kalshi[1];
+  const match = REPLAY_QUERY.exec(query);
+  return match && ['credit', ...match.slice(1).filter(Boolean)].join('.');
+}
+function returnPath(hint) {
+  const kalshi = /^kalshi\.([1-9]\d{12})$/.exec(hint);
+  if (kalshi) return '/kalshi.html?one_clock_at=' + kalshi[1];
+  const match = /^credit\.([1-9]\d{12})(?:\.(\d{1,16})\.(\d{1,16}))?$/.exec(hint);
+  if (!match) return RETURN_PATHS.get(hint);
+  return '/credit-tape/replay?one_clock_at=' + match[1] + (match[2] ? '&end=' + match[2] + '&seq=' + match[3] : '');
+}
 const returnCookie = (age, destination = 'btc') => `__Host-btc-return=${age ? destination : ''}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
 
 export async function creditTape(request) {
@@ -27,6 +41,12 @@ export async function creditTape(request) {
       /^\?view=(?:treu-sample|treu(?:&file=UK_TREU_\d{8}_\d{4}\.csv&sha=[a-f0-9]{64})?)$/.test(url.search)) {
     query = url.search;
   }
+  if (url.pathname === '/credit-tape/replay') {
+    if (!REPLAY_QUERY.test(url.search)) {
+      return error('Invalid credit replay cursor', 400);
+    }
+    query = url.search;
+  }
   const upstream = await fetch(CREDIT_ORIGIN + url.pathname + query, {
     method: request.method, headers, redirect: 'manual', cache: 'no-store'
   });
@@ -41,14 +61,14 @@ export async function creditTape(request) {
   // Fixed navigation hint only, never OAuth state or an identity claim. The
   // trusted upstream still owns approval/state/callback/session validation.
   if (url.pathname.endsWith('/login')) {
-    const destination = url.search === '?return=btc' ? 'btc' : url.search === '?return=kalshi' ? 'kalshi' : null;
+    const destination = url.search === '?return=btc' ? 'btc' : url.search === '?return=kalshi' ? 'kalshi' : replayHint(url.search);
     outgoing.append('Set-Cookie', returnCookie(destination ? 600 : 0, destination));
   }
   if (logout) outgoing.append('Set-Cookie', returnCookie(0));
   if (url.pathname.endsWith('/callback')) {
     const hints = (request.headers.get('Cookie') || '').split(';').map(c => c.trim())
       .filter(c => c.startsWith('__Host-btc-return='));
-    const destination = hints.length === 1 ? RETURN_PATHS.get(hints[0].slice('__Host-btc-return='.length)) : null;
+    const destination = hints.length === 1 ? returnPath(hints[0].slice('__Host-btc-return='.length)) : null;
     const location = upstream.headers.get('Location');
     const target = location ? new URL(location, url.origin) : null;
     if (destination && [302,303].includes(upstream.status) && target?.origin === url.origin &&

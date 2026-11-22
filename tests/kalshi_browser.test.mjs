@@ -5,7 +5,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { handleKalshi } from '../backend/kalshi.js';
-import { writeState } from '../backend/kalshi-store.js';
+import { archive, writeState } from '../backend/kalshi-store.js';
 import { fixture, envFixture, network, COOKIE, TICKER } from './helpers/kalshi_fixture.mjs';
 import { SITE } from '../backend/kalshi-access.js';
 let chromium;
@@ -13,7 +13,7 @@ try { ({chromium}=createRequire(import.meta.url)('playwright')); }
 catch { ({chromium}=createRequire(new URL('../backend/package.json',import.meta.url))('playwright')); }
 const out=process.env.KALSHI_EVIDENCE_DIR||join(tmpdir(),'kalshi-chain-fixtures'); mkdirSync(out,{recursive:true});
 const realFetch=globalThis.fetch;
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH});
 try {
   for(const [label,viewport] of [['phone',{width:390,height:844}],['desktop',{width:1365,height:900}]]) {
     const f=fixture(),env=envFixture(); globalThis.fetch=network(f);
@@ -40,6 +40,19 @@ try {
         body:readFileSync(new URL('../site/'+allowed.get(u.pathname),import.meta.url),'utf8')});
     });
     try {
+      const saved = await archive(env,TICKER,{fixture:'cursor-only'});
+      const at = Date.parse(saved.received_at);
+      const replayRequests=[];
+      const collect = req=>{if(req.url().includes('/api/kalshi/'))replayRequests.push(new URL(req.url()).pathname);};
+      page.on('request',collect);
+      await page.goto(SITE+'/kalshi.html?one_clock_at='+(at-1));
+      await page.waitForFunction(()=>document.getElementById('status').textContent.includes('No retained'));
+      await page.goto(SITE+'/kalshi.html?one_clock_at='+at);
+      await page.locator('#frozen-list button').first().click();
+      await page.waitForFunction(()=>document.getElementById('frozen-detail').textContent.includes('cursor-only'));
+      assert.equal(await page.locator('#workspace').isHidden(),true);
+      assert.ok(replayRequests.every(path=>path==='/api/kalshi/archive'));
+      page.off('request',collect);
       await page.goto(SITE+'/kalshi.html');
       const row=page.locator('.contract').first(),buy=row.locator('.yes .buy'),sell=row.locator('.yes .sell');
       await buy.waitFor(); await page.waitForFunction(()=>!document.querySelector('.yes .buy').disabled);

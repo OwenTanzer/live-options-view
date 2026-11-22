@@ -56,7 +56,7 @@ try {
   const fork = await page.locator('#title').textContent();
   assert.deepEqual(forkAttempts, [fork, fork]);
   assert.match(await page.locator('#diff').textContent(), /lookback/);
-  assert.doesNotMatch(await page.locator('#diff').textContent(), /Parameter · exposure/);
+  assert.doesNotMatch(await page.locator('#diff').textContent(), /Parameter Ã‚Â· exposure/);
   assert.doesNotMatch(await page.locator('#facts').textContent(), /Zero trades/);
   await page.getByText('Assign or update a trial', { exact: true }).click();
   for (const [id, value] of Object.entries({
@@ -102,6 +102,20 @@ try {
   await page.locator('#save-rule').click();
   const saved=JSON.parse(await page.locator('#rule-json').textContent());
   assert.deepEqual(saved.archiveHandoff,{id:data.handoffId,version:fork});
+  await page.reload();
+  await page.locator('#versions').selectOption(JSON.stringify([saved.id, saved.version]));
+  await page.locator('#reopen').click();
+  await page.locator('#rule-origin').waitFor();
+  assert.match(await page.locator('#rule-origin').textContent(), new RegExp(data.handoffId));
+  const designReads = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/strategy-archive') designReads.push(request.url());
+  });
+  await page.locator('#offline-dataset').selectOption('order-flow');
+  await page.waitForURL('**/*dataset=order-flow*');
+  await page.waitForFunction(() => document.querySelector('#versions')?.options.length > 0);
+  assert.equal(await page.locator('#archive-design').isVisible(), false);
+  assert.deepEqual(designReads, []);
   console.log('PASS: fork, diff, assignment, coverage, hypothesis download and reload');
 } finally {
   await browser.close();
