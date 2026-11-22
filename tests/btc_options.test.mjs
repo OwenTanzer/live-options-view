@@ -305,12 +305,15 @@ test('USDC minimum lot buy, sell and settlement use the same BTC units', async (
   const spec = {instrument_name:name, kind:'option', is_active:true, quote_currency:'USDC', settlement_currency:'USDC',
     contract_size:1, min_trade_amount:0.01, strike:90000, option_type:'call', expiration_timestamp:Date.parse(contract.expires_at)};
   let size = 0.01;
+  let throttleBook = true;
   global.fetch = async (raw, options) => {
     assert.equal(options.redirect, 'manual', 'Workers require manual redirect rejection');
     const u = new URL(raw), method = u.pathname.split('/').pop();
     assert.equal(u.origin,'https://linear.invalid');
     const book = {instrument_name:name,state:'open',timestamp:Date.now(),index_price:90000,best_bid_price:950,
       best_ask_price:1000,best_bid_amount:size,best_ask_amount:size};
+    if (method === 'get_order_book' && throttleBook) return new Response(null, {status:429});
+    if (method === 'ticker') { throttleBook = false; return Response.json({result:book}); }
     const results = {get_instrument:spec,get_order_book:book,get_delivery_prices:{data:[{date:contract.exp,delivery_price:91000}]}};
     assert.ok(method in results);
     return Response.json({result:results[method]});
@@ -319,6 +322,7 @@ test('USDC minimum lot buy, sell and settlement use the same BTC units', async (
     const buy = () => h.order(intent('buy',{sym:key}));
     size = 0.005;
     assert.equal((await buy()).status,409);
+    assert.equal(throttleBook,false);
     size = 0.01;
     assert.equal((await buy()).status,201);
     let account = await h.store.users.get('fixture');
