@@ -67,7 +67,19 @@ function renderCommitted(selection) {
   const credit = el('history-clock-credit');
   credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
   credit.hidden = false;
-  renderBot();renderShortlist(selection);return renderChain(selection);
+  const flow = el('history-order-flow-link');
+  flow.hidden = selection.instrument !== 'QQQ';
+  if (flow.hidden) {
+    flow.removeAttribute('href');
+  } else {
+    flow.href = '/order-flow.html?' + new URLSearchParams({
+      one_clock_session: selection.session, one_clock_instrument: selection.instrument,
+      one_clock_at: String(selection.cutoff)
+    });
+  }
+  renderBot();
+  renderShortlist(selection);
+  return renderChain(selection);
 }
 el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {

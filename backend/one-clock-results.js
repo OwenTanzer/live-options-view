@@ -40,7 +40,7 @@ export async function handleOneClockResults(request,env,url=new URL(request.url)
       }
     }
     const paused=env.ONE_CLOCK_PUBLICATIONS!=='enabled'&&await nativeHandoffExists(db);
-    const currentEvaluation=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation,cutoff):evaluation;
+    const currentEvaluation=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation,cutoff,namespace):evaluation;
     const observerNotice=paused?'Current service state: native observation is paused. Historical receipts and retained results are unchanged; an explicit reverse handoff is required before legacy evaluation.':null;
     const body=JSON.stringify({owner:auth.username,session:from+'/'+to,instrument,cutoff,events,rules:definitions,coverage:coverage.map(r=>({...r,coverage:JSON.parse(r.coverage)})),evaluation:currentEvaluation,observerNotice,origin:'recorded'});
     if(new TextEncoder().encode(body).byteLength>8*1024*1024)throw new Error('Result scope exceeds response byte bound; choose fewer sessions.');
