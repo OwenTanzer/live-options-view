@@ -21,7 +21,9 @@ export async function handoffSource(db,descriptor,native,legacy,{source,session,
     // Read generation before the snapshot. The INSERT trigger checks it inside
     // the freezing transaction, rejecting a concurrent legacy ingestion commit.
     const work=await stmt(db,'SELECT generation FROM one_clock_ingestion_work WHERE source=? AND session=? AND instrument=?',adapter,session,instrument).first();
-    const legacyQuery="FROM one_clock_ingested WHERE source=? AND session=? AND instrument=? AND origin='recorded' AND received_at<=? LIMIT 10001",legacyArgs=[source,session,instrument,snapshotCutoff];
+    // Freeze membership through the real cutover, including legacy arrivals
+    // since the historical target. The projection below applies snapshotCutoff.
+    const legacyQuery="FROM one_clock_ingested WHERE source=? AND session=? AND instrument=? AND origin='recorded' AND received_at<=? LIMIT 10001",legacyArgs=[source,session,instrument,cutoff];
     const sizes=await list(stmt(db,'SELECT length(CAST(payload AS BLOB)) n '+legacyQuery,...legacyArgs));
     if(sizes.length>10000||sizes.reduce((n,r)=>n+r.n,0)>8*1024*1024)throw new Error('legacy handoff snapshot bound');
     const retained=await list(stmt(db,'SELECT * '+legacyQuery,...legacyArgs)),heads=new Map(),baselines=new Map();
