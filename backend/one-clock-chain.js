@@ -66,7 +66,6 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
   cutoff=instant(cutoff);
   // The archive partition remains the event day. A private journal can ask
   // what was known about that day at a later cutoff (including late receipts).
-  // The public route below retains its same-day scope contract.
   if(sessionAt(cutoff)<session) throw new Error('cutoff precedes session date');
   const prefix=PREFIX[instrument]+session.replaceAll('-','')+'/snapshot_';
   const candidates=[]; let cursor,lists=0,bytes=0,gets=0,complete=false;
@@ -121,7 +120,7 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
 // The observer retains the verified commit after publication. Replaying what
 // the market source exposed uses the commit's availability, even if the
 // observer recorded it later. Results itself keeps enforcing its receipt time.
-async function publicChainAt(env,selection) {
+export async function publicChainAt(env,selection) {
   if(env.ONE_CLOCK_PUBLICATIONS!=='enabled') return readArchivedChain(env.PAPER_TRADES,selection);
   const {session,instrument,cutoff}=selection,stream='collector-chain/'+instrument;
   const candidates=(await env.DB.prepare(`SELECT payload,available_at,record_id,revision
@@ -152,8 +151,11 @@ async function publicChainAt(env,selection) {
   catch { legacy={rows:[],coverage:{reason:'legacy-chain-unavailable'}}; }
   if(legacy.rows[0]?.eventAt>selected.eventAt) return legacy;
   const coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified',legacyCoverage:legacy.coverage};
-  if(selected.value===null) return {rows:[],coverage:{...coverage,reason:'native-price-unavailable'}};
   const refs=selected.details.evidence;
+  const spot=selected.value?.spot??null;
+  if(selected.value===null && !refs.some(ref=>['collector.snapshot.csv.v1','collector.snapshot.payload.v1'].includes(ref.schema)))
+    return {rows:[],coverage:{...coverage,reason:'native-snapshot-withdrawn',digestVerification:'not-verified'}};
+
   async function body(schema,contentType) {
     const matches=refs.filter(ref=>ref.schema===schema && ref.contentType===contentType);
     if(matches.length!==1) throw new Error('missing native chain evidence');
@@ -171,17 +173,17 @@ async function publicChainAt(env,selection) {
   if(payload.symbol!==instrument || payload.date!==session || payload.snapshot_key!==csvKey ||
      !csvKey.startsWith(PREFIX[instrument]+session.replaceAll('-','')+'/snapshot_') ||
      !/^snapshot_\d{12}\.csv$/.test(csvKey.split('/').at(-1)) || stamp(payload.timestamp)!==eventAt ||
-     payload.underlying_price!==selected.value.spot) throw new Error('native chain evidence identity');
+     (spot!==null && payload.underlying_price!==spot)) throw new Error('native chain evidence identity');
   const rows=projectChainCsv(csv,instrument,session), expirations=[...new Set(rows.map(row=>row.Expiration))];
   if(expirations.length!==1 || expirations[0]!==payload.expiration || expirations[0]<session ||
-     (instrument!=='IBIT' && expirations[0]!==session) || rows.find(r=>r.UnderlyingPrice>0)?.UnderlyingPrice!==selected.value.spot)
+     (instrument!=='IBIT' && expirations[0]!==session) || (spot!==null && rows.find(r=>r.UnderlyingPrice>0)?.UnderlyingPrice!==spot))
     throw new Error('native chain evidence contract');
   const timestamp=new Date(eventAt).toISOString();
   return {coverage,rows:[observation({source:'chain',id:selected.id,revision:selected.revision,session,instrument,origin:'recorded',
     eventAt,availableAt:selected.availableAt,evidence:selected.evidence,
     details:{availabilityBasis:coverage.availabilityBasis,digestVerification:coverage.digestVerification,sequence:selected.details.sequence},
     value:{symbol:instrument,date:session,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
-      underlying_price:selected.value.spot,rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
+      underlying_price:spot,rows:spot===null?rows.map(row=>({...row,UnderlyingPrice:null})):rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
 }
 export async function handleOneClockChain(request,env,url) {
   if(request.method!=='GET') return jsonResponse({error:'method not allowed'},405);
@@ -190,7 +192,7 @@ export async function handleOneClockChain(request,env,url) {
   try {
     if(selection.cutoff>Date.now()+60000) throw new Error('future cutoff');
     // Validate before accessing any storage. Only fixed market prefixes allowed.
-    if(!validSession(selection.session) || !Object.hasOwn(PREFIX,selection.instrument) || sessionAt(instant(selection.cutoff))!==selection.session) throw new Error('invalid scope');
+    if(!validSession(selection.session) || !Object.hasOwn(PREFIX,selection.instrument) || sessionAt(instant(selection.cutoff))<selection.session) throw new Error('invalid scope');
   } catch { return jsonResponse({error:'invalid archive scope'},400); }
   try { return jsonResponse(await publicChainAt(env,selection),200); }
   catch { return jsonResponse({error:'Archive unavailable or exceeded bounded read budget'},503); }

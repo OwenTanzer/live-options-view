@@ -23,10 +23,14 @@ function storage(changes={}) {
     async get(key){calls.push(['get',key]);const r=records.get(key);if(!r)return null;return {size:Buffer.byteLength(r.text),uploaded:new Date(r.uploaded),etag:r.etag,text:async()=>r.text};}};
 }
 const scope=(cutoff=T+2000,instrument='QQQ')=>({session,instrument,cutoff});
-test('public chain route retains same-day contract when internal journal reads allow later publication',async()=>{
-  const db=storage(),url=new URL(`https://example.test/api/one-clock/chain?session=${session}&instrument=QQQ&cutoff=${sessionInstant('2026-11-10',0)}`);
-  assert.equal((await handleOneClockChain(new Request(url),{PAPER_TRADES:db},url)).status,400);
-  assert.equal(db.calls.length,0);
+test('public chain route returns a late revision only once its receipt is available',async()=>{
+  const later=sessionInstant('2026-11-10',9,30),db=storage({[metaKey]:{uploaded:later}});
+  for(const cutoff of [later-1,later]){
+    const url=new URL('https://example.test/api/one-clock/chain?'+new URLSearchParams(scope(cutoff)));
+    const response=await handleOneClockChain(new Request(url),{PAPER_TRADES:db},url);
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).rows.length,cutoff===later?1:0);
+  }
 });
 test('New York archive conversion handles summer/winter and validates dates',()=>{
   assert.equal(new Date(T).toISOString(),'2026-11-09T14:30:00.000Z');
@@ -146,26 +150,37 @@ test('market replay selects the immutable publication before the compatibility s
     return object;
   };
   const id='native:'+stream+':'+csvKey;
-  async function retain(revision,availableAt,value){
+  async function retain(revision,availableAt,value,refs=evidence){
     const evidenceKey='publications/v1/'+stream+'/entries/'+String(revision).padStart(12,'0')+'.json';
     const data={source:'price',id,revision,session,instrument:'QQQ',eventAt:T,availableAt,evidence:evidenceKey,
-      value,details:{originalRecordId:csvKey,sequence:revision,evidence}};
+      value,details:{originalRecordId:csvKey,sequence:revision,evidence:refs}};
     await DB.prepare('INSERT INTO one_clock_publication_entries VALUES(?,?,?,?,?,?,?)').bind(stream,revision,'test-'+revision,'digest',availableAt,T+5000,'{}').run();
     await DB.prepare('INSERT INTO one_clock_publication_records VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(stream,'price',id,revision,session,'QQQ',T,availableAt,T+5000,revision,JSON.stringify(data)).run();
   }
   await retain(1,T+1000,{spot:661});await retain(2,T+4000,null);
+  await retain(3,T+5000,null,[{schema:'collector.snapshot.withdrawal.v1'}]);
   const env={DB,PAPER_TRADES:bucket,ONE_CLOCK_PUBLICATIONS:'enabled'};
   const request=ms=>{
     const url=new URL('https://example.test/api/one-clock/chain?'+new URLSearchParams(scope(ms)));
     return handleOneClockChain(new Request(url),env,url);
   };
   assert.equal((await (await request(T+999)).json()).rows.length,0);
+  const {journalContextAsOf}=await import('../backend/trade-journal-context.js');
+  const position={position_id:'fixture',contract:{underlying:'QQQ',occ_symbol:'QQQ261109C00660000'}};
+  const journal=await journalContextAsOf(env,position,session,T+1000);
+  assert.equal(journal.available_at,T+1000);
+  assert.equal(journal.underlying.segments[0].points[0][1],661);
+  assert.deepEqual(journal.option.segments[0].points[0].slice(1),[1,2]);
   const first=await (await request(T+1000)).json();
   assert.equal(first.rows[0].value.underlying_price,661);
   assert.equal(first.rows[0].details.digestVerification,'verified');
   assert.equal(first.rows[0].availableAt,T+1000);
   assert.ok(!JSON.stringify(first).includes('account-secret'));
-  assert.equal((await (await request(T+4000)).json()).rows.length,0);
+  const stale=(await (await request(T+4000)).json()).rows[0];
+  assert.equal(stale.value.underlying_price,null);
+  assert.equal(stale.value.rows.length,2);
+  assert.ok(stale.value.rows.every(row=>row.UnderlyingPrice===null && row.Bid===1));
+  assert.equal((await (await request(T+5000)).json()).rows.length,0);
   const explain=DB.queries.find(s=>s.includes('INDEXED BY one_clock_native_chain_replay'));
   assert.match(DB.raw('EXPLAIN QUERY PLAN '+explain,stream,session,T+1000,13).map(r=>r.detail).join(),/SEARCH.*one_clock_native_chain_replay/);
   const bytes=bucket.records.get(evidence[0].key);bytes.text=bytes.text.replace('661','662');
