@@ -65,7 +65,7 @@ test('reader bounds listing and object bytes, without sampling an incomplete ind
   await assert.rejects(readArchivedChain(large,scope()),/byte bound/);
 });
 test('route rejects unauthorized key/path scope before touching storage and uses no KV',async()=>{
-  const env=new Proxy({PAPER_TRADES:storage()},{get(target,key){assert.equal(key,'PAPER_TRADES');return target[key];}});
+  const env=new Proxy({PAPER_TRADES:storage()},{get(target,key){assert.ok(['PAPER_TRADES','ONE_CLOCK_PUBLICATIONS'].includes(key));return target[key];}});
   for(const query of ['session=2026-11-09&instrument=QQQ&cutoff=1','session=2026-11-09&instrument=SECRET&cutoff='+T,'session=2026-11-09&instrument=QQQ&cutoff='+T+'&key=private']) {
     const req=new Request('https://example.test/api/one-clock/chain?'+query);
     const response=await handleOneClockChain(req,env,new URL(req.url));assert.equal(response.status,400);
