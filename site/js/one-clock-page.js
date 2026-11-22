@@ -13,8 +13,8 @@ dataset.onchange=()=>{const url=new URL(location.href);if(dataset.value==='order
 let study={rules:demoRules,sources:demoSources,rows:demoRows,selection:demoSelection,start:demoStart,close:demoClose};
 if(archiveMode){
   const notice=document.querySelector('.notice');
-  notice.querySelector('strong').textContent='Reconstructed QQQ order flow Â· September 25, 2026';
-  notice.querySelector('span').textContent='Loading the audited archiveâ€¦';
+  notice.querySelector('strong').textContent='Reconstructed QQQ order flow · September 25, 2026';
+  notice.querySelector('span').textContent='Loading the audited archive…';
   const loadingSections = [document.querySelector('nav'), $('builder'), document.querySelector('.replay')];
   for (const section of loadingSections) section.inert=true;
   try{study=await loadFlowStudy();}
@@ -25,7 +25,7 @@ if(archiveMode){
     document.querySelector('nav').hidden=true;
     throw error;
   }
-  notice.querySelector('span').textContent='Minute samples of 16 contracts at strikes $740â€“747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
+  notice.querySelector('span').textContent='Minute samples of 16 contracts at strikes $740–747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
   $('account-controls').hidden=true;$('account-help').hidden=true;
   $('instrument').replaceChildren(option('QQQ'));
   $('session-strip').hidden=true;
@@ -129,14 +129,14 @@ const key = rule => JSON.stringify([rule.id, rule.version]);
 function choose(value) { return versions.find(v => key(v) === value); }
 function versionOptions() {
   for (const id of ['versions','result-version']) {
-    $(id).replaceChildren(...versions.map(v => option(key(v), `${v.name} Â· v${v.version}`)));
+    $(id).replaceChildren(...versions.map(v => option(key(v), `${v.name} · v${v.version}`)));
     $(id).value = key(currentRule);
   }
 }
 function openRule(rule) {
   editing = rule;
   $('rule-origin').hidden=!rule.archiveHandoff;
-  $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' Â· hypothesis '+rule.archiveHandoff.id : '';
+  $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
   $('rule-name').value = rule.name;
   const instrument = rule.instruments[0];
@@ -150,7 +150,7 @@ function openRule(rule) {
 }
 function updateOutcomes() {
   $('result-instrument').replaceChildren(...currentRule.instruments.map(v => option(v)));
-  $('outcome-choice').replaceChildren(...currentRule.outcomes.map(o => option(o.id, `${o.field} Â· ${o.horizonMs / 60000} min Â· ${o.measure}`)));
+  $('outcome-choice').replaceChildren(...currentRule.outcomes.map(o => option(o.id, `${o.field} · ${o.horizonMs / 60000} min · ${o.measure}`)));
   if (!currentRule.outcomes.length) $('outcome-choice').append(option('', 'Tracking only'));
 }
 function showResults(active) {
@@ -171,8 +171,8 @@ function render() {
   const selection = { ...at, instrument: $('result-instrument').value, cutoff: full ? studyClose + 1000 : at.cutoff };
   const events = evaluateEvents({ rule: currentRule, observations: studyRows, selection, sessionClose: studyClose });
   const outcomeId = $('outcome-choice').value;
-  $('rule-description').textContent = `${currentRule.name} Â· ${selection.instrument} Â· ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} Â· ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} Â· ${studySelection.origin} data`;
-  $('replay-description').textContent = archiveMode?'QQQ Â· minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 Â· ${selection.instrument} Â· synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
+  $('rule-description').textContent = `${currentRule.name} · ${selection.instrument} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · ${studySelection.origin} data`;
+  $('replay-description').textContent = archiveMode?'QQQ · minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
   const sameSkew = currentRule.conditions.some(c => c.source === 'skew' && c.field === 'imbalance' && !c.relativeToAnchor && c.op === '>=' && c.value > 0);
   $('comparison-note').textContent = sameSkew && currentRule.combine === 'all' ? 'A positive same-input skew trigger necessarily agrees with a meter that labels every positive imbalance call-heavy. Disagreement is impossible for that pairing; these results do not compare independent signals.' : 'Descriptive observations only. No predictive conclusion is implied.';
   fixtureResults.update({events,rules:[currentRule],cutoff:selection.cutoff,origin:studySelection.origin,outcome:outcomeId?{ruleKey:ruleKey(currentRule),id:outcomeId}:null});
@@ -180,8 +180,8 @@ function render() {
   const selected = events.find(e => e.id === selectedId);
   $('event-evidence').hidden = !selected;
   $('event-evidence').textContent = selected ? selected.inputEvidence.map(input =>
-    `${input.source} / ${input.id}\nObserved ${time(input.eventAt)} Â· available ${time(input.availableAt)} UTC\nValue: ${input.value}${input.anchor == null ? '' : ' Â· anchor: ' + input.anchor}\nSource: ${input.evidence}`).join('\n\n') : '';
-  $('selected-event').textContent = selected ? `Trigger ${time(selected.triggeredAt)} Â· ${selected.origin} Â· v${selected.ruleVersion}. Evidence below follows the selected results view.` : 'Choose an occurrence to inspect its trigger evidence.';
+    `${input.source} / ${input.id}\nObserved ${time(input.eventAt)} · available ${time(input.availableAt)} UTC\nValue: ${input.value}${input.anchor == null ? '' : ' · anchor: ' + input.anchor}\nSource: ${input.evidence}`).join('\n\n') : '';
+  $('selected-event').textContent = selected ? `Trigger ${time(selected.triggeredAt)} · ${selected.origin} · v${selected.ruleVersion}. Evidence below follows the selected results view.` : 'Choose an occurrence to inspect its trigger evidence.';
   const flowLink=$('order-flow-evidence');
   flowLink.hidden=!archiveMode || !selected;
   if(archiveMode && selected) flowLink.href='/order-flow.html?'+new URLSearchParams({
@@ -280,11 +280,11 @@ async function readObserved(selection,generation) {
     const cutoff=live?Date.now():selection.cutoff;
     $('observed-cutoff').value=new Date(cutoff).toISOString().slice(0,19);
     clock.select({...selection,cutoff});
-    $('observed-status').textContent='Reading retained evidenceâ€¦';
+    $('observed-status').textContent='Reading retained evidence…';
     retainedResults.clear();$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
     const result=await clock.read('observed-events');if(result.discarded||!observedMode||generation!==observedGeneration)return;
     const events=result.rows.map(r=>r.value);
-    $('observed-status').textContent=`${result.selection.session} Â· ${result.selection.instrument} Â· ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
+    $('observed-status').textContent=`${result.selection.session} · ${result.selection.instrument} · ${events.length} retained occurrences as of ${new Date(result.selection.cutoff).toISOString()}. ${live?'Live cutoff; periodic source collection.':'Fixed cutoff.'}`;
     $('observed-coverage').textContent=observedBody.coverage.length?observedBody.coverage.map(r=>`${r.session} ${r.instrument} ${r.coverage.source}: ${r.coverage.reason}; ${r.coverage.pending} pending artifacts, ${r.coverage.gaps} known gaps. Coverage remains provisional.`).join(' '):'No source coverage receipt existed at this cutoff. An empty result does not establish that no market events occurred.';
     $('observed-coverage').textContent+=' '+(observedBody.evaluation.length?observedBody.evaluation.map(r=>`${r.session} ${r.instrument} ${r.rule_id} v${r.version}: ${r.state}${r.attempted_at?' as of '+new Date(r.attempted_at).toISOString():''}. ${r.reason??''}`).join(' '):'No rule-evaluation receipts in the selected scope.');
     if(observedBody.observerNotice)$('observed-coverage').textContent+=' '+observedBody.observerNotice;
@@ -344,7 +344,7 @@ async function loadArchiveDesign(id) {
   const design=record.data.design;
   for (const label of ['Population','Trigger','Comparator','Outcome','Horizon','Evaluation plan']) {
     const line=document.createElement('p');
-    line.textContent=label+' â€” '+design[label];
+    line.textContent=label+' — '+design[label];
     $('archive-plan').append(line);
   }
   $('archive-design').hidden=false;

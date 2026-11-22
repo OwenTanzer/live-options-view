@@ -56,7 +56,7 @@ try {
   const fork = await page.locator('#title').textContent();
   assert.deepEqual(forkAttempts, [fork, fork]);
   assert.match(await page.locator('#diff').textContent(), /lookback/);
-  assert.doesNotMatch(await page.locator('#diff').textContent(), /Parameter Ã‚Â· exposure/);
+  assert.doesNotMatch(await page.locator('#diff').textContent(), /Parameter · exposure/);
   assert.doesNotMatch(await page.locator('#facts').textContent(), /Zero trades/);
   await page.getByText('Assign or update a trial', { exact: true }).click();
   for (const [id, value] of Object.entries({
