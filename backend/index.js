@@ -2,6 +2,7 @@ import { archive } from './strategy-archive.js';
 
 import { handlePrediction, settlePredictions } from './prediction.js';
 import { handleKalshi, kalshiTick } from './kalshi.js';
+import {handleBitcoinReplay} from './one-clock-btc.js';
 import { handleBtcOptions } from './btc-options.js';
 import { handleBtcOwnerLink } from './btc-owner-link.js';
 import { handleOneClockChain } from './one-clock-chain.js';
@@ -40,6 +41,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
+    if (url.pathname === '/api/one-clock/btc-replay') return handleBitcoinReplay(request,env);
     if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
     if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);

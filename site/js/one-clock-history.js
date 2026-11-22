@@ -64,6 +64,9 @@ async function renderShortlist(selection) {
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}
 }
 function renderCommitted(selection) {
+  const bitcoin = el('history-clock-btc');
+  bitcoin.href = '/api/one-clock/btc-replay?one_clock_at=' + selection.cutoff;
+  bitcoin.hidden = false;
   const credit = el('history-clock-credit');
   credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
   credit.hidden = false;
