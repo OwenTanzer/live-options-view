@@ -17,7 +17,16 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
         const url = new URL(route.request().url());
         requests.push(url);
         const json = body=>route.fulfill({json:body});
-        if(url.pathname==='/api/one-clock/chain') return json({rows:[],coverage:{complete:false}});
+        if(url.pathname==='/api/one-clock/chain'){
+          const at=Number(url.searchParams.get('cutoff')),boundary=cutoff+377;
+          const instrument=url.searchParams.get('instrument');
+          if(at<boundary-1) return json({rows:[],coverage:{complete:false}});
+          const spot=at===boundary-1?699:at===boundary+1?null:701;
+          const data={symbol:instrument,expiration:session,date:session,timestamp:new Date(boundary-500).toISOString(),
+            underlying_price:spot,rows:[{Strike:700,Type:'call',OpenInterest:12,Bid:1,Ask:2}],market_readings:[]};
+          return json({rows:[{source:'chain',id:'fixture-chain',revision:1,instrument,session,origin:'recorded',
+            eventAt:boundary-500,availableAt:at,evidence:'fixture-chain',value:data}],coverage:{complete:true}});
+        }
         if(url.pathname==='/api/one-clock/bots/roster')return json({bots:['sample']});
         if(url.pathname==='/api/one-clock/bot-decisions'){
           const row={source:'bot-decision',session,instrument:'QQQ',origin:'recorded',revision:1,evidence:'fixture',
@@ -66,6 +75,25 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       await page.waitForFunction(()=>document.querySelector('#clock-decisions-status').textContent.startsWith('0 recorded'));
       assert.equal(requests.filter(u=>u.pathname==='/api/one-clock/chain').length,chainCalls);
       assert.equal(requests.some(u=>u.pathname==='/api/bots'),false);
+      await page.locator('#tab-history').click();
+      const enter=async(time,symbol)=>{
+        await page.locator('#history-clock-instrument').fill(symbol);
+        await page.locator('#history-clock-time').fill(time);
+        await page.locator('#history-clock-form button').click();
+      };
+      for(const [time,expected] of [['10:00:00.499','$699'],['10:00:00.500','$701'],['10:00:00.501','unavailable'],['10:03:00.501','unavailable']]){
+        await enter(time,'QQQ');
+        await page.waitForFunction(text=>document.querySelector('#history-clock-status').textContent.includes('Underlying spot '+text),expected);
+        assert.match(await page.locator('#history-clock-rows .strike-cell').textContent(),/^700/);
+        assert.equal(await page.locator('#history-clock-rows .atm').count(),expected==='unavailable'?0:1);
+      }
+      await enter('10:00:00.500','IBIT');
+      await page.waitForFunction(()=>document.querySelector('#history-clock-status').textContent.startsWith('IBIT'));
+      assert.ok(await page.locator('#history-order-flow-link').isHidden());
+      await enter('10:00:00.500','BTC');
+      await page.getByText('CME BTC chain archive unavailable at this cursor. IBIT is a separate instrument.').waitFor();
+      assert.equal(await page.locator('#history-clock-rows tr').count(),0);
+      await page.locator('#tab-bots').click();
       await page.locator('#clock-mode').selectOption('live');
       await page.waitForFunction(()=>window.oneClockDashboard.snapshot().mode==='live');
       assert.equal(await page.locator('#bots-panel').isVisible(),true);

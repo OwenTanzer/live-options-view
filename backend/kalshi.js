@@ -1,5 +1,5 @@
 import { ACCOUNT, OWNER_ID, SITE, configured, ownerIdentity, privateJSON } from './kalshi-access.js';
-import { archive, archiveIndex, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
+import { archive, archiveIndex, archiveAt, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
 import { discover, fetchMarket, displayMarket, chainQuotes, publicRead, KALSHI_API } from './kalshi-source.js';
 import { computeBookFromTrades, readJsonBody, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
@@ -111,7 +111,21 @@ export async function handleKalshi(request, env) {
     }
     if (url.pathname === '/api/kalshi/paper') return await paperOrder(request, env);
     if (url.pathname === '/api/kalshi/archive') {
-      const id = url.searchParams.get('id');
+      const params = url.searchParams;
+      const id = params.get('id');
+      if (params.has('one_clock_at')) {
+        const raw = params.get('one_clock_at'), before = params.get('before'), beforeId = params.get('before_id');
+        const validId = value => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+        const stamp = Date.parse(before);
+        if (!/^[1-9][0-9]{12}$/.test(raw) || Number(raw)>Date.now() ||
+            [...params.keys()].some(key=>!['one_clock_at','id','before','before_id'].includes(key)||params.getAll(key).length!==1) ||
+            (id!==null && (!validId(id)||before!==null)) || (before===null)!==(beforeId===null) ||
+            (before!==null && (!Number.isFinite(stamp)||new Date(stamp).toISOString()!==before||stamp>Number(raw)||!validId(beforeId)))) {
+          return privateJSON({error:'Invalid archive cursor'},400);
+        }
+        const result = await archiveAt(env, Number(raw), id, before, beforeId);
+        return result ? privateJSON(result) : privateJSON({error:'No retained receipt at this cursor'},404);
+      }
       return privateJSON(id ? { mode: 'archived', evidence: await getArchive(env, id) } : { archives: await archiveIndex(env) });
     }
     const record = await account(env);

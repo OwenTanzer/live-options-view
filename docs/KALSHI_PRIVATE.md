@@ -259,3 +259,7 @@ hiding. Limits are ten chain requests/minute plus the unchanged global provider
 identity, archive/settlement writes, and paper-only execution remain unchanged.
 No producer, schema or credential changes. Deploy the API first, then assets;
 old assets remain compatible with the new API. Roll back assets independently.
+
+## One Clock replay
+
+Open the private Kalshi archive from the historical cursor to inspect retained captures through that millisecond. The page keeps the existing owner sign-in and reads only the archive endpoint. Both the paginated index and evidence-by-ID lookups apply the cutoff on the server. The receipt records capture time. Retention and the source’s sampling policy limit coverage. The standalone live view keeps its existing order and quote behavior.

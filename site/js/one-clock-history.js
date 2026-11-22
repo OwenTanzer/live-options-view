@@ -115,10 +115,13 @@ function renderCommitted(selection) {
   kalshi.hidden = credit.hidden;
   kalshi.href = '/kalshi.html?one_clock_at=' + selection.cutoff;
   credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
+  const flow=el('history-order-flow-link');
+  flow.hidden=tab!=='history' || selection.instrument!=='QQQ';
+  if(flow.hidden) flow.removeAttribute('href');
   if(tab==='history' && ['QQQ','SPY','IBIT'].includes(selection.instrument)){
     const params=new URLSearchParams({one_clock_session:selection.session,one_clock_instrument:selection.instrument,one_clock_at:String(selection.cutoff)});
     el('clock-journal').href='/trade-journal.html?'+params;
-    el('history-order-flow-link').href='/order-flow.html?'+params;
+    if(!flow.hidden) flow.href='/order-flow.html?'+params;
     el('clock-journal-nav').hidden=false;
   }else el('clock-journal-nav').hidden=true;
   el('clock-scope').textContent=selection.instrument+' · '+new Date(selection.cutoff).toISOString();
@@ -154,6 +157,7 @@ function clear(message) {
 }
 async function renderChain(selection) {
   const {session,instrument}=selection;
+  if(instrument==='BTC'){clear('CME BTC chain archive unavailable at this cursor. IBIT is a separate instrument.');return;}
   if(!['QQQ','SPY','IBIT'].includes(instrument)){clear('Chain archive is available for QQQ, SPY and IBIT. Other sources keep their own coverage.');return;}
   try {
     clear('Loading evidence available at this cursor…');
@@ -162,13 +166,16 @@ async function renderChain(selection) {
     if(!row) { clear('No qualified snapshot at this cursor. Missing publication or retained revision is unavailable.');el('history-clock-evidence').textContent=JSON.stringify(coverage,null,2);return; }
     const data=row.value;
     // Existing read-only renderer and calculations, same eligible parent record.
-    buildHeatmapRows(el('history-clock-rows'),data,relativeOiRanges(data.rows));
+    const spot=reading.state==='fresh' && Number.isFinite(data.underlying_price) && data.underlying_price>0 ? data.underlying_price : null;
+    const chain={...data,underlying_price:spot};
+    buildHeatmapRows(el('history-clock-rows'),chain,relativeOiRanges(data.rows),{showUnanchored:true});
+    const spotText=spot===null?'Underlying spot unavailable':'Underlying spot $'+spot;
     const raw=describeReferenceOiSkew(data,selection.cutoff);
     const cursorLabel=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(selection.cutoff);
-    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). Read-only replay.`;
+    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). ${spotText}. Read-only replay.`;
     el('history-clock-skew').textContent=`Published reference skew: ${raw.text} · ${raw.availability==='live'?'fresh at cursor':raw.availability}. ${raw.detail}`;
     if(instrument==='IBIT') {
-      const adaptive=computeAdaptiveOiSkew(data.rows,data.underlying_price);
+      const adaptive=computeAdaptiveOiSkew(data.rows,spot);
       el('history-clock-adaptive').textContent=adaptive.ok
         ? `Reconstructed IBIT adaptive skew: ${adaptive.imbalance.toFixed(3)} · ${adaptive.band_strikes} strikes · ±${(adaptive.half_width*100).toFixed(2)}%. Same archived snapshot; not a historically published reading.`
         : `Reconstructed IBIT adaptive skew unavailable: ${adaptive.reason}.`;

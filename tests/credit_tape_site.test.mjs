@@ -139,3 +139,18 @@ test('sign-in preserves a validated fixed credit cutoff and its archive page', a
   assert.equal((await callback(hint)).headers.get('Location'),'/credit-tape/replay'+query);
   assert.equal((await callback('__Host-btc-return=credit.1795440000000.123.evil')).headers.get('Location'),'/credit-tape/');
 });
+
+test('returning to a frozen Kalshi archive preserves its millisecond after sign-in', async t => {
+  const base = 'https://options.moopertonic.net/credit-tape/';
+  const cutoff = '1795440000523';
+  t.mock.method(globalThis, 'fetch', async url => new Response(null, {
+    status: 303,
+    headers: {Location: url.includes('/callback') ? '/credit-tape/' : 'https://github.com/login/oauth/authorize'}
+  }));
+  const login = await creditTape(new Request(base + 'auth/login?return=kalshi&one_clock_at=' + cutoff));
+  const hint = login.headers.get('Set-Cookie').split(';')[0];
+  const callback = await creditTape(new Request(base + 'auth/callback?code=fixture&state=fixture', {
+    headers: {Cookie: hint}
+  }));
+  assert.equal(callback.headers.get('Location'), '/kalshi.html?one_clock_at=' + cutoff);
+});

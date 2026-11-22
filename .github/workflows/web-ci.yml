@@ -15,6 +15,8 @@ on:
       - "wrangler.assets.toml"
       - "wrangler.api.toml"
       - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
       - "scripts/build-assets.mjs"
       - "scripts/prepare-asset-release.mjs"
       - "scripts/preview-local.mjs"
@@ -38,6 +40,8 @@ on:
       - "wrangler.assets.toml"
       - "wrangler.api.toml"
       - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
       - "scripts/build-assets.mjs"
       - "scripts/prepare-asset-release.mjs"
       - "scripts/preview-local.mjs"
@@ -67,6 +71,10 @@ jobs:
           node-version: "22"
       - name: Install locked API dependencies
         run: npm ci --prefix backend --ignore-scripts
+      - name: Check modeled daily D1 rows
+        run: |
+          npm ci --prefix tests/d1-budget --ignore-scripts
+          node --experimental-sqlite --test tests/d1-budget/usage.test.mjs
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
       - name: One Clock source and cursor contract
