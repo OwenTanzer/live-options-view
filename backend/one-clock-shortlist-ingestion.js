@@ -41,6 +41,7 @@ export const shortlistIngestion = {
     const reason = result.coverage.reason;
     const row = observation({source:'shortlist', session:scope.session, instrument:scope.instrument, origin:'recorded',
       id:artifact.key, revision:1, eventAt:cutoff, availableAt:cutoff,
+      ...(selected?{valueAt:selected.eventAt}:{}),
       evidence:selected?.evidence ?? artifact.catalog.objects.at(-1).key,
       value:selected?.value ?? null,
       details:{...selected?.details, publishedAt:selected?.availableAt ?? null, coverageReason:reason}});

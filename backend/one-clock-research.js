@@ -159,6 +159,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       };
       const wanted=new Set(chosen.flatMap(inputs));
       const optional=sources.filter(a=>a.demandDriven && a.outputs.some(output=>wanted.has(output)));
+      const targetThrough=Math.min(bounds.close,historic?snapshotAt:now);
       const key=JSON.stringify([job.session,job.instrument,snapshotAt,version?.generation,historic,optional.map(a=>a.id)]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
@@ -177,7 +178,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument))) {
           if(adapter.outputs.every(source=>owners.get(source)?.descriptor.supersedes?.[source]===adapter.id))continue;
           if(adapter.demandDriven && !optional.includes(adapter))continue;
-          if(!historic) {
+          if(!historic || adapter.demandDriven) {
             const sourceKey=JSON.stringify([adapter.id,job.session,job.instrument]);
             if(!sourceReads.has(sourceKey))sourceReads.set(sourceKey,ingestPublicSource(db,env.PAPER_TRADES,adapter,{session:job.session,instrument:job.instrument,now,collection:job.session===day?'prospective':'backfill'}));
             try {coverage.push(await sourceReads.get(sourceKey));}
@@ -185,12 +186,18 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
               if(!adapter.demandDriven)throw error;
               coverage.push({source:adapter.id,indexComplete:false,reason:'source-unavailable'});
             }
-          }else if(adapter.demandDriven){
-            const receipt=await stmt(db,'SELECT coverage FROM one_clock_ingestion_history WHERE source=? AND session=? AND instrument=? AND recorded_at<=? ORDER BY generation DESC LIMIT 1',adapter.id,job.session,job.instrument,snapshotAt).first();
-            coverage.push(receipt?JSON.parse(receipt.coverage):{source:adapter.id,indexComplete:false,reason:'no-retained-coverage'});
           }
         }
         const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:snapshotAt});
+        const demandOutputs=new Set(optional.flatMap(a=>a.outputs));
+        // A late native correction can wake a session whose optional catalog
+        // was never consumed. Retain today's archive read, select only evidence
+        // available through the frozen logical cut, and keep its actual receipt.
+        if(historic && optional.length) {
+          const fresh=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
+          legacy.splice(0,legacy.length,...legacy.filter(r=>!demandOutputs.has(r.source)),
+            ...fresh.filter(r=>demandOutputs.has(r.source)&&r.available_at<=snapshotAt));
+        }
         const records=legacy.filter(r=>!owners.has(r.source));
         for(const [source,{descriptor,native}] of owners) {
           if(!descriptor.supersedes?.[source]&&legacy.some(r=>r.source===source))throw new Error('native source needs explicit supersession');
@@ -200,14 +207,23 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       })());
       const data=await reads.get(key);
       const ruleCutoffs={};
+      const outputsOf=source=>Array.isArray(source.outputs)?source.outputs:Object.keys(source.outputs);
+      const providerOutputs=new Map([...sources,...publicationSources].map(source=>[source.id,outputsOf(source)]));
       const beforeFilter=chosen.length;
       const incomplete=c=>!c.indexComplete || c.pending>0;
       chosen=chosen.filter(rule=>{
         const used=inputs(rule);
+        if(data.coverage.some(c=>incomplete(c) && (providerOutputs.get(c.source)??[]).some(output=>used.includes(output))))return false;
+        for(const output of used) {
+          const nativeOnly=publicationSources.some(source=>outputsOf(source).includes(output)) &&
+            !sources.some(source=>source.outputs.includes(output));
+          if(nativeOnly && !data.coverage.some(c=>!incomplete(c) && providerOutputs.get(c.source)?.includes(output)))return false;
+        }
         const dependencies=optional.filter(a=>a.outputs.some(output=>used.includes(output)));
         for(const adapter of dependencies){
           const receipt=data.coverage.find(c=>c.source===adapter.id);
           if(!receipt || incomplete(receipt))return false;
+          if(historic && receipt.through<targetThrough)return false;
           if(receipt.through!==undefined){
             const key=JSON.stringify([rule.rule_id,rule.version]);
             ruleCutoffs[key]=Math.min(ruleCutoffs[key]??snapshotAt,receipt.through);
@@ -216,7 +232,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         return true;
       });
       const deferred=beforeFilter-chosen.length;
-      if((beforeFilter && !chosen.length) || data.coverage.some(c=>!optional.some(a=>a.id===c.source)&&incomplete(c))) {
+      if(beforeFilter && !chosen.length) {
         if(historic) await finishHistory(db,job,now,'Historical source coverage pending.');
         await stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+beforeFilter)%Math.max(1,rules.length),job.namespace,job.session,job.instrument).run();
         results.push({state:'catching-up',session:job.session,instrument:job.instrument});continue;
@@ -233,8 +249,9 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         (namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(namespace,session,instrument,rule_id,version,attempted_at) DO UPDATE SET state=excluded.state,reason=excluded.reason
         WHERE excluded.state='evaluated'`,job.namespace,job.session,job.instrument,r.rule_id,r.version,now,state,reason));
+      const completeRules=()=>chosen.filter(r=>{const horizon=ruleCutoffs[JSON.stringify([r.rule_id,r.version])];return horizon===undefined || horizon>=targetThrough;});
       const evaluate=()=>observeBatch(db,{namespace:job.namespace,batchId:historic?`history:${job.target}:${job.rule_id}:${job.version}`:`tick:${job.session}:${job.instrument}:${now}:${start}`,source:'public-registry',cursor:String(start),
-        selection,ruleCutoffs,committedAt:now,targetGeneration:version?.generation,completionStatements:[...attempts(chosen,'evaluated',null),...(version?generationWrites(db,job,chosen,version.generation,now):[])],sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
+        selection,ruleCutoffs,committedAt:now,targetGeneration:version?.generation,completionStatements:[...attempts(chosen,'evaluated',null),...(version?generationWrites(db,job,completeRules(),version.generation,now):[])],sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
         ruleKeys:chosen.map(r=>JSON.stringify([r.rule_id,r.version]))});
       let result,failure=null;
       try{result=await evaluate();}catch(error){
@@ -252,7 +269,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       if(schedule.length)await db.batch(schedule);
       if(historic) await finishHistory(db,job,now,failure);
       else if(version && !failure) {
-        for(const rule of chosen) {
+        for(const rule of completeRules()) {
           const queued=await stmt(db,'SELECT * FROM one_clock_historical_rules WHERE namespace=? AND session=? AND instrument=? AND rule_id=? AND version=?',job.namespace,job.session,job.instrument,rule.rule_id,rule.version).first();
           if(queued && queued.target<=version.generation) await finishHistory(db,queued,now);
         }

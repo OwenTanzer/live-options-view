@@ -197,3 +197,12 @@ test('a rule using an indexed source cannot mature beyond that source watermark'
   await observeBatch(DB,{...request,batchId:'second',ruleCutoffs:{},committedAt:now+1});
   assert.equal((await events(now+1))[0].outcomes[0].state,'missing');
 });
+
+test('a registered native-only output needs an actual stream receipt before rule evaluation',async t=>{
+  const {DB,env}=await setup(t),at=sessionInstant('2026-11-20',9,30);
+  await activate(DB,{...rule,id:'bot',conditions:[{source:'bot-decision',field:'acted',op:'==',value:true,maxAgeMs:1000}]},at);
+  const nativeOnly={id:'bot-audit',instruments:['QQQ'],outputs:{'bot-decision':{acted:'boolean'}}};
+  const result=await advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:at+1000,sources:[emptySource],publicationSources:[nativeOnly]});
+  assert.equal(result[0].state,'catching-up');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+});

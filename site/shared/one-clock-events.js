@@ -57,7 +57,7 @@ export function saveRule(versions, input) {
 
 function evidence(row) {
   return row ? { source: row.source, id: row.id, revision: row.revision,
-    eventAt: row.eventAt, availableAt: row.availableAt, evidence: row.evidence } : null;
+    eventAt: row.eventAt, ...(row.valueAt===undefined?{}:{valueAt:row.valueAt}), availableAt: row.availableAt, evidence: row.evidence } : null;
 }
 
 export function evaluateEvents({ rule: input, observations, selection, sessionClose, activationWindows }) {
@@ -81,7 +81,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   const boundaries = new Set(arrivals.keys());
   for (const row of rows) for (const condition of rule.conditions) {
     if (row.source !== condition.source) continue;
-    const expires = row.eventAt + condition.maxAgeMs + 1;
+    const expires = (row.valueAt ?? row.eventAt) + condition.maxAgeMs + 1;
     if (Number.isSafeInteger(expires) && expires > row.availableAt && expires <= cutoff) boundaries.add(expires);
   }
   const bySource = new Map();
@@ -100,7 +100,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   }
   function readingAt(source, at, maxAgeMs) {
     const row = latest.get(source) ?? null;
-    return { row, state: !row || row.value === null ? 'unavailable' : at - row.eventAt > maxAgeMs ? 'stale' : 'fresh' };
+    return { row, state: !row || row.value === null ? 'unavailable' : at - (row.valueAt ?? row.eventAt) > maxAgeMs ? 'stale' : 'fresh' };
   }
   const anchors = new Map();
   const events = [];
@@ -170,12 +170,12 @@ function measureOutcome(event, outcome, rows, selection, close) {
   }
   const eligible = rows.filter(r => r.source === outcome.source);
   const validValue = value => numeric(value) || outcome.measure === 'category' && ['string','boolean'].includes(typeof value);
-  const row = eligible.find(r => r.eventAt >= targetAt && r.eventAt <= deadline && validValue(field(r.value, outcome.field)));
+  const row = eligible.find(r => (r.valueAt ?? r.eventAt) >= targetAt && (r.valueAt ?? r.eventAt) <= deadline && validValue(field(r.value, outcome.field)));
   if (!row) return { ...base, state: cutoff > deadline ? 'missing' : 'pending', reason: cutoff > deadline ? 'no-qualified-endpoint' : null };
   const endpoint = field(row.value, outcome.field);
   const value = outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
   if(outcome.measure!=='category'&&!numeric(value))return {...base,state:'missing',reason:'nonfinite-measurement'};
-  return { ...base, state: 'measured', value, measuredAt: row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
+  return { ...base, state: 'measured', value, measuredAt: row.valueAt ?? row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
 }
 
 export function aggregateEvents(events, outcomeId) {

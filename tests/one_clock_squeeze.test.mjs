@@ -144,3 +144,26 @@ test('account shortlist ingestion uses catalog boundaries, reuses body reads and
   assert.equal(rows[1].details.publishedAt,T+2500);
   assert.equal((await ingestPublicSource(db,f.bucket,adapter,{...options,now:options.now+1})).gets,0);
 });
+
+test('a later unchanged attempt restores pointer coverage without refreshing the underlying value',async()=>{
+  const f=fixture({ticker:'QQQ'}), second=fixture({ticker:'QQQ',run:'33333333-3333-4333-8333-333333333333',
+    started:T+29000,finished:T+30000,published:T+31000,receiptAt:T+32000,latest:'unchanged'});
+  for(const [key,object] of second.objects)f.objects.set(key,object);
+  const adapter=publicIngestionSources.find(a=>a.outputs.includes('shortlist'));
+  const boundaries=[T+100,T+2500,T+30100,T+32000];
+  const rows=[];
+  for(const eventAt of boundaries){
+    const catalog={objects:(await f.bucket.list()).objects.filter(o=>+o.uploaded<=eventAt),truncated:false};
+    const selected=await adapter.read(f.bucket,{session,instrument:'QQQ'},{key:'pointer:'+eventAt,eventAt,catalog});
+    rows.push(...selected.rows);
+  }
+  assert.equal(rows[3].value.listed,true);
+  assert.equal(rows[3].valueAt,T+2500);
+  const selection={session,instrument:'QQQ',origin:'recorded',cutoff:T+33000};
+  assert.equal(readingAsOf(rows,selection,{maxAgeMs:10000}).state,'stale');
+  const rule={id:'fresh',name:'Fresh shortlist',version:1,instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',
+    conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:10000}],
+    outcomes:[{source:'shortlist',id:'later',field:'rank',measure:'value',maxAgeMs:10000,horizonMs:29000,toleranceMs:1000}]};
+  const events=evaluateEvents({rule,selection,observations:rows,sessionClose:T+3600000});
+  assert.equal(events.length,1);assert.equal(events[0].outcomes[0].state,'missing');
+});
