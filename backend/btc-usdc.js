@@ -9,7 +9,11 @@ async function read(env, method, params) {
   url.search = new URLSearchParams(params);
   const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(8000),
     headers: env.BTC_USDC_DATA_TOKEN ? {Authorization: 'Bearer ' + env.BTC_USDC_DATA_TOKEN} : {}});
-  if (!response.ok) throw new Error('USDC data provider unavailable');
+  if (!response.ok) {
+    const error = new Error('USDC data provider unavailable');
+    error.status = response.status;
+    throw error;
+  }
   const data = await response.json();
   if (data.error || data.result == null) throw new Error('USDC data provider unavailable');
   return data.result;
@@ -37,7 +41,16 @@ export function linearContract(row) {
 }
 
 async function quote(env, contract) {
-  const b = await read(env, 'get_order_book', {instrument_name:contract.provider_symbol, depth:1});
+  const params = {instrument_name:contract.provider_symbol};
+  let b;
+  try {
+    b = await read(env, 'get_order_book', {...params, depth:1});
+  } catch (error) {
+    if (error.status !== 429) throw error;
+    // The ticker supplies the same timestamped best prices and displayed sizes.
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    b = await read(env, 'ticker', params);
+  }
   if (b.instrument_name !== contract.provider_symbol || !Number.isFinite(b.timestamp)) throw new Error('Unverified book');
   const ts = new Date(b.timestamp).toISOString(), received = new Date().toISOString();
   return {symbol:contract.contract_key, contract, available:b.state === 'open', source:'Deribit linear',
