@@ -60,3 +60,9 @@ test('final ranking uses finalized time and observed revision receipts, includin
   const rebuilt=await consumer.call('return_rankings',query);
   assert.equal(rebuilt.availability,'unproven_at_cursor');assert.equal(rebuilt.summary,undefined);
 });
+
+test('malformed cursor arguments return the normal validation envelope',async()=>{
+  const {consumer}=setup();
+  for(const tool of ['return_rankings','active_rankings','result_detail'])
+    assert.equal((await consumer.call(tool,null)).status,'failed');
+});

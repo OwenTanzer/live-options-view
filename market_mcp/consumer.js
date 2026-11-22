@@ -287,7 +287,7 @@ class Consumer {
     // An absent publication is a typed answer, not a failed call: same
     // vocabulary as discover_sources, and not flagged isError, which clients
     // can relabel as a generic argument error.
-    const cutoff = name === 'result_detail' ? this.references.get(a.reference)?.value.cursor : a.as_of_ms;
+    const cutoff = name === 'result_detail' ? this.references.get(a?.reference)?.value.cursor : a?.as_of_ms;
     if(out.errors.some(e=>e.code==='unavailable_at_cursor')) {
       // Keep only the scoped request and eligible revision receipts. A later
       // detail artifact cannot leave a half-assembled retrospective payload.
