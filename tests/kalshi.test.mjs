@@ -54,7 +54,7 @@ test('event overrides, cleared overrides, future schedule and unknown multiplier
   assert.throws(() => effectiveFee(f.series,{...f.fees,cursor:'more'},f.raw,Date.now()));
 });
 test('all endpoints deny anonymous, ordinary sessions, spoofed identities, other GitHub users and aliases', async () => scenario(async (env,f) => {
-  const paths = ['status','markets','portfolio','archive','archive?id=00000000-0000-0000-0000-000000000000'];
+  const paths = ['status','markets','portfolio','archive','archive?one_clock_at=1700000000000','archive?id=00000000-0000-0000-0000-000000000000'];
   for (const cookie of ['', 'session=ordinary', '__Host-cds-session=short']) for (const p of paths)
     assert.equal((await worker.fetch(request(p,null,cookie),env)).status,401);
   assert.equal(f.requests.length,0);
@@ -231,4 +231,19 @@ test('chain protocol repeats ticker parameters and checks every response identit
   assert.equal(Object.keys(result.quotes).length,2);
   const url=new URL(f.requests.find(r=>r.url.includes('/markets/orderbooks?')).url);
   assert.deepEqual(url.searchParams.getAll('tickers'),tickers);
+}));
+
+test('frozen private evidence enforces the same cutoff on indexes and details', async () => scenario(async env=>{
+  const at=1700000000123, id=(await archive(env,TICKER,{synthetic:true})).id;
+  env.DB.db.prepare('UPDATE kalshi_evidence SET received_at=? WHERE id=?').run(new Date(at).toISOString(),id);
+  const read=(cutoff,suffix='')=>handleKalshi(request('archive?one_clock_at='+cutoff+suffix),env);
+  assert.deepEqual((await (await read(at-1)).json()).archives,[]);
+  assert.equal((await read(at-1,'&id='+id)).status,404);
+  const result=await (await read(at)).json();
+  assert.equal(result.archives[0].id,id);
+  assert.deepEqual((await (await read(at,'&id='+id)).json()).evidence,{synthetic:true});
+  assert.equal((await read(at,'&one_clock_at='+at)).status,400);
+  assert.equal((await read(at,'&before_id='+id)).status,400);
+  assert.equal((await read(at,'&before='+new Date(at+1).toISOString()+'&before_id='+id)).status,400);
+  assert.equal(env.DB.db.prepare('SELECT count(*) AS n FROM users').get().n,0);
 }));
