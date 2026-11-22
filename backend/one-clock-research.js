@@ -1,3 +1,4 @@
+import {fanoutChanges,snapshotVersion,generationWrites,finishHistory} from './one-clock-reevaluation.js';
 import { requireSession,checkOrigin,readJsonBody,jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
 import { eventRule } from '../site/shared/one-clock-events.js';
@@ -6,7 +7,7 @@ import { validSession,sessionAt } from '../site/shared/one-clock-session.js';
 import { registerObservedRule,observeBatch,observedEventsAsOf } from './one-clock-observer.js';
 import { ingestPublicSource,ingestedAsOf } from './one-clock-ingestion.js';
 import { publicIngestionSources } from './one-clock-ingestion-sources.js';
-import {advanceNativePublications,nativePublicationSources,nativeScopeRecords,retainNativeCoverage,nativeHandoffExists} from './one-clock-publication-sources.js';
+import {advanceNativePublications,nativePublicationSources,nativeScopeRecords,markPendingNativeEvidence,retainNativeCoverage,nativeHandoffExists} from './one-clock-publication-sources.js';
 import {handoffSource} from './one-clock-handoff.js';
 import { equitySession,observerSessions } from './one-clock-calendar.js';
 const stmt=(db,sql,...args)=>db.prepare(sql).bind(...args);
@@ -36,7 +37,7 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
         const rules=await ruleList(db,namespace),activations=await list(stmt(db,'SELECT rule_id,version,started_at,ended_at FROM one_clock_activations WHERE namespace=? ORDER BY started_at LIMIT 1001',namespace));
         return jsonResponse({rules:rules.map(r=>({rule:JSON.parse(r.payload),registeredAt:r.registered_at})),activations,sources:researchFields,instruments,defaultSession:observerSessions(Date.now())[0],
           cadence:'Periodic archive observation on the existing 15-minute service invocation; catch-up and tenant rotation may add delay.',
-          coverage:'Provisional: publications overwritten between polls and arbitrary late corrections to old sessions are not recoverable.'});
+          coverage:'Native revisions queue bounded reevaluation, including paused rules. Legacy sources can miss revisions overwritten between polls.'});
       }
       if([...url.searchParams.keys()].some(k=>!['session','instrument','cutoff'].includes(k)||url.searchParams.getAll(k).length!==1))throw new Error('invalid result query');
       const session=url.searchParams.get('session'),instrument=url.searchParams.get('instrument'),cutoff=instant(Number(url.searchParams.get('cutoff')));
@@ -52,7 +53,8 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
         WHERE r.namespace=? AND r.registered_at<=? AND a.started_at<=? AND (a.ended_at IS NULL OR a.ended_at>=?)
         AND EXISTS(SELECT 1 FROM json_each(r.payload,'$.instruments') WHERE value=?) LIMIT 101`,namespace,cutoff,Math.min(cutoff,bounds.close),bounds.open,instrument)):[];
       const evaluation=applicable.map(r=>attempts.find(a=>a.rule_id===r.rule_id&&a.version===r.version)??{...r,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'});
-      return jsonResponse({session,instrument,cutoff,events,coverage:coverage.map(r=>JSON.parse(r.coverage)),evaluation,origin:'recorded'});
+      const status=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation.map(e=>({...e,session,instrument})),cutoff,namespace):evaluation;
+      return jsonResponse({session,instrument,cutoff,events,coverage:coverage.map(r=>JSON.parse(r.coverage)),evaluation:status,origin:'recorded'});
     }
     const origin=checkOrigin(request);if(origin)return origin;
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
@@ -119,18 +121,39 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
     AND NOT EXISTS(SELECT 1 FROM one_clock_evaluation_work w WHERE w.namespace=r.namespace AND w.session=d.value AND w.instrument=i.value)
     ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,equitySession(day).close,equitySession(previous).close).run();
   // Two accounts/four rules each per invocation; shared source reads are memoized.
+  const nativeEnabled=env.ONE_CLOCK_PUBLICATIONS==='enabled';
+  let discovery=null;
+  if(nativeEnabled) discovery=await fanoutChanges(db,now);
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
+  if(nativeEnabled && discovery.state!=='indexing') {
+    const backlog=await list(stmt(db,'SELECT * FROM one_clock_historical_rules WHERE retry_at<=? ORDER BY retry_at,enqueued_at LIMIT 2',now));
+    const fresh=backlog.filter(h=>!jobs.some(j=>j.namespace===h.namespace && j.session===h.session && j.instrument===h.instrument));
+    if(fresh.length) {
+      if(jobs.length) {
+        jobs.splice(1,1);
+        if(Math.floor(now/900000)%2===0) jobs.unshift(fresh[0]); else jobs.push(fresh[0]);
+      } else jobs.push(...fresh);
+    }
+  }
   const reads=new Map(),results=[];let statementBudget=800;
   for(const job of jobs) {
     try {
-      const key=JSON.stringify([job.session,job.instrument]);
+      const historic=job.target!==undefined;
+      const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now,job.target) : null;
+      if(historic) {
+        const done=await stmt(db,'SELECT MAX(generation) generation FROM one_clock_generation_receipts WHERE namespace=? AND session=? AND instrument=? AND rule_id=? AND version=?',job.namespace,job.session,job.instrument,job.rule_id,job.version).first();
+        if(done.generation>=job.target) {await finishHistory(db,job,now);results.push({state:'already-evaluated',session:job.session,instrument:job.instrument});continue;}
+      }
+      const snapshotAt=historic?version.receivedAt:now;
+      const key=JSON.stringify([job.session,job.instrument,snapshotAt,version?.generation,historic]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
         if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
-          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
+          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:snapshotAt,
+            maxSequence:version ? (version.sequences[descriptor.id+'/'+job.instrument]??0) : null,
             currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
           if(!native)continue;
-          coverage.push(native.coverage);await retainNativeCoverage(db,native.coverage);
+          coverage.push(native.coverage);if(!historic)await retainNativeCoverage(db,native.coverage);
           if(!native.coverage.indexComplete)continue;
           for(const source of Object.keys(descriptor.outputs)) {
             if(owners.has(source))throw new Error('multiple native source owners');
@@ -139,18 +162,19 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         }
         for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument))) {
           if(adapter.outputs.every(source=>owners.get(source)?.descriptor.supersedes?.[source]===adapter.id))continue;
-          coverage.push(await ingestPublicSource(db,env.PAPER_TRADES,adapter,{session:job.session,instrument:job.instrument,now,collection:job.session===day?'prospective':'backfill'}));
+          if(!historic)coverage.push(await ingestPublicSource(db,env.PAPER_TRADES,adapter,{session:job.session,instrument:job.instrument,now,collection:job.session===day?'prospective':'backfill'}));
         }
-        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
+        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:snapshotAt});
         const records=legacy.filter(r=>!owners.has(r.source));
         for(const [source,{descriptor,native}] of owners) {
           if(!descriptor.supersedes?.[source]&&legacy.some(r=>r.source===source))throw new Error('native source needs explicit supersession');
-          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now}));
+          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now,snapshotCutoff:snapshotAt}));
         }
         return {coverage,records};
       })());
       const data=await reads.get(key);
       if(data.coverage.some(c=>!c.indexComplete||c.pending>0)) {
+        if(historic) await finishHistory(db,job,now,'Historical source coverage pending.');
         await stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=? WHERE namespace=? AND session=? AND instrument=?',now,job.namespace,job.session,job.instrument).run();
         results.push({state:'catching-up',session:job.session,instrument:job.instrument});continue;
       }
@@ -161,14 +185,21 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       const bounds=equitySession(job.session);
       const rules=(await ruleList(db,job.namespace)).filter(r=>JSON.parse(r.payload).instruments.includes(job.instrument)&&
         (windows[JSON.stringify([r.rule_id,r.version])]??[]).some(w=>w.started_at<=bounds.close&&(w.ended_at===null||w.ended_at>=bounds.open)));
-      const start=job.rule_cursor%Math.max(1,rules.length);let chosen=rules.slice(start,start+4);
-      const selection={session:job.session,instrument:job.instrument,cutoff:now,origin:'recorded'};
+      const start=(job.rule_cursor??0)%Math.max(1,rules.length);let chosen=historic?rules.filter(r=>r.rule_id===job.rule_id&&r.version===job.version):rules.slice(start,start+4);
+      // Mapping a legacy identity can itself become known after the source
+      // snapshot. Keep that actual handoff time and the transaction time distinct.
+      const evidenceAt=historic?Math.max(snapshotAt,...data.records.map(r=>r.received_at)):now;
+      const selection={session:job.session,instrument:job.instrument,cutoff:evidenceAt,origin:'recorded'};
       // Regular-session observations share the producer's calendar; premarket
       // payloads do not silently become an anchor or trigger for this policy.
       const sourceRecords=data.records.filter(r=>r.event_at>=bounds.open&&r.event_at<=bounds.close);
       if(statementBudget<4)break; // Defer untouched rules, rather than call a depleted budget a failure.
-      const evaluate=()=>observeBatch(db,{namespace:job.namespace,batchId:`tick:${job.session}:${job.instrument}:${now}:${start}`,source:'public-registry',cursor:String(start),
-        selection,sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
+      const attempts=(selected,state,reason)=>selected.map(r=>stmt(db,`INSERT INTO one_clock_evaluation_history
+        (namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?)
+        ON CONFLICT(namespace,session,instrument,rule_id,version,attempted_at) DO UPDATE SET state=excluded.state,reason=excluded.reason
+        WHERE excluded.state='evaluated'`,job.namespace,job.session,job.instrument,r.rule_id,r.version,now,state,reason));
+      const evaluate=()=>observeBatch(db,{namespace:job.namespace,batchId:historic?`history:${job.target}:${job.rule_id}:${job.version}`:`tick:${job.session}:${job.instrument}:${now}:${start}`,source:'public-registry',cursor:String(start),
+        selection,committedAt:now,targetGeneration:version?.generation,completionStatements:[...attempts(chosen,'evaluated',null),...(version?generationWrites(db,job,chosen,version.generation,now):[])],sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
         ruleKeys:chosen.map(r=>JSON.stringify([r.rule_id,r.version]))});
       let result,failure=null;
       try{result=await evaluate();}catch(error){
@@ -179,19 +210,28 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         }
       }
       statementBudget-=result?.statements??0;
-      // Attempt receipt and scheduling advance together even on a broken rule.
-      // Evidence/checkpoints move only inside the successful observer batch.
-      await db.batch([
-        ...chosen.map(r=>stmt(db,'INSERT INTO one_clock_evaluation_history(namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',job.namespace,job.session,job.instrument,r.rule_id,r.version,now,failure?'failed':'evaluated',failure)),
-        stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+chosen.length)%Math.max(1,rules.length),job.namespace,job.session,job.instrument)
-      ]);
+      // Evidence, successful attempt and generation acknowledgment commit together.
+      // Advancing a queue cursor afterward is safe to retry after a crash.
+      const schedule=failure?attempts(chosen,'failed',failure):[];
+      if(!historic) schedule.push(stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+chosen.length)%Math.max(1,rules.length),job.namespace,job.session,job.instrument));
+      if(schedule.length)await db.batch(schedule);
+      if(historic) await finishHistory(db,job,now,failure);
+      else if(version && !failure) {
+        for(const rule of chosen) {
+          const queued=await stmt(db,'SELECT * FROM one_clock_historical_rules WHERE namespace=? AND session=? AND instrument=? AND rule_id=? AND version=?',job.namespace,job.session,job.instrument,rule.rule_id,rule.version).first();
+          if(queued && queued.target<=version.generation) await finishHistory(db,queued,now);
+        }
+      }
       results.push({state:failure?'failed':'evaluated',session:job.session,instrument:job.instrument,...result});
     } catch {
       // A broken source/account cannot monopolize the fair rotation. This is
       // scheduling progress only; no evidence or evaluation checkpoint moves.
       await stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=? WHERE namespace=? AND session=? AND instrument=?',now,job.namespace,job.session,job.instrument).run();
+      if(job.target!==undefined) await finishHistory(db,job,now,'Historical source evaluation failed.');
       console.error('one_clock_observer_scope_failed');results.push({state:'failed',session:job.session,instrument:job.instrument});
     }
   }
+  if(discovery?.state==='indexing') results.push({state:'indexing-history'});
+  if(discovery?.state==='discovered' && results.length) results[0].historicalDiscovery=discovery;
   return results;
 }

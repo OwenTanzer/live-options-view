@@ -256,6 +256,10 @@ username allowlist is ignored; unverified sessions and distinct users remain den
 Apply additive migrations 0005 and 0008 and verify the source rights receipt before enabling
 the separate API/asset release. This does not require a collector rollout.
 
+### One Clock historical corrections
+
+Apply additive migration `0013_one_clock_reevaluation.sql` before releasing this API revision. It adds an insert trigger to the existing native publication transaction. Each affected session and instrument receives a durable generation. The existing observer invocation indexes older activations and retained publications in pages of 24, then distributes work to overlapping saved rule versions, including paused versions. It reserves the existing two evaluation slots for current and historical work. Results compare the generation visible at the selected cutoff with the rule’s successful evaluation receipt. Incomplete bootstrap, failed rules and pending corrections retain their own status. Reverting the API to its previous compatible revision stops processing the historical queue; immutable evidence and additive schema remain available for a forward retry. No new cron or capture process is required.
+
 ## D1 daily row budget
 
 Web CI runs the production catalog and account lookups against local Miniflare and uses its per-statement row counters. The scenario models full unchanged catalog pages on the configured cron, 1,000 historical lookups plus 10,000 authenticated account lookups and 500 session creation/logout pairs per day. These request counts are test assumptions. Update the scenario when adding high-volume workloads or changing the traffic model. Reproduce with `npm ci --prefix tests/d1-budget --ignore-scripts` and `node --experimental-sqlite --test tests/d1-budget/usage.test.mjs`.
