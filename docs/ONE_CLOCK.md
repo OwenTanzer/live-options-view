@@ -235,6 +235,23 @@ cursor.
 
 ## Verification and release
 
+The main dashboard shares one committed selection across Live, Historical and
+Automated. Choose Replay in the Session clock control, set the session,
+instrument and New York time, and apply it. Navigating between tabs preserves
+the instant. Live displays the eligible archived chain. Automated displays
+public fill receipts and carried inventory, keeping live balances, marks and
+paper-trading controls outside the replay. Historical combines the sources
+and links to the private journal at the same instant. A selected instant from
+Event Results opens the same dashboard clock with millisecond precision.
+
+Returning to Live resumes the current roster on the Automated tab. The
+QQQ/SPY/IBIT meters use one shared age tick; their acquisition schedules and
+the account quote service still own their respective live fetches. Dashboard
+readers can subscribe to the window event `one-clock-selection`, with the
+immutable selection in `event.detail`, and use
+`window.oneClockDashboard.snapshot()` on mount. A live-mode notification
+releases the fixed cutoff.
+
 The Historical tab now has an explicit **One Clock · as of cursor** reader,
 alongside the original daily retrospective view. `/api/one-clock/chain` accepts
 only session, QQQ/SPY/IBIT instrument and epoch-millisecond cutoff. It derives

@@ -15,13 +15,13 @@ let shortlistCoverage=null;
 registry.register(squeezeSource({onCoverage:value=>{shortlistCoverage=value;}}));
 const today=sessionAt(Date.now());
 el('history-clock-date').value=today;
-const clock=createClock({registry,initial:{mode:'replay',origin:'recorded',session:today,instrument:'QQQ',cutoff:sessionInstant(today,10)}});
+const clock=createClock({registry,initial:{mode:'live',origin:'recorded',session:today,instrument:'QQQ',cutoff:sessionInstant(today,10)}});
 function clearBot(message) {
   el('history-clock-bot-status').textContent=message;
   el('history-clock-bot-rows').replaceChildren();el('history-clock-bot-inventory').textContent='';
 }
 async function renderBot() {
-  const selection=clock.snapshot();botCoverage=null;
+  const selection=clock.snapshot();
   clearBot(el('history-clock-bot').value?'Loading retained receipt pages…':'Select a public bot.');
   if(!el('history-clock-bot').value) return;
   try {
@@ -30,6 +30,7 @@ async function renderBot() {
     const fills=rows.filter(row=>row.details.eventSession===selection.session);
     el('history-clock-bot-status').textContent=`${fills.length} visible session fills · ${rows.length-fills.length} carried ledger entries · ${botCoverage?.pages??0} pages · ${botCoverage?.complete?'Retained publication receipts complete.':'Publication gaps: opening and current inventory unavailable.'}`;
     el('history-clock-bot-inventory').textContent=JSON.stringify(inventory,null,2);
+    el('history-clock-bot-rows').replaceChildren();
     for(const row of fills.sort((a,b)=>a.eventAt-b.eventAt || a.id.localeCompare(b.id))) {
       const tr=document.createElement('tr');
       for(const value of [new Date(row.eventAt).toISOString(),new Date(row.availableAt).toISOString(),row.value.sym,row.value.side,row.value.qty,row.value.price]) {
@@ -53,7 +54,7 @@ el('history-clock-load-bots').onclick=async()=>{
 };
 function clearShortlist(message) {el('history-clock-shortlist-status').textContent=message;el('history-clock-shortlist-evidence').textContent='';}
 async function renderShortlist(selection) {
-  shortlistCoverage=null;clearShortlist('Reading retained publication receipts…');
+  clearShortlist('Reading retained publication receipts…');
   try {
     const result=await clock.read('shortlist');if(result.discarded)return;
     const row=result.reading.row;
@@ -63,7 +64,55 @@ async function renderShortlist(selection) {
     el('history-clock-shortlist-evidence').textContent=JSON.stringify({...(row?{value:row.value,evidence:row.evidence,details:row.details}:{}),coverage:shortlistCoverage},null,2);
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}
 }
-function renderCommitted(selection) { renderBot();renderShortlist(selection);return renderChain(selection); }
+let tab='live';
+let replay=false;
+const replayTabs=new Set(['live','bots','history']);
+function updateView() {
+  const visible=replay && replayTabs.has(tab);
+  el('clock-navigation').hidden=!replayTabs.has(tab);
+  el('history-clock').hidden=!visible;
+  el('clock-chain-view').hidden=tab==='bots';
+  el('clock-journal-nav').hidden=true;
+  el('clock-floor-view').hidden=tab==='live';
+  el('clock-shortlist-view').hidden=tab!=='history';
+  for(const name of ['live','bots']) {
+    el(name+'-panel').classList.toggle('hidden',tab!==name || visible);
+  }
+  el('history-daily').hidden=replay;
+  el('history-view').value=replay?'clock':'daily';
+  el('clock-mode').value=replay?'replay':'live';
+}
+function renderCommitted(selection) {
+  if(tab==='history' && ['QQQ','SPY','IBIT'].includes(selection.instrument)){
+    const params=new URLSearchParams({one_clock_session:selection.session,one_clock_instrument:selection.instrument,one_clock_at:String(selection.cutoff)});
+    el('clock-journal').href='/trade-journal.html?'+params;
+    el('clock-journal-nav').hidden=false;
+  }else el('clock-journal-nav').hidden=true;
+  el('clock-scope').textContent=selection.instrument+' · '+new Date(selection.cutoff).toISOString();
+  if(tab==='bots')return renderBot();
+  if(tab==='history'){renderBot();renderShortlist(selection);}
+  if(tab==='live' || tab==='history')return renderChain(selection);
+}
+clock.subscribe(selection=>{
+  coverage=null;botCoverage=null;shortlistCoverage=null;
+  window.dispatchEvent(new CustomEvent('one-clock-selection',{detail:selection}));
+});
+window.oneClockDashboard={
+  snapshot:clock.snapshot,
+  isLive() {return !replay;},
+  showTab(name) {
+    tab=name;updateView();
+    if(replay && replayTabs.has(tab))renderCommitted(clock.snapshot());
+    return replay;
+  },
+  liveTime() {
+    if(replay)return clock.snapshot().cutoff;
+    const now=Date.now();
+    return clock.select({mode:'live',origin:'recorded',session:sessionAt(now),
+      instrument:typeof chainSelection!=='undefined'?chainSelection.symbol:'QQQ',cutoff:now}).cutoff;
+  },
+};
+updateView();
 el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();
@@ -73,7 +122,7 @@ async function renderChain(selection) {
   const {session,instrument}=selection;
   if(!['QQQ','SPY','IBIT'].includes(instrument)){clear('Chain archive is available for QQQ, SPY and IBIT. Other sources keep their own coverage.');return;}
   try {
-    coverage=null;clear('Loading evidence available at this cursor…');
+    clear('Loading evidence available at this cursor…');
     const result=await clock.read('chain'); if(result.discarded) return;
     const reading=result.reading,row=reading.row;
     if(!row) { clear('No qualified snapshot at this cursor. Missing publication or retained revision is unavailable.');el('history-clock-evidence').textContent=JSON.stringify(coverage,null,2);return; }
@@ -102,20 +151,30 @@ function renderSelection() {
   } catch(error) {clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
 }
 el('history-clock-form').onsubmit=event=>{event.preventDefault();renderSelection();};
-el('history-view').onchange=()=>{
-  const active=el('history-view').value==='clock';
-  el('history-clock').hidden=!active;el('history-daily').hidden=active;
-  if(active) { if(el('hist-date').value) el('history-clock-date').value=el('hist-date').value;renderSelection(); }
-  else {clock.select({...clock.snapshot(),mode:'replay'});clearBot('Choose One Clock to read the bot ledger.');clearShortlist('Choose One Clock to read publications.');} // cancel pending responses
-};
-window.addEventListener('pagehide',()=>clock.dispose());
+function changeMode(next) {
+  if(next===replay)return;
+  replay=next;
+  if(replay && tab==='history' && el('hist-date').value)el('history-clock-date').value=el('hist-date').value;
+  if(replay && tab==='live' && typeof chainSelection!=='undefined')el('history-clock-instrument').value=chainSelection.symbol;
+  if(typeof closeTicket==='function')closeTicket();
+  updateView();
+  setBotsPolling(tab==='bots' && !replay);
+  if(replay)renderSelection();
+  else {
+    window.oneClockDashboard.liveTime();
+    el('clock-scope').textContent='';
+  }
+}
+el('history-view').onchange=()=>changeMode(el('history-view').value==='clock');
+el('clock-mode').onchange=()=>changeMode(el('clock-mode').value==='replay');
+window.addEventListener('pagehide',event=>{if(!event.persisted)clock.dispose();});
 try {
   const linked=replaySelection(location.search);
   if(linked) {
-    showTab('history');el('history-view').value='clock';el('history-clock').hidden=false;el('history-daily').hidden=true;
+    showTab('history');replay=true;updateView();
     el('history-clock-date').value=linked.session;el('history-clock-instrument').value=linked.instrument;
     const local=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(linked.cutoff);
-    el('history-clock-time').step='0.001';el('history-clock-time').value=local+'.'+String(linked.cutoff%1000).padStart(3,'0');
+    el('history-clock-time').value=local+'.'+String(linked.cutoff%1000).padStart(3,'0');
     const note=document.createElement('p');note.textContent='Source replay at the event trigger. An observer receipt can be retained later; this source view does not move its recorded receipt into the past. Unavailable source evidence remains unavailable.';
     el('history-clock-form').after(note);renderCommitted(clock.select(linked));
   }

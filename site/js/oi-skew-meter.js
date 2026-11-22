@@ -91,7 +91,15 @@ function noteOiSkewRefreshFailure(reason, nowMs = Date.now()) {
 
 function _ensureOiSkewAgeTicker() {
   if (_oiSkewState.timer || typeof setInterval !== 'function') return;
-  _oiSkewState.timer = setInterval(() => renderOiSkewMeter(Date.now()), OI_SKEW_AGE_TICK_MS);
+  _oiSkewState.timer = setInterval(() => {
+    const dashboard = typeof window !== 'undefined' && window.oneClockDashboard;
+    if (dashboard && !dashboard.isLive()) return;
+    const cutoff = dashboard ? dashboard.liveTime() : Date.now();
+    renderOiSkewMeter(cutoff);
+    if (typeof referenceOiSkewMeters !== 'undefined') {
+      for (const meter of Object.values(referenceOiSkewMeters)) meter.render(cutoff);
+    }
+  }, OI_SKEW_AGE_TICK_MS);
 }
 
 function renderOiSkewMeter(nowMs = Date.now()) {
