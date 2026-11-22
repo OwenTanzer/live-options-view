@@ -273,6 +273,10 @@ function open(v) {
   for (const r of [v, ...related(v.id)]) {
     node('h3', r.kind + ' · ' + r.id, facts);
     node('small', r.created_at + ' UTC · submitted by ' + r.credits.join(', '), facts);
+    if (r.kind === 'handoff') {
+      const link=node('a','Open hypothesis in Event Builder',facts);
+      link.href='/one-clock.html?strategy_handoff='+encodeURIComponent(r.id);
+    }
     if (r.kind === 'version')
       for (const [key, label] of Object.entries(ruleFields)) {
         const line = node('div', null, facts);
@@ -459,11 +463,11 @@ $('handoff').onclick = run(async () => {
   if (record.error) return;
   download(version.id + '-hypothesis', {
     handoffId: record.id,
-    version: selected.id,
-    configuration: selected.data,
+    version: version.id,
+    configuration: version.data,
     design: designRecord,
-    trials: related(selected.id).filter((r) => r.kind === 'trial'),
-    evidence: evidence(selected.id),
+    trials: related(version.id).filter((r) => r.kind === 'trial'),
+    evidence: evidence(version.id),
   });
 });
 run(load)();

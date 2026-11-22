@@ -16,6 +16,8 @@
   <section id="builder" aria-labelledby="builder-title">
     <div class="section-head"><h2 id="builder-title">Event Builder</h2><button id="new-rule">New event class</button></div>
     <div class="toolbar"><label>Saved definition<select id="versions"></select></label><button id="reopen">Reopen</button><button id="export-rule">Export rule</button></div>
+    <section id="archive-design" hidden><h3>Strategy Archive hypothesis</h3><div id="archive-plan"></div><button id="use-design">Start a rule from this design</button></section>
+    <p id="rule-origin" hidden></p>
     <form id="rule-form">
       <div class="form-grid"><label>Event name<input id="rule-name" required maxlength="120"></label><label>Instrument<select id="instrument"><option>QQQ</option><option>SPY</option><option>IBIT</option></select></label>
       <label>Combine conditions<select id="combine"><option value="all">All conditions</option><option value="any">Any condition</option></select></label>
