@@ -1,7 +1,7 @@
 // Private BTC monthly paper product. No broker orders or public archive fallback.
 import { computeBookFromTrades, jsonResponse, requireSession, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
-import { linearKey, linearPayload, linearFinal } from './btc-usdc.js';
+import { linearKey, linearPayload, linearFinal, linearBookWindow } from './btc-usdc.js';
 import { btcAllowed, ownerLinkAvailable } from './btc-owner-link.js';
 
 export const BTC_KEY = /^(?:BTCOPT:[0-9a-f]{40}|USDC:BTC_USDC-\d{1,2}[A-Z]{3}\d{2}-\d+(?:\.\d+)?-[CP])$/;
@@ -76,7 +76,7 @@ export function heldBtc(record) {
 export async function fetchBtc(env, record, symbols = [], expiry = null, product = null) {
   if (product === 'usdc' || (product == null && linearKey(symbols[0]))) {
     const keys = product == null ? symbols : [...new Set([...symbols, ...heldBtc(record).map(c => c.contract_key)])];
-    const payload = await linearPayload(env, keys.filter(linearKey), expiry, product == null);
+    const payload = await linearPayload(env, keys.filter(linearKey), expiry, product == null, symbols.slice(0, 1));
     return Response.json(payload);
   }
   if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) throw new Error('Quote service unavailable');
@@ -109,9 +109,13 @@ export async function handleBtcOptions(request, env) {
     if (other.length) {
       const reads = product === 'usdc'
         ? [fetchBtc(env,session.record,other.map(c=>c.contract_key)).then(r=>r.json())]
-        : other.slice(0,4).map(c=>linearPayload(env,[c.contract_key],null,true));
+        : linearBookWindow(other.map(c=>c.contract_key)).map(key=>linearPayload(env,[key],null,true));
       for (const result of await Promise.allSettled(reads)) {
-        if (result.status === 'fulfilled') data.quotes.push(...(result.value.quotes || []));
+        if (result.status === 'fulfilled') {
+          for (const quote of result.value.quotes || []) {
+            data.quotes.push({ ...quote, market_session: result.value.session ?? 'unavailable' });
+          }
+        }
       }
     }
     if (!await btcAllowed(env, session, request)) return jsonResponse({ error: 'Bitcoin data access revoked' }, 403);

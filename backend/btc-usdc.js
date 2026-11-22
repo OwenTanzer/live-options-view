@@ -54,7 +54,17 @@ export async function linearFinal(env, c, now) {
     published_at:new Date(now).toISOString(), time_basis:'observed'};
 }
 
-export async function linearPayload(env, symbols, requestedExpiry, exact = false) {
+// Keep each refresh bounded while giving every held lot a turn at a fresh book.
+export function linearBookWindow(keys, pinned = []) {
+  const selected = [...new Set(pinned)].slice(0, 4);
+  const remaining = [...new Set(keys)].filter(key => !selected.includes(key));
+  const capacity = 4 - selected.length;
+  if (remaining.length <= capacity) return selected.concat(remaining);
+  const start = (Math.floor(Date.now() / 5000) * capacity) % remaining.length;
+  return selected.concat([...remaining, ...remaining].slice(start, start + capacity));
+}
+
+export async function linearPayload(env, symbols, requestedExpiry, exact = false, pinned = []) {
   if (exact) {
     const c = linearContract(await read(env, 'get_instrument', {instrument_name:symbols[0].slice(5)}));
     if (!c || c.contract_key !== symbols[0]) throw new Error('Unknown linear option');
@@ -74,7 +84,7 @@ export async function linearPayload(env, symbols, requestedExpiry, exact = false
     prices['USDC:'+s.instrument_name] = {bid:s.bid_price,ask:s.ask_price,mark:s.mark_price,as_of:new Date(s.creation_timestamp).toISOString()};
     if (Number.isFinite(s.underlying_price)) center = s.underlying_price;
   }
-  const targets = [...new Set(symbols)].filter(k=>directory.has(k)).slice(0,4);
+  const targets = linearBookWindow(symbols.filter(k=>directory.has(k)), pinned.filter(k=>directory.has(k)));
   const quotes = (await Promise.allSettled(targets.map(k=>quote(env,directory.get(k))))).filter(q=>q.status==='fulfilled').map(q=>q.value);
   return {contracts, quotes, expiries, expiry, center, center_from_future:center!=null, display_prices:prices,
     subscribed_keys:quotes.map(q=>q.symbol), entry_keys:all.map(c=>c.contract_key), session:'open'};

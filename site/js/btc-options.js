@@ -143,7 +143,7 @@ const btcOptions = {
   },
   side(symbol, side) {
     const q = this.quotes.get(symbol), now = Date.now();
-    if (!q?.available || (q.contract?.exchange !== 'Deribit' && this.data?.session !== 'open')) return null;
+    if (!q?.available || ((q.market_session ?? this.data?.session) !== 'open')) return null;
     if (!this.clock(q, side, now)) return null;
     if (!(Number.isFinite(q[side]) && q[side] > 0 && Number.isFinite(q[side + '_size']) && q[side + '_size'] >= 1) || (q.bid != null && q.ask != null && q.bid > q.ask)) return null;
     if (now >= Date.parse(q.contract.stops_trading_at)) return null;
@@ -159,7 +159,7 @@ const btcOptions = {
     if (action === 'buy' && !this.data?.entries_enabled) return 'New entries disabled';
     if (action === 'buy' && !this.data?.entry_keys?.includes(symbol)) return 'Not in active option series';
     if (!q || !q.available) return 'Quote unavailable';
-    if (q.contract?.exchange !== 'Deribit' && this.data?.session !== 'open') return 'Session closed / maintenance';
+    if ((q.market_session ?? this.data?.session) !== 'open') return 'Session closed / maintenance';
     if (Date.now() >= Date.parse(q.contract.stops_trading_at)) return 'Contract expired';
     if (!(q[side] > 0 && q[side + '_size'] >= 1)) return `No executable ${side} price or size`;
     if (q.bid != null && q.ask != null && q.bid > q.ask) return 'Crossed quote';
@@ -185,7 +185,8 @@ const btcOptions = {
     let details = ticketEl.querySelector('.btc-ticket-details');
     if (!details) { details = document.createElement('p'); details.className = 'btc-ticket-details'; ticketEl.appendChild(details); }
     const q = this.quotes.get(sym);
-    details.textContent = `1 paper lot = ${q?.contract?.multiplier ?? '—'} BTC. ${q?.contract?.exchange === 'Deribit' ? 'USDC at $1 for paper accounting; standard taker fees.' : '$2.50 simulated fee per side.'} Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
+    const contract = q?.contract ?? this.data?.contracts?.find(c => c.contract_key === sym) ?? computeBook()[sym]?.contract;
+    details.textContent = `1 paper lot = ${contract?.multiplier ?? '—'} BTC. ${sym.startsWith('USDC:') ? 'USDC at $1 for paper accounting; standard taker fees.' : '$2.50 simulated fee per side.'} Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
     const ask = this.side(sym,'ask'), bid = this.side(sym,'bid');
     if (ask != null && bid != null && q?.contract?.multiplier) {
       const lot = q.contract.multiplier;
