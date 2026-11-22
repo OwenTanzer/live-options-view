@@ -25,6 +25,15 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function permitted(key) {
   if (typeof key !== 'string' || !KEY.test(key)) throw new DataError('invalid_reference', 'Artifact is outside the market allowlist.');
 }
+function revisionReceipt(headers) {
+  const etag = headers.etag, modified = headers['last-modified'];
+  if (typeof etag !== 'string' || !/^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag) ||
+      typeof modified !== 'string') return null;
+  const stamp = Date.parse(modified);
+  if (!Number.isFinite(stamp) || new Date(stamp).toUTCString() !== modified) return null;
+  // The origin date is precise to seconds, rounded down.
+  return {etag, availableAt:stamp + 1000};
+}
 function publicRead(key, remaining, timeout, request = https.get, onResponse = () => {}) {
   permitted(key);
   return new Promise((resolve, reject) => {
@@ -110,7 +119,7 @@ class Source {
       const remainingMs = LIMITS.timeout_ms - (Date.now() - started);
       if (remainingMs <= 0) throw new DataError('upstream_timeout', 'Query deadline exceeded.', key);
       const cap = Math.min(LIMITS.artifact_bytes, LIMITS.query_bytes - bytes);
-      let raw, availableAt = null;
+      let raw, availableAt = null, entityTag = null;
       if (this.reader) {
         const result = await this.reader(key);
         if (result && Object.hasOwn(result, 'bytes') && Object.hasOwn(result, 'availableAt')) {
@@ -136,14 +145,8 @@ class Source {
           throw new DataError(e.code === 'ENOENT' ? 'missing_artifact' : 'upstream_failure', 'Local artifact could not be read.', key);
         }
       } else raw = await publicRead(key, cap, remainingMs, https.get, headers => {
-        const modified = headers['last-modified'];
-        // HTTP-date is floored to whole seconds. Qualify this exact body only
-        // after the entire represented second has elapsed.
-        if (headers.etag && typeof modified === 'string') {
-          const stamp = Date.parse(modified);
-          if (Number.isFinite(stamp) && new Date(stamp).toUTCString() === modified)
-            availableAt = stamp + 1000;
-        }
+        const receipt = revisionReceipt(headers);
+        if (receipt) {availableAt = receipt.availableAt; entityTag = receipt.etag;}
       });
       if (raw.length > cap) throw new DataError('excessive_response', 'Artifact or query byte limit exceeded.', key);
       bytes += raw.length;
@@ -154,6 +157,7 @@ class Source {
         checksum_verification: 'not_verified_against_producer' };
       if (cutoff !== null) {
         entry.available_by_ms = availableAt;
+        if (entityTag !== null) entry.etag = entityTag;
         entry.availability_basis = this.reader ? 'injected_fixture_receipt' : 'origin_last_modified_upper_bound';
       }
       evidence.push(entry);
@@ -183,6 +187,6 @@ class Source {
 function errorRecord(e, key = null) {
   return { code: e.code || 'incompatible_schema', message: e instanceof DataError ? e.message : 'Artifact does not satisfy the supported contract.', locator: e.key || key };
 }
-module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, errorRecord };
+module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, revisionReceipt, errorRecord };
 
 

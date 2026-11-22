@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {Source,DataError} = require('./source');
+const {Source,DataError,revisionReceipt} = require('./source');
 const {Consumer} = require('./consumer');
 const {activeFixtures,SESSION} = require('./fixtures');
 
@@ -65,4 +65,14 @@ test('malformed cursor arguments return the normal validation envelope',async()=
   const {consumer}=setup();
   for(const tool of ['return_rankings','active_rankings','result_detail'])
     assert.equal((await consumer.call(tool,null)).status,'failed');
+});
+
+test('origin receipts require one strong entity tag and a canonical HTTP date',()=>{
+  const date='Fri, 02 Oct 2026 20:06:03 GMT';
+  assert.deepEqual(revisionReceipt({etag:'"rev-123"', 'last-modified':date}),
+    {etag:'"rev-123"',availableAt:Date.parse(date)+1000});
+  for(const etag of [undefined,null,'','W/"abc"','abc','"a", "b"','"has space"',['"a"']])
+    assert.equal(revisionReceipt({etag,'last-modified':date}),null);
+  for(const timestamp of [null,'','2026-10-02T20:06:03Z','Sat, 02 Oct 2026 20:06:03 GMT'])
+    assert.equal(revisionReceipt({etag:'"rev"', 'last-modified':timestamp}),null);
 });

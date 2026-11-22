@@ -66,7 +66,7 @@ For One Clock replay, pass `as_of_ms` (UTC epoch milliseconds) to
 session and sweep number. The pinned sweep path skips moving latest/attempt
 pointers. Each required body must have qualifying evidence for that exact
 revision, including later detail pages. For the fixed public archive, the R2
-HTTP response must supply an ETag and Last-Modified date; the conservative
+HTTP response must supply one strong ETag and a Last-Modified date; the conservative
 availability bound is the following whole second. The producer’s own
 `published_at` can precede the upload. The envelope carries per-member
 digests, availability bounds and the latest bound of the selected members.
