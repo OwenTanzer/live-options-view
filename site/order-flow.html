@@ -251,6 +251,7 @@
       ><span>Area = contracts</span><span class="gap">▨ No coverage</span>
     </div>
     <span id="fresh"></span>
+    <a id="flow-history" hidden>Historical chain at this cursor</a>
     <div id="strike-nav" hidden aria-label="Strike navigation">
       <button id="follow-spot" aria-pressed="true">Follow QQQ</button>
       <label>Strike <input id="strike-center" type="range" min="0" max="0" value="0" /></label>
@@ -384,7 +385,20 @@
   <script src="./shared/order-flow-render.js"></script>
   <script src="./shared/order-flow-profile.js"></script>
   <script src="./shared/order-flow-heatmap.js"></script>
-  <script>
+  <script type="module">
+    import { createClock, createSourceRegistry } from "./shared/one-clock.js";
+    import { sessionAt } from "./shared/one-clock-session.js";
+    import { replaySelection } from "./shared/one-clock-replay-link.js";
+
+    const cursor = createClock({
+      registry: createSourceRegistry(),
+      initial: {mode: "live", session: sessionAt(Date.now()), instrument: "QQQ", origin: "recorded"}
+    });
+    function selectCutoff(cutoff) {
+      const current = cursor.snapshot();
+      cursor.select({...current, cutoff: Math.round(cutoff)});
+    }
+
     const X = window.OrderFlowExposure,
       M = window.OrderFlowModel,
       PF = window.OrderFlowProfile,
@@ -414,7 +428,7 @@
       feed = null,
       chain = null,
       liveRows = [],
-      end = Date.now(),
+      end = cursor.snapshot().cutoff,
       playing = true,
       last = performance.now(),
       hits = [],
@@ -428,6 +442,7 @@
       dirty = true,
       tableAt = 0,
       forceTable = true;
+    cursor.subscribe(selection => { end = selection.cutoff; });
     const live = () => el("source").value !== "replay";
     const simulation = () => el("source").value === "simulation";
     const strikeWindow = createStrikeWindow();
@@ -499,7 +514,7 @@
 
     function currentView() {
       if (!live()) return replay ? M.replayAt(replay, end) : null;
-      return feed ? M.liveAt(feed, chain, Date.now()) : null;
+      return feed ? M.liveAt(feed, chain, end) : null;
     }
 
     function freshnessText(v) {
@@ -616,7 +631,14 @@
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + " · " + hits.length + " prints in view";
+      el("state").textContent = status + (view ? " · " + hits.length + " prints in view" : "");
+      const link = el("flow-history");
+      link.hidden = live() || !view;
+      if (!link.hidden) {
+        const at = cursor.snapshot();
+        link.href = "/?" + new URLSearchParams({one_clock_session: at.session,
+          one_clock_instrument: at.instrument, one_clock_at: String(at.cutoff)}) + "#history-clock";
+      }
       if (forceTable || performance.now() - tableAt > 1000) {
         el("fresh").textContent = freshnessText(view);
         el("profile-summary").textContent = PF.profileSummary(view, part(), scale, selected, clock, money);
@@ -638,7 +660,7 @@
         return;
       }
       const day = feed && feed.session && feed.session.day;
-      const s = view ? (simulation() ? simScale : liveScale).update(view, day, Date.now()) : null;
+      const s = view ? (simulation() ? simScale : liveScale).update(view, day, end) : null;
       scale = s || { flow: 0, conc: 0 };
       el("profile-scale").textContent = s
         ? simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
@@ -967,7 +989,7 @@
       k = Math.max(0, Math.min(grid.strikes.length - 1, k));
       playing = false;
       el("play").textContent = "Play";
-      end = grid.times[j];
+      selectCutoff(grid.times[j]);
       el("seek").value = (1000 * (end - replay.coverage.open)) / span();
       dirty = forceTable = true;
       draw();
@@ -1111,7 +1133,7 @@
     const span = () => replay.coverage.close - replay.coverage.open;
     el("seek").oninput = () => {
       if (!replay) return;
-      end = replay.coverage.open + (span() * el("seek").value) / 1000;
+      selectCutoff(replay.coverage.open + (span() * el("seek").value) / 1000);
       dirty = forceTable = true;
     };
     el("filter").onchange = el("participation").onchange = el("hm-uncertain").onchange = () => (dirty = forceTable = true);
@@ -1137,13 +1159,13 @@
     };
     function frame(now) {
       if (!live() && playing && replay) {
-        end += (now - last) * Number(el("speed").value);
-        if (end > replay.coverage.close) end = replay.coverage.open + 15000;
+        const next = end + (now - last) * Number(el("speed").value);
+        selectCutoff(next > replay.coverage.close ? replay.coverage.open + 15000 : next);
         el("seek").value = (1000 * (end - replay.coverage.open)) / span();
         dirty = true;
       }
       if (live()) {
-        end = Date.now();
+        cursor.tick();
         dirty = true;
       }
       last = now;
@@ -1163,13 +1185,15 @@
         if (gen !== generation) return { stale: true };
         if (res.status === 404) return { missing: true };
         if (!res.ok) throw Error("HTTP " + res.status);
-        return { json: await res.json() };
+        const json = await res.json();
+        return gen === generation ? { json } : { stale: true };
       } finally {
         clearTimeout(timeout);
+        controllers = controllers.filter(item => item !== controller);
       }
     }
 
-    async function changeSource() {
+    async function changeSource(linked = null, invalid = false) {
       const gen = ++generation;
       timers.forEach(clearTimeout);
       controllers.forEach((c) => c.abort());
@@ -1188,7 +1212,21 @@
       document.querySelector("footer").style.display = isLive ? "none" : "flex";
       el("mode").textContent = isLive ? "QQQ · Live feed" : "Archive replay · September 25, 2026";
       el("details").textContent = "Tap a print or a strike to inspect it.";
-      history.replaceState(null, "", "?source=" + el("source").value);
+      if (!linked && !invalid) history.replaceState(null, "", "?source=" + el("source").value);
+      el("seek").disabled = el("play").disabled = !isLive;
+      if (invalid || (linked && (linked.instrument !== "QQQ" || linked.session !== "2026-09-25"))) {
+        replay = replayScale = null;
+        grids = {};
+        playing = false;
+        status = invalid ? "Invalid One Clock cursor" : "Order flow archive unavailable at this cursor";
+        el("mode").textContent = invalid ? "Invalid selection" : linked.instrument + " · " + linked.session;
+        if (linked) cursor.select({...linked, origin: "reconstructed"});
+        return;
+      }
+      if (isLive) {
+        cursor.select({mode: "live", session: sessionAt(Date.now()), instrument: "QQQ",
+          origin: simulation() ? "synthetic" : "recorded"});
+      }
       if (simulation()) {
         el("mode").textContent = "QQQ · Simulation";
         simStep = 0; simulationTick();
@@ -1206,12 +1244,26 @@
           if (gen !== generation) return;
           replay = replay || M.decodeReplay(r);
           replayScale = replayScale || PF.replayScale(replay);
-          end = replay.coverage.open + 15000;
-          status = "Archive · " + replay.cols.t.length.toLocaleString() + " audited prints";
+          const cutoff = linked ? linked.cutoff : replay.coverage.open + 15000;
+          cursor.select({mode: "replay", origin: "reconstructed", session: replay.session, instrument: "QQQ", cutoff});
+          if (linked && (linked.session !== replay.session || cutoff < replay.coverage.open || cutoff > replay.coverage.close)) {
+            replay = replayScale = null;
+            grids = {};
+            status = "Outside archive coverage at this cursor";
+            repaint();
+            return;
+          }
+          playing = !linked;
+          last = performance.now();
+          el("seek").disabled = el("play").disabled = false;
+          el("play").textContent = playing ? "Pause" : "Play";
+          el("seek").value = 1000 * (end - replay.coverage.open) / span();
+          status = "Reconstructed archive · print times and snapshots";
+          el("mode").textContent = "QQQ · reconstructed archive · " + replay.session;
         } catch (e) {
           if (gen === generation) status = "Archive unavailable";
         }
-        dirty = true;
+        repaint();
         return;
       }
       status = "Waiting for feed";
@@ -1220,7 +1272,7 @@
         if (gen !== generation) return;
         try {
           const r = await getJson(LIVE_URL + "?_=" + Date.now(), gen, 8000);
-          if (r.stale) return;
+          if (r.stale || gen !== generation) return;
           if (r.missing) {
             feed = null;
             liveRows = [];
@@ -1247,7 +1299,7 @@
         if (gen !== generation) return;
         try {
           const r = await getJson(CHAIN_URL + "?_=" + Date.now(), gen, 10000);
-          if (r.stale) return;
+          if (r.stale || gen !== generation) return;
           chain = r.missing ? null : r.json;
         } catch (e) {
           // Keep the last chain; its age marks it stale once it passes two minutes.
@@ -1263,9 +1315,12 @@
     }
     const initialSource = new URLSearchParams(location.search).get("source");
     el("source").value = ["simulation", "replay"].includes(initialSource) ? initialSource : "live";
-    el("source").onchange = changeSource;
+    let linked = null, invalid = false;
+    try { linked = replaySelection(location.search); } catch { invalid = true; }
+    if (linked || invalid) el("source").value = "replay";
+    el("source").onchange = () => changeSource();
     window.addEventListener("resize", () => (dirty = true));
-    changeSource();
+    changeSource(linked, invalid);
     requestAnimationFrame(frame);
   </script>
 </html>
