@@ -99,7 +99,9 @@ class DecisionLedger:
     written must actually be on disk.
     """
 
-    def __init__(self, ledger_dir: Path, run_id: str | None = None):
+    def __init__(self, ledger_dir: Path, run_id: str | None = None, *, account_names=None, audit_origin=None):
+        self.account_names = dict(account_names or {})
+        self.audit_origin = audit_origin
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.paths = LedgerPaths.for_run(Path(ledger_dir), self.run_id)
         self._lock = threading.Lock()
@@ -199,6 +201,10 @@ class DecisionLedger:
             "outcome_class": outcome_class,
         }
         rec.update(extra)
+        if self.audit_origin is not None:
+            rec["audit_origin"] = self.audit_origin
+        if account_alias in self.account_names:
+            rec["paper_account_username"] = self.account_names[account_alias]
 
         missing = [f for f in MANDATORY_FIELDS if f not in rec]
         if missing:
