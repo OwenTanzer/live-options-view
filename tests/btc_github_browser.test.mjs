@@ -98,7 +98,9 @@ try {
       assert.ok(identityCalls > reads, 'revocation is checked remotely, not cached');
       status = 200; identity = OWNER_ID+1;
       await page.locator('.btc-github-check').click();
-      await page.waitForFunction(() => !btcOwnerLink.busy && !!btcOwnerLink.message);
+      // The first click updates its message before the following panel refresh paints it.
+      // Keep this fixture identity in place until that action's result is visible.
+      await page.locator('.btc-link-status').filter({hasText: 'Owner verification failed. No access was linked.'}).waitFor();
       assert.equal(await page.locator('.btc-contract').count(), 0);
       identity = OWNER_ID;
       await page.locator('.btc-github-check').click(); await page.locator('.btc-sell:not([disabled])').waitFor();
