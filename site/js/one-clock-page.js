@@ -80,7 +80,7 @@ function comparisonValue(value) {
   return value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : value;
 }
 function formRule() {
-  return eventRule({ id: editing.id, version: editing.version, name: $('rule-name').value,
+  return eventRule({ ...(editing.archiveHandoff ? {archiveHandoff:editing.archiveHandoff} : {}), id: editing.id, version: editing.version, name: $('rule-name').value,
     instruments: [$('instrument').value], combine: $('combine').value, transition: $('transition').value, missingInput: $('missing').value,
     conditions: [...$('conditions').children].map(row => ({ source: get(row,'source'), field: get(row,'field'), op: get(row,'op'),
       value: comparisonValue(get(row,'value')), relativeToAnchor: get(row,'relativeToAnchor') === 'true', maxAgeMs: Number(get(row,'maxAgeMs')) * 1000 })),
@@ -99,6 +99,8 @@ function versionOptions() {
 }
 function openRule(rule) {
   editing = rule;
+  $('rule-origin').hidden=!rule.archiveHandoff;
+  $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
   $('rule-name').value = rule.name; $('instrument').value = rule.instruments[0];
   $('combine').value = rule.combine; $('transition').value = rule.transition; $('missing').value = rule.missingInput;
@@ -269,3 +271,26 @@ $('play').onclick = () => {
 };
 window.addEventListener('pagehide',()=>{ clearInterval(timer); clock.dispose(); });
 versionOptions(); openRule(currentRule); if(storageError) status(storageError,true);
+
+async function loadArchiveDesign(id) {
+  if (!/^[a-z0-9][a-z0-9._-]{0,95}$/.test(id)) throw Error('Invalid hypothesis reference.');
+  const response=await fetch('/api/strategy-archive?version='+encodeURIComponent(id));
+  if (!response.ok) throw Error('Strategy Archive hypothesis is unavailable.');
+  const record=(await response.json()).records.find(row=>row.id===id && row.kind==='handoff');
+  if (!record) throw Error('The selected hypothesis is unavailable.');
+  const design=record.data.design;
+  for (const label of ['Population','Trigger','Comparator','Outcome','Horizon','Evaluation plan']) {
+    const line=document.createElement('p');
+    line.textContent=label+' — '+design[label];
+    $('archive-plan').append(line);
+  }
+  $('archive-design').hidden=false;
+  $('use-design').onclick=()=>{
+    openRule({id:crypto.randomUUID(),version:1,name:record.version,instruments:['QQQ'],
+      combine:'all',transition:'rising',missingInput:'hold',conditions:[],outcomes:[],
+      archiveHandoff:{id:record.id,version:record.version}});
+    status('Choose the instrument and encode the trigger and outcome from this design.');
+  };
+}
+const archiveId=new URLSearchParams(location.search).get('strategy_handoff');
+if (archiveId) loadArchiveDesign(archiveId).catch(error=>status(error.message,true));

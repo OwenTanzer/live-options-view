@@ -82,6 +82,7 @@ try {
   assert.equal(data.design.Comparator, 'Fixture design');
   assert.ok(data.handoffId);
   assert.match(await page.locator('#facts').textContent(), /handoff/);
+  const builderLink=await page.getByRole('link',{name:'Open hypothesis in Event Builder'}).getAttribute('href');
   await page.reload();
   await page.locator('#rows button').first().waitFor();
   assert.match(await page.locator('#rows').textContent(), /Chej \(assigned\)/);
@@ -94,6 +95,13 @@ try {
   await page.locator('#reset').click();
   assert.equal(await page.locator('#rows button').count(), 2);
   assert.deepEqual(errors, []);
+  await page.goto(new URL(builderLink,LOCAL_ORIGIN).href);
+  await page.locator('#use-design').click();
+  assert.match(await page.locator('#archive-plan').textContent(),/Fixture design/);
+  await page.locator('#add-condition').click();
+  await page.locator('#save-rule').click();
+  const saved=JSON.parse(await page.locator('#rule-json').textContent());
+  assert.deepEqual(saved.archiveHandoff,{id:data.handoffId,version:fork});
   console.log('PASS: fork, diff, assignment, coverage, hypothesis download and reload');
 } finally {
   await browser.close();
