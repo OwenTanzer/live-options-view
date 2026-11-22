@@ -128,3 +128,14 @@ test('credit replay forwards only a frozen cutoff and bounded archive cursors', 
   }
   assert.equal(calls.length,2);
 });
+
+test('sign-in preserves a validated fixed credit cutoff and its archive page', async t => {
+  const base='https://options.moopertonic.net/credit-tape/', query='?one_clock_at=1795440000000&end=123&seq=0';
+  t.mock.method(globalThis,'fetch', async url => new Response(null, {status:302,
+    headers:{Location:url.includes('/auth/callback')?'/credit-tape/':'https://github.com/login/oauth/authorize'}}));
+  const login=await creditTape(new Request(base+'auth/login'+query));
+  const hint=login.headers.get('set-cookie').split(';')[0];
+  const callback=cookie=>creditTape(new Request(base+'auth/callback?code=test&state=test',{headers:{Cookie:cookie}}));
+  assert.equal((await callback(hint)).headers.get('Location'),'/credit-tape/replay'+query);
+  assert.equal((await callback('__Host-btc-return=credit.1795440000000.123.evil')).headers.get('Location'),'/credit-tape/');
+});
