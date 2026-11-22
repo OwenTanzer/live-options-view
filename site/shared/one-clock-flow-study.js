@@ -38,7 +38,7 @@ export function flowStudy(replay, model) {
   for (const snap of replay.snapshots) {
     if (snap.t<start || snap.t>close) continue;
     rows.push({...selection,source:'price',id:snap.key,revision:1,eventAt:snap.t,availableAt:snap.t,
-      evidence:snap.key,value:Number.isFinite(snap.spot)?{spot:snap.spot}:null});
+      evidence:snap.key,value:Number.isFinite(snap.spot) && snap.spot>0 ? {spot:snap.spot} : null});
   }
   return {start,close,selection,rows,sources:[{id:'orderFlow',label:'Reconstructed order flow',fields},
     {id:'price',label:'Archived underlying price',fields:{spot:'Spot price'}}],

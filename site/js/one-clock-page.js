@@ -15,6 +15,8 @@ if(archiveMode){
   const notice=document.querySelector('.notice');
   notice.querySelector('strong').textContent='Reconstructed QQQ order flow · September 25, 2026';
   notice.querySelector('span').textContent='Loading the audited archive…';
+  const loadingSections = [document.querySelector('nav'), $('builder'), document.querySelector('.replay')];
+  for (const section of loadingSections) section.inert=true;
   try{study=await loadFlowStudy();}
   catch(error){
     notice.querySelector('span').textContent=error.message;
@@ -27,6 +29,7 @@ if(archiveMode){
   $('account-controls').hidden=true;$('account-help').hidden=true;
   $('instrument').replaceChildren(option('QQQ'));
   $('session-strip').hidden=true;
+  for (const section of loadingSections) section.inert=false;
 }
 const {rules:initialRules,sources:studySources,rows:studyRows,selection:studySelection,start:studyStart,close:studyClose}=study;
 const storageKey = archiveMode?'one-clock.order-flow.rules.v1':'one-clock.rules.v1';

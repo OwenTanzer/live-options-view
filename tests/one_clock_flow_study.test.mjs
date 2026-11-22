@@ -31,3 +31,25 @@ test('archived QQQ minute rows match the original GEX model at the same cursor',
   assert.deepEqual(evaluate(study.close,'recorded'),[]);
   assert.deepEqual(evaluate(study.close,'synthetic'),[]);
 });
+
+test('an intact strike trigger still fires when the archived spot is stale or its endpoint is unusable',()=>{
+  const archive=JSON.parse(fs.readFileSync(new URL('../site/order-flow-replay.json',import.meta.url)));
+  const replay=model.decodeReplay(archive);
+  const run=(study,rule)=>evaluateEvents({rule,observations:study.rows,
+    selection:{...study.selection,cutoff:study.close},sessionClose:study.close});
+  const study=flowStudy(replay,model),rule=study.rules[0];
+  const first=run(study,rule)[0],outcome=rule.outcomes[0];
+  const age=first.triggeredAt-first.baselines[outcome.id].evidence.eventAt;
+  assert.ok(age>0);
+  const staleRule={...rule,outcomes:[{...outcome,maxAgeMs:age-1}]};
+  const stale=run(study,staleRule)[0];
+  assert.deepEqual(stale.inputEvidence,first.inputEvidence);
+  assert.equal(stale.outcomes[0].reason,'trigger-baseline-unavailable');
+  const endpoint=first.outcomes[0];
+  for(const snapshot of replay.snapshots) {
+    if(snapshot.t>=endpoint.targetAt && snapshot.t<=endpoint.targetAt+outcome.toleranceMs) snapshot.spot=0;
+  }
+  const unavailable=run(flowStudy(replay,model),rule)[0];
+  assert.deepEqual(unavailable.inputEvidence,first.inputEvidence);
+  assert.equal(unavailable.outcomes[0].reason,'no-qualified-endpoint');
+});
