@@ -49,6 +49,7 @@ from .site_table import render_table
 
 SITE = "https://options.moopertonic.net"
 SITE_PREFIX = "/credit-tape"
+REPLAY_QUERY = re.compile(r"one_clock_at=([1-9][0-9]{12})(?:&end=([0-9]{1,16})&seq=([0-9]{1,16}))?")
 SESSION_COOKIE = "__Host-cds-session"
 FLOW_COOKIE = "__Host-cds-flow"
 GITHUB_ISSUER = "https://github.com/login/oauth"
@@ -518,7 +519,15 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
                 return self.reply(303, headers=[("Location", "/credit-tape/" if site else "/"), ("Set-Cookie", cookie(FLOW_COOKIE)),
                                                ("Set-Cookie", cookie(SESSION_COOKIE, session, 8 * 3600))])
             if not self.authorized():
-                if site and url.path in ("/", "/replay"):
+                if site and url.path == "/replay":
+                    if not REPLAY_QUERY.fullmatch(url.query):
+                        return self.reply(400, b"Invalid credit replay cursor")
+                    resume = url.query.replace("&", "&amp;")
+                    return self.reply(200, ('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+                                            '<title>Credit tape replay</title><h1>Credit tape replay</h1>'
+                                            f'<a href="/credit-tape/auth/login?{resume}">Sign in with GitHub</a>').encode(),
+                                      "text/html; charset=utf-8")
+                if site and url.path == "/":
                     return self.reply(200, b'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Credit tape</title><h1>Credit tape</h1><a href="/credit-tape/auth/login">Sign in with GitHub</a>', "text/html; charset=utf-8")
                 if url.path in ("/", "/index.html"):
                     return self.reply(200, b'<!doctype html><title>Sign in</title><h1>Credit tape</h1>'
@@ -527,7 +536,7 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             q = parse_qs(url.query)
             try:
                 if site and url.path == "/replay":
-                    match = re.fullmatch(r"one_clock_at=([1-9][0-9]{12})(?:&end=([0-9]{1,16})&seq=([0-9]{1,16}))?", url.query)
+                    match = REPLAY_QUERY.fullmatch(url.query)
                     if not match:
                         return self.reply(400, b"Invalid credit replay cursor")
                     cutoff, end, seq = (int(v) if v is not None else None for v in match.groups())

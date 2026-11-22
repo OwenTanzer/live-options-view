@@ -5,6 +5,9 @@ import zlib
 from . import treu
 
 
+BYTE_LIMIT = 2 * 1024 * 1024
+
+
 def read_page(archive, cutoff, project, limit, end=None, seq=None):
     path = archive / "events.jsonl"
     older_bytes = older_seq = 0
@@ -13,9 +16,11 @@ def read_page(archive, cutoff, project, limit, end=None, seq=None):
         with path.open("rb") as stream:
             size = stream.seek(0, 2)
             end = size if end is None else min(size, end)
-            start = max(0, end - 2 * 1024 * 1024)
+            start = max(0, end - BYTE_LIMIT)
             stream.seek(start)
             block = stream.read(end - start)
+        if len(block) == BYTE_LIMIT and b"\n" not in block[:-1]:
+            raise ValueError("Archive line exceeds replay window")
         if start:
             boundary = block.find(b"\n")
             if boundary < 0:
