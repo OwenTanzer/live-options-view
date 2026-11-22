@@ -82,7 +82,8 @@ export async function advanceSourceCatalog(db,bucket,descriptor,{now=Date.now()}
   for(const [group,records] of byGroup) {
     if(records.size>3 || new Set([...records.values()].map(r=>r.kind)).size!==records.size)throw new Error('ambiguous publication group');
     const desiredBuckets=JSON.stringify(attemptGaps([...records.values()]));
-    statements.push(bind(db,`DELETE FROM one_clock_catalog_gaps WHERE source=? AND record_group=?
+    statements.push(bind(db,`DELETE FROM one_clock_catalog_gaps INDEXED BY one_clock_catalog_gap_group
+      WHERE source=? AND record_group=?
       AND bucket NOT IN (SELECT value FROM json_each(?))`,id,group,desiredBuckets));
     statements.push(bind(db,`INSERT INTO one_clock_catalog_gaps(source,bucket,record_group)
       SELECT ?,value,? FROM json_each(?) AS desired
