@@ -63,7 +63,12 @@ async function renderShortlist(selection) {
     el('history-clock-shortlist-evidence').textContent=JSON.stringify({...(row?{value:row.value,evidence:row.evidence,details:row.details}:{}),coverage:shortlistCoverage},null,2);
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}
 }
-function renderCommitted(selection) { renderBot();renderShortlist(selection);return renderChain(selection); }
+function renderCommitted(selection) {
+  const credit = el('history-clock-credit');
+  credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
+  credit.hidden = false;
+  renderBot();renderShortlist(selection);return renderChain(selection);
+}
 el('history-clock-bot').onchange=()=>renderCommitted(clock.select(clock.snapshot()));
 function clear(message) {
   el('history-clock-status').textContent=message; el('history-clock-rows').replaceChildren();

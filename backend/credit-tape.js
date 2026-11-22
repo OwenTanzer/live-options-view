@@ -2,7 +2,7 @@ function error(message, status) {
   return new Response(message, {status, headers: {'Cache-Control': 'private, no-store'}});
 }
 const CREDIT_ORIGIN = 'https://prolific-essence-production.up.railway.app';
-const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/table.css', '/credit-tape/table.js',
+const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/replay', '/credit-tape/table.css', '/credit-tape/table.js',
   '/credit-tape/auth/login', '/credit-tape/auth/callback', '/credit-tape/auth/logout']);
 const RETURN_PATHS = new Map([['btc', '/?chain=BTC'], ['kalshi', '/kalshi.html']]);
 const returnCookie = (age, destination = 'btc') => `__Host-btc-return=${age ? destination : ''}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
@@ -25,6 +25,12 @@ export async function creditTape(request) {
   let query = url.pathname.endsWith('/callback') ? url.search : '';
   if (url.pathname === '/credit-tape/' &&
       /^\?view=(?:treu-sample|treu(?:&file=UK_TREU_\d{8}_\d{4}\.csv&sha=[a-f0-9]{64})?)$/.test(url.search)) {
+    query = url.search;
+  }
+  if (url.pathname === '/credit-tape/replay') {
+    if (!/^\?one_clock_at=[1-9]\d{12}(?:&end=\d{1,16}&seq=\d{1,16})?$/.test(url.search)) {
+      return error('Invalid credit replay cursor', 400);
+    }
     query = url.search;
   }
   const upstream = await fetch(CREDIT_ORIGIN + url.pathname + query, {

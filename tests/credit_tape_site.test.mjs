@@ -106,3 +106,25 @@ test('TREU table and validated original CSV reference reach the fixed credit ori
   await creditTape(new Request(base + '?view=treu&unexpected=1'));
   assert.equal(forwarded, '');
 });
+
+test('credit replay forwards only a frozen cutoff and bounded archive cursors', async t => {
+  const path = '/credit-tape/replay', cutoff = '?one_clock_at=1795440000000';
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push(url);
+    assert.equal(options.headers.get('Cookie'), '__Host-cds-session=fixture');
+    return new Response('Sign in required', {status:401});
+  });
+  const request = query => creditTape(new Request('https://options.moopertonic.net' + path + query,
+    {headers:{Cookie:'__Host-cds-session=fixture; other=private'}}));
+  for (const query of [cutoff, cutoff+'&end=234&seq=0']) {
+    const response = await request(query);
+    assert.equal(response.status,401);
+    assert.equal(response.headers.get('Cache-Control'),'private, no-store');
+    assert.equal(calls.at(-1),'https://prolific-essence-production.up.railway.app'+path+query);
+  }
+  for (const query of ['', '?one_clock_at=invalid', cutoff+'&end=2', cutoff+'&from=yesterday']) {
+    assert.equal((await request(query)).status,400);
+  }
+  assert.equal(calls.length,2);
+});
