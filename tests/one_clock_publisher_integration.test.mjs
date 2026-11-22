@@ -222,4 +222,24 @@ test('migration bootstraps retained entries while concurrent arrivals retain ind
   assert.equal(early.sequences['collector-chain/QQQ'],2);assert.equal(late.sequences['collector-chain/QQQ'],3);
   const plan=DB.raw('EXPLAIN QUERY PLAN '+DB.queries.find(q=>q.startsWith('SELECT c.stream,c.sequence')),session,'QQQ',T+122000,Number.MAX_SAFE_INTEGER).map(r=>r.detail).join(' ');
   assert.doesNotMatch(plan,/SCAN c|SCAN x|TEMP B-TREE/);
+});test('a historical rule exceeding capacity backs off while the same tick evaluates the current market session',async t=>{
+  const {DB,env,bucket}=await setup(t),now=Date.parse('2026-11-25T18:00:00Z');
+  const rule={id:'threshold',version:1,name:'Switches',instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',conditions:[{source:'price',field:'spot',op:'>=',value:700,maxAgeMs:150000}],outcomes:[]};
+  for(const [namespace,start,end] of [['account:old',T-100000,T+1800000],['account:current',now-1000,null]]) {
+    await registerObservedRule(DB,{namespace,rule,registeredAt:start});
+    await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,?)').bind(namespace,rule.id,1,start,end).run();
+  }
+  const writes=Array.from({length:900},(_,i)=>{
+    const at=T+i*1000,row={source:'price',id:'legacy-'+i,revision:1,session,instrument:'QQQ',origin:'recorded',eventAt:at,availableAt:at,evidence:'fixture://load/'+i,value:{spot:i%2?699:701}};
+    return DB.prepare('INSERT INTO one_clock_ingested VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind('price',session,'QQQ','recorded',row.id,1,at,at,at,'backfill',JSON.stringify(row));
+  });
+  await DB.batch(writes);bucket.visible=1;
+  const tick=at=>advanceOneClockResearch(env,{now:at,sources:[]});
+  const result=await tick(now);
+  assert.ok(result.some(r=>r.state==='evaluated'&&r.session==='2026-11-25'),JSON.stringify(result));
+  // A shared budget already spent on current work defers a full-budget retry.
+  if(!result.some(r=>r.state==='failed')) await tick(now+900000);
+  const pending=DB.raw("SELECT reason,retry_at FROM one_clock_historical_rules WHERE namespace='account:old'")[0];
+  assert.match(pending.reason,/capacity/);assert.ok(pending.retry_at>now);
+  assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_generation_receipts WHERE namespace='account:old'")[0].n,0);
 });
