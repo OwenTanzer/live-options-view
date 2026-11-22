@@ -285,7 +285,7 @@ def start_live_quote_server(registry: LiveQuoteRegistry, port: Optional[int] = N
                 except (ValueError, TypeError):
                     self._json(400, {"error": "Invalid BTC request"})
                     return
-                self._json(200, registry.btc.payload(symbols, held, expiry=query.get("expiry", [None])[0]))
+                self._json(200, registry.btc.payload(symbols, held, expiry=query.get("expiry", [None])[0], product=query.get("product", ["cme"])[0]))
                 return
             if parsed.path != "/live-quotes":
                 self._json(404, {"error": "Not found"})

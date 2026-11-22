@@ -226,7 +226,7 @@ export async function handlePaperTrade(request, env) {
     username: session.username,
     ...(btc ? { contract: quoteResult.contract, source_quote: quoteResult.source_quote,
       quote_clock_basis: quoteResult.quote_clock_basis, quote_source_ts: quoteResult.quote_source_ts,
-      fees: quoteResult.fees, fee_model: quoteResult.fee_model, underlying: '/BTC' } : {}),
+      fees: quoteResult.fees, fee_model: quoteResult.fee_model, underlying: quoteResult.contract.product } : {}),
   };
   const candidate = Object.freeze(priceResult.error
     ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }

@@ -35,7 +35,7 @@ export function validateTradeIntent(body) {
   if (!['option', 'share', 'futures_option', 'prediction'].includes(instrumentType)) {
     return 'instrument_type must be option, share, futures_option or prediction';
   }
-  if (instrumentType === 'futures_option' && (!BTC_KEY.test(body.sym) || body.qty !== 1)) return 'BTC monthly orders require an exact key and one contract';
+  if (instrumentType === 'futures_option' && (!BTC_KEY.test(body.sym) || body.qty !== 1)) return 'Bitcoin option orders require an exact key and one paper lot';
   if (instrumentType === 'share' && !TRADEABLE_SHARE_SYMBOLS.has(body.sym)) {
     return 'share symbol is not in the tradeable equity list';
   }

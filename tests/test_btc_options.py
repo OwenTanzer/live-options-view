@@ -42,6 +42,14 @@ class BtcTests(unittest.TestCase):
         self.feed.set_subscriptions([], ['QQQ'])
         self.feed._connected = self.feed._authorized = self.feed._channel_open = True
 
+    def test_micro_monthly_requires_matching_deliverable(self):
+        micro = row()
+        micro.update({'root-symbol':'/MBT','underlying-symbol':'/MBTX6','symbol':'./MBTX6 fixture'})
+        micro['future-option-product'] = {**micro['future-option-product'], 'code':'WM'}
+        future = {**FUTURE,'symbol':'/MBTX6','notional-multiplier':'0.1'}
+        self.assertEqual(normalize(micro,future)['multiplier'],0.1)
+        self.assertIsNone(normalize(micro,FUTURE))
+
     def test_source_identity_and_monthly_only(self):
         c = normalize(row(), FUTURE)
         self.assertEqual(c['multiplier'], 5)

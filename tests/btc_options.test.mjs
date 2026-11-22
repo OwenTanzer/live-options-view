@@ -297,3 +297,49 @@ test('equity insolvency retains the BTC ledger and pending obligation', async ()
     assert.deepEqual(outcome.result.pending, [sym]);
   } finally { h.restore(); }
 });
+
+test('USDC minimum lot buy, sell and settlement use the same BTC units', async () => {
+  const h = await harness();
+  h.env.BTC_USDC_DATA_ORIGIN = 'https://linear.invalid';
+  const name = 'BTC_USDC-27NOV26-90000-C', key = 'USDC:' + name;
+  const spec = {instrument_name:name, kind:'option', is_active:true, quote_currency:'USDC', settlement_currency:'USDC',
+    contract_size:1, min_trade_amount:0.01, strike:90000, option_type:'call', expiration_timestamp:Date.parse(contract.expires_at)};
+  let size = 0.01;
+  global.fetch = async raw => {
+    const u = new URL(raw), method = u.pathname.split('/').pop();
+    assert.equal(u.origin,'https://linear.invalid');
+    const book = {instrument_name:name,state:'open',timestamp:Date.now(),index_price:90000,best_bid_price:950,
+      best_ask_price:1000,best_bid_amount:size,best_ask_amount:size};
+    const results = {get_instrument:spec,get_order_book:book,get_delivery_prices:{data:[{date:contract.exp,delivery_price:91000}]}};
+    assert.ok(method in results);
+    return Response.json({result:results[method]});
+  };
+  try {
+    const buy = () => h.order(intent('buy',{sym:key}));
+    size = 0.005;
+    assert.equal((await buy()).status,409);
+    size = 0.01;
+    assert.equal((await buy()).status,201);
+    let account = await h.store.users.get('fixture');
+    assert.equal(account.trades.at(-1).multiplier,0.01);
+    assert.equal(account.balance_cash,9989.73);
+    assert.equal((await h.order(intent('sell',{sym:key}))).status,201);
+    account = await h.store.users.get('fixture');
+    assert.ok(Math.abs(account.balance_cash-9998.96)<1e-8);
+    assert.equal((await buy()).status,201);
+    const settled = await settleBtcAccount(h.env,'fixture',spec.expiration_timestamp+60000);
+    assert.equal(settled.result.settled[0].cash_delta,10);
+    assert.equal(settled.result.settled[0].multiplier,0.01);
+  } finally {h.restore();}
+});
+
+test('Micro paper lot is 0.1 BTC through entry and exit', async () => {
+  const micro = {...contract,product:'/MBT',multiplier:0.1,future_symbol:'/MBTX6'};
+  const h = await harness(micro);
+  try {
+    assert.equal((await h.order(intent('buy'))).status,201);
+    assert.equal((await h.store.users.get('fixture')).balance_cash,9987.5);
+    assert.equal((await h.order(intent('sell'))).status,201);
+    assert.equal((await h.store.users.get('fixture')).balance_cash,9994.9);
+  } finally {h.restore();}
+});

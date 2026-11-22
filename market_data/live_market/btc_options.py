@@ -5,6 +5,7 @@ is resolved, never manufactured from an OCC parser. Disabled by default.
 """
 import hashlib
 import math
+import os
 import threading
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -38,7 +39,7 @@ def session(now):
 
 def is_standard_monthly(row):
     product = row.get('future-option-product') or {}
-    return (product.get('code') == 'BTC' and product.get('exchange') == 'CME'
+    return (product.get('code') in ('BTC', 'WM') and product.get('exchange') == 'CME'
             and product.get('expiration-type') == 'End-Of-Month')
 
 
@@ -47,26 +48,28 @@ def normalize(row, future):
     try:
         exp = row['expiration-date']
         strike = float(row['strike-price'])
-        if (row['root-symbol'] != '/BTC' or row['exchange'] != 'CME'
+        micro = (row.get('future-option-product') or {}).get('code') == 'WM'
+        root, multiplier = ('/MBT', 0.1) if micro else ('/BTC', 5)
+        if (row['root-symbol'] != root or not future['symbol'].startswith(root) or row['exchange'] != 'CME'
                 or not is_standard_monthly(row)
                 or row['settlement-type'].lower() != 'future'
                 or row['option-type'] not in ('C', 'P')
                 or not math.isfinite(strike) or strike <= 0
                 or future['symbol'] != row['underlying-symbol']
                 or future['expiration-date'] != exp
-                or float(future['notional-multiplier']) != 5
+                or float(future['notional-multiplier']) != multiplier
                 or not row['streamer-symbol'].endswith(':XCME')
                 or not instant(row['expires-at']) or not instant(row['stops-trading-at'])):
             return None
         key = 'BTCOPT:' + hashlib.sha256(row['symbol'].encode()).hexdigest()[:40]
-        return {'contract_key': key, 'instrument_type': 'futures_option', 'product': '/BTC',
+        return {'contract_key': key, 'instrument_type': 'futures_option', 'product': root,
                 'series': 'monthly', 'exchange': 'CME', 'provider_symbol': row['symbol'],
                 'security_id': row.get('security-id'),
                 'streamer_symbol': row['streamer-symbol'], 'future_symbol': future['symbol'],
                 'future_streamer_symbol': future.get('streamer-symbol'),
                 'future_month': (future.get('maturity-date') or exp)[:7], 'future_expiry': exp,
                 'exp': exp, 'expires_at': row['expires-at'], 'stops_trading_at': row['stops-trading-at'],
-                'strike': strike, 'type': 'call' if row['option-type'] == 'C' else 'put', 'multiplier': 5}
+                'strike': strike, 'type': 'call' if row['option-type'] == 'C' else 'put', 'multiplier': multiplier}
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -80,6 +83,7 @@ class BtcOptions:
         self.listed = set()
         self.expiries = []
         self.viewport_expiry = 'front'
+        self.viewport_product = '/BTC'
         self.viewport_keys = ()
         self.held = {}  # provider identity -> last requested time (bounded TTL)
         self.feed = None
@@ -184,6 +188,22 @@ class BtcOptions:
                         break
                 else:
                     raise ValueError('chain_page_budget')
+                if os.getenv('BTC_MICRO_OPTIONS') == '1':
+                    try:
+                        micro_rows = []
+                        for page in range(10):
+                            try:
+                                page_data = self._read('/futures-option-chains/MBT?page-offset=' + str(page), token)
+                            except ValueError as exc:
+                                if str(exc) != 'provider_http_404':
+                                    raise
+                                page_data = self._read('/instruments/future-options?option-root-symbol=WM&exchange=CME&page-offset=' + str(page), token)
+                            micro_rows.extend(page_data.get('items', []))
+                            if page + 1 >= page_data.get('_pagination', {}).get('total-pages', 1):
+                                rows.extend(micro_rows)
+                                break
+                    except (ValueError, KeyError, requests.RequestException):
+                        pass  # Standard quotes stay available when Micro discovery is unavailable.
             chain_symbols = {r.get('symbol') for r in rows}
             for symbol in missing[:4]:
                 rows.append(self._read('/instruments/future-options/' + quote(symbol, safe=''), token))
@@ -226,9 +246,9 @@ class BtcOptions:
     def _subscribe(self, now, symbols=()):
         held = [c for c in self.contracts.values() if c['provider_symbol'] in self.held
                 and instant(c['stops_trading_at']) > now]
-        self.expiry = (self.viewport_expiry if self.viewport_expiry in self.expiries
-                       else next(iter(self.expiries), None))
-        active = [c for k, c in self.contracts.items() if k in self.listed and c['exp'] == self.expiry]
+        expiries = sorted({self.contracts[k]['exp'] for k in self.listed if self.contracts[k]['product'] == self.viewport_product})
+        self.expiry = self.viewport_expiry if self.viewport_expiry in expiries else next(iter(expiries), None)
+        active = [c for k, c in self.contracts.items() if k in self.listed and c['exp'] == self.expiry and c['product'] == self.viewport_product]
         inspected = [self.contracts[k] for k in self.viewport_keys
                      if k in self.listed and self.contracts[k]['exp'] == self.expiry]
         exact = [self.contracts[k] for k in symbols if k in self.contracts]
@@ -255,7 +275,7 @@ class BtcOptions:
         self.selected = {c['contract_key'] for c in chosen}
         self.subscription_count = len(chosen)
 
-    def payload(self, symbols, held, now=None, expiry=None):
+    def payload(self, symbols, held, now=None, expiry=None, product='cme'):
         now = now or datetime.now(timezone.utc)
         with self._lock:
             for s in held:
@@ -263,13 +283,14 @@ class BtcOptions:
                     self.held[s] = now
             if expiry is not None:
                 self.viewport_expiry = expiry
+                self.viewport_product = '/MBT' if product == 'micro' else '/BTC'
                 self.viewport_keys = tuple(symbols)
             if self.feed:
                 try: self._subscribe(now, symbols if expiry is None else ())
                 except Exception: self.status = 'subscription_unavailable'
             selected = getattr(self, 'selected', set())
             contracts = [c for k, c in self.contracts.items()
-                         if (k in self.listed and c['exp'] == getattr(self, 'expiry', None))
+                         if (k in self.listed and c['exp'] == getattr(self, 'expiry', None) and c['product'] == self.viewport_product)
                          or (expiry is None and c['provider_symbol'] in self.held)]
             requested = list(dict.fromkeys([*symbols, *sorted(selected)]))
             ready, state, diagnostics = self.feed.get_btc_snapshot() if self.feed else (False, {}, {})
@@ -295,7 +316,7 @@ class BtcOptions:
                                        if c['contract_key'] in self.display_prices},
                     'contracts': contracts, 'quotes': quotes, 'entry_keys': self.entries,
                     'unavailable': unavailable, 'session': session(now), 'source_status': self.status,
-                    'expiries': self.expiries,
+                    'expiries': sorted({self.contracts[k]['exp'] for k in self.listed if self.contracts[k]['product'] == self.viewport_product}),
                     'expiry': getattr(self, 'expiry', None), 'center': getattr(self, 'center', None),
                     'center_from_future': getattr(self, 'center_from_future', False),
                     'subscribed_keys': sorted(selected), 'subscription_count': self.subscription_count, 'subscription_budget': BUDGET,
