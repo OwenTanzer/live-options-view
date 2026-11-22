@@ -35,13 +35,15 @@ export async function observeBatch(db, input) {
   if (!['prospective','replay','backfill'].includes(collection)) throw new Error('invalid collection mode');
   const cutoff = instant(selection.cutoff);
   const close = instant(sessionClose);
+  const committedAt = instant(input.committedAt ?? cutoff);
+  if (committedAt < cutoff) throw new Error('commit precedes snapshot');
   if (!Array.isArray(input.observations) || input.observations.length > 500) throw new Error('batch must contain at most 500 observations');
   const incoming = input.observations.map(observation);
   for (const row of incoming) {
     if (row.source !== source || row.session !== selection.session || row.instrument !== selection.instrument || row.origin !== selection.origin) throw new Error('observation outside authorized batch scope');
     if (row.availableAt !== null && row.availableAt > cutoff) throw new Error('observation has not arrived');
   }
-  const batchDigest = await digest(canonical({ source,cursor,selection,sessionClose:close,collection,observations:incoming,
+  const batchDigest = await digest(canonical({ source,cursor,selection,...(input.targetGeneration===undefined?{}:{targetGeneration:input.targetGeneration}),sessionClose:close,collection,observations:incoming,
     ...(input.sourceRecords?{sourceRecords:input.sourceRecords,activationWindows:input.activationWindows,ruleKeys:input.ruleKeys}:{}) }));
   const priorReceipt = await bind(db,'SELECT * FROM one_clock_receipts WHERE namespace=? AND batch_id=?',namespace,batchId).first();
   if (priorReceipt) {
@@ -49,7 +51,7 @@ export async function observeBatch(db, input) {
     return { duplicate: true, generation: priorReceipt.generation,statements:0 };
   }
   const state = await bind(db,'SELECT * FROM one_clock_state WHERE namespace=?',namespace).first();
-  if (state && cutoff < state.cutoff) throw new Error('observer cannot rewind; use as-of reads');
+  if (state && committedAt < state.cutoff) throw new Error('observer cannot rewind; use as-of reads');
   // The active public service supplies one shared, already-scoped ingestion
   // snapshot. Legacy trusted callers retain their namespace-local storage.
   const stored = input.sourceRecords ?? await list(bind(db,'SELECT * FROM one_clock_observations WHERE namespace=? AND session=? AND instrument=? AND origin=? LIMIT 10001',...scopeArgs(namespace,selection)));
@@ -106,7 +108,7 @@ export async function observeBatch(db, input) {
   }
   const generation = (state?.generation ?? 0) + 1;
   const statements = [bind(db,`INSERT INTO one_clock_state(namespace,generation,cutoff) VALUES(?,?,?)
-    ON CONFLICT(namespace) DO UPDATE SET generation=excluded.generation,cutoff=excluded.cutoff`,namespace,generation,cutoff)];
+    ON CONFLICT(namespace) DO UPDATE SET generation=excluded.generation,cutoff=excluded.cutoff`,namespace,generation,committedAt)];
   // The generation trigger rejects concurrent evaluations. D1 batch rolls back
   // observations, events and source checkpoint together on any failure.
   for (const row of incoming) statements.push(bind(db,`INSERT INTO one_clock_observations
@@ -125,11 +127,12 @@ export async function observeBatch(db, input) {
       VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(namespace,event_id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,state=excluded.state`,
     namespace,eventId,parsed.session,parsed.instrument,parsed.origin,revision,payload,status));
     statements.push(bind(db,`INSERT INTO one_clock_event_history(namespace,event_id,revision,recorded_at,batch_id,state,payload) VALUES(?,?,?,?,?,?,?)`,
-    namespace,eventId,revision,cutoff,batchId,status,payload));
+    namespace,eventId,revision,committedAt,batchId,status,payload));
   }
   statements.push(bind(db,`INSERT INTO one_clock_checkpoints(namespace,source,cursor,updated_at) VALUES(?,?,?,?)
-    ON CONFLICT(namespace,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`,namespace,source,cursor,cutoff));
-  statements.push(bind(db,'INSERT INTO one_clock_receipts(namespace,batch_id,digest,generation,committed_at) VALUES(?,?,?,?,?)',namespace,batchId,batchDigest,generation,cutoff));
+    ON CONFLICT(namespace,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`,namespace,source,cursor,committedAt));
+  statements.push(bind(db,'INSERT INTO one_clock_receipts(namespace,batch_id,digest,generation,committed_at) VALUES(?,?,?,?,?)',namespace,batchId,batchDigest,generation,committedAt));
+  statements.push(...(input.completionStatements ?? []));
   if(statements.length>(input.maxStatements??900))throw new Error('evaluation statement budget');
   await db.batch(statements);
   return { duplicate:false,generation,events:current.size,statements:statements.length };

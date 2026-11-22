@@ -159,6 +159,14 @@ async function check() {
   catalog=d.markets; $('scope').textContent=d.scope; await portfolio(); if(g!==generation) return;
   categories(); page=0; list(); await loadQuotes();
 }
+async function signOut() {
+  clearPrivate();
+  await fetch('/credit-tape/auth/logout',{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'manual'});
+  const response=await fetch('/api/kalshi/status',{credentials:'same-origin',cache:'no-store'});
+  if(response.status!==401)throw Error('Sign-out was not confirmed. Sign out from Credit Tape.');
+  $('status').textContent='Signed out. Private records cleared from this page.';
+}
+function startLive() {
 $('check').onclick=()=>run(check);
 $('refresh').onclick=()=>{lastActivity=Date.now();auto=true;run(loadQuotes);};
 $('discover').onclick=()=>run(async()=>{
@@ -178,12 +186,7 @@ $('archives').onclick=()=>run(async()=>{
     const g=generation,r=await api('archive?id='+encodeURIComponent(a.id)); if(g===generation)$('replay').textContent='ARCHIVED OBSERVATION — not executable\n'+JSON.stringify(r.evidence,null,2);
   });$('archive-list').append(b);}
 });
-$('logout').onclick=()=>run(async()=>{
-  clearPrivate(); await fetch('/credit-tape/auth/logout',{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'manual'});
-  const r=await fetch('/api/kalshi/status',{credentials:'same-origin',cache:'no-store'});
-  if(r.status!==401)throw Error('Sign-out was not confirmed. Sign out from Credit Tape.');
-  $('status').textContent='Signed out. Private records cleared from this page.';
-});
+$('logout').onclick=()=>run(signOut);
 for(const event of ['pointerdown','keydown'])document.addEventListener(event,()=>{lastActivity=Date.now();});
 setInterval(()=>{if(Date.now()-lastActivity>300000)auto=false;paint();},500);
 setInterval(()=>{if(auto&&enabled&&!document.hidden)run(loadQuotes);},10000);
@@ -192,3 +195,62 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pageshow',e=>{if(e.persisted)run(check);});
 run(check);
+
+}
+
+function startReplay(params) {
+  const cutoff=params.get('one_clock_at');
+  if (params.getAll('one_clock_at').length!==1 || !/^[1-9][0-9]{12}$/.test(cutoff)) {
+    $('status').textContent='Invalid replay cursor.';
+    return;
+  }
+  const query='archive?one_clock_at='+cutoff;
+  const login=$('login');
+  login.href='/credit-tape/auth/login?return=kalshi&one_clock_at='+cutoff;
+  $('logout').hidden=true;
+  let current=0, detail=0, next=null;
+  function clear() {
+    current++; detail++; next=null; $('logout').hidden=true;
+    $('frozen').hidden=true;
+    $('frozen-list').replaceChildren();
+    $('frozen-detail').replaceChildren();
+    $('frozen-more').hidden=true;
+  }
+  async function page(more=false) {
+    const continuation=next;
+    if (!more) clear();
+    const ticket=++current;
+    $('frozen-more').hidden=true;
+    try {
+      const data=await api(query+(more&&continuation?'&'+new URLSearchParams(continuation):''));
+      if(ticket!==current) return;
+      login.hidden=true; $('logout').hidden=false; $('frozen').hidden=false;
+      $('frozen-time').textContent='As of '+new Date(Number(cutoff)).toISOString();
+      $('status').textContent=data.archives.length?'Private archive':'No retained observations at this cursor.';
+      for(const row of data.archives) {
+        const button=el('button','',row.received_at+' · '+row.market);
+        button.onclick=()=>run(async()=>{
+          const read=++detail;
+          $('frozen-detail').textContent='';
+          try {
+            const result=await api(query+'&id='+encodeURIComponent(row.id));
+            if(read===detail) $('frozen-detail').textContent=JSON.stringify(result.evidence,null,2);
+          } catch(error) { if(read===detail){clear();login.hidden=false;throw error;} }
+        });
+        $('frozen-list').append(button);
+      }
+      next=data.next; $('frozen-more').hidden=!next;
+    } catch(error) {
+      if(ticket===current) {clear(); login.hidden=false; throw error;}
+    }
+  }
+  $('logout').onclick=()=>run(async()=>{clear();login.hidden=false;await signOut();});
+  $('check').onclick=()=>run(()=>page());
+  $('frozen-more').onclick=()=>run(()=>page(true));
+  window.addEventListener('pagehide',clear);
+  window.addEventListener('pageshow',event=>{if(event.persisted) run(()=>page());});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden) clear(); else run(()=>page());});
+  run(()=>page());
+}
+const replayParams=new URLSearchParams(location.search);
+if(replayParams.has('one_clock_at')) startReplay(replayParams); else startLive();

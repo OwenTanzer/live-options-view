@@ -93,13 +93,15 @@
     const snapT = chain ? Date.parse(chain.timestamp) : NaN;
     const age = Number.isFinite(snapT) ? now - snapT : null;
     const usable = age != null && age >= 0 && age <= X.OF_SNAPSHOT_MAX_AGE_MS;
+    const positivePrice = value => Number.isFinite(value) && value > 0 ? value : null;
+    const spot = usable ? positivePrice(chain.underlying_price) : null;
     const chainRows = new Map(((chain && chain.rows) || []).map((r) => [r.OptionSymbol, r]));
     const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
     const rows = [...contracts.values()].map((c) => {
       const cr = usable ? chainRows.get(c.symbol) : null;
       return { symbol: c.symbol, strike: c.strike, type: c.type, multiplier, flow: c.flow, firstObserved: c.firstObserved,
         oi: cr ? finite(cr.OpenInterest) : null, oiFirstSeen: null, gamma: cr ? finite(cr.Gamma) : null,
-        spot: cr ? finite(cr.UnderlyingPrice ?? chain.underlying_price) : null };
+        spot: cr ? positivePrice(cr.UnderlyingPrice) ?? spot : null };
     });
     const gaps = (session && session.gaps) || [];
     let coverage = null;
@@ -115,7 +117,7 @@
         incomplete: gaps.length > 0 || late || (session.rebuilt != null && session.rebuilt.status !== 'rebuilt') };
     }
     return { mode: 'live', t: now, strikes: group(rows), contracts: rows,
-      snapshot: Number.isFinite(snapT) ? { t: snapT, key: chain.snapshot_key, age, stale: !usable } : null,
+      snapshot: Number.isFinite(snapT) ? { t: snapT, key: chain.snapshot_key, age, stale: !usable, spot } : null,
       clearingDate: session ? priorWeekday(session.day) : null, coverage };
   }
 

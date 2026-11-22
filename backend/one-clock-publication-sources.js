@@ -21,7 +21,7 @@ export async function advanceNativePublications(env,{now=Date.now(),descriptors=
   return ingestRegisteredPublications(env.DB,env.PAPER_TRADES,descriptors,{now});
 }
 
-export async function nativeScopeRecords(db,descriptor,{session,instrument,cutoff,currentProgress=null}) {
+export async function nativeScopeRecords(db,descriptor,{session,instrument,cutoff,currentProgress=null,maxSequence=null}) {
   cutoff=instant(cutoff);if(!validSession(session))throw new Error('native session');
   const stream=publicationStream(descriptor,instrument);
   const first=await stmt(db,'SELECT payload FROM one_clock_publication_entries WHERE stream=? AND sequence=1 AND received_at<=?',stream,cutoff).first();
@@ -30,7 +30,7 @@ export async function nativeScopeRecords(db,descriptor,{session,instrument,cutof
   const firstSession=JSON.parse(first.payload).records.map(r=>r.session).sort()[0];
   const status=await stmt(db,'SELECT coverage FROM one_clock_publication_status INDEXED BY one_clock_publication_status_cutoff WHERE stream=? AND checked_at<=? ORDER BY checked_at DESC,generation DESC LIMIT 1',stream,cutoff).first();
   const retainedProgress=status?JSON.parse(status.coverage):null;
-  const progress=currentProgress??retainedProgress,nextSequence=retainedProgress?.nextSequence??1,records=[];let after=null,bytes=0;
+  const progress=currentProgress??retainedProgress,nextSequence=Math.min(retainedProgress?.nextSequence??1,maxSequence===null?Infinity:maxSequence+1),records=[];let after=null,bytes=0;
   do {
     const page=await publicationRowsPage(db,descriptor,{session,instrument,cutoff,after});after=page.next;
     for(const {row,receivedAt} of page.rows) {
@@ -67,17 +67,30 @@ export async function retainNativeCoverage(db,coverage) {
   ]);
 }
 
-export async function markPendingNativeEvidence(db,evaluation,cutoff) {
-  const scopes=[...new Map(evaluation.map(e=>[JSON.stringify([e.session,e.instrument]),[e.session,e.instrument]])).entries()];
-  if(scopes.length>93)throw new Error('native result scope bound');
-  const latest=new Map();
-  for(let i=0;i<scopes.length;i+=6)await Promise.all(scopes.slice(i,i+6).map(async([key,[session,instrument]])=>{
-    const row=await stmt(db,'SELECT received_at FROM one_clock_publication_records INDEXED BY one_clock_publication_record_scope WHERE session=? AND instrument=? AND received_at<=? ORDER BY received_at DESC LIMIT 1',session,instrument,cutoff).first();
-    latest.set(key,row?.received_at??0);
-  }));
-  return evaluation.map(e=>{
-    const receivedAt=latest.get(JSON.stringify([e.session,e.instrument]));
-    return e.attempted_at!==null&&receivedAt>e.attempted_at?{...e,state:'pending',newEvidenceAt:receivedAt,
-      reason:'Newer native evidence in this scope has not been evaluated. Retained results reflect the previous evaluation; older sessions await historical reevaluation.'}:e;
-  });
+export async function markPendingNativeEvidence(db,evaluation,cutoff,namespace) {
+  if(!evaluation.length)return [];
+  const indexing=await stmt(db,'SELECT 1 AS pending FROM one_clock_change_bootstrap WHERE last_sequence<end_sequence LIMIT 1').first();
+  const out=[];
+  // Results may cover many rules and sessions. Bind each page once and seek
+  // the scope/receipt indexes inside SQLite instead of making an RPC per rule.
+  for(let start=0;start<evaluation.length;start+=100) {
+    const page=evaluation.slice(start,start+100);
+    const checks=(await stmt(db,`SELECT e.key AS idx,
+      (SELECT MAX((SELECT c.generation FROM one_clock_native_changes c WHERE
+        (c.session,c.instrument,c.stream,c.bootstrap)=(l.session,l.instrument,l.stream,l.bootstrap)
+        AND c.received_at<=? ORDER BY c.received_at DESC,c.generation DESC LIMIT 1))
+        FROM one_clock_change_lanes l WHERE l.session=e.value->>'$.session' AND l.instrument=e.value->>'$.instrument') desired,
+      (SELECT r.generation FROM one_clock_generation_receipts r WHERE r.namespace=?
+        AND r.session=e.value->>'$.session' AND r.instrument=e.value->>'$.instrument'
+        AND r.rule_id=e.value->>'$.rule_id' AND r.version=e.value->>'$.version' AND r.committed_at<=?
+        ORDER BY r.committed_at DESC,r.generation DESC LIMIT 1) completed
+      FROM json_each(?) e`,cutoff,namespace,cutoff,JSON.stringify(page)).all()).results;
+    for(const c of checks) {
+      const e=page[c.idx],desired=c.desired??0,completed=c.completed??0;
+      out.push(indexing?{...e,state:'pending',reason:'Existing native publications are being indexed for historical evaluation.'}:desired>completed?{...e,state:e.state==='failed'?'failed':'pending',desiredGeneration:desired,completedGeneration:completed,
+        reason:e.state==='failed'?e.reason:'New native evidence awaits evaluation. Retained results reflect the previous evaluation.'}:
+        {...e,desiredGeneration:desired,completedGeneration:completed});
+    }
+  }
+  return out;
 }
