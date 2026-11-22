@@ -10,7 +10,7 @@ function link(instrument = 'QQQ', cutoff = archiveCutoff) {
     one_clock_instrument: instrument, one_clock_at: String(cutoff)});
   return origin + '/order-flow.html?' + params;
 }
-const browser = await chromium.launch({headless: true, channel: 'chrome'});
+const browser = await chromium.launch({headless: true, ...(process.env.CHROME_BIN ? {executablePath:process.env.CHROME_BIN} : {channel:'chromium'})});
 try {
   for (const width of [1440, 390]) {
     const page = await browser.newPage({viewport: {width, height: 900}});
