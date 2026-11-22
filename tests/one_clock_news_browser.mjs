@@ -1,11 +1,11 @@
-// Run with the News reader alone or with ONE_CLOCK_DASHBOARD=1 in a paired dashboard checkout.
+// The dashboard feature adds replay controls. Enable the full cursor journey wherever those controls ship.
 import assert from 'node:assert/strict';
 import {existsSync, statSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {chromium} from 'playwright';
 const require = createRequire(import.meta.url);
 const fixture = require('./news_panel/qualify.js').loadQualified();
-const paired = process.env.ONE_CLOCK_DASHBOARD === '1';
+const paired = existsSync('tests/one_clock_dashboard_browser.test.cjs');
 const origin = 'https://dashboard.test';
 const browser = await chromium.launch({headless:true,
   ...(process.env.CHROME_BIN ? {executablePath:process.env.CHROME_BIN} : {channel:'chromium'})});
