@@ -122,8 +122,7 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
 // the market source exposed uses the commit's availability, even if the
 // observer recorded it later. Results itself keeps enforcing its receipt time.
 async function publicChainAt(env,selection) {
-  const legacy=await readArchivedChain(env.PAPER_TRADES,selection);
-  if(env.ONE_CLOCK_PUBLICATIONS!=='enabled') return legacy;
+  if(env.ONE_CLOCK_PUBLICATIONS!=='enabled') return readArchivedChain(env.PAPER_TRADES,selection);
   const {session,instrument,cutoff}=selection,stream='collector-chain/'+instrument;
   const candidates=(await env.DB.prepare(`SELECT payload,available_at,record_id,revision
     FROM one_clock_publication_records INDEXED BY one_clock_native_chain_replay
@@ -133,17 +132,26 @@ async function publicChainAt(env,selection) {
   let selected;
   for(const candidate of candidates.slice(0,MAX_CANDIDATES)) {
     if(candidate.available_at>cutoff) continue;
-    const latest=await env.DB.prepare(`SELECT revision FROM one_clock_publication_records
-      WHERE stream=? AND source='price' AND record_id=? AND available_at<=?
-      ORDER BY revision DESC LIMIT 1`).bind(stream,candidate.record_id,cutoff).first();
-    if(latest?.revision===candidate.revision) {selected=JSON.parse(candidate.payload);break;}
+    const newer=(await env.DB.prepare(`SELECT available_at FROM one_clock_publication_records
+      WHERE stream=? AND source='price' AND record_id=? AND revision>?
+      ORDER BY revision LIMIT ?`).bind(stream,candidate.record_id,candidate.revision,MAX_CANDIDATES+1).all()).results;
+    if(newer.some(r=>r.available_at<=cutoff)) continue;
+    if(newer.length>MAX_CANDIDATES) return {rows:[],coverage:{reason:'native-chain-revision-bound'}};
+    selected=JSON.parse(candidate.payload);
+    break;
   }
   if(!selected) {
     if(candidates.length>MAX_CANDIDATES) return {rows:[],coverage:{reason:'native-chain-candidate-bound'}};
-    return legacy;
+    return readArchivedChain(env.PAPER_TRADES,selection);
   }
+  // A qualified legacy snapshot can precede the next observer sweep. Allow
+  // that newer market evidence without letting a damaged sidecar mask an
+  // already retained, independently verifiable native publication.
+  let legacy;
+  try { legacy=await readArchivedChain(env.PAPER_TRADES,selection); }
+  catch { legacy={rows:[],coverage:{reason:'legacy-chain-unavailable'}}; }
   if(legacy.rows[0]?.eventAt>selected.eventAt) return legacy;
-  const coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified'};
+  const coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified',legacyCoverage:legacy.coverage};
   if(selected.value===null) return {rows:[],coverage:{...coverage,reason:'native-price-unavailable'}};
   const refs=selected.details.evidence;
   async function body(schema,contentType) {
