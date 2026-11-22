@@ -38,6 +38,7 @@ try {
       await page.locator('#auth-submit').click(); await page.locator('.btc-contract').waitFor();
       // Freeze only polling after real login; exercise the shipped renderer and ticket.
       await page.evaluate(payload => {
+        btcOptions.generation++; // Discard any real-login refresh already in flight.
         btcOptions.refresh = async () => {};
         const contracts = [], quotes = [];
         let n = 0;
