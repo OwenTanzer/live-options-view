@@ -547,7 +547,7 @@
       allPrices = view && view.strikes.length
         ? view.strikes.map((s) => s.strike)
         : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
-      const spot = live() && view?.snapshot && !view.snapshot.stale ? chain?.underlying_price : null;
+      const spot = live() ? view?.snapshot?.spot : null;
       windowView = live() ? strikeWindow.update(allPrices, spot) : null;
       const strikes = windowView ? windowView.prices : allPrices;
       if (windowView) {
