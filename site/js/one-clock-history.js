@@ -111,6 +111,9 @@ function updateView() {
 function renderCommitted(selection) {
   const credit = el('history-clock-credit');
   credit.hidden = tab !== 'history';
+  const kalshi = el('history-clock-kalshi');
+  kalshi.hidden = credit.hidden;
+  kalshi.href = '/kalshi.html?one_clock_at=' + selection.cutoff;
   credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
   if(tab==='history' && ['QQQ','SPY','IBIT'].includes(selection.instrument)){
     const params=new URLSearchParams({one_clock_session:selection.session,one_clock_instrument:selection.instrument,one_clock_at:String(selection.cutoff)});
@@ -179,7 +182,7 @@ function renderSelection() {
     const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
     const cutoff=sessionInstant(session,h,m,Math.floor(s),Math.round((s%1)*1000));
     return renderCommitted(clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff}));
-  } catch(error) {el('clock-journal-nav').hidden=true;el('history-clock-credit').hidden=true;clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
+  } catch(error) {el('clock-journal-nav').hidden=true;el('history-clock-credit').hidden=true;el('history-clock-kalshi').hidden=true;clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
 }
 el('history-clock-form').onsubmit=event=>{event.preventDefault();renderSelection();};
 function changeMode(next) {

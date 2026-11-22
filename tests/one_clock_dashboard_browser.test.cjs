@@ -39,6 +39,7 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       await page.goto('https://dashboard.test/?'+params);
       await page.waitForFunction(()=>window.oneClockDashboard?.snapshot().mode==='replay');
       assert.equal(await page.locator('#clock-journal').getAttribute('href'),'/trade-journal.html?'+params);
+      assert.equal(await page.locator('#history-clock-kalshi').getAttribute('href'),'/kalshi.html?one_clock_at='+cutoff);
       await page.locator('#tab-live').click();
       assert.equal(await page.locator('#live-panel').isVisible(),false);
       await page.waitForFunction(()=>document.querySelector('#history-clock-status').textContent.includes('No qualified snapshot'));
