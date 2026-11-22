@@ -64,6 +64,9 @@ async function renderShortlist(selection) {
   } catch(error) {if(clock.snapshot().generation===selection.generation)clearShortlist(error.message);}
 }
 function renderCommitted(selection) {
+  const credit = el('history-clock-credit');
+  credit.href = '/credit-tape/replay?one_clock_at=' + selection.cutoff;
+  credit.hidden = false;
   const flow = el('history-order-flow-link');
   flow.hidden = selection.instrument !== 'QQQ';
   if (flow.hidden) {
