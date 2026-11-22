@@ -224,7 +224,9 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
           const receipt=data.coverage.find(c=>c.source===adapter.id);
           if(!receipt || incomplete(receipt))return false;
           if(historic && receipt.through<targetThrough)return false;
-          if(receipt.through!==undefined){
+          // Once the session is fully indexed, later publication can correct
+          // an in-session endpoint supplied by another source.
+          if(receipt.through!==undefined && receipt.through<bounds.close){
             const key=JSON.stringify([rule.rule_id,rule.version]);
             ruleCutoffs[key]=Math.min(ruleCutoffs[key]??snapshotAt,receipt.through);
           }
