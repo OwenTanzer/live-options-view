@@ -104,6 +104,25 @@ test('a historical first handoff retains legacy arrivals through cutover and fil
   assert.ok(current.some(r=>r.payload===late.payload));
 });
 
+for(const legacySpot of [701,710]) {
+  test('a legacy identity received after the frozen target cannot hide its native price '+legacySpot,async t=>{
+    const {DB,bucket,env}=await setup(t);
+    const snapshotCutoff=T+65000,cutover=T+86400000;
+    bucket.visible=2;
+    await advanceNativePublications(env,{now:snapshotCutoff});
+    const native=await read(DB,snapshotCutoff);
+    const late=await retainLegacy(DB,{value:legacySpot,receivedAt:snapshotCutoff+1});
+    const frozen=await handoffSource(DB,collectorPublication,native,[],{source:'price',session,instrument:'QQQ',cutoff:cutover,snapshotCutoff});
+    assert.deepEqual(frozen.map(r=>r.payload),native.records.filter(r=>r.source==='price').map(r=>r.payload));
+    const current=await compose(DB,native,[late],cutover);
+    assert.ok(current.some(r=>r.payload===late.payload));
+    assert.ok(!current.some(r=>r.record_id.startsWith('native:') && JSON.parse(r.payload).details.originalRecordId===late.record_id));
+    const sameId=current.filter(r=>r.record_id===late.record_id);
+    assert.deepEqual(sameId.map(r=>JSON.parse(r.payload).value.spot),legacySpot===701?[701]:[710,701]);
+    assert.deepEqual(sameId.map(r=>r.revision),legacySpot===701?[4]:[4,5]);
+  });
+}
+
 test('different native baseline is an explicit backfill correction at cutover; failed handoff rolls back',async t=>{
   const {DB,bucket,env}=await setup(t),old=await retainLegacy(DB);bucket.visible=3;await advanceNativePublications(env,{now:T+122000});
   const native=await read(DB,T+122000);DB.flags.failAfterRuns=1;
