@@ -181,7 +181,7 @@ export async function handleLiveQuotes(url, env) {
   if (!symbols) {
     return jsonResponse({ error: `Request 1-${MAX_LIVE_QUOTE_SYMBOLS} valid symbols` }, 400);
   }
-  if (symbols.some(s => s.startsWith('BTCOPT:') || s.startsWith('./'))) return jsonResponse({ error: 'Use authenticated BTC product route' }, 403);
+  if (symbols.some(s => s.startsWith('MBTOPT:') || s.startsWith('BTCOPT:') || s.startsWith('./'))) return jsonResponse({ error: 'Use authenticated BTC product route' }, 403);
   try {
     const upstream = await fetchLiveQuotes(symbols, env);
     const response = new Response(upstream.body, {

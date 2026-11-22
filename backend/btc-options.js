@@ -3,7 +3,7 @@ import { computeBookFromTrades, jsonResponse, requireSession, withUserRecord } f
 import { createStorage } from './storage.js';
 import { btcAllowed, ownerLinkAvailable } from './btc-owner-link.js';
 
-export const BTC_KEY = /^BTCOPT:[0-9a-f]{40}$/;
+export const BTC_KEY = /^(?:BTCOPT:[0-9a-f]{40}|MBTOPT:[1-9][0-9]{0,14})$/;
 export const BTC_FEE = 2.50; // Explicit simulation convention, not a broker fee quote.
 export function btcSession(now = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago',
@@ -14,11 +14,11 @@ export function btcSession(now = Date.now()) {
 }
 export function validBtcContract(c, key = c?.contract_key) {
   return c && BTC_KEY.test(key) && c.contract_key === key && c.instrument_type === 'futures_option' &&
-    c.product === '/BTC' && c.series === 'monthly' && c.exchange === 'CME' && c.multiplier === 5 &&
+    ((c.product === '/BTC' && c.multiplier === 5 && key.startsWith('BTCOPT:')) || (c.product === '/MBT' && c.multiplier === 0.1)) && c.series === 'monthly' && c.exchange === 'CME' &&
     ['call', 'put'].includes(c.type) && Number.isFinite(c.strike) && c.strike > 0 &&
     typeof c.provider_symbol === 'string' && c.provider_symbol.length <= 128 &&
-    typeof c.streamer_symbol === 'string' && c.streamer_symbol.endsWith(':XCME') &&
-    /^\/BTC[A-Z][0-9]{1,4}$/.test(c.future_symbol) && c.future_expiry === c.exp &&
+    (c.product === '/MBT' ? c.provider === 'IBKR' && Number.isSafeInteger(c.conId) && c.conId > 0 && c.contract_key === 'MBTOPT:' + c.conId : typeof c.streamer_symbol === 'string' && c.streamer_symbol.endsWith(':XCME')) &&
+    typeof c.future_symbol === 'string' && c.future_symbol.startsWith(c.product) && /^\/(?:MBT|BTC)[A-Z][0-9]{1,4}$/.test(c.future_symbol) && c.future_expiry === c.exp &&
     /^\d{4}-\d{2}-\d{2}$/.test(c.exp) && Number.isFinite(Date.parse(c.expires_at)) &&
     Number.isFinite(Date.parse(c.stops_trading_at));
 }
@@ -59,7 +59,7 @@ export function exactBtcQuote(payload, intent, now = Date.now()) {
   if (!(Number.isFinite(row[side]) && row[side] > 0 && Number.isFinite(row[side + '_size']) && row[side + '_size'] >= 1)) return fail('Executable side has no price or size');
   if (Number.isFinite(row.bid) && Number.isFinite(row.ask) && row.bid > row.ask) return fail('Crossed book');
   if (row.available !== true) return fail('Quote unavailable after disconnect or maintenance');
-  return { bid: row.bid, ask: row.ask, strike: c.strike, type: c.type, exp: c.exp, multiplier: 5,
+  return { bid: row.bid, ask: row.ask, strike: c.strike, type: c.type, exp: c.exp, multiplier: c.multiplier,
     contract: structuredClone(c), quoteTs: clock.at, quote_clock_basis: clock.basis,
     quote_source_ts: clock.source_at, bidTs: row.bid_ts, askTs: row.ask_ts,
     source_quote: structuredClone(row), fees: BTC_FEE, fee_model: 'btc-paper-flat-2.50-per-side-v1' };
@@ -67,13 +67,16 @@ export function exactBtcQuote(payload, intent, now = Date.now()) {
 export function heldBtc(record) {
   return Object.values(computeBookFromTrades(record.trades || [])).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).map(b => b.contract);
 }
-export async function fetchBtc(env, record, symbols = [], expiry = null) {
-  if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) throw new Error('Quote service unavailable');
-  const url = new URL('/btc-options', env.LIVE_QUOTE_ORIGIN);
+export async function fetchBtc(env, record, symbols = [], expiry = null, product = null) {
+  const micro = product === 'micro' || (product == null && symbols[0]?.startsWith('MBTOPT:'));
+  const origin = micro ? env.IBKR_MBT_QUOTE_ORIGIN : env.LIVE_QUOTE_ORIGIN;
+  const accessKey = micro ? env.IBKR_MBT_QUOTE_KEY : env.LIVE_QUOTE_KEY;
+  if (!origin || !accessKey) throw new Error('Quote service unavailable');
+  const url = new URL('/btc-options', origin);
   if (expiry) url.searchParams.set('expiry', expiry);
-  url.searchParams.set('symbols', symbols.join(','));
-  url.searchParams.set('held', JSON.stringify(heldBtc(record).map(c => c.provider_symbol)));
-  return fetch(url, { headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY },
+  url.searchParams.set('symbols', symbols.filter(k => k.startsWith('MBTOPT:') === micro).join(','));
+  url.searchParams.set('held', JSON.stringify(heldBtc(record).filter(c => (c.product === '/MBT') === micro).map(c => c.provider_symbol)));
+  return fetch(url, { headers: { 'X-Live-Quote-Key': accessKey },
     redirect: 'manual', signal: AbortSignal.timeout(10000), cf: { cacheTtl: 0, cacheEverything: false } });
 }
 export async function handleBtcOptions(request, env) {
@@ -85,10 +88,20 @@ export async function handleBtcOptions(request, env) {
     owner_link_available: ownerLinkAvailable(env) }, 403);
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
+  const params = new URL(request.url).searchParams;
+  const product = params.get('product') || 'cme';
+  if (!['cme','micro'].includes(product)) return jsonResponse({ error: 'Unknown product' },400);
   try {
-    const response = await fetchBtc(env, session.record, symbols, new URL(request.url).searchParams.get('expiry'));
+    const response = await fetchBtc(env, session.record, symbols, params.get('expiry'), product);
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
+    const other = heldBtc(session.record).filter(c => (c.product === '/MBT') !== (product === 'micro'));
+    if (other.length) {
+      try {
+        const extra = await fetchBtc(env,session.record,other.map(c=>c.contract_key),null,product === 'micro' ? 'cme' : 'micro');
+        if (extra.ok) data.quotes.push(...((await extra.json()).quotes || []));
+      } catch { /* Held marks remain unavailable while the other source is offline. */ }
+    }
     if (!await btcAllowed(env, session, request)) return jsonResponse({ error: 'Bitcoin data access revoked' }, 403);
     const entries = env.BTC_OPTIONS_ENTRIES === '1';
     return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: BTC_FEE,
@@ -100,7 +113,7 @@ export async function handleBtcOptions(request, env) {
 // namespace. No daily close, browser-supplied mark or live spot can substitute.
 export async function btcFinalMark(env, c, now = Date.now()) {
   if (!validBtcContract(c) || now < Date.parse(c.expires_at)) return null;
-  const obj = await env.PAPER_TRADES?.get(`paper-trades/btc-final/${c.contract_key.slice(7)}/${c.exp}.json`);
+  const obj = await env.PAPER_TRADES?.get(`paper-trades/btc-final/${(c.product === '/MBT' ? c.contract_key : c.contract_key.slice(7))}/${c.exp}.json`);
   if (!obj) return null;
   const m = await obj.json();
   return m.contract_key === c.contract_key && m.future_symbol === c.future_symbol && m.exp === c.exp &&
@@ -125,9 +138,9 @@ export async function settleBtcAccount(env, username, now = Date.now()) {
       const mark = marks.get(sym);
       if (!mark) { pending.push(sym); continue; }
       const price = Math.max(b.type === 'call' ? mark.value - b.strike : b.strike - mark.value, 0);
-      const cash_delta = price * b.pos * 5;
-      const trade = { execution_id: id, execution_request_id: id, sym, underlying: '/BTC',
-        instrument_type: 'futures_option', contract: b.contract, multiplier: 5, strike: b.strike,
+      const cash_delta = price * b.pos * b.contract.multiplier;
+      const trade = { execution_id: id, execution_request_id: id, sym, underlying: b.contract.product,
+        instrument_type: 'futures_option', contract: b.contract, multiplier: b.contract.multiplier, strike: b.strike,
         type: b.type, exp: b.exp, side: 'sell', qty: b.pos, price, fees: 0, cash_delta,
         fee_model: 'btc-paper-flat-2.50-per-side-v1', settlement_mark: mark, status: 'filled',
         ts: new Date(now).toISOString(), username, note: 'Simulated monthly exercise and immediate futures cash settlement' };

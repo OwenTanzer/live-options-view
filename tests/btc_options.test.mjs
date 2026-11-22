@@ -297,3 +297,17 @@ test('equity insolvency retains the BTC ledger and pending obligation', async ()
     assert.deepEqual(outcome.result.pending, [sym]);
   } finally { h.restore(); }
 });
+
+test('Micro paper lot is 0.1 BTC through entry and exit', async () => {
+  const key = 'MBTOPT:123';
+  const micro = {...contract,contract_key:key,provider:'IBKR',conId:123,product:'/MBT',multiplier:0.1,future_symbol:'/MBTX6'};
+  const h = await harness(micro);
+  h.env.IBKR_MBT_QUOTE_ORIGIN=h.env.LIVE_QUOTE_ORIGIN; h.env.IBKR_MBT_QUOTE_KEY='fixture';
+  h.market.quotes[0].symbol=key; h.market.entry_keys=[key];
+  try {
+    assert.equal((await h.order(intent('buy',{sym:key}))).status,201);
+    assert.equal((await h.store.users.get('fixture')).balance_cash,9987.5);
+    assert.equal((await h.order(intent('sell',{sym:key}))).status,201);
+    assert.equal((await h.store.users.get('fixture')).balance_cash,9994.9);
+  } finally {h.restore();}
+});

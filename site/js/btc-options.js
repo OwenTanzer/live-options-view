@@ -1,6 +1,6 @@
 // Authenticated, memory-only product view. Never ingested as an equity snapshot.
 const btcOptions = {
-  active: false, generation: 0, request: 0, quotes: new Map(), data: null,
+  product: 'cme', active: false, generation: 0, request: 0, quotes: new Map(), data: null,
   owner: null, error: null, access: null, ownerLinkAvailable: false,
   syncSession() {
     const username = sessionVerified ? session?.username || null : null;
@@ -43,6 +43,7 @@ const btcOptions = {
     try {
       const query = new URLSearchParams();
       if (this.active) query.set('expiry', this.expiry || 'front');
+      query.set('product', this.product);
       const visible = this.visibleSymbols();
       this.requestedWindow = visible;
       if (visible) query.set('symbols', visible);
@@ -89,7 +90,7 @@ const btcOptions = {
     const hint = document.getElementById('paper-hint');
     if (active && !wasActive) {
       this.equityHint = hint.textContent;
-      hint.textContent = 'Open a Bitcoin contract ticket to buy or close one contract. Premium ×5, plus the displayed fee.';
+      hint.textContent = 'Open a Bitcoin contract ticket to buy or close one contract. See the ticket for contract size and fees.';
     } else if (!active && wasActive) hint.textContent = this.equityHint || '';
     if (wasActive !== active && typeof tickerPoller !== 'undefined') tickerPoller?.kick();
     if (active) {
@@ -111,7 +112,7 @@ const btcOptions = {
   },
   header() {
     document.getElementById('underlying-select').value = 'BTC';
-    document.getElementById('title').textContent = 'Bitcoin futures options';
+    document.getElementById('title').textContent = 'Bitcoin options';
     document.title = 'Bitcoin futures options — moopertonic';
   },
   clock(q, side, now = Date.now()) {
@@ -140,7 +141,7 @@ const btcOptions = {
   },
   side(symbol, side) {
     const q = this.quotes.get(symbol), now = Date.now();
-    if (!q?.available || this.data?.session !== 'open') return null;
+    if (!q?.available || (this.data?.session !== 'open')) return null;
     if (!this.clock(q, side, now)) return null;
     if (!(Number.isFinite(q[side]) && q[side] > 0 && Number.isFinite(q[side + '_size']) && q[side + '_size'] >= 1) || (q.bid != null && q.ask != null && q.bid > q.ask)) return null;
     if (now >= Date.parse(q.contract.stops_trading_at)) return null;
@@ -154,7 +155,7 @@ const btcOptions = {
     if (pendingExecutions.has(symbol)) return 'Order pending';
     if (action === 'sell' && !((book || computeBook())[symbol]?.pos >= 1)) return 'No position to close';
     if (action === 'buy' && !this.data?.entries_enabled) return 'New entries disabled';
-    if (action === 'buy' && !this.data?.entry_keys?.includes(symbol)) return 'Not in active monthly series';
+    if (action === 'buy' && !this.data?.entry_keys?.includes(symbol)) return 'Not in active option series';
     if (!q || !q.available) return 'Quote unavailable';
     if (this.data?.session !== 'open') return 'Session closed / maintenance';
     if (Date.now() >= Date.parse(q.contract.stops_trading_at)) return 'Contract expired';
@@ -170,6 +171,7 @@ const btcOptions = {
     dismiss.type = 'button'; dismiss.className = 'btc-dismiss'; dismiss.textContent = 'Close ticket';
     dismiss.onclick = () => closeTicket(); ticketEl.appendChild(dismiss);
     this.refreshTicket();
+    this.refresh();
     if (action) ticketEl.querySelector('.btn-' + action).focus();
   },
   refreshTicket() {
@@ -181,18 +183,25 @@ const btcOptions = {
     let details = ticketEl.querySelector('.btc-ticket-details');
     if (!details) { details = document.createElement('p'); details.className = 'btc-ticket-details'; ticketEl.appendChild(details); }
     const q = this.quotes.get(sym);
-    details.textContent = `1 contract = 5 BTC. Premium ×5 + $2.50 fee per side. Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
+    details.textContent = `1 paper lot = ${q?.contract?.multiplier ?? '—'} BTC. $2.50 simulated fee per side. Owned: ${computeBook()[sym]?.pos || 0}. Bid size ${q?.bid_size ?? '—'} · ask size ${q?.ask_size ?? '—'}. Bid: ${this.reason(sym, 'sell') || this.clockLabel(sym, 'bid')}. Ask: ${this.reason(sym, 'buy') || this.clockLabel(sym, 'ask')}.`;
+    const ask = this.side(sym,'ask'), bid = this.side(sym,'bid');
+    if (ask != null && bid != null && q?.contract?.multiplier) {
+      const lot = q.contract.multiplier;
+      const fee = () => 2.50;
+      const debit = ask * lot + fee(ask), exit = bid * lot - fee(bid);
+      details.textContent += ` Pay $${debit.toFixed(2)}. Sell now for $${exit.toFixed(2)}. Round trip $${(debit-exit).toFixed(2)}.`;
+    }
     const snapshot = this.data?.display_prices?.[sym];
     if (snapshot) {
       const values = ['bid', 'ask', 'mark'].filter(side => Number.isFinite(snapshot[side]))
         .map(side => side + ' ' + snapshot[side].toLocaleString('en-US', {maximumFractionDigits: 2})).join(' · ');
-      if (values) details.textContent += ` Tastytrade snapshot at ${snapshot.as_of}: ${values}.`;
+      if (values) details.textContent += ` Provider snapshot at ${snapshot.as_of}: ${values}.`;
     }
     for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
       const px = this.side(sym, side), button = ticketEl.querySelector('.btn-' + action);
       const reason = this.reason(sym, action);
       button.disabled = !!reason || px == null;
-      button.textContent = `${action === 'buy' ? 'Buy' : 'Sell'} 1 @ ${px == null ? 'unavailable' : '$' + px.toFixed(2) + '/BTC ($' + (px * 5).toFixed(2) + ')'}`;
+      button.textContent = `${action === 'buy' ? 'Buy' : 'Sell'} 1 @ ${px == null ? 'unavailable' : '$' + px.toFixed(2) + '/BTC ($' + (px * q.contract.multiplier).toFixed(2) + ')'}`;
       button.title = reason || this.clockLabel(sym, side);
     }
   },
@@ -224,7 +233,7 @@ const btcOptions = {
       mark.hidden = hasBook || !Number.isFinite(snapshot?.mark);
       if (!mark.hidden) {
         mark.textContent = 'Mark ' + snapshot.mark.toLocaleString('en-US', {maximumFractionDigits: 2}) + '*';
-        mark.title = 'Tastytrade snapshot ' + snapshot.as_of;
+        mark.title = 'Provider snapshot ' + snapshot.as_of;
       }
       for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
         const price = this.side(sym, side), reason = this.reason(sym, action, book);
@@ -236,7 +245,7 @@ const btcOptions = {
         const raw = streamed ? q[side] : snapshot?.[side];
         button.textContent = Number.isFinite(raw) ? raw.toLocaleString('en-US', { maximumFractionDigits: 2 }) + (useSnapshot ? '*' : '') : '—';
         button.setAttribute('aria-label', `${action === 'buy' ? 'Buy at ask' : 'Sell / close at bid'} ${q?.contract.type || ''} ${q?.contract.strike || ''}: ${button.textContent}${reason ? ' · ' + reason : ''}`);
-        button.title = useSnapshot ? 'Tastytrade snapshot ' + snapshot.as_of : reason || this.clockLabel(sym, side);
+        button.title = useSnapshot ? 'Provider snapshot ' + snapshot.as_of : reason || this.clockLabel(sym, side);
         row.querySelector('.btc-' + action + '-reason').textContent = reason || 'Opens ticket · 1 contract';
         row.querySelector('.btc-' + side + '-time').textContent = this.clockLabel(sym, side);
       }
@@ -249,9 +258,9 @@ const btcOptions = {
     const data = this.data, root = document.getElementById('btc-chain');
     const focus = document.activeElement?.dataset;
     const focused = focus?.btcAction ? { ...focus } : null;
-    const listed = (data?.contracts || []).filter(c => !data.expiry || c.exp === data.expiry);
+    const listed = (data?.contracts || []).filter(c => (!data.expiry || c.exp === data.expiry) && (this.product === 'micro' ? c.product === '/MBT' : c.product !== '/MBT'));
     const book = computeBook();
-    const layout = JSON.stringify([this.owner, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
+    const layout = JSON.stringify([this.owner, this.product, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
     const sameExpiry = data?.expiry && root.dataset.expiry === data.expiry && root.querySelector('.btc-series');
     if (data && root.dataset.layout === layout && root.querySelector('.btc-series')) {
       this.updateActions();
@@ -298,8 +307,19 @@ const btcOptions = {
       }
       return;
     }
+    const products = element('select', '', '');
+    products.setAttribute('aria-label', 'Bitcoin option product');
+    for (const [key,label] of [['cme','CME standard'],['micro','CME Micro']]) {
+      const option = element('option', '', label); option.value = key; products.appendChild(option);
+    }
+    products.value = this.product;
+    products.onchange = () => {
+      this.product = products.value; this.expiry = null; this.data = null; this.error = null;
+      this.generation++; this.quotes.clear(); closeTicket(); this.render(); this.refresh();
+    };
+    status.appendChild(products);
     if (!data) {
-      status.appendChild(element('p', '', this.error || 'Loading standard monthly contracts…'));
+      status.appendChild(element('p', '', this.error || 'Loading Bitcoin option contracts…'));
       if (this.error) { const retry = element('button', '', 'Retry quotes'); retry.onclick = () => this.refresh(); status.appendChild(retry); }
       return;
     }
@@ -311,7 +331,7 @@ const btcOptions = {
     }
     if (data.expiries?.length) {
       const picker = element('select', '', '');
-      picker.setAttribute('aria-label', 'Standard monthly expiry');
+      picker.setAttribute('aria-label', 'Bitcoin option expiry');
       for (const expiry of data.expiries) picker.add(new Option(expiry, expiry));
       picker.value = data.expiry;
       picker.onchange = () => { this.expiry = picker.value; this.refresh(); };
@@ -373,7 +393,7 @@ const btcOptions = {
       }
       root.appendChild(group);
     }
-    if (!data.contracts?.length) root.append('No verified standard monthly contracts available.');
+    if (!listed.length) root.append('No verified contracts available for this product.');
     this.updateActions();
     this.updateCoverage(listed);
     if (!sameExpiry) {
