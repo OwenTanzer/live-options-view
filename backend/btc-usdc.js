@@ -7,7 +7,7 @@ async function read(env, method, params) {
   const url = new URL('/api/v2/public/' + method, env.BTC_USDC_DATA_ORIGIN);
   if (url.protocol !== 'https:') throw new Error('Expected secure market data origin');
   url.search = new URLSearchParams(params);
-  const response = await fetch(url, {redirect: 'error', signal: AbortSignal.timeout(8000),
+  const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(8000),
     headers: env.BTC_USDC_DATA_TOKEN ? {Authorization: 'Bearer ' + env.BTC_USDC_DATA_TOKEN} : {}});
   if (!response.ok) throw new Error('USDC data provider unavailable');
   const data = await response.json();

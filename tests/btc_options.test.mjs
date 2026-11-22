@@ -305,7 +305,8 @@ test('USDC minimum lot buy, sell and settlement use the same BTC units', async (
   const spec = {instrument_name:name, kind:'option', is_active:true, quote_currency:'USDC', settlement_currency:'USDC',
     contract_size:1, min_trade_amount:0.01, strike:90000, option_type:'call', expiration_timestamp:Date.parse(contract.expires_at)};
   let size = 0.01;
-  global.fetch = async raw => {
+  global.fetch = async (raw, options) => {
+    assert.equal(options.redirect, 'manual', 'Workers require manual redirect rejection');
     const u = new URL(raw), method = u.pathname.split('/').pop();
     assert.equal(u.origin,'https://linear.invalid');
     const book = {instrument_name:name,state:'open',timestamp:Date.now(),index_price:90000,best_bid_price:950,
