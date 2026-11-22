@@ -255,3 +255,9 @@ The legacy paper
 username allowlist is ignored; unverified sessions and distinct users remain denied.
 Apply additive migrations 0005 and 0008 and verify the source rights receipt before enabling
 the separate API/asset release. This does not require a collector rollout.
+
+## D1 daily row budget
+
+Web CI runs the production catalog and account lookups against local Miniflare and uses its per-statement row counters. The scenario models full unchanged catalog pages on the configured cron, 1,000 historical lookups plus 10,000 authenticated account lookups and 500 session creation/logout pairs per day. These request counts are test assumptions. Update the scenario when adding high-volume workloads or changing the traffic model. Reproduce with `npm ci --prefix tests/d1-budget --ignore-scripts` and `node --experimental-sqlite --test tests/d1-budget/usage.test.mjs`.
+
+The separate **D1 daily account budget** workflow checks Cloudflare Analytics every half hour for all databases in the account since midnight UTC. Both checks fail at 80% of either daily free-tier allowance (5,000,000 rows read or 100,000 rows written). Production telemetry runs on master, never in pull requests. It needs Account Analytics Read permission. Use the repository secret `D1_ANALYTICS_READ_TOKEN` if the existing Cloudflare credential lacks it. A failed usage check is an alert; it leaves serving and collection running. Inspect D1 Insights by rows read and rows written, then reproduce the expensive path in the offline fixture. Analytics reporting and scheduled runs can lag, and a burst can consume the remaining allowance between checks.
