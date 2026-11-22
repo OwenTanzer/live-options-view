@@ -948,7 +948,7 @@
     #news-panel .np-src { min-width: 0; }
   }
   /* MediaFlow P1 research view (js/news-research.js styles its own content): shown with the News tab. */
-  #news-panel.hidden + #news-research { display: none; }
+  #news-panel.hidden + #news-research, #news-research[hidden], #news-panel > div[hidden] { display: none; }
   /* ── end news panel ── */
 
   /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */

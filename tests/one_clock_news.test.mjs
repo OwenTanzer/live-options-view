@@ -22,3 +22,33 @@ test('One Clock admits archive revisions at the receipt boundary and restores ea
   assert.equal((await select('11:15:00',{origin:'recorded'})).rows.length,0);
   assert.equal((await select('12:00:00')).partial,true);
 });
+
+test('truncated page chains, changed row counts and view substitution fail closed',async()=>{
+  for(const corrupt of [
+    (index,v)=>{v.page_count++;},
+    (index,v)=>{v.rows_total++;},
+    (index,v)=>{v.first_page=v.first_page.replace('/archive/','/collector/');},
+    (index,v)=>{index.views.push({...v});},
+  ]){
+    const index=structuredClone(fixtures.index);
+    const view=index.views.find(v=>v.date===base.session && v.mode==='archive' && v.stream==='all');
+    corrupt(index,view);
+    await assert.rejects(archiveNews({...base,cutoff:Date.parse(base.session+'T11:15:00Z')},
+      async key=>key===panel.INDEX_KEY?index:fixtures.byKey(key),panel,()=>true),/archive (view|page)/);
+  }
+});
+
+test('a receipt between two milliseconds first becomes visible at the later cursor',async()=>{
+  const read=async key=>{
+    const copy=structuredClone(fixtures.byKey(key));
+    for(const row of copy.rows??[]) if(row.title.includes('Tanker') && row.revision_number===1){
+      row.archived_at='2026-11-09T10:06:00.000684Z';
+    }
+    return copy;
+  };
+  const at=Date.parse(base.session+'T10:06:00Z');
+  for(const [cutoff,visible] of [[at,false],[at+1,true]]){
+    const {rows}=await archiveNews({...base,cutoff},read,panel,()=>true);
+    assert.equal(rows.some(r=>r.value.title.includes('Tanker')),visible);
+  }
+});
