@@ -10,14 +10,23 @@ function link(instrument = 'QQQ', cutoff = archiveCutoff) {
     one_clock_instrument: instrument, one_clock_at: String(cutoff)});
   return origin + '/order-flow.html?' + params;
 }
+const fixture = JSON.parse(await readFile(new URL('./fixtures/order_flow_live_20260925.json', import.meta.url)));
+const provider = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
 const browser = await chromium.launch({headless: true, channel: 'chrome'});
 try {
   for (const width of [1440, 390]) {
     const page = await browser.newPage({viewport: {width, height: 900}});
     const errors = [], unexpected = [];
+    let fixtureChain;
+    await page.clock.setFixedTime(new Date(fixture.displayed_t));
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
+      if (fixtureChain && url.origin === provider) {
+        const data = url.pathname === '/intraday/latest.json' ? fixtureChain :
+          url.pathname === '/order-flow/qqq/v1/recent.json' ? fixture.feed : null;
+        if (data) return route.fulfill({json: data});
+      }
       const allowed = /^\/(?:order-flow\.html|order-flow-replay\.json|shared\/(?:order-flow|one-clock)[a-z-]*\.js)$/;
       if (url.origin !== origin || !allowed.test(url.pathname)) {
         unexpected.push(url.href);
@@ -52,6 +61,25 @@ try {
     await page.goto(origin + '/order-flow.html?source=simulation');
     await statusContains('Simulated market');
     await page.locator('#sim-jump').click();
+    for (const state of ['fresh', 'expired', 'missing', 'zero']) {
+      fixtureChain = structuredClone(fixture.chain);
+      if (state === 'expired') fixtureChain.timestamp = new Date(fixture.displayed_t - 120001).toISOString();
+      if (state === 'missing' || state === 'zero') {
+        fixtureChain.underlying_price = state === 'missing' ? null : 0;
+        for (const row of fixtureChain.rows) row.UnderlyingPrice = fixtureChain.underlying_price;
+      }
+      await page.goto(origin + '/order-flow.html?source=live');
+      await page.waitForFunction(() => document.querySelector('#fresh').textContent.includes('s old'));
+      const rows = page.locator('#ladder tr[data-strike]');
+      assert.equal(await rows.count(), 8, state);
+      assert.match(await page.locator('#strike-range').textContent(),
+        state === 'fresh' ? /Following.*QQQ \$744\.40/ : /Waiting for fresh spot/, state);
+      await rows.first().click();
+      const details = await page.locator('#details').textContent();
+      assert.match(details, /recorded prints [1-9]/, state);
+      if (state !== 'fresh') assert.match(details, /spot no coverage/, state);
+      if (state === 'missing' || state === 'zero') assert.match(details, /gamma 0\.[0-9]+/, state);
+    }
     assert.deepEqual(errors, []);
     assert.deepEqual(unexpected, []);
     await page.close();
