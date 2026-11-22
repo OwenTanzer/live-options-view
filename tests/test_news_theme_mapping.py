@@ -9,7 +9,7 @@ from pathlib import Path
 
 from test_news_support import at
 from market_data.news.classify import classify_rules
-from market_data.news.normalize import canonical_json
+from market_data.news.normalize import canonical_json, normalize_entry
 from market_data.news import config, theme_mapping
 
 FIXTURES = Path(__file__).parent / "fixtures" / "news_theme_mapping"
@@ -20,6 +20,46 @@ WHEN = at("2026-11-22T05:20:00Z")
 class ThemeMapping(unittest.TestCase):
     def classify(self, obs, enabled=True):
         return classify_rules(obs, "fixture-replay", WHEN, fed_treasury_pilot=enabled)
+
+    def headline(self, title):
+        obs, _ = normalize_entry(
+            {"title": title, "link": "https://example.invalid/review-regression"},
+            config.SOURCES["oilprice_com"], "fixture-input", "2026-11-22T05:10:00Z",
+            config.config_digest(), {})
+        return obs
+
+    def test_notes_and_bills_as_verbs_stay_unknown(self):
+        for title in (
+            "U.S. Treasury notes sanctions target cybercrime",
+            "U.S. Treasury bills contractor for the cost of repairs",
+            "U.S. Treasury notes a rise in cybercrime",
+        ):
+            with self.subTest(title=title):
+                result = self.classify(self.headline(title))
+                self.assertEqual("unknown", result["instrument_mapping"])
+                self.assertEqual([], result["instruments"])
+                self.assertEqual([], result["theme_mapping"]["matches"])
+
+    def test_notes_and_bills_with_financing_context(self):
+        for title in (
+            "U.S. Treasury sells 13-week bills",
+            "U.S. Treasury issues 2-year notes",
+            "U.S. Treasury announces auction of bills and notes",
+            "Auction of bills and notes announced by U.S. Treasury",
+            "Demand for 2-year notes sold by U.S. Treasury grows",
+        ):
+            with self.subTest(title=title):
+                result = self.classify(self.headline(title))
+                self.assertEqual(["treasury_financing"], result["theme_mapping"]["themes"])
+                self.assertEqual(["TLT"], result["instruments"])
+
+    def test_fed_label_asserts_topic_only_without_new_subjects(self):
+        result = self.classify(self.headline("Federal Reserve reports a cybersecurity incident"))
+        self.assertEqual(["fed_topic"], result["theme_mapping"]["themes"])
+        self.assertEqual("topic_relevance_only", result["theme_mapping"]["meaning"])
+        self.assertEqual(["QQQ", "SPY", "TLT"], result["instruments"])
+        for title in ("Fed reports a cybersecurity incident", "Bank of England announces a rate cut"):
+            self.assertEqual([], self.classify(self.headline(title))["instruments"])
 
     def test_disabled_matches_frozen_base_byte_for_byte(self):
         baseline = json.loads((FIXTURES / "off_baseline.json").read_text())

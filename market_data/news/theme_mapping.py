@@ -9,17 +9,22 @@ from pathlib import Path
 
 from .normalize import canonical_json, sha256_hex
 
-VERSION = "fed-treasury-v1"
+VERSION = "fed-treasury-v2"
 # Frozen policy: later source enablement must not silently expand this pilot.
 SOURCE_IDS = ("ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch")
 # Explicit US institutions only. Bare 'fed', 'Treasury', Powell, rates and debt
 # are ambiguous. Patterns describe topics, including negation/speculation.
+# Notes/bills alone can be verbs. Require another financing term or a numeric
+# security tenor (e.g. 13-week bills, 2-year notes), not merely their presence.
+_FINANCING = (r"(?:auctions?|debt|bonds?|refunding|borrowing|general account|TGA|deficits?|"
+              r"\d+[- ](?:week|month|year) (?:notes?|bills?))")
 RULES = (
-    ("fed_policy", r"\b(?:Federal Reserve|FOMC|Federal Open Market Committee)\b",
+    # An institution/topic mention, not a verified policy action or sentiment.
+    ("fed_topic", r"\b(?:Federal Reserve|FOMC|Federal Open Market Committee)\b",
      ("QQQ", "SPY", "TLT")),
-    ("treasury_financing", r"\b(?:U\.?S\.?|United States) Treasury\b.{0,100}\b(?:auctions?|debt|bonds?|notes?|bills?|refunding|borrowing|general account|TGA|deficits?)\b",
+    ("treasury_financing", rf"\b(?:U\.?S\.?|United States) Treasury\b.{{0,100}}\b{_FINANCING}\b",
      ("TLT",)),
-    ("treasury_financing", r"\b(?:auctions?|debt|bonds?|notes?|bills?|refunding|borrowing|general account|TGA|deficits?)\b.{0,100}\b(?:U\.?S\.?|United States) Treasury\b",
+    ("treasury_financing", rf"\b{_FINANCING}\b.{{0,100}}\b(?:U\.?S\.?|United States) Treasury\b",
      ("TLT",)),
 )
 DIGEST = sha256_hex(canonical_json({

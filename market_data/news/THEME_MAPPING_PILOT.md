@@ -19,11 +19,17 @@ It does not import the object store, fetch feeds, load credentials or publish.
 
 ## Policy and evidence
 
-The fixed `fed-treasury-v1` table in `theme_mapping.py` maps explicit Federal
+The fixed `fed-treasury-v2` table in `theme_mapping.py` maps explicit Federal
 Reserve/FOMC mentions to QQQ, SPY and TLT; explicit US Treasury financing
 language maps to TLT. These are broad topic-relevance candidates, not assertions
 that a price moved, causal findings, directional opinions or recommendations.
-Even a negated or speculative headline identifies a topic, not a confirmed event.
+The Fed label is `fed_topic`, including non-monetary-policy mentions of the same
+explicit institutions. Its matching pattern and ticker set are unchanged. Even
+a negated or speculative headline identifies a topic, not a confirmed event.
+The v2 revision removes standalone notes/bills as Treasury triggers: they require
+another listed financing term (such as auction or borrowing), or a numeric
+security tenor such as 13-week bills or 2-year notes. Verb usages in sanctions
+and contractor-repair headlines remain unknown.
 No issuer entities are extracted and `conflict` remains unknown.
 
 Only the title is matched, case-insensitively. Bare Fed, Powell, Treasury, rates
@@ -70,12 +76,15 @@ deterministic replay, no mutation, headline-only matching and the default-off CL
 `off_baseline.json` was generated with the untouched classifier from `9e67e45`,
 then frozen. Canonical serialized outputs compare byte for byte, including IDs.
 The existing News fixture suite separately pins source-format/archive/view data.
-Synthetic coverage is not a measured live precision/recall result.
+Three additional targeted tests cover the reviewer's two verb-usage false positives,
+another notes-as-verb case, five positive bills/notes financing titles and Fed
+topic semantics without expanding subject coverage. The frozen v1 off-baseline
+file is unchanged. Synthetic coverage is not a measured live precision/recall result.
 
 Local MSI Python 3.14 measurement (five paired trials, 1,600 classifications per
-arm/trial): median 368.73 microseconds off and 463.44 on, incremental 94.71
-microseconds per revision. The 16-record batch adds 11,680 raw bytes (730 per
-revision) or 954 gzip bytes. Timing varies by host/load and excludes archive,
+arm/trial): median 334.75 microseconds off and 418.34 on, incremental 83.59
+microseconds per revision. The 16-record batch adds 11,672 raw bytes (729.5 per
+revision) or 943 gzip bytes. Timing varies by host/load and excludes archive,
 network, index generation and publication. The script reproduces the method.
 
 ## Workload and the $5/month cap
@@ -91,7 +100,7 @@ The existing 15-minute cadence is 2,880 cycles per 30-day month; mapping would
 run only for classified revisions, not once per ticker or per new feed.
 
 Illustration using the repository's historical assumption of 35 new revisions
-per day: 1,050/month adds about 0.099 CPU seconds at the measured delta. Assuming
+per day: 1,050/month adds about 0.088 CPU seconds at the measured delta. Assuming
 2 KB extra per revision (a planning allowance above this fixture mean, not a
 bound on arbitrary inputs) gives 2.1 MB new raw data/month. At R2 Standard
 $0.015/GB-month, holding all of it for the whole month yields $0.0000315/month

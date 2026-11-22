@@ -38,7 +38,7 @@
       "first_seen_at": "2026-11-22T05:10:00Z"
     },
     "expected_themes": [
-      "fed_policy"
+      "fed_topic"
     ],
     "expected_instruments": [
       "QQQ",
@@ -86,7 +86,7 @@
       "first_seen_at": "2026-11-22T05:10:00Z"
     },
     "expected_themes": [
-      "fed_policy"
+      "fed_topic"
     ],
     "expected_instruments": [
       "QQQ",
@@ -133,7 +133,7 @@
       "first_seen_at": "2026-11-22T05:10:00Z"
     },
     "expected_themes": [
-      "fed_policy"
+      "fed_topic"
     ],
     "expected_instruments": [
       "QQQ",
@@ -316,7 +316,7 @@
       "first_seen_at": "2026-11-22T05:10:00Z"
     },
     "expected_themes": [
-      "fed_policy",
+      "fed_topic",
       "treasury_financing"
     ],
     "expected_instruments": [
