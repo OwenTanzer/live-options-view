@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import {makeStorage} from './helpers/d1_shim.mjs';
+import {advanceSourceCatalog} from '../backend/one-clock-source-catalog.js';
+import {squeezeCatalog} from '../backend/one-clock-catalog-sources.js';
+import {publicIngestionSources} from '../backend/one-clock-ingestion-sources.js';
+import {ingestPublicSource,ingestedAsOf} from '../backend/one-clock-ingestion.js';
 import { readSqueezePublications,handleOneClockSqueeze } from '../backend/one-clock-squeeze.js';
 import { squeezeSource } from '../site/shared/one-clock-squeeze-source.js';
 import { sessionInstant } from '../site/shared/one-clock-session.js';
@@ -9,10 +15,10 @@ import { evaluateEvents } from '../site/shared/one-clock-events.js';
 const session='2026-11-09',T=sessionInstant(session,9,30),prefix='squeeze-scanner/v1/scheduled/';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const scope=(cutoff=T+5000,instrument='ABC')=>({session,instrument,cutoff});
-function fixture({listed=true,status='complete',latest='advanced',run='11111111-1111-4111-8111-111111111111',started=T-60000,finished=T,published=T+2000,receiptAt=T+2500}={}) {
+function fixture({ticker='ABC',listed=true,status='complete',latest='advanced',run='11111111-1111-4111-8111-111111111111',started=T-60000,finished=T,published=T+2000,receiptAt=T+2500}={}) {
   const attempt='22222222-2222-4222-8222-222222222222',base=prefix+'runs/'+run;
   const key=prefix+`publication-attempts/${run}/${attempt}/finished.json`;
-  const results=JSON.stringify(listed?[{ticker:'ABC',comparison_eligible:true,ranks:{combined:1},scores:{combined:.7,factor:.8,options:.6},private:'must-not-leak'}]:[]);
+  const results=JSON.stringify(listed?[{ticker,comparison_eligible:true,ranks:{combined:1},scores:{combined:.7,factor:.8,options:.6},private:'must-not-leak'}]:[]);
   const manifest=JSON.stringify({schema_version:1,run_id:run,started_at:new Date(started).toISOString(),finished_at:new Date(finished).toISOString(),status,
     scoring:{version:'baseline-60-40-v1'},files:{'results.json':{sha256:hash(results),bytes:Buffer.byteLength(results)}}});
   const objects=new Map([[base+'/results.json',{text:results,at:finished+500}],[base+'/manifest.json',{text:manifest,at:finished+1000}],
@@ -113,4 +119,28 @@ test('shared shortlist transport deduplicates and discards late scope responses'
   const clock=createClock({registry,initial:{...scope(),mode:'replay',origin:'recorded'}});
   const pending=clock.read('shortlist');assert.equal(clock.read('shortlist'),pending);await Promise.resolve();
   clock.select({...clock.snapshot(),cutoff:T});release();assert.deepEqual(await pending,{discarded:true});assert.equal(calls,1);assert.equal(called,false);
+});
+
+test('account shortlist ingestion uses catalog boundaries, reuses body reads and records null gaps',async t=>{
+  const db=makeStorage();
+  t.after(()=>db.db.close());
+  for(const file of ['0004_one_clock.sql','0005_one_clock_catalog.sql','0010_one_clock_ingestion.sql']){
+    await db.exec(fs.readFileSync(new URL('../backend/migrations/'+file,import.meta.url),'utf8'));
+  }
+  const f=fixture({ticker:'QQQ'}), adapter=publicIngestionSources.find(a=>a.outputs.includes('shortlist'));
+  const options={session,instrument:'QQQ',now:T+8000};
+  f.bucket.list=async({prefix})=>({objects:[...f.objects].filter(([key])=>key.startsWith(prefix))
+    .map(([key,r])=>({key,uploaded:new Date(r.at),etag:hash(r.text),size:Buffer.byteLength(r.text)})),truncated:false});
+  assert.equal((await ingestPublicSource(db,f.bucket,adapter,options)).reason,'catalog-catching-up');
+  await advanceSourceCatalog(db,f.bucket,squeezeCatalog,{now:T+5000});
+  f.bucket.list=()=>{throw new Error('unexpected archive rescan');};
+  const coverage=await ingestPublicSource(db,f.bucket,adapter,options);
+  assert.equal(coverage.through,T+5000);
+  assert.equal(coverage.gaps,1);
+  assert.equal(coverage.gets,4);
+  const rows=(await ingestedAsOf(db,{session,instrument:'QQQ',cutoff:options.now})).map(r=>JSON.parse(r.payload));
+  assert.deepEqual(rows.map(r=>[r.eventAt,r.value?.listed??null]),[[T+100,null],[T+2500,true]]);
+  assert.equal(rows[1].value.rank,1);
+  assert.equal(rows[1].details.publishedAt,T+2500);
+  assert.equal((await ingestPublicSource(db,f.bucket,adapter,{...options,now:options.now+1})).gets,0);
 });
