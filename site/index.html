@@ -1453,7 +1453,7 @@
     <section id="clock-chain-view" aria-label="Chain at shared cursor">
     <p id="history-clock-status" role="status">Choose a session and cursor.</p>
     <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
-    <p>Anchored bot signal: historical publication unavailable. A replay reading is not a recorded bot decision.</p>
+    <p>Anchored bot decisions appear with their publication receipts on the Automated tab.</p>
     <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
     <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
     </section>
@@ -1467,7 +1467,8 @@
       <label>Public bot <select id="history-clock-bot"><option value="">Select a bot</option></select></label>
       <button id="history-clock-load-bots" type="button">Load current public roster</button>
       <p id="history-clock-bot-status" role="status">Choose a bot to read its retained fill receipts. Current membership does not establish historical strategy assignments.</p>
-      <p>Decision and no-trade history: publication source unavailable. Fills do not stand in for decisions.</p>
+      <p id="clock-decisions-status" role="status">Select a bot to see recorded decisions.</p>
+      <div style="overflow:auto"><table><thead><tr><th>Decision time</th><th>Published by</th><th>Outcome</th><th>Action</th><th>Input age (ms)</th><th>Recorded anchor</th></tr></thead><tbody id="clock-decisions"></tbody></table></div>
       <pre id="history-clock-bot-inventory" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
       <div style="overflow:auto"><table><thead><tr><th>Event time</th><th>Visible from</th><th>Contract</th><th>Side</th><th>Quantity</th><th>Price</th></tr></thead><tbody id="history-clock-bot-rows"></tbody></table></div>
     </section>

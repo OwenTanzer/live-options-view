@@ -19,6 +19,12 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
         const json = body=>route.fulfill({json:body});
         if(url.pathname==='/api/one-clock/chain') return json({rows:[],coverage:{complete:false}});
         if(url.pathname==='/api/one-clock/bots/roster')return json({bots:['sample']});
+        if(url.pathname==='/api/one-clock/bot-decisions'){
+          const row={source:'bot-decision',session,instrument:'QQQ',origin:'recorded',revision:1,evidence:'fixture',
+            id:'decision',eventAt:cutoff-1000,availableAt:cutoff,value:{bot:'sample',outcome:'no_trade',action:null,inputAgeMs:1400},
+            details:{anchor:{anchor:.14}}};
+          return json({rows:Number(url.searchParams.get('cutoff'))>=cutoff?[row]:[],next:null,coverage:{complete:false}});
+        }
         if(url.pathname==='/api/one-clock/bots') {
           const row={source:'bot-ledger',session,instrument:'QQQ',origin:'recorded',revision:1,evidence:'fixture',
             id:'receipt',eventAt:cutoff-1000,availableAt:cutoff,value:{side:'buy',sym:'QQQ',price:100,qty:2},
@@ -48,12 +54,15 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       await page.locator('#history-clock-load-bots').click();
       await page.locator('#history-clock-bot').selectOption('sample');
       await page.waitForFunction(()=>document.querySelectorAll('#history-clock-bot-rows tr').length===1);
+      await page.waitForFunction(()=>document.querySelector('#clock-decisions').textContent.includes('no_trade'));
+      assert.match(await page.locator('#clock-decisions').textContent(),/0\.14/);
       assert.equal(await page.evaluate(()=>window.oneClockDashboard.snapshot().cutoff),cutoff);
       assert.match(await page.locator('#history-clock-bot-inventory').textContent(),/"qty": 2/);
       await page.locator('#history-clock-time').fill('10:00:00.122');
       await page.locator('#history-clock-form button').click();
       await page.waitForFunction(()=>document.querySelector('#history-clock-bot-status').textContent.includes('0 visible'));
       assert.equal(await page.locator('#history-clock-bot-rows tr').count(),0);
+      await page.waitForFunction(()=>document.querySelector('#clock-decisions-status').textContent.startsWith('0 recorded'));
       assert.equal(requests.filter(u=>u.pathname==='/api/one-clock/chain').length,chainCalls);
       assert.equal(requests.some(u=>u.pathname==='/api/bots'),false);
       await page.locator('#clock-mode').selectOption('live');

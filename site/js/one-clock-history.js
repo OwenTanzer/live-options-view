@@ -1,6 +1,7 @@
 import { createClock,createSourceRegistry } from '../shared/one-clock.js';
 import { archivedChainSource } from '../shared/one-clock-chain-source.js';
 import { botLedgerSource,botInventory } from '../shared/one-clock-bot-source.js';
+import {botDecisionSource} from '../shared/one-clock-bot-decisions.js';
 import { squeezeSource } from '../shared/one-clock-squeeze-source.js';
 import { sessionAt,sessionInstant } from '../shared/one-clock-session.js';
 import {replaySelection} from '../shared/one-clock-replay-link.js';
@@ -11,6 +12,8 @@ const registry=createSourceRegistry(); let coverage=null;
 registry.register(archivedChainSource({onCoverage:value=>{coverage=value;}}));
 let botCoverage=null;
 registry.register(botLedgerSource({getBot:()=>el('history-clock-bot').value,onCoverage:value=>{botCoverage=value;}}));
+let decisionCoverage=null;
+registry.register(botDecisionSource({getBot:()=>el('history-clock-bot').value,onCoverage:value=>{decisionCoverage=value;}}));
 let shortlistCoverage=null;
 registry.register(squeezeSource({onCoverage:value=>{shortlistCoverage=value;}}));
 const today=sessionAt(Date.now());
@@ -20,8 +23,31 @@ function clearBot(message) {
   el('history-clock-bot-status').textContent=message;
   el('history-clock-bot-rows').replaceChildren();el('history-clock-bot-inventory').textContent='';
 }
+async function renderDecisions(selection) {
+  const status=el('clock-decisions-status'), body=el('clock-decisions');
+  body.replaceChildren();
+  if(!el('history-clock-bot').value){status.textContent='Select a bot to see recorded decisions.';return;}
+  status.textContent='Loading decision receipts…';
+  try {
+    const result=await clock.read('bot-decision');
+    if(result.discarded)return;
+    status.textContent=result.rows.length+' recorded decisions. '+(decisionCoverage?.reason || 'Coverage is limited to published receipts.');
+    body.replaceChildren();
+    for(const row of result.rows) {
+      const tr=document.createElement('tr');
+      for(const value of [new Date(row.eventAt).toISOString(),new Date(row.availableAt).toISOString(),
+        row.value.outcome,row.value.action,row.value.inputAgeMs,row.details?.anchor?.anchor]) {
+        const td=document.createElement('td');
+        td.textContent=value==null?'—':String(value);
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+  } catch(error){if(clock.snapshot().generation===selection.generation)status.textContent=error.message;}
+}
 async function renderBot() {
   const selection=clock.snapshot();
+  renderDecisions(selection);
   clearBot(el('history-clock-bot').value?'Loading retained receipt pages…':'Select a public bot.');
   if(!el('history-clock-bot').value) return;
   try {
@@ -99,7 +125,7 @@ function renderCommitted(selection) {
   if(tab==='live' || tab==='history')return renderChain(selection);
 }
 clock.subscribe(selection=>{
-  coverage=null;botCoverage=null;shortlistCoverage=null;
+  coverage=null;botCoverage=null;decisionCoverage=null;shortlistCoverage=null;
   window.dispatchEvent(new CustomEvent('one-clock-selection',{detail:selection}));
 });
 window.oneClockDashboard={
