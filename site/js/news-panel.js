@@ -748,8 +748,18 @@ function loadNewsPanel() {
   // research page that index names, from the same generation, under the same lease.
   var box = document.getElementById('news-research');
   var onIndex = box && typeof NewsResearch !== 'undefined' ? NewsResearch.follow(document, box) : null;
-  return NewsPanel.mount(document, document.getElementById('news-panel'),
-    NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,
-      function (url, opts) { return fetch(url, opts); }, Date.now),
-    NewsPanel.INDEX_KEY, { events: typeof window !== 'undefined' ? window : null, onIndex: onIndex });
+  var container = document.getElementById('news-panel');
+  var fetchJson = NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,
+    function (url, opts) { return fetch(url, opts); }, Date.now);
+  function mountLive(target) {
+    return NewsPanel.mount(document, target, fetchJson, NewsPanel.INDEX_KEY,
+      { events: typeof window !== 'undefined' ? window : null, onIndex: onIndex });
+  }
+  if (typeof window !== 'undefined' && window.oneClockDashboard) {
+    return import('./one-clock-news.js').then(function (clock) {
+      return clock.followNews({container: container, research: box, panel: NewsPanel,
+        fetchJson: fetchJson, mountLive: mountLive, dashboard: window.oneClockDashboard, events: window});
+    }).catch(function (error) { container.textContent = 'News unavailable. ' + error.message; });
+  }
+  return mountLive(container);
 }
