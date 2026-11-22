@@ -133,6 +133,8 @@ jobs:
         run: python tests/test_changed_paths.py
       - name: News bounded launcher and pilot config (MediaFlow)
         run: python -m unittest discover -s tests -p test_news_launcher.py -v
+      - name: News optional Fed/Treasury headline mapping
+        run: python -m unittest discover -s tests -p test_news_theme_mapping.py -v
       - name: News history checkpoint and bounded run listing (MediaFlow)
         run: python -m unittest discover -s tests -p test_news_checkpoint.py -v
       - name: News panel dedicated origin and generation contract (MediaFlow)
