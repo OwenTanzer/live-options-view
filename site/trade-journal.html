@@ -71,7 +71,7 @@ svg{display:block;width:100%}
   <label class="note">Date (America/New_York) <input type="date" id="day"></label>
   <label class="note">View <select id="journal-view"><option value="retrospective">Full retrospective</option><option value="recorded">Recorded as of</option></select></label>
   <label class="note">As-of date ET <input type="date" id="journal-asof-date"></label>
-  <label class="note">Cutoff ET <input type="time" id="journal-cutoff" value="10:00" step="1"></label>
+  <label class="note">Cutoff ET <input type="time" id="journal-cutoff" value="10:00" step="0.001"></label>
   <button id="load">Load</button>
   <button id="sync">Sync from Notion</button>
   <button id="lock">Sign out</button>
@@ -105,6 +105,7 @@ svg{display:block;width:100%}
 <script src="js/trade-journal-loads.js?v=06f9691b764c09a6"></script>
 <script type="module">
 import { createClock,createSourceRegistry } from './shared/one-clock.js';
+import { replaySelection } from './shared/one-clock-replay-link.js';
 import { journalSource } from './shared/one-clock-journal-source.js';
 import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
 (() => {
@@ -140,6 +141,23 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   $('day').value = dayInNY.format(new Date());
   $('journal-asof-date').value=$('day').value;
   $('day').addEventListener('change',()=>{$('journal-asof-date').value=$('day').value;});
+  let linkedSelection, linkedTime;
+  try {
+    linkedSelection = replaySelection(location.search);
+    if (linkedSelection) {
+      const {session, cutoff} = linkedSelection;
+      $('day').value = $('journal-asof-date').value = session;
+      $('journal-view').value = 'recorded';
+      const format = new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hourCycle: 'h23',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3});
+      $('journal-cutoff').value = format.format(cutoff);
+      linkedTime = $('journal-cutoff').value;
+    }
+  } catch (error) {
+    $('access').hidden = false;
+    $('authstatus').textContent = error.message;
+    return;
+  }
   const fillsOnDay = p => p.executions.filter(e => dayInNY.format(T(e.ts)) === shownDate());
   const ctxOf = p => loads.context(shownDate(), p.position_id) || { loading: true };
 
@@ -163,7 +181,11 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
       if($('journal-view').value==='recorded') {
         const parts=$('journal-cutoff').value.split(':').map(Number);
         if(parts.length<2)throw new Error('Choose a cutoff time');
-        cutoff=sessionInstant($('journal-asof-date').value,parts[0],parts[1],parts[2]??0);
+        const day = $('journal-asof-date').value, seconds = parts[2] ?? 0;
+        // Preserve the exact instant even in the repeated hour at the DST boundary.
+        cutoff = linkedSelection?.session === day && $('journal-cutoff').value === linkedTime
+          ? linkedSelection.cutoff
+          : sessionInstant(day,parts[0],parts[1],Math.floor(seconds),Math.round((seconds % 1)*1000));
       }
       // Every load invalidates the preceding source generation, including a
       // switch back to the explicit full retrospective.

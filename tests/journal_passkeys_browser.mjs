@@ -28,7 +28,7 @@ try {
       assert.equal(url.origin,origin);
       if (!url.pathname.startsWith('/api/')) {
         if (!['/trade-journal.html','/js/trade-journal-loads.js','/js/journal-passkeys.js',
-          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js'].includes(url.pathname)) return route.abort();
+          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js','/shared/one-clock-replay-link.js'].includes(url.pathname)) return route.abort();
         return route.fulfill({path:'site'+url.pathname});
       }
       const headers=await r.allHeaders();
@@ -39,11 +39,21 @@ try {
       if(resp.headers.get('Set-Cookie')?.startsWith('__Host-journal=')) carriedCookie=resp.headers.get('Set-Cookie').split(';')[0];
       return route.fulfill({status:resp.status,headers:Object.fromEntries(resp.headers),body:await resp.text()});
     });
-    await page.goto(origin+'/trade-journal.html');
+    const cutoff = Date.parse('2026-11-09T14:30:01.523Z');
+    const query = new URLSearchParams({one_clock_session:'2026-11-09',one_clock_instrument:'QQQ',one_clock_at:String(cutoff)});
+    await page.goto(origin+'/trade-journal.html?'+query);
     await page.locator('#access summary').click();
     await page.locator('#invitation').fill(invite);
+    const acceptedRead = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/trade-journal' && url.searchParams.get('cutoff') === String(cutoff) && response.ok();
+    });
     await page.click('#enroll');
+    await acceptedRead;
     await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
+    assert.equal(await page.locator('#journal-view').inputValue(),'recorded');
+    assert.equal(await page.locator('#day').inputValue(),'2026-11-09');
+    assert.equal(await page.locator('#journal-cutoff').inputValue(),'09:30:01.523');
     const repeat=await worker.fetch(new Request(origin+'/api/trade-journal/passkey',{method:'POST',headers:{Origin:origin},body:JSON.stringify({action:'options',invite})}),{DB:db});
     assert.equal(repeat.status,401);
     await page.click('#lock');
