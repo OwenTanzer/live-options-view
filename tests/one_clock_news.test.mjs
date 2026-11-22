@@ -52,3 +52,10 @@ test('a receipt between two milliseconds first becomes visible at the later curs
     assert.equal(rows.some(r=>r.value.title.includes('Tanker')),visible);
   }
 });
+
+test('unknown and prepared sources cannot be counted as recorded news',async()=>{
+  for(const label of ['PREPARED research records (positioning / institutional pressure): not live collection','unknown archive']){
+    await assert.rejects(archiveNews({...base,origin:'recorded',cutoff:Date.parse(base.session+'T11:15:00Z')},
+      async key=>key===panel.INDEX_KEY?fixtures.index:{...fixtures.byKey(key),data_label:label},panel,()=>true),/archive provenance/);
+  }
+});

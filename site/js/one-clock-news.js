@@ -12,11 +12,17 @@ function availableMillisecond(iso) {
   return floor + (/[1-9]/.test(remainder) ? 1 : 0);
 }
 
+function archiveOrigin(label) {
+  if (label === 'PILOT news: prices unavailable (no price input connected)') return 'recorded';
+  if (label === 'SYNTHETIC fixture data (not real news or market data)') return 'synthetic';
+  throw Error('Unrecognized news archive provenance.');
+}
+
 export function headlinesAt(pages, selection) {
   const rows = [];
   for (const page of pages) {
     if (page.mode !== 'archive' || page.stream !== 'all') throw Error('Expected an all-stream archive view.');
-    const origin = /synthetic/i.test(page.data_label) ? 'synthetic' : 'recorded';
+    const origin = archiveOrigin(page.data_label);
     for (const item of page.rows) {
       if (!item.archived_at || !item.observed_at) continue;
       const archived = Date.parse(item.archived_at);
@@ -62,7 +68,7 @@ export async function archiveNews(selection, fetchJson, panel, leaseValid) {
           !Number.isFinite(Date.parse(page.as_of))) throw Error('Invalid news archive page.');
       rowCount += page.rows.length;
       pages.push(page);
-      if ((/synthetic/i.test(page.data_label) ? 'synthetic' : 'recorded') !== selection.origin) partial = true;
+      if ((archiveOrigin(page.data_label)) !== selection.origin) partial = true;
       partial ||= !page.complete || !page.coverage.coverage_complete || Date.parse(page.as_of) < Math.min(selection.cutoff, Date.parse(date+'T23:59:59.999Z'));
     }
     if (rowCount + view.rows_omitted !== view.rows_total) throw Error('News archive row count mismatch.');
