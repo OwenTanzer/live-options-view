@@ -948,7 +948,7 @@
     #news-panel .np-src { min-width: 0; }
   }
   /* MediaFlow P1 research view (js/news-research.js styles its own content): shown with the News tab. */
-  #news-panel.hidden + #news-research { display: none; }
+  #news-panel.hidden + #news-research, #news-panel + #news-research[hidden], #news-panel > div[hidden] { display: none; }
   /* ── end news panel ── */
 
   /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
@@ -2017,7 +2017,7 @@ let timerHandle = null;
 // open. The banner stays here as the section's marker.
 </script>
 <script src="js/news-research.js?v=aac117405484746a"></script>
-<script src="js/news-panel.js?v=43bfab3a65126607"></script>
+<script src="js/news-panel.js?v=c63fdda00f5c36c4"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────
