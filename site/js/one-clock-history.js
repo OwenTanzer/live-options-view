@@ -66,16 +66,16 @@ async function renderShortlist(selection) {
 }
 let tab='live';
 let replay=false;
-const replayTabs=new Set(['live','bots','history']);
+const replayTabs=new Set(['live','bots','history','squeeze']);
 function updateView() {
   const visible=replay && replayTabs.has(tab);
   el('clock-navigation').hidden=!replayTabs.has(tab);
   el('history-clock').hidden=!visible;
-  el('clock-chain-view').hidden=tab==='bots';
+  el('clock-chain-view').hidden=!['live','history'].includes(tab);
   el('clock-journal-nav').hidden=true;
-  el('clock-floor-view').hidden=tab==='live';
-  el('clock-shortlist-view').hidden=tab!=='history';
-  for(const name of ['live','bots']) {
+  el('clock-floor-view').hidden=!['bots','history'].includes(tab);
+  el('clock-shortlist-view').hidden=!['history','squeeze'].includes(tab);
+  for(const name of ['live','bots','squeeze']) {
     el(name+'-panel').classList.toggle('hidden',tab!==name || visible);
   }
   el('history-daily').hidden=replay;
@@ -93,6 +93,7 @@ function renderCommitted(selection) {
     el('clock-journal-nav').hidden=false;
   }else el('clock-journal-nav').hidden=true;
   el('clock-scope').textContent=selection.instrument+' · '+new Date(selection.cutoff).toISOString();
+  if(tab==='squeeze')return renderShortlist(selection);
   if(tab==='bots')return renderBot();
   if(tab==='history'){renderBot();renderShortlist(selection);}
   if(tab==='live' || tab==='history')return renderChain(selection);
@@ -163,9 +164,13 @@ function changeMode(next) {
   if(typeof closeTicket==='function')closeTicket();
   updateView();
   setBotsPolling(tab==='bots' && !replay);
-  if(replay)renderSelection();
+  if(replay){
+    cancelLiveSqueezeRead();
+    renderSelection();
+  }
   else {
     window.oneClockDashboard.liveTime();
+    fetchSqueezeLatest();
     el('clock-scope').textContent='';
   }
 }
@@ -175,7 +180,7 @@ window.addEventListener('pagehide',event=>{if(!event.persisted)clock.dispose();}
 try {
   const linked=replaySelection(location.search);
   if(linked) {
-    showTab('history');replay=true;updateView();
+    showTab('history');replay=true;cancelLiveSqueezeRead();updateView();
     el('history-clock-date').value=linked.session;el('history-clock-instrument').value=linked.instrument;
     const local=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(linked.cutoff);
     el('history-clock-time').value=local+'.'+String(linked.cutoff%1000).padStart(3,'0');

@@ -37,6 +37,12 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       assert.equal(await page.locator('#live-panel').isVisible(),false);
       await page.waitForFunction(()=>document.querySelector('#history-clock-status').textContent.includes('No qualified snapshot'));
       const chainCalls = requests.filter(u=>u.pathname==='/api/one-clock/chain').length;
+      await page.locator('#tab-squeeze').click();
+      assert.equal(await page.locator('#clock-shortlist-view').isVisible(),true);
+      assert.equal(await page.locator('#squeeze-panel').isVisible(),false);
+      const polls=requests.filter(u=>u.pathname.includes('/squeeze-scanner/')).length;
+      await page.evaluate(()=>fetchSqueezeLatest());
+      assert.equal(requests.filter(u=>u.pathname.includes('/squeeze-scanner/')).length,polls);
       await page.locator('#tab-bots').click();
       assert.equal(await page.locator('#bots-panel').isVisible(),false);
       await page.locator('#history-clock-load-bots').click();

@@ -29,7 +29,16 @@ let squeezeError = null;
 // class of its own.
 function squeezeNow() { return Date.now(); }
 
+let squeezeLiveRequest = null;
+function cancelLiveSqueezeRead() {
+  squeezeFetchVersion++;
+  squeezeLiveRequest?.abort();
+}
 async function fetchSqueezeLatest() {
+  if (typeof window !== 'undefined' && window.oneClockDashboard && !window.oneClockDashboard.isLive()) return;
+  squeezeLiveRequest?.abort();
+  const controller = new AbortController();
+  squeezeLiveRequest = controller;
   const version = ++squeezeFetchVersion;
   try {
     const base = `${BROWSER_DATA}/squeeze-scanner/v1/scheduled`;
@@ -38,7 +47,7 @@ async function fetchSqueezeLatest() {
       .map(name => `${base}/${name}?_=${cacheBust}`);
     if (!squeezeCalendar) urls.push(`/squeeze-calendar.json?_=${cacheBust}`);
     const values = await Promise.all(urls.map(async url => {
-      const response = await fetch(url, { cache: 'no-store' });
+      const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
       if (response.status === 404) return null;
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const value = await response.json();
