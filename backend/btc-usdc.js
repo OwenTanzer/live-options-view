@@ -16,13 +16,12 @@ async function read(env, method, params) {
 }
 
 const catalogs = new Map();
-function catalog(env, method, params, lifetime) {
+async function catalog(env, method, params, lifetime) {
   const key = env.BTC_USDC_DATA_ORIGIN + '|' + method;
   const cached = catalogs.get(key);
   if (cached && Date.now() < cached.until) return cached.result;
-  const result = read(env, method, params);
+  const result = await read(env, method, params);
   catalogs.set(key, {result, until:Date.now()+lifetime});
-  result.catch(() => { if (catalogs.get(key)?.result === result) catalogs.delete(key); });
   return result;
 }
 

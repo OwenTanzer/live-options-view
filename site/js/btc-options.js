@@ -112,8 +112,9 @@ const btcOptions = {
   },
   header() {
     document.getElementById('underlying-select').value = 'BTC';
-    document.getElementById('title').textContent = 'Bitcoin options';
-    document.title = 'Bitcoin futures options — moopertonic';
+    const name = this.product === 'usdc' ? 'Bitcoin options (USDC)' : 'Bitcoin futures options';
+    document.getElementById('title').textContent = name;
+    document.title = name + ' - moopertonic';
   },
   clock(q, side, now = Date.now()) {
     const receipt = Date.parse(q[side + '_received_ts']);
