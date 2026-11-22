@@ -47,17 +47,40 @@ class ThemeMapping(unittest.TestCase):
             "U.S. Treasury announces auction of bills and notes",
             "Auction of bills and notes announced by U.S. Treasury",
             "Demand for 2-year notes sold by U.S. Treasury grows",
-            "U.S. Treasury issues notes",
-            "United States Treasury sells bills",
+            "U.S. Treasury issues 10-year notes",
+            "United States Treasury sells 26-week bills",
             "US Treasury auctions bonds",
-            "Notes issued by U.S. Treasury draw demand",
+            "2-year notes issued by U.S. Treasury draw demand",
             "U.S. Treasury 13-week bills attract buyers",
             "U.S. Treasury's 2-year notes draw demand",
+            "U.S. Treasury bond yields rise",
+            "U.S. Treasury note auction draws demand",
+            "U.S. Treasury bill sales increase",
+            "U.S. Treasury bond issuance increases",
+            "U.S. Treasury issues 30-year bonds",
         ):
             with self.subTest(title=title):
                 result = self.classify(self.headline(title))
                 self.assertEqual(["treasury_financing"], result["theme_mapping"]["themes"])
                 self.assertEqual(["TLT"], result["instruments"])
+
+    def test_ambiguous_security_words_need_explicit_context(self):
+        for title in (
+            "U.S. Treasury issues notes on new sanctions guidance",
+            "U.S. Treasury issues bills for contractor overpayments",
+            "U.S. Treasury bonds with schoolchildren",
+            "U.S. Treasury issues notes",
+            "U.S. Treasury issues bills",
+            "U.S. Treasury bonds",
+            "U.S. Treasury sells bills",
+            "Notes issued by U.S. Treasury draw demand",
+            "Bills issued by U.S. Treasury for contractor overpayments",
+        ):
+            with self.subTest(title=title):
+                result = self.classify(self.headline(title))
+                self.assertEqual("unknown", result["instrument_mapping"])
+                self.assertEqual([], result["instruments"])
+                self.assertEqual([], result["theme_mapping"]["matches"])
 
     def test_nearby_unrelated_financing_stays_unknown(self):
         for title in (

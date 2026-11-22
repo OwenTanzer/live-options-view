@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .normalize import canonical_json, sha256_hex
 
-VERSION = "fed-treasury-v3"
+VERSION = "fed-treasury-v4"
 # Frozen policy: later source enablement must not silently expand this pilot.
 SOURCE_IDS = ("ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch")
 # Explicit US institutions only. Bare 'fed', 'Treasury', Powell, rates and debt
@@ -17,11 +17,12 @@ SOURCE_IDS = ("ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch
 # No proximity windows: the institution must own the instrument phrase or be
 # the issuer in an explicit financing template. Uncertain syntax stays unknown.
 _TREASURY = r"(?:U\.?S\.?|United States) Treasury"
-_SECURITY = r"(?:\d+[- ](?:week|month|year) )?(?:bills?|notes?|bonds?)"
+_TENOR_SECURITY = r"\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)"
+_SECURITY = rf"(?:{_TENOR_SECURITY}|bills?|notes?|bonds?)"
 _SECURITIES = rf"{_SECURITY}(?: and {_SECURITY})?"
 _AUCTION = rf"(?:{_SECURITIES} auctions?|auctions? of {_SECURITIES})"
-_OWNED = (rf"(?:\d+[- ](?:week|month|year) (?:bills?|notes?)|bonds?|"
-          rf"(?:bills?|notes?) (?:yields?|auctions?|issuance)|"
+_OWNED = (rf"(?:{_TENOR_SECURITY}|"
+          rf"(?:bills?|notes?|bonds?) (?:yields?|auctions?|sales?|purchases?|issuance)|"
           rf"(?:quarterly )?refunding|debt issuance|general account)")
 RULES = (
     # An institution/topic mention, not a verified policy action or sentiment.
@@ -29,11 +30,15 @@ RULES = (
      ("QQQ", "SPY", "TLT")),
     ("treasury_financing", rf"\b{_TREASURY}(?:['’]s)? {_OWNED}\b",
      ("TLT",)),
-    ("treasury_financing", rf"\b{_TREASURY} (?:sells|issues|auctions) {_SECURITIES}\b",
+    # 'issues notes/bills' can mean guidance/invoices; 'bonds' can be a verb.
+    # Issuer verbs alone do not disambiguate these words without a tenor.
+    ("treasury_financing", rf"\b{_TREASURY} (?:sells|issues) {_TENOR_SECURITY}\b",
+     ("TLT",)),
+    ("treasury_financing", rf"\b{_TREASURY} auctions {_SECURITIES}\b",
      ("TLT",)),
     ("treasury_financing", rf"\b{_TREASURY} announces (?:{_AUCTION}|(?:quarterly )?refunding)\b",
      ("TLT",)),
-    ("treasury_financing", rf"\b{_SECURITIES} (?:sold|issued|auctioned) by {_TREASURY}\b",
+    ("treasury_financing", rf"\b{_TENOR_SECURITY} (?:sold|issued|auctioned) by {_TREASURY}\b",
      ("TLT",)),
     ("treasury_financing", rf"\b{_AUCTION} announced by {_TREASURY}\b",
      ("TLT",)),
