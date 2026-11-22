@@ -47,3 +47,30 @@ export async function pruneArchive(env) {
       WHERE users.username = ? AND json_extract(trade.value, '$.provenance.archive.id') IS NOT NULL
     )`).bind(ACCOUNT, cutoff, ACCOUNT).run();
 }
+
+// The receipt is stamped when archived. It supports a retained capture view;
+// storage commit/public website availability may be later.
+export async function archiveAt(env, cutoff, id, before, beforeId) {
+  const iso = new Date(cutoff).toISOString();
+  if (id) {
+    const row = await env.DB.prepare(
+      'SELECT digest,payload FROM kalshi_evidence WHERE account_id=? AND id=? AND received_at<=?'
+    ).bind(ACCOUNT, id, iso).first();
+    if (!row) return null;
+    if (await hashSessionToken(row.payload) !== row.digest) throw Error('Archive integrity failure');
+    return {evidence:JSON.parse(row.payload)};
+  }
+  const args = [ACCOUNT, iso];
+  let boundary = '';
+  if (before) {
+    boundary = ' AND (received_at,id)<(?,?)';
+    args.push(before, beforeId);
+  }
+  const {results} = await env.DB.prepare(
+    'SELECT id,received_at,market,digest FROM kalshi_evidence WHERE account_id=? AND received_at<=?'+
+    boundary+' ORDER BY received_at DESC,id DESC LIMIT 101'
+  ).bind(...args).all();
+  const archives = results.slice(0,100);
+  const last = archives.at(-1);
+  return {archives,next:results.length>100?{before:last.received_at,before_id:last.id}:null};
+}
