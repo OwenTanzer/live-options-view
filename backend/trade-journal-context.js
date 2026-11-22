@@ -29,7 +29,7 @@ import { jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
 import { JOURNAL_TZ, authorizeJournalViewer, etDate, loadPosition } from './trade-journal.js';
 import { journalCutoff,journalScope } from './one-clock-journal.js';
-import { readArchivedChain } from './one-clock-chain.js';
+import { publicChainAt } from './one-clock-chain.js';
 
 export const CONTEXT_VERSION = 'ctx-v4';
 export const MAX_SNAPSHOTS = 40;
@@ -425,7 +425,7 @@ export async function journalContextAsOf(env,position,day,cutoff) {
   const base={position_id:position.position_id,day,cutoff,view:'recorded-as-of',cached:false,
     underlying:null,option:null,gaps:[],notes:['Only a publication-qualified snapshot at the cutoff is shown.']};
   if(!['QQQ','SPY','IBIT'].includes(instrument))return {...base,gaps:[`${instrument}: no qualified archive adapter`]};
-  const result=await readArchivedChain(env.PAPER_TRADES,{session:day,instrument,cutoff});
+  const result=await publicChainAt(env,{session:day,instrument,cutoff});
   const row=result.rows[0];if(!row)return {...base,gaps:[`${instrument}: ${result.coverage.reason}`],coverage:[],sourceCoverage:result.coverage};
   const at=new Date(row.eventAt).toISOString(),price=row.value.underlying_price;
   const occ=position.contract.occ_symbol?.replaceAll(' ','');
