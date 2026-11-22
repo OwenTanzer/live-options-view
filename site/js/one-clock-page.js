@@ -75,13 +75,21 @@ function inputControl(label, name, value, type = 'text') {
 function removeButton(row) { const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Remove'; button.onclick = () => row.remove(); return button; }
 const sources = registry.list().map(id => [id, registry.get(id).label]);
 const formFields=new Map(studySources.map(source=>[source.id,source.fields]));
+function setChoices(control, choices, selected) {
+  const options = choices.map(([id, label]) => option(id, label));
+  // Saved rules can use an account field before the account request returns.
+  if (selected && !choices.some(([id]) => id === selected)) options.push(option(selected));
+  control.replaceChildren(...options);
+  if (selected) control.value = selected;
+}
 function sourceFields(source, field) {
-  const sourceControl = selectControl('Input', 'source', sources, source);
-  const fieldControl = selectControl('Field', 'field', Object.entries(formFields.get(source)??{}), field);
-  sourceControl.querySelector('select').onchange = event => {
-    const fields = Object.entries(formFields.get(event.target.value)??{});
-    fieldControl.querySelector('select').replaceChildren(...fields.map(([id,label]) => option(id,label)));
-  };
+  const sourceControl = selectControl('Input', 'source', [], source);
+  const fieldControl = selectControl('Field', 'field', [], field);
+  const sourceSelect = sourceControl.querySelector('select');
+  const fieldSelect = fieldControl.querySelector('select');
+  setChoices(sourceSelect, sources, source);
+  setChoices(fieldSelect, Object.entries(formFields.get(source) ?? {}), field);
+  sourceSelect.onchange = () => setChoices(fieldSelect, Object.entries(formFields.get(sourceSelect.value) ?? {}));
   return [sourceControl,fieldControl];
 }
 function condition(c = { source: archiveMode?'orderFlow':'skew', field: archiveMode?'k744.flow':'imbalance', op: '>=', value: archiveMode?0:0.3, maxAgeMs: 150000 }) {
@@ -128,7 +136,10 @@ function versionOptions() {
 function openRule(rule) {
   editing = rule;
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
-  $('rule-name').value = rule.name; $('instrument').value = rule.instruments[0];
+  $('rule-name').value = rule.name;
+  const instrument = rule.instruments[0];
+  if (![...$('instrument').options].some(o => o.value === instrument)) $('instrument').append(option(instrument));
+  $('instrument').value = instrument;
   $('combine').value = rule.combine; $('transition').value = rule.transition; $('missing').value = rule.missingInput;
   $('conditions').replaceChildren(); rule.conditions.forEach(condition);
   $('outcomes').replaceChildren(); rule.outcomes.forEach(outcome);
@@ -196,17 +207,33 @@ async function accountRequest(body) {
     ...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
   const result=await response.json();if(!response.ok)throw new Error(result.error??`Observer request failed (${response.status})`);return result;
 }
-async function loadAccount() {
-  accountState=await accountRequest();
-  if (!archiveMode) {
-    for (const [source,fields] of Object.entries(accountState.sources)) {
-      formFields.set(source,fields);
-      if(!sources.some(([id])=>id===source))sources.push([source,source]);
-    }
+let accountRequestInFlight = null;
+function loadAccount() {
+  if (!accountRequestInFlight) {
+    accountRequestInFlight = accountRequest().then(updateAccountControls).finally(() => {accountRequestInFlight = null;});
   }
-  for(const id of archiveMode ? ['observed-instrument'] : ['instrument','observed-instrument']) {
-    const selected=$(id).value;$(id).replaceChildren(...(id==='observed-instrument'?[option('ALL','All instruments')]:[]),...accountState.instruments.map(value=>option(value)));
-    if(accountState.instruments.includes(selected))$(id).value=selected;
+  return accountRequestInFlight;
+}
+function refreshSourceChoices() {
+  for(const [source,fields] of Object.entries(accountState.sources)) {
+    formFields.set(source,fields);if(!sources.some(([id])=>id===source))sources.push([source,source]);
+  }
+  // Update only the choices. A slow account response must preserve unsaved
+  // values, comparison operators, horizons and rows added since page load.
+  for (const row of document.querySelectorAll('#conditions .condition, #outcomes .outcome')) {
+    const source = row.querySelector('[data-field="source"]');
+    const field = row.querySelector('[data-field="field"]');
+    setChoices(source, sources, source.value);
+    setChoices(field, Object.entries(formFields.get(source.value) ?? {}), field.value);
+  }
+}
+function updateAccountControls(state) {
+  accountState = state;
+  if (!archiveMode) refreshSourceChoices();
+  for (const id of archiveMode ? ['observed-instrument'] : ['instrument','observed-instrument']) {
+    const choices = accountState.instruments.map(value => [value,value]);
+    if (id === 'observed-instrument') choices.unshift(['ALL','All instruments']);
+    setChoices($(id), choices, $(id).value);
   }
   if(!$('observed-day').value)$('observed-day').value=accountState.defaultSession;
   if(!$('observed-end').value)$('observed-end').value=accountState.defaultSession;
@@ -305,3 +332,7 @@ $('play').onclick = () => {
 };
 window.addEventListener('pagehide',()=>{ clearInterval(timer); clock.dispose(); });
 versionOptions(); openRule(currentRule); if(storageError) status(storageError,true);
+
+// Logged-out and offline visitors keep the local engineering fixture. Explicit
+// account actions retry and present the server's authentication or availability message.
+if (!archiveMode) loadAccount().catch(() => {});
