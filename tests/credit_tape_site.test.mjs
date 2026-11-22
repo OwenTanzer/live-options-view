@@ -106,3 +106,36 @@ test('TREU table and validated original CSV reference reach the fixed credit ori
   await creditTape(new Request(base + '?view=treu&unexpected=1'));
   assert.equal(forwarded, '');
 });
+
+test('credit replay forwards only a frozen cutoff and bounded archive cursors', async t => {
+  const path = '/credit-tape/replay', cutoff = '?one_clock_at=1795440000000';
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push(url);
+    assert.equal(options.headers.get('Cookie'), '__Host-cds-session=fixture');
+    return new Response('Sign in required', {status:401});
+  });
+  const request = query => creditTape(new Request('https://options.moopertonic.net' + path + query,
+    {headers:{Cookie:'__Host-cds-session=fixture; other=private'}}));
+  for (const query of [cutoff, cutoff+'&end=234&seq=0']) {
+    const response = await request(query);
+    assert.equal(response.status,401);
+    assert.equal(response.headers.get('Cache-Control'),'private, no-store');
+    assert.equal(calls.at(-1),'https://prolific-essence-production.up.railway.app'+path+query);
+  }
+  for (const query of ['', '?one_clock_at=invalid', cutoff+'&end=2', cutoff+'&from=yesterday']) {
+    assert.equal((await request(query)).status,400);
+  }
+  assert.equal(calls.length,2);
+});
+
+test('sign-in preserves a validated fixed credit cutoff and its archive page', async t => {
+  const base='https://options.moopertonic.net/credit-tape/', query='?one_clock_at=1795440000000&end=123&seq=0';
+  t.mock.method(globalThis,'fetch', async url => new Response(null, {status:302,
+    headers:{Location:url.includes('/auth/callback')?'/credit-tape/':'https://github.com/login/oauth/authorize'}}));
+  const login=await creditTape(new Request(base+'auth/login'+query));
+  const hint=login.headers.get('set-cookie').split(';')[0];
+  const callback=cookie=>creditTape(new Request(base+'auth/callback?code=test&state=test',{headers:{Cookie:cookie}}));
+  assert.equal((await callback(hint)).headers.get('Location'),'/credit-tape/replay'+query);
+  assert.equal((await callback('__Host-btc-return=credit.1795440000000.123.evil')).headers.get('Location'),'/credit-tape/');
+});
