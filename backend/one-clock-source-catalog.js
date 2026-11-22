@@ -81,9 +81,14 @@ export async function advanceSourceCatalog(db,bucket,descriptor,{now=Date.now()}
     id,row.key,row.group,row.kind,row.uploaded,row.size,row.etag));
   for(const [group,records] of byGroup) {
     if(records.size>3 || new Set([...records.values()].map(r=>r.kind)).size!==records.size)throw new Error('ambiguous publication group');
-    statements.push(bind(db,'DELETE FROM one_clock_catalog_gaps WHERE source=? AND record_group=?',id,group));
+    const desiredBuckets=JSON.stringify(attemptGaps([...records.values()]));
+    statements.push(bind(db,`DELETE FROM one_clock_catalog_gaps WHERE source=? AND record_group=?
+      AND bucket NOT IN (SELECT value FROM json_each(?))`,id,group,desiredBuckets));
     statements.push(bind(db,`INSERT INTO one_clock_catalog_gaps(source,bucket,record_group)
-      SELECT ?,value,? FROM json_each(?)`,id,group,JSON.stringify(attemptGaps([...records.values()]))));
+      SELECT ?,value,? FROM json_each(?) AS desired
+      WHERE NOT EXISTS (SELECT 1 FROM one_clock_catalog_gaps AS existing
+        WHERE existing.source=? AND existing.bucket=desired.value AND existing.record_group=?)`,
+      id,group,desiredBuckets,id,group));
   }
   await db.batch(statements);
   return {source:id,generation,indexed:entries.length,cycleComplete:!page.truncated,completeThrough:complete};

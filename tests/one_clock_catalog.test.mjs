@@ -39,6 +39,34 @@ test('resumable catalog exceeds lifetime 2000 keys while per-day query stays bou
   const next=await advanceSourceCatalog(db,r2,squeezeCatalog,{now:now+1000});assert.equal(next.cycleComplete,false);
   assert.equal(db.raw('SELECT count(*) n FROM one_clock_catalog_entries')[0].n,2004);
 });
+test('catalog rescans write only added and removed gap buckets',async t=>{
+  const db=await setup(t),objects=[object(1)],r2=bucket(objects);
+  await db.exec(`CREATE TABLE gap_changes(op TEXT, bucket TEXT);
+    CREATE TRIGGER gap_added AFTER INSERT ON one_clock_catalog_gaps BEGIN
+      INSERT INTO gap_changes VALUES ('add',NEW.bucket); END;
+    CREATE TRIGGER gap_removed AFTER DELETE ON one_clock_catalog_gaps BEGIN
+      INSERT INTO gap_changes VALUES ('remove',OLD.bucket); END;`);
+  const members=()=>db.raw('SELECT bucket FROM one_clock_catalog_gaps').map(row=>row.bucket);
+  async function checkChanges(at) {
+    const before=new Set(members());
+    await db.exec('DELETE FROM gap_changes');
+    await advanceSourceCatalog(db,r2,squeezeCatalog,{now:at});
+    const after=new Set(members());
+    const expected=[...[...before].filter(b=>!after.has(b)).map(b=>'remove '+b),
+      ...[...after].filter(b=>!before.has(b)).map(b=>'add '+b)];
+    const actual=db.raw('SELECT op,bucket FROM gap_changes').map(row=>row.op+' '+row.bucket);
+    assert.deepEqual(actual.sort(),expected.sort());
+    return actual.length;
+  }
+  assert.ok(await checkChanges(now)>0);
+  assert.equal(await checkChanges(now+1),0);
+  objects.push(object(1,'finished',T+1000));
+  assert.ok(await checkChanges(now+2)>0);
+  assert.equal(await checkChanges(now+3),0);
+  objects[1]=object(1,'finished',T);
+  assert.ok(await checkChanges(now+4)>0);
+  assert.deepEqual(members(),[]);
+});
 test('old missing-start and reverse-order attempts retain direct-reader gaps',async t=>{
   for(const objects of [[object(1,'finished',old)], [object(1,'finished',old),object(1,'started',old+1)]]) {
     const db=await setup(t),r2=bucket(objects);await advanceSourceCatalog(db,r2,squeezeCatalog,{now});
