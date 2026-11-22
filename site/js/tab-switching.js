@@ -40,5 +40,6 @@ function showTab(tab) {
   }
   // The bot roster is only polled while its tab is on screen -- no point
   // holding an extra request cycle open behind a hidden panel.
-  setBotsPolling(tab === 'bots');
+  const replay = typeof window !== 'undefined' && window.oneClockDashboard?.showTab(tab);
+  setBotsPolling(tab === 'bots' && !replay);
 }
