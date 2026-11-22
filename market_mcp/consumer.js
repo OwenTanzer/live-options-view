@@ -287,6 +287,23 @@ class Consumer {
     // An absent publication is a typed answer, not a failed call: same
     // vocabulary as discover_sources, and not flagged isError, which clients
     // can relabel as a generic argument error.
+    const cutoff = name === 'result_detail' ? this.references.get(a.reference)?.value.cursor : a.as_of_ms;
+    if(out.errors.some(e=>e.code==='unavailable_at_cursor')) {
+      // Keep only the scoped request and eligible revision receipts. A later
+      // detail artifact cannot leave a half-assembled retrospective payload.
+      const unavailable=this.envelope(out.dataset,a,q);
+      unavailable.status='unavailable'; unavailable.availability='unproven_at_cursor';
+      unavailable.errors=out.errors; out=unavailable;
+    }
+    if(Number.isSafeInteger(cutoff) && ['active_rankings','return_rankings','result_detail'].includes(name) && out.status!=='failed') {
+      const proofs=out.sources.map(s=>s.available_by_ms).filter(Number.isSafeInteger);
+      out.as_of={cutoff_ms:cutoff,available_by_ms:proofs.length && !['missing','unavailable'].includes(out.status)
+        ? Math.max(...proofs) : null,scope:'retained revisions read for this result'};
+      if(name==='active_rankings' && out.producer_times.publication) {
+        out.producer_times.reported_publication=out.producer_times.publication;
+        out.producer_times.publication=null;
+      }
+    }
     if (out.status === 'missing') out.availability = 'missing_publication';
     if (name === 'result_detail') out.sources = out.sources.map(e => ({...e, retained:e.retained === true}));
     if (Buffer.byteLength(JSON.stringify(out)) > LIMITS.output_bytes) {
@@ -519,13 +536,22 @@ class Consumer {
     out.status = attempt.status === 'failed' ? 'failed' : attempt.status === 'partial' || !matches || out.errors.length ? 'partial' : results.length ? 'available' : 'empty';
     return out;
   }
+  scannerCutoff(a,q) {
+    if (a.as_of_ms === undefined) return;
+    check(Number.isSafeInteger(a.as_of_ms) && a.as_of_ms >= 1e12 && a.as_of_ms <= this.now(),
+      'as_of_ms must be a past or present UTC epoch millisecond cutoff.', 'invalid_filter');
+    q.atCutoff(a.as_of_ms);
+  }
   async returns(a,q,out) {
-    args(a,['session','underlying','type','view','limit','offset'],['session']); const {limit,offset}=page(a);
+    args(a,['session','underlying','type','view','limit','offset','as_of_ms'],['session']);
+    this.scannerCutoff(a,q); const {limit,offset}=page(a);
     check(dates(a.session),'Select a real YYYY-MM-DD session (2020..2100).','invalid_filter');
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'view must be all, clean, or qualified_ask_bid_v1.','invalid_filter');
     const prefix=`oa203/scanner/${a.session}/`; const p=await q.json(prefix+'summary.json'); returnSummary(p,a.session);
+    if(a.as_of_ms !== undefined) check(p.final && Number.isFinite(Date.parse(p.finalized_at)) &&
+      Date.parse(p.finalized_at)<=a.as_of_ms, 'Finalized ranking unavailable at this cutoff.', 'unavailable_at_cursor');
     out.actual={session:a.session,final:p.final,return_policy:p.return_policy,qualified_policy:p.qualified_policy??null};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,finalized_at:p.finalized_at ?? null};
     out.session_window={open_ms:p.session_open_ms??null,close_ms:p.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
@@ -569,11 +595,15 @@ class Consumer {
     const filtered=rows.filter(r=>r[field]!==null && (!a.underlying||r.underlying===a.underlying) && (!a.type||r.option_type===a.type));
     filtered.sort((x,y)=>Number(x[field])-Number(y[field])); // producer rank, never re-score
     const paged=slice(filtered,limit,offset); out.pagination=paged.pagination;
-    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
+    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',cursor:a.as_of_ms,p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
     out.status=p.assessment.status==='partial'||!p.final?'partial':filtered.length?'available':'empty';return out;
   }
   async active(a,q,out) {
-    args(a,['session','sweep','underlying','type','view','limit','offset']);
+    args(a,['session','sweep','underlying','type','view','limit','offset','as_of_ms']);
+    this.scannerCutoff(a,q);
+    if(a.as_of_ms !== undefined) check(dates(a.session) && Number.isInteger(a.sweep),
+      'A cursor lookup requires an explicit session and retained sweep.', 'invalid_filter');
+    const clockAt = a.as_of_ms ?? this.now();
     const {limit,offset}=page(a);
     const session=a.session??'current';
     check(session==='current'||dates(session),'session must be current or one valid date.','invalid_filter');
@@ -581,7 +611,7 @@ class Consumer {
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'Invalid active view.','invalid_filter');
-    const selected=session==='current'?exchangeDate(this.now()):session;
+    const selected=session==='current'?exchangeDate(clockAt):session;
     out.actual={session:selected,selector:session,sweep:a.sweep??null,final:false};
     const calendarPoint=Date.parse(selected+'T12:00:00Z');
     const calendarValid=Date.parse(this.calendar?.valid_from)<=calendarPoint &&
@@ -601,7 +631,7 @@ class Consumer {
           return result;
         }
       } else if(final.error.code!=='missing_artifact') out.errors.push(final.error);
-      if(open!==null&&this.now()<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
+      if(open!==null&&clockAt<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
     }
     let pointer=null, sweep=a.sweep;
     if(sweep===undefined) {
@@ -621,17 +651,19 @@ class Consumer {
       activeRevision(selected,sweep,pointer);
       if(out.attempt?.sweep>sweep||out.attempt?.sweep===sweep&&out.attempt.status==='failed')
         out.warnings.push(`Newer or matching snapshot attempt ${out.attempt.sweep} is ${out.attempt.status}: ${out.attempt.reason??'reason unavailable'}.`);
-      if(out.attempt?.status==='building'&&this.now()-Date.parse(out.attempt.at)>300000)
+      if(out.attempt?.status==='building'&&clockAt-Date.parse(out.attempt.at)>300000)
         out.warnings.push(`Snapshot attempt ${out.attempt.sweep} has exceeded the 240-second build budget; completion is unconfirmed.`);
     }
     if(!pointer){
       const found=await q.optionalJson(activePrefix(selected,sweep).slice(0,-1)+'.json');
-      if(found.error){out.errors.push(found.error);out.status=found.error.code==='missing_artifact'?'missing':'failed';return out;}
+      if(found.error){throw new DataError(found.error.code,found.error.message,found.error.locator);}
       pointer=found.value;
     }
     const prefix=activeRevision(selected,sweep,pointer);
     const p=await q.json(prefix+'summary.json');activeSummary(p,selected,sweep);
     const summaryEvidence=q.evidence.at(-1);
+    if(a.as_of_ms !== undefined) check(p.cutoff_ms<=a.as_of_ms,
+      'Pinned sweep was acquired after this cutoff.', 'unavailable_at_cursor');
     if(pointer) check(pointer.members['summary.json']===summaryEvidence.retrieved_sha256&&pointer.cutoff_ms===p.cutoff_ms,
       'Active pointer and summary disagree.','source_changed');
     const board=a.view==='qualified_ask_bid_v1'?'qualified_ask_bid_v1.csv':'leaderboard.csv';
@@ -670,10 +702,10 @@ class Consumer {
          !qualified&&(!Number.isFinite(quoteAge)||quoteAge<0))
         return {status:'unknown',observed_at:null,age_seconds:null,stale_after_seconds:600,basis,
           sample_at:Number.isSafeInteger(endpoint)?new Date(endpoint).toISOString():null};
-      return {...age(new Date(quote).toISOString(),this.now(),600),basis,sample_at:new Date(endpoint).toISOString()};
+      return {...age(new Date(quote).toISOString(),clockAt,600),basis,sample_at:new Date(endpoint).toISOString()};
     };
     out.rows=paged.rows.map(row=>({...row,ranked_evidence_freshness:evidenceAge(row),
-      detail_reference:this.reference({dataset:'options_active',p,row,prefix,board,
+      detail_reference:this.reference({dataset:'options_active',cursor:a.as_of_ms,p,row,prefix,board,
       actual:out.actual,evidence:[...q.evidence],digests:{summary:summaryEvidence.retrieved_sha256,board:boardEvidence.retrieved_sha256,
         manifest:p.member_sha256['manifest.jsonl']}})}));
     out.summary=p;out.coverage=p.assessment;
@@ -686,7 +718,7 @@ class Consumer {
     // A pinned sweep's own age says nothing about whether a newer snapshot
     // exists; overdue is judged only from the current latest pointer.
     let head=a.sweep===undefined?pointer:null;
-    if(a.sweep!==undefined){
+    if(a.sweep!==undefined && a.as_of_ms===undefined){
       const latest=await q.optionalJson(`oa203/scanner/${selected}/inprogress/latest.json`);
       if(!latest.error&&object(latest.value)&&Number.isInteger(latest.value.sweep)&&Number.isFinite(Date.parse(latest.value.published_at)))head=latest.value;
       else if(latest.error&&latest.error.code!=='missing_artifact')out.errors.push(latest.error);
@@ -694,8 +726,8 @@ class Consumer {
         {available:null,sweep:null,published_at:null,reason:'latest snapshot pointer unavailable'};
       if(head&&head.sweep>sweep)out.warnings.push(`Pinned sweep ${sweep} is not the newest snapshot; sweep ${head.sweep} was published at ${head.published_at}.`);
     }
-    const sincePublication=head?.published_at?(this.now()-Date.parse(head.published_at))/1000:null;
-    const overdue=this.now()<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
+    const sincePublication=head?.published_at?(clockAt-Date.parse(head.published_at))/1000:null;
+    const overdue=clockAt<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
     out.cadence={expected_seconds:expectedCadence,observed_seconds:observed,previous_publication:pointer?.previous_published_at??null,
       late_after_seconds:lateAfter,seconds_since_publication:Number.isFinite(sincePublication)?Math.round(sincePublication):null,
       since_publication_of:head?{sweep:head.sweep,basis:'latest snapshot pointer'}:null,
@@ -709,7 +741,7 @@ class Consumer {
     out.session_window={open_ms:p.session_open_ms,close_ms:p.session_close_ms,meaning:'exchange boundaries; not acquisition timestamps'};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:new Date(p.cutoff_ms).toISOString(),
       publication:pointer?.published_at??null,built_at:pointer?.built_at??p.built_at??null};
-    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),this.now(),3600);
+    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),clockAt,3600);
     const rowAges=out.rows.map(row=>row.ranked_evidence_freshness);
     const knownAges=rowAges.map(x=>x.age_seconds).filter(Number.isFinite);
     out.freshness={...cutoffAge,
@@ -719,7 +751,7 @@ class Consumer {
       ranked_evidence:{basis:'actual quote timestamp at the ranked endpoint',stale_after_seconds:600,
         oldest_age_seconds:knownAges.length?Math.max(...knownAges):null,
         stale_rows:rowAges.filter(x=>x.status==='stale').length,unknown_rows:rowAges.filter(x=>x.status==='unknown').length}};
-    out.active_state=this.now()>=p.session_close_ms?'closed_pending_final':'in_progress';
+    out.active_state=clockAt>=p.session_close_ms?'closed_pending_final':'in_progress';
     out.status=out.active_state==='closed_pending_final'?'closed_pending_final':filtered.length?'in_progress':'empty';
     if(p.assessment.truncated_sweeps||Object.keys(p.assessment.chain_status_counts??{}).some(s=>s!=='ok')) out.status='partial';
     if(rowAges.some(x=>x.status==='stale'||x.status==='unknown')&&out.status==='in_progress')out.status='partial';
@@ -826,7 +858,9 @@ class Consumer {
     args(a,['reference','offset','limit'],['reference']); const {limit,offset}=page(a);
     check(typeof a.reference==='string' && new RegExp('^'+UUID+'$').test(a.reference),'Invalid detail reference.','invalid_reference');
     const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired, was evicted by the count/byte limit, or is not from this server; repeat the originating query.','invalid_reference');
-    const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
+    const v=entry.value;
+    if(v.cursor!==undefined) q.atCutoff(v.cursor);
+    Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
     if(v.dataset==='qqq_snapshot'||v.dataset==='spy_snapshot') {
       out.requested_underlying=v.underlying;
       out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=this.readings(v.p.underlying_market);
