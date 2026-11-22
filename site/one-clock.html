@@ -10,8 +10,9 @@
 <main>
   <div class="intro"><div><p class="eyebrow">ONE CLOCK</p><h1>Define a moment.<br>Follow what happens.</h1></div>
   <p class="lede">Register a market event, inspect each occurrence, and measure its outcome on the same clock.</p></div>
+  <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option></select></label>
   <aside class="notice"><strong>Offline engineering session · SYN-1</strong><span>Hand-authored synthetic data. Fixture results are not market evidence. Account observation has its own recorded evidence and coverage.</span></aside>
-  <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Fixture Results</button><button id="show-observed" aria-pressed="false">Observed Results</button></nav>
+  <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Replay Results</button><button id="show-observed" aria-pressed="false">Observed Results</button></nav>
   <section id="builder" aria-labelledby="builder-title">
     <div class="section-head"><h2 id="builder-title">Event Builder</h2><button id="new-rule">New event class</button></div>
     <div class="toolbar"><label>Saved definition<select id="versions"></select></label><button id="reopen">Reopen</button><button id="export-rule">Export rule</button></div>
@@ -25,8 +26,8 @@
       <div class="actions"><button type="button" id="preview-rule">Preview</button><button class="primary" type="submit" id="save-rule">Save new version</button></div>
     </form>
     <p id="form-status" role="status"></p><details><summary>Portable rule</summary><pre id="rule-json"></pre></details>
-    <div class="actions"><button id="account-save">Save to account</button><button id="account-activate">Observe saved version</button><button id="account-pause">Pause observation</button><button id="account-reopen">Reopen account definitions</button></div>
-    <p class="muted">Account observation uses the sources registered for your account. Local previews use the synthetic session. <a href="/">Sign in to Options View</a> to use your account. Pausing stops new triggers; pending outcomes continue.</p>
+    <div class="actions" id="account-controls"><button id="account-save">Save to account</button><button id="account-activate">Observe saved version</button><button id="account-pause">Pause observation</button><button id="account-reopen">Reopen account definitions</button></div>
+    <p class="muted" id="account-help">Account observation uses the sources registered for your account. Local previews use the synthetic session. <a href="/">Sign in to Options View</a> to use your account. Pausing stops new triggers; pending outcomes continue.</p>
   </section>
   <section id="observed-results" hidden aria-labelledby="observed-title">
     <h2 id="observed-title">Observed Results</h2>
@@ -43,7 +44,7 @@
     <p id="rule-description"></p><p id="comparison-note" class="muted"></p>
     <div id="stats" class="stats" aria-live="polite"></div>
     <div class="table-wrap"><table><thead><tr><th>Class / version</th><th>Trigger (UTC)</th><th>Session</th><th>Collection</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody id="ledger"></tbody></table></div>
-    <p id="empty-state"></p>
+    <p id="empty-state"></p><a id="order-flow-evidence" hidden>Open Order Flow at selected trigger</a>
   </section>
   <section class="replay" aria-labelledby="replay-title"><div class="section-head"><h2 id="replay-title">Session replay</h2><strong id="cursor-time"></strong></div>
     <p id="replay-description" class="muted">SYN-1 · QQQ · synthetic clock in UTC. Counts and outcomes follow this cursor.</p>
