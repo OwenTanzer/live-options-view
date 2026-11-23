@@ -283,7 +283,9 @@ class PendingQueueTests(unittest.TestCase):
 
     def test_capture_through_stall_restart_and_ambiguous_latest(self):
         from datetime import datetime, timedelta, timezone
-        from test_snapshot_provenance import EXP, TODAY, NOW, QQQ_STRIKES, FakeFeed, state_for
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from test_snapshot_provenance import QQQ_STRIKES, FakeFeed, state_for
         from market_data.live_market import market, state
         from market_data.live_market.publication_queue import PublicationQueue
 
@@ -298,6 +300,7 @@ class PendingQueueTests(unittest.TestCase):
             def get_object(self, **kwargs):
                 return {**super().get_object(**kwargs), "LastModified": datetime.now(timezone.utc)}
 
+        now = datetime(2026, 11, 20, 16, 0, tzinfo=timezone.utc)
         s = QueueStore()
         queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
         counters, tracker = state.Counters(), state.SnapshotTracker()
@@ -306,17 +309,26 @@ class PendingQueueTests(unittest.TestCase):
             feed = FakeFeed(state_for({"bid": 600, "ask": 600.2, "bid_ts": instant.isoformat(),
                                        "ask_ts": instant.isoformat()}))
             with patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
-                market.take_snapshot(s, feed, QQQ_STRIKES, EXP, "0DTE_Regular", TODAY,
+                market.take_snapshot(s, feed, QQQ_STRIKES, now.date().isoformat(), "0DTE_Regular", now.date(),
                                      counters, tracker, us, publication_queue=queue,
                                      capture=(instant, feed.get_state()))
-        capture(NOW)
+        capture(now)
+        stalled, release = Event(), Event()
         def block_entry(key):
             if "/entries/" in key:
+                stalled.set()
+                self.assertTrue(release.wait(timeout=5))
                 raise StoreError("Unavailable")
         s.before = block_entry
-        with self.assertRaises(PublicationError):
-            queue.publish_oldest()
-        capture(NOW + timedelta(minutes=1))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            inflight = executor.submit(queue.publish_oldest)
+            try:
+                self.assertTrue(stalled.wait(timeout=5))
+                capture(now + timedelta(minutes=1))
+            finally:
+                release.set()
+            with self.assertRaises(PublicationError):
+                inflight.result(timeout=5)
         self.assertEqual(tracker.get()["snapshot_sequence"], 2)
         self.assertNotIn(us.latest_key, s.data)
         self.assertEqual(len([k for k in s.data if k.startswith(queue.prefix)]), 2)
@@ -337,7 +349,7 @@ class PendingQueueTests(unittest.TestCase):
         latest = json.loads(s.data[us.latest_key])
         self.assertEqual([first["one_clock_publication"]["sequence"],
                           latest["one_clock_publication"]["sequence"]], [1, 2])
-        self.assertEqual(latest["timestamp"], (NOW + timedelta(minutes=1)).isoformat())
+        self.assertEqual(latest["timestamp"], (now + timedelta(minutes=1)).isoformat())
         self.assertEqual(len([k for k in s.data if "/entries/" in k]), 2)
         self.assertIsNone(queue.advance_latest(us.latest_key, first))
         self.assertEqual(json.loads(s.data[us.latest_key]), latest)

@@ -631,7 +631,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         provenance["publication"] = {"status": "pending", "reason": "awaiting_one_clock"}
         _put_snapshot_provenance(s3, provenance)
         try:
-            publication_queue.enqueue(payload, provenance, us.latest_key, csv_buf.getvalue().encode())
+            publication_queue.enqueue(payload, provenance, csv_buf.getvalue().encode())
         except Exception:
             provenance["publication"] = {"status": "archived_unpublished", "reason": "outbox_write_failed"}
             _put_snapshot_provenance(s3, provenance)

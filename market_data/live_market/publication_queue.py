@@ -5,12 +5,15 @@ immutable commit, compatible latest update and provenance write retire an item.
 """
 import hashlib
 import json
+import re
+import time
 import threading
 from datetime import datetime, timezone
 
 from .config import log
 from .one_clock import publish_snapshot
 from .publications import EVIDENCE_BYTES, _missing
+from .state import UNDERLYING_SESSIONS
 
 
 def encode(value):
@@ -32,6 +35,7 @@ def read(s3, bucket, key, limit):
 class PublicationQueue:
     def __init__(self, s3, bucket, symbol):
         self.s3, self.bucket = s3, bucket
+        self.lane = UNDERLYING_SESSIONS[symbol]
         self.prefix = f"collector-pending/v1/{symbol}/"
         self.wake = threading.Event()
         self.session = None
@@ -40,9 +44,9 @@ class PublicationQueue:
         threading.Thread(target=self.run, name=self.prefix, daemon=True).start()
         self.wake.set()  # discover any items left by a replaced process
 
-    def enqueue(self, payload, provenance, latest_key, csv_bytes):
+    def enqueue(self, payload, provenance, csv_bytes):
         snapshot_key = payload["snapshot_key"]
-        pending = {"payload": payload, "provenance": provenance, "latest": latest_key,
+        pending = {"payload": payload, "provenance": provenance,
                    "csv_sha256": hashlib.sha256(csv_bytes).hexdigest()}
         raw = encode(pending)
         if len(raw) > 2 * EVIDENCE_BYTES:
@@ -67,12 +71,18 @@ class PublicationQueue:
         pending = json.loads(raw)
         payload, provenance = pending["payload"], pending["provenance"]
         csv_key = payload["snapshot_key"]
+        expected_prefix = self.lane.day_prefix(payload["date"].replace("-", ""))
+        if (key != self.prefix + csv_key + ".json" or payload["symbol"] != self.lane.symbol
+                or provenance["snapshot_key"] != csv_key or provenance["symbol"] != self.lane.symbol
+                or not csv_key.startswith(expected_prefix)
+                or not re.fullmatch(r"snapshot_\d{12}\.csv", csv_key[len(expected_prefix):])):
+            raise ValueError("pending item does not belong to this capture lane")
         csv, _ = read(self.s3, self.bucket, csv_key, EVIDENCE_BYTES)
         if hashlib.sha256(csv).hexdigest() != pending["csv_sha256"]:
             raise ValueError("archived CSV differs from queued snapshot")
         publication = publish_snapshot(self.s3, self.bucket, payload, csv)
         payload["one_clock_publication"] = provenance["one_clock_publication"] = publication
-        published = self.advance_latest(pending["latest"], payload)
+        published = self.advance_latest(self.lane.latest_key, payload)
         provenance["publication"] = {"status": "published" if published else "committed",
                                      "reason": None if published else "newer_latest_exists"}
         provenance["latest_published_at"] = published
@@ -119,6 +129,6 @@ class PublicationQueue:
             except Exception as exc:
                 log.warning("Pending publication retained %s retry in %ss: %s",
                             self.prefix, backoff, exc)
-                threading.Event().wait(backoff)
+                time.sleep(backoff)
                 backoff = min(60, backoff * 2)
                 self.wake.set()
