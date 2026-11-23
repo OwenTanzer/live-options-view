@@ -577,6 +577,7 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
       el = (id) => document.getElementById(id);
     const SIDE = ["buy", "sell", "unknown"],
       COLOR = { buy: "#62e3bd", sell: "#ff967c", unknown: "#b7bbd5" };
+    let strikeIndex = null;
     let replay = null,
       feed = null,
       chain = null,
@@ -833,7 +834,8 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
         const oldest = liveRows[0]?.t;
         const cappedFrom = live() && feed?.cap > 0 && liveRows.length >= feed.cap &&
           oldest > start && (feed.session?.prints == null || feed.session.prints > liveRows.length) ? oldest : null;
-        tapeViews.render(visible, tapeSpots(start), view?.coverage?.gaps || [], start, end, allPrices, cappedFrom);
+        const chainStrikes = !live() && view?.snapshot && strikeIndex?.changes.findLast(([t]) => t <= view.snapshot.t)?.[1];
+        tapeViews.render(visible, tapeSpots(start), view?.coverage?.gaps || [], start, end, allPrices, cappedFrom, chainStrikes);
       } else {
         drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot});
       }
@@ -1473,9 +1475,13 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
       if (!isLive) {
         status = "Loading archive";
         try {
-          const r = replay || (await getJson("./order-flow-replay.json", gen, 60000)).json;
+          const [r, index] = await Promise.all([
+            replay || getJson("./order-flow-replay.json", gen, 60000).then(result => result.json),
+            strikeIndex || getJson("./order-flow-replay-strikes.json", gen, 10000).then(result => result.json).catch(() => null)
+          ]);
           if (gen !== generation) return;
           replay = replay || M.decodeReplay(r);
+          if (index?.session === replay.session) strikeIndex = index;
           replayScale = replayScale || PF.replayScale(replay);
           const cutoff = linked ? linked.cutoff : replay.coverage.open + 15000;
           cursor.select({mode: "replay", origin: "reconstructed", session: replay.session, instrument: "QQQ", cutoff});

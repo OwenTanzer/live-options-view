@@ -157,7 +157,7 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
       delete $('#view').dataset.view;
       if (dialog.open) dialog.close();
     },
-    render(rows, spots, gaps, start, end, strikes, cappedFrom) {
+    render(rows, spots, gaps, start, end, strikes, cappedFrom, chainStrikes) {
       if (held || dialog.open) return;
       const next = JSON.stringify([
         Math.floor(end / 1000),
@@ -167,10 +167,22 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
         gaps,
         strikes,
         cappedFrom,
+        chainStrikes,
       ]);
       if (next === key) return;
       key = next;
-      design.render(current, rows, spots, gaps, start, end, strikes, toggle.checked, cappedFrom);
+      design.render(
+        current,
+        rows,
+        spots,
+        gaps,
+        start,
+        end,
+        strikes,
+        toggle.checked,
+        cappedFrom,
+        chainStrikes,
+      );
     },
   };
 }
@@ -383,6 +395,17 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const travel = (K.length - count) * chartStepPx;
     box.style.setProperty('--strike-travel', travel + 'px');
     const range = $('#chart-strikes');
+    if (S.tradeStrikes?.length) {
+      const note = document.createElement('div');
+      note.className = 'key';
+      note.textContent =
+        'Archived trade coverage: $' +
+        Math.min(...S.tradeStrikes) +
+        '–$' +
+        Math.max(...S.tradeStrikes) +
+        '. Other chain strikes have no individual trade records in this replay.';
+      footer.prepend(note);
+    }
     const inspector = $('#inspect-strikes');
     let visible = [];
     inspector.onclick = () => inspect(visible.map((p) => p[6]).reverse(), range.textContent);
@@ -415,6 +438,8 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       const tickets = big.filter((p) => p[1] >= first && p[1] < first + count);
       inspector.textContent =
         'Inspect ' + visible.length + ' prints at these strikes · ' + tickets.length + ' tickets ≥ $10k';
+      if (S.tradeStrikes && !S.tradeStrikes.some((k) => k >= bottomStrike && k <= topStrike))
+        inspector.textContent = 'Chain only · Individual trades unavailable at these strikes';
       inspector.disabled = !visible.length;
       c.clearRect(0, 0, Wd, Hd);
       c.save();
@@ -573,6 +598,11 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       }
       const k = K.reduce((b, v) => (Math.abs(Y(v) - y) < Math.abs(Y(b) - y) ? v : b), K[0]),
         ki = K.indexOf(k);
+      if (S.tradeStrikes && !S.tradeStrikes.includes(k)) {
+        $('#detail').textContent =
+          '$' + k + ' is in the chain snapshot. This replay has no individual trade coverage at that strike.';
+        return;
+      }
       const win = 1500,
         ps = S.prints.filter((p) => p[1] === ki && Math.abs(p[0] - t) <= win);
       const g = S.gaps.find((g) => t >= g[0] && t <= g[1]);
@@ -911,12 +941,14 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     reset() {
       DCUR = null;
     },
-    render(id, rows, spots, rawGaps, start, end, strikes, showAll, cappedFrom = null) {
-      K = Array.from(new Set([...strikes, ...rows.map((p) => p.strike)]))
+    render(id, rows, spots, rawGaps, start, end, strikes, showAll, cappedFrom = null, chainStrikes) {
+      const fullChain = id === 'chart' && Array.isArray(chainStrikes);
+      K = Array.from(new Set([...(fullChain ? chainStrikes : []), ...strikes, ...rows.map((p) => p.strike)]))
         .filter(Number.isFinite)
         .sort((a, b) => a - b);
       const indices = new Map(K.map((k, i) => [k, i]));
       const S = {
+        tradeStrikes: fullChain ? strikes : null,
         t0: start,
         cappedFrom,
         duration: end - start,

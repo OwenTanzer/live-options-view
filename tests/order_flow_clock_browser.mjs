@@ -28,7 +28,7 @@ try {
           url.pathname === '/order-flow/qqq/v1/recent.json' ? fixture.feed : null;
         if (data) return route.fulfill({json: data});
       }
-      const allowed = /^\/(?:order-flow\.html|order-flow-(?:replay|capture-20261123)\.json|shared\/(?:order-flow|one-clock)[a-z-]*\.js)$/;
+      const allowed = /^\/(?:order-flow\.html|order-flow-(?:replay(?:-strikes)?|capture-20261123)\.json|shared\/(?:order-flow|one-clock)[a-z-]*\.js)$/;
       if (url.origin !== origin || !allowed.test(url.pathname)) {
         unexpected.push(url.href);
         return route.abort();
@@ -87,22 +87,25 @@ try {
     // A wheel over B must change the actual price axis at the reviewer's replay cursor.
     await page.goto(link('QQQ',1790343060000)+'&tape=chart');
     const range = page.locator('#optional-tape #chart-strikes');
-    await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
+    await range.getByText('Strikes $740–$744 of $709–$775',{exact:true}).waitFor();
     const graph = page.locator('#optional-tape #cv');
     await graph.hover();
     const pageY = await page.evaluate(()=>scrollY);
     await page.mouse.wheel(0,240);
-    await range.getByText('Strikes $740–$744 of $740–$747',{exact:true}).waitFor();
+    await range.getByText('Strikes $737–$741 of $709–$775',{exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>scrollY),pageY);
     await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
     const geometry=await panel.evaluate(el=>{
       const cv=el.querySelector('canvas').getBoundingClientRect(), viewport=el.getBoundingClientRect();
       return [el.scrollWidth-el.clientWidth,el.scrollHeight-el.clientHeight,cv.top-viewport.top,cv.height-el.clientHeight];
     });
-    assert.deepEqual(geometry,[0,240,0,0]);
+    assert.deepEqual(geometry,[0,4960,0,0]);
+    await range.getByText('Strikes $709–$713 of $709–$775',{exact:true}).waitFor();
+    assert.ok(await page.getByRole('button',{name:'Chain only · Individual trades unavailable at these strikes'}).isDisabled());
+    await panel.evaluate(el=>el.scrollTop=31*80);
     await page.getByRole('button',{name:'Inspect 2564 prints at these strikes · 37 tickets ≥ $10k'}).waitFor();
     await page.mouse.wheel(0,-240);
-    await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
+    await range.getByText('Strikes $743–$747 of $709–$775',{exact:true}).waitFor();
     await page.goto(origin+'/order-flow.html?source=capture&tape=chart');
     await statusContains('887 prints in view');
     await range.getByText('Strikes $649–$653 of $500–$900',{exact:true}).waitFor();
