@@ -447,6 +447,28 @@
       "params": {
         "forward_skew_arm": "protect_reentry"
       }
+    },
+    {
+      "_comment": "Trump Whisperer x OI skew (crassus/strategies/trump_oi_skew.py): paper only. Opens one ATM option only when Trump's Truth Social mood and the root's adaptive near-money OI skew agree; closes when the skew stops supporting the position or Trump flips. Inactive until its password is provisioned and the root's chain is collected.",
+      "alias": "TrumpWhisperer OI Skew IBIT",
+      "username": "crassus_twskew_ibit",
+      "password_env": "CRASSUS_PW_TWSKEW_IBIT",
+      "strategy_id": "trump_whisperer_oi_skew_ibit",
+      "active": false
+    },
+    {
+      "alias": "TrumpWhisperer OI Skew SLV (silver)",
+      "username": "crassus_twskew_slv",
+      "password_env": "CRASSUS_PW_TWSKEW_SLV",
+      "strategy_id": "trump_whisperer_oi_skew_slv",
+      "active": false
+    },
+    {
+      "alias": "TrumpWhisperer OI Skew DRAM (memory)",
+      "username": "crassus_twskew_dram",
+      "password_env": "CRASSUS_PW_TWSKEW_DRAM",
+      "strategy_id": "trump_whisperer_oi_skew_dram",
+      "active": false
     }
   ]
 }

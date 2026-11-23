@@ -23,7 +23,8 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
-from .strategies.oi_skew import REFERENCE_ROOTS
+from .strategies.oi_skew import REFERENCE_ROOTS as _OI_REFERENCE_ROOTS
+from .strategies.trump_oi_skew import ROOTS as _TRUMP_OI_SKEW_ROOTS
 from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
@@ -65,6 +66,9 @@ from .supervisor import HEARTBEAT_FD, report_cycle, supervise
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
+
+# Strategies that read a non-QQQ snapshot, by root.
+REFERENCE_ROOTS = {**_OI_REFERENCE_ROOTS, **_TRUMP_OI_SKEW_ROOTS}
 
 
 def _validate_strategy_ids(accounts: list[Any]) -> None:
