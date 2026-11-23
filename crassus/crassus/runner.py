@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
-from .strategies.me_bots import IDS as ME_BOTS
+from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
 from .strategies.me_bots_inputs import Inputs as MeBotInputs
 from .strategies.oi_skew import REFERENCE_ROOTS
 from typing import Any
@@ -592,6 +592,13 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
+                if account.strategy_id in ME_BOTS and decision.is_trade:
+                    limit = me_limit_price(ctx, decision.symbol, decision.action)
+                    if limit is None:
+                        decision = Decision.no_trade("Flatten awaiting executable limit quote",
+                                                     decision.strategy_id, decision.strategy_version)
+                    else:
+                        decision.limit_price = limit
             elif arm and arm != "baseline":
                 decision = forward_skew.decide(ctx, account, arm, forward_bars,
                                                self.forward_directory, decision_id)

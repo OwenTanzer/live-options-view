@@ -7,6 +7,7 @@ import requests
 
 from ..clock import ET
 from ..durability import atomic_json
+from ..exchange_calendar import session_close
 from ..skew_bars import SOURCE
 from .me_bots_rules import Bar, MINUTE
 
@@ -26,10 +27,10 @@ def closed_minutes(payload, now):
         if start < opening or start.date() != now.date():
             continue
         end = start + MINUTE
-        if end > now or stamps[i + 1] > now.timestamp():
-            break
         if start != opening + len(rows) * MINUTE or end.timestamp() > stamps[i + 1]:
             raise ValueError("incomplete regular-session minute sequence")
+        if end.time() > session_close(now.date()) or end > now or stamps[i + 1] > now.timestamp():
+            break
         numbers = [q[key][i] for key in ("open", "high", "low", "close", "volume")]
         if any(type(x) not in (float, int) or not isfinite(x) for x in numbers):
             raise ValueError("incomplete OHLCV")
@@ -50,7 +51,7 @@ class Inputs:
         date = now.date().isoformat()
         frozen = self.directory / ("sealed-" + date + ".json")
         if frozen.exists():
-            return json.loads(frozen.read_text())
+            return self.read_seal(frozen, now)
         supplied = self.directory / ("plan-" + date + ".json")
         if now.time() >= time(9, 30) or not supplied.exists():
             return {}
@@ -58,7 +59,20 @@ class Inputs:
         if plan.get("session") != date or plan.get("root") != "QQQ":
             raise ValueError("plan session or instrument mismatch")
         atomic_json(frozen, {"first_seen": now.isoformat(), "levels": plan})
-        return json.loads(frozen.read_text())
+        return self.read_seal(frozen, now)
+
+    @staticmethod
+    def read_seal(path, now):
+        seal = json.loads(path.read_text())
+        seen = datetime.fromisoformat(seal["first_seen"])
+        if seen.tzinfo is None:
+            raise ValueError("unknown plan first-seen timezone")
+        seen = seen.astimezone(ET)
+        if (seen > now or seen.date() != now.date() or seen.time() >= time(9, 30)
+                or seal["levels"].get("session") != now.date().isoformat()
+                or seal["levels"].get("root") != "QQQ"):
+            raise ValueError("plan origin, session or first-seen clock mismatch")
+        return seal
 
     def read(self, cycle, now, phase):
         key = (now.date(), cycle)

@@ -6,9 +6,10 @@ from datetime import datetime, time
 from math import isfinite
 
 from ..clock import ET
+from .gated_strangle import fresh_spot
 from ..durability import atomic_json
 from ..strategy import Decision, register
-from .me_bots_rules import KINDS, MINUTE, entry, exit_reason
+from .me_bots_rules import KINDS, entry, exit_reason
 
 VERSION = "0.1.0"
 IDS = {"me_" + kind + "_qqq": kind for kind in KINDS}
@@ -31,7 +32,7 @@ def completed_losses(trades, day):
     basis = None
     losses = 0
     for when, trade in sorted(fills, key=lambda x: x[0]):
-        symbol, side, qty, price = trade.get("sym"), trade.get("side"), trade.get("qty"), trade.get("price")
+        symbol, side, qty, price = (trade.get(k) for k in ("sym", "side", "qty", "price"))
         if not symbol or qty != 1 or type(price) not in (int, float) or not isfinite(price) or price <= 0:
             raise ValueError("unrecognized fill")
         if side == "buy" and basis is None:
@@ -87,7 +88,18 @@ def evaluate(ctx, strategy_id):
             if not reason:
                 if error or not rows or not 0 <= (now - rows[-1].end).total_seconds() < 60:
                     return skip(error or "Incomplete or stale minute path for exit")
-                reason = exit_reason(kind, rows, seed, fill_at, seed["entry_spot"], now)
+                fill_bar = next((b for b in rows if b.start <= fill_at < b.end), None)
+                if fill_bar is None:
+                    return skip("Waiting for completed fill-minute OHLC; underlying fill price unknown")
+                # Bracket the unknown fill-time underlying. A signal that depends
+                # on where inside the minute the fill occurred is a protective
+                # paper exit, marked separately from a demonstrated stop.
+                reasons = [exit_reason(kind, rows, seed, fill_at, anchor, now)
+                           for anchor in (fill_bar.low, fill_bar.high)]
+                if reasons[0] == reasons[1]:
+                    reason = reasons[0]
+                elif any(reasons):
+                    reason = "Fill-minute ordering or anchor unknown; protective exit"
             if not reason:
                 return skip("Holding; no completed stop or adverse close")
             state["exit_due"] = reason
@@ -101,7 +113,19 @@ def evaluate(ctx, strategy_id):
 
         if error or not rows or not 0 <= (now - rows[-1].end).total_seconds() < 60:
             return skip(error or "Incomplete or stale one-minute sequence")
-        if not plan or aware(plan["first_seen"]).time() >= time(9, 30):
+        current = rows[-1].end
+        prior = aware(state["last_entry_check"]) if state.get("last_entry_check") else None
+        if prior != current:
+            if prior is None or (current - prior).total_seconds() > 60:
+                state["skip_through"] = current.isoformat()
+            state["last_entry_check"] = current.isoformat()
+            atomic_json(path, state)
+        if state.get("skip_through") == current.isoformat():
+            return skip("Entry observation started or resumed after a gap; historical signals skipped")
+        if (not plan or plan["levels"].get("root") != "QQQ"
+                or plan["levels"].get("session") != now.date().isoformat()
+                or aware(plan["first_seen"]).date() != now.date()
+                or aware(plan["first_seen"]).time() >= time(9, 30)):
             return skip("Missing pre-open structural levels or vertical guard")
         if losses >= 3 or (kind == "ratchet" and now.time() >= time(15, 30)):
             return skip("Daily stop or entry cutoff reached")
@@ -117,9 +141,10 @@ def evaluate(ctx, strategy_id):
         if snap is None or str(snap.expiration) != now.date().isoformat():
             return skip("Missing same-day option snapshot")
         observed = aware(snap.timestamp)
-        if not rows[-1].end <= observed <= now:
+        if (not fresh_spot(snap, now) or not rows[-1].end <= observed <= now
+                or not rows[-1].end <= aware(snap.underlying_market.spot_ts) <= now):
             return skip("No underlying observation since trigger close")
-        spot = snap.underlying_price
+        spot = snap.underlying_market.spot
         if type(spot) not in (int, float) or not isfinite(spot) or spot <= 0:
             return skip("Underlying entry price unavailable")
         side = signal["side"]
@@ -128,7 +153,7 @@ def evaluate(ctx, strategy_id):
             return skip("Setup invalidated or first target reached before entry")
         row = snap.atm("call" if side == 1 else "put")
         symbol = (row or {}).get("OptionSymbol", "")
-        pattern = r"\.?QQQ\s*" + now.strftime("%y%m%d") + ("C" if side == 1 else "P") + r"\d+(?:\.\d+)?"
+        pattern = r"QQQ" + now.strftime("%y%m%d") + ("C" if side == 1 else "P") + r"\d{8}"
         if not re.fullmatch(pattern, symbol):
             return skip("ATM contract identity does not match QQQ, date and side")
         ask = price_for(ctx, symbol, "buy")

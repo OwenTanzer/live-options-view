@@ -119,11 +119,27 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
     size = 1 if kind == "opening" else 9
     decision_bars = {bar.end: bar for bar in candles(rows, size) if bar.start >= entry_at}
     for bar in rows:
+        if bar.end <= entry_at:
+            continue
         if bar.start < entry_at:
+            _, hi, lo, cl = prices(bar, side)
+            if cl <= stop:
+                return "underlying closed through stop after fill"
+            if lo <= stop:
+                return "fill-minute stop ordering unknown; protective exit"
+            if kind != "ratchet" and hi >= anchor + distance and lo <= hi - distance:
+                return "fill-minute trail ordering unknown; protective exit"
+            best = max(best, cl)
+            if kind != "ratchet" and best >= anchor + distance:
+                stop = max(stop, best - distance)
             continue
         _, hi, lo, _ = prices(bar, side)
         if lo <= stop:
             return "underlying stop crossed"
+        deadline = entry_at + 25 * MINUTE
+        if kind == "phelps" and bar.start < deadline < bar.end and best < anchor + 1:
+            if prices(bar, side)[0] < anchor + 1 <= hi:
+                return "Phelps threshold ordering at deadline unknown; protective exit"
         best = max(best, hi)
         if kind != "ratchet" and best >= anchor + distance:
             raised = max(stop, best - distance)
