@@ -125,7 +125,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
   const { getPosition, getQuote, onCellClick } = opts;
   const { rows, underlying_price: spot, tier } = data;
   tbody.innerHTML = '';
-  if (!spot || !rows || !rows.length) return false;
+  if (!rows?.length || (!spot && !opts.showUnanchored)) return false;
 
   // Index rows by strike+type
   const byStrike = {};
@@ -135,8 +135,10 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     byStrike[key][r.Type] = r;
   }
 
-  const { atm, window } = computeAtmWindow(rows, spot);
-  if (atm == null) return false;
+  // A replay publication can retain quotes and strikes after withdrawing its spot.
+  const window = spot ? computeAtmWindow(rows, spot).window :
+    Object.keys(byStrike).map(Number).filter(Number.isFinite).sort((a,b)=>b-a)
+      .map(strike=>({strike,offset:null}));
 
   // One row per PUBLISHED strike in the window, highest first. No row is
   // emitted for a strike the snapshot never carried (#219), so the table can
@@ -162,8 +164,8 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 
     const ct = getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
     const pt = getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
-    const cb = oiBucket(callOI, ct);
-    const pb = oiBucket(putOI,  pt);
+    const cb = offset===null ? 0 : oiBucket(callOI, ct);
+    const pb = offset===null ? 0 : oiBucket(putOI, pt);
 
     const tr = document.createElement('tr');
     if (isAtm) tr.classList.add('atm-row');
@@ -189,7 +191,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     strikeTd.textContent = isAtm ? `${strike} ★` : `${strike}`;
     // Ladder steps, not dollars: on a mixed ladder (IBIT) neighbouring rows can
     // be $0.50 or $1 apart, so a dollar claim here would be a guess.
-    strikeTd.title = isAtm ? 'ATM strike'
+    strikeTd.title = offset===null ? 'Archived strike' : isAtm ? 'ATM strike'
       : `${Math.abs(offset)} ${Math.abs(offset) === 1 ? 'strike' : 'strikes'} ${offset > 0 ? 'above' : 'below'} ATM`;
     tr.appendChild(strikeTd);
 

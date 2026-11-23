@@ -13,7 +13,7 @@ function link(instrument = 'QQQ', cutoff = archiveCutoff) {
 }
 const fixture = JSON.parse(await readFile(new URL('./fixtures/order_flow_live_20260925.json', import.meta.url)));
 const provider = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
-const browser = await chromium.launch({headless: true, channel: 'chrome'});
+const browser = await chromium.launch({headless: true, ...(process.env.CHROME_BIN ? {executablePath:process.env.CHROME_BIN} : {channel:'chromium'})});
 try {
   for (const width of [1440, 390]) {
     const page = await browser.newPage({viewport: {width, height: 900}});

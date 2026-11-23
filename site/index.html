@@ -1436,6 +1436,44 @@
      title="Historical research workbench. Opens the analysis app in a new tab.">Move analysis ↗</a>
 </div>
 
+<div id="clock-navigation" hidden>
+  <label>Session clock <select id="clock-mode"><option value="live">Live · now</option><option value="replay">Replay · fixed cursor</option></select></label>
+  <span id="clock-scope" role="status"></span>
+</div>
+  <section id="history-clock" hidden aria-label="Shared session cursor">
+    <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+      <label>Session <input id="history-clock-date" type="date" required></label>
+      <label>Instrument <input id="history-clock-instrument" value="QQQ" list="history-clock-instruments" pattern="[A-Z][A-Z0-9.\-]{0,14}" maxlength="15" required></label>
+      <datalist id="history-clock-instruments"><option value="QQQ"><option value="SPY"><option value="IBIT"></datalist>
+      <label>Cursor (New York) <input id="history-clock-time" type="time" step="0.001" value="10:00:00" required></label>
+      <button type="submit">Show at cursor</button>
+    </form>
+    <p id="clock-journal-nav" hidden><a id="clock-journal">Open private journal at this cursor</a> · <a id="history-order-flow-link">Order flow and estimated gamma at this cursor</a></p>
+    <a id="history-clock-credit" hidden>Open private credit tape at this cursor</a>
+    <a id="history-clock-kalshi" hidden>Open private Kalshi receipts at this cursor</a>
+    <section id="clock-chain-view" aria-label="Chain at shared cursor">
+    <p id="history-clock-status" role="status">Choose a session and cursor.</p>
+    <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
+    <p>Anchored bot decisions appear with their publication receipts on the Automated tab.</p>
+    <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
+    <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    </section>
+    <section id="clock-shortlist-view" aria-label="Published Squeeze shortlist at shared cursor">
+      <h3>Published Squeeze shortlist</h3>
+      <p id="history-clock-shortlist-status" role="status">Choose a cursor to check retained publications.</p>
+      <pre id="history-clock-shortlist-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    </section>
+    <section id="clock-floor-view" aria-label="Bot ledger at shared cursor">
+      <h3>PAPER bot ledger at this cursor</h3>
+      <label>Public bot <select id="history-clock-bot"><option value="">Select a bot</option></select></label>
+      <button id="history-clock-load-bots" type="button">Load current public roster</button>
+      <p id="history-clock-bot-status" role="status">Choose a bot to read its retained fill receipts. Current membership does not establish historical strategy assignments.</p>
+      <p id="clock-decisions-status" role="status">Select a bot to see recorded decisions.</p>
+      <div style="overflow:auto"><table><thead><tr><th>Decision time</th><th>Published by</th><th>Outcome</th><th>Action</th><th>Input age (ms)</th><th>Recorded anchor</th></tr></thead><tbody id="clock-decisions"></tbody></table></div>
+      <pre id="history-clock-bot-inventory" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+      <div style="overflow:auto"><table><thead><tr><th>Event time</th><th>Visible from</th><th>Contract</th><th>Side</th><th>Quantity</th><th>Price</th></tr></thead><tbody id="history-clock-bot-rows"></tbody></table></div>
+    </section>
+  </section>
 <div id="live-panel">
 
 <div id="header">
@@ -1688,36 +1726,6 @@
     <label>Historical view <select id="history-view"><option value="daily">Daily archive · retrospective</option><option value="clock">One Clock · as of cursor</option></select></label>
     <a href="/one-clock.html">Event Builder and Results</a>
   </div>
-  <section id="history-clock" hidden aria-label="One Clock historical replay">
-    <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
-      <label>Session <input id="history-clock-date" type="date" required></label>
-      <label>Instrument <input id="history-clock-instrument" value="QQQ" list="history-clock-instruments" pattern="[A-Z][A-Z0-9.\-]{0,14}" maxlength="15" required></label>
-      <datalist id="history-clock-instruments"><option value="QQQ"><option value="SPY"><option value="IBIT"></datalist>
-      <label>Cursor (New York) <input id="history-clock-time" type="time" step="1" value="10:00:00" required></label>
-      <button type="submit">Show at cursor</button>
-    </form>
-    <a id="history-clock-credit" hidden>Open private credit tape at this cursor</a>
-    <a id="history-order-flow-link" hidden>Order flow and estimated gamma at this cursor</a>
-    <p id="history-clock-status" role="status">Choose a session and cursor.</p>
-    <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
-    <p>Anchored bot signal: historical publication unavailable. A replay reading is not a recorded bot decision.</p>
-    <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
-    <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
-    <section aria-label="Published Squeeze shortlist at shared cursor">
-      <h3>Published Squeeze shortlist</h3>
-      <p id="history-clock-shortlist-status" role="status">Choose a cursor to check retained publications.</p>
-      <pre id="history-clock-shortlist-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-    </section>
-    <section aria-label="Bot ledger at shared cursor">
-      <h3>PAPER bot ledger at this cursor</h3>
-      <label>Public bot <select id="history-clock-bot"><option value="">Select a bot</option></select></label>
-      <button id="history-clock-load-bots" type="button">Load current public roster</button>
-      <p id="history-clock-bot-status" role="status">Choose a bot to read its retained fill receipts. Current membership does not establish historical strategy assignments.</p>
-      <p>Decision and no-trade history: publication source unavailable. Fills do not stand in for decisions.</p>
-      <pre id="history-clock-bot-inventory" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-      <div style="overflow:auto"><table><thead><tr><th>Event time</th><th>Visible from</th><th>Contract</th><th>Side</th><th>Quantity</th><th>Price</th></tr></thead><tbody id="history-clock-bot-rows"></tbody></table></div>
-    </section>
-  </section>
   <div id="history-daily">
   <p>Daily retrospective archive. These full-session values do not follow an intraday cursor.</p>
 
@@ -1848,7 +1856,7 @@
 
 <script src="shared.js?v=050c96a265673ac3"></script>
 <script src="shared/csv-ranges.js?v=2037c69afbe5d94b"></script>
-<script src="shared/heatmap.js?v=0024b54ff710eff6"></script>
+<script src="shared/heatmap.js?v=f192b6ad8fd8cbb5"></script>
 <script src="shared/quotes.js?v=3b80b4397c3c4608"></script>
 <script src="shared/format.js?v=3443e4a7b83f1c13"></script>
 <script src="shared/instruments.js?v=860821b9e03c4a08"></script>
@@ -1967,8 +1975,8 @@ let timerHandle = null;
 </script>
 <script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
 <script src="js/data-fetch-cycle.js?v=5d9d7450db0e394b"></script>
-<script src="js/oi-skew-meter.js?v=2090f692184a9d86"></script>
-<script src="js/reference-oi-skew-meters.js?v=afd0f36529d824e6"></script>
+<script src="js/oi-skew-meter.js?v=e4f1fc4047f80a6f"></script>
+<script src="js/reference-oi-skew-meters.js?v=684a55cfdd32ce6c"></script>
 <script>
 
 // ── countdown timer ───────────────────────────────────────────────────────────
@@ -2001,7 +2009,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/squeeze-panel.js?v=45ce7c9ed3f7dbbb"></script>
+<script src="js/squeeze-panel.js?v=b6f669daf5c8af53"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────
@@ -2017,7 +2025,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/tab-switching.js?v=ab265ee1ec344fe7"></script>
+<script src="js/tab-switching.js?v=d8df60ae0f25d227"></script>
 <script>
 
 // ── automated (bot) panel ────────────────────────────────────────────────────
@@ -2025,8 +2033,8 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/bots-panel.js?v=28a7c5050a835806"></script>
-<script src="js/bot-floor.js?v=ba005118f2e5ba5f"></script>
+<script src="js/bots-panel.js?v=29ec7cc8cc237f15"></script>
+<script src="js/bot-floor.js?v=5499bc245c9b3033"></script>
 <script>
 
 // ── historical panel ─────────────────────────────────────────────────────────
