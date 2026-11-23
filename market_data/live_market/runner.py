@@ -20,6 +20,8 @@ import market_data.live_market as _entry  # entry indirection for main()'s test 
 from .config import (
     COLLECT_SPY,
     COLLECT_IBIT,
+    COLLECT_SLV,
+    COLLECT_DRAM,
     ET,
     HEALTH_SECS,
     PRICE_LANE_ENABLED,
@@ -106,7 +108,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
                    "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
-        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or (sym == "IBIT" and not COLLECT_IBIT):
+        opted_out = {"IBIT": not COLLECT_IBIT, "SLV": not COLLECT_SLV, "DRAM": not COLLECT_DRAM}
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or opted_out.get(sym, False):
             continue
         try:
             us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)

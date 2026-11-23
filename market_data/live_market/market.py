@@ -620,7 +620,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
 
-    if ONE_CLOCK_PUBLICATIONS:
+    from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
+    if ONE_CLOCK_PUBLICATIONS and us.symbol in ONE_CLOCK_INSTRUMENTS:
         from .one_clock import publish_snapshot
         try:
             # Authoritative immutable commit precedes the mutable compatibility
