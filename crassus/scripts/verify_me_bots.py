@@ -17,7 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from crassus.clock import ET
 from crassus.strategy import REGISTRY, StrategyContext
 from crassus.strategies.me_bots import IDS, completed_losses
-from crassus.strategies.me_bots_inputs import Inputs, closed_minutes
+from crassus.strategies.me_bots_inputs import (
+    Inputs,
+    closed_minutes,
+    previous_minutes,
+    validate_prior,
+)
+from crassus.exchange_calendar import preceding_session
 from crassus.strategies.me_bots_rules import (
     Bar,
     MINUTE,
@@ -96,8 +102,20 @@ class MeBots(unittest.TestCase):
                     if kind == "opening"
                     else [early]
                 )
-                # Synthetic qualified history tests rule mechanics only. Runtime
-                # intentionally cannot synthesize a cross-session reference.
+                if kind == "runner":
+                    last = START - timedelta(days=3)
+                    prior = [
+                        Bar(
+                            last + i * 30 * MINUTE,
+                            last + (i + 1) * 30 * MINUTE,
+                            100,
+                            102,
+                            100,
+                            101,
+                            500,
+                        )
+                        for i in range(13)
+                    ]
                 self.assertIsNotNone(qualified_trigger(kind, early, prior, seq, LEVELS))
                 self.assertIsNone(entry(kind, rows[:30], LEVELS))
                 self.assertIsNone(entry(kind, rows, LEVELS))
@@ -190,6 +208,136 @@ class MeBots(unittest.TestCase):
         target = target_for(level, [level, {"price": 728}, {"price": 726}])
         self.assertEqual(target, 728)
         self.assertFalse(admitted(727.8, 730, target, -1))
+
+    def test_exact_previous_exchange_session_coverage(self):
+        # Monday after Thanksgiving 2026 follows the Friday half day.
+        for day, prior, count in (
+            ("2026-11-30", "2026-11-27", 210),
+            ("2026-11-27", "2026-11-25", 390),
+            ("2026-11-23", "2026-11-20", 390),
+        ):
+            target = datetime.fromisoformat(day).date()
+            op, cl = preceding_session(target)
+            self.assertEqual(op.date().isoformat(), prior)
+            raw = [
+                [(op + i * MINUTE).timestamp(), 100, 101, 99, 100, 1]
+                for i in range(count)
+            ]
+            bars = validate_prior(raw, op, cl)
+            self.assertEqual(len(candles(bars, 9)), count // 9)
+            self.assertEqual(len(candles(bars, 30)), count // 30)
+            with self.assertRaises(ValueError):
+                validate_prior(raw[:-1], op, cl)
+            with self.assertRaises(ValueError):
+                validate_prior(raw[:10] + raw[9:-1], op, cl)
+        self.assertIsNone(
+            preceding_session(datetime.fromisoformat("2026-11-26").date())
+        )
+
+    def test_runner_requires_explicit_target_full_history_and_receipt(self):
+        previous = START - timedelta(days=3)
+        prior = [
+            Bar(
+                previous + i * 30 * MINUTE,
+                previous + (i + 1) * 30 * MINUTE,
+                90,
+                92,
+                90,
+                91,
+                100,
+            )
+            for i in range(13)
+        ]
+        current = [
+            Bar(START + i * MINUTE, START + (i + 1) * MINUTE, 100, 103, 100, 103, 100)
+            for i in range(30)
+        ]
+
+        def resolve(bars=prior, seen=START, plan=LEVELS, current_rows=current):
+            reference = dict(
+                for_session=START.date().isoformat(),
+                session=previous.date().isoformat(),
+                first_seen=seen,
+                thirty=bars,
+                nine=[],
+            )
+            return entry("runner", current_rows, plan, reference)
+
+        self.assertIsNotNone(
+            resolve()
+        )  # No prior-range edge or rising-range condition.
+        # A long breakout may gap up and finish on the top quartile of a red candle.
+        # The Runner's enumerated test is independent of candle-body direction.
+        exact = [
+            replace(b, open=100.9, high=101, low=100, close=100.75) for b in current
+        ]
+        exact_prior = [replace(b, high=91) for b in prior]
+        self.assertIsNotNone(
+            resolve(
+                exact_prior,
+                current_rows=exact,
+                plan={
+                    "levels": [
+                        {
+                            "price": 100.5,
+                            "side": "long",
+                            "first_target": 102,
+                            "source": "fixture",
+                        }
+                    ]
+                },
+            )
+        )
+        self.assertIsNone(resolve(prior[:7]))
+        self.assertIsNone(resolve(prior[:-1]))
+        self.assertIsNone(resolve(seen=current[-1].end + timedelta(microseconds=1)))
+        self.assertIsNone(
+            resolve(
+                plan={
+                    "levels": [
+                        {"price": 102, "side": "long", "source": "shelf"},
+                        {"price": 110, "side": "long", "source": "target"},
+                    ]
+                }
+            )
+        )
+        self.assertIsNone(resolve(current_rows=current[:-1]))
+        self.assertIsNone(
+            resolve(current_rows=[replace(b, close=101) for b in current])
+        )
+        self.assertIsNone(resolve(bars=[replace(b, high=95) for b in prior]))
+
+    def test_prior_windows_exclude_trigger_and_truncated_tail(self):
+        op, cl = preceding_session(START.date())
+        raw = [
+            [(op + i * MINUTE).timestamp(), 100, 101, 100, 101, 100] for i in range(390)
+        ]
+        # Last full nine-minute bar expands; the final three minutes are not a candle.
+        for i in range(378, 387):
+            raw[i][2] = 102
+        for i in range(387, 390):
+            raw[i][2] = 140
+        bars = validate_prior(raw, op, cl)
+        nine = candles(bars, 9)
+        self.assertEqual(nine[-1].high, 102)
+        current = [
+            Bar(START + i * MINUTE, START + (i + 1) * MINUTE, 100, 103, 100, 103, 100)
+            for i in range(9)
+        ]
+        ref = dict(
+            for_session=START.date().isoformat(),
+            session=op.date().isoformat(),
+            first_seen=START,
+            nine=nine,
+            thirty=candles(bars, 30),
+        )
+        signal = entry("golden", current, LEVELS, ref)
+        self.assertEqual(signal["prior_session"], op.date().isoformat())
+        self.assertEqual(signal["reference_count"], 14)
+        self.assertIsNone(entry("golden", current, LEVELS, dict(ref, nine=nine[-13:])))
+        self.assertIsNone(
+            entry("golden", current, LEVELS, dict(ref, first_seen=START + 10 * MINUTE))
+        )
 
     def test_input_identity_gaps_and_forming_row(self):
         stamps = [int((START + i * MINUTE).timestamp()) for i in range(4)]

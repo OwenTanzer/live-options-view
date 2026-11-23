@@ -178,3 +178,20 @@ def session_close(d: date) -> time:
         return MARKET_CLOSE
     close_ts = row["market_close"].iloc[0]
     return close_ts.tz_convert(ET).time()
+
+def preceding_session(day: date):
+    """Verified NYSE regular hours immediately preceding a trading date.
+
+    Calendars unavailable at a year boundary cannot certify a prior session.
+    The close-safety fallback used by position flattening is unsuitable here.
+    """
+    schedule = _nyse_schedule_for_year(day.year)
+    if schedule is None or day not in schedule.index.date:
+        return None
+    previous = schedule[schedule.index.date < day]
+    if previous.empty:
+        previous = _nyse_schedule_for_year(day.year - 1)
+    if previous is None or previous.empty:
+        return None
+    row = previous.iloc[-1]
+    return tuple(row[key].tz_convert(ET).to_pydatetime() for key in ("market_open","market_close"))

@@ -12,7 +12,7 @@ from ..durability import atomic_json
 from ..strategy import Decision, register
 from .me_bots_rules import KINDS, admitted, entry, exit_reason
 
-VERSION = "0.2.0-research"
+VERSION = "0.3.0-research"
 IDS = {"me_" + kind + "_qqq": kind for kind in KINDS}
 
 
@@ -173,14 +173,17 @@ def evaluate(ctx, strategy_id):
             return skip("Missing pre-open structural levels or vertical guard")
         if losses >= 3 or (kind == "ratchet" and now.time() >= time(15, 30)):
             return skip("Daily stop or entry cutoff reached")
-        if kind in ("opening", "runner"):
-            if now.time() <= (
-                time(10, 15, 59) if kind == "opening" else time(10, 0, 59)
+        reference = plan.get("reference")
+        if kind == "runner" and rows[-1].end.time() == time(10):
+            if (
+                not reference
+                or len(reference["thirty"]) != 13
+                or reference["first_seen"] > rows[-1].end
             ):
                 return skip(
-                    "Early trigger lacks 14 preceding completed session-aligned nine-minute bars; historical reference policy unresolved"
+                    "Missing thirteen complete 30-minute bars from the immediately preceding session by the trigger close"
                 )
-        signal = entry(kind, rows, plan["levels"])
+        signal = entry(kind, rows, plan["levels"], reference)
         if signal is None:
             return skip("No qualified completed trigger")
         attempts = state["attempts"]
@@ -216,7 +219,12 @@ def evaluate(ctx, strategy_id):
         ask = price_for(ctx, symbol, "buy")
         if ask is None:
             return skip("Missing executable entry ask")
-        signal.update(symbol=symbol, entry_spot=spot, intent_at=now.isoformat())
+        signal.update(
+            symbol=symbol,
+            entry_spot=spot,
+            intent_at=now.isoformat(),
+            trigger_first_seen=plan.get("latest_minute_first_seen"),
+        )
         attempts.append({"side": side, "trigger_end": signal["trigger_end"]})
         state.update(seed=signal, exit_due=None)
         atomic_json(path, state)
