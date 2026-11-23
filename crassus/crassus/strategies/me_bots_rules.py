@@ -191,11 +191,25 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
     distance = 2 if kind in ("runner", "phelps") else 1
     size = 1 if kind == "opening" else 9
     decision_bars = {bar.end: bar for bar in candles(rows, size) if bar.end > entry_at}
+
+    def candle_exit(bar):
+        if bar is None:
+            return None
+        op, _, _, cl = prices(bar, side)
+        if seed.get("nova") is not None and cl < side * seed["nova"]:
+            return "completed candle closed back through fixed Nova"
+        if kind not in ("golden", "runner") and cl < op:
+            return "completed adverse candle"
+        return None
+
     for bar in rows:
         if bar.end <= entry_at:
             continue
         if bar.start < entry_at:
             _, hi, lo, cl = prices(bar, side)
+            known_close = candle_exit(decision_bars.get(bar.end))
+            if known_close:
+                return known_close
             if cl <= stop:
                 return "underlying closed through stop after fill"
             if lo <= stop:
@@ -222,10 +236,9 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
         candle = decision_bars.get(bar.end)
         if candle:
             op, _, adverse, cl = prices(candle, side)
-            if seed.get("nova") is not None and cl < side * seed["nova"]:
-                return "completed candle closed back through fixed Nova"
-            if kind not in ("golden", "runner") and cl < op:
-                return "completed adverse candle"
+            known_close = candle_exit(candle)
+            if known_close:
+                return known_close
             if kind == "ratchet" and cl > op:
                 stop = max(stop, adverse - 1)
         if kind == "phelps" and bar.end >= entry_at + 25 * MINUTE and best < anchor + 1:

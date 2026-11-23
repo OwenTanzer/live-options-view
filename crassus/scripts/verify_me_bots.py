@@ -166,6 +166,31 @@ class MeBots(unittest.TestCase):
             ),
         )
 
+    def test_postfill_nova_in_partial_minute_and_predeclared_fallback(self):
+        rows = [
+            Bar(
+                START + i * MINUTE,
+                START + (i + 1) * MINUTE,
+                100.1,
+                100.2,
+                99.6,
+                99.8,
+                100,
+            )
+            for i in range(9)
+        ]
+        seed = {"side": 1, "stop": 98, "nova": 100}
+        self.assertIn(
+            "Nova",
+            exit_reason(
+                "golden", rows, seed, START + 8.5 * MINUTE, 100.05, rows[-1].end
+            ),
+        )
+        level = {"price": 730, "side": "short", "source": "acceptance shelf"}
+        target = target_for(level, [level, {"price": 728}, {"price": 726}])
+        self.assertEqual(target, 728)
+        self.assertFalse(admitted(727.8, 730, target, -1))
+
     def test_input_identity_gaps_and_forming_row(self):
         stamps = [int((START + i * MINUTE).timestamp()) for i in range(4)]
         q = {
