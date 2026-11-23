@@ -320,14 +320,16 @@ $('encounter-run').onclick=async()=>{
   button.disabled=true;
   try {
     if(!session)throw new Error('Choose an archived session.');
-    if(JSON.stringify(formRule().levelEncounter)!==JSON.stringify(rule.levelEncounter) ||
-      JSON.stringify(formRule().outcomes)!==JSON.stringify(rule.outcomes))throw new Error('Save your edited study to your account before replaying it.');
+    const draft=formRule();
+    const fields=['name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
+    if(JSON.stringify(draft,fields)!==JSON.stringify(rule,fields))throw new Error('Save your edited study to your account before replaying it.');
     progress.textContent='Opening the archived session…';
     for(let batch=0;batch<100;batch++) {
       const body=await accountRequest({action:'replay-encounters',session,ruleId:rule.id,version:rule.version});
       if(generation!==observedGeneration || editing!==rule)return;
       const c=body.coverage;
       progress.textContent=c.retainedVersions+' archived snapshots indexed · '+c.pending+' pending · '+c.gaps+' with gaps.';
+      if(c.gapReasons)progress.textContent+=' '+Object.entries(c.gapReasons).map(([reason,count])=>count+' '+reason.replaceAll('-',' ')).join(', ');
       if(body.complete) {
         showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent='Archived replay · '+session+' · '+body.events.length+' encounters';
         $('observed-coverage').textContent=progress.textContent+' Source availability gates every encounter. Replay may include evidence the observer retained later.';

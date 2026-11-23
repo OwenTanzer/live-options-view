@@ -51,7 +51,7 @@ export function eventRule(input) {
       rule.conditions[0].source!=='oi-levels' || rule.conditions[0].field!=='qualified' ||rule.conditions[0].op!=='==' || rule.conditions[0].value!==true)
       throw new Error('Invalid calibrated OI study input');
     if(rule.combine!=='all' || rule.transition!=='rising' || rule.missingInput!=='reset')throw new Error('Invalid encounter transition');
-    if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='price' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
+    if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='level-spot' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
   }
   return immutable(rule);
 }
@@ -81,8 +81,10 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   // availability. Do not rescan/clone the full archive per condition per tick.
   const finalRows = selectAsOf(rows, selection);
   if (rule.levelEncounter) {
+    const endpoints=finalRows.filter(r=>r.source==='level-spot' && Number.isFinite(r.value?.spot))
+      .sort((a,b)=>(a.valueAt??a.eventAt)-(b.valueAt??b.eventAt) || a.availableAt-b.availableAt);
     return immutable(encounterEvents(rule, rows, selection, close, activationWindows).map(event=>({...event,
-      outcomes:rule.outcomes.map(o=>measureOutcome(event,o,finalRows,selection,close))})));
+      outcomes:rule.outcomes.map(o=>measureOutcome(event,o,endpoints,selection,close))})));
   }
   const arrivals = new Map();
   for (const row of rows) {
@@ -172,7 +174,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
 }
 
 function measureOutcome(event, outcome, rows, selection, close) {
-  const targetAt = event.triggeredAt + outcome.horizonMs;
+  const targetAt = (event.encounter?.upperTime ?? event.triggeredAt) + outcome.horizonMs;
   const deadline = Math.min(targetAt + outcome.toleranceMs, close);
   const cutoff = instant(selection.cutoff);
   const base = { id: outcome.id, targetAt, value: null, measuredAt: null, availableAt: null, evidence: null };

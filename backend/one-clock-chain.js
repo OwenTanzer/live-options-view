@@ -186,7 +186,7 @@ export async function verifiedNativeChain(bucket,{session,instrument,cutoff},sel
   return {coverage,rows:[observation({source:'chain',id:selected.id,revision:selected.revision,session,instrument,origin:'recorded',
     eventAt,availableAt:selected.availableAt,evidence:selected.evidence,
     details:{availabilityBasis:coverage.availabilityBasis,digestVerification:coverage.digestVerification,sequence:selected.details.sequence},
-    value:{symbol:instrument,date:session,tier:payload.tier,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
+    value:{symbol:instrument,date:session,tier:['0DTE_Regular','0DTE_Weekly','0DTE_Monthly'].includes(payload.tier)?payload.tier:null,spotAt:stamp(payload.underlying_market?.spot_ts),spotFreshness:payload.underlying_market?.freshness==='live'?'live':null,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
       underlying_price:spot,rows:spot===null?rows.map(row=>({...row,UnderlyingPrice:null})):rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
 }
 export async function handleOneClockChain(request,env,url) {

@@ -35,7 +35,7 @@ export function encounterForm(root) {
       return {instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',
         conditions:[{source:'oi-levels',field:'qualified',op:'==',value:true,maxAgeMs:maxGapMs}],
         levelEncounter:{minimumBucket:Number(read('level-bucket').value),groups,approach:read('level-approach').value,contact:read('level-contact').value,maxGapMs},
-        outcomes:horizons.map(h=>({id:'direction-'+h,source:'price',field:'spot',measure:'category',horizonMs:h*60000,maxAgeMs:maxGapMs,toleranceMs}))};
+        outcomes:horizons.map(h=>({id:'direction-'+h,source:'level-spot',field:'spot',measure:'category',horizonMs:h*60000,maxAgeMs:maxGapMs,toleranceMs}))};
     }
   };
 }

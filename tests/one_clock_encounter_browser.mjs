@@ -6,7 +6,9 @@ import {readFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {makeStorage} from './helpers/d1_shim.mjs';
 import {createStorage} from '../backend/storage.js';
-import {handleOneClockResearch} from '../backend/one-clock-research.js';
+import {handleOneClockResults} from '../backend/one-clock-results.js';
+import {levelIngestion} from '../backend/one-clock-level-ingestion.js';
+import {advanceOneClockResearch,handleOneClockResearch} from '../backend/one-clock-research.js';
 const DB=makeStorage(), session='2026-11-20', stream='collector-chain/QQQ', start=Date.parse(session+'T15:00:00Z');
 const origin='https://options.moopertonic.net', objects=new Map();
 const PAPER_TRADES={async get(key){return objects.get(key)??null;}};
@@ -30,7 +32,7 @@ for(const [i,[minute,spot]] of sample.entries()) {
     const oi=(j===0&&side==='put'||j===1&&side==='call'||j===2)?50:10;
     return [strike,side,oi,session,spot].join(',');
   })).join('\n');
-  const json=JSON.stringify({symbol:'QQQ',date:session,expiration:session,tier:'0DTE_Regular',timestamp:new Date(at).toISOString(),snapshot_key:csvKey,underlying_price:spot});
+  const json=JSON.stringify({symbol:'QQQ',date:session,expiration:session,tier:'0DTE_Regular',timestamp:new Date(at).toISOString(),snapshot_key:csvKey,underlying_market:{freshness:'live',spot_ts:new Date(at).toISOString()},underlying_price:spot});
   const evidence=[[csv,'collector.snapshot.csv.v1','text/csv'],[json,'collector.snapshot.payload.v1','application/json']].map(([text,schema,contentType])=>{
     const sha256=createHash('sha256').update(text).digest('hex'),key='publications/v1/'+stream+'/blobs/'+sha256;
     object(key,text,at);return {key,sha256,bytes:Buffer.byteLength(text),schema,contentType};
@@ -40,17 +42,22 @@ for(const [i,[minute,spot]] of sample.entries()) {
   await DB.prepare('INSERT INTO one_clock_publication_records VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(stream,'price',id,1,session,'QQQ',at,at,at,sequence,JSON.stringify(price)).run();
 }
 await DB.prepare('INSERT INTO one_clock_publication_status VALUES(?,?,?,?)').bind(stream,1,start+30*60000,JSON.stringify({nextSequence:sample.length+1,reason:'tail-at-check'})).run();
+const realNow=Date.now;
+let simulatedNow=start-60000;
+Date.now=()=>simulatedNow;
 const storage=createStorage(env);
 await storage.users.insert('tester',{username:'tester',version:0});await storage.sessions.create('local-token','tester',3600);
 const browser=await chromium.launch({headless:true,channel:'chromium',executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH});
 try {
   const page=await browser.newPage(),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
+  await page.clock.setFixedTime(new Date(start+31*60000));
   await page.context().addCookies([{name:'session',value:'local-token',url:origin}]);
   await page.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url());assert.equal(url.origin,origin);
-    if(url.pathname==='/api/one-clock/research'){
-      const res=await handleOneClockResearch(new Request(url,{method:request.method(),headers:await request.allHeaders(),body:request.postData()??undefined}),env);
+    if(['/api/one-clock/research','/api/one-clock/results'].includes(url.pathname)){
+      const handler=url.pathname.endsWith('/results')?handleOneClockResults:handleOneClockResearch;
+      const res=await handler(new Request(url,{method:request.method(),headers:await request.allHeaders(),body:request.postData()??undefined}),env);
       const body=await res.text();console.log(request.postDataJSON()?.action??'load',res.status,body.slice(0,130));
       return route.fulfill({status:res.status,body,contentType:'application/json'});
     }
@@ -61,10 +68,21 @@ try {
   await page.click('#new-rule');await page.selectOption('#study-kind','level');await page.fill('#rule-name','QQQ bright OI');
   await page.click('#account-save');await page.waitForFunction(()=>document.querySelector('#form-status').textContent.includes('to your account'));
   await page.click('#account-activate');await page.waitForFunction(()=>document.querySelector('#form-status').textContent.includes('activated'));
+  simulatedNow=start+30*60000;
+  // Native producer evidence is already in D1; run the real scheduled
+  // observer with the study's registered adapter and its ordinary work queue.
+  const ticks=await advanceOneClockResearch(env,{now:simulatedNow,sources:[levelIngestion],publicationSources:[]});
+  assert.ok(ticks.some(t=>t.state==='evaluated' && t.session===session),JSON.stringify(ticks));
+  simulatedNow+=60000;
+  await page.click('#show-observed');await page.waitForSelector('#observed-ledger button');
+  await page.locator('#observed-ledger button').first().click();assert.match(await page.locator('#observed-evidence').innerText(),/observerRevision/);
+  const observed=await page.locator('#observed-ledger tr').count();
+  await page.click('#show-builder');
   await page.fill('#encounter-day',session);await page.click('#encounter-run');
   await page.waitForSelector('#observed-results:not([hidden]) table caption');
   const table=page.locator('#observed-results table').filter({has:page.locator('caption')});
   assert.equal(await table.locator('tbody tr').count(),12);
+  assert.equal(await page.locator('#observed-ledger tr').count(),observed);
   for(const group of ['put-only','call-only','both'])assert.ok(Number(await table.locator('tbody tr').filter({has:page.getByText(group,{exact:true})}).first().locator('td').nth(2).innerText())>0);
   await page.locator('#observed-ledger button').first().click();assert.match(await page.locator('#observed-evidence').innerText(),/calibration/);
   await page.click('#show-builder');await page.selectOption('#level-bucket','4');await page.selectOption('#level-approach','down');
@@ -72,4 +90,4 @@ try {
   await page.waitForFunction(()=>document.querySelector('#form-status').textContent.includes('v2 to your account'));
   await page.click('#encounter-run');await page.waitForSelector('#observed-results:not([hidden]) caption');assert.equal(await table.locator('tbody tr').count(),4);
   assert.deepEqual(errors,[]);console.log('Passed browser account save, observation, archived replay, three exclusive groups, four horizons, receipt inspection and second version.');
-} finally {await browser.close();DB.db.close();}
+} finally {Date.now=realNow;await browser.close();DB.db.close();}
