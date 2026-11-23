@@ -275,6 +275,35 @@ test('migration bootstraps retained entries while concurrent arrivals retain ind
   assert.match(pending.reason,/capacity/);assert.ok(pending.retry_at>now);
   assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_generation_receipts WHERE namespace='account:old'")[0].n,0);
 });
+test('unrelated archived evaluation advances past two failing current-scope queue heads',async t=>{
+  const {DB,env,bucket}=await setup(t);
+  const now=Date.parse('2026-11-25T18:00:00Z');
+  const namespace='account:older';
+  const rule={id:'old',version:1,name:'Archived threshold',instruments:['QQQ'],combine:'all',
+    transition:'rising',missingInput:'reset',conditions:[{source:'price',field:'spot',op:'>=',value:700,maxAgeMs:150000}],outcomes:[]};
+  await registerObservedRule(DB,{namespace,rule,registeredAt:T-100000});
+  await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,?)').bind(namespace,rule.id,1,T-100000,T+120000).run();
+  bucket.visible=2;
+  await advanceNativePublications(env,{now});
+  await DB.prepare('INSERT INTO one_clock_evaluation_work(namespace,session,instrument) VALUES(?,?,?)')
+    .bind('account:broken','2026-11-25','QQQ').run();
+  for (const [i,id] of ['a','b'].entries()) {
+    await DB.prepare(`INSERT INTO one_clock_historical_rules
+      (namespace,session,instrument,rule_id,version,target,next_target,enqueued_at,retry_at)
+      VALUES(?,?,?,?,1,1,1,?,?)`).bind('account:broken','2026-11-25','QQQ',id,i+1,i+1).run();
+  }
+  const brokenSource={id:'broken',version:'1',instruments:['QQQ'],outputs:['fixture'],
+    discover:async()=>{throw Error('fixture source outage');}};
+  let completed=false;
+  for(let i=0;i<8&&!completed;i++) {
+    const result=await advanceOneClockResearch(env,{now:now+i*900000,sources:[brokenSource]});
+    completed=result.some(r=>r.session===session&&r.state==='evaluated') &&
+      DB.raw('SELECT MAX(generation) AS generation FROM one_clock_generation_receipts WHERE namespace=?',namespace)[0].generation>=2;
+  }
+  assert.ok(completed,'the dated native evidence must be evaluated while the current scope is failing');
+  assert.equal((await observedEventsAsOf(DB,{namespace,selection:{session,instrument:'QQQ',origin:'recorded',cutoff:now+8*900000}})).length,1);
+});
+
 test('historical work obtains missing optional evidence and keeps its target pending until covered',async t=>{
   const {DB,bucket,env}=await setup(t),namespace='account:late-shortlist';
   const rule={id:'both',version:1,name:'Recorded shortlist and spot',instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',
