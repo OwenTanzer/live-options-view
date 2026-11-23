@@ -271,6 +271,7 @@ class AccountState:
     fetched_at: str = field(default_factory=clock.iso_utc)
     account_closed: bool = False
     closure_reason: str | None = None
+    trade_history_present: bool = True
 
     def summary(self) -> dict[str, Any]:
         """Compact form for the audit record.
@@ -284,6 +285,7 @@ class AccountState:
             "username": self.username,
             "balance_cash": self.balance_cash,
             "trade_count": len(self.trades),
+            **({"trade_history_present": False} if not self.trade_history_present else {}),
             "fetched_at": self.fetched_at,
             **({"account_closed": True, "closure_reason": self.closure_reason} if self.account_closed else {}),
         }
@@ -603,6 +605,7 @@ class AccountSession:
             username=payload.get("username", self.account.username),
             balance_cash=float(payload.get("balance_cash", 0.0)),
             trades=payload.get("trades", []) or [],
+            trade_history_present=isinstance(payload.get("trades"), list),
             account_closed=payload.get("account_closed") is True,
             closure_reason=payload.get("closure_reason"),
         )

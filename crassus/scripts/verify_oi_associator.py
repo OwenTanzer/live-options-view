@@ -89,6 +89,8 @@ class Adapter(unittest.TestCase):
         self.assertEqual(bot(ctx).action,"no_trade")
         h=[fill("buy",START),fill("sell",START+timedelta(seconds=5))]
         self.assertEqual(bot(context(START+timedelta(seconds=7),h)).action,"no_trade")
+        ctx=context();ctx.account_state["trade_history_present"]=False
+        self.assertEqual(bot(ctx).action,"no_trade")
         ctx=context();ctx.account_state["trade_count"]=1
         self.assertEqual(bot(ctx).action,"no_trade")
         ctx=context();ctx.quotes=lambda _:{"QQQ":Quote("QQQ",744,745,START.isoformat(),START.isoformat(),

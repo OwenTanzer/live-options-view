@@ -89,7 +89,7 @@ def account_position(ctx):
     history = ctx.book.trades
     age = (ctx.now_et - stamp(ctx.account_state["fetched_at"])).total_seconds()
     if (not 0 <= age <= 30 or not isinstance(history, list) or ctx.account_state["trade_count"] != len(history)
-            or ctx.account_state.get("account_closed")):
+            or ctx.account_state.get("account_closed") or ctx.account_state.get("trade_history_present") is False):
         raise ValueError("account snapshot stale, closed or incomplete")
     holding = bought_today = False
     last = None
