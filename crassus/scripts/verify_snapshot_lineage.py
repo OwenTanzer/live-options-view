@@ -129,7 +129,8 @@ class LedgerLineage(unittest.TestCase):
         self.assertEqual(len(MANDATORY_FIELDS), 19)
         self.assertEqual(record["schema_version"], "crassus_audit.v1")
 
-    def test_trade_no_trade_and_dry_run_keep_identical_decisions(self):
+    @patch("crassus.clock.now_utc", return_value=NOW.astimezone(ZoneInfo("UTC")))
+    def test_trade_no_trade_and_dry_run_keep_identical_decisions(self, _now_utc):
         for phase, dry, action in (("open", False, "buy"), ("closed", False, "no_trade"),
                                    ("open", True, "buy")):
             decisions, submissions = [], []
@@ -142,6 +143,9 @@ class LedgerLineage(unittest.TestCase):
                 self.assert_lineage(r, s.lineage)
                 self.assertEqual(r["decision"]["action"], action)
                 self.assertEqual(r["market_snapshot_url_or_hash"], s.provenance)
+                self.assertEqual(r["strategy_decided_at"], NOW.astimezone(ZoneInfo("UTC")).isoformat())
+                for call in self.executor.submit_calls:
+                    self.assertEqual(call["strategy_decided_at"], r["strategy_decided_at"])
                 decisions.append(r["decision"])
                 submissions.append([{k: v for k, v in call.items()
                                      if k not in {"decision_id", "market_snapshot_lineage", "market_snapshot_url_or_hash"}}

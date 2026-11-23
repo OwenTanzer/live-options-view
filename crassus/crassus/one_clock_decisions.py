@@ -83,6 +83,15 @@ def project(record):
              "action": action if action in ("buy", "sell", "no_trade") else None,
              "inputAgeMs": round((at-snap).total_seconds()*1000) if snap and snap <= at else None}
     rows = [{**base, "source": "bot-decision", "value": value}]
+    # A ledger row and a strategy evaluation have different identities.
+    # Preserve the original decision time across recovery; older records with
+    # no such clock remain available as ordinary audit rows only.
+    decided_at = timestamp(record.get("strategy_decided_at"))
+    if decided_at and decided_at <= at and action in ("buy", "sell", "no_trade"):
+        key = hashlib.sha256(f"one-clock.evaluation.v1|{bot}|{private_id}".encode()).hexdigest()
+        rows.append({**base, "source": "bot-evaluation", "eventAt": decided_at.isoformat(),
+                     "session": decided_at.astimezone(NY).date().isoformat(),
+                     "value": {"bot": bot, "action": action, "decisionKey": key}})
     if bot == "crassus_oiskew":
         meter = build_projection(record, published_at=at)
         anchor_at = timestamp(meter["anchor_observed_at"])

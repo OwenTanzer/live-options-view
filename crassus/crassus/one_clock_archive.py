@@ -15,6 +15,7 @@ from .one_clock_decisions import project
 from . import one_clock_publications as wire
 
 FIELDS = {
+    "bot-evaluation": {"bot": "string", "action": "string", "decisionKey": "string"},
     "bot-decision": {"bot": "string", "outcome": "string", "action": "string", "inputAgeMs": "number"},
     "bot-anchored-skew": {"anchor": "number", "imbalance": "number", "delta": "number",
                           "strikes": "number", "anchorAt": "string", "run": "string",
