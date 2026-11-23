@@ -605,6 +605,17 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "market_readings":  readings,
         "market_readings_digest": readings_sha,
     }
+    if us.symbol == "QQQ" and (ts_et.hour, ts_et.minute) >= (9, 30):
+        # This independent artifact cannot stop minute publication. The
+        # exchange calendar, not a late restart, establishes the opening slot.
+        try:
+            from .opening_oi import publish_opening_oi, opening_calendar
+            bounds, prior = opening_calendar(today)
+            if bounds and bounds[0] <= ts_et < bounds[1] and prior:
+                publish_opening_oi(s3, R2_BUCKET, payload=payload, state=state, strikes=strikes,
+                                   captured=ts_et, session_open=bounds[0], previous_session=prior.isoformat(), cursor=us.opening_oi_cursor)
+        except Exception as error:
+            log.warning("opening OI reference unavailable: %s", error)
     if us.symbol != "QQQ":
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])

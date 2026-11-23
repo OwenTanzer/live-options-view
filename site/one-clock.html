@@ -23,12 +23,23 @@
       <label>Combine conditions<select id="combine"><option value="all">All conditions</option><option value="any">Any condition</option></select></label>
       <label>Count a new occurrence<select id="transition"><option value="rising">When false becomes true</option><option value="once-per-session">First match each session</option></select></label>
       <label>When input is missing<select id="missing"><option value="hold">Keep previous state</option><option value="reset">Reset to non-matching</option></select></label></div>
-      <h3>Conditions</h3><div id="conditions"></div><button type="button" id="add-condition">+ Add condition</button>
-      <h3>Outcomes <small>Optional — you can track without predicting</small></h3><div id="outcomes"></div><button type="button" id="add-outcome">+ Add outcome</button>
+      <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option></select></label>
+      <fieldset id="level-fields" hidden><legend>Strike encounters</legend>
+      <p>The session opening map sets each strike’s group using settled open interest and the opening ATM. Encounters qualify once the opening map was available. A fresh approach after leaving the strike can count again.</p>
+      <div class="form-grid"><label>Minimum open-interest bucket<select id="level-bucket"><option value="5">Brightest · at or above p90</option><option value="4">At or above p75</option></select></label>
+      <label>Approach<select id="level-approach"><option value="either">Either direction</option><option value="up">From below</option><option value="down">From above</option></select></label>
+      <label>Contact<select id="level-contact"><option value="exact-or-bracketed">Exact touches and bracketed crossings</option><option value="exact">Exact touches only</option></select></label>
+      <label>Maximum gap between price samples (seconds)<input id="level-gap" type="number" min="1" max="900" value="150"></label>
+      <label>Outcome horizons (minutes, comma separated)<input id="level-horizons" value="1, 3, 9, 27"></label><label>Endpoint tolerance after horizon (seconds)<input id="level-tolerance" type="number" min="0" max="86400" value="30"></label></div>
+      <label><input id="put-only" type="checkbox" checked> Puts only</label> <label><input id="call-only" type="checkbox" checked> Calls only</label> <label><input id="both" type="checkbox" checked> Both</label>
+      <p>The first eligible endpoint beyond the strike in the approach direction counts as continuation. An endpoint on the approach side counts as rejection. A price exactly at the strike counts as a tie.</p></fieldset>
+      <div id="scalar-fields"><h3>Conditions</h3><div id="conditions"></div><button type="button" id="add-condition">+ Add condition</button>
+      <h3>Outcomes <small>Optional — you can track without predicting</small></h3><div id="outcomes"></div><button type="button" id="add-outcome">+ Add outcome</button></div>
       <div class="actions"><button type="button" id="preview-rule">Preview</button><button class="primary" type="submit" id="save-rule">Save new version</button></div>
     </form>
     <p id="form-status" role="status"></p><details><summary>Portable rule</summary><pre id="rule-json"></pre></details>
     <div class="actions" id="account-controls"><button id="account-save">Save to account</button><button id="account-activate">Observe saved version</button><button id="account-pause">Pause observation</button><button id="account-reopen">Reopen account definitions</button></div>
+    <div id="archive-encounter-controls" hidden><label>Archived session<input type="date" id="encounter-day"></label> <button type="button" id="encounter-run">Replay saved study</button><p id="encounter-progress" role="status"></p></div>
     <p class="muted" id="account-help">Account observation uses the sources registered for your account. Local previews use the synthetic session. <a href="/">Sign in to Options View</a> to use your account. Pausing stops new triggers; pending outcomes continue.</p>
   </section>
   <section id="observed-results" hidden aria-labelledby="observed-title">
@@ -38,7 +49,7 @@
     <p class="muted">Load up to 31 calendar days. Dates, instruments and cutoff apply when you choose Read cutoff or Live; filters apply immediately to the loaded occurrence table.</p><p id="observed-status" role="status"></p><p id="observed-coverage" class="muted"></p>
     <div id="observed-stats" class="stats"></div>
     <div class="table-wrap"><table><thead><tr><th>Event / version</th><th>Trigger (UTC)</th><th>Retained (UTC)</th><th>Collection</th><th>Outcomes</th><th>Evidence</th></tr></thead><tbody id="observed-ledger"></tbody></table></div>
-    <pre id="observed-evidence" hidden></pre>
+    <div id="observed-evidence" hidden></div>
   </section>
   <section id="results" aria-labelledby="results-title" hidden>
     <div class="section-head"><h2 id="results-title">Event Results</h2><label>Event class and version<select id="result-version"></select></label></div>

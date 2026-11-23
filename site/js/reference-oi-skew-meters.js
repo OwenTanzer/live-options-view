@@ -13,7 +13,7 @@
 // reuses that payload instead of requesting it twice.
 
 const REFERENCE_OI_SKEW_SYMBOLS = ['SPY', 'IBIT'];
-const REFERENCE_OI_SKEW_AGE_TICK_MS = 15 * 1000;
+
 const REFERENCE_OI_SKEW_LABEL = {
   live: 'live', stale: 'stale', closed: 'session closed', unavailable: 'unavailable', no_data: 'no data',
 };
@@ -257,7 +257,7 @@ function createReferenceOiSkewMeter(symbol) {
 }
 
 const referenceOiSkewMeters = {};
-let _refSkewTimers = null;
+let _refSkewRefresh = null;
 
 function startReferenceOiSkewMeters(refreshSeconds = (typeof REFRESH === 'number' ? REFRESH : 60)) {
   for (const symbol of REFERENCE_OI_SKEW_SYMBOLS) {
@@ -266,12 +266,9 @@ function startReferenceOiSkewMeters(refreshSeconds = (typeof REFRESH === 'number
   }
   const meters = Object.values(referenceOiSkewMeters);
   for (const m of meters) m.refresh();
-  if (_refSkewTimers || typeof setInterval !== 'function' || !meters.length) return;
-  _refSkewTimers = [
-    setInterval(() => { for (const m of meters) m.refresh(); }, refreshSeconds * 1000),
-    // Elapsed time alone moves live -> stale -> session closed without a fetch.
-    setInterval(() => { for (const m of meters) m.render(Date.now()); }, REFERENCE_OI_SKEW_AGE_TICK_MS),
-  ];
+  if (_refSkewRefresh || typeof setInterval !== 'function' || !meters.length) return;
+  _refSkewRefresh = setInterval(() => { for (const m of meters) m.refresh(); }, refreshSeconds * 1000);
+  _ensureOiSkewAgeTicker();
 }
 
 if (typeof module !== 'undefined' && module.exports) {

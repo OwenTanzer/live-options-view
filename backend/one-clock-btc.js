@@ -55,9 +55,9 @@ export async function handleBitcoinReplay(request,env) {
   if(!await btcAllowed(env,session,request))return jsonResponse({error:'Bitcoin data authorization required'},403);
   try {
     const page=await privateBitcoinPage(env.PAPER_TRADES,session.record,cutoff,offset,match[3]);
+    if(!await btcAllowed(env,session,request))return jsonResponse({error:'Bitcoin data authorization required'},403);
     if(page.restart)return jsonResponse({error:'Receipt list changed. Reopen this cutoff.'},409);
     const {rows,gaps,next,version}=page;
-    if(!await btcAllowed(env,session,request))return jsonResponse({error:'Bitcoin data authorization required'},403);
     const cells=rows.map(row=>'<tr>'+[row.venue,row.symbol,row.received,row.bid,row.ask].map(v=>'<td>'+escape(v)+'</td>').join('')+'</tr>').join('');
     const more=next===null?'':'<a href="?one_clock_at='+cutoff+'&amp;offset='+next+'&amp;version='+version+'">Older receipts</a>';
     const html='<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bitcoin quote replay</title><link rel="stylesheet" href="/one-clock.css"><main><h1>Bitcoin quote replay</h1><p>Private paper-fill samples for '+utcDay(cutoff)+' UTC through '+new Date(cutoff).toISOString()+'. Each row became available when its terminal receipt was archived. Coverage is limited to quoted contracts at fills.</p><p>'+rows.length+' eligible receipts on this page · '+gaps+' unverifiable receipt references.</p><div class="table-wrap"><table><thead><tr><th>Venue</th><th>Contract</th><th>Archived UTC</th><th>Bid</th><th>Ask</th></tr></thead><tbody>'+cells+'</tbody></table></div>'+more+'</main>';

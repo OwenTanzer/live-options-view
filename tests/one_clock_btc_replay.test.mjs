@@ -54,3 +54,17 @@ test('receipt pages detect a changed candidate set and retain CME contract ident
   assert.equal(first.rows[0].venue,'CME');
   assert.equal((await privateBitcoinPage(bucket(cmeReceipt),{...owner,trades:[]},uploaded,0,first.version)).restart,true);
 });
+
+test('revocation during receipt storage I/O withholds already-read private evidence',async()=>{
+  const env=withD1({PAPER_TRADES:{async get(path){
+    const object=await bucket().get(path);
+    await env.DB.prepare("DELETE FROM trade_journal_members WHERE member='Owen'").run();
+    return object;
+  }}});
+  await seedAccounts(env,[record]);await seedSession(env,'revoking','owner');setupBtcOwner(env);
+  await seedBtcOwnerSession(env,'revoking','owner');
+  const request=new Request('https://options.moopertonic.net/api/one-clock/btc-replay?one_clock_at='+uploaded,
+    {headers:{Cookie:SESSION_COOKIE+'=revoking'}});
+  const response=await handleBitcoinReplay(request,env);
+  assert.equal(response.status,403);assert.ok(!(await response.text()).includes(key));
+});

@@ -181,6 +181,7 @@ function formatBotLastTrade(value) {
 }
 
 function renderBots() {
+  if (typeof window !== 'undefined' && window.oneClockDashboard && !window.oneClockDashboard.isLive()) return;
   if (!botsData) {
     if (botsError) {
       document.getElementById('bots-status').textContent = botsStatusLine('');

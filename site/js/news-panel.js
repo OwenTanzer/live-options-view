@@ -137,7 +137,8 @@
     var root = String(base).replace(/\/+$/, '');
     var limit = deadlineMs || DEADLINE_MS;
     var T = timers || { set: function (f, ms) { return setTimeout(f, ms); }, clear: function (h) { clearTimeout(h); } };
-    return function fetchJson(key) {
+    return function fetchJson(key, signal) {
+      if (signal && signal.aborted) return Promise.reject(signal.reason);
       if (!isNewsViewKey(key)) {
         return Promise.reject(newsError('refused', 'refused: not a published news view key, so it was not requested'));
       }
@@ -152,7 +153,8 @@
       });
       var work = Promise.resolve().then(function () {
         var init = { credentials: 'omit', cache: 'no-store' };
-        if (ctrl) init.signal = ctrl.signal;
+        if (signal && ctrl) init.signal = AbortSignal.any([signal, ctrl.signal]);
+        else if (signal || ctrl) init.signal = signal || ctrl.signal;
         return fetchImpl(url, init);
       }).then(function (r) {
         if (r.status === 404 && key === INDEX_KEY) throw newsError('absent', 'No news views published yet');
@@ -611,7 +613,7 @@
     // every later call on this mount, from any control, does nothing.
     var reloaded = false;
     function reloadAll() {
-      if (reloaded) return false;
+      if (reloaded || (opts.signal && opts.signal.aborted)) return false;
       reloaded = true;
       dead = true;
       clear(container);
@@ -639,7 +641,12 @@
       container.setAttribute('data-state', 'refresh-required');
     }
 
+    if (opts.signal) opts.signal.addEventListener('abort', function () {
+      dead = true;
+      tell({ state: 'refresh', reason: 'News is no longer following live' });
+    }, {once: true});
     return fetchJson(indexKey).then(function (index) {
+      if (dead) return;
       var tomb = tombstoneState(index);
       if (tomb) {
         // Nothing is published: no page is requested and nothing from an earlier mount is kept.
@@ -661,7 +668,7 @@
       var latest = 0;
       if (opts.events && typeof opts.events.addEventListener === 'function') {
         var recheck = function () { if (!dead && !leaseValid()) refresh('the index lease ended'); };
-        ['visibilitychange', 'pageshow', 'online'].forEach(function (type) { opts.events.addEventListener(type, recheck); });
+        ['visibilitychange', 'pageshow', 'online'].forEach(function (type) { opts.events.addEventListener(type, recheck, opts.signal ? {signal: opts.signal} : undefined); });
       }
       function show(key) {
         if (dead) return Promise.resolve();
@@ -718,6 +725,7 @@
       var initial = collectorDays.find(function (view) { return view.rows_total > 0; });
       return show((initial || collectorDays[0] || index.views[0]).first_page);
     }).catch(function (e) {
+      if (dead) return;
       clear(pageSlot);
       tell({ state: e && e.newsKind === 'absent' ? 'absent' : 'failed' });
       if (e && e.newsKind === 'absent') {
@@ -748,8 +756,18 @@ function loadNewsPanel() {
   // research page that index names, from the same generation, under the same lease.
   var box = document.getElementById('news-research');
   var onIndex = box && typeof NewsResearch !== 'undefined' ? NewsResearch.follow(document, box) : null;
-  return NewsPanel.mount(document, document.getElementById('news-panel'),
-    NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,
-      function (url, opts) { return fetch(url, opts); }, Date.now),
-    NewsPanel.INDEX_KEY, { events: typeof window !== 'undefined' ? window : null, onIndex: onIndex });
+  var container = document.getElementById('news-panel');
+  var fetchJson = NewsPanel.makeFetcher(typeof NEWS_DATA === 'undefined' ? null : NEWS_DATA,
+    function (url, opts) { return fetch(url, opts); }, Date.now);
+  function mountLive(target, signal) {
+    return NewsPanel.mount(document, target, function (key) { return fetchJson(key, signal); }, NewsPanel.INDEX_KEY,
+      { events: typeof window !== 'undefined' ? window : null, onIndex: onIndex, signal: signal });
+  }
+  if (typeof window !== 'undefined') {
+    return import('./one-clock-news.js').then(function (clock) {
+      return clock.followNews({container: container, research: box, panel: NewsPanel,
+        fetchJson: fetchJson, mountLive: mountLive, dashboard: window.oneClockDashboard || {snapshot: function () { return {mode: 'live'}; }}, events: window});
+    }).catch(function (error) { container.textContent = 'News unavailable. ' + error.message; });
+  }
+  return mountLive(container);
 }

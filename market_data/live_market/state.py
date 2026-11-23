@@ -140,6 +140,7 @@ class UnderlyingSession:
         self.prev_vol: dict[str, int] = {}     # persists across calls to compute per-minute delta
         self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
         self.subscription_coverage: dict | None = None  # SPY's fixed startup strike window
+        self.opening_oi_cursor = {}
         self.first_snapshot_written = False     # guard so first.csv is only written once per session
         self.session_date: date | None = None
         self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py
