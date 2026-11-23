@@ -309,14 +309,20 @@ test('account audit preserves each bot decision and its own settlement on delaye
   await ingest([
     {...decision('a',1,31),revision:2}, decision('sell',30,31,'sell'), decision('buy',30,31,'buy'), price(40,105),
     decision('no-baseline',50,51), decision('late',205,220), decision('closed',210,220),
-    decision('missing-endpoint',80,81), price(80,117)
+    decision('missing-endpoint',80,81), price(80,117),
+    decision('prompt',100,100), price(100,108,111), price(110,113)
   ]);
   await tick(close+11*minute);
   const revised = await events(now), byId = id => revised.find(e=>e.inputEvidence[0].id === id);
-  assert.equal(revised.length,7);
+  assert.equal(revised.length,8);
   assert.ok(revised.some(e=>e.id===original[0].id));
   assert.equal(byId('buy').inputEvidence[0].value.action,'buy');
   assert.equal(byId('sell').outcomes[0].value,-4);
+  const prompt = byId('prompt');
+  assert.equal(prompt.collection,'prospective');
+  assert.equal(prompt.baselines['qqq-change'].visibleAtDecision,false);
+  assert.equal(prompt.outcomes[0].baselineTiming,'reconstructed');
+  assert.equal(prompt.lineage.outcomes['qqq-change'].collection,'retrospective');
   assert.equal(byId('no-baseline').outcomes[0].reason,'trigger-baseline-unavailable');
   assert.equal(byId('late').outcomes[0].reason,'session-closed-before-horizon');
   assert.equal(byId('missing-endpoint').outcomes[0].reason,'no-qualified-endpoint');

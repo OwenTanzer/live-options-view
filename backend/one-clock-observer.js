@@ -104,7 +104,7 @@ export async function observeBatch(db, input) {
         const baseline = lineage(event.baselines[outcome.id]?.evidence);
         const endpoint = lineage(outcome.evidence);
         return [outcome.id,{ baseline,endpoint,collection:outcome.state === 'measured'
-          ? classify([baseline,endpoint],eventCollection) : null }];
+          ? classify([baseline,endpoint],outcome.baselineTiming === 'reconstructed' ? 'retrospective' : eventCollection) : null }];
       }));
       current.set(key,{ ...stable,id:key,collection:eventCollection,registeredAt:registered.registered_at,
         lineage:{ inputs,outcomes } });

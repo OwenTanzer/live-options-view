@@ -75,6 +75,7 @@ export function decisionEvents(rule, rows, selection, close, windows, evidence) 
         const change = o.measure === 'change' ? spot - baseline : (spot / baseline - 1) * 100;
         if (!Number.isFinite(change)) return {...empty, state: 'missing', reason: 'nonfinite-measurement'};
         return {...empty, state: 'measured', reason: null, value: change, endpointValue: spot,
+          baselineTiming: quote.availableAt > at ? 'reconstructed' : 'visible-at-decision',
           measuredAt: sampleAt(endpoint), offsetMs: sampleAt(endpoint) - targetAt,
           availableAt: Math.max(quote.availableAt, receipt.availableAt, endpoint.availableAt),
           evidence: evidence(endpoint)};
