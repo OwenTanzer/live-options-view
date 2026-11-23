@@ -28,7 +28,7 @@ try {
           url.pathname === '/order-flow/qqq/v1/recent.json' ? fixture.feed : null;
         if (data) return route.fulfill({json: data});
       }
-      const allowed = /^\/(?:order-flow\.html|order-flow-replay\.json|shared\/(?:order-flow|one-clock)[a-z-]*\.js)$/;
+      const allowed = /^\/(?:order-flow\.html|order-flow-(?:replay|capture-20261123)\.json|shared\/(?:order-flow|one-clock)[a-z-]*\.js)$/;
       if (url.origin !== origin || !allowed.test(url.pathname)) {
         unexpected.push(url.href);
         return route.abort();
@@ -95,6 +95,22 @@ try {
     assert.equal(await page.evaluate(()=>scrollY),pageY);
     await page.mouse.wheel(0,-240);
     await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
+    await page.goto(origin+'/order-flow.html?source=capture&tape=chart');
+    await statusContains('887 prints in view');
+    await range.getByText('Strikes $649–$653 of $500–$900',{exact:true}).waitFor();
+    const chartViewport=page.locator('#optional-tape #view');
+    await chartViewport.focus();
+    await page.keyboard.press('End');
+    await range.getByText('Strikes $500–$520 of $500–$900',{exact:true}).waitFor();
+    await page.keyboard.press('Home');
+    await range.getByText('Strikes $880–$900 of $500–$900',{exact:true}).waitFor();
+    await page.locator('[data-view="footprint"]').click();
+    const strikeColumns=page.locator('#optional-tape .grid thead th');
+    await strikeColumns.nth(201).waitFor({state:'attached'});
+    assert.equal(await strikeColumns.first().textContent(),'ET');
+    assert.equal(await strikeColumns.last().textContent(),'500');
+    await page.locator('[data-view="ladder"]').click();
+    await page.locator('#optional-tape .lrow').nth(200).waitFor({state:'attached'});
     for (const [url, message] of [
       [link('SPY'), 'unavailable at this cursor'],
       [link('QQQ', Date.parse('2026-09-25T01:00:00-04:00')), 'Outside archive coverage'],

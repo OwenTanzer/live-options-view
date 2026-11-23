@@ -154,6 +154,7 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
     reset() {
       design.reset();
       resume();
+      delete $('#view').dataset.view;
       if (dialog.open) dialog.close();
     },
     render(rows, spots, gaps, start, end, strikes, cappedFrom) {
@@ -356,6 +357,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
   }
 
   /* ---------- B: price chart + tickets ---------- */
+  const chartStepPx = 80;
   function renderB(S) {
     const box = $('#view');
     box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · <span style="color:var(--faint)">faint ticks</span> = every other print · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
@@ -377,8 +379,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     // Keep the canvas bounded even for a full chain. Native scrolling moves a
     // five-strike price window; ticket picking uses the same projection.
     const count = Math.min(5, K.length);
-    const stepPx = 80;
-    const travel = (K.length - count) * stepPx;
+    const travel = (K.length - count) * chartStepPx;
     $('.strike-track').style.height = Hd + travel + 'px';
     const range = $('#chart-strikes');
     let lo, hi;
@@ -388,7 +389,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const col = { b: '#3fd0a4', s: '#f07a64', u: '#9aa6ad' };
     const rad = (p) => 3 + Math.sqrt(prem(p) / 270000) * 16;
     function paint() {
-      const offset = Math.min(K.length - count, Math.round(box.scrollTop / stepPx));
+      const offset = Math.min(K.length - count, Math.round(box.scrollTop / chartStepPx));
       const first = K.length - count - offset;
       const bottomStrike = K[first],
         topStrike = K[first + count - 1];
@@ -906,7 +907,16 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       viewport.dataset.view = id;
       viewport.onscroll = null;
       draw(S);
-      viewport.scrollTo(left, top);
+      if (id === 'chart' && !sameView && K.length > 17) {
+        // Enter a wide chain near the observed market. Every collected strike
+        // above and below remains in the same scroll track.
+        const target = spots.at(-1)?.spot ?? rows.at(-1)?.strike ?? K[Math.floor(K.length / 2)];
+        const closest = K.reduce(
+          (best, k, i) => (Math.abs(k - target) < Math.abs(K[best] - target) ? i : best),
+          0,
+        );
+        viewport.scrollTo(0, Math.max(0, Math.min(K.length - 5, K.length - 3 - closest)) * chartStepPx);
+      } else viewport.scrollTo(left, top);
       $('.panel').style.setProperty('--grid-width', 65 + K.length * 36 + 'px');
     },
   };

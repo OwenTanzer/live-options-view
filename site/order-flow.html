@@ -240,7 +240,8 @@
         >Source
         <select id="source">
           <option value="live">Live</option>
-          <option value="replay">Archive replay</option>
+          <option value="replay">September 25 · archive replay</option>
+          <option value="capture">November 23 · recorded close</option>
           <option value="simulation">Simulation · 30-point move</option>
         </select></label
       ><span id="state" role="status"></span
@@ -595,11 +596,16 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
       forceTable = true;
     cursor.subscribe(selection => { end = selection.cutoff; });
     const live = () => el("source").value !== "replay";
+    const capture = () => el("source").value === "capture";
+    const capturedScale = PF.liveScale(null);
     const simulation = () => el("source").value === "simulation";
     const strikeWindow = createStrikeWindow();
     const simScale = PF.liveScale(null);
     let allPrices = [], windowView = null, simStep = 0;
     function repaint() { dirty = forceTable = true; }
+    function publishedRows(feed) {
+      return feed.rows.map((p,i) => ({...p, publishedRow:i+1})).sort((a,b) => a.t-b.t);
+    }
     function simulationTick() {
       ({feed, chain} = simulateOrderFlow(simStep, Date.now()));
       liveRows = feed.rows.map((p,i) => ({...p, publishedRow:i+1}));
@@ -819,24 +825,21 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
         slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
         el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
         el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
-        el("strike-range").textContent = strikes.length ? (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
+        el("strike-range").textContent = strikes.length ? (tapeViews.optional() ? "Profile window · " : "") + (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
           " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
       }
-      let filtered;
       if (tapeViews.optional()) {
-        const shown = new Set(strikes);
-        filtered = windowView ? visible.filter(p => shown.has(p.strike)) : visible;
         const oldest = liveRows[0]?.t;
         const cappedFrom = live() && feed?.cap > 0 && liveRows.length >= feed.cap &&
           oldest > start && (feed.session?.prints == null || feed.session.prints > liveRows.length) ? oldest : null;
-        tapeViews.render(filtered, tapeSpots(start), view?.coverage?.gaps || [], start, end, strikes, cappedFrom);
+        tapeViews.render(visible, tapeSpots(start), view?.coverage?.gaps || [], start, end, allPrices, cappedFrom);
       } else {
         drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot});
       }
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + (view ? " · " + (tapeViews.optional() ? filtered.length : hits.length) + " prints in view" : "");
+      el("state").textContent = status + (view ? " · " + (tapeViews.optional() ? visible.length : hits.length) + " prints in view" : "");
       const link = el("flow-history");
       link.hidden = live() || !view;
       if (!link.hidden) {
@@ -865,10 +868,10 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
         return;
       }
       const day = feed && feed.session && feed.session.day;
-      const s = view ? (simulation() ? simScale : liveScale).update(view, day, end) : null;
+      const s = view ? (capture() ? capturedScale : simulation() ? simScale : liveScale).update(view, day, end) : null;
       scale = s || { flow: 0, conc: 0 };
       el("profile-scale").textContent = s
-        ? simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
+        ? capture() ? "Scale: recorded close" : simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
         : "Scale: waiting for session history";
     }
 
@@ -1235,7 +1238,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
       if (!view) return;
       const s = view.strikes.find((r) => r.strike === strike);
       if (!s) return;
-      const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (live() ? "live" : "archive replay") + ")"];
+      const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (capture() ? "recorded close" : live() ? "live" : "archive replay") + ")"];
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
         const obs = c.observed;
@@ -1369,7 +1372,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
         el("seek").value = (1000 * (end - replay.coverage.open)) / span();
         dirty = true;
       }
-      if (live()) {
+      if (live() && !capture()) {
         cursor.tick();
         dirty = true;
       }
@@ -1419,7 +1422,12 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
       document.querySelector("footer").style.display = isLive ? "none" : "flex";
       el("mode").textContent = isLive ? "QQQ · Live feed" : "Archive replay · September 25, 2026";
       el("details").textContent = "Tap a print or a strike to inspect it.";
-      if (!linked && !invalid) history.replaceState(null, "", "?source=" + el("source").value);
+      if (!linked && !invalid) {
+        const params = new URLSearchParams({source:el("source").value});
+        const tape = el("tape-view").querySelector('[aria-pressed="true"]')?.dataset.view;
+        if (tape && tape !== "classic") params.set("tape", tape);
+        history.replaceState(null, "", "?" + params);
+      }
       el("seek").disabled = el("play").disabled = !isLive;
       if (invalid || (linked && (linked.instrument !== "QQQ" || linked.session !== "2026-09-25"))) {
         replay = replayScale = null;
@@ -1428,6 +1436,23 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
         status = invalid ? "Invalid One Clock cursor" : "Order flow archive unavailable at this cursor";
         el("mode").textContent = invalid ? "Invalid selection" : linked.instrument + " · " + linked.session;
         if (linked) cursor.select({...linked, origin: "reconstructed"});
+        return;
+      }
+      if (capture()) {
+        el("mode").textContent = "QQQ · Recorded close · November 23, 2026";
+        status = "Loading recorded feed";
+        try {
+          const {json} = await getJson("./order-flow-capture-20261123.json", gen, 15000);
+          if (gen !== generation) return;
+          cursor.select({mode:"replay", origin:"recorded", session:json.feed.session.day, instrument:"QQQ", cutoff:json.asOf});
+          feed = json.feed;
+          chain = json.chain;
+          liveRows = publishedRows(feed);
+          status = "Recorded feed · " + clock(json.asOf) + " ET";
+        } catch {
+          if (gen === generation) status = "Recorded feed unavailable";
+        }
+        repaint();
         return;
       }
       if (isLive) {
@@ -1487,7 +1512,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
           } else {
             if (!r.json || !Array.isArray(r.json.rows)) throw Error("Invalid feed");
             feed = r.json;
-            liveRows = feed.rows.map((p,i) => ({...p, publishedRow:i+1})).sort((a, b) => a.t - b.t);
+            liveRows = publishedRows(feed);
             received = feed.lastReceived;
             const age = received == null ? Infinity : Date.now() - received;
             status = (age > 15000 ? "Stale" : "Receiving") + (received ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");
@@ -1521,7 +1546,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
       readChain();
     }
     const initialSource = new URLSearchParams(location.search).get("source");
-    el("source").value = ["simulation", "replay"].includes(initialSource) ? initialSource : "live";
+    el("source").value = ["simulation", "replay","capture"].includes(initialSource) ? initialSource : "live";
     let linked = null, invalid = false;
     try { linked = replaySelection(location.search); } catch { invalid = true; }
     if (linked || invalid) el("source").value = "replay";
