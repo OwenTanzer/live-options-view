@@ -1,4 +1,5 @@
 """QQQ Me Bots. All prices in this module are underlying points."""
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, time
 from math import isfinite
@@ -40,12 +41,20 @@ def candles(rows, n):
     for index, bar in enumerate(rows):
         if (bar.end - opening) % (n * MINUTE) or index + 1 < n:
             continue
-        group = rows[index + 1 - n:index + 1]
+        group = rows[index + 1 - n : index + 1]
         if group[0].start + n * MINUTE != bar.end:
             continue
-        result.append(Bar(group[0].start, bar.end, group[0].open,
-                          max(b.high for b in group), min(b.low for b in group),
-                          bar.close, sum(b.volume for b in group)))
+        result.append(
+            Bar(
+                group[0].start,
+                bar.end,
+                group[0].open,
+                max(b.high for b in group),
+                min(b.low for b in group),
+                bar.close,
+                sum(b.volume for b in group),
+            )
+        )
     return result
 
 
@@ -63,8 +72,10 @@ def entry(kind, rows, plan):
         # by a research owner before this session. No inferred target or fill.
         target = levels.get("first_target")
         max_span = levels.get("max_trigger_range_points")
-        if not all(type(x) in (float, int) and isfinite(x) and x > 0
-                   for x in (target, max_span)):
+        if not all(
+            type(x) in (float, int) and isfinite(x) and x > 0
+            for x in (target, max_span)
+        ):
             continue
         op, hi, lo, cl = prices(trigger, side)
         if hi >= side * target or trigger.span > max_span or cl <= op:
@@ -77,8 +88,10 @@ def entry(kind, rows, plan):
             if type(level) not in (int, float) or not isfinite(level):
                 continue
             # The rejection must occur within this three-bar setup.
-            if not any(prices(x, side)[2] <= side * level < prices(x, side)[3]
-                       for x in (a, b, trigger)):
+            if not any(
+                prices(x, side)[2] <= side * level < prices(x, side)[3]
+                for x in (a, b, trigger)
+            ):
                 continue
         else:
             if len(series) < 15:
@@ -98,10 +111,19 @@ def entry(kind, rows, plan):
                     continue
             if kind == "phelps":
                 normal = mean(x.volume for x in prior)
-                if normal <= 0 or trigger.volume < 2 * normal or cl <= max(p[1] for p in prev):
+                if (
+                    normal <= 0
+                    or trigger.volume < 2 * normal
+                    or cl <= max(p[1] for p in prev)
+                ):
                     continue
-        return dict(side=side, trigger_end=trigger.end.isoformat(), stop=lo * side,
-                    trigger_close=trigger.close, kind=kind)
+        return dict(
+            side=side,
+            trigger_end=trigger.end.isoformat(),
+            stop=lo * side,
+            trigger_close=trigger.close,
+            kind=kind,
+        )
     return None
 
 
@@ -117,7 +139,9 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
     best = anchor
     distance = 2 if kind in ("runner", "phelps") else 1
     size = 1 if kind == "opening" else 9
-    decision_bars = {bar.end: bar for bar in candles(rows, size) if bar.start >= entry_at}
+    decision_bars = {
+        bar.end: bar for bar in candles(rows, size) if bar.start >= entry_at
+    }
     for bar in rows:
         if bar.end <= entry_at:
             continue

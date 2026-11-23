@@ -1,4 +1,5 @@
 """Inactive provisional QQQ 0DTE acceleration strategies for Crassus paper accounts."""
+
 import hashlib
 import json
 import re
@@ -32,8 +33,16 @@ def completed_losses(trades, day):
     basis = None
     losses = 0
     for when, trade in sorted(fills, key=lambda x: x[0]):
-        symbol, side, qty, price = (trade.get(k) for k in ("sym", "side", "qty", "price"))
-        if not symbol or qty != 1 or type(price) not in (int, float) or not isfinite(price) or price <= 0:
+        symbol, side, qty, price = (
+            trade.get(k) for k in ("sym", "side", "qty", "price")
+        )
+        if (
+            not symbol
+            or qty != 1
+            or type(price) not in (int, float)
+            or not isfinite(price)
+            or price <= 0
+        ):
             raise ValueError("unrecognized fill")
         if side == "buy" and basis is None:
             basis = (symbol, price, when)
@@ -56,6 +65,7 @@ def price_for(ctx, symbol, side):
 
 def evaluate(ctx, strategy_id):
     kind = IDS[strategy_id]
+
     def skip(reason):
         return Decision.no_trade(reason, strategy_id, VERSION)
 
@@ -77,25 +87,41 @@ def evaluate(ctx, strategy_id):
             return skip("Held position cannot be reconciled with today's fills")
         if holding:
             symbol, cost, fill_at = holding
-            if len(positions) != 1 or symbol not in positions or positions[symbol].quantity != 1:
+            if (
+                len(positions) != 1
+                or symbol not in positions
+                or positions[symbol].quantity != 1
+            ):
                 return skip("Position outside single-contract paper design")
             seed = state.get("seed")
-            if not seed or seed.get("symbol") != symbol or aware(seed["intent_at"]) > fill_at:
+            if (
+                not seed
+                or seed.get("symbol") != symbol
+                or aware(seed["intent_at"]) > fill_at
+            ):
                 return skip("No matching durable entry evidence")
             reason = state.get("exit_due")
             if not reason and kind == "ratchet" and now.time() >= time(15, 30):
                 reason = "15:30 ET cutoff"
             if not reason:
-                if error or not rows or not 0 <= (now - rows[-1].end).total_seconds() < 60:
+                if (
+                    error
+                    or not rows
+                    or not 0 <= (now - rows[-1].end).total_seconds() < 60
+                ):
                     return skip(error or "Incomplete or stale minute path for exit")
                 fill_bar = next((b for b in rows if b.start <= fill_at < b.end), None)
                 if fill_bar is None:
-                    return skip("Waiting for completed fill-minute OHLC; underlying fill price unknown")
+                    return skip(
+                        "Waiting for completed fill-minute OHLC; underlying fill price unknown"
+                    )
                 # Bracket the unknown fill-time underlying. A signal that depends
                 # on where inside the minute the fill occurred is a protective
                 # paper exit, marked separately from a demonstrated stop.
-                reasons = [exit_reason(kind, rows, seed, fill_at, anchor, now)
-                           for anchor in (fill_bar.low, fill_bar.high)]
+                reasons = [
+                    exit_reason(kind, rows, seed, fill_at, anchor, now)
+                    for anchor in (fill_bar.low, fill_bar.high)
+                ]
                 if reasons[0] == reasons[1]:
                     reason = reasons[0]
                 elif any(reasons):
@@ -107,25 +133,43 @@ def evaluate(ctx, strategy_id):
             bid = price_for(ctx, symbol, "sell")
             if bid is None:
                 return skip(reason + "; awaiting executable option bid")
-            return Decision("sell", reason, strategy_id, VERSION, symbol=symbol, quantity=1,
-                            instrument_type="option", limit_price=bid,
-                            metadata={"trigger_end": seed["trigger_end"], "fill_at": fill_at.isoformat()})
+            return Decision(
+                "sell",
+                reason,
+                strategy_id,
+                VERSION,
+                symbol=symbol,
+                quantity=1,
+                instrument_type="option",
+                limit_price=bid,
+                metadata={
+                    "trigger_end": seed["trigger_end"],
+                    "fill_at": fill_at.isoformat(),
+                },
+            )
 
         if error or not rows or not 0 <= (now - rows[-1].end).total_seconds() < 60:
             return skip(error or "Incomplete or stale one-minute sequence")
         current = rows[-1].end
-        prior = aware(state["last_entry_check"]) if state.get("last_entry_check") else None
+        prior = (
+            aware(state["last_entry_check"]) if state.get("last_entry_check") else None
+        )
         if prior != current:
             if prior is None or (current - prior).total_seconds() > 60:
                 state["skip_through"] = current.isoformat()
             state["last_entry_check"] = current.isoformat()
             atomic_json(path, state)
         if state.get("skip_through") == current.isoformat():
-            return skip("Entry observation started or resumed after a gap; historical signals skipped")
-        if (not plan or plan["levels"].get("root") != "QQQ"
-                or plan["levels"].get("session") != now.date().isoformat()
-                or aware(plan["first_seen"]).date() != now.date()
-                or aware(plan["first_seen"]).time() >= time(9, 30)):
+            return skip(
+                "Entry observation started or resumed after a gap; historical signals skipped"
+            )
+        if (
+            not plan
+            or plan["levels"].get("root") != "QQQ"
+            or plan["levels"].get("session") != now.date().isoformat()
+            or aware(plan["first_seen"]).date() != now.date()
+            or aware(plan["first_seen"]).time() >= time(9, 30)
+        ):
             return skip("Missing pre-open structural levels or vertical guard")
         if losses >= 3 or (kind == "ratchet" and now.time() >= time(15, 30)):
             return skip("Daily stop or entry cutoff reached")
@@ -141,8 +185,11 @@ def evaluate(ctx, strategy_id):
         if snap is None or str(snap.expiration) != now.date().isoformat():
             return skip("Missing same-day option snapshot")
         observed = aware(snap.timestamp)
-        if (not fresh_spot(snap, now) or not rows[-1].end <= observed <= now
-                or not rows[-1].end <= aware(snap.underlying_market.spot_ts) <= now):
+        if (
+            not fresh_spot(snap, now)
+            or not rows[-1].end <= observed <= now
+            or not rows[-1].end <= aware(snap.underlying_market.spot_ts) <= now
+        ):
             return skip("No underlying observation since trigger close")
         spot = snap.underlying_market.spot
         if type(spot) not in (int, float) or not isfinite(spot) or spot <= 0:
@@ -153,7 +200,9 @@ def evaluate(ctx, strategy_id):
             return skip("Setup invalidated or first target reached before entry")
         row = snap.atm("call" if side == 1 else "put")
         symbol = (row or {}).get("OptionSymbol", "")
-        pattern = r"QQQ" + now.strftime("%y%m%d") + ("C" if side == 1 else "P") + r"\d{8}"
+        pattern = (
+            r"QQQ" + now.strftime("%y%m%d") + ("C" if side == 1 else "P") + r"\d{8}"
+        )
         if not re.fullmatch(pattern, symbol):
             return skip("ATM contract identity does not match QQQ, date and side")
         ask = price_for(ctx, symbol, "buy")
@@ -163,9 +212,17 @@ def evaluate(ctx, strategy_id):
         attempts.append({"side": side, "trigger_end": signal["trigger_end"]})
         state.update(seed=signal, exit_due=None)
         atomic_json(path, state)
-        return Decision("buy", "Qualified completed acceleration setup", strategy_id, VERSION,
-                        symbol=symbol, quantity=1, limit_price=ask, instrument_type="option",
-                        metadata={**signal, "levels_first_seen": plan["first_seen"]})
+        return Decision(
+            "buy",
+            "Qualified completed acceleration setup",
+            strategy_id,
+            VERSION,
+            symbol=symbol,
+            quantity=1,
+            limit_price=ask,
+            instrument_type="option",
+            metadata={**signal, "levels_first_seen": plan["first_seen"]},
+        )
     except (OSError, TypeError, ValueError, IndexError, KeyError):
         return skip("Unusable input, account history or durable strategy state")
 
@@ -173,6 +230,7 @@ def evaluate(ctx, strategy_id):
 def make_strategy(strategy_id):
     def decide(ctx):
         return evaluate(ctx, strategy_id)
+
     decide.strategy_id = strategy_id
     decide.strategy_version = VERSION
     decide.requires_snapshot = False

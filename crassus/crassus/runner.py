@@ -581,8 +581,9 @@ class Runner:
         )
 
         if account.strategy_id in ME_BOTS:
-            ctx.params = {**ctx.params, "_me_inputs": self.me_inputs.read(self.cycle_count, ctx.now_et, phase),
-                          "_me_directory": self.me_inputs.directory}
+            inputs = self.me_inputs.read(self.cycle_count, ctx.now_et, phase)
+            ctx.now_et = clock.now_et()
+            ctx.params = {**ctx.params, "_me_inputs": inputs, "_me_directory": self.me_inputs.directory}
 
         if account.strategy_id == "qqq_gated_strangle" and phase == "open":
             ctx.params = {**ctx.params, "_completed_bars": self.forward_bars.read(self.cycle_count, ctx.now_et)}
