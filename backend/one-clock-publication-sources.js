@@ -6,7 +6,17 @@ const stmt=(db,sql,...args)=>db.prepare(sql).bind(...args);
 export const collectorPublication=Object.freeze({id:'collector-chain',owner:'market_data.live_market',audience:'public',sessionBasis:'new-york',
   supersedes:{price:'archived-chain',skew:'archived-chain'},
   instruments:['QQQ','SPY','IBIT'],outputs:{price:{spot:'number'},skew:{imbalance:'number',strikes:'number',callOI:'number',putOI:'number'}}});
-export const nativePublicationSources=Object.freeze([collectorPublication]);
+export const botAuditPublication = Object.freeze({
+  id: 'bot-audit', owner: 'crassus', audience: 'public', sessionBasis: 'new-york',
+  instrumentsByOutput: {'bot-anchored-skew':['QQQ']},
+  instruments: ['QQQ', 'SPY', 'IBIT'],
+  outputs: {
+    'bot-decision': {bot:'string', outcome:'string', action:'string', inputAgeMs:'number'},
+    'bot-anchored-skew': {anchor:'number', imbalance:'number', delta:'number', strikes:'number',
+      anchorAt:'string', run:'string', threshold:'number', minChange:'number'},
+  },
+});
+export const nativePublicationSources=Object.freeze([collectorPublication,botAuditPublication]);
 export async function advanceNativePublications(env,{now=Date.now(),descriptors=nativePublicationSources}={}) {
   if(env.ONE_CLOCK_PUBLICATIONS!=='enabled')return [];
   return ingestRegisteredPublications(env.DB,env.PAPER_TRADES,descriptors,{now});

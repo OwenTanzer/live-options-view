@@ -1,3 +1,4 @@
+import {handleOpeningOi} from "./one-clock-opening-oi.js";
 import { archive } from './strategy-archive.js';
 
 import { handlePrediction, settlePredictions } from './prediction.js';
@@ -9,6 +10,7 @@ import { handleOneClockSqueeze } from './one-clock-squeeze.js';
 import { advanceOneClockCatalogs } from './one-clock-catalog-sources.js';
 import { handleOneClockResearch,advanceOneClockResearch } from './one-clock-research.js';
 import { handleOneClockResults } from './one-clock-results.js';
+import { handleBotDecisions } from './one-clock-bot-decisions.js';
 import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
 import { creditTape } from './credit-tape.js';
 import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
@@ -40,8 +42,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
+    if (url.pathname === '/api/one-clock/opening-oi') return handleOpeningOi(request,env,url);
     if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
     if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
+    if (url.pathname === '/api/one-clock/bot-decisions') return handleBotDecisions(request, env, url);
     if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
     if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
     if (url.pathname === '/api/one-clock/research') return handleOneClockResearch(request,env,url);

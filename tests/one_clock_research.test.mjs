@@ -32,6 +32,14 @@ test('account authorization, origin, immutable versions and source allowlist pre
   assert.equal((await call('alice',{action:'deactivate',ruleId:rule.id,version:1})).status,200);
   assert.ok(DB.raw('SELECT ended_at FROM one_clock_activations')[0].ended_at);
 });
+test('anchored skew is registerable only for its documented producer instrument',async t=>{
+  const {call}=await setup(t);
+  const conditions=[{source:'bot-anchored-skew',field:'delta',op:'>=',value:0.1,maxAgeMs:60000}];
+  for(const instrument of ['QQQ','SPY','IBIT']) {
+    const candidate={...rule,id:'anchor-'+instrument,instruments:[instrument],conditions};
+    assert.equal((await call('alice',{action:'save',rule:candidate})).status,instrument==='QQQ'?201:400);
+  }
+});
 test('activation intervals retain old events/outcomes and limited rule batches do not retract other rules',async t=>{
   const {DB}=await setup(t),namespace='account:alice',cutoff=demoClose+1000;
   for(const r of demoRules)await registerObservedRule(DB,{namespace,rule:r,registeredAt:demoStart});
@@ -160,4 +168,49 @@ test('oversized rules retain visible as-of failures and do not starve following 
   assert.deepEqual(after.evaluation.map(r=>r.state),['failed','evaluated']);
   assert.match(after.evaluation[0].reason,/capacity/);
   const other=await result('other',now+1000);assert.equal(other.events.length,0);assert.equal(other.evaluation.length,0);
+});
+
+test('a shortlist rule is editable; unresolved catalog only defers dependent rules',async t=>{
+  const {DB,env,call}=await setup(t);
+  const at=sessionInstant('2026-11-20',9,30);
+  const shortlist={...rule,id:'b-shortlist',
+    conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:60000}]};
+  assert.equal((await call('alice',{action:'save',rule:shortlist})).status,201);
+  await activate(DB,rule,at);
+  await activate(DB,shortlist,at);
+  const source={id:'shortlist-fixture',version:'1',instruments:['QQQ'],outputs:['shortlist'],demandDriven:true,
+    discover:async()=>({complete:false,artifacts:[]}),read:()=>{throw Error('no objects');}};
+  const now=at+5000;
+  const result=await advanceOneClockResearch({...env,PAPER_TRADES:{}},{now,sources:[emptySource,source]});
+  assert.equal(result[0].state,'evaluated');
+  assert.deepEqual(DB.raw("SELECT rule_id FROM one_clock_evaluation_history WHERE state='evaluated'").map(x=>x.rule_id),[rule.id]);
+});
+
+test('a rule using an indexed source cannot mature beyond that source watermark',async t=>{
+  const {DB}=await setup(t);
+  const session='2026-11-20',at=sessionInstant(session,9,30),through=at+1000,now=at+60000;
+  const r={...rule,conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:60000}],
+    outcomes:[{id:'later',source:'price',field:'spot',measure:'value',horizonMs:5000,toleranceMs:1000,maxAgeMs:1000}]};
+  await activate(DB,r,at);
+  const row={source:'shortlist',id:'fixture',revision:1,session,instrument:'QQQ',origin:'recorded',
+    eventAt:at,availableAt:at,evidence:'fixture://receipt',value:{listed:true}};
+  const selection={session,instrument:'QQQ',origin:'recorded',cutoff:now};
+  const request={namespace:'account:alice',source:'test',cursor:'0',selection,sessionClose:equitySession(session).close,
+    observations:[],sourceRecords:[{payload:JSON.stringify(row),received_at:now,collection:'prospective'}],
+    ruleCutoffs:{[JSON.stringify([r.id,r.version])]:through}};
+  await observeBatch(DB,{...request,batchId:'first'});
+  const events=(cutoff)=>observedEventsAsOf(DB,{namespace:request.namespace,selection:{...selection,cutoff}});
+  assert.deepEqual(await events(now-1),[]);
+  assert.equal((await events(now))[0].outcomes[0].state,'pending');
+  await observeBatch(DB,{...request,batchId:'second',ruleCutoffs:{},committedAt:now+1});
+  assert.equal((await events(now+1))[0].outcomes[0].state,'missing');
+});
+
+test('a registered native-only output needs an actual stream receipt before rule evaluation',async t=>{
+  const {DB,env}=await setup(t),at=sessionInstant('2026-11-20',9,30);
+  await activate(DB,{...rule,id:'bot',conditions:[{source:'bot-decision',field:'acted',op:'==',value:true,maxAgeMs:1000}]},at);
+  const nativeOnly={id:'bot-audit',instruments:['QQQ'],outputs:{'bot-decision':{acted:'boolean'}}};
+  const result=await advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:at+1000,sources:[emptySource],publicationSources:[nativeOnly]});
+  assert.equal(result[0].state,'catching-up');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
 });

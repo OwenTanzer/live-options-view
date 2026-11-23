@@ -43,7 +43,7 @@ export async function observeBatch(db, input) {
     if (row.source !== source || row.session !== selection.session || row.instrument !== selection.instrument || row.origin !== selection.origin) throw new Error('observation outside authorized batch scope');
     if (row.availableAt !== null && row.availableAt > cutoff) throw new Error('observation has not arrived');
   }
-  const batchDigest = await digest(canonical({ source,cursor,selection,...(input.targetGeneration===undefined?{}:{targetGeneration:input.targetGeneration}),sessionClose:close,collection,observations:incoming,
+  const batchDigest = await digest(canonical({ source,cursor,selection,...(input.targetGeneration===undefined?{}:{targetGeneration:input.targetGeneration}),sessionClose:close,collection,observations:incoming,...(input.ruleCutoffs?{ruleCutoffs:input.ruleCutoffs}:{}),
     ...(input.sourceRecords?{sourceRecords:input.sourceRecords,activationWindows:input.activationWindows,ruleKeys:input.ruleKeys}:{}) }));
   const priorReceipt = await bind(db,'SELECT * FROM one_clock_receipts WHERE namespace=? AND batch_id=?',namespace,batchId).first();
   if (priorReceipt) {
@@ -76,7 +76,10 @@ export async function observeBatch(db, input) {
   const current = new Map();
   for (const registered of rules) {
     const activationWindows=input.activationWindows?.[JSON.stringify([registered.rule_id,registered.version])];
-    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection,sessionClose:close,
+    const ruleKey=JSON.stringify([registered.rule_id,registered.version]);
+    const through=input.ruleCutoffs?.[ruleKey]??cutoff;
+    if(instant(through)>cutoff)throw new Error('rule cutoff exceeds evidence snapshot');
+    const events = evaluateEvents({ rule:JSON.parse(registered.payload), observations:[...history,...incoming],selection:{...selection,cutoff:through},sessionClose:close,
       activationWindows:input.activationWindows?(activationWindows??[]):undefined });
     for (const event of events) {
       const key = await digest(event.id);

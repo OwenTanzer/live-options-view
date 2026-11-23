@@ -303,3 +303,53 @@ test('unrelated archived evaluation advances past two failing current-scope queu
   assert.ok(completed,'the dated native evidence must be evaluated while the current scope is failing');
   assert.equal((await observedEventsAsOf(DB,{namespace,selection:{session,instrument:'QQQ',origin:'recorded',cutoff:now+8*900000}})).length,1);
 });
+
+test('historical work obtains missing optional evidence and keeps its target pending until covered',async t=>{
+  const {DB,bucket,env}=await setup(t),namespace='account:late-shortlist';
+  const rule={id:'both',version:1,name:'Recorded shortlist and spot',instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'reset',
+    conditions:[{source:'price',field:'spot',op:'>=',value:700,maxAgeMs:150000},
+      {source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:86400000}],outcomes:[]};
+  await registerObservedRule(DB,{namespace,rule,registeredAt:T-100000});
+  await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,?)').bind(namespace,rule.id,1,T-100000,T+120000).run();
+  const now=Date.parse('2026-11-25T18:00:00Z');
+  let through=T+60000;
+  const source={id:'fixture-shortlist',version:'1',instruments:['QQQ'],outputs:['shortlist'],demandDriven:true,
+    discover:async()=>({complete:true,through,artifacts:[{key:'k',version:'1',eventAt:T}]}),
+    read:async()=>({rows:[{source:'shortlist',id:'fixture',session,instrument:'QQQ',origin:'recorded',
+      revision:1,eventAt:T,availableAt:T,evidence:'fixture://listed',value:{listed:true}}]})};
+  bucket.visible=2;
+  const tick=at=>advanceOneClockResearch(env,{now:at,sources:[source]});
+  await tick(now);
+  const pending=DB.raw('SELECT * FROM one_clock_historical_rules WHERE namespace=?',namespace)[0];
+  assert.ok(pending);assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_generation_receipts WHERE namespace=?',namespace)[0].n,0);
+  through=Date.parse(session+'T21:00:00Z');
+  await tick(pending.retry_at+1);
+  await tick(pending.retry_at+2);
+  const receipt=DB.raw('SELECT MAX(generation) generation FROM one_clock_generation_receipts WHERE namespace=?',namespace)[0];
+  assert.equal(receipt.generation,2);
+  const events=await observedEventsAsOf(DB,{namespace,selection:{session,instrument:'QQQ',origin:'recorded',cutoff:pending.retry_at+2}});
+  assert.equal(events.length,1);assert.equal(events[0].lineage.inputs.find(input=>input.record?.source==='shortlist').record.receivedAt,now);
+});
+
+test('a completed shortlist session admits a later native correction to a Friday price outcome',async t=>{
+  const {DB,bucket,env}=await setup(t),namespace='account:late-price';
+  const close=Date.parse(session+'T21:00:00Z'), monday=Date.parse('2026-11-23T16:00:00Z');
+  const rule={id:'listed',version:1,name:'Shortlist with price outcome',instruments:['QQQ'],combine:'all',transition:'rising',missingInput:'hold',
+    conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:86400000}],
+    outcomes:[{source:'price',field:'spot',id:'price',measure:'value',horizonMs:60000,toleranceMs:0,maxAgeMs:86400000}]};
+  await registerObservedRule(DB,{namespace,rule,registeredAt:T-100000});
+  await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,?)').bind(namespace,rule.id,1,T-100000,T+120000).run();
+  const source={id:'fixture-shortlist',version:'1',instruments:['QQQ'],outputs:['shortlist'],demandDriven:true,
+    discover:async()=>({complete:true,through:close,artifacts:[{key:'k',version:'1',eventAt:T}]}),
+    read:async()=>({rows:[{source:'shortlist',id:'fixture',session,instrument:'QQQ',origin:'recorded',revision:1,eventAt:T,availableAt:T,evidence:'fixture://listed',value:{listed:true}}]})};
+  const readValue=async cutoff=>(await observedEventsAsOf(DB,{namespace,selection:{session,instrument:'QQQ',origin:'recorded',cutoff}}))[0].outcomes[0].value;
+  bucket.visible=2;
+  for(let i=0;i<3;i++)await advanceOneClockResearch(env,{now:close+i,sources:[source]});
+  assert.equal(await readValue(close+2),701);
+  const get=bucket.get.bind(bucket);
+  bucket.get=async key=>{const object=await get(key);if(object&&key===fixtures[2].key)object.uploaded=new Date(monday);return object;};
+  bucket.visible=3;
+  for(let i=0;i<4;i++)await advanceOneClockResearch(env,{now:monday+i,sources:[source]});
+  assert.equal(await readValue(monday+3),698);
+  assert.equal(await readValue(close+2),701);
+});
