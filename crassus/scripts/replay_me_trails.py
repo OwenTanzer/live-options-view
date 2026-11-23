@@ -12,6 +12,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from crassus.exchange_calendar import is_holiday, session_close
+
 ET = ZoneInfo("America/New_York")
 
 
@@ -24,7 +27,10 @@ def paired(case):
         raise ValueError("entry must have a qualified minute-boundary timestamp")
     entered = entered.astimezone(ET)
     opening = entered.replace(hour=9, minute=30)
-    if entered < opening or (entered-opening).total_seconds() % 540:
+    if (entered.weekday() >= 5 or is_holiday(entered.date())
+            or entered < opening + timedelta(minutes=9)
+            or entered.time() >= session_close(entered.date())
+            or (entered-opening).total_seconds() % 540):
         raise ValueError("entry must follow a completed session-aligned nine-minute candle")
     outcomes = {}
     for width in (1,2):
@@ -39,7 +45,8 @@ def paired(case):
             raise ValueError("no replay path")
         for index,row in enumerate(rows):
             t = datetime.fromisoformat(row["start"])
-            if t.tzinfo is None or t != entered + timedelta(minutes=index):
+            if (t.tzinfo is None or t != entered + timedelta(minutes=index)
+                    or t + timedelta(minutes=1) > datetime.combine(entered.date(), session_close(entered.date()), ET)):
                 raise ValueError("incomplete minute path")
             op, hi, lo, cl = [row[key] for key in ("open","high","low","close")]
             if not (all(math.isfinite(n) for n in (op,hi,lo,cl)) and 0 < lo <= min(op,cl) <= max(op,cl) <= hi):

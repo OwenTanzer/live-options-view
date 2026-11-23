@@ -6,4 +6,4 @@ COPY crassus/ ./
 ENV CRASSUS_ACCOUNTS_FILE=/app/accounts.me-bots.provisional.json \
     CRASSUS_DATA_ROOT=/data \
     CRASSUS_ONE_CLOCK_PUBLICATION=disabled
-CMD ["python", "-m", "crassus.runner", "--interval", "15"]
+CMD ["sh", "-c", "exec python -m crassus.runner --me-paper-roster --accounts \"$CRASSUS_ACCOUNTS_FILE\" --interval 15"]

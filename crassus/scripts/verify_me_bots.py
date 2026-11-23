@@ -1,5 +1,6 @@
 """Offline fixtures for the inactive Me Bots. Run from the crassus directory."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -7,7 +8,9 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from replay_me_trails import paired
+from crassus.config import load_accounts
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from crassus.clock import ET
@@ -122,6 +125,21 @@ class MeBots(unittest.TestCase):
         self.assertEqual(result[2]["points_range"],[0.5,1])
         self.assertEqual(result[1]["possible_exit_minutes"],[0,1])
         self.assertEqual(result[2]["possible_exit_minutes"],[0,2])
+
+    def test_replay_session_boundaries_and_scoped_roster(self):
+        for start in (START, START.replace(day=22,minute=39), START.replace(hour=17)):
+            with self.assertRaises(ValueError):
+                paired(dict(side=1,entry_spot=100,entry_minute=start.isoformat(),
+                            initial_stop=98,rows=[]))
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/"roster.json"
+            p.write_text(json.dumps({"accounts":[{"alias":"test","username":"crassus_me_golden",
+                         "strategy_id":"me_golden_qqq","active":True,"password":"fixture"}]}))
+            with patch.dict(os.environ, {"CRASSUS_PW_OA233":"fixture","CRASSUS_NEWTON_CONFIRMED":"1"}):
+                self.assertEqual([a.username for a in load_accounts(p,me_paper_only=True)],["crassus_me_golden"])
+                p.write_text(p.read_text().replace("crassus_me_golden","foreign_bot"))
+                with self.assertRaises(ValueError):
+                    load_accounts(p,me_paper_only=True)
 
     def test_three_realized_losses(self):
         ts=START

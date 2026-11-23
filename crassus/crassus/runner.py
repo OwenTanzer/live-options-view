@@ -870,6 +870,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=300.0, help="Seconds between cycles (default 300)")
     parser.add_argument("--once", action="store_true", help="Run a single cycle and exit")
     parser.add_argument("--dry-run", action="store_true", help="Decide and log, but never submit an order")
+    parser.add_argument("--me-paper-roster", action="store_true", help="Require an explicit isolated Me Bot roster")
     parser.add_argument("--only", action="append", help="Limit to these account aliases")
     parser.add_argument("--base-url", default=BASE_URL)
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -883,7 +884,9 @@ def main(argv: list[str] | None = None) -> int:
         return supervise([sys.executable, "-m", "crassus.runner",
                           *(sys.argv[1:] if argv is None else argv)], args.interval)
 
-    accounts = load_accounts(args.accounts)
+    if args.me_paper_roster and (not args.accounts or args.base_url.rstrip("/") != forward_skew.PAPER_ORIGIN):
+        parser.error("Me Bot provisional mode requires --accounts and the paper execution origin")
+    accounts = load_accounts(args.accounts, me_paper_only=True) if args.me_paper_roster else load_accounts(args.accounts)
     if args.only:
         accounts = [a for a in accounts if a.alias in set(args.only)]
         if not accounts:
