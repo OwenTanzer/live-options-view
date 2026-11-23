@@ -277,6 +277,12 @@ class ServerTests(unittest.TestCase):
             "first_seen": "2099-01-01T00:00:01.000+00:00", "raw_ref": "dtcc-sec-credits/raw/2099-01-01/x_abc.json.gz",
             "row_index": 0, "record": fixture_row(1)}) + "\n")
 
+    def test_replay_rejects_an_oversized_or_unterminated_archive_boundary(self):
+        for payload in (b"a" * 32, b"a" * 31 + b"\n", b"a" * 33 + b"\n"):
+            (self.archive / "events.jsonl").write_bytes(payload)
+            with mock.patch.object(sp.replay, "BYTE_LIMIT", 32), self.assertRaises(ValueError):
+                sp.replay.read_page(self.archive, 4070908801000, sp.panel_event, 5)
+
     def test_main_site_table_uses_owner_session_and_static_rows(self):
         from urllib.parse import parse_qs, urlsplit
         settings = sp.Settings(self.archive, "https://cds.example.test", "cid", "secret", frozenset({42}), options_view=True)
@@ -340,6 +346,36 @@ class ServerTests(unittest.TestCase):
         self.assertLess(unified.index(b"TREU-LIVE"), unified.index(b"FIXTURE1"))
         self.assertIn(b"<dt>Price</dt><dd>99.7</dd>", unified)
         self.assertNotIn(b"TREU-ONLY", unified)
+        cutoff = 4070908801000  # 2099-01-01T00:00:01.000Z
+        replay = page + "replay?one_clock_at="
+        gated = self.get(port, replay + str(cutoff), host)[1]
+        self.assertIn(b"Sign in with GitHub", gated)
+        self.assertIn(f"/credit-tape/auth/login?one_clock_at={cutoff}".encode(), gated)
+        self.assertNotIn(b"FIXTURE1", gated)
+        before = self.get(port, replay + str(cutoff - 1), host, session)[1]
+        self.assertNotIn(b"FIXTURE1", before)
+        at = self.get(port, replay + str(cutoff), host, session)[1]
+        self.assertIn(b"FIXTURE1", at)
+        self.assertIn(b'data-mode="replay"', at)
+        self.assertNotIn(b"TREU-LIVE", at)
+        after = self.get(port, replay + str(cutoff + 2000), host, session)[1]
+        self.assertIn(b"TREU-LIVE", after)
+        self.assertNotIn(b"TREU-ONLY", after)
+        self.assertEqual(self.get(port, replay + str(cutoff) + "&view=live", host, session)[0], 400)
+        with mock.patch.object(sp, "MAX_ROWS", 1):
+            tape = self.archive / "events.jsonl"
+            split = tape.stat().st_size
+            with tape.open("a") as handle:
+                handle.write(json.dumps({"kind": "publication", "id": "LATER",
+                                         "first_seen": "2099-01-01T10:00:00Z"}) + "\n")
+            newest = self.get(port, replay + str(cutoff), host, session)[1]
+            self.assertNotIn(b"LATER", newest)
+            self.assertIn(f"&amp;end={split}&amp;seq=0".encode(), newest)
+            older = self.get(port, replay + str(cutoff) + f"&end={split}&seq=0", host, session)[1]
+            self.assertIn(b"FIXTURE1", older)
+            self.assertNotIn(b"older archive page", older)
+            with tape.open("r+b") as handle:
+                handle.truncate(split)
         focused = self.get(port, page + "?view=treu", host, session)[1]
         self.assertIn(b'data-publisher-filter="Tradeweb"', focused)
         self.assertIn(b"FIXTURE1", focused)

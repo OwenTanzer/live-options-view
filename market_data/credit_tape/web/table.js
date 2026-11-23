@@ -112,4 +112,4 @@ if (initialPublisher) {
   publisher.value = initialPublisher;
   filter();
 }
-setTimeout(refresh, 60000);
+if (document.querySelector('main').dataset.mode !== 'replay') setTimeout(refresh, 60000);
