@@ -7,7 +7,7 @@ import { instant } from '../site/shared/one-clock.js';
 import { validSession,sessionAt } from '../site/shared/one-clock-session.js';
 import { registerObservedRule,observeBatch,observedEventsAsOf } from './one-clock-observer.js';
 import { ingestPublicSource,ingestedAsOf } from './one-clock-ingestion.js';
-import { publicIngestionSources } from './one-clock-ingestion-sources.js';
+import { publicIngestionSources,levelEvaluationStatus } from './one-clock-ingestion-sources.js';
 import {advanceNativePublications,nativePublicationSources,nativeScopeRecords,markPendingNativeEvidence,retainNativeCoverage,nativeHandoffExists} from './one-clock-publication-sources.js';
 import {handoffSource} from './one-clock-handoff.js';
 import { equitySession,observerSessions } from './one-clock-calendar.js';
@@ -49,13 +49,17 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
         WHERE namespace=? AND session=? AND instrument=? AND attempted_at<=?
         AND attempted_at=(SELECT MAX(h2.attempted_at) FROM one_clock_evaluation_history h2 WHERE h2.namespace=h.namespace AND h2.session=h.session AND h2.instrument=h.instrument AND h2.rule_id=h.rule_id AND h2.version=h.version AND h2.attempted_at<=?) LIMIT 101`,namespace,session,instrument,cutoff,cutoff));
       const bounds=equitySession(session);
-      const applicable=bounds?await list(stmt(db,`SELECT DISTINCT r.rule_id,r.version FROM one_clock_rules r JOIN one_clock_activations a
+      const applicable=bounds?await list(stmt(db,`SELECT DISTINCT r.rule_id,r.version,r.payload FROM one_clock_rules r JOIN one_clock_activations a
         ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
         WHERE r.namespace=? AND r.registered_at<=? AND a.started_at<=? AND (a.ended_at IS NULL OR a.ended_at>=?)
         AND EXISTS(SELECT 1 FROM json_each(r.payload,'$.instruments') WHERE value=?) LIMIT 101`,namespace,cutoff,Math.min(cutoff,bounds.close),bounds.open,instrument)):[];
-      const evaluation=applicable.map(r=>attempts.find(a=>a.rule_id===r.rule_id&&a.version===r.version)??{...r,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'});
-      const status=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation.map(e=>({...e,session,instrument})),cutoff,namespace):evaluation;
-      return jsonResponse({session,instrument,cutoff,events,coverage:coverage.map(r=>JSON.parse(r.coverage)),evaluation:status,origin:'recorded'});
+      const sourceCoverage=coverage.map(r=>JSON.parse(r.coverage));
+      const evaluation=applicable.map(({rule_id,version,payload})=>{
+        const attempt=attempts.find(a=>a.rule_id===rule_id&&a.version===version)??{rule_id,version,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'};
+        return levelEvaluationStatus({...attempt,session,instrument},JSON.parse(payload),sourceCoverage);
+      });
+      const status=env.ONE_CLOCK_PUBLICATIONS==='enabled'?await markPendingNativeEvidence(db,evaluation,cutoff,namespace):evaluation;
+      return jsonResponse({session,instrument,cutoff,events,coverage:sourceCoverage,evaluation:status,origin:'recorded'});
     }
     const origin=checkOrigin(request);if(origin)return origin;
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
@@ -132,7 +136,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
     const target=backlog[0];
     if(target && jobs.length) {
       // The ordinary turn can satisfy a queued generation using all evidence
-      // available now. Give it one chance before running the frozen target.
+      // available now. Give it one chance before the targeted retry.
       const overlap=jobs.find(j=>j.namespace===target.namespace && j.session===target.session && j.instrument===target.instrument);
       if(!overlap || overlap.updated_at>=target.retry_at) {
         // A failed live turn must not hide the historical retry. Run each
@@ -148,12 +152,19 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   for(const job of jobs) {
     try {
       const historic=job.target!==undefined;
-      const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now,job.target) : null;
+      const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
+      if(historic && version.generation<job.target) {
+        await finishHistory(db,job,now,'Queued evidence is not yet visible.');
+        continue;
+      }
       if(historic) {
         const done=await stmt(db,'SELECT MAX(generation) generation FROM one_clock_generation_receipts WHERE namespace=? AND session=? AND instrument=? AND rule_id=? AND version=?',job.namespace,job.session,job.instrument,job.rule_id,job.version).first();
         if(done.generation>=job.target) {await finishHistory(db,job,now);results.push({state:'already-evaluated',session:job.session,instrument:job.instrument});continue;}
       }
-      const snapshotAt=historic?version.receivedAt:now;
+      // A queued generation is a minimum obligation. Reconcile the mutable
+      // event set against all evidence retained at this tick, never an older
+      // projection that predates events or outcomes already written by live work.
+
       const windows={};
       for(const a of await list(stmt(db,'SELECT rule_id,version,started_at,ended_at FROM one_clock_activations WHERE namespace=? LIMIT 1001',job.namespace))) {
         const ruleKey=JSON.stringify([a.rule_id,a.version]);(windows[ruleKey]??=[]).push(a);
@@ -168,12 +179,12 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       };
       const wanted=new Set(chosen.flatMap(inputs));
       const optional=sources.filter(a=>a.demandDriven && a.outputs.some(output=>wanted.has(output)));
-      const targetThrough=Math.min(bounds.close,historic?snapshotAt:now);
-      const key=JSON.stringify([job.session,job.instrument,snapshotAt,version?.generation,historic,optional.map(a=>a.id)]);
+      const targetThrough=Math.min(bounds.close,now);
+      const key=JSON.stringify([job.session,job.instrument,now,version?.generation,historic,optional.map(a=>a.id)]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
         if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
-          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:snapshotAt,
+          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
             maxSequence:version ? (version.sequences[descriptor.id+'/'+job.instrument]??0) : null,
             currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
           if(!native)continue;
@@ -197,20 +208,11 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
             }
           }
         }
-        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:snapshotAt});
-        const demandOutputs=new Set(optional.flatMap(a=>a.outputs));
-        // A late native correction can wake a session whose optional catalog
-        // was never consumed. Retain today's archive read, select only evidence
-        // available through the frozen logical cut, and keep its actual receipt.
-        if(historic && optional.length) {
-          const fresh=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
-          legacy.splice(0,legacy.length,...legacy.filter(r=>!demandOutputs.has(r.source)),
-            ...fresh.filter(r=>demandOutputs.has(r.source)&&r.available_at<=snapshotAt));
-        }
+        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
         const records=legacy.filter(r=>!owners.has(r.source));
         for(const [source,{descriptor,native}] of owners) {
           if(!descriptor.supersedes?.[source]&&legacy.some(r=>r.source===source))throw new Error('native source needs explicit supersession');
-          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now,snapshotCutoff:snapshotAt}));
+          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now,snapshotCutoff:now}));
         }
         return {coverage,records};
       })());
@@ -234,14 +236,14 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         for(const adapter of dependencies){
           const receipt=data.coverage.find(c=>c.source===adapter.id);
           if(!receipt || incomplete(receipt))return false;
-          if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?snapshotAt:targetThrough))return false;
-          if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<snapshotAt)
+          if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?now:targetThrough))return false;
+          if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<now)
             partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           // Once the session is fully indexed, later publication can correct
           // an in-session endpoint supplied by another source.
           if(receipt.through!==undefined && (receipt.through<bounds.close || receipt.pending>0)){
             const key=JSON.stringify([rule.rule_id,rule.version]);
-            ruleCutoffs[key]=Math.min(ruleCutoffs[key]??snapshotAt,receipt.through);
+            ruleCutoffs[key]=Math.min(ruleCutoffs[key]??now,receipt.through);
           }
         }
         return true;
@@ -252,10 +254,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         await stmt(db,'UPDATE one_clock_evaluation_work SET updated_at=?,rule_cursor=? WHERE namespace=? AND session=? AND instrument=?',now,(start+beforeFilter)%Math.max(1,rules.length),job.namespace,job.session,job.instrument).run();
         results.push({state:'catching-up',session:job.session,instrument:job.instrument});continue;
       }
-      // Mapping a legacy identity can itself become known after the source
-      // snapshot. Keep that actual handoff time and the transaction time distinct.
-      const evidenceAt=historic?Math.max(snapshotAt,...data.records.map(r=>r.received_at)):now;
-      const selection={session:job.session,instrument:job.instrument,cutoff:evidenceAt,origin:'recorded'};
+      const selection={session:job.session,instrument:job.instrument,cutoff:now,origin:'recorded'};
       // Regular-session observations share the producer's calendar; premarket
       // payloads do not silently become an anchor or trigger for this policy.
       const sourceRecords=data.records.filter(r=>r.event_at>=bounds.open&&r.event_at<=bounds.close);
@@ -289,7 +288,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
           if(queued && queued.target<=version.generation) await finishHistory(db,queued,now);
         }
       }
-      results.push({state:failure?'failed':'evaluated',session:job.session,instrument:job.instrument,...result});
+      results.push({state:failure?'failed':partialRules.size?'catching-up':'evaluated',session:job.session,instrument:job.instrument,...result});
     } catch {
       // A broken source/account cannot monopolize the fair rotation. This is
       // scheduling progress only; no evidence or evaluation checkpoint moves.

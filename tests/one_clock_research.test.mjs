@@ -227,7 +227,7 @@ test('level studies retain the known prefix before catch-up and acknowledge cove
     value:{qualified:true,levels:[{strike:650,call:5,put:1}],calibration:{etag:'opening',tier:'0DTE_Regular'}}};
   const rows=[opening,...Array.from({length:32},(_,i)=>price(i,i<2?652.34:648.31))];
   const source={id:'levels',version:'2',instruments:['QQQ'],outputs:['oi-levels','level-spot'],demandDriven:true,orderedAvailability:true,
-    discover:async()=>({complete:true,artifacts:rows.map(row=>({key:row.id,version:'1',eventAt:row.eventAt,availableAt:row.availableAt,row})).reverse()}),
+    discover:async()=>({complete:true,artifacts:rows.map(row=>({key:row.id,version:String(row.revision),eventAt:row.eventAt,availableAt:row.availableAt,row})).reverse()}),
     read:async(bucket,scope,a)=>({rows:[a.row]})};
   const now=at+40*60000,tick=cutoff=>advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:cutoff,sources:[source],publicationSources:[]});
   await tick(now);
@@ -244,11 +244,31 @@ test('level studies retain the known prefix before catch-up and acknowledge cove
   const [maturing]=await events(now+15*60000);
   assert.equal(maturing.id,early.id);assert.equal(maturing.outcomes.at(-1).state,'measured');
   assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
-  await tick(now+30*60000);
-  const finished=await events(now+30*60000);
+  // An older native change is discovered after live evidence matured.
+  for(const name of ['0011_one_clock_publications','0012_one_clock_handoff','0013_one_clock_reevaluation'])
+    await DB.exec(fs.readFileSync(new URL('../backend/migrations/'+name+'.sql',import.meta.url),'utf8'));
+  env.ONE_CLOCK_PUBLICATIONS='enabled';
+  await DB.prepare('INSERT INTO one_clock_native_changes(generation,stream,sequence,session,instrument,received_at) VALUES(84,?,?,?,?,?)')
+    .bind('bot-audit/QQQ',58,session,'QQQ',at-1).run();
+  for(let i=47;i<69;i++)rows.push(price(i,648.31));
+  const retry=await tick(now+30*60000);
+  assert.ok(retry.some(r=>r.state==='catching-up'));
+  assert.deepEqual(await events(now+30*60000),[maturing]);
+  assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_event_history WHERE state='retracted'")[0].n,0);
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_generation_receipts')[0].n,0);
+  assert.equal(DB.raw('SELECT target FROM one_clock_historical_rules')[0].target,84);
+  await tick(now+45*60000);
+  const finished=await events(now+45*60000);
   assert.equal(finished.length,1);assert.equal(finished[0].id,early.id);
   assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_evaluation_history WHERE state='evaluated'")[0].n,1);
   assert.deepEqual((await events(now))[0].outcomes,early.outcomes);
+  // A late-discovered map revision available before the trigger can
+  // legitimately remove it on a covered pass. The old as-of view survives.
+  rows.push({...opening,revision:2,availableAt:opening.availableAt+1,
+    value:{...opening.value,levels:[]}});
+  await tick(now+60*60000);
+  assert.equal((await events(now+60*60000)).length,0);
+  assert.equal((await events(now+45*60000))[0].id,early.id);
 });
 test('account audit preserves each bot decision and its own settlement on delayed/repeated delivery', async t => {
   const {oiSkewAuditRule} = await import('../site/shared/one-clock-decision-events.js');
