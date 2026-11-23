@@ -5,7 +5,7 @@ const { formatSqueezeScheduleStatus } = require('../site/shared.js');
 const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 const overview = require('./overview');
 
-const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows'];
+const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows', 'crypto_snapshot'];
 // Chain underlyings (#121). QQQ keeps its original artifact and dataset id, so
 // an omitted selector behaves exactly as before; SPY has its own tree.
 const UNDERLYINGS = Object.freeze({
@@ -122,6 +122,19 @@ function snapshot(p, symbol = 'QQQ') {
   check(!object(p.underlying_market) || p.underlying_market.symbol == null || p.underlying_market.symbol === symbol, `Underlying readings belong to ${p.underlying_market?.symbol}, not ${symbol}.`, 'symbol_mismatch');
   check(p.rows.every(r => occRoot(r.OptionSymbol) === symbol), `Snapshot contains non-${symbol} contracts.`, 'symbol_mismatch');
   check(p.snapshot_key == null || UNDERLYINGS[symbol].archive.test(p.snapshot_key), 'Invalid snapshot locator.');
+}
+const CRYPTO_SOURCES = ['coinbase', 'coingecko'];
+const CRYPTO_FRESHNESS = ['fresh', 'stale', 'unavailable'];
+const CRYPTO_ROW_STATUS = ['ok', 'partial', 'source_unavailable'];
+function cryptoSnapshot(p) {
+  check(object(p) && p.schema_version === 'crypto_snapshot.v1' && Array.isArray(p.coins) && p.coins.length <= 39 &&
+    p.coins.every(r => object(r) && typeof r.symbol === 'string' && CRYPTO_SOURCES.includes(r.source) &&
+      r.price_basis === r.source && // No substitution: a row's price basis must be its own source.
+      (r.price === null || (typeof r.price === 'number' && Number.isFinite(r.price))) &&
+      (r.rank == null || Number.isInteger(r.rank)) &&
+      CRYPTO_FRESHNESS.includes(r.freshness) && CRYPTO_ROW_STATUS.includes(r.status)),
+    'Unsupported crypto snapshot contract.');
+  check(p.session_model === 'continuous_24_7', 'Crypto snapshot must carry the continuous 24/7 session model.');
 }
 function squeeze(p, isSuccess = false) {
   check(object(p) && p.schema_version === 1 && new RegExp('^' + UUID + '$').test(p.run_id) &&
@@ -243,6 +256,7 @@ units.spy_snapshot = units.qqq_snapshot;
 units.options_active = units.options_returns;
 units.options_windows = { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms': 'UTC epoch milliseconds', '*_entry_delay_from_boundary_s, *_exit_lead_before_close_s': 'seconds from the session boundary', '*_quote_age_s': 'seconds between quote observation and sample', '*_relative_spread': 'spread / midpoint', '*_size': 'contracts at quoted side', rank: 'producer ordinal rank within the selected basis', contracts_evaluated: 'contracts evaluated in this window, eligible plus excluded' };
 units.cross_market_overview = overview.units;
+units.crypto_snapshot = { price: 'USD', high_24h: 'USD', low_24h: 'USD', change_24h_pct: 'percentage points', change_1h_pct: 'percentage points', change_7d_pct: 'percentage points', volume_24h: 'USD', market_cap: 'USD', rank: 'producer market-cap rank' };
 const warnings = {
   cross_market_overview: overview.warnings,
   qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.'],
@@ -253,6 +267,7 @@ warnings.options_windows = ['Sampled quotes (~5-minute sweeps); between-sample m
 warnings.spy_snapshot = [...warnings.qqq_snapshot,
   'SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.',
   'SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.'];
+warnings.crypto_snapshot = ['A Coinbase price is never substituted for a CoinGecko price or vice versa; a missing source publishes a null price with status source_unavailable.', 'Rank, market cap and 1h/7d change are CoinGecko metadata, not the price basis.', 'Fear & Greed is best-effort; an unavailable feed publishes value null, never a fabricated value.', 'Crypto trades 24/7; freshness is judged against each provider observation time, not an equity session clock.'];
 
 class Consumer {
   constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); this.retainedBytes = 0; }
@@ -271,11 +286,12 @@ class Consumer {
   async call(name, a = {}) {
     const q = this.source.query();
     const marketDataset = supportedUnderlying(underlyingOf(a)) ? UNDERLYINGS[underlyingOf(a)].dataset : 'unsupported_underlying';
-    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
+    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview', crypto_snapshot:'crypto_snapshot'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
     let out = this.envelope(dataset, a, q);
     try {
       if (name === 'discover_sources') out = await this.discover(a, q, out);
       else if (name === 'market_context') out = await this.market(a, q, out);
+      else if (name === 'crypto_snapshot') out = await this.crypto(a, q, out);
       else if (name === 'squeeze_results') out = await this.squeeze(a, q, out);
       else if (name === 'return_rankings') out = await this.returns(a, q, out);
       else if (name === 'active_rankings') out = await this.active(a, q, out);
@@ -317,12 +333,12 @@ class Consumer {
     // spy_snapshot is appended so existing clients' capability positions stay put.
     const probes = [['qqq_snapshot', 'intraday/latest.json'], ['scheduled_squeeze', 'squeeze-scanner/v1/scheduled/latest.json'],
       ['options_returns', a.session ? `oa203/scanner/${a.session}/summary.json` : null], ['spy_snapshot', UNDERLYINGS.SPY.key],
-      ['cross_market_overview', overview.KEY]];
+      ['cross_market_overview', overview.KEY], ['crypto_snapshot', 'crypto/latest.json']];
     const chainSymbol = id => id === 'qqq_snapshot' ? 'QQQ' : id === 'spy_snapshot' ? 'SPY' : null;
     out.capabilities = [];
     for (const [id, key] of probes) {
       const probe = key ? await q.optionalJson(key) : {value:null,error:null};
-      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else returnSummary(probe.value, a.session); }
+      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else if (id === 'crypto_snapshot') cryptoSnapshot(probe.value); else returnSummary(probe.value, a.session); }
       catch (e) { probe.error = errorRecord(e, key); probe.value = null; }
       if (id === 'cross_market_overview') {
         const p = probe.value;
@@ -340,6 +356,20 @@ class Consumer {
           source_dependent_identities: [{label:'JPY/USD',source:'yfinance',id:'fx.jpyusd',instrument_type:'spot_fx'},{label:'JPY/USD',source:'last-known without retained origin',id:'unknown.jpyusd',instrument_type:'unknown'}],
           gaps:overview.gaps(listed?.known ?? overview.rows({prices:{},timestamp:new Date(this.now()).toISOString(),feed_stale:true},this.now()).known), cadence: 'collector price loop about every 10 s during collector sessions; yfinance fills cached 60 s',
           coverage: p ? { strip_labels: Object.keys(p.prices).length, identified:listed.known.length, unmapped:listed.unmapped.length } : null, historical_index: 'not_supported' });
+        continue;
+      }
+      if (id === 'crypto_snapshot') {
+        const p = probe.value;
+        out.capabilities.push({ dataset: id, producer_schema: 'crypto_snapshot.v1',
+          availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : 'available',
+          actual: p ? { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null } : null,
+          freshness: p ? {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'} : { status: 'unknown' },
+          source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
+          fields: ['rank','symbol','name','source','price_basis','price','high_24h','low_24h','change_24h_pct','change_1h_pct','change_7d_pct','volume_24h','market_cap','provider_observed_at','as_of','freshness','status','patterns','market'],
+          filters: ['symbol','source','limit','offset'],
+          cadence: 'hourly publication; continuous 24/7 session model, no equity session close',
+          coverage: p ? `${p.coins.length} coins by market-cap rank; ${p.counts?.source_unavailable ?? 0} source-unavailable` : null,
+          historical_index: 'not_supported' });
         continue;
       }
       const chain = chainSymbol(id);
@@ -411,6 +441,25 @@ class Consumer {
     const incomplete = !object(m) || m.spot == null || m.vwap == null || m.vwap_partial_session || m.rvol?.status !== 'ok' || m.momentum?.status !== 'ok';
     if(incomplete && object(m)) out.warnings.push(`Partial readings: VWAP ${m.vwap==null?'missing':m.vwap_partial_session?'partial_session':'available'}; RVOL ${m.rvol?.status??'missing'}; reference momentum ${m.momentum?.status??'missing'}.`);
     out.status = incomplete ? 'partial' : p.rows.length ? 'available' : 'empty';
+    return out;
+  }
+  async crypto(a, q, out) {
+    args(a, ['symbol', 'source', 'limit', 'offset']); const {limit, offset} = page(a);
+    if (a.symbol !== undefined) check(typeof a.symbol === 'string' && /^[A-Z0-9]{1,10}$/.test(a.symbol), 'Invalid symbol.', 'invalid_filter');
+    if (a.source !== undefined) check(CRYPTO_SOURCES.includes(a.source), 'source must be coinbase or coingecko.', 'invalid_filter');
+    const p = await q.json('crypto/latest.json'); cryptoSnapshot(p);
+    out.actual = { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
+    out.producer_times.acquisition_end = p.constructed_at;
+    out.freshness = {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'};
+    out.market = p.market ?? null;
+    out.patterns = Array.isArray(p.patterns) ? p.patterns : [];
+    const rows = p.coins.filter(r => (!a.symbol || r.symbol === a.symbol) && (!a.source || r.source === a.source));
+    const paged = slice(rows, limit, offset); out.pagination = paged.pagination;
+    out.rows = paged.rows;
+    const unavailable = p.coins.filter(r => r.status === 'source_unavailable').length;
+    if (unavailable) out.warnings.push(`${unavailable} coin${unavailable === 1 ? '' : 's'} source-unavailable; no price was substituted from the other source.`);
+    out.coverage = {source_rows: p.coins.length, matched_rows: rows.length, unavailable_rows: unavailable};
+    out.status = unavailable ? 'partial' : p.coins.length ? 'available' : 'empty';
     return out;
   }
   async overview(a, q, out) {
