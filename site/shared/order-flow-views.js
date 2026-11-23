@@ -448,7 +448,8 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       }
       // Stack coincident marks away from the strike without shifting their time.
       const stacks = new Map();
-      c.fillStyle = '#afc7d4';
+      c.fillStyle = 'rgba(175, 199, 212, 0.45)';
+      c.beginPath();
       for (const p of visible) {
         if (prem(p) >= BIG) continue;
         const x = Math.round(X(p[0]));
@@ -460,8 +461,10 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         const next = K[p[1] - direction];
         const room = Math.abs(Y(next ?? (direction < 0 ? hi : lo)) - Y(k));
         const distance = Math.min(5 + 6 * depth, Math.max(3, room * 0.43));
-        c.fillRect(x - 1, Y(k) + direction * distance - 3, 3, 6);
+        c.rect(x - 1, Y(k) + direction * distance - 3, 3, 6);
       }
+      // Fill once so overlapping ticks stay at the same opacity.
+      c.fill();
       // spot
       c.strokeStyle = '#ffd166';
       c.lineWidth = 2.2;
