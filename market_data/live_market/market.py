@@ -390,11 +390,15 @@ def _put_snapshot_provenance(s3, record: dict[str, Any]) -> None:
 def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
                   exp_date: str, tier: str, today: date,
                   counters: Counters, tracker: SnapshotTracker,
-                  us: "UnderlyingSession | None" = None):
+                  us: "UnderlyingSession | None" = None, *, publication_queue=None, capture=None):
     us     = us or QQQ_SESSION
-    state  = feed.get_state()
-    ts_et  = datetime.now(ET)
-    ts_utc = datetime.now(timezone.utc)
+    if capture is None:
+        state = feed.get_state()
+        ts_et = datetime.now(ET)
+        ts_utc = datetime.now(timezone.utc)
+    else:
+        ts_utc, state = capture
+        ts_et = ts_utc.astimezone(ET)
 
     quote = state.get(us.symbol, {})
     if us.symbol == "SPY":
@@ -521,6 +525,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         )
         csv_uploaded_at = datetime.now(timezone.utc)
         counters.inc_csv()
+        tracker.record(ts_utc)
         log.info(f"-> {csv_key}  ({len(rows)} rows,  underlying={underlying},  bids={bid_count})")
     except Exception as e:
         log.error(f"CSV upload failed: {e}")
@@ -586,8 +591,11 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     # The payload is only observable if the write succeeds, so its readings
     # carry the publication attempt time as `published_at`; a failed write
     # leaves no payload and the sidecar records `archived_unpublished`.
-    publication_time = datetime.now(timezone.utc)
-    finish_publication(readings, published_at=publication_time, status="published")
+    deferred = publication_queue is not None and ONE_CLOCK_PUBLICATIONS
+    publication_time = None if deferred else datetime.now(timezone.utc)
+    finish_publication(readings, published_at=publication_time,
+                       status="pending" if deferred else "published",
+                       reason="awaiting_one_clock" if deferred else None)
     readings_sha = readings_digest(readings)
     provenance["market_readings_digest"] = readings_sha
 
@@ -620,6 +628,22 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
 
+    if deferred:
+        # Persist the exact payload and CSV digest before returning to capture.
+        # The sidecar can report pending while the publisher is catching up.
+        provenance["market_readings_availability_basis"] = "confirmed_latest_publication"
+        provenance["publication"] = {"status": "pending", "reason": "awaiting_one_clock"}
+        _put_snapshot_provenance(s3, provenance)
+        try:
+            publication_queue.enqueue(payload, provenance, csv_buf.getvalue().encode())
+        except Exception:
+            # An ambiguous write may already be in flight. Leave the pending
+            # sidecar (or a concurrent successful finalization) intact.
+            log.error("Could not confirm queued publication %s", csv_key)
+            counters.inc_failure()
+            raise
+        return
+
     if ONE_CLOCK_PUBLICATIONS:
         from .one_clock import publish_snapshot
         try:
@@ -646,7 +670,6 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
             CacheControl="no-cache, max-age=0",
         )
         counters.inc_snapshot(ts_utc.isoformat())
-        tracker.record()
         provenance["latest_published_at"] = publication_time.isoformat()
         provenance["publication"] = {"status": "published", "reason": None}
         log.info(f"-> {us.latest_key} updated")
