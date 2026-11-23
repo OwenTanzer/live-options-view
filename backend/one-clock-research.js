@@ -153,6 +153,10 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
     try {
       const historic=job.target!==undefined;
       const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
+      if(historic && version.generation<job.target) {
+        await finishHistory(db,job,now,'Queued evidence is not yet visible.');
+        continue;
+      }
       if(historic) {
         const done=await stmt(db,'SELECT MAX(generation) generation FROM one_clock_generation_receipts WHERE namespace=? AND session=? AND instrument=? AND rule_id=? AND version=?',job.namespace,job.session,job.instrument,job.rule_id,job.version).first();
         if(done.generation>=job.target) {await finishHistory(db,job,now);results.push({state:'already-evaluated',session:job.session,instrument:job.instrument});continue;}
@@ -160,7 +164,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       // A queued generation is a minimum obligation. Reconcile the mutable
       // event set against all evidence retained at this tick, never an older
       // projection that predates events or outcomes already written by live work.
-      const snapshotAt=now;
+
       const windows={};
       for(const a of await list(stmt(db,'SELECT rule_id,version,started_at,ended_at FROM one_clock_activations WHERE namespace=? LIMIT 1001',job.namespace))) {
         const ruleKey=JSON.stringify([a.rule_id,a.version]);(windows[ruleKey]??=[]).push(a);
@@ -175,12 +179,12 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       };
       const wanted=new Set(chosen.flatMap(inputs));
       const optional=sources.filter(a=>a.demandDriven && a.outputs.some(output=>wanted.has(output)));
-      const targetThrough=Math.min(bounds.close,historic?snapshotAt:now);
-      const key=JSON.stringify([job.session,job.instrument,snapshotAt,version?.generation,historic,optional.map(a=>a.id)]);
+      const targetThrough=Math.min(bounds.close,now);
+      const key=JSON.stringify([job.session,job.instrument,now,version?.generation,historic,optional.map(a=>a.id)]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
         if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
-          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:snapshotAt,
+          const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
             maxSequence:version ? (version.sequences[descriptor.id+'/'+job.instrument]??0) : null,
             currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
           if(!native)continue;
@@ -204,11 +208,11 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
             }
           }
         }
-        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:snapshotAt});
+        const legacy=await ingestedAsOf(db,{session:job.session,instrument:job.instrument,cutoff:now});
         const records=legacy.filter(r=>!owners.has(r.source));
         for(const [source,{descriptor,native}] of owners) {
           if(!descriptor.supersedes?.[source]&&legacy.some(r=>r.source===source))throw new Error('native source needs explicit supersession');
-          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now,snapshotCutoff:snapshotAt}));
+          records.push(...await handoffSource(db,descriptor,native,legacy,{source,session:job.session,instrument:job.instrument,cutoff:now,snapshotCutoff:now}));
         }
         return {coverage,records};
       })());
@@ -232,14 +236,14 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         for(const adapter of dependencies){
           const receipt=data.coverage.find(c=>c.source===adapter.id);
           if(!receipt || incomplete(receipt))return false;
-          if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?snapshotAt:targetThrough))return false;
-          if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<snapshotAt)
+          if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?now:targetThrough))return false;
+          if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<now)
             partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           // Once the session is fully indexed, later publication can correct
           // an in-session endpoint supplied by another source.
           if(receipt.through!==undefined && (receipt.through<bounds.close || receipt.pending>0)){
             const key=JSON.stringify([rule.rule_id,rule.version]);
-            ruleCutoffs[key]=Math.min(ruleCutoffs[key]??snapshotAt,receipt.through);
+            ruleCutoffs[key]=Math.min(ruleCutoffs[key]??now,receipt.through);
           }
         }
         return true;

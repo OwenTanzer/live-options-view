@@ -60,14 +60,18 @@ test('a prior empty level study remains pending while newer coverage is partial'
   await DB.prepare('INSERT INTO one_clock_rules VALUES(?,?,?,?,?)').bind('account:alice',rule.id,1,T-7200000,JSON.stringify(rule)).run();
   await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,NULL)').bind('account:alice',rule.id,1,T-3600000).run();
   await DB.prepare("INSERT INTO one_clock_evaluation_history VALUES(?,?,?,?,1,?,'evaluated',NULL)").bind('account:alice',session,instrument,rule.id,T-10000).run();
-  for(const [generation,at,pending] of [[1,T-10000,0],[2,T,55]]) {
+  for(const [generation,at,pending] of [[1,T-10000,0],[2,T,55],[3,T+1,0]]) {
     const source='calibrated-oi-levels';
     await DB.prepare('INSERT INTO one_clock_ingestion_history VALUES(?,?,?,?,?,?)').bind(source,session,instrument,generation,at,
-      JSON.stringify({source,session,instrument,indexComplete:true,pending,updatedAt:at})).run();
+      JSON.stringify({source,session,instrument,indexComplete:true,pending,updatedAt:at,gaps:generation===3?1:0})).run();
   }
   const read=async cutoff=>(await call('alice',{from:session,to:session,instrument,cutoff:String(cutoff)})).json();
   assert.equal((await read(T-1)).evaluation[0].state,'evaluated');
   const partial=await read(T);
   assert.deepEqual(partial.events,[]);
   assert.equal(partial.evaluation[0].state,'pending');
+  await DB.prepare("INSERT INTO one_clock_evaluation_history VALUES(?,?,?,?,1,?,'evaluated',NULL)").bind('account:alice',session,instrument,rule.id,T+1).run();
+  const gapped=await read(T+1);
+  assert.equal(gapped.evaluation[0].state,'pending');
+  assert.match(gapped.evaluation[0].reason,/gaps/);
 });
