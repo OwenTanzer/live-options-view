@@ -83,30 +83,45 @@ def admitted(close, level, target, side):
 
 
 def qualified_trigger(kind, trigger, previous, sequence, plan):
-    """Pure research specification. Every previous 9-minute bar ends before this trigger."""
-    if len(previous) < 14 or any(bar.end > trigger.start for bar in previous):
+    """Apply the frozen trigger using only complete reference candles."""
+    runner = kind == "runner"
+    size = 30 if runner else 1 if kind == "opening" else 9
+    if trigger.span <= 0 or trigger.end - trigger.start != size * MINUTE:
         return None
-    previous = previous[-14:]
-    avg = mean(bar.span for bar in previous)
-    if avg <= 0 or trigger.span <= 0 or trigger.span > 3 * avg:
+    if any(b.end > trigger.start for b in previous):
         return None
-    size = 1 if kind == "opening" else 30 if kind == "runner" else 9
-    if trigger.end - trigger.start != size * MINUTE:
-        return None
-    if kind == "runner" and (
-        trigger.start.time() != time(9, 30) or trigger.end.time() != time(10)
-    ):
-        return None
-    if kind == "opening":
-        if trigger.end.time() > time(10, 15) or len(sequence) < 3:
+    if runner:
+        if (
+            trigger.start.time() != time(9, 30)
+            or trigger.end.time() != time(10)
+            or len(previous) != 13
+            or any(b.end - b.start != 30 * MINUTE for b in previous)
+        ):
             return None
-        if not sequence[-3].span < sequence[-2].span < trigger.span:
+        avg = mean(b.span for b in previous)
+        if avg <= 0 or trigger.span < avg:
             return None
-    elif (
-        trigger.span < 1.5 * avg
-        or not previous[-2].span < previous[-1].span < trigger.span
-    ):
-        return None
+    else:
+        if len(previous) < 14 or any(
+            b.end - b.start != 9 * MINUTE for b in previous[-14:]
+        ):
+            return None
+        previous = previous[-14:]
+        avg = mean(b.span for b in previous)
+        if avg <= 0 or trigger.span > 3 * avg:
+            return None
+        if kind == "opening":
+            if (
+                trigger.end.time() > time(10, 15)
+                or len(sequence) < 3
+                or not sequence[-3].span < sequence[-2].span < trigger.span
+            ):
+                return None
+        elif (
+            trigger.span < 1.5 * avg
+            or not previous[-2].span < previous[-1].span < trigger.span
+        ):
+            return None
     levels = plan.get("levels")
     if not isinstance(levels, list) or not levels:
         return None
@@ -123,6 +138,8 @@ def qualified_trigger(kind, trigger, previous, sequence, plan):
     for level in levels:
         side = 1 if level["side"] == "long" else -1
         price = level["price"]
+        if runner and not number(level.get("first_target")):
+            continue
         target = target_for(level, levels)
         if target is None or not admitted(trigger.close, price, target, side):
             continue
@@ -131,7 +148,7 @@ def qualified_trigger(kind, trigger, previous, sequence, plan):
             continue
         if kind != "opening" and cl < hi - trigger.span / 4:
             continue
-        if kind in ("golden", "runner"):
+        if kind == "golden":
             edge = max(prices(x, side)[1] for x in previous[-6:])
             if abs(side * price - edge) > 0.25 or cl <= edge:
                 continue
@@ -167,15 +184,34 @@ def qualified_trigger(kind, trigger, previous, sequence, plan):
     return candidates[0] if len(candidates) == 1 else None
 
 
-def entry(kind, rows, plan):
+def entry(kind, rows, plan, reference=None):
     nine = candles(rows, 9)
     size = 1 if kind == "opening" else 30 if kind == "runner" else 9
     series = candles(rows, size) if size != 9 else nine
     if not series or series[-1].end != rows[-1].end:
         return None
     trigger = series[-1]
-    previous = [b for b in nine if b.end <= trigger.start]
-    return qualified_trigger(kind, trigger, previous, series, plan)
+    local = [b for b in nine if b.end <= trigger.start]
+    # A previous session can only inform an actionable trigger after our
+    # own first sight of that history. Late retrieval cannot repair the past.
+    known = (
+        reference is not None
+        and reference["for_session"] == trigger.start.date().isoformat()
+        and reference["first_seen"] <= trigger.end
+    )
+    use_prior = kind == "runner" or len(local) < 14
+    if kind == "runner":
+        previous = reference["thirty"] if known else []
+    else:
+        previous = (reference["nine"] if known and use_prior else []) + local
+    signal = qualified_trigger(kind, trigger, previous, series, plan)
+    if signal:
+        signal["reference_count"] = 13 if kind == "runner" else 14
+        signal["reference_minutes"] = 30 if kind == "runner" else 9
+        if use_prior and known:
+            signal["prior_session"] = reference["session"]
+            signal["prior_first_seen"] = reference["first_seen"].isoformat()
+    return signal
 
 
 def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
