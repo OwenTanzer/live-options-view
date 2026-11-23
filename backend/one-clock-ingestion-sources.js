@@ -61,3 +61,10 @@ export const chainIngestion=Object.freeze({id:'archived-chain',version:'1',owner
 });
 // A stream joins once here; all accounts share the same public ingestion pass.
 export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion,levelIngestion]);
+
+export function levelEvaluationStatus(attempt,rule,coverage) {
+  if(attempt.state!=='evaluated' || ![...rule.conditions,...rule.outcomes].some(input=>levelIngestion.outputs.includes(input.source)))return attempt;
+  const receipt=coverage.find(c=>c.source===levelIngestion.id && c.session===attempt.session && c.instrument===attempt.instrument);
+  if(receipt?.indexComplete && receipt.pending===0 && receipt.updatedAt<=attempt.attempted_at)return attempt;
+  return {...attempt,state:'pending',reason:'Calibrated source coverage awaits complete rule evaluation.'};
+}

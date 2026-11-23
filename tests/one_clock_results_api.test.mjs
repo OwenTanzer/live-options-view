@@ -53,3 +53,21 @@ test('result byte preflight rejects an oversized payload before reading its body
   const response=await call();assert.equal(response.status,400);assert.match((await response.json()).error,/byte/);
   assert.ok(!DB.queries.some(sql=>sql.startsWith('SELECT h.* FROM one_clock_events')));
 });
+
+test('a prior empty level study remains pending while newer coverage is partial',async t=>{
+  const {DB,call}=await fixture(t),session='2026-11-20',instrument='QQQ';
+  const rule={...demoRules[0],conditions:[{source:'level-spot'}],outcomes:[]};
+  await DB.prepare('INSERT INTO one_clock_rules VALUES(?,?,?,?,?)').bind('account:alice',rule.id,1,T-7200000,JSON.stringify(rule)).run();
+  await DB.prepare('INSERT INTO one_clock_activations VALUES(?,?,?,?,NULL)').bind('account:alice',rule.id,1,T-3600000).run();
+  await DB.prepare("INSERT INTO one_clock_evaluation_history VALUES(?,?,?,?,1,?,'evaluated',NULL)").bind('account:alice',session,instrument,rule.id,T-10000).run();
+  for(const [generation,at,pending] of [[1,T-10000,0],[2,T,55]]) {
+    const source='calibrated-oi-levels';
+    await DB.prepare('INSERT INTO one_clock_ingestion_history VALUES(?,?,?,?,?,?)').bind(source,session,instrument,generation,at,
+      JSON.stringify({source,session,instrument,indexComplete:true,pending,updatedAt:at})).run();
+  }
+  const read=async cutoff=>(await call('alice',{from:session,to:session,instrument,cutoff:String(cutoff)})).json();
+  assert.equal((await read(T-1)).evaluation[0].state,'evaluated');
+  const partial=await read(T);
+  assert.deepEqual(partial.events,[]);
+  assert.equal(partial.evaluation[0].state,'pending');
+});
