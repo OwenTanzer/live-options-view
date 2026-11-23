@@ -1,5 +1,6 @@
 // Bounded market-only projection. No client-supplied object key, URL, account,
 // capture, storage write, or fallback to a current snapshot during replay.
+import { publicationDigest } from './one-clock-publication-contract.js';
 import { jsonResponse } from './common.js';
 import { instant, observation } from '../site/shared/one-clock.js';
 import { validSession, sessionAt, snapshotInstant } from '../site/shared/one-clock-session.js';
@@ -65,7 +66,6 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
   cutoff=instant(cutoff);
   // The archive partition remains the event day. A private journal can ask
   // what was known about that day at a later cutoff (including late receipts).
-  // The public route below retains its same-day scope contract.
   if(sessionAt(cutoff)<session) throw new Error('cutoff precedes session date');
   const prefix=PREFIX[instrument]+session.replaceAll('-','')+'/snapshot_';
   const candidates=[]; let cursor,lists=0,bytes=0,gets=0,complete=false;
@@ -117,6 +117,74 @@ export async function readArchivedChain(bucket,{session,instrument,cutoff}) {
   }
   return {rows:[],coverage:{...coverage,gets,bytes,reason:candidates.length>MAX_CANDIDATES?'candidate-bound':'no-qualified-snapshot'}};
 }
+// The observer retains the verified commit after publication. Replaying what
+// the market source exposed uses the commit's availability, even if the
+// observer recorded it later. Results itself keeps enforcing its receipt time.
+export async function publicChainAt(env,selection) {
+  if(env.ONE_CLOCK_PUBLICATIONS!=='enabled') return readArchivedChain(env.PAPER_TRADES,selection);
+  const {session,instrument,cutoff}=selection,stream='collector-chain/'+instrument;
+  const candidates=(await env.DB.prepare(`SELECT payload,available_at,record_id,revision
+    FROM one_clock_publication_records INDEXED BY one_clock_native_chain_replay
+    WHERE stream=? AND session=? AND source='price' AND event_at<=?
+    ORDER BY event_at DESC,available_at DESC,record_id DESC,revision DESC LIMIT ?`)
+    .bind(stream,session,cutoff,MAX_CANDIDATES+1).all()).results;
+  let selected;
+  for(const candidate of candidates.slice(0,MAX_CANDIDATES)) {
+    if(candidate.available_at>cutoff) continue;
+    const newer=(await env.DB.prepare(`SELECT available_at FROM one_clock_publication_records
+      WHERE stream=? AND source='price' AND record_id=? AND revision>?
+      ORDER BY revision LIMIT ?`).bind(stream,candidate.record_id,candidate.revision,MAX_CANDIDATES+1).all()).results;
+    if(newer.some(r=>r.available_at<=cutoff)) continue;
+    if(newer.length>MAX_CANDIDATES) return {rows:[],coverage:{reason:'native-chain-revision-bound'}};
+    selected=JSON.parse(candidate.payload);
+    break;
+  }
+  if(!selected) {
+    if(candidates.length>MAX_CANDIDATES) return {rows:[],coverage:{reason:'native-chain-candidate-bound'}};
+    return readArchivedChain(env.PAPER_TRADES,selection);
+  }
+  // A qualified legacy snapshot can precede the next observer sweep. Allow
+  // that newer market evidence without letting a damaged sidecar mask an
+  // already retained, independently verifiable native publication.
+  let legacy;
+  try { legacy=await readArchivedChain(env.PAPER_TRADES,selection); }
+  catch { legacy={rows:[],coverage:{reason:'legacy-chain-unavailable'}}; }
+  if(legacy.rows[0]?.eventAt>selected.eventAt) return legacy;
+  const coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified',legacyCoverage:legacy.coverage};
+  const refs=selected.details.evidence;
+  const spot=selected.value?.spot??null;
+  if(selected.value===null && !refs.some(ref=>['collector.snapshot.csv.v1','collector.snapshot.payload.v1'].includes(ref.schema)))
+    return {rows:[],coverage:{...coverage,reason:'native-snapshot-withdrawn',digestVerification:'not-verified'}};
+
+  async function body(schema,contentType) {
+    const matches=refs.filter(ref=>ref.schema===schema && ref.contentType===contentType);
+    if(matches.length!==1) throw new Error('missing native chain evidence');
+    const [ref]=matches;
+    if(!/^[a-f0-9]{64}$/.test(ref.sha256) || ref.key!=='publications/v1/'+stream+'/blobs/'+ref.sha256 ||
+       ref.bytes<1 || ref.bytes>MAX_OBJECT) throw new Error('invalid native chain evidence');
+    const object=await env.PAPER_TRADES.get(ref.key);
+    if(!object || object.size!==ref.bytes) throw new Error('native chain evidence size');
+    const bytes=new Uint8Array(await object.arrayBuffer());
+    if(bytes.length!==ref.bytes || await publicationDigest(bytes)!==ref.sha256) throw new Error('native chain evidence digest');
+    return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+  }
+  const [csv,json]=await Promise.all([body('collector.snapshot.csv.v1','text/csv'),body('collector.snapshot.payload.v1','application/json')]);
+  const payload=JSON.parse(json),csvKey=selected.details.originalRecordId,eventAt=selected.eventAt;
+  if(payload.symbol!==instrument || payload.date!==session || payload.snapshot_key!==csvKey ||
+     !csvKey.startsWith(PREFIX[instrument]+session.replaceAll('-','')+'/snapshot_') ||
+     !/^snapshot_\d{12}\.csv$/.test(csvKey.split('/').at(-1)) || stamp(payload.timestamp)!==eventAt ||
+     (spot!==null && payload.underlying_price!==spot)) throw new Error('native chain evidence identity');
+  const rows=projectChainCsv(csv,instrument,session), expirations=[...new Set(rows.map(row=>row.Expiration))];
+  if(expirations.length!==1 || expirations[0]!==payload.expiration || expirations[0]<session ||
+     (instrument!=='IBIT' && expirations[0]!==session) || (spot!==null && rows.find(r=>r.UnderlyingPrice>0)?.UnderlyingPrice!==spot))
+    throw new Error('native chain evidence contract');
+  const timestamp=new Date(eventAt).toISOString();
+  return {coverage,rows:[observation({source:'chain',id:selected.id,revision:selected.revision,session,instrument,origin:'recorded',
+    eventAt,availableAt:selected.availableAt,evidence:selected.evidence,
+    details:{availabilityBasis:coverage.availabilityBasis,digestVerification:coverage.digestVerification,sequence:selected.details.sequence},
+    value:{symbol:instrument,date:session,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
+      underlying_price:spot,rows:spot===null?rows.map(row=>({...row,UnderlyingPrice:null})):rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
+}
 export async function handleOneClockChain(request,env,url) {
   if(request.method!=='GET') return jsonResponse({error:'method not allowed'},405);
   if([...url.searchParams.keys()].some(k=>!['session','instrument','cutoff'].includes(k)) || [...url.searchParams.keys()].some(k=>url.searchParams.getAll(k).length!==1)) return jsonResponse({error:'invalid query'},400);
@@ -124,8 +192,8 @@ export async function handleOneClockChain(request,env,url) {
   try {
     if(selection.cutoff>Date.now()+60000) throw new Error('future cutoff');
     // Validate before accessing any storage. Only fixed market prefixes allowed.
-    if(!validSession(selection.session) || !Object.hasOwn(PREFIX,selection.instrument) || sessionAt(instant(selection.cutoff))!==selection.session) throw new Error('invalid scope');
+    if(!validSession(selection.session) || !Object.hasOwn(PREFIX,selection.instrument) || sessionAt(instant(selection.cutoff))<selection.session) throw new Error('invalid scope');
   } catch { return jsonResponse({error:'invalid archive scope'},400); }
-  try { return jsonResponse(await readArchivedChain(env.PAPER_TRADES,selection),200); }
+  try { return jsonResponse(await publicChainAt(env,selection),200); }
   catch { return jsonResponse({error:'Archive unavailable or exceeded bounded read budget'},503); }
 }
