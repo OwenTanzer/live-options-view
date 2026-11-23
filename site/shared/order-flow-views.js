@@ -217,7 +217,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     ],
     B: [
       'B · QQQ price chart with tickets pinned on it',
-      'The QQQ line is the main object, on the same price axis as the strikes. Tickets are circles at their strike and time (area = premium, ▲ call ▼ put). Every small print is a faint tick. Tap anywhere to list the prints there.',
+      'The QQQ line is the main object, on the same price axis as the strikes. Tickets are circles at their strike and time (area = premium, ▲ call ▼ put). Ticks show smaller prints, with calls above the strike and puts below. Tap anywhere to list the prints there.',
     ],
     C: [
       'C · Strike footprint',
@@ -360,7 +360,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
   const chartStepPx = 80;
   function renderB(S) {
     const box = $('#view');
-    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · <span style="color:var(--faint)">faint ticks</span> = every other print · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
+    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
     const cv = $('#cv'),
       dpr = devicePixelRatio || 1,
       Wd = cv.clientWidth,
@@ -382,6 +382,9 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const travel = (K.length - count) * chartStepPx;
     $('.strike-track').style.height = Hd + travel + 'px';
     const range = $('#chart-strikes');
+    const inspector = $('#inspect-strikes');
+    let visible = [];
+    inspector.onclick = () => inspect(visible.map((p) => p[6]).reverse(), range.textContent);
     let lo, hi;
     const X = (t) => L + ((Wd - L - R) * t) / dur;
     const Y = (v) => T + ((Hd - T - B) * (hi - v)) / (hi - lo);
@@ -397,6 +400,11 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       lo = bottomStrike - padding;
       hi = topStrike + padding;
       range.textContent = 'Strikes $' + bottomStrike + '–$' + topStrike + ' of $' + K[0] + '–$' + K.at(-1);
+      visible = S.prints.filter((p) => p[1] >= first && p[1] < first + count);
+      const tickets = big.filter((p) => p[1] >= first && p[1] < first + count);
+      inspector.textContent =
+        'Inspect ' + visible.length + ' prints at these strikes · ' + tickets.length + ' tickets ≥ $10k';
+      inspector.disabled = !visible.length;
       c.clearRect(0, 0, Wd, Hd);
       c.save();
       c.beginPath();
@@ -438,12 +446,21 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
           T + 14,
         );
       }
-      // faint ticks: every print
-      c.fillStyle = 'rgba(138,154,163,.28)';
-      for (const p of S.prints) {
+      // Stack coincident marks away from the strike without shifting their time.
+      const stacks = new Map();
+      c.fillStyle = '#afc7d4';
+      for (const p of visible) {
         if (prem(p) >= BIG) continue;
-        const y = Y(K[p[1]]) + (p[2] === 'C' ? -3 : 3);
-        c.fillRect(X(p[0]), y - 1.5, 1, 3);
+        const x = Math.round(X(p[0]));
+        const key = [p[1], p[2], x].join('/');
+        const depth = stacks.get(key) || 0;
+        stacks.set(key, depth + 1);
+        const k = K[p[1]];
+        const direction = p[2] === 'C' ? -1 : 1;
+        const next = K[p[1] - direction];
+        const room = Math.abs(Y(next ?? (direction < 0 ? hi : lo)) - Y(k));
+        const distance = Math.min(5 + 6 * depth, Math.max(3, room * 0.43));
+        c.fillRect(x - 1, Y(k) + direction * distance - 3, 3, 6);
       }
       // spot
       c.strokeStyle = '#ffd166';
@@ -463,7 +480,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         c.fillRect(X(p.t) - 1, Y(p.spot) - 1, 3, 3);
       }
       // tickets
-      for (const p of big.slice().reverse()) {
+      for (const p of tickets) {
         const x = X(p[0]),
           y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6),
           r = rad(p);
@@ -481,10 +498,32 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       c.font = '12px ui-monospace,Consolas,monospace';
       c.fillStyle = '#e6edf0';
       c.textAlign = 'left';
-      for (const p of big.slice(0, 5)) {
+      const labeled = new Set();
+      const labelBoxes = [];
+      for (const p of tickets) {
+        if (labeled.has(p) || labelBoxes.length >= 5) continue;
+        const sameMark = tickets.filter(
+          (q) => !labeled.has(q) && p[1] === q[1] && p[2] === q[2] && Math.abs(X(q[0]) - X(p[0])) < 3,
+        );
+        sameMark.forEach((q) => labeled.add(q));
+        const label = sameMark.length > 1 ? sameMark.length + ' tickets' : money(prem(p));
         const x = X(p[0]),
           y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6);
-        c.fillText(money(prem(p)), Math.min(x + rad(p) + 3, Wd - 50), y - rad(p) + 2);
+        const width = c.measureText(label).width;
+        const left = Math.min(x + rad(p) + 3, Wd - width - 3);
+        const base = Math.min(Hd - B - 2, Math.max(T + 12, y + (p[2] === 'C' ? -rad(p) - 4 : rad(p) + 13)));
+        for (const dy of [0, 15, -15, 30, -30]) {
+          const line = base + dy;
+          if (
+            line < T + 12 ||
+            line > Hd - B ||
+            labelBoxes.some((b) => left < b.right && left + width > b.left && Math.abs(line - b.line) < 14)
+          )
+            continue;
+          c.fillText(label, left, line);
+          labelBoxes.push({ left, right: left + width, line });
+          break;
+        }
       }
       c.restore();
       c.font = '12px ui-monospace,Consolas,monospace';
@@ -893,7 +932,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       $('#oh').textContent = OPT[letter][0];
       $('#op').textContent = OPT[letter][1];
       renderNow(S);
-      $('#chart-strikes').hidden = id !== 'chart' || !K.length;
+      $('#inspect-strikes').hidden = $('#chart-strikes').hidden = id !== 'chart' || !K.length;
       if (!K.length) {
         $('#view').onscroll = null;
         $('#view').textContent = 'Waiting for strikes';

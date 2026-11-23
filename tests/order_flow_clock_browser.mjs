@@ -99,6 +99,18 @@ try {
     await statusContains('887 prints in view');
     await range.getByText('Strikes $649–$653 of $500–$900',{exact:true}).waitFor();
     const chartViewport=page.locator('#optional-tape #view');
+    await chartViewport.evaluate(el=>el.scrollTop-=240);
+    await range.getByText('Strikes $652–$656 of $500–$900',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Inspect 254 prints at these strikes · 3 tickets ≥ $10k'}).click();
+    const inspected=[];
+    for (;;) {
+      inspected.push(...await page.locator('#print-inspector li').allTextContents());
+      if (await page.locator('#inspect-next').isDisabled()) break;
+      await page.locator('#inspect-next').click();
+    }
+    assert.equal(inspected.length,254);
+    for (const sequence of [20949,20951]) assert.ok(inspected.some(row=>row.includes('source sequence '+sequence)));
+    await page.locator('#inspect-close').click();
     await chartViewport.focus();
     await page.keyboard.press('End');
     await range.getByText('Strikes $500–$520 of $500–$900',{exact:true}).waitFor();

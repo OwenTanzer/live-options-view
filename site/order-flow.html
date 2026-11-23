@@ -395,6 +395,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
 .strike-track {min-width:560px}
 .strike-track canvas {position:sticky;top:0;background:var(--panel)}
 #chart-strikes {margin:0 0 6px;font:13px var(--mono);color:var(--dim)}
+#inspect-strikes {margin-bottom:8px}
 #chart-strikes::after {content:" · Scroll vertically to browse strikes"}
 .tape {min-width:560px}
 .grid thead th {position:sticky;top:0;background:var(--panel);z-index:1}
@@ -410,7 +411,7 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
 .controls button,#view>button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
 .controls:has(label[hidden]):has(button[hidden]){display:none}
 .controls label{font-weight:600}.controls input{accent-color:var(--spot)}
-</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div class="key" id="spot-source"></div><div id="chart-strikes" hidden></div><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
+</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div class="key" id="spot-source"></div><div id="chart-strikes" hidden></div><button id="inspect-strikes" hidden></button><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
     <section id="optional-tape" hidden></section>
     <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output
