@@ -2,6 +2,7 @@
 export const API_PATHS = new Set([
   '/api/one-clock/chain',
   '/api/one-clock/opening-oi',
+  '/api/one-clock/btc-replay',
   '/api/one-clock/squeeze',
   '/api/one-clock/bots',
   '/api/one-clock/bots/roster',

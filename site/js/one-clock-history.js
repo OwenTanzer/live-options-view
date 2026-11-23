@@ -109,6 +109,9 @@ function updateView() {
   el('clock-mode').value=replay?'replay':'live';
 }
 function renderCommitted(selection) {
+  const bitcoin = el('history-clock-btc');
+  bitcoin.href = '/api/one-clock/btc-replay?one_clock_at=' + selection.cutoff;
+  bitcoin.hidden = tab !== 'history';
   const credit = el('history-clock-credit');
   credit.hidden = tab !== 'history';
   const kalshi = el('history-clock-kalshi');
@@ -193,7 +196,7 @@ function renderSelection() {
     const [h,m,s=0]=el('history-clock-time').value.split(':').map(Number);
     const cutoff=sessionInstant(session,h,m,Math.floor(s),Math.round((s%1)*1000));
     return renderCommitted(clock.select({mode:'replay',origin:'recorded',session,instrument,cutoff}));
-  } catch(error) {el('clock-journal-nav').hidden=true;el('history-clock-credit').hidden=true;el('history-clock-kalshi').hidden=true;clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
+  } catch(error) {el('history-clock-btc').hidden=true;el('clock-journal-nav').hidden=true;el('history-clock-credit').hidden=true;el('history-clock-kalshi').hidden=true;clear(error.message);clearBot('Invalid cursor; choose a valid session and time.');clearShortlist('Invalid cursor.');}
 }
 el('history-clock-form').onsubmit=event=>{event.preventDefault();renderSelection();};
 function changeMode(next) {

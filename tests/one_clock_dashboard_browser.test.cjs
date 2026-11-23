@@ -78,6 +78,8 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       assert.equal(requests.filter(u=>u.pathname==='/api/one-clock/chain').length,chainCalls);
       assert.equal(requests.some(u=>u.pathname==='/api/bots'),false);
       await page.locator('#tab-history').click();
+      assert.equal(await page.locator('#history-clock-btc').getAttribute('href'),'/api/one-clock/btc-replay?one_clock_at='+(cutoff-1));
+      assert.ok(await page.locator('#history-clock-btc').isVisible());
       const enter=async(time,symbol)=>{
         await page.locator('#history-clock-instrument').fill(symbol);
         await page.locator('#history-clock-time').fill(time);
