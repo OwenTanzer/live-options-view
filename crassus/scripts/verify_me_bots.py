@@ -18,18 +18,30 @@ from crassus.clock import ET
 from crassus.strategy import REGISTRY, StrategyContext
 from crassus.strategies.me_bots import IDS, completed_losses
 from crassus.strategies.me_bots_inputs import Inputs, closed_minutes
-from crassus.strategies.me_bots_rules import Bar, MINUTE, candles, entry, exit_reason
+from crassus.strategies.me_bots_rules import (
+    Bar,
+    MINUTE,
+    candles,
+    entry,
+    exit_reason,
+    qualified_trigger,
+    admitted,
+    target_for,
+)
 
 START = datetime(2026, 11, 23, 9, 30, tzinfo=ET)
 LEVELS = {
     "root": "QQQ",
     "session": START.date().isoformat(),
-    "long": {
-        "first_target": 150,
-        "max_trigger_range_points": 10,
-        "opening_key_level": 99,
-        "premarket_rejection_level": 100,
-    },
+    "levels": [
+        {
+            "price": 102,
+            "side": "long",
+            "source": "fixture shelf",
+            "first_target": 110,
+            "premarket_rejection": True,
+        }
+    ],
 }
 PLAN = {"first_seen": (START - MINUTE).isoformat(), "levels": LEVELS}
 
@@ -38,7 +50,7 @@ def minutes():
     data = []
     for i in range(15 * 9):
         group = i // 9
-        span = {13: 2, 14: 4}.get(group, 1)
+        span = {13: 2, 14: 3}.get(group, 1)
         start = START + i * MINUTE
         data.append(
             Bar(
@@ -67,13 +79,31 @@ class MeBots(unittest.TestCase):
         rows = minutes()
         for id, kind in IDS.items():
             self.assertIn(id, REGISTRY)
-            trigger = (
-                [replace(rows[i], high=101 + i, close=101 + i) for i in range(3)]
-                if kind == "opening"
-                else rows
-            )
-            self.assertEqual(entry(kind, trigger, LEVELS)["side"], 1, kind)
-            self.assertIsNone(entry(kind, trigger, {}))
+            if kind in ("opening", "runner"):
+                end = START + (30 if kind == "runner" else 3) * MINUTE
+                start = START if kind == "runner" else end - MINUTE
+                early = Bar(start, end, 100, 103, 100, 103, 900)
+                prior = [
+                    replace(
+                        b,
+                        start=b.start - timedelta(days=3),
+                        end=b.end - timedelta(days=3),
+                    )
+                    for b in candles(rows, 9)[:-1]
+                ]
+                seq = (
+                    [replace(early, high=101), replace(early, high=102), early]
+                    if kind == "opening"
+                    else [early]
+                )
+                # Synthetic qualified history tests rule mechanics only. Runtime
+                # intentionally cannot synthesize a cross-session reference.
+                self.assertIsNotNone(qualified_trigger(kind, early, prior, seq, LEVELS))
+                self.assertIsNone(entry(kind, rows[:30], LEVELS))
+                self.assertIsNone(entry(kind, rows, LEVELS))
+                continue
+            self.assertEqual(entry(kind, rows, LEVELS)["side"], 1, kind)
+            self.assertIsNone(entry(kind, rows, {}))
             put = [
                 replace(
                     b,
@@ -82,26 +112,59 @@ class MeBots(unittest.TestCase):
                     low=200 - b.high,
                     close=200 - b.close,
                 )
-                for b in trigger
+                for b in rows
             ]
             short = {
-                "short": dict(
-                    first_target=50,
-                    max_trigger_range_points=10,
-                    opening_key_level=101,
-                    premarket_rejection_level=100,
-                )
+                "levels": [
+                    dict(
+                        price=98, side="short", first_target=90, source="fixture shelf"
+                    )
+                ]
             }
             self.assertEqual(entry(kind, put, short)["side"], -1, kind)
-        self.assertIsNone(
-            entry(
-                "runner", rows, {"long": {**LEVELS["long"], "opening_key_level": 150}}
-            )
-        )
         self.assertIsNone(
             entry("phelps", [replace(b, volume=100) for b in rows], LEVELS)
         )
         self.assertIsNone(entry("golden", rows[:-1], LEVELS))
+
+    def test_research_examples_targets_and_nova(self):
+        self.assertFalse(admitted(728.72, 730, 728, -1))
+        self.assertTrue(admitted(719.1, 720, 717, -1))
+        level = dict(price=720, side="short", source="documented shelf")
+        self.assertIsNone(target_for(level, [level]))
+        self.assertEqual(
+            target_for(level, [level, dict(price=717), dict(price=715)]), 717
+        )
+        self.assertFalse(admitted(718.4, 720, 715, -1))
+        rows = minutes()
+        self.assertIsNone(
+            entry("golden", rows, {"levels": [{**LEVELS["levels"][0], "price": 101.5}]})
+        )
+        seed = {"side": -1, "stop": 725, "nova": 720}
+        hold = [
+            Bar(
+                START + i * MINUTE,
+                START + (i + 1) * MINUTE,
+                719,
+                719.4,
+                718.9,
+                719.15,
+                100,
+            )
+            for i in range(9)
+        ]
+        self.assertIsNone(exit_reason("runner", hold, seed, START, 719.1, hold[-1].end))
+        self.assertIn(
+            "Nova",
+            exit_reason(
+                "runner",
+                [replace(b, high=721, close=720.3) for b in hold],
+                seed,
+                START,
+                719.1,
+                hold[-1].end,
+            ),
+        )
 
     def test_input_identity_gaps_and_forming_row(self):
         stamps = [int((START + i * MINUTE).timestamp()) for i in range(4)]
@@ -121,6 +184,9 @@ class MeBots(unittest.TestCase):
             }
         }
         self.assertEqual(len(closed_minutes(payload, START + 3 * MINUTE)), 3)
+        stamps.append(stamps[-1] + 12)
+        now = START + 3 * MINUTE + timedelta(seconds=15)
+        self.assertEqual(len(closed_minutes(payload, now)), 3)
         stamps[2] += 30
         with self.assertRaises(ValueError):
             closed_minutes(payload, START + 3 * MINUTE)
@@ -192,7 +258,7 @@ class MeBots(unittest.TestCase):
                 ctx.now_et = bars[-1].end + timedelta(seconds=5)
                 snap.timestamp = ctx.now_et.isoformat()
                 snap.underlying_market = SimpleNamespace(
-                    spot=104, spot_ts=snap.timestamp, freshness="live"
+                    spot=103, spot_ts=snap.timestamp, freshness="live"
                 )
                 ctx.params = {
                     "_me_directory": Path(td),
@@ -243,6 +309,7 @@ class MeBots(unittest.TestCase):
                 entry_spot=100,
                 entry_minute=entry_time.isoformat(),
                 initial_stop=98,
+                nova=99,
                 rows=rows,
             )
         )
@@ -261,6 +328,7 @@ class MeBots(unittest.TestCase):
                         entry_spot=100,
                         entry_minute=start.isoformat(),
                         initial_stop=98,
+                        nova=99,
                         rows=[bar],
                     )
                 )

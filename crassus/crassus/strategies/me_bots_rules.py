@@ -58,73 +58,124 @@ def candles(rows, n):
     return result
 
 
-def entry(kind, rows, plan):
-    size = 1 if kind == "opening" else 9
-    series = candles(rows, size)
-    if len(series) < 3 or series[-1].end != rows[-1].end:
+def number(value):
+    return type(value) in (float, int) and isfinite(value) and value > 0
+
+
+def target_for(level, declared):
+    side = 1 if level["side"] == "long" else -1
+    target = level.get("first_target")
+    if target is not None:
+        return (
+            target if number(target) and side * (target - level["price"]) > 0 else None
+        )
+    ahead = [
+        row["price"] for row in declared if side * (row["price"] - level["price"]) > 0
+    ]
+    return min(ahead, key=lambda price: side * price) if ahead else None
+
+
+def admitted(close, level, target, side):
+    """Jayden's provisional 1.5 reward/risk and 1.5-point extension."""
+    risk = side * (close - level)
+    reward = side * (target - close)
+    return 0 < risk <= 1.5 and reward >= 1.5 * risk
+
+
+def qualified_trigger(kind, trigger, previous, sequence, plan):
+    """Pure research specification. Every previous 9-minute bar ends before this trigger."""
+    if len(previous) < 14 or any(bar.end > trigger.start for bar in previous):
         return None
-    a, b, trigger = series[-3:]
-    for side, name in ((1, "long"), (-1, "short")):
-        levels = plan.get(name, {})
-        if not isinstance(levels, dict):
-            continue
-        # Each direction's first target and vertical cutoff must be supplied
-        # by a research owner before this session. No inferred target or fill.
-        target = levels.get("first_target")
-        max_span = levels.get("max_trigger_range_points")
-        if not all(
-            type(x) in (float, int) and isfinite(x) and x > 0
-            for x in (target, max_span)
-        ):
+    previous = previous[-14:]
+    avg = mean(bar.span for bar in previous)
+    if avg <= 0 or trigger.span <= 0 or trigger.span > 3 * avg:
+        return None
+    size = 1 if kind == "opening" else 30 if kind == "runner" else 9
+    if trigger.end - trigger.start != size * MINUTE:
+        return None
+    if kind == "runner" and (
+        trigger.start.time() != time(9, 30) or trigger.end.time() != time(10)
+    ):
+        return None
+    if kind == "opening":
+        if trigger.end.time() > time(10, 15) or len(sequence) < 3:
+            return None
+        if not sequence[-3].span < sequence[-2].span < trigger.span:
+            return None
+    elif (
+        trigger.span < 1.5 * avg
+        or not previous[-2].span < previous[-1].span < trigger.span
+    ):
+        return None
+    levels = plan.get("levels")
+    if not isinstance(levels, list) or not levels:
+        return None
+    if any(
+        not isinstance(row, dict)
+        or not number(row.get("price"))
+        or row.get("side") not in ("long", "short")
+        or not isinstance(row.get("source"), str)
+        or not row["source"].strip()
+        for row in levels
+    ):
+        return None
+    candidates = []
+    for level in levels:
+        side = 1 if level["side"] == "long" else -1
+        price = level["price"]
+        target = target_for(level, levels)
+        if target is None or not admitted(trigger.close, price, target, side):
             continue
         op, hi, lo, cl = prices(trigger, side)
-        if hi >= side * target or trigger.span > max_span or cl <= op:
+        if hi >= side * target or cl <= op:
             continue
-        prev = [prices(x, side) for x in series[:-1]]
-        if kind == "opening":
-            if trigger.end.time() > time(10, 15) or not a.span < b.span < trigger.span:
+        if kind != "opening" and cl < hi - trigger.span / 4:
+            continue
+        if kind in ("golden", "runner"):
+            edge = max(prices(x, side)[1] for x in previous[-6:])
+            if abs(side * price - edge) > 0.25 or cl <= edge:
                 continue
-            level = levels.get("premarket_rejection_level")
-            if type(level) not in (int, float) or not isfinite(level):
+        elif kind == "opening":
+            if not level.get("premarket_rejection") is True:
                 continue
-            # The rejection must occur within this three-bar setup.
             if not any(
-                prices(x, side)[2] <= side * level < prices(x, side)[3]
-                for x in (a, b, trigger)
+                prices(x, side)[2] <= side * price < prices(x, side)[3]
+                for x in sequence[-3:]
             ):
                 continue
-        else:
-            if len(series) < 15:
+        elif kind == "phelps":
+            volume = mean(b.volume for b in previous)
+            if volume <= 0 or trigger.volume < 2 * volume:
                 continue
-            prior = series[-15:-1]
-            if trigger.span <= 0 or trigger.span < 1.5 * mean(x.span for x in prior):
+            if not sequence[:-1] or cl <= max(
+                prices(b, side)[1] for b in sequence[:-1]
+            ):
                 continue
-            if cl < hi - trigger.span / 4 or not a.span < b.span < trigger.span:
-                continue
-            if kind in ("golden", "runner") and cl <= max(p[1] for p in prev[-14:]):
-                continue
-            if kind == "runner":
-                key = levels.get("opening_key_level")
-                if type(key) not in (int, float) or not isfinite(key) or len(rows) < 30:
-                    continue
-                if side * rows[29].close <= side * key:
-                    continue
-            if kind == "phelps":
-                normal = mean(x.volume for x in prior)
-                if (
-                    normal <= 0
-                    or trigger.volume < 2 * normal
-                    or cl <= max(p[1] for p in prev)
-                ):
-                    continue
-        return dict(
-            side=side,
-            trigger_end=trigger.end.isoformat(),
-            stop=lo * side,
-            trigger_close=trigger.close,
-            kind=kind,
+        candidates.append(
+            dict(
+                side=side,
+                trigger_end=trigger.end.isoformat(),
+                stop=lo * side,
+                trigger_close=trigger.close,
+                kind=kind,
+                nova=price,
+                first_target=target,
+                level_source=level["source"],
+            )
         )
-    return None
+    # Multiple qualifying structural theses require a choice before the open.
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def entry(kind, rows, plan):
+    nine = candles(rows, 9)
+    size = 1 if kind == "opening" else 30 if kind == "runner" else 9
+    series = candles(rows, size) if size != 9 else nine
+    if not series or series[-1].end != rows[-1].end:
+        return None
+    trigger = series[-1]
+    previous = [b for b in nine if b.end <= trigger.start]
+    return qualified_trigger(kind, trigger, previous, series, plan)
 
 
 def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
@@ -139,9 +190,7 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
     best = anchor
     distance = 2 if kind in ("runner", "phelps") else 1
     size = 1 if kind == "opening" else 9
-    decision_bars = {
-        bar.end: bar for bar in candles(rows, size) if bar.start >= entry_at
-    }
+    decision_bars = {bar.end: bar for bar in candles(rows, size) if bar.end > entry_at}
     for bar in rows:
         if bar.end <= entry_at:
             continue
@@ -173,7 +222,9 @@ def exit_reason(kind, rows, seed, entry_at, entry_spot, now):
         candle = decision_bars.get(bar.end)
         if candle:
             op, _, adverse, cl = prices(candle, side)
-            if cl < op:
+            if seed.get("nova") is not None and cl < side * seed["nova"]:
+                return "completed candle closed back through fixed Nova"
+            if kind not in ("golden", "runner") and cl < op:
                 return "completed adverse candle"
             if kind == "ratchet" and cl > op:
                 stop = max(stop, adverse - 1)

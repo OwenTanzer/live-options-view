@@ -1,6 +1,6 @@
 """Compare trails on one identical, preselected QQQ breakout entry.
 
-Pass JSON with entry_minute, entry_spot, initial_stop, side (+1 call, -1 put)
+Pass JSON with entry_minute, entry_spot, initial_stop, nova, side (+1 call, -1 put)
 and rows [{start, open, high, low, close}]. The entry must be at the open of
 the first minute. Choose entries and the end of the replay window beforehand.
 Underlying-point outcomes only. A gap through the stop uses the next open.
@@ -42,6 +42,11 @@ def paired(case):
     if not rows:
         raise ValueError("no replay path")
     initial_stop = side * case["initial_stop"]
+    nova = side * case["nova"]
+    if not math.isfinite(nova) or not initial_stop <= nova < side * anchor:
+        raise ValueError(
+            "fixed Nova must lie between trigger invalidation and breakout entry"
+        )
     entry_price = side * anchor
     if not math.isfinite(initial_stop) or initial_stop >= entry_price:
         raise ValueError("invalid initial stop")
@@ -83,9 +88,7 @@ def paired(case):
             raise ValueError("entry price must match first bar open")
         if side == -1:
             op, hi, lo, cl = -op, -lo, -hi, -cl
-        if index % 9 == 0:
-            nine_open = op
-        finish = (index + 1) % 9 == 0 and cl < nine_open or index == len(rows) - 1
+        finish = (index + 1) % 9 == 0 and cl < nova or index == len(rows) - 1
         successors = set()
         for first, second in live:
             for levels in ((op, hi, lo, cl), (op, lo, hi, cl)):

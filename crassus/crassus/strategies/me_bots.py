@@ -10,9 +10,9 @@ from ..clock import ET
 from .gated_strangle import fresh_spot
 from ..durability import atomic_json
 from ..strategy import Decision, register
-from .me_bots_rules import KINDS, entry, exit_reason
+from .me_bots_rules import KINDS, admitted, entry, exit_reason
 
-VERSION = "0.1.0"
+VERSION = "0.2.0-research"
 IDS = {"me_" + kind + "_qqq": kind for kind in KINDS}
 
 
@@ -173,6 +173,13 @@ def evaluate(ctx, strategy_id):
             return skip("Missing pre-open structural levels or vertical guard")
         if losses >= 3 or (kind == "ratchet" and now.time() >= time(15, 30)):
             return skip("Daily stop or entry cutoff reached")
+        if kind in ("opening", "runner"):
+            if now.time() <= (
+                time(10, 15, 59) if kind == "opening" else time(10, 0, 59)
+            ):
+                return skip(
+                    "Early trigger lacks 14 preceding completed session-aligned nine-minute bars; historical reference policy unresolved"
+                )
         signal = entry(kind, rows, plan["levels"])
         if signal is None:
             return skip("No qualified completed trigger")
@@ -195,8 +202,9 @@ def evaluate(ctx, strategy_id):
         if type(spot) not in (int, float) or not isfinite(spot) or spot <= 0:
             return skip("Underlying entry price unavailable")
         side = signal["side"]
-        levels = plan["levels"]["long" if side == 1 else "short"]
-        if not side * signal["stop"] < side * spot < side * levels["first_target"]:
+        if side * spot <= side * signal["stop"] or not admitted(
+            spot, signal["nova"], signal["first_target"], side
+        ):
             return skip("Setup invalidated or first target reached before entry")
         row = snap.atm("call" if side == 1 else "put")
         symbol = (row or {}).get("OptionSymbol", "")

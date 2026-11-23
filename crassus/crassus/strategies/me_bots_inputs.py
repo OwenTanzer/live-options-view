@@ -28,7 +28,7 @@ def closed_minutes(payload, now):
         if start < opening or start.date() != now.date():
             continue
         end = start + MINUTE
-        if start != opening + len(rows) * MINUTE or end.timestamp() > stamps[i + 1]:
+        if start != opening + len(rows) * MINUTE:
             raise ValueError("incomplete regular-session minute sequence")
         if (
             end.time() > session_close(now.date())
@@ -36,6 +36,8 @@ def closed_minutes(payload, now):
             or stamps[i + 1] > now.timestamp()
         ):
             break
+        if end.timestamp() > stamps[i + 1]:
+            raise ValueError("next timestamp does not witness candle rollover")
         numbers = [q[key][i] for key in ("open", "high", "low", "close", "volume")]
         if any(type(x) not in (float, int) or not isfinite(x) for x in numbers):
             raise ValueError("incomplete OHLCV")
