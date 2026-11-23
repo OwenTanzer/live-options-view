@@ -214,3 +214,39 @@ test('a registered native-only output needs an actual stream receipt before rule
   assert.equal(result[0].state,'catching-up');
   assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
 });
+
+test('level studies retain the known prefix before catch-up and acknowledge coverage after draining',async t=>{
+  const {DB,env}=await setup(t),session='2026-11-23',at=equitySession(session).open;
+  const r={...rule,id:'bright-encounter',conditions:[{source:'oi-levels',field:'qualified',op:'==',value:true,maxAgeMs:150000}],
+    levelEncounter:{minimumBucket:5,approach:'either',contact:'exact-or-bracketed',maxGapMs:150000,groups:['call-only']},
+    outcomes:[1,3,9,27].map(n=>({id:'h'+n,source:'level-spot',field:'spot',measure:'category',horizonMs:n*60000,toleranceMs:30000,maxAgeMs:150000}))};
+  await activate(DB,r,at);
+  const price=(i,spot)=>({source:'level-spot',id:'price'+i,eventAt:at+i*60000,availableAt:at+i*60000+2000,
+    revision:1,session,instrument:'QQQ',origin:'recorded',evidence:'fixture/'+i,value:{spot},valueAt:at+i*60000});
+  const opening={...price(0,652.34),source:'oi-levels',id:'opening',availableAt:at+1000,
+    value:{qualified:true,levels:[{strike:650,call:5,put:1}],calibration:{etag:'opening',tier:'0DTE_Regular'}}};
+  const rows=[opening,...Array.from({length:32},(_,i)=>price(i,i<2?652.34:648.31))];
+  const source={id:'levels',version:'2',instruments:['QQQ'],outputs:['oi-levels','level-spot'],demandDriven:true,orderedAvailability:true,
+    discover:async()=>({complete:true,artifacts:rows.map(row=>({key:row.id,version:'1',eventAt:row.eventAt,availableAt:row.availableAt,row})).reverse()}),
+    read:async(bucket,scope,a)=>({rows:[a.row]})};
+  const now=at+40*60000,tick=cutoff=>advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:cutoff,sources:[source],publicationSources:[]});
+  await tick(now);
+  const events=cutoff=>observedEventsAsOf(DB,{namespace:'account:alice',selection:{session,instrument:'QQQ',origin:'recorded',cutoff}});
+  const [early]=await events(now);
+  assert.equal(early.encounter.strike,650);assert.equal(early.triggeredAt,at+122000);
+  assert.equal(early.outcomes.at(-1).state,'pending');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+  const first=JSON.parse(DB.raw("SELECT coverage FROM one_clock_ingestion_work WHERE source='levels'")[0].coverage);
+  assert.equal(first.pending,13);assert.equal(first.processed,20);assert.equal(first.through,rows[20].availableAt-1);
+  // The next normal tick supplies another fifteen fresh observations.
+  for(let i=32;i<47;i++)rows.push(price(i,648.31));
+  await tick(now+15*60000);
+  const [maturing]=await events(now+15*60000);
+  assert.equal(maturing.id,early.id);assert.equal(maturing.outcomes.at(-1).state,'measured');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+  await tick(now+30*60000);
+  const finished=await events(now+30*60000);
+  assert.equal(finished.length,1);assert.equal(finished[0].id,early.id);
+  assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_evaluation_history WHERE state='evaluated'")[0].n,1);
+  assert.deepEqual((await events(now))[0].outcomes,early.outcomes);
+});
