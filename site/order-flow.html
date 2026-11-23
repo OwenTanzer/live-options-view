@@ -212,6 +212,24 @@
     tr:focus-visible {
       outline: 2px solid #62e3bd;
     }
+    #optional-tape {margin-block: 12px; min-width: 0}
+    #optional-tape h2, dialog h2 {margin: 0 0 8px}
+    #optional-tape p {color: #bdcace; font-size: 13px}
+    .flow-scroll {overflow: auto; max-height: 460px; margin-top: 8px; scrollbar-gutter: stable}
+    .flow-line {display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #314047; border-radius: 0; background: transparent; font: 13px/1.5 monospace}
+    .flow-line.ticket, .foot-ticket {border-left: 3px solid #f2c96b; font-weight: 700}
+    .flow-group {color: #c3cdd0}
+    .flow-chart {display:block; width:100%; height:auto; background:#101d23}
+    #optional-tape td {padding:2px}
+    #optional-tape td button {min-width:65px; font:13px/1.5 monospace}
+    #optional-tape td small {display:block}
+    #optional-tape th {position:sticky; top:0; background:#101d23}
+    .spot-cell {outline:2px solid #f2c96b; outline-offset:-2px}
+    dialog {color:inherit; background:#101d23; border:1px solid #63787e; width:min(640px,94vw); max-height:85vh}
+    dialog::backdrop {background:#000a}
+    dialog ol {max-height:47vh; overflow:auto; padding-left:3em}
+    dialog li {padding:8px 0; border-bottom:1px solid #405359; overflow-wrap:anywhere; font:13px/1.6 monospace}
+    [hidden] {display:none !important}
   </style>
   <main>
     <header>
@@ -245,7 +263,8 @@
         </select></label
       >
     </nav>
-    <div class="legend">
+    <label> Tape view <select id="tape-view"></select></label>
+    <div class="legend" id="tape-legend">
       <b class="buy">+ Inferred buy</b><b class="sell">− Inferred sell</b
       ><b class="unknown">· Unknown side</b><span>○ Call　◇ Put</span
       ><span>Area = contracts</span><span class="gap">▨ No coverage</span>
@@ -261,12 +280,17 @@
       <span id="strike-range"></span>
       <button id="sim-jump" hidden>Move QQQ $30</button>
     </div>
+    <section id="classic-tape">
     <canvas
       aria-label="Prints by time and strike over the last minute to the displayed time. Select a print or strike to inspect it."
-    ></canvas
-    ><output id="details" aria-live="polite"
+    ></canvas>
+    </section>
+    <section id="optional-tape" hidden></section>
+    <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output
     >
+    <button id="inspect-available">Inspect available prints</button>
+    <dialog id="print-inspector" aria-labelledby="inspector-title"><h2 id="inspector-title"></h2><p id="inspect-context"></p><ol></ol><button id="inspect-prev">Previous</button> <button id="inspect-next">Next</button> <button id="inspect-close">Return to tape</button></dialog>
     <footer>
       <button id="play">Pause</button
       ><label
@@ -387,6 +411,7 @@
   <script src="./shared/order-flow-profile.js"></script>
   <script src="./shared/order-flow-heatmap.js"></script>
   <script type="module">
+    import { createTapeViews } from "./shared/order-flow-views.js";
     import { createClock, createSourceRegistry } from "./shared/one-clock.js";
     import { sessionAt } from "./shared/one-clock-session.js";
     import { replaySelection } from "./shared/one-clock-replay-link.js";
@@ -452,7 +477,7 @@
     function repaint() { dirty = forceTable = true; }
     function simulationTick() {
       ({feed, chain} = simulateOrderFlow(simStep, Date.now()));
-      liveRows = feed.rows;
+      liveRows = feed.rows.map((p,i) => ({...p, publishedRow:i+1}));
       status = "Simulated market";
       repaint();
     }
@@ -487,32 +512,67 @@
     });
     canvas.addEventListener("lostpointercapture", () => { drag = null; });
     const part = () => Number(el("participation").value);
-    const clock = (t) =>
-      new Date(t).toLocaleTimeString("en-US", {
+    const etClock = new Intl.DateTimeFormat("en-US", {
+        hour:"2-digit", minute:"2-digit", second:"2-digit",
         timeZone: "America/New_York",
         hour12: false,
       });
+    const clock = t => etClock.format(t);
     const R = window.OrderFlowRender,
       { money, unsigned, contractsCount } = R;
 
-    // Prints within [start, end] for the plot.
+    function archivePrint(i) {
+      const c = replay.cols, k = replay.contracts[c.contract[i]];
+      return { archiveRow:i+1, seq:replay.json.prints.seq?.[i], t:c.t[i], size:c.size[i],
+        price:c.cents[i]/100, symbol:k.symbol, strike:k.strike, type:k.type, side:SIDE[c.side[i]] };
+    }
+    function wantContract(type) {
+      const filter = el("filter").value;
+      return filter === "All" || type === filter[0];
+    }
     function visiblePrints(start, stop) {
-      const f = el("filter").value,
-        want = (type) => f === "All" || type === f[0];
       if (!live() && replay) {
-        const c = replay.cols,
-          out = [];
+        const c = replay.cols, out = [];
         for (let i = X.ofLowerBound(c.t, start); i < c.t.length && c.t[i] <= stop; i++) {
-          const k = replay.contracts[c.contract[i]];
-          if (want(k.type))
-            out.push({ t: c.t[i], size: c.size[i], price: c.cents[i] / 100, symbol: k.symbol,
-              strike: k.strike, type: k.type, side: SIDE[c.side[i]] });
+          if (wantContract(replay.contracts[c.contract[i]].type)) out.push(archivePrint(i));
         }
         return out;
       }
-      return liveRows.filter((p) => p.t >= start && p.t <= stop && want(p.type));
+      return liveRows.filter(p => p.t >= start && p.t <= stop && wantContract(p.type));
+    }
+    function availablePrints() {
+      if (live() || !replay) return visiblePrints(-Infinity,end).reverse();
+      // Pin the cutoff and filter. Materialize only the page being inspected.
+      const count = X.ofLowerBound(replay.cols.t, Math.floor(end)+1);
+      let indices = null;
+      if (el("filter").value !== "All") {
+        indices = [];
+        const wanted = replay.contracts.map(k => wantContract(k.type));
+        for (let i=0; i<count; i++) if (wanted[replay.cols.contract[i]]) indices.push(i);
+      }
+      const length = indices ? indices.length : count;
+      return {length, slice(start,stop) {
+        return Array.from({length:Math.min(stop,length)-start}, (_,n) => {
+          const index = length-1-start-n;
+          return archivePrint(indices ? indices[index] : index);
+        });
+      }};
     }
 
+    let spotHistory = [], replaySpotSource, replaySpotTimes;
+    const tapeViews = createTapeViews(el, clock, availablePrints,
+      () => live() ? X.OF_MULTIPLIER : replay?.multiplier ?? X.OF_MULTIPLIER);
+    el("tape-view").oninput = repaint;
+    function tapeSpots(start) {
+      const points = live() ? spotHistory : replay?.snapshots || [];
+      if (live()) return points.filter(p => p.t >= start && p.t <= end);
+      if (points !== replaySpotSource) {
+        replaySpotSource = points;
+        replaySpotTimes = points.map(p => p.t);
+      }
+      return points.slice(X.ofLowerBound(replaySpotTimes, start), X.ofLowerBound(replaySpotTimes, Math.floor(end) + 1))
+        .filter(p => Number.isFinite(p.spot) && p.spot > 0);
+    }
     function currentView() {
       if (!live()) return replay ? M.replayAt(replay, end) : null;
       return feed ? M.liveAt(feed, chain, end) : null;
@@ -525,42 +585,7 @@
       return R.freshnessText(v, clock, extra);
     }
 
-    function draw() {
-      const w = canvas.clientWidth,
-        h = canvas.clientHeight,
-        d = devicePixelRatio || 1;
-      if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
-        canvas.width = Math.round(w * d);
-        canvas.height = Math.round(h * d);
-      }
-      ctx.setTransform(d, 0, 0, d, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      hits = [];
-      strikeHits = [];
-      view = currentView();
-      const left = 48,
-        right = w - 14,
-        top = 30,
-        bottom = h - 36,
-        start = end - 60000,
-        visible = visiblePrints(start, end);
-      allPrices = view && view.strikes.length
-        ? view.strikes.map((s) => s.strike)
-        : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
-      const spot = live() ? view?.snapshot?.spot : null;
-      windowView = live() ? strikeWindow.update(allPrices, spot) : null;
-      const strikes = windowView ? windowView.prices : allPrices;
-      if (windowView) {
-        el("follow-spot").setAttribute("aria-pressed", String(windowView.follow));
-        const slider = el("strike-center");
-        slider.max = Math.max(0, allPrices.length - 1);
-        slider.value = allPrices.length - 1 - (windowView.center || 0);
-        slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
-        el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
-        el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
-        el("strike-range").textContent = strikes.length ? (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
-          " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
-      }
+    function drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot}) {
       const high = strikes[0],
         low = strikes[strikes.length - 1];
       const strikeY = (strike) =>
@@ -629,10 +654,61 @@
         hits.push({ x, y, p, r: Math.max(8, p.type === "C" ? r : k) });
       }
       for (const s of strikes) strikeHits.push({ y: strikeY(s), strike: s });
+    }
+
+    function draw() {
+      const w = canvas.clientWidth,
+        h = canvas.clientHeight,
+        d = devicePixelRatio || 1;
+      if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
+        canvas.width = Math.round(w * d);
+        canvas.height = Math.round(h * d);
+      }
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      hits = [];
+      strikeHits = [];
+      view = currentView();
+      const observed = view?.snapshot;
+      if (live() && Number.isFinite(observed?.spot) && observed.t > (spotHistory.at(-1)?.t ?? 0)) {
+        spotHistory = spotHistory.filter(p => p.t >= end - 60000);
+        spotHistory.push({t: observed.t, spot: observed.spot});
+      }
+      const left = 48,
+        right = w - 14,
+        top = 30,
+        bottom = h - 36,
+        start = end - 60000,
+        visible = visiblePrints(start, end);
+      allPrices = view && view.strikes.length
+        ? view.strikes.map((s) => s.strike)
+        : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
+      const spot = live() ? view?.snapshot?.spot : null;
+      windowView = live() ? strikeWindow.update(allPrices, spot) : null;
+      const strikes = windowView ? windowView.prices : allPrices;
+      if (windowView) {
+        el("follow-spot").setAttribute("aria-pressed", String(windowView.follow));
+        const slider = el("strike-center");
+        slider.max = Math.max(0, allPrices.length - 1);
+        slider.value = allPrices.length - 1 - (windowView.center || 0);
+        slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
+        el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
+        el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
+        el("strike-range").textContent = strikes.length ? (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
+          " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
+      }
+      let filtered;
+      if (tapeViews.optional()) {
+        const shown = new Set(strikes);
+        filtered = windowView ? visible.filter(p => shown.has(p.strike)) : visible;
+        tapeViews.render(filtered, tapeSpots(start), view?.coverage?.gaps || [], start, end);
+      } else {
+        drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot});
+      }
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + (view ? " · " + hits.length + " prints in view" : "");
+      el("state").textContent = status + (view ? " · " + (tapeViews.optional() ? filtered.length : hits.length) + " prints in view" : "");
       const link = el("flow-history");
       link.hidden = live() || !view;
       if (!link.hidden) {
@@ -1200,6 +1276,8 @@
       controllers.forEach((c) => c.abort());
       timers = [];
       controllers = [];
+      tapeViews.reset();
+      spotHistory = [];
       feed = chain = null;
       liveRows = [];
       selected = null;
@@ -1281,7 +1359,7 @@
           } else {
             if (!r.json || !Array.isArray(r.json.rows)) throw Error("Invalid feed");
             feed = r.json;
-            liveRows = feed.rows.slice().sort((a, b) => a.t - b.t);
+            liveRows = feed.rows.map((p,i) => ({...p, publishedRow:i+1})).sort((a, b) => a.t - b.t);
             received = feed.lastReceived;
             const age = received == null ? Infinity : Date.now() - received;
             status = (age > 15000 ? "Stale" : "Receiving") + (received ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");

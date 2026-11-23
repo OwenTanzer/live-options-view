@@ -531,3 +531,5 @@ not pretend a later observer receipt existed at trigger time. Missing source
 evidence is shown as unavailable. Roll back this Results API and asset slice
 together to the compatible observer release; it adds no schema migration,
 publisher, cron or KV operation.
+
+The Order Flow tape selector keeps the current view as its default. Time & Sales, the QQQ price chart and the ten-second strike footprint share the displayed minute, contract filter and strike window. Inspect available prints opens the published live tail or archive through the selected cursor with the contract filter applied. Ticket highlighting begins at $10,000 in premium. Archive rows without provider sequences retain their archive row number.

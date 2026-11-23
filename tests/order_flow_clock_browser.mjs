@@ -81,6 +81,38 @@ try {
       if (state !== 'fresh') assert.match(details, /spot no coverage/, state);
       if (state === 'missing' || state === 'zero') assert.match(details, /gamma 0\.[0-9]+/, state);
     }
+    // Two otherwise identical tickets and two identical small prints must survive every view.
+    const sample = {...fixture.feed.rows[0], type:'P', t:fixture.displayed_t, price:1};
+    fixture.feed.rows = [1,2,3,4].map(seq => ({...sample, seq, size:seq <= 2 ? 100 : 1}));
+    fixtureChain = structuredClone(fixture.chain);
+    await page.goto(origin + '/order-flow.html?source=live');
+    await statusContains('4 prints in view');
+    const picker = page.locator('#tape-view'), optional = page.locator('#optional-tape');
+    assert.equal(await picker.inputValue(), 'classic');
+    await picker.selectOption('sales');
+    await optional.locator('.flow-group').click();
+    const details = page.locator('#print-inspector li');
+    assert.equal(await details.count(), 2);
+    assert.match(await details.allTextContents().then(lines=>lines.join(' ')), /sequence 4.*sequence 3/);
+    await page.locator('#inspect-close').click();
+    await optional.getByLabel('All prints').check();
+    await page.waitForFunction(()=>document.querySelectorAll('.flow-line').length === 4);
+    assert.equal(await optional.locator('.ticket').count(), 2);
+    await picker.selectOption('chart');
+    await optional.getByRole('button',{name:'Inspect chart prints (4)'}).click();
+    assert.equal(await details.count(), 4);
+    await page.locator('#inspect-close').click();
+    await picker.selectOption('footprint');
+    await optional.locator('td button').click();
+    assert.equal(await details.count(), 4);
+    assert.equal(new Set(await details.allTextContents()).size, 4);
+    await page.locator('#inspect-close').click();
+    await page.locator('#filter').selectOption('Calls');
+    await statusContains('0 prints in view');
+    assert.equal(await optional.locator('td button').count(), 0);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth));
+    await picker.selectOption('classic');
+    assert.ok(await page.locator('#classic-tape').isVisible());
     assert.deepEqual(errors, []);
     assert.deepEqual(unexpected, []);
     await page.close();
