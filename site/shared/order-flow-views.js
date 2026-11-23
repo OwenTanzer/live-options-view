@@ -360,8 +360,8 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
   const chartStepPx = 80;
   function renderB(S) {
     const box = $('#view');
-    const col = { b: '#3fd0a4', s: '#f07a64', u: '#ffffff' };
-    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span style="color:${col.u}">unknown side</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
+    const col = { b: '#42ff83', s: '#ff626b', u: '#ffffff' };
+    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span style="color:${col.b}">buy</span> / <span style="color:${col.s}">sell</span> / <span style="color:${col.u}">unknown side</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
     const cv = $('#cv'),
       dpr = devicePixelRatio || 1,
       Wd = cv.clientWidth,
@@ -487,12 +487,10 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         const x = X(p[0]),
           y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6),
           r = rad(p);
-        c.globalAlpha = p[5] === 'u' ? 1 : 0.85;
         c.fillStyle = col[p[5]];
         c.beginPath();
         c.arc(x, y, r, 0, 7);
         c.fill();
-        c.globalAlpha = 1;
         c.fillStyle = '#0b0f12';
         c.font = `${Math.max(8, r)}px system-ui`;
         c.textAlign = 'center';
