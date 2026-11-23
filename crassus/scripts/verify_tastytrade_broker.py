@@ -708,8 +708,11 @@ def scenario_uncertain_state(tmp: Path) -> None:
         r2 = ex.recover_pending()
     check("fill that appears after 120s is reconciled, not discarded",
           r2.outcome_class == Outcome.RECONCILED_AFTER_AMBIGUITY and r2.execution_request_id == rid, r2.note or "")
-    check("...owned and counted once, never resubmitted",
-          Book(session.me().trades).position(CALL).quantity == 1 and guard.opens_today() == 1 and fake2.posts_to_orders() == 1)
+    with at((t0 + timedelta(seconds=260)).isoformat()):
+        check("...owned and counted once, never resubmitted",
+              Book(session.me().trades).position(CALL).quantity == 1 and guard.opens_today() == 1 and fake2.posts_to_orders() == 1)
+    with at((t0 + timedelta(days=1)).isoformat()):
+        check("the recovered open does not spend the next session's slot", guard.opens_today() == 0)
 
     # Our order on page two of the order history.
     fake = FakeTasty()
@@ -1450,9 +1453,11 @@ def scenario_history_validation(tmp: Path) -> None:
     with at((t0 + timedelta(minutes=40)).isoformat()):
         fake._fill(late)
         st = session.me()
-    check("the late fill is attributed to the bot, counted once, never resubmitted",
-          Book(st.trades).position(CALL).quantity == 1 and st.late_fills == [rid] and st.pending_open_contracts == 0
-          and guard.opens_today() == 1 and fake.posts_to_orders() == 1, str(st.summary()))
+        check("the late fill is attributed to the bot, counted once, never resubmitted",
+              Book(st.trades).position(CALL).quantity == 1 and st.late_fills == [rid] and st.pending_open_contracts == 0
+              and guard.opens_today() == 1 and fake.posts_to_orders() == 1, str(st.summary()))
+    with at((t0 + timedelta(days=1)).isoformat()):
+        check("the attributed late fill does not spend the next session's slot", guard.opens_today() == 0)
 
 
 def main() -> int:
