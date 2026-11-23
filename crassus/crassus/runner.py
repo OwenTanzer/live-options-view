@@ -200,7 +200,10 @@ class Runner:
         # "monitoring is broken".
         self.key_health = key_health
 
-        self.ledger = DecisionLedger(ledger_dir)
+        self.ledger = DecisionLedger(
+            ledger_dir, account_names={account.alias: account.username for account in accounts},
+            audit_origin="paper" if not dry_run and base_url.rstrip("/") == forward_skew.PAPER_ORIGIN else "simulation",
+        )
         self.snapshots = SnapshotReader(snapshot_url)
         roots = {REFERENCE_ROOTS[a.strategy_id] for a in accounts if a.strategy_id in REFERENCE_ROOTS}
         if roots and base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
@@ -890,6 +893,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     archive = archive_from_environment(runner.ledger.paths.ledger.parent, runner.state_dir)
+    from .one_clock_archive_worker import from_environment as archive_projection_from_environment
+    projection = archive_projection_from_environment(archive, runner.state_dir)
+    if projection:
+        projection.start()
+        archive.projection_wake = projection.wake
     if archive:
         archive.start()
     # Sanitized public OI skew meter projection (H1). Off unless its own
@@ -912,6 +920,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if oi_skew_publisher:
             oi_skew_publisher.close()
+        if projection:
+            projection.close()
         if archive:
             archive.close()
 

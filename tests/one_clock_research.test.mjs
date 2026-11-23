@@ -32,6 +32,14 @@ test('account authorization, origin, immutable versions and source allowlist pre
   assert.equal((await call('alice',{action:'deactivate',ruleId:rule.id,version:1})).status,200);
   assert.ok(DB.raw('SELECT ended_at FROM one_clock_activations')[0].ended_at);
 });
+test('anchored skew is registerable only for its documented producer instrument',async t=>{
+  const {call}=await setup(t);
+  const conditions=[{source:'bot-anchored-skew',field:'delta',op:'>=',value:0.1,maxAgeMs:60000}];
+  for(const instrument of ['QQQ','SPY','IBIT']) {
+    const candidate={...rule,id:'anchor-'+instrument,instruments:[instrument],conditions};
+    assert.equal((await call('alice',{action:'save',rule:candidate})).status,instrument==='QQQ'?201:400);
+  }
+});
 test('activation intervals retain old events/outcomes and limited rule batches do not retract other rules',async t=>{
   const {DB}=await setup(t),namespace='account:alice',cutoff=demoClose+1000;
   for(const r of demoRules)await registerObservedRule(DB,{namespace,rule:r,registeredAt:demoStart});
