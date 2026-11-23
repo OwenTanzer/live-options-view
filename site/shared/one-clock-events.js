@@ -1,3 +1,4 @@
+import { validateEncounter, encounterEvents, signedOutcome } from './one-clock-level-encounters.js';
 import { instant, observation, observationKey, selectAsOf } from './one-clock.js';
 
 const OPS = { '>=': (a, b) => a >= b, '>': (a, b) => a > b, '<=': (a, b) => a <= b,
@@ -44,6 +45,10 @@ export function eventRule(input) {
     if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
+  if (rule.levelEncounter !== undefined) {
+    validateEncounter(rule.levelEncounter);
+    if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='price' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
+  }
   return immutable(rule);
 }
 
@@ -71,6 +76,10 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   // Validate duplicate revision contents once, then advance a source index by
   // availability. Do not rescan/clone the full archive per condition per tick.
   const finalRows = selectAsOf(rows, selection);
+  if (rule.levelEncounter) {
+    return immutable(encounterEvents(rule, rows, selection, close, activationWindows).map(event=>({...event,
+      outcomes:rule.outcomes.map(o=>measureOutcome(event,o,finalRows,selection,close))})));
+  }
   const arrivals = new Map();
   for (const row of rows) {
     if (!arrivals.has(row.availableAt)) arrivals.set(row.availableAt, []);
@@ -169,11 +178,11 @@ function measureOutcome(event, outcome, rows, selection, close) {
     return { ...base, state: 'missing', reason: 'trigger-baseline-unavailable' };
   }
   const eligible = rows.filter(r => r.source === outcome.source);
-  const validValue = value => numeric(value) || outcome.measure === 'category' && ['string','boolean'].includes(typeof value);
+  const validValue = value => numeric(value) || outcome.measure === 'category' && !event.encounter && ['string','boolean'].includes(typeof value);
   const row = eligible.find(r => (r.valueAt ?? r.eventAt) >= targetAt && (r.valueAt ?? r.eventAt) <= deadline && validValue(field(r.value, outcome.field)));
   if (!row) return { ...base, state: cutoff > deadline ? 'missing' : 'pending', reason: cutoff > deadline ? 'no-qualified-endpoint' : null };
   const endpoint = field(row.value, outcome.field);
-  const value = outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
+  const value = event.encounter ? signedOutcome(event, endpoint) : outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
   if(outcome.measure!=='category'&&!numeric(value))return {...base,state:'missing',reason:'nonfinite-measurement'};
   return { ...base, state: 'measured', value, measuredAt: row.valueAt ?? row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
 }
