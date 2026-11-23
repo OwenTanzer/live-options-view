@@ -83,6 +83,18 @@ try {
     await page.setViewportSize({width,height:900});
     await page.locator('#seek').fill('350');
     await page.waitForFunction(previous => document.querySelector('#flow-history').getAttribute('href') !== previous, first);
+    // A wheel over B must change the actual price axis at the reviewer's replay cursor.
+    await page.goto(link('QQQ',1790343060000)+'&tape=chart');
+    const range = page.locator('#optional-tape #chart-strikes');
+    await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
+    const graph = page.locator('#optional-tape #cv');
+    await graph.hover();
+    const pageY = await page.evaluate(()=>scrollY);
+    await page.mouse.wheel(0,240);
+    await range.getByText('Strikes $740–$744 of $740–$747',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>scrollY),pageY);
+    await page.mouse.wheel(0,-240);
+    await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
     for (const [url, message] of [
       [link('SPY'), 'unavailable at this cursor'],
       [link('QQQ', Date.parse('2026-09-25T01:00:00-04:00')), 'Outside archive coverage'],
@@ -117,6 +129,7 @@ try {
     }
     // Two otherwise identical tickets and two identical small prints must survive every view.
     const sample = {...fixture.feed.rows[0], type:'P', t:fixture.displayed_t, price:1};
+    fixture.feed.cap = 4;
     fixture.feed.rows = [1,2,3,4].map(seq => ({...sample, seq, size:seq <= 2 ? 100 : 1}));
     fixtureChain = structuredClone(fixture.chain);
     await page.goto(origin + '/order-flow.html?source=live');
@@ -125,6 +138,8 @@ try {
     const choose = id => picker.locator('[data-view="'+id+'"]').click();
     assert.equal(await picker.locator('[aria-pressed=true]').getAttribute('data-view'), 'classic');
     await choose('sales');
+    await optional.locator('.coverage-cap').waitFor();
+    assert.match(await optional.locator('.coverage-cap').textContent(), /Covers only from .*display cap/);
     await optional.locator('.run').click();
     assert.match(await optional.locator('.inner').textContent(), /sequence 4.*sequence 3/);
     await optional.getByLabel('All prints').check();

@@ -95,6 +95,7 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
     snapshot = [];
   };
 
+  $('#spot-source').textContent = 'QQQ prices and crossings use available chain snapshots.';
   const design = createDesign(shadow, formatClock, getMultiplier, inspect);
   let current = 'classic',
     key = '',
@@ -155,7 +156,7 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
       resume();
       if (dialog.open) dialog.close();
     },
-    render(rows, spots, gaps, start, end, strikes) {
+    render(rows, spots, gaps, start, end, strikes, cappedFrom) {
       if (held || dialog.open) return;
       const next = JSON.stringify([
         Math.floor(end / 1000),
@@ -164,10 +165,11 @@ export function createTapeViews(el, formatClock, available, getMultiplier) {
         spots,
         gaps,
         strikes,
+        cappedFrom,
       ]);
       if (next === key) return;
       key = next;
-      design.render(current, rows, spots, gaps, start, end, strikes, toggle.checked);
+      design.render(current, rows, spots, gaps, start, end, strikes, toggle.checked, cappedFrom);
     },
   };
 }
@@ -239,8 +241,15 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       first = S.points[0]?.spot;
     const tot = S.prints.reduce((a, p) => a + prem(p), 0),
       big = S.prints.filter((p) => prem(p) >= BIG).length;
+    const capNote =
+      S.cappedFrom == null
+        ? ''
+        : S.cappedFrom > S.t0 + S.duration
+          ? 'Outside retained prints (display cap)'
+          : 'Covers only from ' + formatClock(S.cappedFrom) + ' ET (display cap)';
     $('#now').innerHTML =
-      `<span class="q">QQQ ${last == null ? 'unavailable' : last.toFixed(2)}</span><span class="t">${S.start}–${S.end} ET · from ${first == null ? 'unavailable' : first.toFixed(2)}</span><span class="t">${S.prints.length.toLocaleString()} prints · ${money(tot)} · ${big} tickets ≥ $10k</span>`;
+      `<span class="q">QQQ ${last == null ? 'unavailable' : last.toFixed(2)}</span><span class="t">${S.start}–${S.end} ET · from ${first == null ? 'unavailable' : first.toFixed(2)}</span><span class="t">${S.prints.length.toLocaleString()} prints · ${money(tot)} · ${big} tickets ≥ $10k</span>` +
+      (capNote ? `<b class="coverage-cap">${capNote}</b>` : '');
   }
 
   /* ---------- A: Time & Sales ---------- */
@@ -249,7 +258,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       rows = [];
     const lost = S.gaps.map((g) => ({ t: g[0], end: g[1] }));
     let group = [],
-      lastT = 0;
+      lastT = S.cappedFrom == null ? 0 : S.cappedFrom - S.t0;
     const flush = () => {
       if (group.length) rows.push({ k: 'run', ps: group, t: group[group.length - 1][0] });
       group = [];
@@ -349,11 +358,12 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
   /* ---------- B: price chart + tickets ---------- */
   function renderB(S) {
     const box = $('#view');
-    box.innerHTML = `<canvas id="cv"></canvas><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · <span style="color:var(--faint)">faint ticks</span> = every other print · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
+    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · <span style="color:var(--faint)">faint ticks</span> = every other print · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
     const cv = $('#cv'),
       dpr = devicePixelRatio || 1,
       Wd = cv.clientWidth,
-      Hd = Math.min(520, Math.max(360, Wd * 0.55));
+      Hd = Math.min(520, Math.max(180, Math.floor(innerHeight * 0.6)), Math.max(360, Wd * 0.55));
+    box.style.setProperty('--chart-height', Hd + 'px');
     cv.width = Wd * dpr;
     cv.height = Hd * dpr;
     cv.style.height = Hd + 'px';
@@ -364,98 +374,127 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       T = 10,
       B = 26,
       dur = S.duration;
-    const sp = S.points.map((p) => p.spot),
-      lo = Math.min(K[0] - 0.6, ...sp),
-      hi = Math.max(K.at(-1) + 0.6, ...sp);
-    const X = (t) => L + ((Wd - L - R) * t) / dur,
-      Y = (v) => T + ((Hd - T - B) * (hi - v)) / (hi - lo);
-    c.font = '12px ui-monospace,Consolas,monospace';
-    c.fillStyle = '#8a9aa3';
-    c.textAlign = 'right';
-    for (const k of K) {
-      c.strokeStyle = '#1b252b';
-      c.beginPath();
-      c.moveTo(L, Y(k));
-      c.lineTo(Wd - R, Y(k));
-      c.stroke();
-      c.fillText(k, L - 6, Y(k) + 4);
-    }
-    c.textAlign = 'center';
-    const step = dur > 150000 ? 30000 : 20000;
-    for (let t = 0; t <= dur; t += step)
-      c.fillText(clock(S, t).slice(0, 8), Math.min(Wd - 36, Math.max(L + 30, X(t))), Hd - 6);
-    for (const g of S.gaps) {
-      const x0 = X(g[0]),
-        x1 = X(g[1]);
-      c.save();
-      c.beginPath();
-      c.rect(x0, T, x1 - x0, Hd - T - B);
-      c.clip();
-      c.fillStyle = 'rgba(197,139,42,.16)';
-      c.fillRect(x0, T, x1 - x0, Hd - T - B);
-      c.strokeStyle = 'rgba(197,139,42,.5)';
-      for (let x = x0 - 200; x < x1; x += 8) {
-        c.beginPath();
-        c.moveTo(x, Hd - B);
-        c.lineTo(x + 200, T);
-        c.stroke();
-      }
-      c.restore();
-      c.fillStyle = '#f1c27d';
-      c.textAlign = 'left';
-      c.fillText('feed lost ' + ((g[1] - g[0]) / 1000).toFixed(1) + ' s', Math.min(x1 + 4, Wd - 110), T + 14);
-    }
-    // faint ticks: every print
-    c.fillStyle = 'rgba(138,154,163,.28)';
-    for (const p of S.prints) {
-      if (prem(p) >= BIG) continue;
-      const y = Y(K[p[1]]) + (p[2] === 'C' ? -3 : 3);
-      c.fillRect(X(p[0]), y - 1.5, 1, 3);
-    }
-    // spot
-    c.strokeStyle = '#ffd166';
-    c.lineWidth = 2.2;
-    c.beginPath();
-    S.points.forEach((p, i) => {
-      const x = X(p.t),
-        y = Y(p.spot),
-        prev = S.points[i - 1];
-      if (!prev || S.gaps.some(([a, b]) => a <= p.t && b >= prev.t)) c.moveTo(x, y);
-      else c.lineTo(x, y);
-    });
-    c.stroke();
-    c.lineWidth = 1;
-    for (const p of S.points) {
-      c.fillStyle = '#ffd166';
-      c.fillRect(X(p.t) - 1, Y(p.spot) - 1, 3, 3);
-    }
-    // tickets
+    // Keep the canvas bounded even for a full chain. Native scrolling moves a
+    // five-strike price window; ticket picking uses the same projection.
+    const count = Math.min(5, K.length);
+    const stepPx = 80;
+    const travel = (K.length - count) * stepPx;
+    $('.strike-track').style.height = Hd + travel + 'px';
+    const range = $('#chart-strikes');
+    let lo, hi;
+    const X = (t) => L + ((Wd - L - R) * t) / dur;
+    const Y = (v) => T + ((Hd - T - B) * (hi - v)) / (hi - lo);
     const big = S.prints.filter((p) => prem(p) >= BIG).sort((a, b) => prem(b) - prem(a));
     const col = { b: '#3fd0a4', s: '#f07a64', u: '#9aa6ad' };
     const rad = (p) => 3 + Math.sqrt(prem(p) / 270000) * 16;
-    for (const p of big.slice().reverse()) {
-      const x = X(p[0]),
-        y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6),
-        r = rad(p);
-      c.globalAlpha = 0.85;
-      c.fillStyle = col[p[5]];
+    function paint() {
+      const offset = Math.min(K.length - count, Math.round(box.scrollTop / stepPx));
+      const first = K.length - count - offset;
+      const bottomStrike = K[first],
+        topStrike = K[first + count - 1];
+      const padding = count > 1 ? ((topStrike - bottomStrike) / (count - 1)) * 0.45 : 0.5;
+      lo = bottomStrike - padding;
+      hi = topStrike + padding;
+      range.textContent = 'Strikes $' + bottomStrike + '–$' + topStrike + ' of $' + K[0] + '–$' + K.at(-1);
+      c.clearRect(0, 0, Wd, Hd);
+      c.save();
       c.beginPath();
-      c.arc(x, y, r, 0, 7);
-      c.fill();
-      c.globalAlpha = 1;
-      c.fillStyle = '#0b0f12';
-      c.font = `${Math.max(8, r)}px system-ui`;
+      c.rect(0, T, Wd, Hd - T - B);
+      c.clip();
+      c.font = '12px ui-monospace,Consolas,monospace';
+      c.fillStyle = '#8a9aa3';
+      c.textAlign = 'right';
+      for (const k of K) {
+        c.strokeStyle = '#1b252b';
+        c.beginPath();
+        c.moveTo(L, Y(k));
+        c.lineTo(Wd - R, Y(k));
+        c.stroke();
+        c.fillText(k, L - 6, Y(k) + 4);
+      }
+      for (const g of S.gaps) {
+        const x0 = X(g[0]),
+          x1 = X(g[1]);
+        c.save();
+        c.beginPath();
+        c.rect(x0, T, x1 - x0, Hd - T - B);
+        c.clip();
+        c.fillStyle = 'rgba(197,139,42,.16)';
+        c.fillRect(x0, T, x1 - x0, Hd - T - B);
+        c.strokeStyle = 'rgba(197,139,42,.5)';
+        for (let x = x0 - 200; x < x1; x += 8) {
+          c.beginPath();
+          c.moveTo(x, Hd - B);
+          c.lineTo(x + 200, T);
+          c.stroke();
+        }
+        c.restore();
+        c.fillStyle = '#f1c27d';
+        c.textAlign = 'left';
+        c.fillText(
+          'feed lost ' + ((g[1] - g[0]) / 1000).toFixed(1) + ' s',
+          Math.min(x1 + 4, Wd - 110),
+          T + 14,
+        );
+      }
+      // faint ticks: every print
+      c.fillStyle = 'rgba(138,154,163,.28)';
+      for (const p of S.prints) {
+        if (prem(p) >= BIG) continue;
+        const y = Y(K[p[1]]) + (p[2] === 'C' ? -3 : 3);
+        c.fillRect(X(p[0]), y - 1.5, 1, 3);
+      }
+      // spot
+      c.strokeStyle = '#ffd166';
+      c.lineWidth = 2.2;
+      c.beginPath();
+      S.points.forEach((p, i) => {
+        const x = X(p.t),
+          y = Y(p.spot),
+          prev = S.points[i - 1];
+        if (!prev || S.gaps.some(([a, b]) => a <= p.t && b >= prev.t)) c.moveTo(x, y);
+        else c.lineTo(x, y);
+      });
+      c.stroke();
+      c.lineWidth = 1;
+      for (const p of S.points) {
+        c.fillStyle = '#ffd166';
+        c.fillRect(X(p.t) - 1, Y(p.spot) - 1, 3, 3);
+      }
+      // tickets
+      for (const p of big.slice().reverse()) {
+        const x = X(p[0]),
+          y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6),
+          r = rad(p);
+        c.globalAlpha = 0.85;
+        c.fillStyle = col[p[5]];
+        c.beginPath();
+        c.arc(x, y, r, 0, 7);
+        c.fill();
+        c.globalAlpha = 1;
+        c.fillStyle = '#0b0f12';
+        c.font = `${Math.max(8, r)}px system-ui`;
+        c.textAlign = 'center';
+        if (r > 6) c.fillText(p[2] === 'C' ? '▲' : '▼', x, y + r * 0.35);
+      }
+      c.font = '12px ui-monospace,Consolas,monospace';
+      c.fillStyle = '#e6edf0';
+      c.textAlign = 'left';
+      for (const p of big.slice(0, 5)) {
+        const x = X(p[0]),
+          y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6);
+        c.fillText(money(prem(p)), Math.min(x + rad(p) + 3, Wd - 50), y - rad(p) + 2);
+      }
+      c.restore();
+      c.font = '12px ui-monospace,Consolas,monospace';
+      c.fillStyle = '#8a9aa3';
       c.textAlign = 'center';
-      if (r > 6) c.fillText(p[2] === 'C' ? '▲' : '▼', x, y + r * 0.35);
+      const step = dur > 150000 ? 30000 : 20000;
+      for (let t = 0; t <= dur; t += step)
+        c.fillText(clock(S, t).slice(0, 8), Math.min(Wd - 36, Math.max(L + 30, X(t))), Hd - 6);
     }
-    c.font = '12px ui-monospace,Consolas,monospace';
-    c.fillStyle = '#e6edf0';
-    c.textAlign = 'left';
-    for (const p of big.slice(0, 5)) {
-      const x = X(p[0]),
-        y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6);
-      c.fillText(money(prem(p)), Math.min(x + rad(p) + 3, Wd - 50), y - rad(p) + 2);
-    }
+    box.onscroll = paint;
+    paint();
     cv.setAttribute('aria-label', 'QQQ price and tickets by time and strike');
     const list = document.createElement('button');
     list.textContent = 'Inspect chart prints (' + S.prints.length + ')';
@@ -602,7 +641,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         }
     }
     $('#view').innerHTML =
-      `<div class="dctl"><span id="dnow"></span><input type="range" id="dslider" min="${Math.min(D_WIN / 2, dur)}" max="${dur}" step="1000" value="${DCUR}" aria-label="Move now through the scene"><button id="dlive">Back to end</button></div><div id="dban"></div><div class="dhead"><span>◀ calls · premium, last 60 s</span><span>strike</span><span>puts · premium, last 60 s ▶</span></div><div class="ladder" id="ladder"></div><div class="key">Bars: <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>; bright = last 10 s, dim = 10–60 s ago. Bar length is on one fixed scale for the whole scene. Chip = largest ticket ≥ $10k in the window (+n = more). <span style="color:var(--spot)">━ QQQ</span> at "now". Tap a bar for its prints.</div>`;
+      `<div class="dctl"><span id="dnow"></span><input type="range" id="dslider" min="0" max="${dur}" step="1000" value="${DCUR}" aria-label="Move now through the scene"><button id="dlive">Back to end</button></div><div id="dban"></div><div class="dhead"><span>◀ calls · premium, last 60 s</span><span>strike</span><span>puts · premium, last 60 s ▶</span></div><div class="ladder" id="ladder"></div><div class="key">Bars: <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>; bright = last 10 s, dim = 10–60 s ago. The bar scale stays fixed while you scrub this window and recalculates when the window updates. Chip = largest ticket ≥ $10k in the window (+n = more). <span style="color:var(--spot)">━ QQQ</span> at "now". Tap a bar for its prints.</div>`;
     const ks = K.slice().reverse(),
       ROW = 44;
     const draw = () => {
@@ -718,7 +757,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       if (v >= BIG) items.push({ k: 'ev', t: e.ps[0][0], e, v });
       else
         for (const p of e.ps) {
-          const b = Math.floor(p[0] / BG);
+          const b = Math.min(Math.ceil(S.duration / BG) - 1, Math.floor(p[0] / BG));
           if (!bg.has(b)) bg.set(b, []);
           bg.get(b).push(p);
         }
@@ -726,7 +765,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     for (const [b, ps] of bg) items.push({ k: 'bg', t: b * BG, ps, b });
     for (const c of crossings(S)) items.push({ k: 'cross', t: c.t, c });
     for (const g of S.gaps) items.push({ k: 'lost', t: g[0], g });
-    let lastT = 0;
+    let lastT = S.cappedFrom == null ? 0 : S.cappedFrom - S.t0;
     for (const p of S.prints) {
       const pause = p[0] - lastT;
       if (pause > 8000) {
@@ -820,13 +859,14 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     reset() {
       DCUR = null;
     },
-    render(id, rows, spots, rawGaps, start, end, strikes, showAll) {
+    render(id, rows, spots, rawGaps, start, end, strikes, showAll, cappedFrom = null) {
       K = Array.from(new Set([...strikes, ...rows.map((p) => p.strike)]))
         .filter(Number.isFinite)
         .sort((a, b) => a - b);
       const indices = new Map(K.map((k, i) => [k, i]));
       const S = {
         t0: start,
+        cappedFrom,
         duration: end - start,
         start: formatClock(start),
         end: formatClock(end),
@@ -852,7 +892,9 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       $('#oh').textContent = OPT[letter][0];
       $('#op').textContent = OPT[letter][1];
       renderNow(S);
+      $('#chart-strikes').hidden = id !== 'chart' || !K.length;
       if (!K.length) {
+        $('#view').onscroll = null;
         $('#view').textContent = 'Waiting for strikes';
         $('#detail').textContent = '';
         return;
@@ -862,6 +904,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       const top = sameView ? viewport.scrollTop : 0;
       const left = sameView ? viewport.scrollLeft : 0;
       viewport.dataset.view = id;
+      viewport.onscroll = null;
       draw(S);
       viewport.scrollTo(left, top);
       $('.panel').style.setProperty('--grid-width', 65 + K.length * 36 + 'px');
