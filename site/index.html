@@ -846,7 +846,7 @@
   .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
   #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden,
-  #news-panel.hidden { display: none; }
+  #crypto-panel.hidden, #news-panel.hidden { display: none; }
 
   /* ── news panel (MediaFlow M4b) ──────────────────────────────────────── */
   /* Scoped to #news-panel; tests/news_panel/harness.html copies this block. */
@@ -1012,6 +1012,90 @@
     padding: 1px 6px;
     border-radius: 4px;
     margin-right: 4px;
+  }
+
+  /* ── crypto panel ──────────────────────────────────────────────────── */
+  /* Read-only display of the hourly crypto/latest.json snapshot; styles
+     mirror the squeeze panel (header + status + table + patterns). */
+  #crypto-panel { max-width: 1100px; }
+  #crypto-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-title { font-weight: 600; color: var(--bright); }
+  #crypto-status { color: var(--dim); font-size: 0.76rem; }
+  #crypto-status[data-state="stale"], #crypto-status[data-state="fallback"] { opacity: 0.72; }
+  #crypto-warning {
+    background: #2d1f0a;
+    border: 1px solid #d49a00;
+    color: #ffcc66;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-warning.hidden { display: none; }
+  #crypto-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 0.7rem;
+    font-size: 0.85rem;
+  }
+  .crypto-hero-price { font-size: 1.15rem; font-weight: 600; color: var(--bright); }
+  #crypto-market {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    color: var(--dim);
+    font-size: 0.78rem;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-claim { color: var(--fg); font-size: 0.8rem; margin: 0 0 4px; }
+  #crypto-about { margin: 0 0 0.9rem; }
+  #crypto-table { width: 100%; max-width: 860px; border-collapse: collapse; font-size: 0.85rem; }
+  #crypto-table th {
+    text-align: right;
+    color: var(--dim);
+    font-weight: 500;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  #crypto-table th:first-child, #crypto-table td:first-child,
+  #crypto-table th:nth-child(2), #crypto-table td:nth-child(2) { text-align: left; }
+  #crypto-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .crypto-name { color: var(--dim); font-size: 0.76rem; }
+  .crypto-up { color: #7ee787; }
+  .crypto-down { color: #ffa198; }
+  tr.crypto-unavailable td { color: var(--dim); }
+  .crypto-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  #crypto-caption { caption-side: top; text-align: left; color: var(--dim); font-size: 0.74rem; padding: 0 0 6px; }
+  #crypto-patterns { list-style: none; padding: 0; margin: 0 0 0.9rem; font-size: 0.85rem; }
+  #crypto-patterns li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .crypto-severity {
+    display: inline-block;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
+  .crypto-severity-info { background: #21262d; color: #a3adb7; }
+  .crypto-severity-notable { background: #2d1f0a; color: #ffcc66; }
+  .crypto-severity-extreme { background: #331c20; color: #ffa198; }
+  .crypto-pattern-detail { color: var(--dim); }
+  .crypto-pattern-time { color: var(--dim); font-size: 0.74rem; }
+  @media (max-width: 600px) {
+    #crypto-table { table-layout: fixed; min-width: 0; font-size: 0.76rem; }
+    #crypto-table th, #crypto-table td { padding: 5px 3px; overflow-wrap: anywhere; }
   }
 
   /* ── automated (bot) panel ───────────────────────────────────────────── */
@@ -1424,6 +1508,7 @@
   <button id="tab-bots" class="tab-btn">Automated</button>
   <button id="tab-squeeze" class="tab-btn">Squeeze</button>
   <button id="tab-news" class="tab-btn">News</button>
+  <button id="tab-crypto" class="tab-btn">Crypto</button>
   <a class="analysis-link" href="https://trainer.moopertonic.net/">Options Trainer</a>
   <a class="analysis-link" href="/strategy-archive.html">Strategy Archive</a>
   <a class="analysis-link" href="/order-flow.html">Order flow</a>
@@ -1846,6 +1931,48 @@
 
 </div> <!-- /squeeze-panel -->
 
+<div id="crypto-panel" class="hidden">
+
+  <div id="crypto-header">
+    <span id="crypto-title">Crypto</span>
+    <span id="crypto-status" data-state="fallback">—</span>
+  </div>
+  <p id="crypto-claim">Hourly spot-crypto snapshot · 39 coins by market-cap rank · read-only</p>
+  <div id="crypto-warning" class="hidden"></div>
+  <div id="crypto-hero" aria-label="Bitcoin summary"></div>
+  <div id="crypto-market" aria-label="Market summary"></div>
+  <details class="truth-about" id="crypto-about"><summary>About this reading</summary>
+  <p>
+    Published hourly by the crypto collector
+    (<code>market_data/crypto_collector/</code>) from public Coinbase
+    Exchange prices, with CoinGecko for the 9 top-ranked coins Coinbase
+    cannot supply (USDT, USDC, TRX, XMR, LEO, WBT, DAI, CC, GRAM).
+    Every price carries its source and as-of time; a missing source
+    shows "source unavailable" and is never substituted from the other
+    source. Crypto trades 24/7, so this panel has no equity session
+    close. No trading, no alerts, no favourites.
+  </p>
+  </details>
+  <table id="crypto-table">
+    <caption id="crypto-caption"></caption>
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Coin</th>
+        <th>Price</th>
+        <th>24h change</th>
+        <th>Market cap</th>
+        <th>Source</th>
+        <th>As of (UTC)</th>
+      </tr>
+    </thead>
+    <tbody id="crypto-tbody"></tbody>
+  </table>
+  <h3>Trend patterns</h3>
+  <ul id="crypto-patterns"></ul>
+
+</div> <!-- /crypto-panel -->
+
 <div id="news-panel" class="hidden" aria-live="polite"></div> <!-- MediaFlow news views (js/news-panel.js) -->
 <div id="news-research" aria-live="polite"></div> <!-- MediaFlow P1 research view (js/news-research.js); hidden with #news-panel -->
 
@@ -2011,6 +2138,14 @@ let timerHandle = null;
 // the section's marker.
 </script>
 <script src="js/squeeze-panel.js?v=b6f669daf5c8af53"></script>
+<script>
+
+// ── crypto panel ─────────────────────────────────────────────────────────
+// Lives in js/crypto-panel.js, loaded below; the Crypto tab mounts it on
+// first open, like the News panel. The banner stays here as the section's
+// marker.
+</script>
+<script src="js/crypto-panel.js?v=4ac1f1cbdebcdf92"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────
