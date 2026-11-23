@@ -228,6 +228,8 @@ jobs:
           node tests/btc_compact_chain.test.mjs
           node tests/btc_owner_link_browser.test.mjs
           node tests/btc_github_browser.test.mjs
+      - name: News reader visible and hidden browser workflow
+        run: node tests/one_clock_news_browser.mjs
       - name: Private Kalshi phone and desktop fixture workflow
         env:
           NODE_OPTIONS: --experimental-sqlite
