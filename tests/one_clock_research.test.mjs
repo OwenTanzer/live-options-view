@@ -9,11 +9,11 @@ import {demoRows,demoRules,demoStart,demoClose,demoSelection} from '../site/shar
 import {sessionAt,sessionInstant} from '../site/shared/one-clock-session.js';
 import {equitySession,observerSessions} from '../backend/one-clock-calendar.js';
 import {evaluateEvents} from '../site/shared/one-clock-events.js';
-async function setup(t) {
+async function setup(t, sessionTtl = 3600) {
   const DB=makeStorage();t.after(()=>DB.db.close());
   for(const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql'])await DB.exec(fs.readFileSync(new URL('../backend/migrations/'+file,import.meta.url),'utf8'));
   const env={DB,ONE_CLOCK_OBSERVER:'enabled'},storage=createStorage(env);
-  for(const name of ['alice','other']) {await storage.users.insert(name,{username:name,version:0});await storage.sessions.create(name+'-token',name,3600);}
+  for(const name of ['alice','other']) {await storage.users.insert(name,{username:name,version:0});await storage.sessions.create(name+'-token',name,sessionTtl);}
   const call=(user,body,query='',origin='https://options.moopertonic.net')=>handleOneClockResearch(new Request('https://options.moopertonic.net/api/one-clock/research'+query,{headers:{...(user?{Cookie:'session='+user+'-token'}:{}),Origin:origin,'Content-Type':'application/json'},...(body?{method:'POST',body:JSON.stringify(body)}:{})}),env);
   return {DB,env,call};
 }
@@ -249,4 +249,73 @@ test('level studies retain the known prefix before catch-up and acknowledge cove
   assert.equal(finished.length,1);assert.equal(finished[0].id,early.id);
   assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_evaluation_history WHERE state='evaluated'")[0].n,1);
   assert.deepEqual((await events(now))[0].outcomes,early.outcomes);
+});
+test('account audit preserves each bot decision and its own settlement on delayed/repeated delivery', async t => {
+  const {oiSkewAuditRule} = await import('../site/shared/one-clock-decision-events.js');
+  const session = '2026-11-27', {open,close} = equitySession(session);
+  const minute = 60000;
+  let now = open;
+  t.mock.method(Date, 'now', () => now);
+  const {DB,env,call} = await setup(t, 8 * 3600);
+  const rule = oiSkewAuditRule('audit');
+  const save = await call('alice', {action:'save', rule});
+  assert.equal(save.status, 201);
+  assert.deepEqual((await (await call('alice')).json()).activations, []);
+  assert.equal((await call('alice', {action:'activate', ruleId:rule.id, version:1})).status, 200);
+
+  const decision = (id, m, posted, action = 'no_trade', bot = 'crassus_oiskew') => ({
+    source:'bot-decision', id, eventAt:open+m*minute, availableAt:open+posted*minute, value:{bot,action}
+  });
+  const price = (m, spot, posted = m) => ({
+    source:'price', id:'price-'+m, eventAt:open+m*minute, availableAt:open+posted*minute, value:{spot}
+  });
+  const records = [
+    price(1,100), price(2,101), price(11,103), price(12,104), price(20,110), price(30,109),
+    decision('a',1,20), decision('b',2,20), decision('a',1,20),
+    decision('different-bot',1,20,'no_trade','foreign')
+  ];
+  async function ingest(rows) {
+    for (const row of rows) {
+      const full = {...row, revision:row.revision??1, session, instrument:'QQQ', origin:'recorded', evidence:'fixture://'+row.id};
+      await DB.prepare('INSERT INTO one_clock_ingested(source,session,instrument,origin,record_id,revision,event_at,available_at,received_at,collection,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+        .bind(row.source,session,'QQQ','recorded',row.id,full.revision,row.eventAt,row.availableAt,row.availableAt,'prospective',JSON.stringify(full)).run();
+    }
+  }
+  const tick = async cutoff => {
+    now = cutoff;
+    const results = await advanceOneClockResearch({...env,PAPER_TRADES:{}}, {now,
+      sources:[{...emptySource,outputs:['price','bot-decision']}],publicationSources:[]});
+    assert.ok(results.some(r=>r.state === 'evaluated'), JSON.stringify(results));
+  };
+  const events = async cutoff => (await (await call('alice',null,'?'+new URLSearchParams({
+    session,instrument:'QQQ',cutoff:String(cutoff)
+  }))).json()).events;
+  await ingest(records);
+  await tick(open+19*minute);
+  assert.deepEqual(await events(now), []);
+  await tick(open+20*minute);
+  const original = (await events(now)).sort((a,b)=>a.decisionAt-b.decisionAt);
+  assert.deepEqual(original.map(e=>[e.inputEvidence[0].id,e.decisionAt,e.triggeredAt,e.baselines['qqq-change'].value,
+    e.outcomes[0].targetAt,e.outcomes[0].endpointValue,e.outcomes[0].value,e.collection]), [
+    ['a',open+minute,now,100,open+11*minute,103,3,'retrospective'],
+    ['b',open+2*minute,now,101,open+12*minute,104,3,'retrospective']
+  ]);
+  await tick(open+30*minute);
+  assert.deepEqual((await events(now)).map(e=>e.id).sort(), original.map(e=>e.id).sort());
+  const beforeCorrection = now;
+  await ingest([
+    {...decision('a',1,31,'buy'),revision:2}, decision('sell',30,31,'sell'), price(40,105),
+    decision('no-baseline',50,51), decision('late',205,220), decision('closed',210,220),
+    decision('missing-endpoint',80,81), price(80,117)
+  ]);
+  await tick(close+11*minute);
+  const revised = await events(now), byId = id => revised.find(e=>e.inputEvidence[0].id === id);
+  assert.equal(revised.length,6);
+  assert.equal(byId('a').id,original[0].id);
+  assert.equal(byId('a').inputEvidence[0].value.action,'buy');
+  assert.equal(byId('sell').outcomes[0].value,-4);
+  assert.equal(byId('no-baseline').outcomes[0].reason,'trigger-baseline-unavailable');
+  assert.equal(byId('late').outcomes[0].reason,'session-closed-before-horizon');
+  assert.equal(byId('missing-endpoint').outcomes[0].reason,'no-qualified-endpoint');
+  assert.equal((await events(beforeCorrection)).find(e=>e.id===original[0].id).inputEvidence[0].revision,1);
 });

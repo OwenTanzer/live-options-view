@@ -95,8 +95,9 @@ export async function observeBatch(db, input) {
         return ['backfill','replay','unknown'].find(mode => modes.includes(mode)) ?? fallback;
       }
       const inputs = event.inputEvidence.map(e => ({ record:lineage(e), anchor:lineage(e.anchorEvidence) }));
+      const lateDecision = event.decisionAt !== undefined && event.decisionAt < event.triggeredAt;
       const eventCollection = classify(inputs.flatMap(e => [e.record,e.anchor]),
-        (event.decisionAt ?? event.triggeredAt) < registered.registered_at || event.decisionAt < event.triggeredAt ? 'retrospective' : 'prospective');
+        (event.decisionAt ?? event.triggeredAt) < registered.registered_at || lateDecision ? 'retrospective' : 'prospective');
       // An observed trigger and its later measurement can have different
       // collection histories. Never upgrade an endpoint or anchor on redelivery.
       const outcomes = Object.fromEntries(event.outcomes.map(outcome => {

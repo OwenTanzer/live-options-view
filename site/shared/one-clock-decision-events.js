@@ -76,6 +76,7 @@ export function decisionEvents(rule, rows, selection, close, windows, evidence) 
     result.push({id: JSON.stringify([rule.id, rule.version, observationKey(receipt)]),
       ruleId: rule.id, ruleVersion: rule.version, session: selection.session, instrument: selection.instrument,
       origin: selection.origin, triggeredAt: receipt.availableAt, decisionAt: at, matchingObservations: 1,
+      decisionEvidence: 'published-audit-receipt', predictionCommitment: null,
       inputEvidence: [{...evidence(receipt), value: receipt.value}], baselines, outcomes});
   }
   return result;
