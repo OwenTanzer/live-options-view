@@ -17,13 +17,15 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
         const url = new URL(route.request().url());
         requests.push(url);
         const json = body=>route.fulfill({json:body});
+        if(url.pathname==='/api/one-clock/opening-oi')return json({session,availableAt:cutoff-5000,
+          calibration:{openingAtm:700,settledSession:'2026-11-06'},levels:[{strike:700,call:5,put:2,callOI:480,putOI:15}]});
         if(url.pathname==='/api/one-clock/chain'){
           const at=Number(url.searchParams.get('cutoff')),boundary=cutoff+377;
           const instrument=url.searchParams.get('instrument');
           if(at<boundary-1) return json({rows:[],coverage:{complete:false}});
           const spot=at===boundary-1?699:at===boundary+1?null:701;
           const data={symbol:instrument,expiration:session,date:session,timestamp:new Date(boundary-500).toISOString(),
-            underlying_price:spot,rows:[{Strike:700,Type:'call',OpenInterest:12,Bid:1,Ask:2}],market_readings:[]};
+            underlying_price:spot,rows:[{Strike:699,Type:'call',OpenInterest:99999},{Strike:700,Type:'call',OpenInterest:at===boundary?1:12,Bid:1,Ask:2},{Strike:701,Type:'call',OpenInterest:99999}],market_readings:[]};
           return json({rows:[{source:'chain',id:'fixture-chain',revision:1,instrument,session,origin:'recorded',
             eventAt:boundary-500,availableAt:at,evidence:'fixture-chain',value:data}],coverage:{complete:true}});
         }
@@ -84,9 +86,37 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
       for(const [time,expected] of [['10:00:00.499','$699'],['10:00:00.500','$701'],['10:00:00.501','unavailable'],['10:03:00.501','unavailable']]){
         await enter(time,'QQQ');
         await page.waitForFunction(text=>document.querySelector('#history-clock-status').textContent.includes('Underlying spot '+text),expected);
-        assert.match(await page.locator('#history-clock-rows .strike-cell').textContent(),/^700/);
+        const reference=page.locator('#history-clock-rows tr').filter({has:page.locator('.strike-cell',{hasText:'700'})});
+        assert.match(await reference.locator('.call-cell').getAttribute('class'),/c5/);
+        assert.match(await reference.locator('.call-cell').getAttribute('title'),/opening reference OI 480/);
+        const unqualified=page.locator('#history-clock-rows tr').filter({has:page.locator('.strike-cell',{hasText:'699'})}).locator('.call-cell');
+        assert.match(await unqualified.getAttribute('class'),/c0/);assert.match(await unqualified.innerText(),/99K/);
+        if(expected!=='unavailable')assert.match(await page.locator('#history-clock-rows .atm-row .strike-cell').innerText(),new RegExp(expected.slice(1)));
         assert.equal(await page.locator('#history-clock-rows .atm').count(),expected==='unavailable'?0:1);
       }
+      // The Live and dated Historical renderers consume that identical map
+      // even while spot moves and every current-chain count disagrees.
+      const surfaces=await page.evaluate(async({session,cutoff})=>{
+        const map=await loadOpeningOi(session,cutoff);
+        const rows=[699,700,701].flatMap(Strike=>['put','call'].map(Type=>({Strike,Type,OpenInterest:1})));
+        const checks=[];
+        for(const spot of [699,701]){
+          const data={symbol:'QQQ',date:session,expiration:session,snapshot_time:session,timestamp:new Date(cutoff).toISOString(),
+            rows,underlying_price:spot,tier:'0DTE_Regular',openingOi:map};
+          renderHeatmap(data);renderHistoryHeatmap(data);
+          for(const id of ['heatmap-body','hist-heatmap-body']){
+            const body=document.getElementById(id);
+            const reference=[...body.rows].find(r=>r.querySelector('.strike-cell').textContent.startsWith('700'));
+            checks.push([reference.querySelector('.call-cell').classList.contains('c5'),body.querySelector('.atm-row .strike-cell').textContent.includes(String(spot))]);
+          }
+        }
+        renderHeatmap({symbol:'QQQ',date:session,expiration:session,snapshot_time:session,timestamp:new Date(cutoff).toISOString(),rows,
+          underlying_price:699,tier:'0DTE_Regular',openingOi:null});
+        const missing=document.querySelector('#heatmap-body .call-cell');
+        checks.push([missing.classList.contains('c0'),missing.textContent.includes('1')]);
+        return checks;
+      },{session,cutoff});
+      assert.deepEqual(surfaces,Array.from({length:5},()=>[true,true]));
       await enter('10:00:00.500','IBIT');
       await page.waitForFunction(()=>document.querySelector('#history-clock-status').textContent.startsWith('IBIT'));
       assert.ok(await page.locator('#history-order-flow-link').isHidden());

@@ -25,7 +25,7 @@
       <label>When input is missing<select id="missing"><option value="hold">Keep previous state</option><option value="reset">Reset to non-matching</option></select></label></div>
       <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option></select></label>
       <fieldset id="level-fields" hidden><legend>Strike encounters</legend>
-      <p>A strike qualifies after an earlier chart snapshot flags it. Its most recent qualifying snapshot sets the group. A fresh approach after leaving the strike can count again.</p>
+      <p>The session opening map sets each strike’s group using settled open interest and the opening ATM. Encounters qualify once the opening map was available. A fresh approach after leaving the strike can count again.</p>
       <div class="form-grid"><label>Minimum open-interest bucket<select id="level-bucket"><option value="5">Brightest · at or above p90</option><option value="4">At or above p75</option></select></label>
       <label>Approach<select id="level-approach"><option value="either">Either direction</option><option value="up">From below</option><option value="down">From above</option></select></label>
       <label>Contact<select id="level-contact"><option value="exact-or-bracketed">Exact touches and bracketed crossings</option><option value="exact">Exact touches only</option></select></label>

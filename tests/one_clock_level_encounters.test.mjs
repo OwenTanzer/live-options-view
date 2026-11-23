@@ -51,3 +51,26 @@ test('calibration uses signed ladder offsets, lower ATM on a tie, tier multiplie
   assert.deepEqual(calibratedLevels(chain,csv),{levels:[{strike:702,call:4,put:3},{strike:698,call:5,put:5}],gaps:1});
   assert.equal(calibratedLevels(chain,csv.replace('0DTE_Regular,0,1,2,3,4','0DTE_Regular,0,1,2,3,')).gaps,2);
 });
+
+test('late-fill opening revisions are visible at actual publication only; restarts and rewinds keep opening calibration',async()=>{
+  const {readOpeningOi}=await import('../backend/one-clock-opening-oi.js');
+  const open=Date.parse('2026-11-20T14:30:00Z');
+  const csv='Tier,StrikeOffset,Call_p25,Call_p50,Call_p75,Call_p90,Put_p25,Put_p50,Put_p75,Put_p90,Call_adj,Put_adj\n'+
+    [-1,0,1].map(n=>'0DTE_Regular,'+n+',1,2,3,4,1,2,3,4,1,1').join('\n');
+  const packets=[{version:1,at:open+30000,put:null},{version:2,at:base+15*60000,put:0}].map(({version,at,put})=>{
+    const data={schema:'opening-oi.v1',instrument:'QQQ',session:selection.session,settledSession:'2026-11-19',version,openAt:new Date(open).toISOString(),
+      capturedAt:new Date(at-100).toISOString(),openingSpot:700,tier:'0DTE_Regular',calibration:{etag:'june',csv,uploaded:new Date(open-86400000).toISOString()},
+      legs:[{strike:699,call:0,put:0},{strike:700,call:15,put},{strike:701,call:0,put:0}]};
+    return {key:'intraday/20261120/opening-oi/v1/'+String(version).padStart(4,'0')+'.json',
+      etag:'opening'+version,uploaded:new Date(at),size:JSON.stringify(data).length,text:async()=>JSON.stringify(data)};
+  });
+  const bucket={async list(){return {objects:packets,truncated:false};},async get(k){return packets.find(p=>p.key===k);}};
+  const lookup=cutoff=>readOpeningOi(bucket,selection.session,cutoff);
+  assert.equal((await lookup(open)).reason,'opening-evidence-unavailable');
+  const early=await lookup(base),late=await lookup(base+16*60000);
+  assert.equal(early.levels.find(s=>s.strike===700).put,undefined);assert.equal(late.levels.find(s=>s.strike===700).put,0);
+  assert.deepEqual(await lookup(base),early);assert.equal(late.calibration.openingAtm,700);
+  const maps=[early,late].map((map,i)=>row('oi-levels',map.capturedAt-base,{levels:map.levels,calibration:map.calibration},map.availableAt-map.capturedAt,{id:packets[i].key}));
+  const draws=run([...maps,price(1,699),price(2,701),price(16*60000,699),price(16*60000+1,701)]);
+  assert.equal(draws.length,1);assert.equal(draws[0].encounter.cohort,'call-only');assert.equal(draws[0].triggeredAt,base+16*60000+1);
+});

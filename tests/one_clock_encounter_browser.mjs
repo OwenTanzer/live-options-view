@@ -11,7 +11,7 @@ import {levelIngestion} from '../backend/one-clock-level-ingestion.js';
 import {advanceOneClockResearch,handleOneClockResearch} from '../backend/one-clock-research.js';
 const DB=makeStorage(), session='2026-11-20', stream='collector-chain/QQQ', start=Date.parse(session+'T15:00:00Z');
 const origin='https://options.moopertonic.net', objects=new Map();
-const PAPER_TRADES={async get(key){return objects.get(key)??null;}};
+const PAPER_TRADES={async list({prefix}){return {objects:[...objects].filter(([k])=>k.startsWith(prefix)).map(([key,obj])=>({key,...obj})),truncated:false};},async get(key){return objects.get(key)??null;}};
 const env={DB,PAPER_TRADES,ONE_CLOCK_OBSERVER:'enabled',ONE_CLOCK_PUBLICATIONS:'enabled'};
 for(const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql','0011_one_clock_publications.sql','0012_one_clock_handoff.sql','0013_one_clock_reevaluation.sql','0014_one_clock_chain_evidence.sql']) {
   await DB.exec(await readFile(new URL('../backend/migrations/'+file,import.meta.url),'utf8'));
@@ -23,13 +23,18 @@ function object(key,text,uploaded) {
 }
 const ranges='Tier,StrikeOffset,Call_p25,Call_p50,Call_p75,Call_p90,Put_p25,Put_p50,Put_p75,Put_p90,Call_adj,Put_adj\n'+
   [-2,-1,0,1,2].map(n=>'0DTE_Regular,'+n+',10,20,30,40,10,20,30,40,1,1').join('\n');
-object('derived/OIranges.csv',ranges,start-86400000);
+const openAt=Date.parse(session+'T14:30:00Z');
+const openingPacket={schema:'opening-oi.v1',version:1,session,instrument:'QQQ',settledSession:'2026-11-19',tier:'0DTE_Regular',
+  openAt:new Date(openAt).toISOString(),capturedAt:new Date(openAt+15000).toISOString(),openingSpot:700,snapshotKey:'fixture-open',
+  legs:[{strike:699,call:10,put:50},{strike:700,call:50,put:10},{strike:701,call:50,put:50}],
+  calibration:{etag:'opening-calibration',uploaded:new Date(start-86400000).toISOString(),csv:ranges}};
+object('intraday/20261120/opening-oi/v1/0001.json',JSON.stringify(openingPacket),openAt+16000);
 const sample=[[0,698],[1,699],[2,700],[3,701],[5,699],[11,700],[29,700]];
 for(const [i,[minute,spot]] of sample.entries()) {
   const at=start+minute*60000, sequence=i+1, csvKey='intraday/20261120/snapshot_10'+String(minute).padStart(2,'0')+'00000000.csv';
   const id='native:'+stream+':'+csvKey, evidenceKey='test-entry-'+sequence;
   const csv='Strike,Type,OpenInterest,Expiration,UnderlyingPrice\n'+[699,700,701].flatMap((strike,j)=>['call','put'].map(side=>{
-    const oi=(j===0&&side==='put'||j===1&&side==='call'||j===2)?50:10;
+    const oi=1; // All intraday OI disagrees with the frozen map.
     return [strike,side,oi,session,spot].join(',');
   })).join('\n');
   const json=JSON.stringify({symbol:'QQQ',date:session,expiration:session,tier:'0DTE_Regular',timestamp:new Date(at).toISOString(),snapshot_key:csvKey,underlying_market:{freshness:'live',spot_ts:new Date(at).toISOString()},underlying_price:spot});

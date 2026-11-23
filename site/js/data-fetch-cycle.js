@@ -40,6 +40,14 @@ async function fetchLatest() {
   if (qqq.data && qqq.data.rows.length) {
     lastTs = qqq.data.timestamp;
     lastData = qqq.data;
+    if(typeof loadOpeningOi==='function'){
+      const data=qqq.data;
+      loadOpeningOi(data.date,Date.now()).then(opening=>{
+        if(lastData!==data || latestQqqRequest!==qqqRequest)return;
+        data.openingOi=opening;
+        if(chainSelection.symbol==='QQQ' && (typeof btcOptions==='undefined'||!btcOptions.active) && window.oneClockDashboard?.isLive()!==false)renderSelectedChain();
+      });
+    }
     chainState.QQQ = { data: qqq.data, error: null };
     if (typeof qqqIv !== "undefined") qqqIv.update(qqq.data);
     ingestSnapshotQuotes(qqq.data);

@@ -168,11 +168,15 @@ async function renderChain(selection) {
     // Existing read-only renderer and calculations, same eligible parent record.
     const spot=reading.state==='fresh' && Number.isFinite(data.underlying_price) && data.underlying_price>0 ? data.underlying_price : null;
     const chain={...data,underlying_price:spot};
-    buildHeatmapRows(el('history-clock-rows'),chain,relativeOiRanges(data.rows),{showUnanchored:true});
+    const opening=instrument==='QQQ' && typeof loadOpeningOi==='function'?await loadOpeningOi(session,selection.cutoff):null;
+    const current=clock.snapshot();
+    if(!replay || current.session!==session || current.instrument!==instrument || current.cutoff!==selection.cutoff)return;
+    buildHeatmapRows(el('history-clock-rows'),chain,instrument==='QQQ'?null:relativeOiRanges(data.rows),{
+      showUnanchored:true,...(instrument==='QQQ'?{openingOi:opening}:{})});
     const spotText=spot===null?'Underlying spot unavailable':'Underlying spot $'+spot;
     const raw=describeReferenceOiSkew(data,selection.cutoff);
     const cursorLabel=new Intl.DateTimeFormat('en-GB',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(selection.cutoff);
-    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). ${spotText}. Read-only replay.`;
+    el('history-clock-status').textContent=`${instrument} · session ${session} · expiration ${data.expiration} · cursor ${cursorLabel} New York · snapshot ${new Date(row.eventAt).toISOString()} · ${reading.state} (${Math.round(reading.ageMs/1000)} s old). ${spotText}. Read-only replay.${instrument==='QQQ' && typeof openingOiNote==='function'?' '+openingOiNote(opening):''}`;
     el('history-clock-skew').textContent=`Published reference skew: ${raw.text} · ${raw.availability==='live'?'fresh at cursor':raw.availability}. ${raw.detail}`;
     if(instrument==='IBIT') {
       const adaptive=computeAdaptiveOiSkew(data.rows,spot);

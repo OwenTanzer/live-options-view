@@ -243,7 +243,8 @@ async function loadHistoryDate(dateStr) {
   setHistStatus(`Loading ${dateStr}…`);
   resetHistoryView(`Loading ${dateStr}…`);
   try {
-    const rows = await fetchChainCsv(dateStr);
+    const [rows,openingOi]=await Promise.all([fetchChainCsv(dateStr),
+      typeof loadOpeningOi==='function'?loadOpeningOi(dateStr,Date.now()):null]);
     if (request !== histRequest) return;
     const sub = rows.filter(r => r.Expiration === dateStr);
     if (!sub.length) {
@@ -253,7 +254,7 @@ async function loadHistoryDate(dateStr) {
     }
     const spot = sub[0].UnderlyingPrice || null;
     const tier = classifyTierSimple(dateStr);
-    const ok = renderHistoryHeatmap({ rows: sub, underlying_price: spot, tier, expiration: dateStr, snapshot_time: dateStr });
+    const ok = renderHistoryHeatmap({ openingOi, rows: sub, underlying_price: spot, tier, expiration: dateStr, snapshot_time: dateStr });
     if (ok) {
       document.getElementById('hist-sidebar').classList.remove('hidden');
       renderHistWidgets(sub, spot, tier, dateStr);
@@ -272,7 +273,7 @@ async function loadHistoryDate(dateStr) {
 function renderHistoryHeatmap(data) {
   const { underlying_price: spot, tier, snapshot_time } = data;
 
-  const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, ranges);
+  const ok = buildHeatmapRows(document.getElementById('hist-heatmap-body'), data, ranges, {openingOi:data.openingOi});
   if (!ok) {
     setHistStatus(`No usable spot/strike data for ${snapshot_time}.`);
     document.getElementById('hist-heatmap-wrap').classList.add('hidden');
@@ -288,6 +289,6 @@ function renderHistoryHeatmap(data) {
 
   document.getElementById('hist-no-data').classList.add('hidden');
   document.getElementById('hist-heatmap-wrap').classList.remove('hidden');
-  setHistStatus(`Trade date ${snapshot_time}` + (histStaleNote ? ` — ${histStaleNote}` : ''));
+  setHistStatus(`Trade date ${snapshot_time}` + (typeof openingOiNote==='function'?' · '+openingOiNote(data.openingOi):'') + (histStaleNote ? ` — ${histStaleNote}` : ''));
   return true;
 }
