@@ -69,7 +69,7 @@ health-check host may be allowed on `/healthz` alone.
 | Tool result | 256 KiB before text/structured duplication. |
 | Pilot quota | 120 authenticated MCP requests/minute and 500 authenticated requests/UTC day; separate 120 failed-authentication attempts/minute; 429 includes Retry-After. |
 | Retained references | 64 and 16 MiB of serialized data, fifteen-minute TTL; count/byte eviction and periodic pruning. |
-| Upstream artifacts | Fixed public origin, four MiB raw / 24 MiB expanded; 64 MiB and twelve artifact reads per query, fifteen-second source deadline. |
+| Upstream artifacts | Fixed public origin, four MiB raw / 48 MiB expanded; 64 MiB and twelve artifact reads per query, fifteen-second source deadline. |
 | JSONL parsing | At most 100,000 physical lines, 10,000 retained manifest records; 256 KiB per manifest line. Quote lines at most 16 KiB; retain at most 50 matching quote rows per sweep, six sweeps per page. Unrelated quote rows are discarded during incremental parsing. |
 | CSV parsing | At most 10,000 physical records, 128 columns and 4,096 characters/cell. |
 | Logging | Strict event/status/duration/port fields only; at most 60 entries/minute plus a suppressed-count summary. No headers, tokens, claims, URLs, bodies, producer payloads or exception text. |

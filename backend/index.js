@@ -1,9 +1,29 @@
-import { R2_ORIGIN } from './common.js';
-import { BROWSER_DATA_PREFIX, handleBrowserData, handleLiveQuotes } from './browser-data.js';
+import {handleOpeningOi} from "./one-clock-opening-oi.js";
+import { archive } from './strategy-archive.js';
+
+import { handlePrediction, settlePredictions } from './prediction.js';
+import { handleKalshi, kalshiTick } from './kalshi.js';
+import {handleBitcoinReplay} from './one-clock-btc.js';
+import { handleBtcOptions } from './btc-options.js';
+import { handleBtcOwnerLink } from './btc-owner-link.js';
+import { handleOneClockChain } from './one-clock-chain.js';
+import { handleOneClockSqueeze } from './one-clock-squeeze.js';
+import { advanceOneClockCatalogs } from './one-clock-catalog-sources.js';
+import { handleOneClockResearch,advanceOneClockResearch } from './one-clock-research.js';
+import { handleOneClockResults } from './one-clock-results.js';
+import { handleBotDecisions } from './one-clock-bot-decisions.js';
+import { handleOneClockBots,handleOneClockBotRoster } from './one-clock-bots.js';
+import { creditTape } from './credit-tape.js';
+import { BROWSER_DATA_PREFIX, LEGACY_R2_PROXY_PREFIX, handleBrowserData, handleLegacyR2Proxy, handleLiveQuotes } from './browser-data.js';
 import { handleSettle, settleAllBots, settlementPriceServer, validateSettleRequest } from './settlement.js';
 import { handleBotIndexReconcile, handleBotMetadata, handleBots } from './bots.js';
 import { handleLogin, handleLogout, handleMe, handleRegister } from './auth.js';
 import { handlePaperTrade } from './paper-trade.js';
+import { cutoverFenceActive } from './fence.js';
+import { createCronOutcomeLog } from './cron_outcome.js';
+import { handleTradeJournalDay, handleTradeJournalRow, handleTradeJournalSync } from './trade-journal.js';
+import { handleJournalPasskey } from './journal-passkeys.js';
+import { handleTradeJournalContext } from './trade-journal-context.js';
 
 // Re-exported from backend/common.js so the Worker's public API (the 31
 // exports pinned by tests/worker_logic.test.js) stays on backend/index.js.
@@ -13,28 +33,55 @@ export { EXECUTION_RESERVATION_LEASE_MS, exactShareQuote, executionIntentMatches
 export { BOT_INDEX_KEY, handleBotIndexReconcile, handleBotMetadata, handleBots, netPositions, repairLegacyBotMarker, updateBotIndex } from './bots.js';
 export { MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, USERNAME_RE, constantTimeEqual, derivePasswordHash, randomSaltBase64 } from './auth.js';
 
+const MUTATING_API_PATHS = new Set([
+  '/api/strategy-archive', '/api/register', '/api/login', '/api/logout', '/api/paper-trade', '/api/settle',
+  '/api/bot-metadata', '/api/bot-index/reconcile', '/api/trade-journal/sync', '/api/trade-journal/passkey',
+  '/api/btc-options/owner-link',
+]);
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/kalshi' || url.pathname.startsWith('/api/kalshi/')) return handleKalshi(request, env);
+    if (url.pathname === '/api/one-clock/btc-replay') return handleBitcoinReplay(request,env);
+    if (url.pathname === '/api/one-clock/opening-oi') return handleOpeningOi(request,env,url);
+    if (url.pathname === '/api/one-clock/chain') return handleOneClockChain(request, env, url);
+    if (url.pathname === '/api/one-clock/squeeze') return handleOneClockSqueeze(request, env, url);
+    if (url.pathname === '/api/one-clock/bot-decisions') return handleBotDecisions(request, env, url);
+    if (url.pathname === '/api/one-clock/bots') return handleOneClockBots(request, env, url);
+    if (url.pathname === '/api/one-clock/bots/roster') return handleOneClockBotRoster(request, env, url);
+    if (url.pathname === '/api/one-clock/research') return handleOneClockResearch(request,env,url);
+    if (url.pathname === '/api/one-clock/results') return handleOneClockResults(request,env,url);
+    if (url.pathname.startsWith('/credit-tape/')) return creditTape(request);
 
     if (url.pathname === '/browser-data' || url.pathname.startsWith(BROWSER_DATA_PREFIX)) {
       return handleBrowserData(request, url);
     }
 
-    // Same-origin passthrough to the R2 bucket, fetched edge-to-edge by
-    // Cloudflare rather than over the client's own network. Exists so
-    // diag.html can compare "direct to the r2.dev subdomain" against "same
-    // origin as the page" — if a client's network/DNS/carrier treats the two
-    // hostnames differently, this tells them apart instead of leaving it a
-    // guess. Not used by the main app yet.
-    if (url.pathname.startsWith("/r2-proxy/")) {
-      const key = url.pathname.slice("/r2-proxy/".length);
-      const upstream = await fetch(`${R2_ORIGIN}/${key}${url.search}`, { cf: { cacheTtl: 0 } });
-      const proxied = new Response(upstream.body, upstream);
-      proxied.headers.set("Cache-Control", "no-store");
-      proxied.headers.set("Access-Control-Allow-Origin", "*");
-      return proxied;
+    // Bounded legacy route (G4b): /r2-proxy/ now enforces the same
+    // public-key/read policy as /browser-data/ — allowlisted keys only, GET
+    // only, same origin/query discipline, same upstream discipline, and no
+    // Access-Control-Allow-Origin passthrough. The only consumer is
+    // site/diag.html; the main app uses /browser-data/. Preview still denies
+    // it (frontend/worker.mjs returns 403 there).
+    if (url.pathname === '/r2-proxy' || url.pathname.startsWith(LEGACY_R2_PROXY_PREFIX)) {
+      return handleLegacyR2Proxy(request, url);
     }
+
+    // Post-cutover fence check. The migration route is retired from this
+    // Worker, but the fence remains as a safety interlock: a stale armed fence
+    // pauses writes instead of being ignored. Reads keep working throughout.
+    if (request.method === 'POST' && MUTATING_API_PATHS.has(url.pathname) &&
+        await cutoverFenceActive(env)) {
+      return new Response(JSON.stringify({
+        error: 'Cutover in progress; writes are paused. Retry in a moment.',
+      }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '30', 'Cache-Control': 'no-store' },
+      });
+    }
+
+    if (url.pathname === '/api/strategy-archive') return archive(request, env);
 
     if (request.method === 'POST' && url.pathname === '/api/register') {
       return handleRegister(request, env);
@@ -57,8 +104,9 @@ export default {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/bot-index/reconcile') {
-      return handleBotIndexReconcile(request, env);
-    }
+      return handleBotIndexReconcile(request, env);    }
+
+    if (request.method === 'GET' && url.pathname.startsWith('/api/prediction/')) return handlePrediction(request, env, url);
 
     if (request.method === 'GET' && url.pathname === '/api/me') {
       return handleMe(request, env);
@@ -71,6 +119,28 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/settle') {
       return handleSettle(request, env);
     }
+
+    if (request.method === 'POST' && url.pathname === '/api/trade-journal/passkey') return handleJournalPasskey(request, env);
+    // OA-238: private, read-only trade journal (Notion Trade Retrospectives).
+    // Private journal passkey session on every data route; see trade-journal.js.
+    if (request.method === 'GET' && url.pathname === '/api/trade-journal') {
+      return handleTradeJournalDay(request, env, url);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/trade-journal/row') {
+      return handleTradeJournalRow(request, env, url);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/trade-journal/context') {
+      return handleTradeJournalContext(request, env, url);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/trade-journal/sync') {
+      return handleTradeJournalSync(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/btc-options') return handleBtcOptions(request, env);
+    if (url.pathname === '/api/btc-options/owner-link') return handleBtcOwnerLink(request, env);
 
     if (request.method === 'GET' && url.pathname === '/api/live-quotes') {
       return handleLiveQuotes(url, env);
@@ -98,7 +168,41 @@ export default {
   // but a bot nobody is watching never opens a dashboard, so its expired
   // positions just piled up unsettled (issue #42). This sweeps every bot
   // account server-side on a schedule instead of relying on a viewer.
+  //
+  // E2: every invocation logs a structured outcome (backend/cron_outcome.js):
+  // "invoked", then exactly one of "completed" (settled / no_op + reason) or
+  // "error" (re-thrown, so failure behavior is unchanged). Counts only.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(settleAllBots(env));
+    const outcome = createCronOutcomeLog(event);
+    outcome.invoked();
+    // A settlement sweep during the cutover window would be a second writer
+    // racing the copy; skip it, loudly, and let the next cron pick it up.
+    let fenced;
+    try {
+      fenced = await cutoverFenceActive(env);
+    } catch (error) {
+      outcome.error('cutover_fence', error);
+      throw error;
+    }
+    if (fenced) {
+      console.log(JSON.stringify({ event: 'settlement_skipped_cutover_fence' }));
+      outcome.completed({ no_op_reason: 'cutover_fence' });
+      return;
+    }
+    const clock = new Date(event.scheduledTime ?? Date.now());
+    if (env.KALSHI_PERSONAL_ENABLED === '1') ctx.waitUntil(kalshiTick(env).catch(() => { console.error('kalshi_private_sweep_failed'); }));
+    // Reuse the existing invocation. Catalog failures do not block settlement;
+    // metadata reads and additive D1 checkpoints never execute a trade.
+    if(env.ONE_CLOCK_CATALOG==='enabled')ctx.waitUntil(advanceOneClockCatalogs(env,{now:Date.now()}));
+    if(env.ONE_CLOCK_OBSERVER==='enabled')ctx.waitUntil(advanceOneClockResearch(env,{now:Date.now()}).catch(()=>console.error('one_clock_observer_failed')));
+    if (env.PREDICTION_ENVIRONMENT) ctx.waitUntil(settlePredictions(env, clock).catch(error => { console.error('prediction_settlement_failed'); throw error; }));
+    // The 24/7 event clock must not broaden legacy equity settlement hours.
+    if (clock.getUTCDay() === 0 || clock.getUTCDay() === 6 || clock.getUTCHours() < 12) {
+      outcome.completed({ no_op_reason: 'outside_equity_session' }); return;
+    }
+    ctx.waitUntil(settleAllBots(env).then(
+      summary => { outcome.completed(summary); },
+      error => { outcome.error('settle_all_bots', error); throw error; },
+    ));
   },
 }

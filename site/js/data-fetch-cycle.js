@@ -40,14 +40,29 @@ async function fetchLatest() {
   if (qqq.data && qqq.data.rows.length) {
     lastTs = qqq.data.timestamp;
     lastData = qqq.data;
+    if(typeof loadOpeningOi==='function'){
+      const data=qqq.data;
+      loadOpeningOi(data.date,Date.now()).then(opening=>{
+        if(lastData!==data || latestQqqRequest!==qqqRequest)return;
+        data.openingOi=opening;
+        if(chainSelection.symbol==='QQQ' && (typeof btcOptions==='undefined'||!btcOptions.active) && window.oneClockDashboard?.isLive()!==false)renderSelectedChain();
+      });
+    }
     chainState.QQQ = { data: qqq.data, error: null };
+    if (typeof qqqIv !== "undefined") qqqIv.update(qqq.data);
     ingestSnapshotQuotes(qqq.data);
     updateQqqVwapRvolLine(qqq.data.underlying_market);
     updateQqqMomentumLine(qqq.data.underlying_market);
+    // OI skew meter (js/oi-skew-meter.js): same 60s QQQ payload, no extra request.
+    if (typeof updateOiSkewMeter === 'function') updateOiSkewMeter(qqq.data);
   } else {
     chainState.QQQ = { data: chainState.QQQ?.data ?? null, error: qqq.error || 'No QQQ rows in the latest snapshot.' };
+    // A failed/empty refresh must not leave the OI skew meter labelled live.
+    if (typeof noteOiSkewRefreshFailure === 'function') noteOiSkewRefreshFailure(chainState.QQQ.error);
   }
 
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) return;
+  if (selectedRequest !== latestSelectedRequest) return;
   if (token.symbol !== 'QQQ') {
     const other = await fetchChain(token.symbol);
     // The selection changed while this was in flight: drop the reply rather
@@ -55,6 +70,7 @@ async function fetchLatest() {
     // fetchLatest for the same selection supersedes this one too.
     if (selectedRequest !== latestSelectedRequest) return;
     if (!chainSelection.accepts(token)) return;
+    if (typeof btcOptions !== 'undefined' && btcOptions.active) return;
     if (other.data) {
       chainState[token.symbol] = { data: other.data, error: null };
       // Interests first: the quote cache only keeps wanted (visible) symbols.
@@ -74,6 +90,7 @@ async function fetchLatest() {
 }
 
 function selectedChainData() {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) return null;
   return chainState[chainSelection.symbol]?.data ?? null;
 }
 
@@ -84,11 +101,22 @@ function clearChain(message) {
   noData.textContent = message;
   noData.classList.remove('hidden');
   for (const id of ['vwap-rvol', 'momentum', 'chain-note']) document.getElementById(id).textContent = '';
-  document.getElementById('price').textContent = '—';
+  const price = document.getElementById('price');
+  price.textContent = '—';
+  price.title = '';
+  price.dataset.state = '';
+  // The snapshot line belongs to the snapshot that just went away; leaving it
+  // behind would label the NEXT underlying's empty chain with the old one's
+  // time and age.
+  const priceAge = document.getElementById('price-age');
+  priceAge.textContent = '';
+  priceAge.title = '';
+  priceAge.dataset.state = '';
   document.getElementById('tier-badge').style.display = 'none';
 }
 
 function renderChainTitle(symbol) {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) { btcOptions.header(); return; }
   const data = chainState[symbol]?.data;
   const expiry = data?.expiration;
   document.getElementById('title').textContent = `${symbol} ${expiry ? (expiry === data.date ? '0DTE' : `exp ${expiry}`) : 'Options'} Live OI`;
@@ -100,7 +128,9 @@ function renderChainTitle(symbol) {
 // Renders whichever underlying is selected, from that underlying's own
 // validated snapshot only. Each symbol's stale/unavailable state is its own.
 function renderSelectedChain() {
+  if (typeof btcOptions !== 'undefined' && btcOptions.active) { btcOptions.render(); return; }
   const symbol = chainSelection.symbol;
+  if (typeof qqqIv !== "undefined") qqqIv.select(symbol);
   renderChainTitle(symbol);
   const state = chainState[symbol];
   const data = state?.data;
@@ -116,15 +146,26 @@ function renderSelectedChain() {
   }
   renderHeatmap(data, symbol);
   if (!data.underlying_price) return;  // renderHeatmap already marked it stale
-  const snapAge = Math.round((Date.now() - new Date(data.timestamp).getTime()) / 1000 / 60);
   const hasBids = data.rows.some(r => r.Bid != null);
   // Dot color carries live/stale; text is just a small timestamp note —
-  // deeper diagnosis lives in diag.html, not the main view.
-  setStatus(!Number.isFinite(snapAge) || snapAge < -1 || snapAge > 2 || !hasBids || state.error ? 'stale' : 'live', data.snapshot_time);
+  // deeper diagnosis lives in diag.html, not the main view. The freshness
+  // judgment is the same call the header's snapshot line uses (#178), so the
+  // dot and the age text can never disagree about a chain that has stopped.
+  const freshness = formatChainSnapshot(data);
+  setStatus(freshness.state === 'live' && hasBids && !state.error ? 'live' : 'stale', data.snapshot_time);
 }
 
 function selectUnderlying(symbol) {
-  if (!chainSelection.select(symbol)) return;
+  if (symbol === 'BTC') {
+    latestSelectedRequest++;
+    btcOptions.select(true);
+    updateQuoteInterests();
+    return;
+  }
+  const wasBtc = typeof btcOptions !== 'undefined' && btcOptions.active;
+  if (wasBtc) btcOptions.select(false);
+  if (!chainSelection.select(symbol) && !wasBtc) return;
+  if (typeof btcOptions !== 'undefined') btcOptions.saveSelection(chainSelection.symbol);
   if (typeof closeTicket === 'function') closeTicket();
   try { localStorage.setItem(UNDERLYING_KEY, chainSelection.symbol); } catch (e) {}
   // Clear immediately so nothing from the previous underlying stays on screen

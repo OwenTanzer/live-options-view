@@ -9,13 +9,14 @@ const zlib = require('node:zlib');
 const { createHash } = require('node:crypto');
 
 const ORIGIN = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
-const LIMITS = Object.freeze({ artifact_bytes: 4 * 1024 * 1024, expanded_artifact_bytes: 24 * 1024 * 1024, query_bytes: 64 * 1024 * 1024,
+const LIMITS = Object.freeze({ artifact_bytes: 4 * 1024 * 1024, expanded_artifact_bytes: 48 * 1024 * 1024, query_bytes: 64 * 1024 * 1024,
   output_bytes: 256 * 1024, requests: 12, timeout_ms: 15000, rows: 50, path_sweeps: 6,
   input_bytes: 16384, references: 64, reference_bytes: 16 * 1024 * 1024, reference_ttl_ms: 15 * 60 * 1000,
   jsonl_lines: 100000, jsonl_rows: 10000, jsonl_line_bytes: 256 * 1024, quote_line_bytes: 16384,
   csv_rows: 10000, csv_columns: 192, csv_cell_chars: 4096 });
+const PATH_LINE_BYTES = 64 * 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const KEY = new RegExp('^(?:intraday/(?:spy/)?latest\\.json|intraday/prices\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)|inprogress/(?:latest(?:-attempt)?\\.json|sweep_\\d{4}(?:\\.json|/rev_[0-9a-f]{64}/(?:summary\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|manifest\\.jsonl)))))$');
+const KEY = new RegExp('^(?:intraday/(?:spy/)?latest\\.json|intraday/prices\\.json|squeeze-scanner/v1/scheduled/(?:latest(?:-attempt|-schedule)?\\.json|runs/' + UUID + '/(?:manifest|results|inputs)\\.json)|oa203/scanner/\\d{4}-\\d{2}-\\d{2}/(?:summary\\.json|universe\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|sweeps/(?:manifest\\.jsonl|sweep_\\d{4}\\.jsonl\\.gz)|inprogress/(?:latest(?:-attempt)?\\.json|sweep_\\d{4}(?:\\.json|/rev_[0-9a-f]{64}/(?:summary\\.json|leaderboard\\.csv|qualified_ask_bid_v1\\.csv|manifest\\.jsonl))))|oa203/windows/oa203-windows-v1/(?:weekly_cheapest/weekly-\\d{4}-W\\d{2}-cheapest|weekly_fixed/weekly-\\d{4}-W\\d{2}-fixed|weekly_cheapest_best_exit/weekly-\\d{4}-W\\d{2}-cheapest_best_exit|overnight/overnight-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2}|sessions_2/sessions2-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2}|sessions_3/sessions3-\\d{4}-\\d{2}-\\d{2}_\\d{4}-\\d{2}-\\d{2})/(?:summary\\.json|rankings\\.csv|paths\\.csv\\.gz|latest\\.json))$');
 
 class DataError extends Error {
   constructor(code, message, key = null) { super(message); this.code = code; this.key = key; }
@@ -24,7 +25,16 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function permitted(key) {
   if (typeof key !== 'string' || !KEY.test(key)) throw new DataError('invalid_reference', 'Artifact is outside the market allowlist.');
 }
-function publicRead(key, remaining, timeout, request = https.get) {
+function revisionReceipt(headers) {
+  const etag = headers.etag, modified = headers['last-modified'];
+  if (typeof etag !== 'string' || !/^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag) ||
+      typeof modified !== 'string') return null;
+  const stamp = Date.parse(modified);
+  if (!Number.isFinite(stamp) || new Date(stamp).toUTCString() !== modified) return null;
+  // The origin date is precise to seconds, rounded down.
+  return {etag, availableAt:stamp + 1000};
+}
+function publicRead(key, remaining, timeout, request = https.get, onResponse = () => {}) {
   permitted(key);
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -36,6 +46,7 @@ function publicRead(key, remaining, timeout, request = https.get) {
         res.destroy(); req.destroy();
         return;
       }
+      onResponse(res.headers || {});
       let size = 0; const chunks = [];
       res.on('data', chunk => {
         size += chunk.length;
@@ -51,6 +62,46 @@ function publicRead(key, remaining, timeout, request = https.get) {
   });
 }
 
+// A weekly detail read verifies the whole compressed member, but returns only
+// the header and matching row to the ordinary CSV and pinned-detail checks.
+async function selectWeeklyPath(raw, symbol, key, deadline, remainingBytes) {
+  const gunzip = zlib.createGunzip();
+  gunzip.end(raw);
+  const selected = [];
+  const prefix = Buffer.from(symbol + ',');
+  let tail = Buffer.alloc(0), expanded = 0, first = true;
+  function visit(line) {
+    if (line.length > PATH_LINE_BYTES) throw new DataError('excessive_response', 'Weekly path line is too long.', key);
+    if (first || line.subarray(0, prefix.length).equals(prefix)) {
+      if (selected.length === 2) throw new DataError('incompatible_schema', 'Duplicate weekly contract path.', key);
+      selected.push(line.toString('utf8'));
+    }
+    first = false;
+  }
+  try {
+    for await (const chunk of gunzip) {
+      expanded += chunk.length;
+      if (expanded > remainingBytes) throw new DataError('excessive_or_malformed_artifact', 'Weekly path expansion exceeds its limit.', key);
+      if (Date.now() >= deadline) throw new DataError('upstream_timeout', 'Weekly path scan deadline exceeded.', key);
+      const block = tail.length ? Buffer.concat([tail, chunk]) : chunk;
+      let start = 0, end;
+      while ((end = block.indexOf(10, start)) !== -1) {
+        visit(block.subarray(start, end));
+        start = end + 1;
+      }
+      tail = block.subarray(start);
+      if (tail.length > PATH_LINE_BYTES) throw new DataError('excessive_response', 'Weekly path line is too long.', key);
+    }
+    if (tail.length) visit(tail);
+  } catch (error) {
+    if (error instanceof DataError) throw error;
+    throw new DataError('excessive_or_malformed_artifact', 'Weekly paths gzip is damaged.', key);
+  } finally {
+    gunzip.destroy();
+  }
+  return {text: selected.join('\n') + '\n', expanded};
+}
+
 class Source {
   constructor({ directory = null, publicAccess = false, read = null } = {}) {
     if (!directory && !publicAccess && !read) throw new Error('Choose an explicit fixture directory or --public.');
@@ -61,14 +112,21 @@ class Source {
   query() {
     const started = Date.now(); let requests = 0, bytes = 0;
     const evidence = [];
-    const get = async key => {
+    let cutoff = null;
+    const get = async (key, pathSymbol = null) => {
       permitted(key);
       if (++requests > LIMITS.requests) throw new DataError('excessive_request', 'Query request limit exceeded.', key);
       const remainingMs = LIMITS.timeout_ms - (Date.now() - started);
       if (remainingMs <= 0) throw new DataError('upstream_timeout', 'Query deadline exceeded.', key);
       const cap = Math.min(LIMITS.artifact_bytes, LIMITS.query_bytes - bytes);
-      let raw;
-      if (this.reader) raw = Buffer.from(await this.reader(key));
+      let raw, availableAt = null, entityTag = null;
+      if (this.reader) {
+        const result = await this.reader(key);
+        if (result && Object.hasOwn(result, 'bytes') && Object.hasOwn(result, 'availableAt')) {
+          raw = Buffer.from(result.bytes);
+          availableAt = result.availableAt;
+        } else raw = Buffer.from(result);
+      }
       else if (this.directory) {
         try {
           const root = await fs.realpath(this.directory);
@@ -86,13 +144,28 @@ class Source {
           if (e instanceof DataError) throw e;
           throw new DataError(e.code === 'ENOENT' ? 'missing_artifact' : 'upstream_failure', 'Local artifact could not be read.', key);
         }
-      } else raw = await publicRead(key, cap, remainingMs);
+      } else raw = await publicRead(key, cap, remainingMs, https.get, headers => {
+        const receipt = revisionReceipt(headers);
+        if (receipt) {availableAt = receipt.availableAt; entityTag = receipt.etag;}
+      });
       if (raw.length > cap) throw new DataError('excessive_response', 'Artifact or query byte limit exceeded.', key);
       bytes += raw.length;
+      if (cutoff !== null && (!Number.isSafeInteger(availableAt) || availableAt < 1e12 || availableAt > cutoff))
+        throw new DataError('unavailable_at_cursor', 'This retained revision has no qualifying availability evidence at the requested cutoff.', key);
       const entry = { locator: key, link: this.mode === 'public_anonymous' ? ORIGIN + '/' + key : null,
         retrieval_time: new Date().toISOString(), bytes: raw.length, retrieved_sha256: hash(raw),
         checksum_verification: 'not_verified_against_producer' };
+      if (cutoff !== null) {
+        entry.available_by_ms = availableAt;
+        if (entityTag !== null) entry.etag = entityTag;
+        entry.availability_basis = this.reader ? 'injected_fixture_receipt' : 'origin_last_modified_upper_bound';
+      }
       evidence.push(entry);
+      if (pathSymbol !== null && key.startsWith('oa203/windows/oa203-windows-v1/weekly_') && key.endsWith('/paths.csv.gz')) {
+        const path = await selectWeeklyPath(raw, pathSymbol, key, started + LIMITS.timeout_ms, LIMITS.query_bytes - bytes);
+        bytes += path.expanded;
+        return path.text;
+      }
       if (key.endsWith('.gz')) {
         try { raw = zlib.gunzipSync(raw, { maxOutputLength: Math.min(LIMITS.expanded_artifact_bytes, LIMITS.query_bytes - bytes) }); }
         catch { throw new DataError('excessive_or_malformed_artifact', 'Gzip is damaged or exceeds the expanded byte limit.', key); }
@@ -101,7 +174,7 @@ class Source {
       }
       return raw.toString('utf8');
     };
-    return { evidence, get, json: async key => {
+    return { evidence, get, atCutoff(value) { cutoff = value; }, json: async key => {
       const text = await get(key);
       try { return JSON.parse(text); }
       catch { throw new DataError('incompatible_schema', 'Artifact is not valid JSON.', key); }
@@ -114,6 +187,6 @@ class Source {
 function errorRecord(e, key = null) {
   return { code: e.code || 'incompatible_schema', message: e instanceof DataError ? e.message : 'Artifact does not satisfy the supported contract.', locator: e.key || key };
 }
-module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, errorRecord };
+module.exports = { Source, DataError, LIMITS, ORIGIN, UUID, hash, permitted, publicRead, revisionReceipt, errorRecord };
 
 

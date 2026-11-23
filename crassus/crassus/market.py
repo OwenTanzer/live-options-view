@@ -204,7 +204,7 @@ def _snapshot_key(payload: dict[str, Any]) -> tuple[str | None, str]:
     key = payload["snapshot_key"]
     if not isinstance(key, str):
         return None, "invalid"
-    match = re.fullmatch(r"intraday/([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
+    match = re.fullmatch(r"intraday/(?:spy/|ibit/|slv/|dram/)?([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
     if match is None:
         return None, "invalid"
     date_part, time_part = match.groups()
@@ -386,7 +386,8 @@ class SnapshotReader:
     snapshot unless explicitly forced.
     """
 
-    def __init__(self, url: str = SNAPSHOT_URL, min_interval_s: float = 60.0, timeout_s: float = 15.0):
+    def __init__(self, url: str = SNAPSHOT_URL, min_interval_s: float = 60.0, timeout_s: float = 15.0, *, expected_root: str | None = None):
+        self.expected_root = expected_root
         self.url = url
         self.min_interval_s = min_interval_s
         self.timeout_s = timeout_s
@@ -402,7 +403,13 @@ class SnapshotReader:
 
         resp = requests.get(self.url, timeout=self.timeout_s)
         resp.raise_for_status()
-        snapshot = MarketSnapshot.from_payload(self.url, json.loads(resp.content), resp.content)
+        payload = json.loads(resp.content)
+        if self.expected_root:
+            root = self.expected_root
+            if (payload.get("symbol") != root or (payload.get("underlying_market") or {}).get("symbol", root) != root
+                    or not str(payload.get("snapshot_key", "")).startswith(f"intraday/{root.lower()}/")):
+                raise ValueError(f"Mismatched {root} snapshot identity")
+        snapshot = MarketSnapshot.from_payload(self.url, payload, resp.content)
         self._cached, self._cached_at = snapshot, _time.monotonic()
         return snapshot
 

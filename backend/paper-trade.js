@@ -1,3 +1,6 @@
+import { predictionQuote } from './prediction.js';
+import { fetchBtc, heldBtc, exactBtcQuote } from './btc-options.js';
+import { btcAllowed } from './btc-owner-link.js';
 // backend/paper-trade.js (B4) -- paper trading: the /api/paper-trade route,
 // the largest single function in the Worker (304 lines). Moved verbatim
 // from worker.js; the router in worker.js still owns the route table. It
@@ -11,6 +14,7 @@ import {
   requireSession, withUserRecord,
 } from './common.js';
 import { fetchLiveQuotes } from './browser-data.js';
+import { operationalBucket } from './operational-storage.js';
 import {
   exactExecutionQuote, executionIntentMatches, executionPriceForOrder,
   executionReservationExpired, existingExecutionResponse,
@@ -38,6 +42,18 @@ export async function handlePaperTrade(request, env) {
   const originError = checkOrigin(request);
   if (originError) return originError;
 
+  // Execution records share a bucket with the capture producer. Every read and
+  // conditional write below goes through the operational boundary, so a defect
+  // in key construction refuses instead of overwriting a published artifact.
+  // A missing binding keeps the endpoint's existing 503 rather than surfacing
+  // as an unhandled Worker error.
+  let executionStore;
+  try {
+    executionStore = operationalBucket(env, 'paper_trade');
+  } catch {
+    return jsonResponse({ error: 'Execution state unavailable' }, 503);
+  }
+
   const contentLength = Number(request.headers.get('Content-Length') || 0);
   if (contentLength > MAX_BODY_BYTES) {
     return new Response('Payload too large', { status: 413 });
@@ -61,6 +77,12 @@ export async function handlePaperTrade(request, env) {
     return new Response(validationError, { status: 400 });
   }
 
+  // The quote source belongs to the approved subscriber. A held position or
+  // retried request cannot grant another account access to that source.
+  if (body.instrument_type === 'futures_option' && !await btcAllowed(env, session, request)) {
+    return jsonResponse({ error: 'BTC options access not enabled' }, 403);
+  }
+
   const executionId = body.execution_request_id;
   const key = `paper-trades/requests/${executionId}.json`;
   let reserved;
@@ -76,7 +98,7 @@ export async function handlePaperTrade(request, env) {
       const closure = session.record.closure_execution;
       if (session.record.account_closed && closure?.execution_request_id === executionId) {
         try {
-          const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, closure, etag);
+          const recovered = await finalizeExecutionRequest(executionStore, key, closure, etag);
           return existingExecutionResponse(recovered.outcome, body);
         } catch (error) {
           return jsonResponse({ error: 'Closed-account rejection could not be recovered' }, 503);
@@ -86,7 +108,7 @@ export async function handlePaperTrade(request, env) {
       if (!appliedTrade) {
         if (session.record.account_closed) {
           try {
-            const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key,
+            const recovered = await finalizeExecutionRequest(executionStore, key,
               { ...storedOutcome, status: 'rejected', http_status: 403,
                 error: 'Account closed', account_closed: true }, etag);
             return existingExecutionResponse(recovered.outcome, body);
@@ -101,7 +123,7 @@ export async function handlePaperTrade(request, env) {
         }, 409);
       }
       try {
-        const recovered = await finalizeExecutionRequest(env.PAPER_TRADES, key, appliedTrade, etag);
+        const recovered = await finalizeExecutionRequest(executionStore, key, appliedTrade, etag);
         storedOutcome = recovered.outcome;
       } catch (error) {
         return jsonResponse({ error: 'Pending execution could not be recovered' }, 503);
@@ -115,7 +137,7 @@ export async function handlePaperTrade(request, env) {
   };
 
   try {
-    const existing = await env.PAPER_TRADES.get(key);
+    const existing = await executionStore.get(key);
     if (existing) {
       const storedOutcome = await existing.json();
       const appliedTrade = session.record.trades.find(t => t.execution_request_id === executionId);
@@ -131,7 +153,7 @@ export async function handlePaperTrade(request, env) {
       }
 
       const renewed = await renewExecutionReservation(
-        env.PAPER_TRADES,
+        executionStore,
         key,
         storedOutcome,
         existing.etag,
@@ -149,17 +171,29 @@ export async function handlePaperTrade(request, env) {
       closure_reason: session.record.closure_reason }, 403);
   }
 
+  const btc = body.instrument_type === 'futures_option';
+  if (btc && body.side === 'buy' && (!await btcAllowed(env, session, request) || env.BTC_OPTIONS_ENTRIES !== '1')) {
+    return jsonResponse({ error: 'BTC new entries disabled' }, 403);
+  }
+  if (btc && body.side === 'sell' && !heldBtc(session.record).some(c => c.contract_key === body.sym)) {
+    return jsonResponse({ error: 'No held BTC contract' }, 400);
+  }
   let quotePayload;
+  let eventQuote;
   try {
-    const quoteResponse = await fetchLiveQuotes([body.sym], env);
-    if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
-    quotePayload = await quoteResponse.json();
+    if (body.instrument_type === 'prediction') {
+      eventQuote = await predictionQuote(env, body);
+    } else {
+      const quoteResponse = await (btc ? fetchBtc(env, session.record, [body.sym]) : fetchLiveQuotes([body.sym], env));
+      if (!quoteResponse.ok) return quoteProviderErrorResponse(quoteResponse);
+      quotePayload = await quoteResponse.json();
+    }
   } catch (error) {
     return jsonResponse({ error: 'Fresh quote unavailable' }, 503);
   }
   const quoteReceivedAt = new Date();
 
-  const quoteResult = exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
+  const quoteResult = eventQuote ?? exactExecutionQuote(quotePayload, body, quoteReceivedAt.getTime());
   if (quoteResult.error) {
     return jsonResponse({ error: quoteResult.error }, quoteResult.status);
   }
@@ -167,6 +201,7 @@ export async function handlePaperTrade(request, env) {
   const executedAt = new Date();
   const priceResult = executionPriceForOrder(quoteResult, body);
   const common = {
+    ...(quoteResult.prediction ? { prediction: quoteResult.prediction, fee_units: quoteResult.fee_units } : {}),
     execution_id: executionId,
     execution_request_id: executionId,
     ts: executedAt.toISOString(),
@@ -175,7 +210,7 @@ export async function handlePaperTrade(request, env) {
     bid_ts: quoteResult.bidTs,
     ask_ts: quoteResult.askTs,
     sym: body.sym,
-    underlying: /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
+    underlying: quoteResult.underlying ?? /^([A-Z]+)\d{6}[CP]\d{8}$/.exec(body.sym)?.[1] ?? body.sym,
     instrument_type: body.instrument_type ?? 'option',
     multiplier: quoteResult.multiplier,
     strike: quoteResult.strike,
@@ -189,6 +224,9 @@ export async function handlePaperTrade(request, env) {
     bid: quoteResult.bid,
     ask: quoteResult.ask,
     username: session.username,
+    ...(btc ? { contract: quoteResult.contract, source_quote: quoteResult.source_quote,
+      quote_clock_basis: quoteResult.quote_clock_basis, quote_source_ts: quoteResult.quote_source_ts,
+      fees: quoteResult.fees, fee_model: quoteResult.fee_model, underlying: quoteResult.contract.product } : {}),
   };
   const candidate = Object.freeze(priceResult.error
     ? { ...common, error: priceResult.error, status: 'rejected', http_status: 409 }
@@ -207,7 +245,7 @@ export async function handlePaperTrade(request, env) {
       ts: executedAt.toISOString(),
     });
     try {
-      reserved = await reserveExecutionRequest(env.PAPER_TRADES, key, reservation);
+      reserved = await reserveExecutionRequest(executionStore, key, reservation);
     } catch (error) {
       return jsonResponse({ error: 'Execution could not be reserved' }, 503);
     }
@@ -216,7 +254,7 @@ export async function handlePaperTrade(request, env) {
 
   if (candidate.status === 'rejected') {
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, candidate, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, candidate, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Execution rejection could not be recorded' }, 503);
@@ -233,6 +271,11 @@ export async function handlePaperTrade(request, env) {
   let cashDelta = trade.side === 'buy'
     ? -(trade.price * trade.qty * multiplier)
     : (trade.price * trade.qty * multiplier);
+  if (trade.instrument_type === 'prediction') {
+    const units = quoteResult.price_units * trade.qty;
+    cashDelta = ((trade.side === 'buy' ? -units : units) - trade.fee_units) / 10000;
+  }
+  if (btc) { cashDelta -= trade.fees; trade = { ...trade, cash_delta: cashDelta }; }
   // Financing is charged only when closing a leveraged share position. The
   // loan is the negative cash created by the entry; one annual rate and the
   // elapsed calendar days are enough for this single-position paper bot.
@@ -256,7 +299,7 @@ export async function handlePaperTrade(request, env) {
 
   try {
     const fenced = await renewExecutionReservation(
-      env.PAPER_TRADES,
+      executionStore,
       key,
       reserved.outcome,
       reserved.etag,
@@ -268,12 +311,21 @@ export async function handlePaperTrade(request, env) {
     return jsonResponse({ error: 'Execution lease could not be refreshed' }, 503);
   }
 
+  if (btc && !await btcAllowed(env, session, request)) return jsonResponse({ error: 'BTC data access revoked' }, 403);
   const kvOutcome = await withUserRecord(env, session.username, (record) => {
     const existingTrade = record.trades.find(t => t.execution_request_id === executionId);
     if (existingTrade) {
       return { result: { trade: existingTrade, balance_cash: record.balance_cash } };
     }
+    if (btc) {
+      if (exactBtcQuote(quotePayload, body, Date.now()).error) return { error: 'quote_expired' };
+      const book = computeBookFromTrades(record.trades);
+      const held = book[trade.sym];
+      if (trade.side === 'buy' && !held?.pos && Object.values(book).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).length >= 64) return { error: 'position_budget' };
+      if (held?.pos && JSON.stringify(held.contract) !== JSON.stringify(trade.contract)) return { error: 'metadata_changed' };
+    }
     if (record.account_closed) return { error: 'account_closed' };
+    if (trade.instrument_type === 'prediction' && (Date.now() >= Date.parse(trade.prediction.rules.cutoff) || Date.now() - Date.parse(trade.quote_ts) > 15000)) return { error: 'stale_prediction' };
     if (trade.side === 'buy' && (record.balance_cash < 0 || -cashDelta > record.balance_cash)) {
       const marginLimit = Number(record.paper_margin_limit ?? 1);
       const book = computeBookFromTrades(record.trades);
@@ -292,17 +344,26 @@ export async function handlePaperTrade(request, env) {
         return { error: 'insufficient_balance' };
       }
     }
-    if ((trade.instrument_type ?? 'option') === 'share' && trade.side === 'sell') {
+    if (['share', 'prediction', 'futures_option'].includes(trade.instrument_type) && trade.side === 'sell') {
       const held = computeBookFromTrades(record.trades)[trade.sym]?.pos ?? 0;
       if (held < trade.qty) return { error: 'insufficient_position' };
     }
-    const balance_cash = record.balance_cash + cashDelta;
+    const balance_cash = trade.instrument_type === 'prediction'
+      ? (Math.round(record.balance_cash * 10000) + Math.round(cashDelta * 10000)) / 10000
+      : record.balance_cash + cashDelta;
     return {
       record: { ...record, balance_cash, trades: [...record.trades, trade] },
       result: { trade, balance_cash },
     };
   });
 
+  if (['quote_expired', 'metadata_changed', 'position_budget'].includes(kvOutcome.error)) {
+    const rejection = { ...common, error: kvOutcome.error, status: 'rejected', http_status: 409 };
+    try {
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
+      return responseForStoredOutcome(finalized.outcome, finalized.etag);
+    } catch { return jsonResponse({ error: 'Rejection could not be recorded' }, 503); }
+  }
   if (kvOutcome.error === 'insufficient_balance' || kvOutcome.result?.balance_rejection) {
     const rejection = Object.freeze(kvOutcome.result?.balance_rejection ?? {
       ...common,
@@ -311,7 +372,7 @@ export async function handlePaperTrade(request, env) {
       http_status: 400,
     });
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Balance rejection could not be recorded' }, 503);
@@ -321,21 +382,21 @@ export async function handlePaperTrade(request, env) {
     const rejection = { ...common, error: 'Account closed', account_closed: true,
       status: 'rejected', http_status: 403 };
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Account closure rejection could not be recorded' }, 503);
     }
   }
-  if (kvOutcome.error === 'insufficient_position') {
+  if (kvOutcome.error === 'insufficient_position' || kvOutcome.error === 'stale_prediction') {
     const rejection = Object.freeze({
       ...common,
-      error: 'Cannot sell more shares than are held',
+      error: kvOutcome.error === 'stale_prediction' ? 'Prediction book expired before execution' : 'Cannot sell more units than are held',
       status: 'rejected',
       http_status: 400,
     });
     try {
-      const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, rejection, reserved.etag);
+      const finalized = await finalizeExecutionRequest(executionStore, key, rejection, reserved.etag);
       return responseForStoredOutcome(finalized.outcome, finalized.etag);
     } catch (error) {
       return jsonResponse({ error: 'Position rejection could not be recorded' }, 503);
@@ -346,7 +407,7 @@ export async function handlePaperTrade(request, env) {
   }
 
   try {
-    const finalized = await finalizeExecutionRequest(env.PAPER_TRADES, key, trade, reserved.etag);
+    const finalized = await finalizeExecutionRequest(executionStore, key, trade, reserved.etag);
     if (finalized.outcome.status !== 'filled') {
       return jsonResponse({ error: 'Execution finalization conflicted' }, 503);
     }

@@ -11,6 +11,7 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'site', 'index.html'), 'utf8');
@@ -217,7 +218,114 @@ assert.equal(freshShareQuote({ ...shareTickers.get('AAPL'), bid_ts: '2026-07-30T
     assert.equal(svc.get('MINE').mid, 1.1, 'clearing bot interest leaves the user book intact');
   }
 
-  console.log('PASS live quote service polling, interests, health, and deduplication');
+  // ── A closed quote lane is only closed on explicit producer evidence ────────
+  // The producer reports `offline` in three different situations: no session has
+  // started yet, a session died (auth circuit, token refresh, unhandled
+  // exception), and the deliberate end of a trading session. Only the last one
+  // may be shown as closed; hiding a trading-hours outage behind that label
+  // would be worse than a red badge. These cases run against a real HTTP
+  // server, so the bodies, statuses and Retry-After headers are the wire ones.
+  {
+    const NOW = Date.parse('2026-11-10T23:30:00Z');
+    const bodies = {
+      '/closed': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'offline', session: 'session_closed', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/waiting': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'offline', session: 'waiting_for_session', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/failed': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'offline', session: 'session_failed', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/uninitialized': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'offline', session: 'uninitialized', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/connecting': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'connecting', session: 'open', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/legacy': { status: 503, retry: '5', body: {
+        error: 'Live quote feed unavailable',
+        health: { state: 'offline', last_quote_at: null, server_ts: '2026-11-10T23:30:00Z' } } },
+      '/live': { status: 200, retry: null, body: {
+        server_ts: '2026-11-10T23:30:00Z',
+        health: { state: 'live', session: 'open', server_ts: '2026-11-10T23:30:00Z' },
+        quotes: [{ symbol: 'QQQ261110C00677000', bid: 1, ask: 1.2, strike: 677,
+          type: 'call', exp: '2026-11-10', quote_ts: '2026-11-10T23:30:00Z',
+          bid_ts: '2026-11-10T23:30:00Z', ask_ts: '2026-11-10T23:30:00Z' }] } },
+    };
+    const server = http.createServer((req, res) => {
+      const spec = bodies[new URL(req.url, 'http://127.0.0.1').pathname] || bodies['/legacy'];
+      const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+      if (spec.retry) headers['Retry-After'] = spec.retry;
+      res.writeHead(spec.status, headers);
+      res.end(JSON.stringify(spec.body));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const once = async (route) => {
+      const svc = new LiveQuoteService();
+      svc.setVisibleContracts(['QQQ261110C00677000']);
+      const poller = new LiveQuotePoller(svc, {
+        endpoint: `${origin}${route}`, nowFn: () => NOW, randomFn: () => 0.5, isHidden: () => false,
+      });
+      poller.running = true;
+      await poller.poll();
+      const health = { ...poller.health };
+      poller.stop();
+      return health;
+    };
+
+    const closed = await once('/closed');
+    assert.equal(closed.state, 'closed', 'a deliberate session end is the only thing shown as closed');
+    assert.equal(closed.sessionState, 'session_closed');
+    assert.equal(closed.serviceState, 'offline');
+    assert.equal(Date.parse(closed.retryAt) - NOW, 60_000, 'a closed lane is probed once a minute');
+    assert.equal(closed.message, 'The option quote feed is closed for this session');
+
+    const failed = await once('/failed');
+    assert.equal(failed.state, 'unavailable', 'a session failure is a failure, not a closed lane');
+    assert.equal(failed.sessionState, 'session_failed');
+    assert.equal(Date.parse(failed.retryAt) - NOW, 5_000, 'the producer Retry-After still governs the retry');
+
+    // A cold restart after hours sits in the scheduler's deliberate wait for the
+    // next session: closed, and labelled as waiting rather than as an outage.
+    const waiting = await once('/waiting');
+    assert.equal(waiting.state, 'closed', 'a deliberate wait for the next session is a closed lane');
+    assert.equal(waiting.sessionState, 'waiting_for_session');
+    assert.equal(Date.parse(waiting.retryAt) - NOW, 60_000, 'and it is probed once a minute');
+
+    const uninitialized = await once('/uninitialized');
+    assert.equal(uninitialized.state, 'unavailable', 'a collector that has not opened a session is not "closed"');
+
+    const connecting = await once('/connecting');
+    assert.equal(connecting.state, 'unavailable', 'an in-session feed outage stays a failure');
+    assert.equal(connecting.serviceState, 'connecting');
+
+    const legacy = await once('/legacy');
+    assert.equal(legacy.state, 'unavailable', 'an older producer with no session field is never assumed closed');
+
+    // Repeated failures still escalate, so a real outage is visible and backed off.
+    {
+      const svc = new LiveQuoteService();
+      svc.setVisibleContracts(['QQQ261110C00677000']);
+      const poller = new LiveQuotePoller(svc, {
+        endpoint: `${origin}/failed`, nowFn: () => NOW, randomFn: () => 0.5, isHidden: () => false,
+      });
+      poller.running = true;
+      await poller.poll();
+      await poller.poll();
+      assert.equal(poller.health.state, 'backing-off', 'a failing lane still walks the backoff ladder');
+      assert.equal(poller.failureCount, 2);
+      poller.stop();
+    }
+
+    const live = await once('/live');
+    assert.equal(live.state, 'live', 'a real answer clears the lane');
+    assert.equal(live.sessionState, 'open');
+    await new Promise(resolve => server.close(resolve));
+  }
+
+  console.log('PASS live quote service polling, interests, health, closed-vs-failed lane handling over real HTTP, and deduplication');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

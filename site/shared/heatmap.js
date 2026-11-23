@@ -78,14 +78,40 @@ function flowHtml(delta) {
 // Shared by buildHeatmapRows (what's rendered) and the live app's quote
 // interest tracking (what LiveQuoteService keeps around), so the two windows
 // can't drift out of sync with each other.
+//
+// The window is selected along the snapshot's OWN strike ladder (#219). It
+// used to be synthesized as `atm + offset`, which silently assumed a
+// contiguous $1 ladder. QQQ and SPY happen to be $1 apart, so nothing showed;
+// IBIT publishes whole-dollar strikes at 30–39 and 51–59 and half-dollar
+// strikes at 39.5–50, so a synthetic grid invented strikes that were never
+// published. Those cells rendered empty — a 19:38Z render centered on 41.5
+// produced 30 phantom strikes out of 41 — and the quote request asked for the
+// invented contracts while skipping real ones. Selecting by ladder position
+// keeps `strikes` a subset of what the producer actually published, and
+// `offset` becomes the distance in ladder steps from the ATM strike (identical
+// to the old dollar offset on a $1 ladder, so OI calibration is unchanged).
 function computeAtmWindow(rows, spot, display = DISPLAY) {
   const strikeValues = [...new Set((rows || []).map(r => +r.Strike).filter(Number.isFinite))].sort((a, b) => a - b);
-  if (!strikeValues.length || spot == null) return { atm: null, offsets: [], strikes: new Set() };
-  const atm = strikeValues.reduce((best, s) => Math.abs(s - spot) < Math.abs(best - spot) ? s : best, strikeValues[0]);
-  const offsets = [];
-  for (let o = display; o >= -display; o--) offsets.push(o);
-  const strikes = new Set(offsets.map(o => atm + o));
-  return { atm, offsets, strikes };
+  if (!strikeValues.length || spot == null) {
+    return { atm: null, atmIndex: -1, offsets: [], strikes: new Set(), window: [] };
+  }
+  let atmIndex = 0;
+  for (let i = 1; i < strikeValues.length; i++) {
+    if (Math.abs(strikeValues[i] - spot) < Math.abs(strikeValues[atmIndex] - spot)) atmIndex = i;
+  }
+  const window = [];
+  for (let o = display; o >= -display; o--) {
+    const i = atmIndex + o;
+    if (i < 0 || i >= strikeValues.length) continue;
+    window.push({ strike: strikeValues[i], offset: o });
+  }
+  return {
+    atm: strikeValues[atmIndex],
+    atmIndex,
+    offsets: window.map(entry => entry.offset),
+    strikes: new Set(window.map(entry => entry.strike)),
+    window,
+  };
 }
 
 // ── shared heatmap row builder ─────────────────────────────────────────────────
@@ -99,7 +125,7 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
   const { getPosition, getQuote, onCellClick } = opts;
   const { rows, underlying_price: spot, tier } = data;
   tbody.innerHTML = '';
-  if (!spot || !rows || !rows.length) return false;
+  if (!rows?.length || (!spot && !opts.showUnanchored)) return false;
 
   // Index rows by strike+type
   const byStrike = {};
@@ -109,18 +135,27 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     byStrike[key][r.Type] = r;
   }
 
-  const { atm, offsets } = computeAtmWindow(rows, spot);
-  if (atm == null) return false;
+  // A replay publication can retain quotes and strikes after withdrawing its spot.
+  const window = spot ? computeAtmWindow(rows, spot).window :
+    Object.keys(byStrike).map(Number).filter(Number.isFinite).sort((a,b)=>b-a)
+      .map(strike=>({strike,offset:null}));
 
-  for (const offset of offsets) {
-    const strike = atm + offset;
+  // A supplied opening reference controls OI only. Current strikes, ATM,
+  // volume, quotes and option selection still use the displayed snapshot.
+  const frozen=Object.hasOwn(opts,'openingOi');
+  const opening=new Map((opts.openingOi?.levels??[]).map(level=>[level.strike,level]));
+  // One row per PUBLISHED strike in the window, highest first. No row is
+  // emitted for a strike the snapshot never carried (#219), so the table can
+  // no longer show a strike with two empty cells beside it.
+  for (const { strike, offset } of window) {
     const strKey = `${strike}`;
     const callRow = byStrike[strKey]?.call;
     const putRow  = byStrike[strKey]?.put;
     const isAtm   = offset === 0;
 
-    const callOI    = parseInt(callRow?.OpenInterest ?? 0) || 0;
-    const putOI     = parseInt(putRow?.OpenInterest  ?? 0) || 0;
+    const level=opening.get(strike);
+    const callOI = callRow?.OpenInterest == null ? null : parseInt(callRow.OpenInterest);
+    const putOI = putRow?.OpenInterest == null ? null : parseInt(putRow.OpenInterest);
     const callVol   = parseInt(callRow?.Volume    ?? 0) || 0;
     const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
     const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
@@ -132,19 +167,20 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     const putBid    = getQuote ? (putQuote?.bid ?? null) : (putRow?.Bid ?? null);
     const putAsk    = getQuote ? (putQuote?.ask ?? null) : (putRow?.Ask ?? null);
 
-    const ct = getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
-    const pt = getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
-    const cb = oiBucket(callOI, ct);
-    const pb = oiBucket(putOI,  pt);
+    const ct = frozen ? null : getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
+    const pt = frozen ? null : getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
+    const cb = frozen ? (level?.call??0) : offset===null ? 0 : oiBucket(callOI??0, ct);
+    const pb = frozen ? (level?.put??0) : offset===null ? 0 : oiBucket(putOI??0, pt);
 
     const tr = document.createElement('tr');
     if (isAtm) tr.classList.add('atm-row');
 
     // Call cell
     const callTd = document.createElement('td');
+    if(frozen)callTd.title=level?.callOI!=null?'Snapshot OI; color uses opening reference OI '+level.callOI:'Snapshot OI; opening color unavailable';
     callTd.className = `call-cell c${cb}`;
     const callPos = getPosition ? (getPosition(callRow?.OptionSymbol) || 0) : 0;
-    callTd.innerHTML = fmtOI(callOI) +
+    callTd.innerHTML = (frozen && !Number.isFinite(callOI)?'—':fmtOI(callOI)) +
       quoteHtml(callBid, callAsk) +
       (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
       flowHtml(callDelta) +
@@ -159,14 +195,18 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     const strikeTd = document.createElement('td');
     strikeTd.className = 'strike-cell' + (isAtm ? ' atm' : '');
     strikeTd.textContent = isAtm ? `${strike} ★` : `${strike}`;
-    strikeTd.title = `${offset > 0 ? '+' : ''}${offset} from ATM`;
+    // Ladder steps, not dollars: on a mixed ladder (IBIT) neighbouring rows can
+    // be $0.50 or $1 apart, so a dollar claim here would be a guess.
+    strikeTd.title = offset===null ? 'Archived strike' : isAtm ? 'ATM strike'
+      : `${Math.abs(offset)} ${Math.abs(offset) === 1 ? 'strike' : 'strikes'} ${offset > 0 ? 'above' : 'below'} ATM`;
     tr.appendChild(strikeTd);
 
     // Put cell
     const putTd = document.createElement('td');
+    if(frozen)putTd.title=level?.putOI!=null?'Snapshot OI; color uses opening reference OI '+level.putOI:'Snapshot OI; opening color unavailable';
     putTd.className = `put-cell p${pb}`;
     const putPos = getPosition ? (getPosition(putRow?.OptionSymbol) || 0) : 0;
-    putTd.innerHTML = fmtOI(putOI) +
+    putTd.innerHTML = (frozen && !Number.isFinite(putOI)?'—':fmtOI(putOI)) +
       quoteHtml(putBid, putAsk) +
       (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
       flowHtml(putDelta) +

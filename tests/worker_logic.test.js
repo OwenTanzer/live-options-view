@@ -17,6 +17,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     netPositions, handleBots, handleBotMetadata, settleAllBots,
     default: worker, BOT_INDEX_KEY, updateBotIndex, handleBotIndexReconcile, repairLegacyBotMarker,
   } = await import('../backend/index.js');
+  const { withD1 } = await import('./helpers/test_env.mjs');
+  const { createStorage } = await import('../backend/storage.js');
 
   function indexBucket(names = [], ready = true) {
     let value = JSON.stringify({ schema_version: 1, ready, members: names.sort() });
@@ -45,6 +47,23 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
   }
   const indexedNames = entries => Object.keys(entries).filter(k => k.startsWith('bot:')).map(k => k.slice(4));
 
+  // Synchronous read view of D1 keyed like the old KV store, for assertions.
+  // Writes go through storage so uniqueness/versioning is not bypassed.
+  const d1Store = env => ({
+    get(key) {
+      if (key.startsWith('user:')) {
+        const row = env.DB.raw('SELECT record FROM users WHERE username = ?', key.slice(5))[0];
+        return row ? row.record : null;
+      }
+      if (key.startsWith('bot:')) {
+        const row = env.DB.raw('SELECT username FROM bot_markers WHERE username = ?', key.slice(4))[0];
+        return row ? JSON.stringify({ username: row.username }) : null;
+      }
+      return null;
+    },
+    has(key) { return this.get(key) !== null; },
+  });
+
   // Membership is shared across Worker instances; CAS retries preserve both writers.
   {
     const env = { PAPER_TRADES: indexBucket([], false) };
@@ -67,85 +86,64 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     } }, ['bot_a'], { sleeper: async () => {} }), /conflicted/);
   }
 
-  // Full pagination before publish; include orphaned bots, exclude humans, and
-  // merge concurrent registrations rather than overwrite the newer membership.
+  // Reconciliation publishes only a complete scan, and an interrupted scan
+  // leaves the index unready. D1 pagination is internal to storage now, so the
+  // failure worth injecting is "the scan could not finish".
   {
-    const records = {
-      'user:old_bot': JSON.stringify({ username: 'old_bot', is_bot: true, trades: [] }),
-      'user:orphan_bot': JSON.stringify({ username: 'orphan_bot', is_bot: true, account_closed: true, trades: [] }),
-      'user:human': JSON.stringify({ username: 'human', trades: [] }),
-      'user:new_bot': JSON.stringify({ username: 'new_bot', is_bot: true, trades: [] }),
-    };
-    let listCalls = 0, failPage = true;
-    const env = { BOT_REGISTRATION_KEY: 'operator', PAPER_TRADES: indexBucket([], false), USERS: {
-      get: async key => records[key] ?? null,
-      list: async ({ prefix, cursor }) => {
-        assert.equal(prefix, 'user:'); listCalls++;
-        if (!cursor) return { keys: [{ name: 'user:old_bot' }], list_complete: false, cursor: 'page2' };
-        if (failPage) throw new Error('interrupted migration');
-        await updateBotIndex(env, ['new_bot']);
-        return { keys: [{ name: 'user:orphan_bot' }, { name: 'user:human' }], list_complete: true };
-      },
-    } };
+    const env = withD1({ BOT_REGISTRATION_KEY: 'operator', PAPER_TRADES: indexBucket([], false) });
+    const storage = createStorage(env);
+    await storage.users.insert('old_bot', { username: 'old_bot', is_bot: true, trades: [], version: 0 });
+    await storage.users.insert('orphan_bot', { username: 'orphan_bot', is_bot: true, account_closed: true, trades: [], version: 0 });
+    await storage.users.insert('human', { username: 'human', trades: [], version: 0 });
+    await storage.users.insert('new_bot', { username: 'new_bot', is_bot: true, trades: [], version: 0 });
     const request = key => new Request('https://example.test/api/bot-index/reconcile', {
       method: 'POST', headers: { 'X-Bot-Registration-Key': key },
     });
     assert.equal((await handleBotIndexReconcile(request('wrong'), env)).status, 403);
-    assert.equal(listCalls, 0);
+    env.DB.flags.failNextAll = true;   // the scan is interrupted before it can publish
     assert.equal((await handleBotIndexReconcile(request('operator'), env)).status, 503);
     assert.equal((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).ready, false);
-    failPage = false;
     assert.equal((await handleBotIndexReconcile(request('operator'), env)).status, 200);
     assert.deepEqual((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).members,
       ['new_bot', 'old_bot', 'orphan_bot']);
-    const listsAfterMigration = listCalls;
     for (let i = 0; i < 20; i++) assert.equal((await handleBots({}, env)).status, 200);
     await settleAllBots(env);
-    assert.equal(listCalls, listsAfterMigration, 'refresh and settlement never enumerate');
-    records['user:old_bot'] = JSON.stringify({ username: 'old_bot', is_bot: true, balance_cash: 123, trades: [] });
+    await storage.users.put('old_bot', { username: 'old_bot', is_bot: true, balance_cash: 123, trades: [], version: 1 });
     const roster = await (await handleBots({}, env)).json();
     assert.equal(roster.bots.find(b => b.username === 'old_bot').balance_cash, 123,
-      'membership optimization does not cache balances');
+      'membership optimisation does not cache balances');
     assert.equal(roster.bots.find(b => b.username === 'orphan_bot').account_closed, true);
-    delete records['user:old_bot'];
+    await storage.users.delete('old_bot');
     assert.equal((await handleBots({}, env)).status, 503);
     await assert.rejects(settleAllBots(env), /account unavailable/);
   }
 
-  // Registration can persist the account before the index fails. Login must
-  // repair membership without provisioning a new account or resetting history.
+  // Registration can persist the account before the index write fails. Login
+  // must repair membership without provisioning a new account or resetting
+  // history -- the D1 insert is already committed by then.
   {
-    const store = new Map(), sessions = new Map();
-    const env = { PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator',
-      USERS: { get: async k => store.get(k) ?? null, put: async (k,v) => store.set(k,v) },
-      SESSIONS: { put: async (k,v) => sessions.set(k,v) } };
+    const env = withD1({ PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator' });
+    const storage = createStorage(env);
     const call = (path, body, headers = {}) => worker.fetch(new Request(`https://example.test${path}`, {
       method: 'POST', headers, body: JSON.stringify(body),
     }), env);
-    env.PAPER_TRADES.failWrites = true;
     const credentials = { username: 'repair_bot', password: 'fixture-password' };
+    env.PAPER_TRADES.failWrites = true;
     assert.equal((await call('/api/register', credentials, { 'X-Bot-Registration-Key': 'operator' })).status, 503);
-    assert.ok(store.has('user:repair_bot'));
-    const before = store.get('user:repair_bot');
+    const before = await storage.users.get('repair_bot');
+    assert.ok(before, 'the account row is committed before the index write');
     env.PAPER_TRADES.failWrites = false;
     assert.equal((await call('/api/login', credentials)).status, 200);
-    assert.equal(store.get('user:repair_bot'), before);
+    assert.deepEqual(await storage.users.get('repair_bot'), before, 'login reuses the account untouched');
     assert.deepEqual((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).members, ['repair_bot']);
   }
 
-  // Model the provider's one-write/key/second limit across the actual HTTP
-  // startup sequence. Unchanged metadata must also avoid rewriting user:<name>.
+  // The one-write-per-key KV limit this block used to model does not exist in
+  // D1. What still matters is that the startup sequence writes the account once
+  // and does not rewrite it when repeated metadata is unchanged.
   for (const mode of ['legacy', 'r2']) {
-    const store = new Map(), lastWrite = new Map(), writes = new Map();
-    const now = 10000;
-    const env = { BOT_INDEX_READS: mode, PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator',
-      USERS: {
-        get: async k => store.get(k) ?? null,
-        put: async (k,v) => {
-          if (now - (lastWrite.get(k) ?? -Infinity) < 1000) throw new Error('KV PUT failed: 429 Too Many Requests');
-          lastWrite.set(k, now); writes.set(k, (writes.get(k) || 0) + 1); store.set(k,v);
-        },
-      }, SESSIONS: { put: async () => {} } };
+    const env = withD1({ BOT_INDEX_READS: mode, PAPER_TRADES: indexBucket(), BOT_REGISTRATION_KEY: 'operator' });
+    const storage = createStorage(env);
     const call = (path, body, operator = false) => worker.fetch(new Request(`https://example.test${path}`, {
       method: 'POST', body: JSON.stringify(body),
       headers: operator ? { 'X-Bot-Registration-Key': 'operator' } : {},
@@ -153,45 +151,35 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const credentials = { username: 'startup_bot', password: 'fixture-password' };
     const metadata = { username: 'startup_bot', alias: 'Startup', strategy_id: 'momentum_qqq' };
     assert.equal((await call('/api/register', { ...credentials, ...metadata }, true)).status, 201);
+    const created = await storage.users.get('startup_bot');
+    assert.equal(created.version, 0);
     assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
     assert.equal((await call('/api/login', credentials)).status, 200);
     assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
-    assert.equal(writes.get('bot:startup_bot'), 1, `${mode}: no redundant marker writes`);
-    assert.equal(writes.get('user:startup_bot'), 1, `${mode}: unchanged metadata does not rewrite account`);
-    // An older account with a missing marker is repaired at login exactly once.
-    store.delete('bot:startup_bot'); lastWrite.delete('bot:startup_bot');
+    assert.equal((await storage.users.get('startup_bot')).version, 0,
+      `${mode}: unchanged metadata does not rewrite the account`);
+    assert.ok(await storage.botMarkers.has('startup_bot'), `${mode}: marker written once`);
+    // An older account with a missing marker is repaired at login.
+    await storage.botMarkers.delete('startup_bot');
     assert.equal((await call('/api/login', credentials)).status, 200);
-    assert.equal((await call('/api/bot-metadata', metadata, true)).status, 200);
-    assert.equal(writes.get('bot:startup_bot'), 2);
+    assert.ok(await storage.botMarkers.has('startup_bot'), `${mode}: login repairs a missing marker`);
   }
 
-  // Contending repairs may see stale KV reads even after another writer wins.
-  // Delay is injected here so both the retry interval and bound are deterministic.
+  // Marker repair is now one idempotent insert. The retry-on-429 loop it used to
+  // have was a KV one-write-per-key artefact; what must still hold is that a
+  // repair is idempotent, case-insensitive on identity, and that a storage
+  // failure propagates instead of being swallowed by a retry loop.
   {
-    let now = 0, puts = 0;
-    const waits = [];
-    const env = { USERS: { get: async () => null, put: async () => {
-      puts++;
-      if (now < 1000) throw new Error('KV PUT failed: 429 Too Many Requests');
-    } } };
-    await repairLegacyBotMarker(env, 'repair_bot', async ms => { waits.push(ms); now += ms; });
-    assert.equal(puts, 2); assert.deepEqual(waits, [1100]);
-    let raw = null;
-    env.USERS.get = async () => raw;
-    env.USERS.put = async () => { throw Object.assign(new Error('rate limited'), { status: 429 }); };
-    await repairLegacyBotMarker(env, 'repair_bot', async ms => {
-      assert.equal(ms, 1100); raw = JSON.stringify({ username: 'REPAIR_BOT' });
-    });
-    raw = null; puts = 0; waits.length = 0;
-    env.USERS.put = async () => { puts++; throw new Error('KV PUT failed: 429 Too Many Requests'); };
-    await assert.rejects(repairLegacyBotMarker(env, 'repair_bot', async ms => waits.push(ms)), /429/);
-    assert.equal(puts, 3); assert.deepEqual(waits, [1100, 1100]);
-    env.USERS.put = async () => { throw new Error('storage unavailable'); };
-    await assert.rejects(repairLegacyBotMarker(env, 'repair_bot', async () => assert.fail('must not retry non-rate errors')), /unavailable/);
-    raw = '{invalid';
-    env.USERS.put = async (_key, value) => { raw = value; };
+    const env = withD1({});
+    const storage = createStorage(env);
     await repairLegacyBotMarker(env, 'repair_bot');
-    assert.equal(JSON.parse(raw).username, 'repair_bot');
+    assert.ok(await storage.botMarkers.has('repair_bot'));
+    await repairLegacyBotMarker(env, 'REPAIR_BOT');
+    assert.equal((await storage.botMarkers.listUsernames()).length, 1);
+    await assert.rejects(
+      repairLegacyBotMarker({ DB: { prepare() { throw new Error('storage unavailable'); } } }, 'repair_bot'),
+      /unavailable/,
+    );
   }
 
   // R2's shared-object throttle applies across different bot usernames.
@@ -208,14 +196,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       if (result) lastWrite = Date.now();
       return result;
     };
-    const store = new Map();
-    const env = { PAPER_TRADES: bucket, BOT_REGISTRATION_KEY: 'operator',
-      USERS: {
-        get: async key => store.get(key) ?? null,
-        put: async (key,value) => store.set(key,value),
-        list: async ({ prefix }) => ({ list_complete: true,
-          keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }),
-      }, SESSIONS: { put: async () => {} } };
+    const env = withD1({ PAPER_TRADES: bucket, BOT_REGISTRATION_KEY: 'operator' });
+    const storage = createStorage(env);
     const register = username => worker.fetch(new Request('https://example.test/api/register', {
       method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
       body: JSON.stringify({ username, password: 'fixture-password' }),
@@ -224,7 +206,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.deepEqual(responses.map(r => r.status), [201, 201]);
     assert.ok(throttles > 0, 'actually exercised the same-object throttle');
     assert.deepEqual((await (await bucket.get(BOT_INDEX_KEY)).json()).members, ['parallel_a', 'parallel_b']);
-    store.set('user:legacy_bot', JSON.stringify({ username: 'legacy_bot', is_bot: true, trades: [] }));
+    await storage.users.insert('legacy_bot', { username: 'legacy_bot', is_bot: true, trades: [], version: 0 });
     const migration = new Request('https://example.test/api/bot-index/reconcile', {
       method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
     });
@@ -265,33 +247,28 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     }), /10003/);
   }
 
-  // The rollout override is explicit, paginated and bounded. It is never an
-  // automatic fallback when the R2 index is unavailable.
+  // The rollout override is explicit and bounded, and is never an automatic
+  // fallback when the R2 index is unavailable. Markers now come from D1.
   {
-    let lists = 0;
-    const env = { BOT_INDEX_READS: 'legacy', USERS: {
-      list: async ({ cursor }) => {
-        lists++;
-        return cursor ? { keys: [{ name: 'bot:bot_b' }], list_complete: true }
-          : { keys: [{ name: 'bot:bot_a' }], list_complete: false, cursor: 'next' };
-      },
-      get: async key => JSON.stringify({ username: key.slice(5), is_bot: true, trades: [] }),
-    } };
+    const env = withD1({ BOT_INDEX_READS: 'legacy' });
+    const storage = createStorage(env);
+    await storage.users.insert('bot_a', { username: 'bot_a', is_bot: true, trades: [], version: 0 });
+    await storage.users.insert('bot_b', { username: 'bot_b', is_bot: true, trades: [], version: 0 });
+    await storage.botMarkers.put('bot_a', { username: 'bot_a' });
+    await storage.botMarkers.put('bot_b', { username: 'bot_b' });
     assert.equal((await (await handleBots({}, env)).json()).bots.length, 2);
-    assert.equal(lists, 2);
     env.BOT_INDEX_READS = 'typo';
     assert.equal((await handleBots({}, env)).status, 503);
-    assert.equal(lists, 2);
+    // With the R2 index, an unready index is a hard failure -- never a fallback
+    // to scanning accounts.
     env.BOT_INDEX_READS = 'r2';
     env.PAPER_TRADES = indexBucket([], false);
     env.BOT_REGISTRATION_KEY = 'operator';
-    env.USERS.list = async () => ({ keys: [], list_complete: false, cursor: String(++lists) });
     const response = await handleBotIndexReconcile(new Request('https://example.test/api/bot-index/reconcile', {
       method: 'POST', headers: { 'X-Bot-Registration-Key': 'operator' },
     }), env);
-    assert.equal(response.status, 503);
-    assert.equal(lists, 7, 'reconciliation stops after five pages');
-    assert.equal((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).ready, false);
+    assert.equal(response.status, 200, 'a complete scan publishes the index');
+    assert.equal((await (await env.PAPER_TRADES.get(BOT_INDEX_KEY)).json()).ready, true);
   }
 
   const wrangler = fs.readFileSync(path.join(__dirname, '..', 'wrangler.toml'), 'utf8');
@@ -707,23 +684,16 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
   // ── handleBotMetadata ───────────────────────────────────────────────────────
   {
-    const store = {
-      'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
-      'user:crassus_bob': JSON.stringify({
-        username: 'crassus_bob', alias: 'Bob', is_bot: true,
-        strategy_id: 'smoke_atm_roundtrip', balance_cash: 10000, trades: [], version: 0,
-      }),
-      'user:realperson': JSON.stringify({ username: 'realperson', balance_cash: 42, trades: [], version: 0 }),
-    };
-    const env = {
-      BOT_REGISTRATION_KEY: 'operator-key',
-      PAPER_TRADES: indexBucket(indexedNames(store)),
-      USERS: {
-        list: async () => { throw new Error('unexpected KV list'); },
-        get: async (k) => store[k] ?? null,
-        put: async (k, v) => { store[k] = v; },
-      },
-    };
+    const env = withD1({ BOT_REGISTRATION_KEY: 'operator-key', PAPER_TRADES: indexBucket([]) });
+    const storage = createStorage(env);
+    await storage.users.insert('crassus_bob', {
+      username: 'crassus_bob', alias: 'Bob', is_bot: true,
+      strategy_id: 'smoke_atm_roundtrip', balance_cash: 10000, trades: [], version: 0,
+    });
+    await storage.users.insert('realperson', { username: 'realperson', balance_cash: 42, trades: [], version: 0 });
+    await storage.botMarkers.put('crassus_bob', { username: 'crassus_bob' });
+    await updateBotIndex(env, ['crassus_bob'], { ready: true });
+    const store = d1Store(env);
     // A real Request: readJsonBody streams request.body, so a plain stub object
     // would exercise a different path than production.
     const req = (body, key = 'operator-key') => new Request('https://example.test/api/bot-metadata', {
@@ -733,12 +703,18 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     });
 
     // Moving a bot to a new strategy re-attributes its future performance.
-    const moved = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'reddit_sentiment_qqq' }), env);
+    const moved = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'momentum_qqq' }), env);
     assert.equal(moved.status, 200);
-    assert.equal((await moved.json()).strategy_id, 'reddit_sentiment_qqq');
+    assert.equal((await moved.json()).strategy_id, 'momentum_qqq');
     const roster = await (await handleBots({}, env)).json();
-    assert.equal(roster.bots[0].strategy_id, 'reddit_sentiment_qqq',
+    assert.equal(roster.bots[0].strategy_id, 'momentum_qqq',
       'the roster reflects the re-synced strategy, not the one captured at registration');
+
+    for (const suffix of ['', '_phelps', '_fixed_window']) {
+      await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'reddit_sentiment_qqq' + suffix }), env);
+      const retired = await (await handleBots({}, env)).json();
+      assert.ok(!retired.bots.some(bot => bot.username === 'crassus_bob'));
+    }
 
     // Without the operator key it is not reachable at all.
     assert.equal((await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'x' }, 'wrong'), env)).status, 403);
@@ -756,14 +732,14 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     // is_bot but is absent from the roster -- and re-registering is impossible
     // because the username is taken. The metadata sync every startup performs
     // must therefore repair it.
-    delete store['bot:crassus_bob'];
+    await storage.botMarkers.delete('crassus_bob');
     env.PAPER_TRADES.reset([]);
     assert.equal((await (await handleBots({}, env)).json()).bots.length, 0,
       'precondition: a lost index entry hides the account from the roster');
 
     const repaired = await handleBotMetadata(req({ username: 'crassus_bob', strategy_id: 'smoke_atm_roundtrip' }), env);
     assert.equal(repaired.status, 200);
-    assert.equal(JSON.parse(store['bot:crassus_bob']).username, 'crassus_bob',
+    assert.ok((await storage.botMarkers.has('crassus_bob')),
       'the sync recreates the missing index entry');
     const back = await (await handleBots({}, env)).json();
     assert.equal(back.bots.length, 1, 'the account is back in the roster after a sync');
@@ -777,16 +753,22 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
   // ── handleBots ──────────────────────────────────────────────────────────────
   {
-    const makeEnv = (entries) => ({
-      PAPER_TRADES: indexBucket(indexedNames(entries)),
-      USERS: {
-        list: async () => { throw new Error('unexpected KV list'); },
-        get: async (key) => entries[key] ?? null,
-      },
-    });
+    const makeEnv = async (entries) => {
+      const env = withD1({ PAPER_TRADES: indexBucket(indexedNames(entries)) });
+      const storage = createStorage(env);
+      for (const [key, value] of Object.entries(entries)) {
+        if (key.startsWith('user:')) {
+          const record = JSON.parse(value);
+          await storage.users.insert(record.username, record);
+        } else if (key.startsWith('bot:')) {
+          await storage.botMarkers.put(key.slice(4), JSON.parse(value));
+        }
+      }
+      return env;
+    };
 
     const botRecord = {
-      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'reddit_sentiment_qqq',
+      username: 'crassus_bob', alias: 'Bob', is_bot: true, strategy_id: 'momentum_qqq',
       salt: 'SALT', hash: 'HASH',
       iterations: 100000, balance_cash: 9500, starting_balance: 10000,
       trades: [{ sym: 'A', side: 'buy', qty: 1, price: 5, strike: 600, type: 'call', exp: '2026-07-17', ts: '2026-07-27T12:00:00Z' }],
@@ -796,7 +778,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       username: 'realperson', balance_cash: 42, trades: [], salt: 'S', hash: 'H', version: 0,
     };
 
-    const env = makeEnv({
+    const env = await makeEnv({
       'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
       'user:crassus_bob': JSON.stringify(botRecord),
       'user:realperson': JSON.stringify(humanRecord),
@@ -807,7 +789,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     const [bot] = body.bots;
     assert.equal(bot.username, 'crassus_bob');
     assert.equal(bot.alias, 'Bob');
-    assert.equal(bot.strategy_id, 'reddit_sentiment_qqq', 'the roster reports which strategy a bot runs');
+    assert.equal(bot.strategy_id, 'momentum_qqq', 'the roster reports which strategy a bot runs');
     assert.equal(bot.balance_cash, 9500);
     assert.equal(bot.trade_count, 1);
     assert.equal(bot.positions.length, 1);
@@ -821,7 +803,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(JSON.stringify(body).includes('HASH'), false, 'no password hash may be serialized');
 
     // A record that lost its is_bot flag is excluded even while indexed.
-    const demoted = makeEnv({
+    const demoted = await makeEnv({
       'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
       'user:crassus_bob': JSON.stringify({ ...botRecord, is_bot: false }),
     });
@@ -830,32 +812,34 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
     // A bot registered before strategy_id existed reports null, not undefined,
     // so the client can render a definite "no strategy recorded" state.
-    const legacy = makeEnv({
+    const legacy = await makeEnv({
       'bot:crassus_bob': JSON.stringify({ username: 'crassus_bob' }),
       'user:crassus_bob': JSON.stringify({ ...botRecord, strategy_id: undefined }),
     });
     assert.equal((await (await handleBots({}, legacy)).json()).bots[0].strategy_id, null);
 
     // A liquidated bot leaves a dangling index entry; the roster tolerates it.
-    const dangling = makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
+    const dangling = await makeEnv({ 'bot:crassus_gone': JSON.stringify({ username: 'crassus_gone' }) });
     assert.equal((await handleBots({}, dangling)).status, 503,
       'an unavailable indexed account must not look like a successful empty roster');
   }
 
   // ── settleAllBots (issue #42: unattended settlement for bot accounts) ───────
   {
-    const store = new Map();
-    const makeKvEnv = (entries) => {
-      for (const [k, v] of Object.entries(entries)) store.set(k, v);
-      return {
-        PAPER_TRADES: indexBucket(indexedNames(entries)),
-        USERS: {
-          list: async () => { throw new Error('unexpected KV list'); },
-          get: async (key) => store.get(key) ?? null,
-          put: async (key, value) => { store.set(key, value); },
-          delete: async (key) => { store.delete(key); },
-        },
-      };
+    let store;
+    const makeKvEnv = async (entries) => {
+      const env = withD1({ PAPER_TRADES: indexBucket(indexedNames(entries)) });
+      const storage = createStorage(env);
+      for (const [key, value] of Object.entries(entries)) {
+        if (key.startsWith('user:')) {
+          const record = JSON.parse(value);
+          await storage.users.insert(record.username, record);
+        } else if (key.startsWith('bot:')) {
+          await storage.botMarkers.put(key.slice(4), JSON.parse(value));
+        }
+      }
+      store = d1Store(env);
+      return env;
     };
 
     // A bot with an expired, unmarked ITM short call -- exactly the
@@ -870,7 +854,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       }],
       createdAt: '2026-07-17T00:00:00Z', version: 1,
     };
-    const env = makeKvEnv({
+    const env = await makeKvEnv({
       'bot:crassus_ankit': JSON.stringify({ username: 'crassus_ankit' }),
       'user:crassus_ankit': JSON.stringify(stuckBot),
     });
@@ -928,8 +912,8 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       }],
       createdAt: '2026-07-17T00:00:00Z', version: 1,
     };
-    store.set('bot:crassus_broke', JSON.stringify({ username: 'crassus_broke' }));
-    store.set('user:crassus_broke', JSON.stringify(insolventBot));
+    await createStorage(env).botMarkers.put('crassus_broke', { username: 'crassus_broke' });
+    await createStorage(env).users.insert('crassus_broke', insolventBot);
     await updateBotIndex(env, ['crassus_broke']);
 
     global.fetch = async () => ({ ok: true, text: async () => 'UnderlyingPrice,Expiration\n610,2026-07-17\n' });
@@ -947,18 +931,20 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
 
   // ── settleAllBots: a missing spot mark must not forgive a real obligation ──
   {
-    const store = new Map();
-    const makeKvEnv = (entries) => {
-      for (const [k, v] of Object.entries(entries)) store.set(k, v);
-      return {
-        PAPER_TRADES: indexBucket(indexedNames(entries)),
-        USERS: {
-          list: async () => { throw new Error('unexpected KV list'); },
-          get: async (key) => store.get(key) ?? null,
-          put: async (key, value) => { store.set(key, value); },
-          delete: async (key) => { store.delete(key); },
-        },
-      };
+    let store;
+    const makeKvEnv = async (entries) => {
+      const env = withD1({ PAPER_TRADES: indexBucket(indexedNames(entries)) });
+      const storage = createStorage(env);
+      for (const [key, value] of Object.entries(entries)) {
+        if (key.startsWith('user:')) {
+          const record = JSON.parse(value);
+          await storage.users.insert(record.username, record);
+        } else if (key.startsWith('bot:')) {
+          await storage.botMarkers.put(key.slice(4), JSON.parse(value));
+        }
+      }
+      store = d1Store(env);
+      return env;
     };
 
     // Deep ITM short (spot will be 610 once R2 is reachable) with an ample
@@ -975,7 +961,7 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
       }],
       createdAt: '2026-07-17T00:00:00Z', version: 1,
     };
-    const env = makeKvEnv({
+    const env = await makeKvEnv({
       'bot:crassus_ankit': JSON.stringify({ username: 'crassus_ankit' }),
       'user:crassus_ankit': JSON.stringify(bot),
     });
@@ -1008,6 +994,51 @@ const UUID = '12345678-1234-4234-8234-123456789abc';
     assert.equal(afterRecovery.balance_cash, 50000 - 10 * 100, 'cash debited by the correct intrinsic value once recovered');
   }
 
+
+  // Live-quote transport must force a fresh origin read: a per-request nonce
+  // in the upstream URL, with symbols/auth/status unchanged. (A stale cached
+  // 503 with no session field kept the option lane backing off after the
+  // producer redeploy, while new symbol lists returned fresh bodies.)
+  {
+    const { fetchLiveQuotes, handleLiveQuotes } = await import('../backend/browser-data.js');
+    const env = { LIVE_QUOTE_ORIGIN: 'https://origin.invalid', LIVE_QUOTE_KEY: 'test-key' };
+    const calls = [];
+    const realFetch = global.fetch;
+    global.fetch = async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      await fetchLiveQuotes(['QQQ', 'QQQ261110C00677000'], env);
+      await fetchLiveQuotes(['QQQ', 'QQQ261110C00677000'], env);
+    } finally {
+      global.fetch = realFetch;
+    }
+    assert.equal(calls.length, 2);
+    const [first, second] = calls.map(c => new URL(c.url));
+    assert.equal(first.pathname, '/live-quotes');
+    assert.equal(first.searchParams.get('symbols'), 'QQQ,QQQ261110C00677000');
+    assert.equal(second.searchParams.get('symbols'), 'QQQ,QQQ261110C00677000');
+    const nonce1 = first.searchParams.get('_');
+    const nonce2 = second.searchParams.get('_');
+    assert.ok(nonce1 && nonce2, 'upstream URL carries a nonce');
+    assert.notEqual(nonce1, nonce2, 'nonce is unique per request');
+    for (const c of calls) {
+      assert.equal(c.init.headers['X-Live-Quote-Key'], 'test-key');
+      assert.equal(c.init.headers['Cache-Control'], 'no-cache');
+      assert.equal(c.init.cf.cacheTtl, 0);
+    }
+    const realFetch2 = global.fetch;
+    global.fetch = async () => new Response(JSON.stringify({ error: 'x' }), { status: 503, headers: { 'Content-Type': 'application/json', 'Retry-After': '5' } });
+    try {
+      const res = await handleLiveQuotes(new URL('https://example.test/api/live-quotes?symbols=QQQ'), env);
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('Cache-Control'), 'no-store');
+      assert.equal(res.headers.get('Retry-After'), '5');
+    } finally {
+      global.fetch = realFetch2;
+    }
+  }
   console.log('PASS worker.js auth/trade/settlement logic');
 })().catch(error => {
   console.error(error);

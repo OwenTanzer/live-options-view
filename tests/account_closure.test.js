@@ -2,15 +2,11 @@ const assert = require('node:assert/strict');
 
 (async () => {
   const { default: worker, derivePasswordHash, randomSaltBase64, updateBotIndex } = await import('../backend/index.js');
-  const users = new Map(), sessions = new Map(), objects = new Map();
+  const { withD1 } = await import('./helpers/test_env.mjs');
+  const { createStorage } = await import('../backend/storage.js');
+  const objects = new Map();
   let revision = 0, failFinalization = false, quotes = 0;
-  const kv = store => ({
-    get: async key => store.get(key) ?? null,
-    put: async (key, value) => { store.set(key, value); },
-    delete: async key => { store.delete(key); },
-    list: async ({ prefix }) => ({ keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }),
-  });
-  const env = { USERS: kv(users), SESSIONS: kv(sessions), BOT_REGISTRATION_KEY: 'fixture-operator',
+  const env = withD1({ BOT_REGISTRATION_KEY: 'fixture-operator',
     LIVE_QUOTE_ORIGIN: 'https://fixture.invalid', LIVE_QUOTE_KEY: 'fixture-key',
     PAPER_TRADES: {
       async get(key) {
@@ -30,7 +26,7 @@ const assert = require('node:assert/strict');
         return { etag };
       },
     },
-  };
+  });
   await updateBotIndex(env, [], { ready: true });
   const realFetch = global.fetch;
   global.fetch = async () => {
@@ -44,13 +40,14 @@ const assert = require('node:assert/strict');
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }), env);
   const password = 'fixture-password';
+  const storage = createStorage(env);
   async function seed(username, isBot = true) {
     const salt = randomSaltBase64();
     const record = { username, salt, hash: await derivePasswordHash(password, salt, 1000), iterations: 1000,
       version: 0, balance_cash: 5, trades: [], is_bot: isBot };
-    users.set(`user:${username}`, JSON.stringify(record));
-    if (isBot) users.set(`bot:${username}`, JSON.stringify({ username }));
-    sessions.set(`sess:${username}`, JSON.stringify({ username }));
+    await storage.users.insert(username, record);
+    if (isBot) await storage.botMarkers.put(username, { username });
+    await storage.sessions.create(username, username, 3600);
     return `session=${username}`;
   }
   const intent = id => ({ execution_request_id: id, sym: 'AAPL', instrument_type: 'share', side: 'buy', qty: 1 });
@@ -59,7 +56,7 @@ const assert = require('node:assert/strict');
     const id = '12345678-1234-4234-8234-123456789abc';
     failFinalization = true;
     assert.equal((await call('/api/paper-trade', intent(id), cookie)).status, 503);
-    const closed = JSON.parse(users.get('user:fixture_bot'));
+    const closed = await storage.users.get('fixture_bot');
     assert.equal(closed.account_closed, true);
     assert.equal(closed.closure_reason, 'insufficient_balance');
     assert.equal(closed.balance_cash, 5);
@@ -82,12 +79,12 @@ const assert = require('node:assert/strict');
     assert.equal(login.status, 200, 'restart can authenticate without re-registration');
     assert.equal((await call('/api/register', { username: 'fixture_bot', password }, '',
       { 'X-Bot-Registration-Key': 'fixture-operator' })).status, 409);
-    assert.equal(JSON.parse(users.get('user:fixture_bot')).balance_cash, 5, 'cannot receive a fresh starting balance');
+    assert.equal((await storage.users.get('fixture_bot')).balance_cash, 5, 'cannot receive a fresh starting balance');
 
     const human = await seed('fixture_human', false);
     const h = await call('/api/paper-trade', intent('32345678-1234-4234-8234-123456789abc'), human);
     assert.equal(h.status, 400);
-    assert.equal(JSON.parse(users.get('user:fixture_human')).account_closed, undefined);
+    assert.equal((await storage.users.get('fixture_human')).account_closed, undefined);
     for (const username of ['crassus_freuding_phelps', 'crassus_trumpwhisp_phelps', 'crassus_newton_phelps']) {
       assert.equal((await call('/api/register', { username, password })).status, 400);
       assert.equal((await call('/api/register', { username, password }, '',

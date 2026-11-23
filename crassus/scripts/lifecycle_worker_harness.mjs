@@ -3,8 +3,14 @@
 // QQQ option quote origin. Binds both listeners to OS-assigned loopback ports
 // and announces a nonce identity so the parent cannot attach to a stranger.
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import worker, { updateBotIndex } from '../../backend/index.js';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // Fixed regular-session time for the fixture contracts. Production clock
 // behavior stays intact; only this isolated test process replaces Date.
@@ -19,23 +25,46 @@ const BOT_KEY = 'lifecycle-integration-key';
 const HOST = '127.0.0.1';
 const nonce = randomUUID();
 
-const users = new Map();
-const sessions = new Map();
 const objects = new Map();
-const counts = { lists: 0, gets: 0, puts: 0 };
+// Issue #208: the lifecycle runs against D1, and any remaining KV access is a
+// hard failure rather than a silent fallback. kv_touches must stay zero.
+const counts = { lists: 0, gets: 0, puts: 0, kv_touches: 0 };
 let revision = 0;
 
-function kv(store) {
-  return {
-    async get(key) { return store.get(key) ?? null; },
-    async put(key, value) { store.set(key, String(value)); },
-    async delete(key) { store.delete(key); },
-    async list({ prefix = '', limit = 1000 } = {}) {
-      counts.lists++;
-      return { keys: [...store.keys()].filter(k => k.startsWith(prefix)).slice(0, limit).map(name => ({ name })), list_complete: true };
+const sqlite = new DatabaseSync(':memory:');
+sqlite.exec(fs.readFileSync(
+  path.join(REPO_ROOT, 'backend', 'migrations', '0001_accounts_sessions.sql'), 'utf8',
+));
+
+function prepared(sql) {
+  let params = [];
+  const statement = {
+    bind(...values) { params = values; return statement; },
+    async run() {
+      const result = sqlite.prepare(sql).run(...params);
+      return { success: true, meta: { changes: result.changes, last_row_id: result.lastInsertRowid } };
     },
+    async first() { return sqlite.prepare(sql).get(...params) ?? null; },
+    async all() { return { results: sqlite.prepare(sql).all(...params), success: true, meta: {} }; },
   };
+  return statement;
 }
+
+const DB = {
+  prepare: prepared,
+  async exec(sql) { sqlite.exec(sql); },
+  async batch(statements) { return statements.map(statement => statement.run()); },
+};
+
+function forbiddenNamespace(name) {
+  const fail = () => {
+    counts.kv_touches++;
+    throw new Error(`KV namespace ${name} touched at runtime; #208 requires zero KV operations`);
+  };
+  return { get: fail, put: fail, delete: fail, list: fail };
+}
+const users = forbiddenNamespace('USERS');
+const sessions = forbiddenNamespace('SESSIONS');
 
 const r2 = {
   async get(key) {
@@ -59,7 +88,7 @@ const r2 = {
 };
 
 const env = {
-  USERS: kv(users), SESSIONS: kv(sessions), PAPER_TRADES: r2,
+  DB, USERS: users, SESSIONS: sessions, PAPER_TRADES: r2,
   BOT_REGISTRATION_KEY: BOT_KEY,
   LIVE_QUOTE_ORIGIN: null,
   LIVE_QUOTE_KEY: 'local-quote-key',

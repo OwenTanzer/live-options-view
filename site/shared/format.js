@@ -10,6 +10,11 @@
 // describeSqueezeAcquisitionFailure / formatSqueezeFirstSeen / fmtSteoDelta /
 // findRevision / normalizePaperOrder / normalizeShareOrder as globals; under
 // Node it exports the same twelve names (see the guard at the bottom).
+// #178 added the chain-snapshot header formatters below those
+// (chainSessionFromEtTime / formatSnapshotAge / formatChainSnapshot and the
+// CHAIN_SNAPSHOT_LIVE_MS bound). They are browser globals like the rest, and
+// are NOT re-exported through site/shared.js, whose 26-name Node surface is
+// pinned by tests/csv_ranges.test.js.
 // Self-contained: every name it reads is defined in this file
 // (formatSqueezeScheduleStatus reads formatSqueezeScanStatus and
 // describeSqueezeAcquisitionFailure; normalizeShareOrder reads
@@ -294,6 +299,148 @@ function normalizeShareOrder({
   return normalized;
 }
 
+// -- options-chain snapshot header: spot, session and age (#178) -------------
+// The legacy header above the chain shows the spot the chain was captured at
+// plus a tier badge. Neither said WHEN the snapshot was taken, so a chain that
+// stopped collecting at 16:14 ET sat next to Core Markets cards that were
+// still advancing after hours: 675.34 / "Regular" / 16:14 ET above 675.51 /
+// AFTER HOURS / updated 6s. The tier badge made that worse, because "Regular"
+// is the 0DTE_Regular EXPIRY TIER and reads like a market-session label.
+//
+// This formatter reports the snapshot's own session, its age, and whether the
+// quoted spot is a retained historical reading, so a stopped chain is labeled
+// as stopped instead of being read as a current price. The session comes from
+// the ET clock the producer wrote into `snapshot_time` ("16:14 ET") rather
+// than from the reader's clock or time zone: a browser in another zone must
+// not relabel 16:14 ET as the regular session. Age uses `timestamp`, the same
+// instant the status dot already judges, so header and dot cannot disagree
+// about freshness.
+const CHAIN_SNAPSHOT_LIVE_MS = 2 * 60 * 1000;   // same bound as the status dot
+
+const CHAIN_SESSION_LABELS = {
+  premarket: 'Premarket',
+  regular: 'Regular session',
+  afterhours: 'After hours',
+  overnight: 'Closed',
+};
+
+// "16:14 ET" -> 'afterhours'. Unparseable or absent -> null (unknown, never
+// guessed). 09:30–16:00 is the regular session; 04:00–09:30 premarket;
+// 16:00–20:00 after hours; anything else is outside the equity session day.
+function chainSessionFromEtTime(snapshotTime) {
+  const match = /^\s*(\d{1,2}):(\d{2})\s*(AM|PM)?\s*ET\s*$/i.exec(String(snapshotTime ?? ''));
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour > 24 || minute > 59) return null;
+  const meridiem = (match[3] || '').toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  const minutes = hour * 60 + minute;
+  if (minutes >= 570 && minutes < 960) return 'regular';
+  if (minutes >= 240 && minutes < 570) return 'premarket';
+  if (minutes >= 960 && minutes < 1200) return 'afterhours';
+  return 'overnight';
+}
+
+function formatSnapshotAge(ageMs) {
+  if (!Number.isFinite(ageMs)) return 'age unknown';
+  if (ageMs < -30_000) return 'clock skew';
+  const seconds = Math.max(0, Math.round(ageMs / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return restMinutes ? `${hours}h ${restMinutes}m ago` : `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours ? `${days}d ${restHours}h ago` : `${days}d ago`;
+}
+
+// A wall-clock reading in `timeZone` as a UTC instant. Two passes: the first
+// uses the offset at the naive guess, the second re-reads the offset at that
+// corrected instant, which settles the one-hour discontinuity of a DST change.
+// Built on Intl rather than a date library because this is a classic script
+// with no build step and no dependencies.
+function zonedWallClockToUtcMs(year, month, day, hour, minute, second = 0, timeZone = 'America/New_York') {
+  const naive = Date.UTC(year, month - 1, day, hour, minute, second);
+  const offsetAt = utcMs => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(utcMs)).filter(p => p.type !== 'literal');
+    const f = Object.fromEntries(parts.map(p => [p.type, p.value]));
+    return Date.UTC(Number(f.year), Number(f.month) - 1, Number(f.day),
+      Number(f.hour), Number(f.minute), Number(f.second)) - utcMs;
+  };
+  const first = naive - offsetAt(naive);
+  return naive - offsetAt(first);
+}
+
+// The instant a chain snapshot was captured, independent of the reader's time
+// zone. `timestamp` is the producer's own wall clock, written on the Pacific
+// machine that collects the chain ("11/10/2026 13:14:51" beside "16:14 ET"),
+// so reading it as browser-local time would report a different age in every
+// zone. Order: an offset-bearing spot timestamp if the payload has one (IBIT
+// publishes one), then the producer's PT clock, then any parseable timestamp,
+// then the ET pair (date + snapshot_time), and null rather than a guess.
+function chainSnapshotInstant(data) {
+  const spotTs = String(data?.underlying_market?.spot_ts ?? '').trim();
+  if (/T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(spotTs)) {
+    const parsed = Date.parse(spotTs);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const localMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(data?.timestamp ?? '').trim());
+  if (localMatch) {
+    return zonedWallClockToUtcMs(Number(localMatch[3]), Number(localMatch[1]), Number(localMatch[2]),
+      Number(localMatch[4]), Number(localMatch[5]), localMatch[6] ? Number(localMatch[6]) : 0, 'America/Los_Angeles');
+  }
+  const parsed = Date.parse(data?.timestamp || '');
+  if (Number.isFinite(parsed)) return parsed;
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(data?.date ?? '').trim());
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?\s*ET$/i.exec(String(data?.snapshot_time ?? '').trim());
+  if (dateMatch && timeMatch) {
+    let hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2]);
+    const second = timeMatch[3] ? Number(timeMatch[3]) : 0;
+    const meridiem = (timeMatch[4] || '').toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    if (hour <= 24 && minute <= 59 && second <= 59) {
+      return zonedWallClockToUtcMs(Number(dateMatch[1]), Number(dateMatch[2]), Number(dateMatch[3]),
+        hour, minute, second, 'America/New_York');
+    }
+  }
+  return null;
+}
+
+// state: 'live' (the snapshot is current), 'retained' (a historical value kept
+// on screen after collection stopped) or 'untimed' (no usable timestamp).
+function formatChainSnapshot(data, nowMs = Date.now()) {
+  const snapshotTime = String(data?.snapshot_time ?? '').trim();
+  const session = chainSessionFromEtTime(snapshotTime);
+  const sessionLabel = session ? CHAIN_SESSION_LABELS[session] : null;
+  const snapshotMs = chainSnapshotInstant(data);
+  const ageMs = snapshotMs == null ? null : nowMs - snapshotMs;
+  const state = ageMs == null ? 'untimed' : ageMs <= CHAIN_SNAPSHOT_LIVE_MS ? 'live' : 'retained';
+  const ageLabel = formatSnapshotAge(ageMs);
+  const parts = [`snapshot ${snapshotTime || 'time unknown'}`];
+  if (sessionLabel) parts.push(sessionLabel);
+  parts.push(ageLabel);
+  if (state === 'retained') parts.push('retained');
+  const detail = state === 'retained'
+    ? `This chain is a historical snapshot taken at ${snapshotTime || 'an unknown time'}`
+      + `${sessionLabel ? ` during the ${sessionLabel.toLowerCase()}` : ''}, ${ageLabel}. `
+      + 'The quoted spot and its cells are the values captured then, not current prices; '
+      + 'Core markets shows live prices.'
+    : state === 'untimed'
+      ? 'This snapshot has no usable timestamp, so its age cannot be shown.'
+      : `Chain snapshot taken at ${snapshotTime || 'an unknown time'}`
+        + `${sessionLabel ? ` during the ${sessionLabel.toLowerCase()}` : ''}, ${ageLabel}.`;
+  return { state, session, sessionLabel, snapshotTime, snapshotMs, ageMs, text: parts.join(' · '), detail };
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { VWAP_RVOL_CLOSED_AFTER_MS, formatVwapRvol, formatMomentum, SQUEEZE_SCAN_STALE_AFTER_MS, formatSqueezeScanStatus, formatSqueezeScheduleStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen, fmtSteoDelta, findRevision, normalizePaperOrder, normalizeShareOrder };
+  module.exports = { VWAP_RVOL_CLOSED_AFTER_MS, formatVwapRvol, formatMomentum, CHAIN_SNAPSHOT_LIVE_MS, chainSessionFromEtTime, formatSnapshotAge, zonedWallClockToUtcMs, chainSnapshotInstant, formatChainSnapshot, SQUEEZE_SCAN_STALE_AFTER_MS, formatSqueezeScanStatus, formatSqueezeScheduleStatus, describeSqueezeAcquisitionFailure, formatSqueezeFirstSeen, fmtSteoDelta, findRevision, normalizePaperOrder, normalizeShareOrder };
 }

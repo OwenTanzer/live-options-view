@@ -34,7 +34,7 @@ test('artifact allowlist admits only the fixed SPY latest key', () => {
 test('discovery reports SPY coverage explicitly and keeps QQQ positions stable', async () => {
   const { consumer } = setup();
   const out = await consumer.call('discover_sources');
-  assert.deepEqual(out.capabilities.map(c => c.dataset), ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'options_active']);
+  assert.deepEqual(out.capabilities.map(c => c.dataset), ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'options_windows', 'options_active']);
   const spy = out.capabilities[3];
   assert.equal(spy.underlying, 'SPY');
   assert.equal(spy.availability, 'available');

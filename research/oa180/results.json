@@ -1,0 +1,539 @@
+[
+  {
+    "accepted_contracts": 4783589,
+    "contracts_by_method": {
+      "combined": {
+        "buy": 1798966,
+        "sell": 1826314,
+        "unknown": 1158309
+      },
+      "comparison": {
+        "agree": 887990,
+        "disagree": 156656,
+        "one_or_both_unknown": 3738943
+      },
+      "quote_100ms": {
+        "buy": 6,
+        "sell": 208,
+        "unknown": 4783375
+      },
+      "quote_1s": {
+        "buy": 853587,
+        "sell": 878035,
+        "unknown": 3051967
+      },
+      "quote_1s_spread_le_10c": {
+        "buy": 852670,
+        "sell": 877196,
+        "unknown": 3053723
+      },
+      "quote_5s": {
+        "buy": 1803697,
+        "sell": 1857363,
+        "unknown": 1122529
+      },
+      "tick": {
+        "buy": 1462796,
+        "sell": 1475508,
+        "unknown": 1845285
+      }
+    },
+    "day": "2026-09-25",
+    "event_counts": {
+      "excluded_timesale": 103,
+      "quote": 997780,
+      "timesale": 1211681
+    },
+    "examples": {
+      "agree": {
+        "age_ms": 787,
+        "ask": 0.79,
+        "bid": 0.2,
+        "line": 229,
+        "previous_tick": [
+          1790343000500,
+          4000,
+          "unknown"
+        ],
+        "price": 0.36,
+        "quote_receipt": "2026-09-25T13:30:00.735+00:00",
+        "quote_sign": "sell",
+        "receipt": "2026-09-25T13:30:01.076+00:00",
+        "segment": "moo144/tradier/2026-09-25/2fe15b0976d1-part-0000.ndjson.gz",
+        "symbol": "QQQ260925C00747000",
+        "tick_sign": "sell",
+        "trade_ms": 1790343000787
+      },
+      "disagree": {
+        "age_ms": 761,
+        "ask": 1.0,
+        "bid": 0.77,
+        "line": 225,
+        "previous_tick": [
+          1790343000684,
+          9200,
+          "sell"
+        ],
+        "price": 0.91,
+        "quote_receipt": "2026-09-25T13:30:00.735+00:00",
+        "quote_sign": "buy",
+        "receipt": "2026-09-25T13:30:01.075+00:00",
+        "segment": "moo144/tradier/2026-09-25/2fe15b0976d1-part-0000.ndjson.gz",
+        "symbol": "QQQ260925P00740000",
+        "tick_sign": "sell",
+        "trade_ms": 1790343000761
+      },
+      "one_or_both_unknown": {
+        "age_ms": 5400142,
+        "ask": 0.71,
+        "bid": 0.69,
+        "line": 6,
+        "previous_tick": [
+          1790343000094,
+          6800,
+          "unknown"
+        ],
+        "price": 0.63,
+        "quote_receipt": "2026-09-25T13:29:04.610+00:00",
+        "quote_sign": "unknown",
+        "receipt": "2026-09-25T13:30:00.216+00:00",
+        "segment": "moo144/tradier/2026-09-25/2fe15b0976d1-part-0000.ndjson.gz",
+        "symbol": "QQQ260925C00746000",
+        "tick_sign": "sell",
+        "trade_ms": 1790343000142
+      }
+    },
+    "excluded_option_prints": {},
+    "fields_populated": {
+      "ask": 680161,
+      "bid": 680161,
+      "cancel": 680161,
+      "collector_receipt_timestamp": 680161,
+      "correction": 680161,
+      "date": 680161,
+      "duplicate_in_run": 680161,
+      "exch": 680161,
+      "flag": 680161,
+      "last": 680161,
+      "preceding_quote_age_ms": 680150,
+      "preceding_quote_context": 24,
+      "preceding_quote_source": 24,
+      "provider": 680161,
+      "seq": 680161,
+      "session": 680161,
+      "size": 680161,
+      "symbol": 680161,
+      "type": 680161
+    },
+    "first_last_option_ms": [
+      1790343000094,
+      1790366399736
+    ],
+    "manifest": "moo144/tradier/2026-09-25/manifest-2fe15b0976d1.json",
+    "manifest_sha256": "727933ec55d1710f977175887d0090fa70086abaa360e2ff8c5acc3097e4349f",
+    "provider_audit": {
+      "cancel_count": 1,
+      "correction_count": 0,
+      "duplicate_count": 0,
+      "gap_seconds": 0.0,
+      "sequence_discontinuities_by_symbol": {
+        "QQQ": 172216,
+        "QQQ260925C00740000": 8692,
+        "QQQ260925C00741000": 16738,
+        "QQQ260925C00742000": 34921,
+        "QQQ260925C00743000": 51150,
+        "QQQ260925C00744000": 74011,
+        "QQQ260925C00745000": 97272,
+        "QQQ260925C00746000": 61952,
+        "QQQ260925C00747000": 33306,
+        "QQQ260925P00740000": 40455,
+        "QQQ260925P00741000": 42626,
+        "QQQ260925P00742000": 47112,
+        "QQQ260925P00743000": 50191,
+        "QQQ260925P00744000": 61919,
+        "QQQ260925P00745000": 43474,
+        "QQQ260925P00746000": 12481,
+        "QQQ260925P00747000": 3845
+      },
+      "sequence_out_of_order_by_symbol": {
+        "QQQ": 1
+      }
+    },
+    "universe": [
+      "QQQ260925C00740000",
+      "QQQ260925C00741000",
+      "QQQ260925C00742000",
+      "QQQ260925C00743000",
+      "QQQ260925C00744000",
+      "QQQ260925C00745000",
+      "QQQ260925C00746000",
+      "QQQ260925C00747000",
+      "QQQ260925P00740000",
+      "QQQ260925P00741000",
+      "QQQ260925P00742000",
+      "QQQ260925P00743000",
+      "QQQ260925P00744000",
+      "QQQ260925P00745000",
+      "QQQ260925P00746000",
+      "QQQ260925P00747000"
+    ]
+  },
+  {
+    "accepted_contracts": 4396227,
+    "contracts_by_method": {
+      "combined": {
+        "buy": 1669865,
+        "sell": 1729777,
+        "unknown": 996585
+      },
+      "comparison": {
+        "agree": 943862,
+        "disagree": 152384,
+        "one_or_both_unknown": 3299981
+      },
+      "quote_100ms": {
+        "buy": 6,
+        "sell": 4,
+        "unknown": 4396217
+      },
+      "quote_1s": {
+        "buy": 859581,
+        "sell": 916477,
+        "unknown": 2620169
+      },
+      "quote_1s_spread_le_10c": {
+        "buy": 858726,
+        "sell": 915732,
+        "unknown": 2621769
+      },
+      "quote_5s": {
+        "buy": 1686005,
+        "sell": 1774179,
+        "unknown": 936043
+      },
+      "tick": {
+        "buy": 1348983,
+        "sell": 1370847,
+        "unknown": 1676397
+      }
+    },
+    "day": "2026-09-29",
+    "event_counts": {
+      "excluded_timesale": 165,
+      "quote": 997170,
+      "timesale": 1142293
+    },
+    "examples": {
+      "agree": {
+        "age_ms": 814,
+        "ask": 2.2,
+        "bid": 2.14,
+        "line": 531,
+        "previous_tick": [
+          1790688600538,
+          22200,
+          "buy"
+        ],
+        "price": 2.26,
+        "quote_receipt": "2026-09-29T13:30:00.681+00:00",
+        "quote_sign": "buy",
+        "receipt": "2026-09-29T13:30:01.309+00:00",
+        "segment": "moo144/tradier/2026-09-29/64d13a1597e1-part-0000.ndjson.gz",
+        "symbol": "QQQ260929C00740000",
+        "tick_sign": "buy",
+        "trade_ms": 1790688600814
+      },
+      "disagree": {
+        "age_ms": 908,
+        "ask": 2.36,
+        "bid": 2.3,
+        "line": 1031,
+        "previous_tick": [
+          1790688602887,
+          22100,
+          "unknown"
+        ],
+        "price": 2.23,
+        "quote_receipt": "2026-09-29T13:30:02.804+00:00",
+        "quote_sign": "sell",
+        "receipt": "2026-09-29T13:30:03.743+00:00",
+        "segment": "moo144/tradier/2026-09-29/64d13a1597e1-part-0000.ndjson.gz",
+        "symbol": "QQQ260929C00740000",
+        "tick_sign": "buy",
+        "trade_ms": 1790688602908
+      },
+      "one_or_both_unknown": {
+        "age_ms": 5400371,
+        "ask": 1.19,
+        "bid": 1.17,
+        "line": 252,
+        "previous_tick": [
+          1790688600266,
+          22000,
+          "unknown"
+        ],
+        "price": 2.2,
+        "quote_receipt": "2026-09-29T13:29:04.845+00:00",
+        "quote_sign": "unknown",
+        "receipt": "2026-09-29T13:30:00.593+00:00",
+        "segment": "moo144/tradier/2026-09-29/64d13a1597e1-part-0000.ndjson.gz",
+        "symbol": "QQQ260929C00740000",
+        "tick_sign": "unknown",
+        "trade_ms": 1790688600371
+      }
+    },
+    "excluded_option_prints": {},
+    "fields_populated": {
+      "ask": 659584,
+      "bid": 659584,
+      "cancel": 659584,
+      "collector_receipt_timestamp": 659584,
+      "correction": 659584,
+      "date": 659584,
+      "duplicate_in_run": 659584,
+      "exch": 659584,
+      "flag": 659584,
+      "last": 659584,
+      "preceding_quote_age_ms": 659575,
+      "preceding_quote_context": 35,
+      "preceding_quote_source": 35,
+      "provider": 659584,
+      "seq": 659584,
+      "session": 659584,
+      "size": 659584,
+      "symbol": 659584,
+      "type": 659584
+    },
+    "first_last_option_ms": [
+      1790688600021,
+      1790711999739
+    ],
+    "manifest": "moo144/tradier/2026-09-29/manifest-64d13a1597e1.json",
+    "manifest_sha256": "e40c6a01de3eccf5ecf6437152f885b7760aa5a2dd5033bd40fbf5f744a0583d",
+    "provider_audit": {
+      "cancel_count": 0,
+      "correction_count": 2,
+      "duplicate_count": 0,
+      "gap_seconds": 0.0,
+      "sequence_discontinuities_by_symbol": {
+        "QQQ": 134697,
+        "QQQ260929C00736000": 30934,
+        "QQQ260929C00737000": 66917,
+        "QQQ260929C00738000": 81405,
+        "QQQ260929C00739000": 71762,
+        "QQQ260929C00740000": 67122,
+        "QQQ260929C00741000": 35888,
+        "QQQ260929C00742000": 21891,
+        "QQQ260929C00743000": 13577,
+        "QQQ260929P00736000": 74842,
+        "QQQ260929P00737000": 79894,
+        "QQQ260929P00738000": 62593,
+        "QQQ260929P00739000": 33277,
+        "QQQ260929P00740000": 13417,
+        "QQQ260929P00741000": 3676,
+        "QQQ260929P00742000": 1676,
+        "QQQ260929P00743000": 697
+      },
+      "sequence_out_of_order_by_symbol": {
+        "QQQ": 2
+      }
+    },
+    "universe": [
+      "QQQ260929C00736000",
+      "QQQ260929C00737000",
+      "QQQ260929C00738000",
+      "QQQ260929C00739000",
+      "QQQ260929C00740000",
+      "QQQ260929C00741000",
+      "QQQ260929C00742000",
+      "QQQ260929C00743000",
+      "QQQ260929P00736000",
+      "QQQ260929P00737000",
+      "QQQ260929P00738000",
+      "QQQ260929P00739000",
+      "QQQ260929P00740000",
+      "QQQ260929P00741000",
+      "QQQ260929P00742000",
+      "QQQ260929P00743000"
+    ]
+  },
+  {
+    "accepted_contracts": 4392596,
+    "contracts_by_method": {
+      "combined": {
+        "buy": 1719670,
+        "sell": 1695914,
+        "unknown": 977012
+      },
+      "comparison": {
+        "agree": 900021,
+        "disagree": 171740,
+        "one_or_both_unknown": 3320835
+      },
+      "quote_100ms": {
+        "buy": 554,
+        "sell": 38,
+        "unknown": 4392004
+      },
+      "quote_1s": {
+        "buy": 845437,
+        "sell": 833353,
+        "unknown": 2713806
+      },
+      "quote_1s_spread_le_10c": {
+        "buy": 842280,
+        "sell": 830511,
+        "unknown": 2719805
+      },
+      "quote_5s": {
+        "buy": 1742700,
+        "sell": 1757804,
+        "unknown": 892092
+      },
+      "tick": {
+        "buy": 1418899,
+        "sell": 1389656,
+        "unknown": 1584041
+      }
+    },
+    "day": "2026-10-01",
+    "event_counts": {
+      "excluded_timesale": 77,
+      "quote": 1052587,
+      "timesale": 1274644
+    },
+    "examples": {
+      "agree": {
+        "age_ms": 668,
+        "ask": 2.24,
+        "bid": 2.1,
+        "line": 267,
+        "previous_tick": [
+          1790861400616,
+          21300,
+          "unknown"
+        ],
+        "price": 2.09,
+        "quote_receipt": "2026-10-01T13:30:00.549+00:00",
+        "quote_sign": "sell",
+        "receipt": "2026-10-01T13:30:00.844+00:00",
+        "segment": "moo144/tradier/2026-10-01/66314af0dcf4-part-0000.ndjson.gz",
+        "symbol": "QQQ261001C00743000",
+        "tick_sign": "sell",
+        "trade_ms": 1790861400668
+      },
+      "disagree": {
+        "age_ms": 571,
+        "ask": 5.31,
+        "bid": 2.91,
+        "line": 264,
+        "previous_tick": [
+          1790861400424,
+          37500,
+          "unknown"
+        ],
+        "price": 3.96,
+        "quote_receipt": "2026-10-01T13:30:00.570+00:00",
+        "quote_sign": "sell",
+        "receipt": "2026-10-01T13:30:00.838+00:00",
+        "segment": "moo144/tradier/2026-10-01/66314af0dcf4-part-0000.ndjson.gz",
+        "symbol": "QQQ261001C00740000",
+        "tick_sign": "buy",
+        "trade_ms": 1790861400571
+      },
+      "one_or_both_unknown": {
+        "age_ms": 5400146,
+        "ask": 1.64,
+        "bid": 1.57,
+        "line": 99,
+        "previous_tick": [
+          1790861400145,
+          17900,
+          "unknown"
+        ],
+        "price": 1.79,
+        "quote_receipt": "2026-10-01T13:29:04.186+00:00",
+        "quote_sign": "unknown",
+        "receipt": "2026-10-01T13:30:00.215+00:00",
+        "segment": "moo144/tradier/2026-10-01/66314af0dcf4-part-0000.ndjson.gz",
+        "symbol": "QQQ261001C00744000",
+        "tick_sign": "unknown",
+        "trade_ms": 1790861400146
+      }
+    },
+    "excluded_option_prints": {},
+    "fields_populated": {
+      "ask": 639055,
+      "bid": 639055,
+      "cancel": 639055,
+      "collector_receipt_timestamp": 639055,
+      "correction": 639055,
+      "date": 639055,
+      "duplicate_in_run": 639055,
+      "exch": 639055,
+      "flag": 639055,
+      "last": 639055,
+      "preceding_quote_age_ms": 639048,
+      "preceding_quote_context": 39,
+      "preceding_quote_source": 39,
+      "provider": 639055,
+      "seq": 639055,
+      "session": 639055,
+      "size": 639055,
+      "symbol": 639055,
+      "type": 639055
+    },
+    "first_last_option_ms": [
+      1790861400064,
+      1790884799898
+    ],
+    "manifest": "moo144/tradier/2026-10-01/manifest-66314af0dcf4.json",
+    "manifest_sha256": "19e8f99d30b80b331e04c1e2526f4eabb996a0953a645ba6ce004b0cec2f977a",
+    "provider_audit": {
+      "cancel_count": 1,
+      "correction_count": 0,
+      "duplicate_count": 0,
+      "gap_seconds": 0.0,
+      "sequence_discontinuities_by_symbol": {
+        "QQQ": 201410,
+        "QQQ261001C00739000": 48793,
+        "QQQ261001C00740000": 63877,
+        "QQQ261001C00741000": 46977,
+        "QQQ261001C00742000": 59536,
+        "QQQ261001C00743000": 64295,
+        "QQQ261001C00744000": 53933,
+        "QQQ261001C00745000": 44870,
+        "QQQ261001C00746000": 23261,
+        "QQQ261001P00739000": 47277,
+        "QQQ261001P00740000": 49410,
+        "QQQ261001P00741000": 37221,
+        "QQQ261001P00742000": 42273,
+        "QQQ261001P00743000": 35777,
+        "QQQ261001P00744000": 14329,
+        "QQQ261001P00745000": 5633,
+        "QQQ261001P00746000": 1577
+      },
+      "sequence_out_of_order_by_symbol": {
+        "QQQ": 1
+      }
+    },
+    "universe": [
+      "QQQ261001C00739000",
+      "QQQ261001C00740000",
+      "QQQ261001C00741000",
+      "QQQ261001C00742000",
+      "QQQ261001C00743000",
+      "QQQ261001C00744000",
+      "QQQ261001C00745000",
+      "QQQ261001C00746000",
+      "QQQ261001P00739000",
+      "QQQ261001P00740000",
+      "QQQ261001P00741000",
+      "QQQ261001P00742000",
+      "QQQ261001P00743000",
+      "QQQ261001P00744000",
+      "QQQ261001P00745000",
+      "QQQ261001P00746000"
+    ]
+  }
+]

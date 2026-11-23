@@ -1,0 +1,499 @@
+{
+ "as_of": "2026-11-09T11:15:00Z",
+ "build_as_of": "2026-11-09T11:15:00Z",
+ "complete": true,
+ "coverage": {
+  "after_cutoff_hindsight": [],
+  "corrupt_runs": 0,
+  "coverage_complete": true,
+  "note": "coverage is for the view's stream and is not narrowed by the panel's source filter",
+  "pending_availability_runs": 0,
+  "price": {
+   "missing": [
+    {
+     "end": "2026-11-09T10:00:02Z",
+     "seconds": 36002,
+     "start": "2026-11-09T00:00:00Z"
+    }
+   ],
+   "stale": [
+    {
+     "end": "2026-11-09T10:20:02Z",
+     "last_price_time": "2026-11-09T10:09:00Z",
+     "seconds": 542,
+     "start": "2026-11-09T10:11:00Z"
+    }
+   ]
+  },
+  "quiet_blocked_by": [],
+  "quiet_rule": "observed, no items only for a covered segment between two observed runs with no new observations and no row events in its span, both counted before pagination and filtering; otherwise no items on this page",
+  "segments": [
+   {
+    "before_first_run": true,
+    "clipped_to_window_start": true,
+    "end": "2026-11-09T10:05:00Z",
+    "events_in_span": 1,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 2,
+    "quiet": false,
+    "run_id": "20261109T100500Z-fx",
+    "sources": {
+     "attempted": [
+      "oilprice_com",
+      "eia_today_in_energy"
+     ],
+     "disabled_count": 54,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [],
+     "ok": [
+      "oilprice_com",
+      "eia_today_in_energy"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T00:00:00Z",
+    "state": "covered"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:10:00Z",
+    "events_in_span": 1,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 1,
+    "quiet": false,
+    "run_id": "20261109T101000Z-fx",
+    "sources": {
+     "attempted": [
+      "oilprice_com"
+     ],
+     "disabled_count": 54,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy"
+     ],
+     "ok": [
+      "oilprice_com"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:05:00Z",
+    "state": "partial"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:15:00Z",
+    "events_in_span": 2,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 1,
+    "quiet": false,
+    "run_id": "20261109T101500Z-fx",
+    "sources": {
+     "attempted": [
+      "oilprice_com"
+     ],
+     "disabled_count": 54,
+     "failed": [],
+     "failed_entries": 0,
+     "not_selected": [
+      "eia_today_in_energy"
+     ],
+     "ok": [
+      "oilprice_com"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:10:00Z",
+    "state": "partial"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T10:25:00Z",
+    "events_in_span": 0,
+    "gap_seconds": null,
+    "missed_interval": false,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T102500Z-fx",
+    "sources": {
+     "attempted": [
+      "oilprice_com"
+     ],
+     "disabled_count": 54,
+     "failed": [],
+     "failed_entries": 1,
+     "not_selected": [
+      "eia_today_in_energy"
+     ],
+     "ok": [
+      "oilprice_com"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:15:00Z",
+    "state": "partial"
+   },
+   {
+    "before_first_run": false,
+    "clipped_to_window_start": false,
+    "end": "2026-11-09T11:10:00Z",
+    "events_in_span": 0,
+    "gap_seconds": 2700,
+    "missed_interval": true,
+    "observations_in_span": 0,
+    "quiet": false,
+    "run_id": "20261109T111000Z-fx",
+    "sources": {
+     "attempted": [
+      "oilprice_com"
+     ],
+     "disabled_count": 54,
+     "failed": [],
+     "failed_entries": 1,
+     "not_selected": [
+      "eia_today_in_energy"
+     ],
+     "ok": [
+      "oilprice_com"
+     ],
+     "roster_complete": true,
+     "source_ids_omitted": 0
+    },
+    "start": "2026-11-09T10:25:00Z",
+    "state": "partial"
+   }
+  ],
+  "stream_scope": "sources of the requested stream",
+  "tail": {
+   "end": "2026-11-09T11:15:00Z",
+   "seconds": 300,
+   "start": "2026-11-09T11:10:00Z"
+  },
+  "uncommitted_runs": 0
+ },
+ "data_label": "SYNTHETIC fixture data (not real news or market data)",
+ "date": "2026-11-09",
+ "excluded": {
+  "before_window": 0,
+  "no_publication_time": 0,
+  "not_in_stream": 0,
+  "unclassified_for_stream": 0
+ },
+ "hindsight": false,
+ "limits": {
+  "hindsight_per_page": 50,
+  "index_bytes": 262144,
+  "index_views": 500,
+  "page_bytes": 262144,
+  "pages_per_view": 20,
+  "price_intervals_per_page": 200,
+  "rows_per_page": 50,
+  "segments_per_page": 200,
+  "source_ids_per_segment": 100
+ },
+ "mode": "collector",
+ "mode_label": "collector-as-of join: news and prices only as available by each event",
+ "next_page": null,
+ "omitted": {
+  "hindsight_omitted": 0,
+  "intervals_omitted": 0,
+  "rows_omitted": 0,
+  "segments_omitted": 0,
+  "source_ids_omitted": 0
+ },
+ "overflow_reasons": [],
+ "page_count": 1,
+ "page_number": 1,
+ "prev_page": null,
+ "price_series": {
+  "instrument_id": "etf.qqq",
+  "series": "underlying_quote",
+  "sha256": "4172e8f3cb087e0a962b61ba33da41c7a1a1f5cb8af3c8220d3d2117795310e2",
+  "synthetic": true,
+  "tolerance_s": 120
+ },
+ "rows": [
+  {
+   "archived_at": "2026-11-09T10:25:40Z",
+   "canonical_url": "https://oilprice.com/Energy/Crude-Oil/OPEC-Delegates-Signal-Extra-Cut.html",
+   "classification_at_event": {
+    "classification_id": "997f9243eaa9166076960d756c29f1a54f49cba06baddd15a683fa62fd65de6d",
+    "classified_at": "2026-11-09T10:15:00Z",
+    "instrument_mapping": "unknown",
+    "known_at": "2026-11-09T10:15:00Z",
+    "stream_memberships": [
+     "oil"
+    ],
+    "timing": "at_event",
+    "version": "rules-v1"
+   },
+   "event_at": "2026-11-09T10:15:00Z",
+   "event_basis": "observed_at",
+   "instruments": {
+    "linked": [],
+    "mapping": "unknown",
+    "note": "unmapped: no instrument is linked to this item; the price is the page's series"
+   },
+   "item_id": "d605459a3c037a241d294444e7af62cf4a2f128036cfc718c05b855de10a71b6",
+   "later_context": {
+    "classifications_after_event": [],
+    "classifications_after_event_omitted": 0,
+    "revisions_after_event": [],
+    "revisions_after_event_omitted": 0,
+    "revisions_known_by_cutoff": 1,
+    "stream_membership_removed_at": null
+   },
+   "observed_at": "2026-11-09T10:15:00Z",
+   "outlet": "",
+   "price": {
+    "age_seconds": 360.0,
+    "record": {
+     "available_at": "2026-11-09T10:09:02Z",
+     "granularity": "tick",
+     "instrument_id": "etf.qqq",
+     "price": 600.63,
+     "price_basis": "last_trade",
+     "quote_ts": "2026-11-09T10:09:00Z",
+     "record_id": "uq-100900",
+     "record_kind": "underlying_quote",
+     "session": "pre",
+     "synthetic": true
+    },
+    "status": "stale"
+   },
+   "published_at": "2026-11-09T10:13:00Z",
+   "revision_id": "152e24db1529102c08a19f8643ea42f55b632346732fb78cf9ba2a7152da169a",
+   "revision_number": 1,
+   "revisions_known_at_event": 1,
+   "run_id": "20261109T101500Z-fx",
+   "source_id": "oilprice_com",
+   "time_quality": {
+    "published": "explicit",
+    "updated": "missing"
+   },
+   "title": "OPEC+ delegates signal an extra output cut",
+   "title_truncated": false,
+   "url_rejected": null
+  },
+  {
+   "archived_at": "2026-11-09T10:06:00Z",
+   "canonical_url": "https://eia.gov/todayinenergy/detail.php?id=99950",
+   "classification_at_event": {
+    "classification_id": "4f6363059c83d681e19f42a206e3fc709e110c500c51fb467f3171edbc1a00d7",
+    "classified_at": "2026-11-09T10:12:00Z",
+    "instrument_mapping": "unknown",
+    "known_at": "2026-11-09T10:12:00Z",
+    "stream_memberships": [
+     "ai_buildout",
+     "oil"
+    ],
+    "timing": "at_event",
+    "version": "rules-v1"
+   },
+   "event_at": "2026-11-09T10:12:00Z",
+   "event_basis": "classified_at",
+   "instruments": {
+    "linked": [],
+    "mapping": "unknown",
+    "note": "unmapped: no instrument is linked to this item; the price is the page's series"
+   },
+   "item_id": "66d8847de8e694e3d0255396953b7e6cde29d30a74116ca059f43b975086d33f",
+   "later_context": {
+    "classifications_after_event": [],
+    "classifications_after_event_omitted": 0,
+    "revisions_after_event": [],
+    "revisions_after_event_omitted": 0,
+    "revisions_known_by_cutoff": 1,
+    "stream_membership_removed_at": null
+   },
+   "observed_at": "2026-11-09T10:05:00Z",
+   "outlet": "",
+   "price": {
+    "age_seconds": 180.0,
+    "record": {
+     "available_at": "2026-11-09T10:09:02Z",
+     "granularity": "tick",
+     "instrument_id": "etf.qqq",
+     "price": 600.63,
+     "price_basis": "last_trade",
+     "quote_ts": "2026-11-09T10:09:00Z",
+     "record_id": "uq-100900",
+     "record_kind": "underlying_quote",
+     "session": "pre",
+     "synthetic": true
+    },
+    "status": "stale"
+   },
+   "published_at": "2026-11-09T09:55:00Z",
+   "revision_id": "26b26fc7ba829b8492aa9ab73b91f4da35514b9a31112d07fa0525f7fba90963",
+   "revision_number": 1,
+   "revisions_known_at_event": 1,
+   "run_id": "20261109T100500Z-fx",
+   "source_id": "eia_today_in_energy",
+   "time_quality": {
+    "published": "explicit",
+    "updated": "missing"
+   },
+   "title": "AI data center power demand lifts natural gas and oil use at peaking plants",
+   "title_truncated": false,
+   "url_rejected": null
+  },
+  {
+   "archived_at": "2026-11-09T10:10:30Z",
+   "canonical_url": "https://oilprice.com/Geopolitics/Middle-East/Tanker-Attacked-Near-Hormuz.html",
+   "classification_at_event": {
+    "classification_id": "a58ef6dfe88ca389356cf5cd9af1e439472b8faca8693c81fdb659d8d89a5702",
+    "classified_at": "2026-11-09T10:10:00Z",
+    "instrument_mapping": "unknown",
+    "known_at": "2026-11-09T10:10:00Z",
+    "stream_memberships": [
+     "oil"
+    ],
+    "timing": "at_event",
+    "version": "rules-v1"
+   },
+   "event_at": "2026-11-09T10:10:00Z",
+   "event_basis": "observed_at",
+   "instruments": {
+    "linked": [],
+    "mapping": "unknown",
+    "note": "unmapped: no instrument is linked to this item; the price is the page's series"
+   },
+   "item_id": "d5ca2f226151dc7b91854c9d5a29e25658d2ba08e56860235d785a0974c401c7",
+   "later_context": {
+    "classifications_after_event": [],
+    "classifications_after_event_omitted": 0,
+    "revisions_after_event": [],
+    "revisions_after_event_omitted": 0,
+    "revisions_known_by_cutoff": 2,
+    "stream_membership_removed_at": null
+   },
+   "observed_at": "2026-11-09T10:10:00Z",
+   "outlet": "",
+   "price": {
+    "age_seconds": 60.0,
+    "record": {
+     "available_at": "2026-11-09T10:09:02Z",
+     "granularity": "tick",
+     "instrument_id": "etf.qqq",
+     "price": 600.63,
+     "price_basis": "last_trade",
+     "quote_ts": "2026-11-09T10:09:00Z",
+     "record_id": "uq-100900",
+     "record_kind": "underlying_quote",
+     "session": "pre",
+     "synthetic": true
+    },
+    "status": "matched"
+   },
+   "published_at": "2026-11-09T10:00:00Z",
+   "revision_id": "8201b83c3a1a1366b17e99f3fa6d263bcb1f378cf60574757eebd56cc7282504",
+   "revision_number": 2,
+   "revisions_known_at_event": 2,
+   "run_id": "20261109T101000Z-fx",
+   "source_id": "oilprice_com",
+   "time_quality": {
+    "published": "explicit",
+    "updated": "missing"
+   },
+   "title": "Tanker attacked near the Strait of Hormuz; crew evacuated",
+   "title_truncated": false,
+   "url_rejected": null
+  },
+  {
+   "archived_at": "2026-11-09T10:06:00Z",
+   "canonical_url": "https://oilprice.com/Geopolitics/Middle-East/Tanker-Attacked-Near-Hormuz.html",
+   "classification_at_event": {
+    "classification_id": "870bfee3ea44898412210e2ac1fd105d66750f5b9fe1fe2e7bb833733cd73b83",
+    "classified_at": "2026-11-09T10:05:00Z",
+    "instrument_mapping": "unknown",
+    "known_at": "2026-11-09T10:05:00Z",
+    "stream_memberships": [
+     "oil"
+    ],
+    "timing": "at_event",
+    "version": "rules-v1"
+   },
+   "event_at": "2026-11-09T10:05:00Z",
+   "event_basis": "observed_at",
+   "instruments": {
+    "linked": [],
+    "mapping": "unknown",
+    "note": "unmapped: no instrument is linked to this item; the price is the page's series"
+   },
+   "item_id": "d5ca2f226151dc7b91854c9d5a29e25658d2ba08e56860235d785a0974c401c7",
+   "later_context": {
+    "classifications_after_event": [],
+    "classifications_after_event_omitted": 0,
+    "revisions_after_event": [
+     {
+      "known_at": "2026-11-09T10:10:00Z",
+      "revision_id": "8201b83c3a1a1366b17e99f3fa6d263bcb1f378cf60574757eebd56cc7282504",
+      "title": "Tanker attacked near the Strait of Hormuz; crew evacuated"
+     }
+    ],
+    "revisions_after_event_omitted": 0,
+    "revisions_known_by_cutoff": 2,
+    "stream_membership_removed_at": null
+   },
+   "observed_at": "2026-11-09T10:05:00Z",
+   "outlet": "",
+   "price": {
+    "age_seconds": 60.0,
+    "record": {
+     "available_at": "2026-11-09T10:04:02Z",
+     "granularity": "tick",
+     "instrument_id": "etf.qqq",
+     "price": 600.28,
+     "price_basis": "last_trade",
+     "quote_ts": "2026-11-09T10:04:00Z",
+     "record_id": "uq-100400",
+     "record_kind": "underlying_quote",
+     "session": "pre",
+     "synthetic": true
+    },
+    "status": "matched"
+   },
+   "published_at": "2026-11-09T10:00:00Z",
+   "revision_id": "02d36bc4f01f15893d83a8efa703de105d127dadac9f9537688670efb4811c94",
+   "revision_number": 1,
+   "revisions_known_at_event": 1,
+   "run_id": "20261109T100500Z-fx",
+   "source_id": "oilprice_com",
+   "time_quality": {
+    "published": "explicit",
+    "updated": "missing"
+   },
+   "title": "Tanker attacked near the Strait of Hormuz",
+   "title_truncated": false,
+   "url_rejected": null
+  }
+ ],
+ "rows_offset": 0,
+ "rows_on_page": 4,
+ "schema_version": "news-view/v1",
+ "stream": "oil",
+ "synthetic_prices": true,
+ "view": {
+  "complete": true,
+  "pages_omitted": 0,
+  "rows_omitted": 0,
+  "rows_total": 4
+ },
+ "window": {
+  "applies_to": "rows (event_at), price_coverage and news_coverage",
+  "end": "2026-11-09T11:15:00Z",
+  "start": "2026-11-09T00:00:00Z"
+ }
+}

@@ -42,6 +42,48 @@ MEASUREMENT_NOTE = (
     "samples; a brief spike in a contract that never ranks is not discovered."
 )
 
+WINDOWS_LIVE_ENV = "OA203_WINDOWS_LIVE_ENABLED"
+
+
+def windows_live_enabled() -> bool:
+    """Live window hook enablement: env flag only, default off."""
+    return os.getenv(WINDOWS_LIVE_ENV) == "1"
+
+
+def maybe_run_windows_after_finalize(archive: DayArchive, universe: dict[str, Any], cfg: Config,
+                                     *, hook: Callable | None = None) -> dict[str, Any]:
+    """Disabled-by-default production hook: build + publish #130 windows.
+
+    Called at the end of ``finalize``. When ``OA203_WINDOWS_LIVE_ENABLED``
+    is not ``"1"`` this is a no-op that touches nothing (no build, no
+    publish, no extra collection, no R2 call). When enabled it runs
+    ``windows_live.run_after_finalize`` (or the injected ``hook``, which
+    takes ``(spool_dir, day, universe)``) over the finalized spool and
+    records the outcome in a best-effort ``windows_live.json`` artifact.
+    A hook failure is logged and never unfinalizes the day: finalize has
+    already written the final summary by the time this runs. Enabling
+    the flag is live activation (Chej alone, after review); the code
+    only implements the hook.
+    """
+    if not windows_live_enabled():
+        return {"enabled": False}
+    try:
+        from .windows_live import run_after_finalize
+        run = hook or run_after_finalize
+        result = run(archive.dir.parent, archive.day, universe)
+    except Exception as exc:
+        runtime.log("oa203_windows_after_finalize_failed", date=archive.day.isoformat(),
+                    error=f"{type(exc).__name__}: {exc}"[:300])
+        return {"enabled": True, "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    try:
+        archive.write_json("windows_live.json", result)
+        archive.push("windows_live.json")
+    except Exception as exc:  # the publication stands; the record is best-effort
+        runtime.log("oa203_windows_after_finalize_record_failed", date=archive.day.isoformat(),
+                    error=f"{type(exc).__name__}: {exc}"[:200])
+    return result
+
 
 def _sleep_until(when: datetime) -> None:
     while not runtime.STOP:
@@ -71,11 +113,15 @@ def build_universe_for(day: date, client: Tradier, cfg: Config, archive: DayArch
 
 
 def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[str, Any],
-             open_ms: int | None, close_ms: int | None, backfill_enabled: bool = True) -> dict[str, Any]:
+             open_ms: int | None, close_ms: int | None, backfill_enabled: bool = True,
+             windows_hook: Callable | None = None) -> dict[str, Any]:
     """Build outputs, backfill, reconcile uploads and write the final summary.
 
     Safe to re-run: a crash or stop anywhere before ``summary.json`` is
     written leaves the day unfinalized, and the next ``run`` finalizes it.
+    After the summary is written, the disabled-by-default windows hook
+    runs (see ``maybe_run_windows_after_finalize``); it never unfinalizes
+    the day. ``windows_hook`` is an injectable hook for tests.
     """
     damaged: list[dict[str, Any]] = []
     rows = build_contract_rows(archive.dir, cfg.policy, open_ms, close_ms, damaged,
@@ -137,6 +183,8 @@ def finalize(archive: DayArchive, client: Tradier, cfg: Config, universe: dict[s
     runtime.log("oa203_session_finalized", date=archive.day.isoformat(),
         **{**summary["assessment"], "pending_uploads": remaining},
         contracts=summary["contracts"])
+    summary["windows_live"] = maybe_run_windows_after_finalize(archive, universe, cfg,
+                                                                hook=windows_hook)
     return summary
 
 

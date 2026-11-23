@@ -30,6 +30,9 @@ function makeEl() {
 }
 const els = {};
 const calls = { setStatus: [], clearChain: [], buildRows: [], openTicket: [], relative: [] };
+// The real #178 chain-snapshot formatter: the header line this test checks is
+// the one the page will render, not a stub of it.
+const sharedFormat = require('../site/shared/format.js');
 const sandbox = {
   console,
   TIER_COLORS: { '0DTE_Regular': '#ff0000' },
@@ -42,6 +45,7 @@ const sandbox = {
   openTicket: (e, row) => { calls.openTicket.push([e, row]); },
   formatVwapRvol: () => ({ text: 'VWAP 600.50 · RVOL 1.20', state: 'live' }),
   formatMomentum: () => ({ text: 'MOM +0.40', state: 'up' }),
+  formatChainSnapshot: sharedFormat.formatChainSnapshot,
   document: { getElementById: id => (els[id] ||= makeEl()) },
 };
 const context = vm.createContext(sandbox);
@@ -60,9 +64,13 @@ const reset = () => {
   vm.runInContext('ranges = ' + JSON.stringify(RANGES) + ';', context);
 };
 const qqqData = {
-  underlying_price: 600.1, tier: '0DTE_Regular', snapshot_time: '2026-11-07T21:00:00Z',
+  underlying_price: 600.1, tier: '0DTE_Regular', snapshot_time: '16:14 ET',
+  timestamp: '11/7/2026 13:14:45',
   underlying_market: {}, rows: [{ Strike: 600, Type: 'call', OpenInterest: 100 }],
 };
+// The producer's own ET stamp, so the header's session/age line is exercised
+// with a real payload shape instead of an ISO string the page never receives.
+const SNAP_MS = new Date(2026, 10, 7, 13, 14, 45).getTime();
 
 // QQQ with a spot: rows built from the OIranges calibration, ticket clicks
 // wired, header + VWAP/RVOL + momentum written, no-data hidden.
@@ -78,7 +86,16 @@ calls.buildRows[0].opts.onCellClick({ type: 'click' }, { Strike: 600 });
 assert.equal(calls.openTicket.length, 1, 'a QQQ cell click opens a ticket');
 assert.equal(els['chain-note'].textContent, '', 'QQQ has no view-only note');
 assert.equal(els['price'].textContent, '$600.10', 'header shows the spot');
-assert.equal(els['tier-badge'].textContent, 'Regular', 'tier badge drops the 0DTE_ prefix');
+// #178: the header now says which snapshot the price came from, its session
+// and its age — and marks the value retained once collection has stopped.
+assert.equal(els['price'].dataset.state, 'retained', 'a snapshot from hours ago is not presented as current');
+assert.match(els['price'].title, /historical snapshot taken at 16:14 ET during the after hours/);
+assert.equal(els['price-age'].dataset.state, 'retained');
+assert.match(els['price-age'].textContent,
+  /^snapshot 16:14 ET · After hours · .+ · retained$/,
+  'the header line carries the snapshot time, its session, its age and the retained marker');
+assert.equal(els['tier-badge'].textContent, 'Regular tier', 'the tier badge says it is a tier, not a session');
+assert.equal(els['tier-badge'].title, 'Expiration tier 0DTE_Regular — not a market session');
 assert.equal(els['tier-badge'].style.color, '#ff0000', 'tier badge takes the tier color');
 assert.equal(els['tier-badge'].style.display, '', 'tier badge is shown');
 assert.equal(els['vwap-rvol'].textContent, 'VWAP 600.50 · RVOL 1.20', 'VWAP/RVOL line written');
@@ -92,7 +109,7 @@ assert.equal(calls.setStatus.length, 0, 'no stale marking on a good render');
 // QQQ without a spot: marked stale, nothing built, chain left as-is.
 reset();
 vm.runInContext('renderHeatmap(' + JSON.stringify({ ...qqqData, underlying_price: null }) + ", 'QQQ')", context);
-assert.deepEqual(calls.setStatus, [['stale', '2026-11-07T21:00:00Z']], 'a missing spot marks the page stale');
+assert.deepEqual(calls.setStatus, [['stale', '16:14 ET']], 'a missing spot marks the page stale');
 assert.equal(calls.buildRows.length, 0, 'no rows built without a spot');
 assert.equal(calls.clearChain.length, 0, 'a QQQ chain without a spot is not cleared');
 
@@ -100,7 +117,7 @@ assert.equal(calls.clearChain.length, 0, 'a QQQ chain without a spot is not clea
 // with another underlying's price.
 reset();
 vm.runInContext('renderHeatmap(' + JSON.stringify({ ...qqqData, underlying_price: null }) + ", 'SPY')", context);
-assert.deepEqual(calls.setStatus, [['stale', '2026-11-07T21:00:00Z']], 'a missing SPY spot marks the page stale');
+assert.deepEqual(calls.setStatus, [['stale', '16:14 ET']], 'a missing SPY spot marks the page stale');
 assert.deepEqual(calls.clearChain, ['SPY spot price unavailable in the latest snapshot.'], 'a non-QQQ chain without a spot is cleared');
 assert.equal(calls.buildRows.length, 0, 'no rows built without a spot');
 

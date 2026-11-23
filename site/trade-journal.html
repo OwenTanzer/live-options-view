@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Trade Journal</title>
+<!-- OA-238: private retroactive trade display. This file carries no trade or
+     market data; everything comes from /api/trade-journal*, which requires a
+     signed-in session listed in TRADE_JOURNAL_VIEWERS. -->
+<style>
+:root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1f21;--muted:#62666b;--line:#dcdcd8;--grid:#ececea;--buy:#1f7a4d;--sell:#b2342a;
+  --accent:#3668b2;--band:rgba(54,104,178,.20);--und:#5a4fa3;--sel:#eef3fb;--warn:#8a5a00;--warnbg:#fff4dc;--ok:#1f7a4d;--bad:#b2342a;--mark:#9aa0a6}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;
+  --line:#33363a;--grid:#26282b;--buy:#4cc38a;--sell:#f07167;--accent:#7fa8f0;--band:rgba(110,160,240,.22);--und:#a99cf0;--sel:#1f2a3a;
+  --warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167;--mark:#6b7075}}
+:root[data-theme="dark"]{--bg:#141517;--panel:#1c1e21;--ink:#e7e7e4;--muted:#a0a4a8;--line:#33363a;--grid:#26282b;--buy:#4cc38a;
+  --sell:#f07167;--accent:#7fa8f0;--band:rgba(110,160,240,.22);--und:#a99cf0;--sel:#1f2a3a;--warn:#f0c060;--warnbg:#2e2614;--ok:#4cc38a;--bad:#f07167;--mark:#6b7075}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+h1{font-size:17px;margin:0} h2{font-size:12px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+main{display:grid;grid-template-columns:minmax(280px,380px) 1fr;gap:16px;padding:16px;max-width:1500px;margin:0 auto}
+@media (max-width:860px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:16px;min-width:0}
+.note{color:var(--muted);font-size:12px} .ok{color:var(--ok)} .bad{color:var(--bad)}
+button,input{font:inherit;font-size:13px;padding:4px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+button{cursor:pointer} button:disabled{opacity:.5;cursor:default} button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+table{border-collapse:collapse;width:100%;font-size:13px} th,td{padding:4px 6px;border-bottom:1px solid var(--grid);text-align:left;vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums} th{color:var(--muted);font-weight:600}
+.pos{display:grid;grid-template-columns:auto 1fr auto;gap:2px 8px;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer}
+.pos.on{background:var(--sel);border-color:var(--accent)} .pos .m{grid-column:2/4;color:var(--muted);font-size:12px}
+.badge{font-size:11px;padding:0 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
+.badge.warn{color:var(--warn);background:var(--warnbg);border-color:var(--warn)}
+.banner{padding:10px;border:1px solid var(--warn);background:var(--warnbg);color:var(--warn);border-radius:6px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.lane{position:relative;border-top:1px solid var(--grid)} .lane:first-child{border-top:0}
+.lane .lt{position:absolute;left:8px;top:4px;font-size:12px;font-weight:600;pointer-events:none}
+.lane .ls{position:absolute;right:8px;top:4px;font-size:11px;color:var(--muted);pointer-events:none;max-width:62%;text-align:right}
+.gapbox{margin:22px 8px 8px;padding:10px;border:1px dashed var(--warn);background:var(--warnbg);color:var(--warn);border-radius:6px;font-size:12px}
+svg{display:block;width:100%}
+#access .gate{max-width:440px;margin:12vh auto 0;padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;gap:12px}
+#access .gate-kicker{margin:0;font-size:12px} #access .gate-kicker a{color:var(--accent);text-decoration:none}
+#access h1{font-size:20px} #access .gate-what{margin:0;color:var(--muted)}
+#access button{min-height:44px;font-size:14px} #access button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+#access details{border-top:1px solid var(--line);padding-top:10px} #access summary{cursor:pointer;color:var(--muted);min-height:28px}
+#access details label{display:flex;flex-direction:column;gap:4px;margin:8px 0;font-size:13px;color:var(--muted)}
+#access details input{min-height:44px;font-size:16px}
+#access #authstatus{margin:0;color:var(--bad);min-height:1em}
+@media (max-width:480px){#access .gate{margin:16px;}}
+#tip{position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;display:none;z-index:9;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+</style>
+</head>
+<body>
+<!-- Critical Design Theory: the gate answers one question -- "what is this, and how do I get in?" --
+     in the journal's own tokens, so arriving here feels like the same building, not a bare default page. -->
+<section id="access" hidden><div class="gate">
+<p class="gate-kicker"><a href="/">← Options View</a></p>
+<h1>Private trade journal</h1>
+<p class="gate-what">A retroactive view of journaled trades: fills, fees and archived quotes on one New York clock.
+  Nothing is shown until you sign in; this page itself carries no trade data.</p>
+<button id="unlock" class="primary">Sign in with a passkey</button>
+<details><summary>Join with an invitation</summary>
+<p class="note">Access is by invitation. Enter the one-time code you were sent, then save a passkey on this device.</p>
+<label>One-time code <input id="invitation" type="password" autocomplete="off"></label>
+<button id="enroll">Save my passkey</button></details>
+<p id="authstatus" role="status"></p></div></section>
+<div id="journal" hidden>
+<header>
+  <h1>Trade journal</h1>
+  <label class="note">Date (America/New_York) <input type="date" id="day"></label>
+  <label class="note">View <select id="journal-view"><option value="retrospective">Full retrospective</option><option value="recorded">Recorded as of</option></select></label>
+  <label class="note">As-of date ET <input type="date" id="journal-asof-date"></label>
+  <label class="note">Cutoff ET <input type="time" id="journal-cutoff" value="10:00" step="0.001"></label>
+  <button id="load">Load</button>
+  <button id="sync">Sync from Notion</button>
+  <button id="lock">Sign out</button>
+  <span id="syncinfo" class="note"></span>
+</header>
+<main>
+  <section>
+    <div id="msg"></div>
+    <div class="card"><h2>Totals for the day</h2><table id="totals"></table><div class="note" id="totnote"></div></div>
+    <div class="card">
+      <h2>Positions with an execution that day</h2>
+      <div class="row"><button id="restore">Restore all</button><span class="note" id="selcount"></span></div>
+      <div id="plist"></div>
+    </div>
+    <div class="card" id="unsupcard" hidden><h2>Rows outside the position totals</h2><div id="unsup" class="note"></div></div>
+  </section>
+  <section>
+    <div class="card">
+      <div class="row"><b style="font-size:13px">Window</b>
+        <button data-w="session" class="on">Session 09:30–16:15</button><button data-w="fills">All fills</button><button data-w="sel">Selected ±10 min</button></div>
+      <div id="lanes"></div>
+      <div class="note" style="margin-top:6px">One clock (New York) for every lane; each underlying and each option has its own price scale. Archived quotes are separate observations from the journal's fills: lines and bands are continuous archived coverage around the fills; dots and ticks are sparse samples of the holding period; blank stretches were not read.</div>
+    </div>
+    <div class="card"><h2>Fills</h2><div style="overflow-x:auto"><table id="fills"></table></div>
+      <div class="note" style="margin-top:6px">Times are the journal's execution-alert or broker order-initiation times, not exchange fill times. Fees are estimated until actual charges are recorded.</div></div>
+  </section>
+</main>
+<div id="tip"></div>
+</div>
+<script src="js/journal-passkeys.js"></script>
+<script src="js/trade-journal-loads.js?v=06f9691b764c09a6"></script>
+<script type="module">
+import { createClock,createSourceRegistry } from './shared/one-clock.js';
+import { replaySelection } from './shared/one-clock-replay-link.js';
+import { journalSource } from './shared/one-clock-journal-source.js';
+import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
+(() => {
+  const TZ = 'America/New_York';
+  const fT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fHM = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  const fDT = new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fH = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const usd = v => (v < 0 ? '−' : '+') + '$' + Math.abs(v).toFixed(2);
+  const T = s => Date.parse(s);
+  let data = null, selected = new Set(), win = 'session', laneData = [];
+  // Day-list and context responses are tied to their requested date and load
+  // generation (js/trade-journal-loads.js), so a late response for another day
+  // or an earlier load can never replace the current selection.
+  let journalBody;
+  const registry=createSourceRegistry();registry.register(journalSource({onBody:body=>{journalBody=body;}}));
+  const clock=createClock({registry,initial:{mode:'replay',origin:'recorded',session:sessionAt(Date.now()),instrument:'JOURNAL',cutoff:Date.now()}});
+  const loads = createTradeJournalLoads(async url => {
+    if(url.startsWith('/api/trade-journal?') && new URL(url,location.origin).searchParams.has('cutoff')) {
+      try {
+        const result=await clock.read('private-journal');
+        if(result.discarded)return {ok:false,status:409,body:{error:'Selection changed'}};
+        return {ok:true,status:200,body:{...journalBody,positions:result.rows.map(row=>row.value)}};
+      } catch(error){return {ok:false,status:error.status??503,body:{error:error.message}};}
+    }
+    const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});
+    return {ok:response.ok,status:response.status,body:await response.json().catch(()=>({}))};
+  });
+  const shownDate = () => (data ? data.date : $('day').value);
+  const dayInNY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  $('day').value = dayInNY.format(new Date());
+  $('journal-asof-date').value=$('day').value;
+  $('day').addEventListener('change',()=>{$('journal-asof-date').value=$('day').value;});
+  let linkedSelection, linkedTime;
+  try {
+    linkedSelection = replaySelection(location.search);
+    if (linkedSelection) {
+      const {session, cutoff} = linkedSelection;
+      $('day').value = $('journal-asof-date').value = session;
+      $('journal-view').value = 'recorded';
+      const format = new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hourCycle: 'h23',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3});
+      $('journal-cutoff').value = format.format(cutoff);
+      linkedTime = $('journal-cutoff').value;
+    }
+  } catch (error) {
+    $('access').hidden = false;
+    $('authstatus').textContent = error.message;
+    return;
+  }
+  const fillsOnDay = p => p.executions.filter(e => dayInNY.format(T(e.ts)) === shownDate());
+  const ctxOf = p => loads.context(shownDate(), p.position_id) || { loading: true };
+
+  const label = p => { const c = p.contract; if (p.label) return p.label; if (c.instrument_type === 'shares') return c.underlying + ' shares'; return `${c.underlying} $${+c.strike} ${c.option_type}`; };
+  const orders = p => [...new Set(p.executions.map(e => e.order_ref))].join('→');
+  const etMs = (h, m) => { const day = shownDate(), noon = Date.parse(day + 'T12:00:00Z');
+    const off = (12 - +fH.format(noon)) * 3600e3; return Date.parse(day + 'T00:00:00Z') + (h * 60 + m) * 60e3 + off; };
+
+  function showSync(sync) {
+    if(!sync){$('syncinfo').textContent=`Recorded as of ${fDT.format(data.cutoff)} ET. Unretained earlier revisions are unavailable.`;return;}
+    const parts = [sync.last_success_at ? `Last successful sync ${fDT.format(T(sync.last_success_at))} ET` : 'Never synced'];
+    if (sync.scan_in_progress) parts.push(`<span class="bad">Scan in progress since ${fDT.format(T(sync.scan_in_progress.started_at))} ET (${sync.scan_in_progress.query_complete ? 'listing done, bodies pending' : 'listing not finished'}); sync again to continue</span>`);
+    if (sync.last_error) parts.push(`<span class="bad">Last read failed ${fDT.format(T(sync.last_error.at))} ET: ${esc(sync.last_error.message)}</span>`);
+    $('syncinfo').innerHTML = parts.join(' · ');
+  }
+
+  async function load() {
+    $('msg').innerHTML = '';
+    let cutoff=null;
+    try {
+      if($('journal-view').value==='recorded') {
+        const parts=$('journal-cutoff').value.split(':').map(Number);
+        if(parts.length<2)throw new Error('Choose a cutoff time');
+        const day = $('journal-asof-date').value, seconds = parts[2] ?? 0;
+        // Preserve the exact instant even in the repeated hour at the DST boundary.
+        cutoff = linkedSelection?.session === day && $('journal-cutoff').value === linkedTime
+          ? linkedSelection.cutoff
+          : sessionInstant(day,parts[0],parts[1],Math.floor(seconds),Math.round((seconds % 1)*1000));
+      }
+      // Every load invalidates the preceding source generation, including a
+      // switch back to the explicit full retrospective.
+      clock.select({session:$('day').value,instrument:'JOURNAL',mode:'replay',origin:'recorded',cutoff:cutoff??sessionInstant($('day').value,16)});
+    } catch(error){$('msg').textContent=error.message;return false;}
+    const res = await loads.loadDay($('day').value,cutoff);
+    if (res.stale) return false;                                       // a later day load superseded this one
+    if (res.status === 401) { $('access').hidden = false; $('journal').hidden = true; return false; }
+    $('journal').hidden = false;
+    const body = res.body || {};
+    if (!res.ok) { $('msg').innerHTML = `<div class="banner">${esc(body.error || `HTTP ${res.status}`)}</div>`; return false; }
+    data = { ...body, date: res.date };
+    $('sync').disabled=cutoff!==null;
+    selected = new Set(data.positions.map(p => p.position_id));       // open with every position selected
+    showSync(data.sync);
+    if(data.view==='retrospective')$('syncinfo').textContent+=' · Full retrospective: later fills and revisions included.';
+    render();
+    return true;
+  }
+
+  async function sync() {
+    if(data?.view==='recorded-as-of'){$('msg').textContent='Switch to Full retrospective to sync the current journal.';return;}
+    $('sync').disabled = true;
+    try {
+      const res = await fetch('/api/trade-journal/sync', { method: 'POST', credentials: 'same-origin' });
+      const body = await res.json().catch(() => ({}));
+      if (body.sync) showSync(body.sync);
+      if (!res.ok) { $('msg').innerHTML = `<div class="banner">Sync did not complete: ${esc(body.error?.message || body.error || res.status)}</div>`; return; }
+      const s = body.summary;
+      await load();                                                    // drops every context and any load in flight
+      $('msg').innerHTML = `<div class="note">Synced: ${s.rows_listed} rows listed, ${s.inserted.length} new, ${s.refreshed.length} refreshed, ${s.unchanged} unchanged` +
+        `${s.pending_rows ? `, <b>${s.pending_rows} still pending</b>` : ''}${s.status_changes.length ? `, ${s.status_changes.length} status changes` : ''}` +
+        `${s.unverified_missing.length ? `, ${s.unverified_missing.length} missing rows not yet verified` : ''}. Scan ${s.scan.finished ? 'finished' : 'continues on the next sync'}.</div>`;
+    } finally { $('sync').disabled = false; }
+  }
+
+  function loadContexts(ps) {
+    const date = shownDate();
+    for (const p of ps) {
+      // Keyed by date + position and the current load generation; a stale reply resolves false and draws nothing.
+      loads.loadContext(date, p.position_id).then(applied => { if (applied) renderLanes(); });
+    }
+  }
+
+  function render() {
+    const ps = data.positions;
+    const sel = ps.filter(p => selected.has(p.position_id));
+    const act = sel.filter(p => p.source_status === 'active');
+    const closed = act.filter(p => p.closed && (p.expired_on || dayInNY.format(T(p.closed_ts))) === shownDate()), open = act.filter(p => !p.closed);
+    const t = data.totals;
+    const rows = [
+      ['Positions', t.positions, act.length, 0], ['Fills', t.fills, act.reduce((a, p) => a + fillsOnDay(p).length, 0), 0],
+      ['Realised gross (closed)', t.gross, closed.reduce((a, p) => a + p.gross_pnl, 0), 2],
+      ['Fees (closed)', t.fees, closed.reduce((a, p) => a + p.fees, 0), 2],
+      ['Realised net (closed)', t.net, closed.reduce((a, p) => a + p.net_pnl, 0), 2],
+    ];
+    if (t.open_positions) rows.push(['Open positions', t.open_positions, open.length, 0],
+      ['Open cost basis', t.open_cost_basis, open.reduce((a, p) => a + p.open_cost_basis, 0), 2],
+      ['Fees paid on open', t.open_fees_paid, open.reduce((a, p) => a + p.fees, 0), 2]);
+    $('totals').innerHTML = '<tr><th></th><th class="n">Day</th><th class="n">Selected</th></tr>' +
+      rows.map(([k, a, b, d]) => `<tr><td>${k}</td><td class="n">${d ? a.toFixed(d) : a}</td><td class="n">${d ? b.toFixed(d) : b}</td></tr>`).join('');
+    $('totnote').textContent = [t.open_positions ? 'Open positions are not counted as realised gains or losses.' : '',
+      t.excluded_not_active ? `${t.excluded_not_active} position(s) no longer active in the journal are shown but not counted.` : ''].filter(Boolean).join(' ');
+    $('selcount').textContent = `${selected.size} of ${ps.length} selected`;
+    $('plist').innerHTML = ps.length ? ps.map(p => {
+      const on = selected.has(p.position_id);
+      const flags = [p.source_status !== 'active' ? `<span class="badge warn">${esc(p.source_status.replaceAll('_', ' '))}</span>` : '',
+        p.revision > 1 ? `<span class="badge">rev ${p.revision}</span>` : '', p.closed ? '' : '<span class="badge warn">open</span>'].join(' ');
+      const pnl = p.closed ? `gross ${usd(p.gross_pnl)} · fees $${p.fees.toFixed(2)} ${esc(p.fee_basis.join('+'))} · net ${usd(p.net_pnl)}`
+        : `open ${Math.abs(p.open_qty)} ${p.open_side} · cost basis $${p.open_cost_basis.toFixed(2)} · fees paid $${p.fees.toFixed(2)}${p.realized_gross_pnl ? ` · realised so far ${usd(p.realized_gross_pnl)}` : ''}`;
+      return `<div class="pos ${on ? 'on' : ''}" data-id="${esc(p.position_id)}"><input type="checkbox" ${on ? 'checked' : ''} aria-label="select ${esc(label(p))}">
+        <span><b>${esc(label(p))}</b> <span class="note">· ${esc(orders(p))}</span> ${flags}</span><span><button data-only="${esc(p.position_id)}">Only</button></span>
+        <span class="m">${fDT.format(T(p.opened_ts))}${p.closed_ts ? '→' + fDT.format(T(p.closed_ts)) : ''}${p.expired_on ? ' · expired worthless ' + esc(p.expired_on) : ''} · ${fillsOnDay(p).length} fills on this date · position ${pnl}
+        ${p.source_last_edited?' · journal edited '+fDT.format(T(p.source_last_edited)):''} · recorded ${fDT.format(T(p.app_read_at))}${p.journal_url?' · <a href="'+esc(p.journal_url)+'" target="_blank" rel="noopener">row</a>':''}</span></div>`;
+    }).join('') : '<div class="note">'+(data.view==='recorded-as-of'?'No eligible position was retained by this cutoff. Unretained earlier history is unavailable.':'No journal positions have an execution on this date.')+'</div>';
+    $('unsupcard').hidden = !data.unsupported.length;
+    $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
+    $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
+      sel.flatMap(p => fillsOnDay(p).map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
+        `<tr><td>${esc(label({ contract: e.instrument }))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
+         <td>${fT.format(T(e.ts))}</td><td class="note">${esc(e.ts_kind)}</td><td class="n">$${e.fee.toFixed(2)} <span class="note">${esc(e.fee_basis)}</span></td>
+         <td class="note"><code>${esc(e.execution_id.replace(/^notion:[0-9a-f]+:/, ''))}</code></td></tr>`).join('');
+    loadContexts(sel);
+    renderLanes();
+  }
+
+  // ------------------------------------------------------------- lanes
+  const W = 900, H = 120, PADL = 56, PADR = 12, PADT = 22, PADB = 18;
+  function domain() {
+    const sel = data.positions.filter(p => selected.has(p.position_id));
+    if (win === 'session' || !sel.length) return [etMs(9, 30), etMs(16, 15)];
+    const ts = (win === 'fills' ? data.positions : sel).flatMap(p => fillsOnDay(p).map(e => T(e.ts)));
+    if (!ts.length) return [etMs(9, 30), etMs(16, 15)];
+    const pad = win === 'fills' ? 8 * 60e3 : 10 * 60e3;
+    return [Math.min(...ts) - pad, Math.max(...ts) + pad];
+  }
+  // `segments`: [{kind: 'line'|'band'|'points', points}]. Each segment is drawn on its own;
+  // nothing is ever joined across the gap between two segments. 'points' are sparse samples.
+  function lane(title, source, segments, fills, isOption) {
+    const [x0, x1] = domain(); const X = t => PADL + (t - x0) / (x1 - x0) * (W - PADL - PADR);
+    const visible = r => { const t = T(r[0]); return t >= x0 - 120e3 && t <= x1 + 120e3; };
+    const segs = (segments || []).map(s => ({ ...s, points: s.points.filter(visible) })).filter(s => s.points.length);
+    let vals = segs.flatMap(s => s.points.flatMap(r => (isOption ? [r[1], r[2]] : [r[1]]))).concat(fills.map(f => f.price).filter(Number.isFinite));
+    if (!vals.length) vals = [0, 1];
+    let lo = Math.min(...vals), hi = Math.max(...vals); if (hi - lo < 1e-9) { hi += 0.01; lo -= 0.01; }
+    const pd = (hi - lo) * 0.08; lo -= pd; hi += pd;
+    const Y = v => PADT + (hi - v) / (hi - lo) * (H - PADT - PADB);
+    let g = '';
+    for (let i = 0; i <= 3; i++) { const v = lo + (hi - lo) * i / 3;
+      g += `<line x1="${PADL}" x2="${W - PADR}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grid)"/><text x="${PADL - 4}" y="${Y(v) + 4}" font-size="10" text-anchor="end" fill="var(--muted)">${v.toFixed(2)}</text>`; }
+    const step = x1 - x0 > 3 * 3600e3 ? 3600e3 : x1 - x0 > 3600e3 ? 15 * 60e3 : 5 * 60e3;
+    for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step)
+      g += `<line x1="${X(t)}" x2="${X(t)}" y1="${PADT}" y2="${H - PADB}" stroke="var(--grid)"/><text x="${X(t)}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">${fHM.format(t)}</text>`;
+    const xy = (r, v) => `${X(T(r[0])).toFixed(1)},${Y(v).toFixed(1)}`;
+    for (const s of segs) {
+      if (s.kind === 'points') {
+        for (const r of s.points) g += isOption
+          ? `<line x1="${X(T(r[0]))}" x2="${X(T(r[0]))}" y1="${Y(r[2])}" y2="${Y(r[1])}" stroke="var(--accent)" stroke-width="2"/>`
+          : `<circle cx="${X(T(r[0]))}" cy="${Y(r[1])}" r="1.8" fill="var(--und)"/>`;
+      } else if (isOption) {
+        g += `<polygon points="${s.points.map(r => xy(r, r[2])).concat(s.points.slice().reverse().map(r => xy(r, r[1]))).join(' ')}" fill="var(--band)"/>`;
+        g += `<polyline points="${s.points.map(r => xy(r, (r[1] + r[2]) / 2)).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="1"/>`;
+      } else {
+        g += `<polyline points="${s.points.map(r => xy(r, r[1])).join(' ')}" fill="none" stroke="var(--und)" stroke-width="1.3"/>`;
+      }
+    }
+    for (const f of fills) { const x = X(T(f.ts)), c = f.side === 'buy' ? 'var(--buy)' : 'var(--sell)';
+      g += `<line x1="${x}" x2="${x}" y1="${PADT}" y2="${H - PADB}" stroke="${c}" stroke-dasharray="3 3" opacity=".6"/>`;
+      if (Number.isFinite(f.price)) { const y = Y(f.price);
+        g += f.side === 'buy' ? `<path d="M${x - 6},${y + 8}L${x + 6},${y + 8}L${x},${y - 2}Z" fill="${c}"/>` : `<path d="M${x - 6},${y - 8}L${x + 6},${y - 8}L${x},${y + 2}Z" fill="${c}"/>`;
+        g += `<text x="${x + 8}" y="${y + (f.side === 'buy' ? 12 : -6)}" font-size="11" fill="${c}">${f.side} ${f.price}</text>`; } }
+    const pts = segs.flatMap(s => s.points).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    return { html: `<div class="lane"><div class="lt">${esc(title)}</div><div class="ls">${esc(source)}</div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}<line class="xh" x1="-10" x2="-10" y1="${PADT}" y2="${H - PADB}" stroke="var(--mark)"/></svg></div>`, pts, kind: isOption ? 'band' : 'line' };
+  }
+  const gapLane = (title, text) => `<div class="lane"><div class="lt">${esc(title)}</div><div class="gapbox">${esc(text)}</div></div>`;
+
+  function renderLanes() {
+    const el = $('lanes'); laneData = [];
+    if (!data) return;
+    const sel = data.positions.filter(p => selected.has(p.position_id)).flatMap(p => p.legs ? p.legs.map((leg, i) => ({ ...leg, legContext: ctxOf(p).legs?.[i] || { loading: ctxOf(p).loading, error: ctxOf(p).error } })) : [p]);
+    if (!sel.length) { el.innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
+    let html = '';
+    const unds = [...new Set(sel.map(p => p.contract.underlying))];
+    for (const u of unds) {
+      const ps = sel.filter(p => p.contract.underlying === u);
+      const ctxs = ps.map(p => p.legContext || ctxOf(p));
+      const fills = ps.flatMap(p => fillsOnDay(p).map(e => ({ ts: e.ts, side: e.side, price: NaN })));
+      const withSeries = ctxs.filter(c => c.underlying);
+      if (withSeries.length) {
+        // Each position contributes its own segments; windows of different positions are never joined.
+        const L = lane(`${u} underlying`, withSeries[0].underlying.source, withSeries.flatMap(c => c.underlying.segments), fills, false);
+        laneData.push({ name: u, L }); html += L.html;
+      } else if (ctxs.some(c => c.loading)) html += gapLane(`${u} underlying`, 'loading archived prices…');
+      else html += gapLane(`${u} underlying`, `Coverage gap: ${ctxs.map(c => c.error || (c.gaps || []).find(g => g.startsWith(u)) || 'no archived series').filter(Boolean)[0]}`);
+    }
+    for (const p of sel) {
+      const c = p.legContext || ctxOf(p);
+      const fills = fillsOnDay(p).map(e => ({ ts: e.ts, side: e.side, price: e.price }));
+      const title = `${label(p)} · ${orders(p)}`;
+      if (p.contract.instrument_type === 'shares') {
+        const L = lane(title, 'Recorded share fills', [], fills, false);
+        laneData.push({ name: label(p), L }); html += L.html;
+      } else if (c.option) {
+        const notes = [...(c.notes || []), ...(c.coverage || [])].join(' · ');
+        const L = lane(title, c.option.source + (notes ? ` — ${notes}` : ''), c.option.segments, fills, true);
+        laneData.push({ name: label(p), L }); html += L.html;
+      }
+      else if (c.loading) html += gapLane(title, 'loading archived quotes…');
+      else html += gapLane(title, `Coverage gap: ${c.error || (c.gaps || []).filter(g => !g.includes(' underlying')).join(' ') || 'no archived quotes'} Fills on this date: ${fillsOnDay(p).map(e => `${e.side} ${e.qty} @ ${e.price} at ${fT.format(T(e.ts))} ET`).join(', ')}.`);
+    }
+    el.innerHTML = html;
+  }
+
+  $('lanes').addEventListener('mousemove', ev => {
+    const svg = ev.target.closest('svg'), tip = $('tip');
+    if (!svg) { tip.style.display = 'none'; return; }
+    const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W, [x0, x1] = domain();
+    if (vx < PADL) { tip.style.display = 'none'; return; }
+    const t = x0 + (vx - PADL) / (W - PADL - PADR) * (x1 - x0);
+    document.querySelectorAll('#lanes svg .xh').forEach(l => { l.setAttribute('x1', vx); l.setAttribute('x2', vx); });
+    const lines = laneData.map(({ name, L }) => { let best = null; for (const p of L.pts) { if (T(p[0]) <= t) best = p; else break; }
+      if (!best || t - T(best[0]) > 300e3) return `${esc(name)}: —`;
+      return `${esc(name)}: ${L.kind === 'band' ? `${best[1]}/${best[2]}` : best[1]} <span class="note">(${fT.format(T(best[0]))})</span>`; });
+    tip.innerHTML = `<b>${fT.format(t)} ET</b><br>${lines.join('<br>')}`; tip.style.display = 'block';
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - 280) + 'px'; tip.style.top = (ev.clientY + 14) + 'px';
+  });
+  $('lanes').addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
+
+  $('plist').addEventListener('click', ev => {
+    const only = ev.target.closest('[data-only]');
+    if (only) { selected = new Set([only.dataset.only]); render(); return; }
+    if (ev.target.closest('a')) return;
+    const row = ev.target.closest('.pos'); if (!row) return;
+    selected.has(row.dataset.id) ? selected.delete(row.dataset.id) : selected.add(row.dataset.id); render();
+  });
+  $('restore').onclick = () => { if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
+  document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { win = b.dataset.w; document.querySelectorAll('[data-w]').forEach(x => x.classList.toggle('on', x === b)); renderLanes(); });
+  async function unlock(enroll) {
+    const invite = enroll ? $('invitation').value.trim() : undefined;
+    if (enroll && !invite) { $('authstatus').textContent='Enter your invitation code.'; return; }
+    $('unlock').disabled = $('enroll').disabled = true;
+    try {
+      await journalPasskey(invite);
+      $('invitation').value = '';
+      $('access').hidden = true;
+      await load();
+    } catch (e) { $('authstatus').textContent = e.name === 'NotAllowedError' ? 'Passkey request canceled or unavailable.' : e.message; }
+    finally { $('unlock').disabled = $('enroll').disabled = false; }
+  }
+  $('unlock').onclick = () => unlock(false);
+  $('enroll').onclick = () => unlock(true);
+  $('lock').onclick = async () => {
+    const r = await fetch('/api/trade-journal/passkey',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});
+    if(r.ok) location.reload();
+  };
+  $('load').onclick = () => { load(); };
+  $('sync').onclick = sync;
+  load();
+})();
+</script>
+</body>
+</html>

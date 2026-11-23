@@ -22,19 +22,23 @@ import yfinance as yf
 import market_data.live_market as _entry
 from market_data.overview import INSTRUMENTS, UNIVERSE_VERSION
 from .config import (
-    COLLECT_SPY, ET, PRICES_SECS, PRICE_TICKERS, R2_BUCKET, STALE_FEED_SECS,
+    COLLECT_SPY, ET, EXTENDED_QUOTE_MAX_AGE_SECS, EXTENDED_QUOTE_MAX_SPREAD_PCT,
+    PRICES_SECS, PRICE_TICKERS, R2_BUCKET, STALE_FEED_SECS,
     YF_SYMBOL_MAP, log, past_stop,
 )
 from .feed import DXLinkFeed
-from .quotes import LiveQuoteRegistry, _observed_spy_price_with_basis
+from .price_sessions import EXTENDED_STATUSES
+from .quotes import LiveQuoteRegistry, _observed_spy_price_with_basis, _older_observed
 from .state import Counters, QQQ_SESSION, _last_prices
 
 
-def make_s3():
+def make_s3(*, publication=False):
+    from botocore.config import Config
     return boto3.client(
         "s3", endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
         aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"], region_name="auto",
+        **({"config": Config(connect_timeout=1, read_timeout=1, retries={"total_max_attempts": 1})} if publication else {}),
     )
 
 
@@ -217,22 +221,186 @@ def fetch_yf_prices_bounded(labels=None) -> dict:
         return copy.deepcopy(merged)
 
 
-def _dx_row(label, sym, raw, selected=None):
-    bid, ask, last = (_positive(raw.get(k)) for k in ("bid", "ask", "last"))
-    mid = _finite(round(bid / 2 + ask / 2, 4)) if bid is not None and ask is not None else None
-    if selected is None:
-        price, basis = (last, "last_trade") if last is not None else (mid, "bid_ask_midpoint" if mid is not None else None)
-        receipt = raw.get("last_ts") if last is not None else (
-            min(raw["bid_ts"], raw["ask_ts"]) if mid is not None and raw.get("bid_ts") and raw.get("ask_ts") else None)
-    else:
-        price, receipt, basis = selected
-    if basis == "last_trade":
-        observed = raw.get("last_observed_at")
-        session = raw.get("last_session")
-    else:
-        observed = (min(raw["bid_observed_at"], raw["ask_observed_at"])
-                    if raw.get("bid_observed_at") and raw.get("ask_observed_at") else None)
-        session = None  # Quote has no trustworthy session discriminator.
+def _parse_instant(value):
+    """Parse a provider/collector ISO instant; a naive string has no zone and
+    is rejected rather than assumed local."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _iso(value):
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None
+
+
+def _qualified_extended_quote(raw, now):
+    """A two-sided quote that may stand in for an active extended session.
+
+    Requirements are deliberately strict, because a midpoint is not a price
+    when one side is a placeholder: both sides present and ordered, both
+    collector receipts inside the stale window, and a spread under the
+    configured bound. Trades carry provider event time; quotes on this feed
+    usually do not, so the provider time is used only when BOTH sides carry
+    one and is never inferred from the receipt clock.
+    """
+    bid, ask = _positive(raw.get("bid")), _positive(raw.get("ask"))
+    bid_ts, ask_ts = _parse_instant(raw.get("bid_ts")), _parse_instant(raw.get("ask_ts"))
+    if bid is None or ask is None or bid_ts is None or ask_ts is None or ask < bid:
+        return None
+    try:
+        if (now - min(bid_ts, ask_ts)).total_seconds() > EXTENDED_QUOTE_MAX_AGE_SECS:
+            return None
+    except TypeError:
+        return None
+    mid = _finite(round(bid / 2 + ask / 2, 4))
+    if mid is None or mid <= 0:
+        return None
+    spread_pct = (ask - bid) / mid * 100
+    if spread_pct > EXTENDED_QUOTE_MAX_SPREAD_PCT:
+        return None
+    observed = None
+    bid_observed = _parse_instant(raw.get("bid_observed_at"))
+    ask_observed = _parse_instant(raw.get("ask_observed_at"))
+    if bid_observed is not None and ask_observed is not None:
+        observed = _iso(min(bid_observed, ask_observed))
+    return {
+        "price": mid, "receipt": _iso(max(bid_ts, ask_ts)), "observed": observed,
+        "basis": "bid_ask_midpoint",
+        "reason": None if observed else "provider_quote_time_unavailable",
+        "session": None,
+    }
+
+
+def _midpoint_input(raw):
+    """Two-sided midpoint when no trade exists at all; strict gates are not
+    applied here because there is no other price to fall back to."""
+    bid, ask = _positive(raw.get("bid")), _positive(raw.get("ask"))
+    if bid is None or ask is None or ask < bid:
+        return None
+    mid = _finite(round(bid / 2 + ask / 2, 4))
+    if mid is None or mid <= 0:
+        return None
+    bid_ts, ask_ts = _parse_instant(raw.get("bid_ts")), _parse_instant(raw.get("ask_ts"))
+    receipt = _iso(min(bid_ts, ask_ts)) if bid_ts is not None and ask_ts is not None else None
+    observed = None
+    bid_observed = _parse_instant(raw.get("bid_observed_at"))
+    ask_observed = _parse_instant(raw.get("ask_observed_at"))
+    if bid_observed is not None and ask_observed is not None:
+        observed = _iso(min(bid_observed, ask_observed))
+    return {
+        "price": mid, "receipt": receipt, "observed": observed,
+        "basis": "bid_ask_midpoint",
+        "reason": None if observed else "provider_event_time_unavailable",
+        "session": None,
+    }
+
+
+def _print_selection(raw, *, market_session, session_start, trade_observed):
+    """A provider-timed TimeAndSale print for the active extended session.
+
+    Only extended sessions consult prints. The print must carry its own
+    provider time inside the session, must not be marked regular-session by the
+    provider, and must be newer than the snapshot Trade event; otherwise the
+    caller keeps its existing selection. The collector receipt is carried
+    separately as the row's quote/receipt time and never becomes the
+    observation time.
+    """
+    if market_session not in EXTENDED_STATUSES:
+        return None
+    price = _positive(raw.get("ts_price"))
+    observed = _parse_instant(raw.get("ts_time"))
+    receipt = _parse_instant(raw.get("ts_received_at"))
+    if price is None or observed is None or receipt is None:
+        return None
+    start = _parse_instant(session_start) if session_start else None
+    if start is not None and observed < start:
+        return None
+    if raw.get("ts_extended") is False:
+        return None
+    if trade_observed is not None and observed <= trade_observed:
+        return None
+    return {"price": price, "receipt": _iso(receipt), "observed": _iso(observed),
+            "basis": "last_trade", "reason": None, "session": "extended"}
+
+
+def _select_price_input(raw, *, market_session=None, session_start=None, now=None):
+    """Select the price for the active session with its exact provenance.
+
+    A last trade is current only when it carries a provider event time inside
+    the active session. During premarket/after-hours a trade that predates the
+    session is last session's close: a qualified live two-sided quote then
+    becomes the current price, with an unknown provider time when the feed
+    supplies none. A stale close is retained rather than replaced by a wide or
+    half-updated quote.
+    """
+    now = now or datetime.now(timezone.utc)
+    last = _positive(raw.get("last"))
+    last_receipt = _parse_instant(raw.get("last_ts"))
+    last_observed = _parse_instant(raw.get("last_observed_at"))
+    start = _parse_instant(session_start) if session_start else None
+    if last is not None:
+        trade_current = last_observed is not None and (
+            start is None or last_observed >= start)
+        if trade_current:
+            print_input = _print_selection(
+                raw, market_session=market_session, session_start=session_start,
+                trade_observed=last_observed)
+            if print_input is not None:
+                return print_input
+            return {"price": last, "receipt": _iso(last_receipt),
+                    "observed": _iso(last_observed), "basis": "last_trade",
+                    "reason": None, "session": raw.get("last_session")}
+        print_input = _print_selection(
+            raw, market_session=market_session, session_start=session_start,
+            trade_observed=last_observed)
+        if print_input is not None:
+            return print_input
+        if market_session in EXTENDED_STATUSES:
+            quote = _qualified_extended_quote(raw, now)
+            if quote is not None:
+                return quote
+        return {"price": last, "receipt": _iso(last_receipt),
+                "observed": _iso(last_observed), "basis": "last_trade",
+                "reason": None if last_observed else "provider_event_time_unavailable",
+                "session": raw.get("last_session")}
+    print_input = _print_selection(
+        raw, market_session=market_session, session_start=session_start,
+        trade_observed=None)
+    if print_input is not None:
+        return print_input
+    return _midpoint_input(raw)
+
+
+def _spy_selection(raw):
+    """SPY keeps its accepted midpoint-first selector, with event provenance."""
+    price, receipt, basis = _observed_spy_price_with_basis(raw)
+    observed = None
+    if basis == "bid_ask_midpoint":
+        observed = _older_observed(
+            ("bid", raw.get("bid_observed_at")), ("ask", raw.get("ask_observed_at")))
+    elif basis == "last_trade":
+        observed = _iso(_parse_instant(raw.get("last_observed_at")))
+    reason = None
+    if price is not None and not observed:
+        reason = ("provider_quote_time_unavailable" if basis == "bid_ask_midpoint"
+                  else "provider_event_time_unavailable")
+    return {"price": price, "receipt": receipt, "observed": observed, "basis": basis,
+            "reason": reason, "session": None}
+
+
+def _dx_row(label, sym, raw, selection=None, *, market_session=None,
+            session_start=None, now=None):
+    if selection is None:
+        selection = _select_price_input(raw, market_session=market_session,
+                                        session_start=session_start, now=now)
+    price = selection.get("price") if selection else None
+    receipt = selection.get("receipt") if selection else None
+    observed = selection.get("observed") if selection else None
+    basis = selection.get("basis") if selection else None
+    reason = selection.get("reason") if selection else None
+    instrument_session = selection.get("session") if selection else None
     from .overview_sources import RESOLVED_CONTRACTS
     contract = RESOLVED_CONTRACTS.get(label)
     identity = _instrument_id(label)
@@ -249,15 +417,17 @@ def _dx_row(label, sym, raw, selected=None):
             "session": None, "adjustment_basis": "unknown", "resolved_contract": contract,
         }
     return {
-        "instrument_id": identity, "price": price, "bid": bid, "ask": ask,
+        "instrument_id": identity, "price": price, "bid": _positive(raw.get("bid")),
+        "ask": _positive(raw.get("ask")),
         "prev_close": prev, "volume": raw.get("volume"),
         "source": "dxlink" if price is not None else None,
         "source_symbol": sym if price is not None else None, "price_basis": basis,
         "quote_ts": receipt, "collector_received_at": receipt,
         "observed_at": observed if price is not None else None,
-        "observation_time_reason": None if observed and price is not None else "provider_event_time_unavailable",
+        "observation_time_reason": (reason if price is not None else None),
         "observation_date": None, "observation_timezone": "UTC" if observed else None,
-        "observation_granularity": "event" if observed else None, "session": session,
+        "observation_granularity": "event" if observed else None,
+        "session": instrument_session,
         "adjustment_basis": "unknown", "resolved_contract": contract,
         "acquired_at": receipt, "last_success_at": receipt,
         "last_attempt_at": receipt, "refresh_error": None, "reference": reference,
@@ -339,7 +509,13 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
     ts_utc = now_utc or datetime.now(timezone.utc)
     last_event = fh["last_feed_event_time"]
     feed_stale = last_event is None or (ts_utc - last_event).total_seconds() > STALE_FEED_SECS
-    prices = {label: _dx_row(label, sym, state.get(sym, {})) for label, sym in PRICE_TICKERS.items()}
+    sessions = (lane_context or {}).get("sessions") or {}
+    session_starts = (lane_context or {}).get("session_starts") or {}
+    prices = {}
+    for label, sym in PRICE_TICKERS.items():
+        raw = state.get(sym, {}) if sym else {}
+        prices[label] = _dx_row(label, sym, raw, market_session=sessions.get(label),
+                                session_start=session_starts.get(label), now=ts_utc)
     missing = [label for label, row in prices.items() if row["price"] is None]
     yf_data = _entry.fetch_yf_prices_bounded(missing) if missing else {}
     for label in missing:
@@ -372,7 +548,8 @@ def push_prices(s3, feed: DXLinkFeed, counters: Counters,
         )
     # SPY retains its receipt-based price selector, with event provenance added.
     raw_spy = state.get("SPY", {}) if COLLECT_SPY else {}
-    prices["SPY"] = _dx_row("SPY", "SPY", raw_spy, _observed_spy_price_with_basis(raw_spy))
+    prices["SPY"] = _dx_row("SPY", "SPY", raw_spy, _spy_selection(raw_spy),
+                            market_session=sessions.get("SPY"), now=ts_utc)
     for label, row in prices.items():
         _change(row)
         if row["price"] is not None and label != "SPY":

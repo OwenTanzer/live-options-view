@@ -13,7 +13,10 @@ on:
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
+      - "tests/test_btc_options.py"
+      - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
+      - "tests/test_one_clock_publisher.py"
       - "tests/test_market_readings.py"
       - "tests/test_market_readings_series.py"
       - "research/market_readings_series.py"
@@ -30,6 +33,7 @@ on:
       - "tests/test_auth_safety.py"
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
+      - "tests/test_qqq_recent.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -48,6 +52,8 @@ on:
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
+      - "tests/verify_collector_restore_paging.py"
+      - "tests/verify_manifest_concurrency.py"
       - ".github/workflows/collector-ci.yml"
   pull_request:
     paths:
@@ -57,7 +63,10 @@ on:
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
+      - "tests/test_btc_options.py"
+      - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
+      - "tests/test_one_clock_publisher.py"
       - "tests/test_market_readings.py"
       - "tests/test_market_readings_series.py"
       - "research/market_readings_series.py"
@@ -74,6 +83,7 @@ on:
       - "tests/test_auth_safety.py"
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
+      - "tests/test_qqq_recent.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -92,6 +102,8 @@ on:
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
+      - "tests/verify_collector_restore_paging.py"
+      - "tests/verify_manifest_concurrency.py"
       - ".github/workflows/collector-ci.yml"
 
 jobs:
@@ -112,6 +124,8 @@ jobs:
         run: python -m unittest discover -s tests -p test_moo144_tradier_probe.py -v
       - name: Run MOO-169 Tradier collector suite
         run: python -m unittest discover -s tests -p test_moo144_tradier_collector.py -v
+      - name: Run QQQ order-flow display and session accumulation suite
+        run: python -m unittest discover -s tests -p test_qqq_recent.py -v
       - name: Run OA-203 options return scanner suite
         run: python -m unittest discover -s tests -p test_oa203_return_scanner.py -v
       - name: Run OA-203 active snapshot suite
@@ -122,8 +136,12 @@ jobs:
         run: python -m unittest discover -s tests -p test_price_observations.py -v
       - name: Run extended price lane suite (#178)
         run: python -m unittest discover -s tests -p test_price_lane.py -v
+      - name: Run DXLink streamer-token expiry suite (E1)
+        run: python -m unittest discover -s tests -p test_feed_reauth.py -v
       - name: Run snapshot price provenance suite (#146)
         run: python -m unittest discover -s tests -p test_snapshot_provenance.py -v
+      - name: Immutable One Clock publication and crash recovery
+        run: python -m unittest discover -s tests -p test_one_clock_publisher.py -v
       - name: Run reference market-readings suite (#107)
         run: python -m unittest discover -s tests -p test_market_readings.py -v
       - name: Run market-readings replay series suite (#107)
@@ -148,9 +166,16 @@ jobs:
         run: python tests/verify_eia_steo_calibration.py
       - name: Run weekly collection suite
         run: python tests/verify_weekly_collection.py
+      - name: Run restore-state archive paging suite (#225 R1)
+        run: python tests/verify_collector_restore_paging.py
+      - name: Run manifest merge protocol suite (#225 R2b)
+        run: python tests/verify_manifest_concurrency.py
       - name: Verify actual producer image entry points (offline)
         run: |
           docker build -f deployment/python/Dockerfile -t producer-check .
           docker run --rm --network none \
             -v "$PWD/tests/producer_packaging.py:/app/tests/producer_packaging.py:ro" \
             producer-check python tests/producer_packaging.py
+
+      - name: BTC monthly private quote fixtures
+        run: python -m unittest discover -s tests -p test_btc_options.py -v

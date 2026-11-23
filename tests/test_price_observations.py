@@ -361,5 +361,490 @@ class YahooObservations(unittest.TestCase):
             self.assertIsNone(result["QQQ"]["refresh_error"])
 
 
+class ExtendedSessionSelection(unittest.TestCase):
+    """#178 repair: an active extended session is not last session's close.
+
+    The live November 9 artifact carried the 15:59:59 ET closing print for all
+    71 streaming equity rows across 2.7 hours of after-hours while two-sided
+    quotes advanced. These fixtures pin the selection rules that replace it
+    without ever promoting a receipt time into observation time.
+    """
+
+    def setUp(self):
+        self.old_last = copy.deepcopy(p._last_prices)
+        p._last_prices.clear()
+        self.now = datetime(2026, 11, 9, 21, 30, tzinfo=UTC)       # 16:30 ET
+        self.afterhours_start = "2026-11-09T21:00:00+00:00"       # 16:00 ET
+        self.premarket_start = "2026-11-09T09:00:00+00:00"        # 04:00 ET
+        self.regular_start = "2026-11-09T14:30:00+00:00"          # 09:30 ET
+
+    def tearDown(self):
+        p._last_prices.clear()
+        p._last_prices.update(self.old_last)
+
+    def publish_lane(self, state, sessions, starts, now=None):
+        sink = Sink()
+        context = {"writer_id": "test-writer", "summary": {"mode": "equities"},
+                   "sessions": sessions, "session_starts": starts}
+        with patch.object(entry, "fetch_yf_prices_bounded", return_value={}):
+            p.push_prices(sink, Feed(state), entry.Counters(), lane_context=context,
+                          now_utc=now or self.now)
+        return sink.payload["prices"]
+
+    def extended_state(self, last="2026-11-09T20:59:59.916000+00:00", **quote):
+        raw = {"last": 678.78, "last_ts": "2026-11-09T20:59:59.916000+00:00",
+               "last_observed_at": last, "last_session": "regular",
+               "bid": 679.58, "ask": 679.61,
+               "bid_ts": "2026-11-09T21:29:59+00:00", "ask_ts": "2026-11-09T21:29:59.500000+00:00",
+               "prev_close": 675.0, "prev_close_date": "2026-11-06"}
+        raw.update(quote)
+        return raw
+
+    def test_afterhours_stale_close_is_replaced_by_a_qualified_quote(self):
+        row = self.publish_lane({"QQQ": self.extended_state()},
+                                {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "bid_ask_midpoint")
+        self.assertAlmostEqual(row["price"], 679.595)
+        self.assertIsNone(row["observed_at"], "a quote without provider time is not observed now")
+        self.assertEqual(row["observation_time_reason"], "provider_quote_time_unavailable")
+        self.assertEqual(row["quote_ts"], "2026-11-09T21:29:59.500000+00:00")
+        self.assertIsNone(row["session"], "a Quote has no trustworthy session discriminator")
+        self.assertEqual(row["market_session"], "afterhours")
+
+    def test_extended_quote_provider_times_make_the_row_live(self):
+        row = self.publish_lane({"QQQ": self.extended_state(
+            bid_observed_at="2026-11-09T21:29:58+00:00",
+            ask_observed_at="2026-11-09T21:29:59+00:00")},
+            {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "bid_ask_midpoint")
+        self.assertEqual(row["observed_at"], "2026-11-09T21:29:58+00:00",
+                         "the older side wins; never the receipt clock")
+        self.assertIsNone(row["observation_time_reason"])
+
+    def test_premarket_trade_inside_the_session_still_wins(self):
+        row = self.publish_lane({"QQQ": self.extended_state(
+            last="2026-11-09T13:59:00+00:00")},
+            {"QQQ": "premarket"}, {"QQQ": self.premarket_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "last_trade")
+        self.assertEqual(row["price"], 678.78)
+        self.assertEqual(row["observed_at"], "2026-11-09T13:59:00+00:00")
+        self.assertEqual(row["session"], "regular")
+
+    def test_wide_afterhours_quote_keeps_the_honest_stale_close(self):
+        # IGV's live 13% after-hours spread is a placeholder, not a price.
+        row = self.publish_lane({"QQQ": self.extended_state(bid=97.0, ask=110.55)},
+                                {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "last_trade")
+        self.assertEqual(row["price"], 678.78)
+        self.assertEqual(row["observed_at"], "2026-11-09T20:59:59.916000+00:00")
+
+    def test_half_updated_quote_receipts_are_rejected(self):
+        row = self.publish_lane({"QQQ": self.extended_state(
+            ask_ts="2026-11-09T21:00:00+00:00")},  # 30 minutes old on one side
+            {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "last_trade")
+        self.assertEqual(row["price"], 678.78)
+
+    def test_regular_session_keeps_the_last_trade(self):
+        row = self.publish_lane({"QQQ": self.extended_state(
+            last="2026-11-09T21:29:50+00:00")},
+            {"QQQ": "regular"}, {"QQQ": self.regular_start})["QQQ"]
+        self.assertEqual(row["price_basis"], "last_trade")
+        self.assertEqual(row["observed_at"], "2026-11-09T21:29:50+00:00")
+
+    def test_reference_rolls_with_the_provider_day_id(self):
+        first = self.publish_lane({"QQQ": self.extended_state()},
+                                  {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(first["reference"]["observation_date"], "2026-11-06")
+        rolled = self.publish_lane({"QQQ": self.extended_state(
+            prev_close=679.0, prev_close_date="2026-11-09")},
+            {"QQQ": "afterhours"}, {"QQQ": self.afterhours_start})["QQQ"]
+        self.assertEqual(rolled["reference"]["observation_date"], "2026-11-09")
+        self.assertEqual(rolled["reference"]["value"], 679.0)
+        self.assertAlmostEqual(rolled["chg_pct"], round((rolled["price"] - 679.0) / 679.0 * 100, 2))
+
+
+class FeedEventEvidence(unittest.TestCase):
+    def test_provider_event_and_quote_time_counts_are_observable(self):
+        feed = DXLinkFeed("unused", "unused")
+        millis = int(datetime.fromisoformat(OLD).timestamp() * 1000)
+        feed._ingest([
+            {"eventType": "Quote", "eventSymbol": "QQQ", "bidPrice": 100, "askPrice": 101},
+            {"eventType": "TradeETH", "eventSymbol": "QQQ", "price": 100.5, "time": millis},
+            {"eventType": "Quote", "eventSymbol": "QQQ", "bidPrice": 100, "askPrice": 101,
+             "bidTime": millis, "askTime": millis},
+        ])
+        health = feed.get_health()
+        self.assertEqual(health["event_counts"]["Quote"], 2)
+        self.assertEqual(health["event_counts"]["TradeETH"], 1)
+        self.assertEqual(health["quote_time_counts"],
+                         {"with_provider_time": 1, "without_provider_time": 1})
+
+    def test_observed_event_fields_are_reported_for_schema_evidence(self):
+        feed = DXLinkFeed("unused", "unused")
+        feed._ingest([
+            {"eventType": "Quote", "eventSymbol": "QQQ", "bidPrice": 100, "askPrice": 101,
+             "bidTime": 1, "askTime": 2},
+            {"eventType": "Quote", "eventSymbol": "QQQ", "bidPrice": 100, "askPrice": 101},
+            {"eventType": "TradeETH", "eventSymbol": "QQQ", "price": 100.5, "time": 3},
+        ])
+        fields = feed.get_health()["event_fields"]
+        self.assertEqual(fields["Quote"],
+                         ["askPrice", "askTime", "bidPrice", "bidTime"])
+        self.assertEqual(fields["TradeETH"], ["price", "time"],
+                         "the first observed TradeETH sample is preserved")
+
+
+    def test_timesale_uses_its_own_odd_channel_setup_and_subscription(self):
+        feed = DXLinkFeed("unused", "unused")
+        sent = []
+        feed._send = sent.append
+        feed.set_subscriptions([], ["QQQ"], ["QQQ", "SPY"])
+        self.assertEqual(DXLinkFeed._TIMESALE_CHANNEL % 2, 1,
+                         "DXLink requires odd numbers for service channels")
+        for message in (
+            {"type": "CHANNEL_OPENED", "channel": 1},
+            {"type": "CHANNEL_OPENED", "channel": DXLinkFeed._TIMESALE_CHANNEL},
+            {"type": "FEED_CONFIG", "channel": 1},
+            {"type": "FEED_CONFIG", "channel": DXLinkFeed._TIMESALE_CHANNEL},
+        ):
+            feed._on_message(None, json.dumps(message))
+        base_setup = [m for m in sent if m.get("type") == "FEED_SETUP"
+                      and m.get("channel") == 1]
+        self.assertIn("Quote", base_setup[0]["acceptEventFields"])
+        self.assertNotIn("TimeAndSale", base_setup[0]["acceptEventFields"])
+        ts_setup = [m for m in sent if m.get("type") == "FEED_SETUP"
+                    and m.get("channel") == DXLinkFeed._TIMESALE_CHANNEL]
+        fields = ts_setup[0]["acceptEventFields"]["TimeAndSale"]
+        for name in ("time", "sequence", "price", "size", "tradeId", "flags"):
+            self.assertIn(name, fields)
+        ts_subs = [m for m in sent if m.get("type") == "FEED_SUBSCRIPTION"
+                   and m.get("channel") == DXLinkFeed._TIMESALE_CHANNEL]
+        self.assertTrue(ts_subs[0]["reset"])
+        self.assertEqual([entry["symbol"] for entry in ts_subs[0]["add"]], ["QQQ", "SPY"])
+        base_subs = [m for m in sent if m.get("type") == "FEED_SUBSCRIPTION"
+                     and m.get("channel") == 1]
+        self.assertEqual([entry["type"] for entry in base_subs[0]["add"]][:4],
+                         ["Quote", "Trade", "TradeETH", "Summary"])
+        for message in sent:
+            self.assertIn(message.get("channel"), (0, 1, DXLinkFeed._TIMESALE_CHANNEL))
+        self.assertTrue(feed.get_health()["timesale"]["subscribed"])
+
+    def test_timesale_channel_error_does_not_touch_the_market_feed(self):
+        feed = DXLinkFeed("unused", "unused")
+        feed._send = [].append
+        feed.set_subscriptions([], ["QQQ"], ["QQQ"])
+        feed._on_message(None, json.dumps({"type": "ERROR",
+                                           "channel": DXLinkFeed._TIMESALE_CHANNEL,
+                                           "error": "BAD_ACTION"}))
+        health = feed.get_health()["timesale"]
+        self.assertEqual(health["error"], "BAD_ACTION")
+        self.assertFalse(feed.needs_reauth())
+        self.assertFalse(feed.get_health()["connected"])
+
+    def _feed(self):
+        return DXLinkFeed("unused", "unused")
+
+    def _print(self, **kw):
+        event = {"eventType": "TimeAndSale", "eventSymbol": "QQQ"}
+        event.update(kw)
+        return [event]
+
+    def test_trade_id_zero_is_unavailable_and_never_an_identity(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, size=10, time=1794260000000,
+                                 tradeId=0, type="NEW"))
+        feed._ingest(self._print(price=90, size=10, time=1794259900000,
+                                 tradeId=0, type="NEW"))
+        state = feed.get_state()["QQQ"]
+        self.assertEqual(state["ts_price"], 100)
+        self.assertIsNone(state["ts_trade_id"], "tradeId 0 means unavailable")
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["out_of_order"], 1)
+
+    def test_an_unrelated_correction_cannot_rewind_the_latest(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=110, size=10, time=1794260100000,
+                                 tradeId=10, type="NEW"))
+        feed._ingest(self._print(price=80, size=5, time=1794259800000,
+                                 tradeId=5, type="CORRECTION"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 110)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["unmatched"], 1)
+
+    def test_cancellation_without_a_price_removes_the_print(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=120, size=10, time=1794260200000,
+                                 tradeId=20, type="NEW"))
+        feed._ingest(self._print(time=1794260200000, tradeId=20, type="CANCEL"))
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"])
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["cancelled"], 1)
+
+    def test_index_identity_matches_a_correction_without_a_trade_id(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=130, size=10, time=1794260300000, index=555))
+        feed._ingest(self._print(price=131, size=10, time=1794260300000, index=555,
+                                 type="CORRECTION"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 131)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["corrected"], 1)
+
+    def test_a_correction_without_identity_is_rejected(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=140, size=10, time=1794260400000, type="NEW"))
+        feed._ingest(self._print(price=141, size=10, time=1794260400000,
+                                 type="CORRECTION"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 140)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["unmatched"], 1)
+
+    def test_flags_supply_type_session_and_valid_tick(self):
+        feed = self._feed()
+        # NEW | VALID_TICK | ETH
+        feed._ingest(self._print(price=150, time=1794260500000, tradeId=30, flags=0x0C))
+        state = feed.get_state()["QQQ"]
+        self.assertEqual(state["ts_price"], 150)
+        self.assertTrue(state["ts_extended"])
+        # NEW | ETH but no VALID_TICK: a non-valid tick is rejected.
+        feed._ingest(self._print(price=151, time=1794260600000, tradeId=31, flags=0x08))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 150)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["invalid"], 1)
+
+    def test_a_spread_leg_tick_is_rejected(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=170, time=1794260700000, tradeId=40, flags=0x14))
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"])
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["invalid"], 1)
+
+    def test_an_unknown_transactional_type_is_rejected(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=160, time=1794260800000, type="NEW"))
+        feed._ingest(self._print(price=161, time=1794260900000, type="BOGUS"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 160)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["invalid"], 1)
+
+    def test_correction_and_cancellation_match_index_and_sequence(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=180, time=1794261000000, sequence=3,
+                                 flags=0x04, tradeId=50))   # NEW | VALID_TICK
+        feed._ingest(self._print(price=181, time=1794261000000, sequence=3,
+                                 flags=0x05, tradeId=50))   # CORRECTION | VALID_TICK
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 181)
+        feed._ingest(self._print(time=1794261000000, sequence=3,
+                                 flags=0x02, tradeId=50))   # CANCEL, no VT, no price
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"])
+
+    def test_equal_time_higher_sequence_replaces_the_print(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794262000000, sequence=1,
+                                 validTick=True))
+        feed._ingest(self._print(price=101, time=1794262000000, sequence=2,
+                                 validTick=True))
+        state = feed.get_state()["QQQ"]
+        self.assertEqual((state["ts_price"], state["ts_sequence"]), (101, 2))
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["out_of_order"], 0)
+
+    def test_equal_time_lower_sequence_is_rejected_and_equal_is_duplicate(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794262100000, sequence=2,
+                                 validTick=True))
+        feed._ingest(self._print(price=99, time=1794262100000, sequence=1,
+                                 validTick=True))
+        feed._ingest(self._print(price=98, time=1794262100000, sequence=2,
+                                 validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        counts = feed.get_health()["timesale"]["counts"]
+        self.assertEqual(counts["out_of_order"], 1)
+        self.assertEqual(counts["duplicate"], 1)
+
+    def test_equal_time_without_a_sequence_fails_closed(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794262200000, sequence=2,
+                                 validTick=True))
+        feed._ingest(self._print(price=99, time=1794262200000, validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["out_of_order"], 1)
+
+    def test_missing_sequence_with_a_later_time_is_accepted(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794262300000, sequence=2,
+                                 validTick=True))
+        feed._ingest(self._print(price=101, time=1794262301000, validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 101)
+        self.assertIsNone(feed.get_state()["QQQ"]["ts_sequence"])
+
+    def test_duplicate_new_identity_is_rejected_before_ordering(self):
+        feed = self._feed()
+        big = 9007199254740992
+        feed._ingest(self._print(price=100, time=1794262400000, index=big,
+                                 validTick=True))
+        feed._ingest(self._print(price=999, time=1794262400000, index=big,
+                                 validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["duplicate"], 1)
+
+    def test_large_integer_sequences_order_and_identify(self):
+        feed = self._feed()
+        big = 9007199254740992
+        feed._ingest(self._print(price=100, time=1794262500000, sequence=big,
+                                 validTick=True))
+        feed._ingest(self._print(price=101, time=1794262500000, sequence=big + 1,
+                                 validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 101)
+        feed._ingest(self._print(price=102, time=1794262500000, sequence=big + 1,
+                                 type="CORRECTION"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 102)
+        feed._ingest(self._print(time=1794262500000, sequence=big + 1,
+                                 type="CANCEL"))
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"])
+
+    def test_out_of_order_snapshot_does_not_rewind(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794262600000, sequence=9,
+                                 validTick=True))
+        feed._ingest(self._print(price=90, time=1794262500000, sequence=9,
+                                 validTick=True))
+        feed._ingest(self._print(price=80, time=1794262400000, sequence=9,
+                                 validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["out_of_order"], 2)
+
+    def test_large_index_identities_do_not_collide_through_float(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794260000000,
+                                 index=9007199254740992, validTick=True))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        feed._ingest(self._print(time=1794260000000, index=9007199254740993,
+                                 type="CANCEL"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100,
+                         "2**53+1 must not match 2**53")
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["unmatched"], 1)
+
+    def test_large_trade_id_identities_do_not_collide_through_float(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794260000000,
+                                 tradeId=9007199254740992, validTick=True))
+        feed._ingest(self._print(time=1794260000000, tradeId=9007199254740993,
+                                 type="CANCEL"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100)
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["unmatched"], 1)
+
+    def test_fractional_identities_are_rejected(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794260000000, index=1.5,
+                                 tradeId=2.5, validTick=True))
+        state = feed.get_state()["QQQ"]
+        self.assertIsNone(state["ts_index"])
+        self.assertIsNone(state["ts_trade_id"])
+        feed._ingest(self._print(price=101, time=1794260000000, index=1.5,
+                                 type="CORRECTION"))
+        self.assertEqual(feed.get_state()["QQQ"]["ts_price"], 100,
+                         "a fractional id cannot identify the stored print")
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["unmatched"], 1)
+
+    def test_matching_correction_with_a_nonvalid_tick_invalidates_the_print(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794261100000, index=77,
+                                 validTick=True))
+        feed._ingest(self._print(price=100, time=1794261100000, index=77,
+                                 type="CORRECTION", validTick=False))
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"],
+                         "superseded evidence must not stay selected")
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["invalidated"], 1)
+
+    def test_matching_correction_to_a_spread_leg_invalidates_the_print(self):
+        feed = self._feed()
+        feed._ingest(self._print(price=100, time=1794261200000, index=78,
+                                 validTick=True))
+        feed._ingest(self._print(price=100, time=1794261200000, index=78,
+                                 type="CORRECTION", spreadLeg=True))
+        self.assertNotIn("ts_price", feed.get_state()["QQQ"])
+        self.assertEqual(feed.get_health()["timesale"]["counts"]["invalidated"], 1)
+
+    def test_matching_correction_to_a_bad_price_invalidates_the_print(self):
+        for bad_price in (0, -5, "NaN", None):
+            feed = self._feed()
+            feed._ingest(self._print(price=100, time=1794261300000, index=79,
+                                     validTick=True))
+            feed._ingest(self._print(price=bad_price, time=1794261300000, index=79,
+                                     type="CORRECTION"))
+            self.assertNotIn("ts_price", feed.get_state()["QQQ"], bad_price)
+            self.assertEqual(
+                feed.get_health()["timesale"]["counts"]["invalidated"], 1, bad_price)
+
+
+class ExtendedPrintSelection(unittest.TestCase):
+    """A provider-timed extended print replaces the unknown-time midpoint."""
+
+    def setUp(self):
+        self.old_last = copy.deepcopy(p._last_prices)
+        p._last_prices.clear()
+        self.now = datetime(2026, 11, 9, 21, 30, tzinfo=UTC)
+        self.start = "2026-11-09T21:00:00+00:00"
+
+    def tearDown(self):
+        p._last_prices.clear()
+        p._last_prices.update(self.old_last)
+
+    def publish(self, state):
+        sink = Sink()
+        context = {"writer_id": "test-writer", "summary": {"mode": "equities"},
+                   "sessions": {"QQQ": "afterhours"}, "session_starts": {"QQQ": self.start}}
+        with patch.object(entry, "fetch_yf_prices_bounded", return_value={}):
+            p.push_prices(sink, Feed(state), entry.Counters(), lane_context=context,
+                          now_utc=self.now)
+        return sink.payload["prices"]["QQQ"]
+
+    def raw(self, **extra):
+        state = {"last": 678.78, "last_ts": "2026-11-09T20:59:59.916000+00:00",
+                 "last_observed_at": "2026-11-09T20:59:59.916000+00:00",
+                 "last_session": "regular", "bid": 679.58, "ask": 679.61,
+                 "bid_ts": "2026-11-09T21:29:59+00:00",
+                 "ask_ts": "2026-11-09T21:29:59+00:00",
+                 "prev_close": 675.0, "prev_close_date": "2026-11-06"}
+        state.update(extra)
+        return state
+
+    def test_extended_print_replaces_the_unknown_time_midpoint(self):
+        row = self.publish({"QQQ": self.raw(
+            ts_price=679.9, ts_time="2026-11-09T21:29:55+00:00", ts_trade_id=11,
+            ts_extended=True, ts_received_at="2026-11-09T21:29:56+00:00")})
+        self.assertEqual(row["price"], 679.9)
+        self.assertEqual(row["price_basis"], "last_trade")
+        self.assertEqual(row["observed_at"], "2026-11-09T21:29:55+00:00")
+        self.assertEqual(row["quote_ts"], "2026-11-09T21:29:56+00:00")
+        self.assertEqual(row["session"], "extended")
+
+    def test_regular_session_print_is_not_used_after_hours(self):
+        row = self.publish({"QQQ": self.raw(
+            ts_price=679.9, ts_time="2026-11-09T21:29:55+00:00",
+            ts_extended=False, ts_received_at="2026-11-09T21:29:56+00:00")})
+        self.assertEqual(row["price_basis"], "bid_ask_midpoint")
+        self.assertIsNone(row["observed_at"])
+
+    def test_print_before_the_session_starts_is_ignored(self):
+        row = self.publish({"QQQ": self.raw(
+            ts_price=600.0, ts_time="2026-11-09T20:30:00+00:00",
+            ts_extended=True, ts_received_at="2026-11-09T21:29:56+00:00")})
+        self.assertEqual(row["price_basis"], "bid_ask_midpoint")
+
+    def test_a_newer_snapshot_trade_beats_an_older_print(self):
+        row = self.publish({"QQQ": self.raw(
+            last_observed_at="2026-11-09T21:29:58+00:00",
+            last_ts="2026-11-09T21:29:58+00:00",
+            ts_price=679.0, ts_time="2026-11-09T21:29:55+00:00",
+            ts_extended=True, ts_received_at="2026-11-09T21:29:56+00:00")})
+        self.assertEqual(row["price"], 678.78)
+        self.assertEqual(row["observed_at"], "2026-11-09T21:29:58+00:00")
+
+    def test_print_without_the_flag_is_accepted_inside_the_session(self):
+        row = self.publish({"QQQ": self.raw(
+            ts_price=679.7, ts_time="2026-11-09T21:29:50+00:00",
+            ts_received_at="2026-11-09T21:29:51+00:00")})
+        self.assertEqual(row["price"], 679.7)
+        self.assertEqual(row["observed_at"], "2026-11-09T21:29:50+00:00")
+
+    def test_midpoint_fallback_survives_without_a_print(self):
+        row = self.publish({"QQQ": self.raw()})
+        self.assertEqual(row["price_basis"], "bid_ask_midpoint")
+        self.assertIsNone(row["observed_at"], "receipt time never becomes observation time")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -659,7 +659,8 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
     # An "active": false catalog entry (MOO-161's FW roster, pending
     # CRASSUS_PW_*_FW provisioning) is deliberately excluded here too --
     # see the next block for that gate specifically.
-    active_entries = [e for e in raw["accounts"] if e.get("active", True)]
+    active_entries = [e for e in raw["accounts"] if e.get("active", True)
+                      and not e["strategy_id"].startswith("reddit_sentiment_qqq")]
     stale_override = tmp / "accounts.json"
     stale_override.write_text(json.dumps({
         "accounts": [{
@@ -740,8 +741,9 @@ def scenario_strategy_config_validation(tmp: Path) -> None:
         example_accounts_path = tmp / "accounts.example.filled.json"
         example_accounts_path.write_text(json.dumps(raw))
         accounts = load_accounts(example_accounts_path)
-        runner = Runner(accounts, bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
-                        ledger_dir=tmp / "cfgexample-logs", state_dir=tmp / "cfgexample-state")
+        with patch("crassus.forward_skew.PAPER_ORIGIN", BASE):
+            runner = Runner(accounts, bot_registration_key=BOT_KEY, base_url=BASE, snapshot_url=MOCK_SNAPSHOT_URL,
+                            ledger_dir=tmp / "cfgexample-logs", state_dir=tmp / "cfgexample-state")
         runner.startup()
         check("accounts.example.json constructs and starts a Runner without error",
               set(runner.sessions) == {a.alias for a in accounts})

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>OilPrice.com (SYNTHETIC TEST FIXTURE A, version 2)</title>
+<link>https://oilprice.com</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>Tanker attacked near the Strait of Hormuz; crew evacuated</title>
+<link>https://oilprice.com/Geopolitics/Middle-East/Tanker-Attacked-Near-Hormuz.html</link>
+<guid isPermaLink="false">oilprice-fixture-a</guid>
+<description>Synthetic: updated report, the crew was evacuated.</description>
+<pubDate>Mon, 09 Nov 2026 10:00:00 GMT</pubDate>
+</item>
+</channel>
+</rss>

@@ -240,7 +240,7 @@ test('detail stays bound to the queried row after the strip advances', async () 
 
 test('discovery appends the overview capability without moving existing positions', async () => {
   const { consumer, files } = setup(); let out = await consumer.call('discover_sources');
-  assert.deepEqual(out.capabilities.map(c => c.dataset), ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'options_active']);
+  assert.deepEqual(out.capabilities.map(c => c.dataset), ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'options_windows', 'options_active']);
   assert.equal(out.capabilities[4].availability, 'available'); assert.equal(out.capabilities[4].source_locator, KEY);
   assert.ok(out.capabilities[4].gaps.length > 0);
   assert.equal(out.capabilities[4].instruments.find(i => i.label === 'JPY/USD').id, 'fut.6j');

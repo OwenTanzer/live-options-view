@@ -1,3 +1,9 @@
+# LEGACY COMBINED-WORKER RESTORATION ONLY — not the live asset configuration.
+# Bare `wrangler deploy` reads this file and would undo site/API separation.
+# Ordinary site releases use .github/workflows/deploy-staged.yml, which stages
+# wrangler.assets.toml. API releases explicitly use wrangler.api.toml.
+# Retained for the gated combined-restoration path; see docs/SITE_RELEASES.md.
+
 name = "live-options-view"
 main = "backend/index.js"
 compatibility_date = "2026-06-23"
@@ -16,18 +22,29 @@ binding = "ASSETS"
 binding = "PAPER_TRADES"
 bucket_name = "qqq-options-chain-data"
 
-# Backs /api/register, /api/login, /api/logout, /api/me, /api/bots, and the
-# session-authenticated /api/paper-trade and /api/settle. These ids are not
-# secrets -- a namespace id only resolves against this account -- but they must
-# be real: wrangler rejects the deploy outright on an unknown id, which is how
-# the PR #15 auth build silently failed to ship for a week (run 29759921735).
-[[kv_namespaces]]
-binding = "USERS"
-id = "e6d7e57f32ea4122ba81b8c84dc28553"
-
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "2b996344769e4e679d9f307196a76b84"
+# Issue #208: accounts, sessions and bot markers live in D1. There are no KV
+# bindings in this deployment and no migration route in this Worker: the graph
+# reaches backend/fence.js and backend/storage.js only, so an ordinary request
+# cannot read or write Workers KV.
+#
+# The legacy USERS/SESSIONS namespaces still exist in the account and their data
+# is preserved. They are simply not bound here. Historical migration and recovery
+# use the separate, deliberately deployed recovery Worker
+# (wrangler.recovery.toml, main = backend/recovery.js) and nothing else; see
+# backend/NO_KV.md, "Post-cutover cleanup". D1 is the serving rollback floor: a
+# code rollback means deploying a previous D1-reading revision, never serving
+# from the stale KV archive.
+#
+# Schema (already applied for the live database):
+#
+#   wrangler d1 execute live-options --remote \
+#     --file backend/migrations/0001_accounts_sessions.sql
+#   wrangler d1 execute live-options --remote \
+#     --file backend/migrations/0002_cutover_support.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "live-options"
+database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"
 
 # Server-side settlement sweep (see the `scheduled` export in worker.js /
 # settleAllBots) -- fixes bot accounts that never settle because nothing

@@ -1,0 +1,23 @@
+{
+  "base": {"source":"fixture","id":"signal","revision":1,"session":"2026-11-09","instrument":"QQQ","origin":"recorded","evidence":"fixture://one-clock","eventAt":1794234600000,"availableAt":1794234600000,"value":1},
+  "rows": [
+    {},
+    {"revision":2,"availableAt":1794234600020,"value":2},
+    {"revision":3,"availableAt":1794234600030,"value":null},
+    {"id":"unknown","availableAt":null},
+    {"id":"demo","origin":"synthetic","value":7},
+    {"id":"a","value":"a"},
+    {"id":"A","value":"A"},
+    {"id":"late","eventAt":1794234600010,"availableAt":1794234600015,"value":4},
+    {"id":"other","instrument":"SPY"}
+  ],
+  "cases": [
+    {"offset":-1,"origin":"recorded","expected":[]},
+    {"offset":0,"origin":"recorded","expected":[["A",1,"A"],["a",1,"a"],["signal",1,1]]},
+    {"offset":10,"origin":"recorded","expected":[["A",1,"A"],["a",1,"a"],["signal",1,1]]},
+    {"offset":20,"origin":"recorded","expected":[["A",1,"A"],["a",1,"a"],["signal",2,2],["late",1,4]]},
+    {"offset":30,"origin":"recorded","expected":[["A",1,"A"],["a",1,"a"],["signal",3,null],["late",1,4]]},
+    {"offset":30,"origin":"synthetic","expected":[["demo",1,7]]},
+    {"offset":30,"origin":"reconstructed","expected":[]}
+  ]
+}

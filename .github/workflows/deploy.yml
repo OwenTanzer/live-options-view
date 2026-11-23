@@ -1,26 +1,143 @@
-name: Deploy Cloudflare Worker
+name: Deploy API Worker (explicit, gated)
 
+# Current protected release lane; deployed at the November 12, 2026 cutover.
+# Same-runner authorization and staging are active. The old download-artifact step failed because
+# no workflow ever uploaded an authorization-<revision> artifact: the
+# record is now created ON the execution runner by the approved job
+# itself (same job, same workspace) and consumed directly from the
+# external releases directory — it is never downloaded from another run.
+# Release authority comes from the GitHub "production" environment
+# (Owen is the required reviewer; GitHub enforces approval before the
+# job runs or accesses environment secrets). NOTE: the "production"
+# environment must exist as a repo setting (Settings → Environments)
+# with Owen as required reviewer BEFORE the first run; referencing a
+# missing environment does not create its protection rules, so a run
+# against a missing environment is NOT an approved release.
+# The job checks out the full candidate SHA explicitly, verifies the
+# checkout, and queries GitHub for successful required checks against
+# that SHA — caller-supplied run-id:success strings are never accepted
+# as proof (the web-check / api-check inputs are removed). It then
+# authorizes and deploys in the same job, and uploads the authorization
+# record and receipts afterward as audit evidence (named by revision,
+# target and run attempt). The evidence does not need downloading to
+# authorize its own producer. The release lock and supersession are
+# per-runner (single job, shared lock in the external releases dir);
+# cross-run serialization is the concurrency group below. A fresh
+# runner directory does NOT enforce durable cross-run supersession.
+# Runner readiness: install the pinned wrangler and wire the provider
+# credential explicitly (the old workflow installed only Node before
+# invoking a script that expects wrangler).
+# B2 — same concurrency group as deploy-staged.yml, gate is the only
+# deploy mechanism. F1 — all inputs reach the script via env only; no
+# ${{ }} expression is interpolated into any run: step.
 on:
-  push:
-    branches: [master]
-    paths:
-      - "site/**"
-      - "backend/**"
-      - "wrangler.toml"
-      - "scripts/stamp-build.mjs"
-      - "tests/build_stamp.test.mjs"
-      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Full 40-hex revision to deploy'
+        required: true
+      execute:
+        description: 'Execute the promotion (default is dry-run)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-live-options-view
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Release authority: the job runs only after the required reviewer
+    # (Owen) approves it in the "production" environment. The
+    # environment must be created as a repo setting first (see header).
+    environment: production
     steps:
-      - uses: actions/checkout@v4
-      - name: Verify build packaging
-        run: node --test tests/build_stamp.test.mjs
-      - name: Stamp and verify build ID
-        run: node scripts/stamp-build.mjs
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+      - name: Check out the candidate revision (full history)
+        uses: actions/checkout@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+      - name: Verify the checkout is the candidate revision
+        env:
+          DEPLOY_REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DEPLOY_REVISION"
+          git rev-parse HEAD^{tree}
+      - name: Verify required checks passed for the revision
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          # Query GitHub (not the dispatcher) for ALL Web CI runs on
+          # the exact revision — no status filter, so a newer running
+          # or queued check is visible and cannot be hidden by an
+          # older success. The NEWEST run/attempt (by last update)
+          # must be completed with a success conclusion: an older
+          # success does not override a newer failure, and a newer
+          # running or queued check refuses the deploy here, before
+          # any authorization is created. A missing newest check
+          # also refuses.
+          run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/web-ci.yml/runs?head_sha=${DEPLOY_REVISION}&per_page=5" --jq '.workflow_runs | max_by(.updated_at) | select(.status == "completed" and .conclusion == "success") | .id')"
+          if [ -z "$run_id" ]; then
+            echo "No successful Web CI run for revision ${DEPLOY_REVISION}" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked API dependencies
+        run: npm ci --prefix backend --ignore-scripts
+      - name: Install pinned deployment tooling
+        # Pinned wrangler (review point: confirm the pin matches the
+        # known-good version). The deploy script invokes `wrangler`
+        # from PATH; without this step the executor is not installed.
+        run: npm install -g wrangler@4.160.1
+      - name: Authorize the API candidate (on the execution runner)
+        env:
+          DEPLOY_RELEASES_DIR: ${{ github.workspace }}/../.deploy-releases
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          DEPLOY_WEB_CHECK: ${{ steps.checks.outputs.run_id }}:success
+          DEPLOY_API_CHECK: ${{ steps.checks.outputs.run_id }}:success
+          DEPLOY_AUTHORIZER: ${{ github.actor }}
+          DEPLOY_AUTHORIZE: 'true'
+        run: node scripts/deploy-staged-payload.mjs --authorize --target api
+      - name: Deploy API Worker through the gate
+        env:
+          DEPLOY_RELEASES_DIR: ${{ github.workspace }}/../.deploy-releases
+          DEPLOY_REVISION: ${{ inputs.revision }}
+          DEPLOY_WEB_CHECK: ${{ steps.checks.outputs.run_id }}:success
+          DEPLOY_API_CHECK: ${{ steps.checks.outputs.run_id }}:success
+          DEPLOY_EXECUTE: ${{ inputs.execute }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/deploy-staged-payload.mjs --deploy --target api
+      - name: Resolve the releases directory to an absolute path
+        # upload-artifact rejects '..' segments in the path, so resolve
+        # the releases directory (which lives outside the checkout) to
+        # an absolute path with no '..'. realpath -m resolves lexically,
+        # so it works even when the directory does not exist yet (e.g.
+        # the checks refused before any authorization was created).
+        # Always runs, so the audit upload always has a valid path.
+        id: releases
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "abs=$(realpath -m "$GITHUB_WORKSPACE/../.deploy-releases")" >> "$GITHUB_OUTPUT"
+      - name: Upload authorization and receipts (audit evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authorization-${{ inputs.revision }}-api-${{ github.run_attempt }}
+          path: ${{ steps.releases.outputs.abs }}
+          # The releases directory is hidden (.deploy-releases); the
+          # upload excludes hidden files unless told otherwise.
+          include-hidden-files: true
+          if-no-files-found: warn

@@ -49,6 +49,9 @@ FUTURES_SUNDAY_OPEN = (18, 0)
 FX_SUNDAY_OPEN = (17, 0)
 
 EQUITY_STATUSES = frozenset({"premarket", "regular", "afterhours"})
+# Sessions in which a regular-session close is not a current price: the venue
+# is trading, so the price basis must come from the active session's events.
+EXTENDED_STATUSES = frozenset({"premarket", "afterhours"})
 ACTIVE_STATUSES = frozenset({
     "premarket", "regular", "afterhours", "overnight", "continuous",
 })
@@ -160,6 +163,24 @@ def equity_session(et: datetime, calendar: EquityCalendar | None) -> SessionStat
         status, nxt = "closed", _next_equity_open(et, calendar)
     return SessionState(status, status in EQUITY_STATUSES, nxt, calendar.basis,
                         early_close=bool(early))
+
+
+def equity_session_start(et: datetime, calendar: EquityCalendar | None) -> datetime | None:
+    """Start instant (ET) of the active equity/ETF session, else ``None``.
+
+    Price selection needs the instant the current session began: a trade
+    printed before it belongs to an earlier session and cannot be presented as
+    the current extended-hours price. Early-close days start after-hours at the
+    verified early close, not at 16:00.
+    """
+    state = equity_session(et, calendar)
+    if state.status == "premarket":
+        return _at(et, *PREMARKET_OPEN)
+    if state.status == "regular":
+        return _at(et, *REGULAR_OPEN)
+    if state.status == "afterhours":
+        return _at(et, *(EQUITY_EARLY_CLOSES.get(et.date()) or REGULAR_CLOSE))
+    return None
 
 
 def _next_equity_open(et: datetime, calendar: EquityCalendar) -> datetime | None:
@@ -283,6 +304,25 @@ def session_for(instrument: dict, et: datetime,
     return daily_session(et)
 
 
+def session_start_for(instrument: dict, et: datetime,
+                      calendar: EquityCalendar | None) -> datetime | None:
+    """Start of the active session where a prior-session trade is not current.
+
+    Only US equities/ETFs carry the extended-hours basis rule; futures, crypto,
+    FX and daily series keep their existing selection because their provider
+    events are provider-timed or explicitly dated.
+    """
+    asset_class = instrument.get("asset_class")
+    profile = instrument.get("profile")
+    if asset_class in CRYPTO_CLASSES or profile == "C":
+        return None
+    if profile == "FU" or asset_class in FUTURES_CLASSES:
+        return None
+    if asset_class in EQUITY_CLASSES or profile in {"E", "V"}:
+        return equity_session_start(et, calendar)
+    return None
+
+
 def lane_summary(et: datetime, calendar: EquityCalendar | None) -> dict:
     """The price lane's current mode and next clock change.
 
@@ -346,6 +386,7 @@ def lane_summary_payload(et: datetime, calendar: EquityCalendar | None) -> dict:
 __all__ = [
     "ET", "SessionState", "ExchangeCalendarUnavailable", "EquityCalendar",
     "EQUITY_EARLY_CLOSES", "FUTURES_EARLY_CLOSES", "FUTURES_FULL_CLOSURES",
+    "EXTENDED_STATUSES", "equity_session_start", "session_start_for",
     "build_equity_calendar", "equity_session", "futures_session", "crypto_session",
     "fx_session", "daily_session", "session_for", "lane_summary",
     "lane_summary_payload",

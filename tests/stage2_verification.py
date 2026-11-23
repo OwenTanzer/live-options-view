@@ -398,16 +398,8 @@ def test_classify_tier_still_labels_monthly_opex():
 def test_dxlink_unauthorized_greeting_is_not_an_auth_failure():
     """dxLink sends AUTH_STATE:UNAUTHORIZED unprompted after SETUP. Counting it as a
     rejection walked _auth_fail_count toward needs_reauth() on every healthy session."""
-    feed = collector.DXLinkFeed.__new__(collector.DXLinkFeed)
-    feed._lock = __import__("threading").Lock()
-    feed._auth_fail_count = 0
-    feed._authorized = False
+    feed = collector.DXLinkFeed('wss://fixture.invalid', 'tok')
     feed._connected = True
-    feed._channel_open = False
-    feed._last_close_code = None
-    feed._ready = __import__("threading").Event()
-    feed._token = "tok"
-    feed._ws = None
     sent = []
     feed._send = sent.append
 

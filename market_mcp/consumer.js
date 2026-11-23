@@ -5,7 +5,7 @@ const { formatSqueezeScheduleStatus } = require('../site/shared.js');
 const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 const overview = require('./overview');
 
-const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active'];
+const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows'];
 // Chain underlyings (#121). QQQ keeps its original artifact and dataset id, so
 // an omitted selector behaves exactly as before; SPY has its own tree.
 const UNDERLYINGS = Object.freeze({
@@ -22,6 +22,33 @@ const QUALIFIED_RANK = 'qualified_first_ask_to_later_bid_rank';
 // A real expanded sweep is about 20 MiB. Two leave room for the pinned
 // summary/board/manifest inside the existing 64 MiB per-query ceiling.
 const ACTIVE_PATH_SWEEPS = 2;
+// #130 multi-session windows (F2). The consumer reads producer-written
+// oa203/windows/ artifacts only; it never builds windows, never publishes
+// them, and never invents an exit. Live R2 publication is Chej's release
+// step (see docs/131-window-consumer.md): the first live window
+// (overnight-2026-10-05_2026-10-06, rev_c1abd845...) was published to R2
+// on 2026-11-10 by Chej's conditional trial. This consumer reads whatever
+// the publisher writes; it does not publish, set any env flag, start a
+// collector, or deploy.
+const WINDOW_POLICY_VERSION = 'oa203-windows-v1';
+const WINDOW_KINDS = ['weekly_cheapest', 'weekly_fixed', 'weekly_cheapest_best_exit', 'overnight', 'sessions_2', 'sessions_3'];
+const WINDOW_BASES = ['mid', 'exec', 'qualified'];
+const WINDOW_SHORTLIST = 200;
+const WINDOW_STATES = ['final', 'partial', 'in_progress'];
+const WINDOW_ID = Object.freeze({
+  weekly_cheapest: /^weekly-\d{4}-W\d{2}-cheapest$/,
+  weekly_fixed: /^weekly-\d{4}-W\d{2}-fixed$/,
+  weekly_cheapest_best_exit: /^weekly-\d{4}-W\d{2}-cheapest_best_exit$/,
+  overnight: /^overnight-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}$/,
+  sessions_2: /^sessions2-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}$/,
+  sessions_3: /^sessions3-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}$/,
+});
+const WINDOW_RANKING_COLUMNS = ['basis', 'rank', 'symbol', 'underlying', 'option_type', 'strike', 'expiration', 'pct', 'entry', 'exit', 'abs_change_per_contract', 'entry_session', 'exit_session', 'flags'];
+// Exact copy of market_data/options_scanner/windows_outputs.py PATH_COLUMNS
+// plus per-basis BASIS_COLUMNS. A paths row whose header differs is rejected.
+const WINDOW_PATH_COLUMNS = ['symbol', 'underlying', 'root', 'option_type', 'strike', 'expiration', 'contract_size', 'flags', 'contract_exclusions',
+  ...['mid', 'exec', 'qualified'].flatMap(b => ['status', 'reasons', 'pct', 'entry', 'exit', 'abs_change_per_contract', 'entry_ms', 'exit_ms', 'entry_session', 'exit_session', 'entry_delay_from_boundary_s', 'exit_lead_before_close_s', 'entry_bid', 'entry_ask', 'entry_bid_ms', 'entry_ask_ms', 'entry_ask_size', 'entry_bid_quote_age_s', 'entry_ask_quote_age_s', 'entry_quote_age_s', 'entry_relative_spread', 'exit_bid', 'exit_ask', 'exit_bid_ms', 'exit_ask_ms', 'exit_bid_size', 'exit_bid_quote_age_s', 'exit_ask_quote_age_s', 'exit_quote_age_s', 'exit_relative_spread'].map(c => `${b}_${c}`))];
+
 const OPTIONAL_STAMP_VALUE = Object.freeze({bid_ms:'bid',ask_ms:'ask',trade_ms:'last'});
 const dates = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value && value >= '2020-01-01' && value <= '2100-12-31';
@@ -150,6 +177,61 @@ function activeSummary(p, session, sweep) {
     Number.isSafeInteger(p.cutoff_ms) && p.cutoff_ms>p.session_open_ms && p.cutoff_ms<=p.session_close_ms+60000 &&
     object(p.member_sha256) && p.qualified_policy?.version==='oa203-qualified-ask-bid-v1', 'Unsupported active snapshot summary.');
 }
+function windowSpan(kind, window_id) {
+  const m = /(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/.exec(window_id);
+  return m ? [m[1], m[2]] : null;
+}
+function windowSummary(p, kind, window_id) {
+  check(object(p) && p.schema_version===1 && p.kind===kind && p.window_id===window_id &&
+    typeof p.state==='string' && WINDOW_STATES.includes(p.state) && Array.isArray(p.state_reasons) &&
+    p.state_reasons.every(r=>typeof r==='string'), 'Unsupported window summary identity or state.');
+  check(object(p.policy) && p.policy.version===WINDOW_POLICY_VERSION && p.policy.close_tolerance_s===900 &&
+    p.policy.open_tolerance_s===900 && p.policy.qualified_endpoint_policy?.max_quote_age_s===1800,
+    'Unsupported window policy.');
+  check(Array.isArray(p.sessions) && p.sessions.length>=1 && p.sessions.every(s=>object(s) && dates(s.day) &&
+    Number.isSafeInteger(s.open_ms) && Number.isSafeInteger(s.close_ms) && s.open_ms<s.close_ms &&
+    typeof s.early_close==='boolean' && typeof s.final==='boolean' && typeof s.assessment==='string') &&
+    p.sessions.every((s,i)=>i===0||p.sessions[i-1].day<s.day), 'Unsupported window sessions.');
+  const days=p.sessions.map(s=>s.day);
+  check(Array.isArray(p.entry_sessions) && p.entry_sessions.length>=1 &&
+    p.entry_sessions.every((d,i)=>d===days[i]) && p.exit_session===days.at(-1) &&
+    Array.isArray(p.early_closes) && p.early_closes.every(d=>days.includes(d)), 'Unsupported window entry/exit sessions.');
+  const pending=p.sessions.filter(s=>!s.final).map(s=>s.day);
+  if(p.state==='final') check(pending.length===0 && p.state_reasons.length===0 && p.sessions.every(s=>s.assessment==='complete'), 'Final window has pending or partial sessions.');
+  if(p.state==='partial') check(pending.length===0 && p.state_reasons.length>0, 'Partial window names no reason.');
+  if(p.state==='in_progress') check(pending.length>0 && p.state_reasons.some(r=>r.startsWith('session_not_final:')), 'In-progress window names no pending session.');
+  check(Number.isSafeInteger(p.contracts_evaluated) && p.contracts_evaluated>=0 && object(p.counts) &&
+    WINDOW_BASES.every(b=>{
+      const c=p.counts[b];
+      return object(c) && Number.isSafeInteger(c.eligible) && c.eligible>=0 && Number.isSafeInteger(c.negative) && c.negative>=0 &&
+        c.negative<=c.eligible && Number.isSafeInteger(c.excluded) && c.excluded>=0 &&
+        c.eligible+c.excluded===p.contracts_evaluated && Number.isSafeInteger(c.shortlist) && c.shortlist>=0 &&
+        c.shortlist===Math.min(WINDOW_SHORTLIST, c.eligible) && object(c.exclusion_reasons) &&
+        Object.values(c.exclusion_reasons).every(n=>Number.isSafeInteger(n)&&n>=0) &&
+        Object.values(c.exclusion_reasons).reduce((a,n)=>a+n,0)===c.excluded;
+    }), 'Unsupported window per-basis counts.');
+  check(object(p.outputs) && p.outputs.rankings==='rankings.csv' && p.outputs.paths==='paths.csv.gz' &&
+    Array.isArray(p.labels) && p.labels.length>0 && p.labels.every(l=>typeof l==='string') &&
+    (['weekly_cheapest','weekly_cheapest_best_exit'].includes(kind) ? p.labels.some(l=>l.toLowerCase().includes('hindsight')) : true) &&
+    typeof p.generated_at==='string' && Number.isFinite(Date.parse(p.generated_at)) && object(p.scope) &&
+    typeof p.calendar==='string' && Array.isArray(p.sources) &&
+    p.sources.every(s=>object(s)&&typeof s.key==='string'), 'Unsupported window outputs, labels or provenance.');
+}
+function windowPathsRow(text, symbol) {
+  // One contract's path row without materializing all paths: producer rows
+  // never contain a quoted newline (reasons/flags are ';'-joined), so the
+  // row is located by its leading symbol cell and parsed alone.
+  const lines=text.split('\n');
+  const head=csv((lines[0] ?? '')+'\n');
+  check(head.columns.length===WINDOW_PATH_COLUMNS.length && head.columns.every((c,i)=>c===WINDOW_PATH_COLUMNS[i]), 'Unsupported window paths header.');
+  const matches=lines.slice(1).filter(l=>l.startsWith(symbol+','));
+  check(matches.length<=1, 'Paths file carries conflicting attributions for this symbol; no canonical path is asserted.');
+  if(!matches.length) return null;
+  const rows=csv(lines[0]+'\n'+matches[0]+'\n');
+  check(rows.length===1, 'Unsupported window paths row.');
+  return rows[0];
+}
+
 
 const units = {
   spy_snapshot: null, // filled below from qqq_snapshot
@@ -159,6 +241,7 @@ const units = {
 };
 units.spy_snapshot = units.qqq_snapshot;
 units.options_active = units.options_returns;
+units.options_windows = { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms': 'UTC epoch milliseconds', '*_entry_delay_from_boundary_s, *_exit_lead_before_close_s': 'seconds from the session boundary', '*_quote_age_s': 'seconds between quote observation and sample', '*_relative_spread': 'spread / midpoint', '*_size': 'contracts at quoted side', rank: 'producer ordinal rank within the selected basis', contracts_evaluated: 'contracts evaluated in this window, eligible plus excluded' };
 units.cross_market_overview = overview.units;
 const warnings = {
   cross_market_overview: overview.warnings,
@@ -166,6 +249,7 @@ const warnings = {
   scheduled_squeeze: ['Scores are experimental screens, not squeeze probabilities.', 'first_seen_at/is_new describe producer shortlist publication history; unknown values remain unknown.', 'Provider source times can be absent; acquisition and publication times are distinct.'],
   options_returns: ['Sampled returns miss between-sample extremes. Trade-bar backfill covers only already-ranked contracts.', 'Midpoint and ask-entry/bid-exit comparisons describe observations, not achievable fills.', 'Qualified ask-to-later-bid is a hindsight quote comparison; sizes and spreads do not establish obtainable fills.', 'All/clean coverage is the old top 200 all OR clean; qualified coverage is its separate full-universe top 200.', 'Session artifacts may be rebuilt in place; detail detects summary/shortlist changes and asks for a new query.'],
 };
+warnings.options_windows = ['Sampled quotes (~5-minute sweeps); between-sample moves are missed.', 'Quote comparisons, not executed fills; spread/size qualification does not establish fills, fees or capacity.', 'Ranks are cut only after a full-universe ranking; the shortlist holds at most 200 rows per basis.', 'Window availability is determined for the requested window; partial replay coverage is not full-universe coverage.', 'In-progress windows have no final exit; no ranking is served for them.'];
 warnings.spy_snapshot = [...warnings.qqq_snapshot,
   'SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.',
   'SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.'];
@@ -187,7 +271,7 @@ class Consumer {
   async call(name, a = {}) {
     const q = this.source.query();
     const marketDataset = supportedUnderlying(underlyingOf(a)) ? UNDERLYINGS[underlyingOf(a)].dataset : 'unsupported_underlying';
-    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', market_overview:'cross_market_overview'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
+    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
     let out = this.envelope(dataset, a, q);
     try {
       if (name === 'discover_sources') out = await this.discover(a, q, out);
@@ -195,6 +279,7 @@ class Consumer {
       else if (name === 'squeeze_results') out = await this.squeeze(a, q, out);
       else if (name === 'return_rankings') out = await this.returns(a, q, out);
       else if (name === 'active_rankings') out = await this.active(a, q, out);
+      else if (name === 'window_rankings') out = await this.window(a, q, out);
       else if (name === 'market_overview') out = await this.overview(a, q, out);
       else if (name === 'result_detail') out = await this.detail(a, q, out);
       else throw new DataError('invalid_filter', 'Unknown tool.');
@@ -202,6 +287,23 @@ class Consumer {
     // An absent publication is a typed answer, not a failed call: same
     // vocabulary as discover_sources, and not flagged isError, which clients
     // can relabel as a generic argument error.
+    const cutoff = name === 'result_detail' ? this.references.get(a?.reference)?.value.cursor : a?.as_of_ms;
+    if(out.errors.some(e=>e.code==='unavailable_at_cursor')) {
+      // Keep only the scoped request and eligible revision receipts. A later
+      // detail artifact cannot leave a half-assembled retrospective payload.
+      const unavailable=this.envelope(out.dataset,a,q);
+      unavailable.status='unavailable'; unavailable.availability='unproven_at_cursor';
+      unavailable.errors=out.errors; out=unavailable;
+    }
+    if(Number.isSafeInteger(cutoff) && ['active_rankings','return_rankings','result_detail'].includes(name) && out.status!=='failed') {
+      const proofs=out.sources.map(s=>s.available_by_ms).filter(Number.isSafeInteger);
+      out.as_of={cutoff_ms:cutoff,available_by_ms:proofs.length && !['missing','unavailable'].includes(out.status)
+        ? Math.max(...proofs) : null,scope:'retained revisions read for this result'};
+      if(name==='active_rankings' && out.producer_times.publication) {
+        out.producer_times.reported_publication=out.producer_times.publication;
+        out.producer_times.publication=null;
+      }
+    }
     if (out.status === 'missing') out.availability = 'missing_publication';
     if (name === 'result_detail') out.sources = out.sources.map(e => ({...e, retained:e.retained === true}));
     if (Buffer.byteLength(JSON.stringify(out)) > LIMITS.output_bytes) {
@@ -251,6 +353,18 @@ class Consumer {
         cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
         coverage: probe.value?.coverage || probe.value?.assessment || (chain ? `latest ${chain} 0DTE snapshot only` : null), historical_index: 'not_supported' });
     }
+    // Windows have no global index or window list to probe: the producer writes
+    // one directory per window, each with its own latest.json pointer that pins
+    // a read to one revision. Live R2 publication is Chej's release step.
+    // Discovery therefore advertises the fixed contract and requires an
+    // explicit window; it never claims live data.
+    out.capabilities.push({dataset:'options_windows',producer_schema:'oa203-windows-v1',
+      availability:'explicit_window_required',source_locator:'oa203/windows/oa203-windows-v1/<kind>/<window_id>/{summary.json,rankings.csv,paths.csv.gz}',
+      error:null,actual:null,fields:['summary','rankings','paths','counts','labels'],
+      filters:['window_id','kind','basis','underlying','type','limit','offset'],
+      kinds:WINDOW_KINDS,bases:WINDOW_BASES,states:WINDOW_STATES,shortlist_per_basis:WINDOW_SHORTLIST,
+      units:units.options_windows,warnings:warnings.options_windows,
+      publication:'query_explicit_window',historical_index:'explicit window only; no global index'});
     const activeSession=a.session??exchangeDate(this.now());
     const activeKey=`oa203/scanner/${activeSession}/inprogress/latest.json`;
     const activeProbe=await q.optionalJson(activeKey);
@@ -422,13 +536,22 @@ class Consumer {
     out.status = attempt.status === 'failed' ? 'failed' : attempt.status === 'partial' || !matches || out.errors.length ? 'partial' : results.length ? 'available' : 'empty';
     return out;
   }
+  scannerCutoff(a,q) {
+    if (a.as_of_ms === undefined) return;
+    check(Number.isSafeInteger(a.as_of_ms) && a.as_of_ms >= 1e12 && a.as_of_ms <= this.now(),
+      'as_of_ms must be a past or present UTC epoch millisecond cutoff.', 'invalid_filter');
+    q.atCutoff(a.as_of_ms);
+  }
   async returns(a,q,out) {
-    args(a,['session','underlying','type','view','limit','offset'],['session']); const {limit,offset}=page(a);
+    args(a,['session','underlying','type','view','limit','offset','as_of_ms'],['session']);
+    this.scannerCutoff(a,q); const {limit,offset}=page(a);
     check(dates(a.session),'Select a real YYYY-MM-DD session (2020..2100).','invalid_filter');
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'view must be all, clean, or qualified_ask_bid_v1.','invalid_filter');
     const prefix=`oa203/scanner/${a.session}/`; const p=await q.json(prefix+'summary.json'); returnSummary(p,a.session);
+    if(a.as_of_ms !== undefined) check(p.final && Number.isFinite(Date.parse(p.finalized_at)) &&
+      Date.parse(p.finalized_at)<=a.as_of_ms, 'Finalized ranking unavailable at this cutoff.', 'unavailable_at_cursor');
     out.actual={session:a.session,final:p.final,return_policy:p.return_policy,qualified_policy:p.qualified_policy??null};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,finalized_at:p.finalized_at ?? null};
     out.session_window={open_ms:p.session_open_ms??null,close_ms:p.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
@@ -472,11 +595,15 @@ class Consumer {
     const filtered=rows.filter(r=>r[field]!==null && (!a.underlying||r.underlying===a.underlying) && (!a.type||r.option_type===a.type));
     filtered.sort((x,y)=>Number(x[field])-Number(y[field])); // producer rank, never re-score
     const paged=slice(filtered,limit,offset); out.pagination=paged.pagination;
-    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
+    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',cursor:a.as_of_ms,p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
     out.status=p.assessment.status==='partial'||!p.final?'partial':filtered.length?'available':'empty';return out;
   }
   async active(a,q,out) {
-    args(a,['session','sweep','underlying','type','view','limit','offset']);
+    args(a,['session','sweep','underlying','type','view','limit','offset','as_of_ms']);
+    this.scannerCutoff(a,q);
+    if(a.as_of_ms !== undefined) check(dates(a.session) && Number.isInteger(a.sweep),
+      'A cursor lookup requires an explicit session and retained sweep.', 'invalid_filter');
+    const clockAt = a.as_of_ms ?? this.now();
     const {limit,offset}=page(a);
     const session=a.session??'current';
     check(session==='current'||dates(session),'session must be current or one valid date.','invalid_filter');
@@ -484,7 +611,7 @@ class Consumer {
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'Invalid active view.','invalid_filter');
-    const selected=session==='current'?exchangeDate(this.now()):session;
+    const selected=session==='current'?exchangeDate(clockAt):session;
     out.actual={session:selected,selector:session,sweep:a.sweep??null,final:false};
     const calendarPoint=Date.parse(selected+'T12:00:00Z');
     const calendarValid=Date.parse(this.calendar?.valid_from)<=calendarPoint &&
@@ -504,7 +631,7 @@ class Consumer {
           return result;
         }
       } else if(final.error.code!=='missing_artifact') out.errors.push(final.error);
-      if(open!==null&&this.now()<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
+      if(open!==null&&clockAt<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
     }
     let pointer=null, sweep=a.sweep;
     if(sweep===undefined) {
@@ -524,17 +651,19 @@ class Consumer {
       activeRevision(selected,sweep,pointer);
       if(out.attempt?.sweep>sweep||out.attempt?.sweep===sweep&&out.attempt.status==='failed')
         out.warnings.push(`Newer or matching snapshot attempt ${out.attempt.sweep} is ${out.attempt.status}: ${out.attempt.reason??'reason unavailable'}.`);
-      if(out.attempt?.status==='building'&&this.now()-Date.parse(out.attempt.at)>300000)
+      if(out.attempt?.status==='building'&&clockAt-Date.parse(out.attempt.at)>300000)
         out.warnings.push(`Snapshot attempt ${out.attempt.sweep} has exceeded the 240-second build budget; completion is unconfirmed.`);
     }
     if(!pointer){
       const found=await q.optionalJson(activePrefix(selected,sweep).slice(0,-1)+'.json');
-      if(found.error){out.errors.push(found.error);out.status=found.error.code==='missing_artifact'?'missing':'failed';return out;}
+      if(found.error){throw new DataError(found.error.code,found.error.message,found.error.locator);}
       pointer=found.value;
     }
     const prefix=activeRevision(selected,sweep,pointer);
     const p=await q.json(prefix+'summary.json');activeSummary(p,selected,sweep);
     const summaryEvidence=q.evidence.at(-1);
+    if(a.as_of_ms !== undefined) check(p.cutoff_ms<=a.as_of_ms,
+      'Pinned sweep was acquired after this cutoff.', 'unavailable_at_cursor');
     if(pointer) check(pointer.members['summary.json']===summaryEvidence.retrieved_sha256&&pointer.cutoff_ms===p.cutoff_ms,
       'Active pointer and summary disagree.','source_changed');
     const board=a.view==='qualified_ask_bid_v1'?'qualified_ask_bid_v1.csv':'leaderboard.csv';
@@ -573,10 +702,10 @@ class Consumer {
          !qualified&&(!Number.isFinite(quoteAge)||quoteAge<0))
         return {status:'unknown',observed_at:null,age_seconds:null,stale_after_seconds:600,basis,
           sample_at:Number.isSafeInteger(endpoint)?new Date(endpoint).toISOString():null};
-      return {...age(new Date(quote).toISOString(),this.now(),600),basis,sample_at:new Date(endpoint).toISOString()};
+      return {...age(new Date(quote).toISOString(),clockAt,600),basis,sample_at:new Date(endpoint).toISOString()};
     };
     out.rows=paged.rows.map(row=>({...row,ranked_evidence_freshness:evidenceAge(row),
-      detail_reference:this.reference({dataset:'options_active',p,row,prefix,board,
+      detail_reference:this.reference({dataset:'options_active',cursor:a.as_of_ms,p,row,prefix,board,
       actual:out.actual,evidence:[...q.evidence],digests:{summary:summaryEvidence.retrieved_sha256,board:boardEvidence.retrieved_sha256,
         manifest:p.member_sha256['manifest.jsonl']}})}));
     out.summary=p;out.coverage=p.assessment;
@@ -589,7 +718,7 @@ class Consumer {
     // A pinned sweep's own age says nothing about whether a newer snapshot
     // exists; overdue is judged only from the current latest pointer.
     let head=a.sweep===undefined?pointer:null;
-    if(a.sweep!==undefined){
+    if(a.sweep!==undefined && a.as_of_ms===undefined){
       const latest=await q.optionalJson(`oa203/scanner/${selected}/inprogress/latest.json`);
       if(!latest.error&&object(latest.value)&&Number.isInteger(latest.value.sweep)&&Number.isFinite(Date.parse(latest.value.published_at)))head=latest.value;
       else if(latest.error&&latest.error.code!=='missing_artifact')out.errors.push(latest.error);
@@ -597,8 +726,8 @@ class Consumer {
         {available:null,sweep:null,published_at:null,reason:'latest snapshot pointer unavailable'};
       if(head&&head.sweep>sweep)out.warnings.push(`Pinned sweep ${sweep} is not the newest snapshot; sweep ${head.sweep} was published at ${head.published_at}.`);
     }
-    const sincePublication=head?.published_at?(this.now()-Date.parse(head.published_at))/1000:null;
-    const overdue=this.now()<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
+    const sincePublication=head?.published_at?(clockAt-Date.parse(head.published_at))/1000:null;
+    const overdue=clockAt<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
     out.cadence={expected_seconds:expectedCadence,observed_seconds:observed,previous_publication:pointer?.previous_published_at??null,
       late_after_seconds:lateAfter,seconds_since_publication:Number.isFinite(sincePublication)?Math.round(sincePublication):null,
       since_publication_of:head?{sweep:head.sweep,basis:'latest snapshot pointer'}:null,
@@ -612,7 +741,7 @@ class Consumer {
     out.session_window={open_ms:p.session_open_ms,close_ms:p.session_close_ms,meaning:'exchange boundaries; not acquisition timestamps'};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:new Date(p.cutoff_ms).toISOString(),
       publication:pointer?.published_at??null,built_at:pointer?.built_at??p.built_at??null};
-    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),this.now(),3600);
+    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),clockAt,3600);
     const rowAges=out.rows.map(row=>row.ranked_evidence_freshness);
     const knownAges=rowAges.map(x=>x.age_seconds).filter(Number.isFinite);
     out.freshness={...cutoffAge,
@@ -622,7 +751,7 @@ class Consumer {
       ranked_evidence:{basis:'actual quote timestamp at the ranked endpoint',stale_after_seconds:600,
         oldest_age_seconds:knownAges.length?Math.max(...knownAges):null,
         stale_rows:rowAges.filter(x=>x.status==='stale').length,unknown_rows:rowAges.filter(x=>x.status==='unknown').length}};
-    out.active_state=this.now()>=p.session_close_ms?'closed_pending_final':'in_progress';
+    out.active_state=clockAt>=p.session_close_ms?'closed_pending_final':'in_progress';
     out.status=out.active_state==='closed_pending_final'?'closed_pending_final':filtered.length?'in_progress':'empty';
     if(p.assessment.truncated_sweeps||Object.keys(p.assessment.chain_status_counts??{}).some(s=>s!=='ok')) out.status='partial';
     if(rowAges.some(x=>x.status==='stale'||x.status==='unknown')&&out.status==='in_progress')out.status='partial';
@@ -631,11 +760,107 @@ class Consumer {
     if(rowAges.some(x=>x.status==='stale'))out.warnings.push('Displayed ranked quote evidence is older than two expected five-minute sweeps.');
     return out;
   }
+  async window(a,q,out) {
+    args(a,['window_id','kind','basis','underlying','type','limit','offset'],['window_id','kind']);
+    const {limit,offset}=page(a);
+    const basis=a.basis??'qualified';
+    check(WINDOW_KINDS.includes(a.kind),'kind must be one of '+WINDOW_KINDS.join(', ')+'.','invalid_filter');
+    check(WINDOW_ID[a.kind].test(a.window_id),'window_id does not match kind '+a.kind+'.','invalid_filter');
+    check(WINDOW_BASES.includes(basis),'basis must be mid, exec, or qualified.','invalid_filter');
+    if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
+    if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
+    const span=windowSpan(a.kind,a.window_id);
+    if(span) check(dates(span[0])&&dates(span[1])&&span[0]<span[1],'window entry day must precede its exit day.','invalid_filter');
+    const prefix=`oa203/windows/${WINDOW_POLICY_VERSION}/${a.kind}/${a.window_id}/`;
+    const p=await q.json(prefix+'summary.json');
+    // A newer producer policy is a typed unsupported answer, not a failure:
+    // the artifacts exist, this consumer does not understand them.
+    if(object(p)&&p.policy?.version!==undefined&&p.policy.version!==WINDOW_POLICY_VERSION) {
+      out.status='unsupported';out.summary=p;out.window_state={state:p.state??null,reasons:p.state_reasons??[]};
+      out.warnings.push(`Window policy ${p.policy.version} is not supported by this consumer; supported: ${WINDOW_POLICY_VERSION}.`);
+      out.actual={window_id:a.window_id,kind:a.kind,basis,state:p.state??null,policy:p.policy.version};
+      return out;
+    }
+    if(object(p)&&typeof p.state==='string'&&!WINDOW_STATES.includes(p.state)) {
+      out.status='unsupported';out.summary=p;out.window_state={state:p.state,reasons:p.state_reasons??[]};
+      out.warnings.push(`Window state ${p.state} is not supported by this consumer; supported: ${WINDOW_STATES.join(', ')}.`);
+      out.actual={window_id:a.window_id,kind:a.kind,basis,state:p.state,policy:p.policy?.version??null};
+      return out;
+    }
+    windowSummary(p,a.kind,a.window_id);
+    const days=p.sessions.map(s=>s.day);
+    out.actual={window_id:a.window_id,kind:a.kind,basis,state:p.state,sessions:days,entry_sessions:p.entry_sessions,
+      exit_session:p.exit_session,policy:WINDOW_POLICY_VERSION,generated_at:p.generated_at,
+      summary_sha256:q.evidence.at(-1).retrieved_sha256};
+    out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,generated_at:p.generated_at};
+    out.session_window={open_ms:p.sessions[0].open_ms,close_ms:p.sessions.at(-1).close_ms,meaning:'exchange boundaries; not acquisition timestamps'};
+    out.freshness={status:'historical',meaning:'Explicit selected window; generated_at is not a quote observation or publication time.'};
+    out.summary=p;out.coverage=p.counts;out.window_state={state:p.state,reasons:p.state_reasons};
+    out.warnings.push(...p.state_reasons,...p.labels);
+    if(p.state==='in_progress') {
+      // The exit is not invented: an in-progress window has no final ranking.
+      out.rows=[];out.pagination={offset,limit,total:0,truncated:false,next_offset:null};
+      out.status='in_progress';
+      out.warnings.push('Window has no final exit; no ranking is served for an in-progress window.');
+      return out;
+    }
+    const boardText=await q.get(prefix+'rankings.csv');
+    const rows=csv(boardText);
+    check(rows.columns.length===WINDOW_RANKING_COLUMNS.length && rows.columns.every((c,i)=>c===WINDOW_RANKING_COLUMNS[i]), 'Missing window rankings columns.');
+    // Ranks are cut only after a full-universe ranking: per basis the file
+    // must hold exactly ranks 1..shortlist, pct-descending, symbol tiebreak.
+    for(const b of WINDOW_BASES) {
+      const brow=rows.filter(r=>r.basis===b);
+      check(brow.length===p.counts[b].shortlist, `Window rankings hold ${brow.length} ${b} rows, not the published shortlist ${p.counts[b].shortlist}.`);
+      check(brow.every((r,i)=>Number(r.rank)===i+1), `Window ${b} ranks are not exactly 1..${p.counts[b].shortlist}.`);
+      check(brow.every((r,i)=>i===0||Number(r.pct)<Number(brow[i-1].pct)||(Number(r.pct)===Number(brow[i-1].pct)&&r.symbol>brow[i-1].symbol)), `Window ${b} rows are not pct-descending with symbol tiebreak.`);
+      if(p.counts[b].eligible===p.counts[b].shortlist)
+        check(brow.filter(r=>Number(r.pct)<0).length===p.counts[b].negative, `Window ${b} negative count disagrees with its published count.`);
+      else check(brow.filter(r=>Number(r.pct)<0).length<=p.counts[b].negative, `Window ${b} shortlist holds more negative rows than its published count.`);
+    }
+    check(rows.every(r=>WINDOW_BASES.includes(r.basis) && CONTRACT.test(r.symbol) && SYMBOL.test(r.underlying) &&
+      ['call','put'].includes(r.option_type) && Number.isFinite(Number(r.strike)) && Number(r.strike)>0 &&
+      dates(r.expiration) && Number.isFinite(Number(r.pct)) && Number.isFinite(Number(r.entry)) && Number(r.entry)>0 &&
+      Number.isFinite(Number(r.exit)) && Number(r.exit)>0 && Number.isFinite(Number(r.abs_change_per_contract)) &&
+      days.includes(r.entry_session) && days.includes(r.exit_session) && r.entry_session<=r.exit_session &&
+      Math.abs(Number(r.pct)-(Number(r.exit)/Number(r.entry)-1))<2e-6), 'Invalid window rankings rows.');
+    let basisOrder=0;
+    check(rows.every(r=>{ const i=WINDOW_BASES.indexOf(r.basis); if(i<basisOrder) return false; basisOrder=i; return true; }), 'Window rankings are not grouped by basis.');
+    const baseline=q.evidence.slice(-2).map(e=>e.retrieved_sha256);
+    await q.get(prefix+'summary.json');await q.get(prefix+'rankings.csv');
+    check(q.evidence.slice(-2).every((e,i)=>e.retrieved_sha256===baseline[i]),'Selected window changed during rankings read; retry this window.','source_changed');
+    // The flat keys are written one at a time, so a concurrent republish
+    // can leave a stable mixed revision on disk (new summary, old rankings
+    // or vice versa) that the before/after check above cannot see: it only
+    // detects changes DURING this read. The publisher writes latest.json
+    // last with the member digests of the revision it just published, so a
+    // present pointer pins this read to one revision; a mismatch is a
+    // refusal, never a served mix. A window with no pointer keeps the old
+    // behaviour (served, with a warning): the publisher always writes one,
+    // so a missing pointer means a legacy or hand-placed window.
+    const pointer=await q.optionalJson(prefix+'latest.json');
+    if(pointer.value) {
+      check(object(pointer.value) && pointer.value.schema_version===1 && pointer.value.kind===a.kind &&
+        pointer.value.window_id===a.window_id && pointer.value.state===p.state && object(pointer.value.members) &&
+        pointer.value.members['summary.json']===baseline[0] && pointer.value.members['rankings.csv']===baseline[1],
+        'Published window pointer disagrees with the flat summary/rankings just read; the window is being republished.','source_changed');
+    } else out.warnings.push('No published window pointer for this window; the flat members are not revision-pinned.');
+    out.actual.rankings_sha256=baseline[1];
+    out.warnings.push('Matching before/after summary/rankings digests detect observed rebuilds; the published pointer pins the read to one revision when present.');
+    const filtered=rows.filter(r=>r.basis===basis && (!a.underlying||r.underlying===a.underlying) && (!a.type||r.option_type===a.type));
+    filtered.sort((x,y)=>Number(x.rank)-Number(y.rank)); // producer rank, never re-score
+    const paged=slice(filtered,limit,offset); out.pagination=paged.pagination;
+    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_windows',p,row,prefix,board:'rankings.csv',basis,
+      actual:out.actual,evidence:q.evidence.slice(-4),digests:{summary:baseline[0],rankings:baseline[1]}})}));
+    out.status=p.state==='partial'?'partial':filtered.length?'available':'empty';return out;
+  }
   async detail(a,q,out) {
     args(a,['reference','offset','limit'],['reference']); const {limit,offset}=page(a);
     check(typeof a.reference==='string' && new RegExp('^'+UUID+'$').test(a.reference),'Invalid detail reference.','invalid_reference');
     const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired, was evicted by the count/byte limit, or is not from this server; repeat the originating query.','invalid_reference');
-    const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
+    const v=entry.value;
+    if(v.cursor!==undefined) q.atCutoff(v.cursor);
+    Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
     if(v.dataset==='qqq_snapshot'||v.dataset==='spy_snapshot') {
       out.requested_underlying=v.underlying;
       out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=this.readings(v.p.underlying_market);
@@ -666,6 +891,87 @@ class Consumer {
       check(Array.isArray(results)&&Array.isArray(inputs),'Unsupported squeeze detail shape.');
       out.result=results.find(r=>r.ticker===v.row.ticker)??null;out.inputs=inputs.find(r=>r.ticker===v.row.ticker)??null;out.manifest=manifest;out.coverage=manifest.coverage??v.p.coverage??null;
       if(!out.result||!out.inputs) {out.status='partial';out.warnings.push('Selected candidate detail is absent from the run archive.');}return out;
+    }
+    if(v.dataset==='options_windows') {
+      const summary=await q.json(v.prefix+'summary.json');windowSummary(summary,v.p.kind,v.p.window_id);
+      check(q.evidence.at(-1).retrieved_sha256===v.digests.summary,'Pinned window summary changed.','source_changed');
+      await q.get(v.prefix+v.board);
+      check(q.evidence.at(-1).retrieved_sha256===v.digests.rankings,'Pinned window rankings changed.','source_changed');
+      const pointer=await q.optionalJson(v.prefix+'latest.json');
+      out.summary=summary;out.coverage=summary.counts;out.window_state={state:summary.state,reasons:summary.state_reasons};
+      out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,generated_at:summary.generated_at??null};
+      out.freshness={status:'historical',basis:'exact pinned window summary and rankings'};
+      out.session_window={open_ms:summary.sessions[0].open_ms,close_ms:summary.sessions.at(-1).close_ms};
+      out.pagination={offset:0,limit:1,total:1,truncated:false,next_offset:null,scope:'one pinned contract path from paths.csv.gz'};
+      out.warnings.push(...(summary.labels??[]));
+      // Paths are consistency-verified against the pinned ranking row, not
+      // digest-pinned to a prior paths read: no prior paths read exists and
+      // the summary carries no member digests. A missing paths file leaves
+      // the pinned ranking standing with an explicit warning; a mismatching
+      // paths row fails closed.
+      let pathsRow=null, pathsRead=false;
+      try {
+        const pathsText=await q.get(v.prefix+'paths.csv.gz',v.row.symbol);
+        pathsRead=true;
+        const pathsEvidence=q.evidence.at(-1);
+        pathsRow=windowPathsRow(pathsText,v.row.symbol);
+        if(pathsRow) {
+          check(pathsRow.underlying===v.row.underlying && pathsRow.option_type===v.row.option_type &&
+            Number(pathsRow.strike)===Number(v.row.strike) && pathsRow.expiration===v.row.expiration &&
+            pathsRow[`${v.basis}_status`]==='eligible' && Number(pathsRow[`${v.basis}_pct`])===Number(v.row.pct) &&
+            Number(pathsRow[`${v.basis}_entry`])===Number(v.row.entry) &&
+            Number(pathsRow[`${v.basis}_exit`])===Number(v.row.exit) &&
+            pathsRow[`${v.basis}_entry_session`]===v.row.entry_session &&
+            pathsRow[`${v.basis}_exit_session`]===v.row.exit_session &&
+            (pathsRow.contract_exclusions===null||pathsRow.contract_exclusions===''),
+            'Window paths row disagrees with the pinned ranking row.','source_changed');
+          const entryMs=Number(pathsRow[`${v.basis}_entry_ms`]), exitMs=Number(pathsRow[`${v.basis}_exit_ms`]);
+          const entrySession=summary.sessions.find(s=>s.day===v.row.entry_session);
+          const exitSession=summary.sessions.find(s=>s.day===v.row.exit_session);
+          check(Number.isSafeInteger(entryMs) && Number.isSafeInteger(exitMs) && exitMs>entryMs &&
+            entrySession && entryMs>=entrySession.open_ms && entryMs<entrySession.close_ms &&
+            exitSession && exitMs>=exitSession.open_ms && exitMs<exitSession.close_ms,
+            'Window path endpoints fall outside their sessions or the exit does not follow the entry.');
+          for(const [stamp,at] of [[`${v.basis}_entry_bid_ms`,entryMs],[`${v.basis}_entry_ask_ms`,entryMs],[`${v.basis}_exit_bid_ms`,exitMs],[`${v.basis}_exit_ask_ms`,exitMs]]) {
+            const t=pathsRow[stamp];
+            check(t===null||(Number.isSafeInteger(Number(t))&&Number(t)>=946684800000&&Number(t)<=at), 'Window path quote stamp is missing, future, or before 2000.');
+          }
+          for(const col of [`${v.basis}_entry_quote_age_s`,`${v.basis}_exit_quote_age_s`,`${v.basis}_entry_bid_quote_age_s`,`${v.basis}_entry_ask_quote_age_s`,`${v.basis}_exit_bid_quote_age_s`,`${v.basis}_exit_ask_quote_age_s`]) {
+            const n=pathsRow[col];
+            check(n===null||(Number.isFinite(Number(n))&&Number(n)>=0), 'Window path quote age is negative.');
+          }
+          check(Number.isSafeInteger(Number(pathsRow.contract_size)) && Number(pathsRow.contract_size)>0 &&
+            Math.abs(Number(pathsRow[`${v.basis}_pct`])-(Number(pathsRow[`${v.basis}_exit`])/Number(pathsRow[`${v.basis}_entry`])-1))<2e-6 &&
+            Math.abs(Number(pathsRow[`${v.basis}_abs_change_per_contract`])-(Number(pathsRow[`${v.basis}_exit`])-Number(pathsRow[`${v.basis}_entry`]))*Number(pathsRow.contract_size))<1e-3,
+            'Window path arithmetic disagrees with its own endpoints.');
+          if(pointer.value) {
+            // The pointer pins the paths bytes to the published revision:
+            // a paths file from another revision is refused even when its
+            // row still matches the pinned ranking row.
+            check(object(pointer.value.members) && pointer.value.members['paths.csv.gz']===pathsEvidence.retrieved_sha256,
+              'Pinned window paths digest disagrees with the published pointer.','source_changed');
+            pathsEvidence.checksum_verification='matches_published_pointer';
+            out.paths={digest:pathsEvidence.retrieved_sha256,verified:'matches_published_pointer'};
+          } else {
+            pathsEvidence.checksum_verification='matches_pinned_ranking_row';
+            out.paths={digest:pathsEvidence.retrieved_sha256,verified:'matches_pinned_ranking_row'};
+          }
+        }
+      } catch(e) {
+        if(e.code==='missing_artifact') {
+          out.errors.push(errorRecord(e,v.prefix+'paths.csv.gz'));
+          out.status='partial';
+          out.warnings.push('Window paths file is unavailable; this detail is rankings-only.');
+          out.path=null;
+        } else throw e;
+      }
+      if(pathsRead && !pathsRow && out.status!=='partial') {
+        out.status='partial';
+        out.warnings.push('Contract path is absent from paths.csv.gz; the pinned ranking row stands without its full path.');
+        out.path=null;
+      }
+      if(pathsRow) out.path=pathsRow;
+      return out;
     }
     if(v.dataset==='options_active') {
       const summary=await q.json(v.prefix+'summary.json');activeSummary(summary,v.actual.session,v.actual.sweep);

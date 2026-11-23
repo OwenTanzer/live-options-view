@@ -15,6 +15,11 @@ Window state:
   assessment ``complete``.
 - ``partial``: every session is final, but at least one is assessed
   partial or a source is missing/damaged (reasons listed).
+- ``partial`` (bounded subset): an emit whose scope says
+  ``universe_scope == "bounded_subset"`` is always ``partial`` with
+  reason ``bounded_universe_subset``, even when every session it covers
+  is complete. A 50-underlying subset never claims full-universe
+  completion or final availability.
 - ``in_progress``: at least one window session has no final daily summary
   yet. Its exit is not invented.
 """
@@ -118,8 +123,16 @@ def write_window(root: Path, window: w.Window, rows: Sequence[Mapping[str, Any]]
     out = root / "oa203" / "windows" / w.WINDOW_POLICY_VERSION / window.kind / window.window_id
     state, reasons = window_state(window, session_status,
                                   [s["key"] for s in sources if s.get("missing")])
-    if scope.get("mode") == "offline_replay" and state == "final":
-        state, reasons = "partial", ["bounded_universe_replay"]
+    subset_reason = None
+    if scope.get("mode") == "offline_replay":
+        subset_reason = "bounded_universe_replay"
+    elif scope.get("universe_scope") == "bounded_subset":
+        subset_reason = "bounded_universe_subset"
+    if subset_reason:
+        if state == "final":
+            state, reasons = "partial", [subset_reason]
+        elif subset_reason not in reasons:
+            reasons = [subset_reason, *reasons]
     rankings, counts = rankings_csv(rows, shortlist)
     paths = gzip.compress(path_rows_csv(rows), mtime=0)
     summary = {

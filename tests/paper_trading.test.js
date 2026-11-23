@@ -225,6 +225,12 @@ assert.equal(els['quote-health'].className, 'transport-health live');
 assert.equal(els['quote-health'].textContent, 'Options: live · 4s');
 get('renderTransportHealth')('quote-health', 'Options', { state: 'stale', returned: 1, requested: 3, message: 'partial' });
 assert.equal(els['quote-health'].textContent, 'Options: stale · 1/3');
+// A closed quote feed is a named state, not a red failure: after the session
+// stop the producer refuses option requests while tickers stay live, and the
+// line has to say which of those happened.
+get('renderTransportHealth')('quote-health', 'Options', { state: 'closed', returned: 0, requested: 82, message: 'closed for this session' });
+assert.equal(els['quote-health'].className, 'transport-health closed');
+assert.equal(els['quote-health'].textContent, 'Options: session closed');
 
 const SYM = 'QQQ260918C600000';
 const INFO = { sym: SYM, strike: 600, type: 'call', exp: '2026-09-18' };
@@ -388,6 +394,16 @@ const INFO = { sym: SYM, strike: 600, type: 'call', exp: '2026-09-18' };
   assert.equal(calls.marginCall.length, 1, 'the margin-call screen is shown');
   assert.equal(calls.marginCall[0], 'A settlement obligation exceeded the account balance');
   assert.equal(get('session').trades.length, 1, 'a margin-called settlement adds no trade');
+
+  nextResponse = response({settled: []});
+  await get('settleExpired')();
+  const emptyCount = fetchCalls.length;
+  await get('settleExpired')();
+  assert.equal(fetchCalls.length, emptyCount, 'unchanged empty settlement is coalesced');
+  get('spotMarks')['2026-09-18'] = 500;
+  await get('settleExpired')();
+  assert.equal(fetchCalls.length, emptyCount + 1, 'a new mark retries immediately');
+  vm.runInContext('lastEmptySettlement.retryAt = 0', context);
 
   // --- settleExpired: a transient 500 leaves the book alone for the next cycle. ---
   nextResponse = response({}, 500);

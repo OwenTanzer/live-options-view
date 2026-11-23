@@ -112,7 +112,7 @@ def _merge_entries(
     return [by_username[username] for username in order]
 
 
-def _entries_for(
+def _base_entries_for(
     path: Path | None,
     catalog_path: Path,
     override_path: Path,
@@ -126,12 +126,44 @@ def _entries_for(
     if configured_path is not None:
         if not configured_path.exists():
             raise FileNotFoundError(f"No accounts file at {configured_path}.")
-        return _read_entries(configured_path)
+        entries = _read_entries(configured_path)
+        if path is not None or os.environ.get("CRASSUS_FORWARD_COHORT") != "oi-forward-v1":
+            return entries
+        # The forward cohort is an explicitly activated experiment. Preserve
+        # every private runtime setting while admitting newly cataloged arms.
+        if catalog_path.exists():
+            cohort = [entry for entry in _read_entries(catalog_path)
+                      if entry.get("username") in {
+                          "crassus_oif_baseline", "crassus_oif_stop35",
+                          "crassus_oif_protect", "crassus_oif_recover"}]
+            existing = {entry.get("username") for entry in entries}
+            return entries + [entry for entry in cohort if entry["username"] not in existing]
+        return entries
     if not catalog_path.exists():
         raise FileNotFoundError(f"No bot catalog at {catalog_path}.")
     catalog = _read_entries(catalog_path)
     overrides = _read_entries(override_path) if override_path.exists() else []
     return _merge_entries(catalog, overrides)
+
+
+def _entries_for(path: Path | None, catalog_path: Path, override_path: Path) -> list[dict[str, Any]]:
+    entries = _base_entries_for(path, catalog_path, override_path)
+    if path is None and os.getenv("CRASSUS_PW_OA233") and not any(e["username"] == "crassus_oa233" for e in entries):
+        entries.extend(e for e in _read_entries(catalog_path) if e["username"] == "crassus_oa233")
+    if os.environ.get("CRASSUS_NEWTON_CONFIRMED") != "1":
+        return entries
+    control = next(entry for entry in entries if entry["username"] == "crassus_newton")
+    twin = next(entry for entry in _read_entries(catalog_path)
+                if entry["username"] == "crassus_newton_confirmed")
+    challenger = {**control, **twin, "active": control.get("active", True),
+                  "params": {**control.get("params", {}), **twin["params"]}}
+    challenger.pop("password", None)
+    return [entry for entry in entries if entry["username"] != twin["username"]] + [challenger]
+
+
+def _inactive(entry: dict[str, Any]) -> bool:
+    # Private roster overrides may still include retired Reddit strategies.
+    return entry.get("active", True) is False or str(entry.get("strategy_id", "")).startswith("reddit_sentiment_qqq")
 
 
 def account_gaps(
@@ -150,7 +182,7 @@ def account_gaps(
     environment = os.environ if environ is None else environ
     gaps: list[dict[str, str]] = []
     for entry in _entries_for(path, catalog_path, override_path):
-        if entry.get("active", True) is False:
+        if _inactive(entry):
             continue
         if entry.get("broker", "worker") == "tastytrade":
             # Brokerage-routed: no Worker password. Report which owner-set
@@ -231,7 +263,7 @@ def load_accounts(
     accounts = []
     missing: list[str] = []
     for entry in entries:
-        if entry.get("active", True) is False:
+        if _inactive(entry):
             continue
         broker = entry.get("broker", "worker")
         if broker not in BROKERS:

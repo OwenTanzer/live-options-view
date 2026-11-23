@@ -1,14 +1,16 @@
-// backend/bots.js (B4) -- bot roster: the membership index (R2 + legacy KV
-// markers), the operator reconcile/metadata routes, the public /api/bots
+// backend/bots.js (B4) -- bot roster: the R2 membership index (legacy markers
+// are mirrored in D1 for reconciliation), the operator reconcile/metadata routes, the public /api/bots
 // roster, and netPositions. Moved verbatim from worker.js; the entry
 // re-exports the public names. syncBotMembership is exported for auth
 // (register/login retry it) -- it is not one of the Worker's public exports.
 
 import {
   BOT_USERNAME_RE, MAX_KV_WRITE_ATTEMPTS, STARTING_BALANCE, STRATEGY_ID_RE,
-  botKey, computeBookFromTrades, jsonResponse, readJsonBody, sleep, userKey,
+  computeBookFromTrades, jsonResponse, readJsonBody, sleep,
   withUserRecord,
 } from './common.js';
+import { createStorage } from './storage.js';
+import { operationalBucket } from './operational-storage.js';
 
 export const BOT_INDEX_KEY = 'system/bot-membership-v1.json';
 const MAX_BOT_INDEX_MEMBERS = 500;
@@ -30,13 +32,16 @@ async function loadBotIndex(env) {
 export async function updateBotIndex(env, additions, { ready = false, sleeper = sleep } = {}) {
   const names = additions.map(n => n.toLowerCase());
   if (names.some(n => !BOT_USERNAME_RE.test(n))) throw new Error('Invalid bot membership');
+  // The roster index shares a bucket with the capture producer; writes go
+  // through the operational boundary so a wrong key cannot reach capture.
+  const indexWrites = operationalBucket(env, 'bot_index');
   for (let attempt = 0; attempt < MAX_KV_WRITE_ATTEMPTS; attempt++) {
     const current = await loadBotIndex(env);
     const members = [...new Set([...(current?.value.members || []), ...names])].sort();
     const next = validateBotIndex({ schema_version: 1, ready: ready || current?.value.ready || false, members });
     if (current && JSON.stringify(current.value) === JSON.stringify(next)) return next;
     try {
-      const stored = await env.PAPER_TRADES.put(BOT_INDEX_KEY, JSON.stringify(next), {
+      const stored = await indexWrites.put(BOT_INDEX_KEY, JSON.stringify(next), {
         onlyIf: current ? { etagMatches: current.etag } : { etagDoesNotMatch: '*' },
         httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' },
       });
@@ -53,24 +58,22 @@ export async function updateBotIndex(env, additions, { ready = false, sleeper = 
   }
   throw new Error('Bot membership update conflicted; retry');
 }
-// Only migration/reconciliation and the explicit staged rollout mode enumerate
-// KV. Never fall back to listing on an ordinary index read failure.
-async function listMigrationKeys(env, prefix) {
-  const names = [];
-  let cursor;
-  for (let page = 0; page < 5; page++) {
-    const result = await env.USERS.list({ prefix, limit: 100, ...(cursor ? { cursor } : {}) });
-    names.push(...result.keys.map(k => k.name));
-    if (names.length > MAX_BOT_INDEX_MEMBERS) throw new Error('Bot migration scan limit exceeded');
-    if (result.list_complete === true) return names;
-    if (!result.cursor || result.cursor === cursor) throw new Error('Incomplete bot migration scan');
-    cursor = result.cursor;
-  }
-  throw new Error('Bot migration scan limit exceeded');
+// Account and marker enumeration now comes from D1 (#208); the legacy KV scan
+// existed only because KV had no other way to list. The bound on the roster
+// size stays: a runaway scan is a signal to stop, not to keep reading.
+async function listAccountNames(env) {
+  const names = await createStorage(env).users.listUsernames();
+  if (names.length > MAX_BOT_INDEX_MEMBERS) throw new Error('Bot migration scan limit exceeded');
+  return names;
+}
+async function listMarkerNames(env) {
+  const names = await createStorage(env).botMarkers.listUsernames();
+  if (names.length > MAX_BOT_INDEX_MEMBERS) throw new Error('Bot migration scan limit exceeded');
+  return names;
 }
 export async function botUsernames(env) {
   if (env.BOT_INDEX_READS === 'legacy') {
-    return (await listMigrationKeys(env, 'bot:')).map(k => k.slice(4));
+    return (await listMarkerNames(env));
   }
   if (env.BOT_INDEX_READS && env.BOT_INDEX_READS !== 'r2') throw new Error('Invalid bot index mode');
   const current = await loadBotIndex(env);
@@ -78,25 +81,14 @@ export async function botUsernames(env) {
   return current.value.members;
 }
 export async function repairLegacyBotMarker(env, username, sleeper = sleep) {
-  const key = botKey(username);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await env.USERS.get(key);
-    let marker;
-    try { marker = raw ? JSON.parse(raw) : null; } catch { marker = null; }
-    if (typeof marker?.username === 'string' &&
-        marker.username.toLowerCase() === username.toLowerCase()) return;
-    try {
-      await env.USERS.put(key, JSON.stringify({ username }));
-      return;
-    } catch (error) {
-      // A competing repair or an eventually consistent stale read can still
-      // cause a same-key PUT. Retry only rate limits, outside the one-second
-      // write window, and re-read so a completed competing repair is a no-op.
-      const rateLimited = error?.status === 429 || /\b429\b/.test(String(error?.message));
-      if (!rateLimited || attempt === 2) throw error;
-      await sleeper(1100);
-    }
-  }
+  // Kept for rollout/rollback compatibility: the marker table exists so old
+  // code paths and reconciliation see the same membership. D1 makes the
+  // retry-on-429 loop unnecessary; the parameter stays for call-site
+  // compatibility and is intentionally unused.
+  void sleeper;
+  const store = createStorage(env);
+  if (await store.botMarkers.has(username)) return;
+  await store.botMarkers.put(username, { username });
 }
 export async function syncBotMembership(env, username) {
   // Keep the legacy marker during rollout/rollback. The account already exists;
@@ -111,14 +103,15 @@ export async function handleBotIndexReconcile(request, env) {
   try {
     // Scan account records, not just bot: markers, to repair interrupted legacy
     // registrations. A bounded, fully paginated scan must finish before publish.
-    const keys = await listMigrationKeys(env, 'user:');
+    const keys = await listAccountNames(env);
     const members = [];
-    for (const key of keys) {
-      const raw = await env.USERS.get(key);
-      if (!raw) throw new Error('Migration account unavailable; retry');
-      const record = JSON.parse(raw);
+    const store = createStorage(env);
+    for (const name of keys) {
+      const record = await store.users.get(name);
+      if (!record) throw new Error('Migration account unavailable; retry');
       if (record.is_bot === true) {
-        if (typeof record.username !== 'string' || userKey(record.username) !== key) {
+        if (typeof record.username !== 'string' ||
+            record.username.toLowerCase() !== String(name).toLowerCase()) {
           throw new Error('Migration account identity mismatch');
         }
         members.push(record.username);
@@ -149,7 +142,7 @@ export async function handleBotIndexReconcile(request, env) {
 // session, let alone anonymously.
 // Public strategy summary for the Automated card. Only the fields the runner
 // intentionally publishes are retained; nested objects, credentials and
-// arbitrary metadata are rejected rather than copied into KV.
+// arbitrary metadata are rejected rather than copied into the record.
 const STRATEGY_STATE_KEYS = new Set([
   'strategy', 'symbol', 'window', 'signal_date', 'close', 'sma',
   'prior_close', 'prior_sma', 'signal', 'target', 'position', 'position_qty',
@@ -260,11 +253,13 @@ export async function handleBots(request, env) {
     const usernames = await botUsernames(env);
 
     const bots = [];
+    const asOf = new Date();
+    const store = createStorage(env);
     for (const name of usernames) {
-      const raw = await env.USERS.get(`user:${name}`);
-      if (!raw) throw new Error('Indexed bot account unavailable');
-      const record = JSON.parse(raw);
+      const record = await store.users.get(name);
+      if (!record) throw new Error('Indexed bot account unavailable');
       if (!record.is_bot) continue;    // index and record disagree -- trust the record
+      if (record.strategy_id?.startsWith('reddit_sentiment_qqq')) continue;
       const trades = Array.isArray(record.trades) ? record.trades : [];
       bots.push({
         username: record.username,
@@ -279,6 +274,7 @@ export async function handleBots(request, env) {
         first_trade_ts: trades.length ? trades[0].ts : null,
         last_trade_ts: trades.length ? trades[trades.length - 1].ts : null,
         positions: netPositions(trades),
+        ...sessionFills(trades, asOf),
         strategy_state: record.strategy_state ?? null,
         paper_margin_limit: record.paper_margin_limit ?? 1,
         paper_financing_rate: record.paper_financing_rate ?? 0,
@@ -287,12 +283,63 @@ export async function handleBots(request, env) {
     }
 
     bots.sort((a, b) => a.alias.localeCompare(b.alias));
-    return jsonResponse({ bots, as_of: new Date().toISOString() }, 200);
+    return jsonResponse({ bots, as_of: asOf.toISOString() }, 200);
   } catch {
     console.error('bot_roster_read_failed');
     return jsonResponse({ error: 'Bot roster temporarily unavailable' }, 503);
   }
 }
+// The current New York day's fills, oldest first, for the floor board's
+// entry/exit tape and session lanes. Settlement is a separate position adjustment, and
+// only the fields a display needs (no quote internals or request ids). Capped
+// so a high-frequency bot (the smoke round-trippers trade every cycle) cannot
+// grow the public roster without bound; the newest fills are kept and
+// `session_fills_truncated` says older ones were dropped, so the client knows
+// a position it held before the first listed fill may have opened later than
+// the session open.
+export const MAX_SESSION_FILLS = 100;
+const NEW_YORK_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+export function sessionFills(trades, now = new Date()) {
+  const fills = sessionFillList(trades, now);
+  return {
+    session_fills: fills.slice(-MAX_SESSION_FILLS),
+    session_fills_truncated: fills.length > MAX_SESSION_FILLS,
+  };
+}
+
+function sessionFillList(trades, now) {
+  const day = NEW_YORK_DAY.format(now);
+  const fills = [];
+  for (const t of trades) {
+    if (!t || (t.status && t.status !== 'filled')) continue;
+    if (t.side !== 'buy' && t.side !== 'sell') continue;
+    const ms = Date.parse(t.ts);
+    if (!Number.isFinite(ms) || NEW_YORK_DAY.format(new Date(ms)) !== day) continue;
+    const qty = Number(t.qty);
+    const price = Number(t.price);
+    if (t.price == null || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) continue;
+    const id = t.execution_id ?? t.execution_request_id;
+    const settlement = typeof id === 'string' && id.startsWith('settle:');
+    fills.push({
+      ts: new Date(ms).toISOString(),
+      sym: String(t.sym ?? ''),
+      side: t.side,
+      qty,
+      price,
+      instrument_type: t.instrument_type === 'share' ? 'share' : 'option',
+      type: t.type === 'call' || t.type === 'put' ? t.type : null,
+      strike: typeof t.strike === 'number' && Number.isFinite(t.strike) && t.strike >= 0 ? t.strike : null,
+      kind: settlement ? 'settlement' : 'fill',
+    });
+  }
+  // Concurrent requests timestamp before appending, so append order is not necessarily time order.
+  // Stable sort preserves ledger order for equal timestamps.
+  return fills.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
 // Projects the account's position book into the roster's wire shape.
 //
 // This delegates to computeBookFromTrades rather than accumulating its own cost

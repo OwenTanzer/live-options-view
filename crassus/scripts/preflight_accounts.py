@@ -37,54 +37,10 @@ from crassus.config import (  # noqa: E402
     BOT_REGISTRATION_KEY, DEFAULT_ACCOUNTS_CATALOG, DEFAULT_ACCOUNTS_OVERRIDE,
     _entries_for, account_gaps,
 )
+from crassus.preflight import (  # noqa: E402
+    ACCEPTED_ERROR, REJECTED_ERROR, probe_registration_key, worker_error as _worker_error,
+)
 from crassus.strategy import REGISTRY  # noqa: E402
-
-
-ACCEPTED_ERROR = "Username must be 3-40 characters: letters, numbers, underscore"
-REJECTED_ERROR = "Invalid bot registration key"
-
-
-def _worker_error(response) -> str | None:
-    try:
-        payload = json.loads(response.text or "")
-    except (TypeError, ValueError):
-        return None
-    return payload.get("error") if isinstance(payload, dict) else None
-
-
-def probe_registration_key(base_url: str, key: str, request=requests.post) -> dict:
-    """Classify the Worker's answer without mutating an account.
-
-    The only accepted proof is the real handleRegister contract: the supplied
-    header passed the key guard, and the intentionally empty body then failed
-    username validation with this exact 400 error. Any other 4xx (401, a
-    different 403, 404, 429, an unrelated 400) fails closed rather than
-    reporting readiness.
-    """
-    try:
-        response = request(
-            base_url.rstrip("/") + "/api/register",
-            headers={"X-Bot-Registration-Key": key},
-            json={},
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        return {"status": "unreachable", "detail": type(exc).__name__}
-    error = _worker_error(response)
-    status = response.status_code
-    if status == 400 and error == ACCEPTED_ERROR:
-        return {"status": "accepted", "http_status": status}
-    if status == 403 and error == REJECTED_ERROR:
-        return {"status": "rejected", "http_status": status}
-    if status == 401:
-        return {"status": "unauthorized", "http_status": status}
-    if status == 403:
-        return {"status": "forbidden", "http_status": status, "error": (error or "")[:160]}
-    if status == 404:
-        return {"status": "not_found", "http_status": status}
-    if status == 429:
-        return {"status": "rate_limited", "http_status": status}
-    return {"status": "unexpected", "http_status": status, "error": (error or "")[:160]}
 
 
 def main(argv: list[str] | None = None) -> int:

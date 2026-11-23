@@ -1,0 +1,41 @@
+# OFFLINE recovery deployment for issue #208. Not the production Worker.
+#
+# This configuration exists so the KV -> D1 migration and the reverse path stay
+# executable against the preserved legacy namespaces after the normal deployment
+# drops its KV bindings. Deploy it only for a deliberate recovery window, point
+# no production route at it, and delete it when the window closes:
+#
+#   wrangler deploy --config wrangler.recovery.toml
+#   wrangler secret put MIGRATION_TOKEN --config wrangler.recovery.toml
+#   # ... run the phases against /api/admin/migrate ...
+#   wrangler delete live-options-recovery
+#
+# It has no cron triggers and no asset routes on purpose. It shares the live D1
+# database, so a recovery copy writes the same accounts the production Worker
+# serves; that is intended, and it is why recovery work happens under the fence.
+name = "live-options-recovery"
+main = "backend/recovery.js"
+compatibility_date = "2026-06-23"
+account_id = "413bc8abe4485cf2a2e0d9f534436ade"
+
+[vars]
+BOT_INDEX_READS = "r2"
+
+[[r2_buckets]]
+binding = "PAPER_TRADES"
+bucket_name = "qqq-options-chain-data"
+
+# Legacy namespaces, bound only in this offline deployment. The production
+# Worker has no KV binding and no code path that reaches these.
+[[kv_namespaces]]
+binding = "USERS"
+id = "e6d7e57f32ea4122ba81b8c84dc28553"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "2b996344769e4e679d9f307196a76b84"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "live-options"
+database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"

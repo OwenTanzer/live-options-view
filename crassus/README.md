@@ -17,6 +17,8 @@ record of what the bot saw, decided, and did.
 
 ---
 
+[Four-arm forward paper comparison](docs/forward-skew.md)
+
 ## Status
 
 | Phase | | |
@@ -92,6 +94,9 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `crassus/sentiment.py` | Reddit sentiment observation for `reddit_sentiment_qqq` (public JSON listing scrape + browser fallback + VADER, polled and cached like the market snapshot) |
 | `crassus/trump_sentiment.py` | Trump Truth Social sentiment observation for `trump_whisperer_qqq` (`trumpstruth.org/feed` RSS + VADER, polled and cached the same way) |
 | `crassus/phelps.py` | `phelps_wrap()` -- retrofits Guideline Phelps' ~25-30 minute hold-time floor onto any existing strategy's exits, without touching its entry/signal logic |
+| `crassus/exits.py` | Configurable profit/protective exits for held positions: average-cost vs fresh liquidation-side quote, explicit stop/profit/Phelps/session precedence, durable re-entry cooldown. Inert until `CRASSUS_EXITS_ENABLED`; see `docs/2026-11-exits.md` |
+| `crassus/key_health.py` | Bounded periodic registration-key health: one non-mutating probe per interval, redacted and deduplicated reporting, recovery detection. See `docs/2026-11-bot-provisioning.md` |
+| `crassus/provisioning.py` | Pre-merge gate for newly active `password_env` entries: redacted evidence or `active: false`. See `docs/2026-11-bot-provisioning.md` |
 | `crassus/strategies/` | Strategy implementations |
 | `crassus/strategies/phelps_variants.py` | Phelps-wrapped twins of the four live strategies (`smoke_atm_roundtrip_phelps`, `reddit_sentiment_qqq_phelps`, `trump_whisperer_qqq_phelps`, `momentum_qqq_phelps`) -- same entries, exits deferred one Phelps window |
 | `crassus/strategies/phelps_pure.py` | `phelps_pure_qqq` -- entry *and* exit both derived from Guideline Phelps directly (short-window displacement trigger, hold-until-invalidation-or-window-elapses exit), rather than wrapping another strategy's signal |

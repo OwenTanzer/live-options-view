@@ -1,61 +1,127 @@
 """Bounded source discovery and official daily Treasury observations."""
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
 
 import requests
 
 from market_data.overview import INSTRUMENTS
-from .config import PRICE_TICKERS, TASTY_BASE, log
+from .config import (
+    CONTRACT_RESOLVE_RETRY_MAX_SECS, CONTRACT_RESOLVE_RETRY_MIN_SECS,
+    PRICE_TICKERS, TASTY_BASE, log,
+)
 from .oauth import _bearer_headers
 
 RESOLVED_CONTRACTS = {}
 _RESOLVE_LOCK = threading.Lock()
 _RESOLVED_FOR_DATE = None
+_RESOLVE_ATTEMPTS = 0
+_RESOLVE_RETRY_AT = None
+_RESOLVE_STATE = {
+    "state": "never_attempted", "last_attempt_at": None, "last_success_at": None,
+    "last_error": None, "attempts": 0, "retry_at": None, "carried": [],
+}
 TREASURY_URL = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml'
 
 
-def resolve_futures(access_token, *, force=False):
-    """Resolve provider-designated active months once per UTC day; never guess a roll.
+def _resolution_failed(reason, now):
+    """Record a resolution gap without touching the published/subscribed map."""
+    global _RESOLVE_ATTEMPTS, _RESOLVE_RETRY_AT
+    _RESOLVE_ATTEMPTS += 1
+    delay = min(CONTRACT_RESOLVE_RETRY_MAX_SECS,
+                CONTRACT_RESOLVE_RETRY_MIN_SECS * (2 ** (_RESOLVE_ATTEMPTS - 1)))
+    _RESOLVE_RETRY_AT = now + timedelta(seconds=delay)
+    _RESOLVE_STATE.update(
+        state="degraded", last_error=reason, attempts=_RESOLVE_ATTEMPTS,
+        last_attempt_at=now.isoformat(), retry_at=_RESOLVE_RETRY_AT.isoformat(),
+        carried=[])
 
-    The continuous price lane and the option-chain session both need this, so a
-    repeated call on the same day is a cache read rather than a second network
-    resolution that could briefly clear the lane's symbols mid-publish.
+
+def resolution_status():
+    """Resolution state for the lane health record (never mutates anything)."""
+    with _RESOLVE_LOCK:
+        return {
+            **_RESOLVE_STATE,
+            "resolved_for_date": _RESOLVED_FOR_DATE,
+            "labels": {label: contract.get("symbol")
+                       for label, contract in RESOLVED_CONTRACTS.items()},
+        }
+
+
+def resolve_futures(access_token, *, force=False, now=None):
+    """Resolve provider-designated active months; never discard a good mapping.
+
+    The provider is the only authority for the active month. A request that
+    fails, returns no items, or leaves a product without an eligible active
+    contract is a resolution gap: the last good contract stays published and
+    subscribed, and the retry is bounded. Only a genuine provider answer
+    replaces the shared mapping. Clearing it first -- the November 9 defect --
+    unsubscribed every futures symbol while the market was still open.
     """
-    global _RESOLVED_FOR_DATE
+    global _RESOLVED_FOR_DATE, _RESOLVE_ATTEMPTS, _RESOLVE_RETRY_AT
+    now = now or datetime.now(timezone.utc)
     futures = [r for r in INSTRUMENTS if r['profile'] == 'FU' and r['enabled']]
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = now.date().isoformat()
     with _RESOLVE_LOCK:
         if not force and _RESOLVED_FOR_DATE == today and RESOLVED_CONTRACTS:
             return dict(RESOLVED_CONTRACTS)
-        for r in futures:
-            PRICE_TICKERS[r['label']] = None
-        RESOLVED_CONTRACTS.clear()
-        _RESOLVED_FOR_DATE = today
+        if (not force and _RESOLVE_RETRY_AT is not None
+                and now < _RESOLVE_RETRY_AT and RESOLVED_CONTRACTS):
+            return dict(RESOLVED_CONTRACTS)
+        _RESOLVE_STATE['last_attempt_at'] = now.isoformat()
         try:
             response = requests.get(TASTY_BASE + '/instruments/futures',
                 params={'product-code[]': [r['id'][4:].upper() for r in futures]},
                 headers=_bearer_headers(access_token), timeout=15)
             response.raise_for_status()
             items = response.json()['data']['items']
-            for r in futures:
-                root = r['id'][4:].upper()
-                candidates = [i for i in items if i.get('active-month') and i.get('active')
-                    and not i.get('is-closing-only') and i.get('expiration-date', '') >= today
-                    and i.get('future-product', {}).get('code') == root]
-                if len(candidates) != 1:
-                    log.warning('overview future %s unresolved: %s active candidates', root, len(candidates))
-                    continue
+            if not isinstance(items, list) or not items:
+                raise ValueError('empty_futures_instrument_response')
+        except Exception as exc:
+            status = getattr(getattr(exc, 'response', None), 'status_code', None)
+            reason = f'auth_rejected_{status}' if status in (401, 403) else type(exc).__name__
+            _resolution_failed(reason, now)
+            log.warning('overview futures discovery unavailable; keeping last known contracts')
+            return dict(RESOLVED_CONTRACTS)
+        resolved = {}
+        carried = []
+        unresolved = []
+        for r in futures:
+            root = r['id'][4:].upper()
+            candidates = [i for i in items if i.get('active-month') and i.get('active')
+                and not i.get('is-closing-only') and i.get('expiration-date', '') >= today
+                and i.get('future-product', {}).get('code') == root]
+            symbol = candidates[0].get('streamer-symbol') if len(candidates) == 1 else None
+            if symbol and ':' in symbol:
                 i = candidates[0]
-                symbol = i.get('streamer-symbol')
-                if not symbol or ':' not in symbol:
-                    continue
-                RESOLVED_CONTRACTS[r['label']] = {'symbol': symbol, 'root': root,
+                resolved[r['label']] = {'symbol': symbol, 'root': root,
                     'expiry': i['expiration-date'], 'exchange': symbol.split(':', 1)[1],
                     'selection': 'provider_active_month'}
-                PRICE_TICKERS[r['label']] = symbol
-        except Exception:
-            log.warning('overview futures discovery unavailable; no guessed contracts subscribed')
+                continue
+            prior = RESOLVED_CONTRACTS.get(r['label'])
+            if prior and prior.get('expiry', '') >= today:
+                resolved[r['label']] = dict(prior)
+                carried.append(r['label'])
+            else:
+                unresolved.append(root)
+        if not resolved:
+            _resolution_failed('no_active_contracts', now)
+            return dict(RESOLVED_CONTRACTS)
+        # Commit atomically, and only after a usable answer exists.
+        RESOLVED_CONTRACTS.clear()
+        RESOLVED_CONTRACTS.update(resolved)
+        for r in futures:
+            contract = resolved.get(r['label'])
+            PRICE_TICKERS[r['label']] = contract['symbol'] if contract else None
+        _RESOLVED_FOR_DATE = today
+        _RESOLVE_ATTEMPTS = 0
+        _RESOLVE_RETRY_AT = None
+        _RESOLVE_STATE.update(
+            state='ok' if not unresolved and not carried else 'partial',
+            last_success_at=now.isoformat(), last_error=None, attempts=0,
+            retry_at=None, carried=carried)
+        if carried or unresolved:
+            log.warning(f"overview futures resolution partial: carried={carried} unresolved={unresolved}")
         return dict(RESOLVED_CONTRACTS)
 
 

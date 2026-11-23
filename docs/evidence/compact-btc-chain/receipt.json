@@ -1,0 +1,143 @@
+{
+  "width": 375,
+  "height": 667,
+  "source": "site/index.html via disposable preview; synthetic quotes and holdings",
+  "rects": [
+    {
+      "strike": "85000",
+      "top": 269.1875,
+      "bottom": 322.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "86000",
+      "top": 322.1875,
+      "bottom": 375.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "87000",
+      "top": 375.1875,
+      "bottom": 428.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "88000",
+      "top": 428.1875,
+      "bottom": 481.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "89000",
+      "top": 481.1875,
+      "bottom": 534.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "90000",
+      "top": 534.1875,
+      "bottom": 587.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "91000",
+      "top": 587.1875,
+      "bottom": 640.1875,
+      "left": 9,
+      "right": 366,
+      "complete": true
+    },
+    {
+      "strike": "92000",
+      "top": 640.1875,
+      "bottom": 693.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "85000",
+      "top": 774.1875,
+      "bottom": 827.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "86000",
+      "top": 827.1875,
+      "bottom": 880.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "87000",
+      "top": 880.1875,
+      "bottom": 933.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "88000",
+      "top": 933.1875,
+      "bottom": 986.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "89000",
+      "top": 986.1875,
+      "bottom": 1039.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "90000",
+      "top": 1039.1875,
+      "bottom": 1092.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "91000",
+      "top": 1092.1875,
+      "bottom": 1145.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    },
+    {
+      "strike": "92000",
+      "top": 1145.1875,
+      "bottom": 1198.1875,
+      "left": 9,
+      "right": 366,
+      "complete": false
+    }
+  ],
+  "base_revision": "1faaf6ef13e5ebd97fed65be0ca2f39a3bc7d033",
+  "captured_by": "Brian; 2026-11-21; Playwright Chromium headless; local production entry via disposable preview",
+  "source_sha256": {
+    "site/index.html": "b38975c06513603ecb04bbb7503e60bf468398e63b715d533946bc8dbe7a2307",
+    "site/js/btc-options.js": "92fc32a398e025acc786a6739cfd31051d22ca409a960e28ca31a0a5afd5d95c",
+    "tests/btc_compact_chain.test.mjs": "608e95d590f453777f45004720a1d02075e92625a9bc632438bcc3f3e723126c"
+  },
+  "screenshot_sha256": "3a3da0e42a362198333fe9f05d2c18803e13d878da51932062d1612b7fef2e36"
+}

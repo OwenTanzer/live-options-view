@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<title>Atom parser fixture (SYNTHETIC)</title>
+<id>urn:fixture:atom</id>
+<updated>2026-11-09T10:00:00Z</updated>
+<entry>
+<title type="html">Synthetic &lt;b&gt;atom&lt;/b&gt; entry</title>
+<id>urn:fixture:atom:1</id>
+<link rel="self" href="https://example.com/self/1"/>
+<link rel="alternate" href="https://example.com/Atom/Entry-One?ref=Feed&amp;utm_campaign=x"/>
+<published>2026-11-09T09:00:00+01:00</published>
+<updated>2026-11-09T09:30:00+01:00</updated>
+<summary>Synthetic atom summary.</summary>
+<category term="Energy"/>
+<source><title>Syndicated Outlet</title></source>
+</entry>
+</feed>

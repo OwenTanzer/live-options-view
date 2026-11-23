@@ -83,6 +83,17 @@ def _fill_time_for_symbol(ctx: StrategyContext, symbol: str) -> datetime | None:
     return best
 
 
+def position_entry_time(ctx: StrategyContext, symbol: str) -> datetime | None:
+    """Public read of a held position's own fill time.
+
+    The exit layer (`crassus/exits.py`) needs the same entry timestamp this
+    module tracks internally, to decide whether the Phelps window still
+    withholds a profit exit. Exposing the read keeps one implementation of the
+    trade-record parsing rather than a second, subtly different copy.
+    """
+    return _fill_time_for_symbol(ctx, symbol)
+
+
 def resolve_phelps_minutes(params: dict[str, Any]) -> float:
     """`params.get("phelps_minutes")`, validated -- shared by `phelps_wrap`
     and `phelps_pure_qqq` so both apply the same guard, rather than each

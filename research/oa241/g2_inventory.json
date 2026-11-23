@@ -1,0 +1,197 @@
+[
+ {
+  "date": "2026-09-10",
+  "trade_prints_and_preceding_quotes": {
+   "archived_segments": 0,
+   "status": "none archived"
+  },
+  "snapshots": 595,
+  "rth_snapshots": 378,
+  "first_snapshot": "06:00:02",
+  "last_snapshot": "16:14:01",
+  "decision_time_settled_oi": {
+   "contracts_with_oi_at_0930": 150,
+   "contracts": 150,
+   "last_oi_change_before_open": "08:53:05",
+   "clearing_date": "not recorded; inferred prior session"
+  },
+  "spot": {
+   "rth_snapshots_with_single_spot": 378,
+   "source": "snapshot UnderlyingPrice at snapshot time"
+  },
+  "gamma": {
+   "rth_contract_cells": 50652,
+   "usable": 50652,
+   "usable_share": 1.0,
+   "timestamp": "snapshot filename time, ET"
+  },
+  "captured_strikes": {
+   "count": 72,
+   "low": 674.0,
+   "high": 745.0,
+   "note": "0DTE chain rows in each snapshot; the strike set moves with the collector's window"
+  },
+  "cumulative_volume": {
+   "rth_contract_cells": 50652,
+   "usable": 50652
+  },
+  "rth_gaps_over_120s": [],
+  "strongest_estimate": "unsigned only: settled-OI gamma concentration (OA-171 C) and unsigned minute volume activity (OA-171 A) by strike and time. Signed flow, the OA-178 S-B dealer accumulation and its attribution endpoints are unsupported: no trade prints or preceding quotes were archived."
+ },
+ {
+  "date": "2026-09-11",
+  "trade_prints_and_preceding_quotes": {
+   "archived_segments": 0,
+   "status": "none archived"
+  },
+  "snapshots": 598,
+  "rth_snapshots": 378,
+  "first_snapshot": "06:00:03",
+  "last_snapshot": "16:14:36",
+  "decision_time_settled_oi": {
+   "contracts_with_oi_at_0930": 144,
+   "contracts": 144,
+   "last_oi_change_before_open": "08:57:44",
+   "clearing_date": "not recorded; inferred prior session"
+  },
+  "spot": {
+   "rth_snapshots_with_single_spot": 378,
+   "source": "snapshot UnderlyingPrice at snapshot time"
+  },
+  "gamma": {
+   "rth_contract_cells": 50652,
+   "usable": 50652,
+   "usable_share": 1.0,
+   "timestamp": "snapshot filename time, ET"
+  },
+  "captured_strikes": {
+   "count": 70,
+   "low": 681.0,
+   "high": 750.0,
+   "note": "0DTE chain rows in each snapshot; the strike set moves with the collector's window"
+  },
+  "cumulative_volume": {
+   "rth_contract_cells": 50652,
+   "usable": 50652
+  },
+  "rth_gaps_over_120s": [],
+  "strongest_estimate": "unsigned only: settled-OI gamma concentration (OA-171 C) and unsigned minute volume activity (OA-171 A) by strike and time. Signed flow, the OA-178 S-B dealer accumulation and its attribution endpoints are unsupported: no trade prints or preceding quotes were archived."
+ },
+ {
+  "date": "2026-09-14",
+  "trade_prints_and_preceding_quotes": {
+   "archived_segments": 0,
+   "status": "none archived"
+  },
+  "snapshots": 598,
+  "rth_snapshots": 378,
+  "first_snapshot": "06:00:03",
+  "last_snapshot": "16:14:28",
+  "decision_time_settled_oi": {
+   "contracts_with_oi_at_0930": 140,
+   "contracts": 140,
+   "last_oi_change_before_open": "08:37:10",
+   "clearing_date": "not recorded; inferred prior session"
+  },
+  "spot": {
+   "rth_snapshots_with_single_spot": 378,
+   "source": "snapshot UnderlyingPrice at snapshot time"
+  },
+  "gamma": {
+   "rth_contract_cells": 50652,
+   "usable": 50652,
+   "usable_share": 1.0,
+   "timestamp": "snapshot filename time, ET"
+  },
+  "captured_strikes": {
+   "count": 77,
+   "low": 670.0,
+   "high": 746.0,
+   "note": "0DTE chain rows in each snapshot; the strike set moves with the collector's window"
+  },
+  "cumulative_volume": {
+   "rth_contract_cells": 50652,
+   "usable": 50652
+  },
+  "rth_gaps_over_120s": [],
+  "strongest_estimate": "unsigned only: settled-OI gamma concentration (OA-171 C) and unsigned minute volume activity (OA-171 A) by strike and time. Signed flow, the OA-178 S-B dealer accumulation and its attribution endpoints are unsupported: no trade prints or preceding quotes were archived."
+ },
+ {
+  "date": "2026-09-15",
+  "trade_prints_and_preceding_quotes": {
+   "archived_segments": 0,
+   "status": "none archived"
+  },
+  "snapshots": 598,
+  "rth_snapshots": 378,
+  "first_snapshot": "06:00:03",
+  "last_snapshot": "16:14:53",
+  "decision_time_settled_oi": {
+   "contracts_with_oi_at_0930": 140,
+   "contracts": 140,
+   "last_oi_change_before_open": "08:49:26",
+   "clearing_date": "not recorded; inferred prior session"
+  },
+  "spot": {
+   "rth_snapshots_with_single_spot": 378,
+   "source": "snapshot UnderlyingPrice at snapshot time"
+  },
+  "gamma": {
+   "rth_contract_cells": 50652,
+   "usable": 50652,
+   "usable_share": 1.0,
+   "timestamp": "snapshot filename time, ET"
+  },
+  "captured_strikes": {
+   "count": 72,
+   "low": 671.0,
+   "high": 742.0,
+   "note": "0DTE chain rows in each snapshot; the strike set moves with the collector's window"
+  },
+  "cumulative_volume": {
+   "rth_contract_cells": 50652,
+   "usable": 50652
+  },
+  "rth_gaps_over_120s": [],
+  "strongest_estimate": "unsigned only: settled-OI gamma concentration (OA-171 C) and unsigned minute volume activity (OA-171 A) by strike and time. Signed flow, the OA-178 S-B dealer accumulation and its attribution endpoints are unsupported: no trade prints or preceding quotes were archived."
+ },
+ {
+  "date": "2026-09-16",
+  "trade_prints_and_preceding_quotes": {
+   "archived_segments": 0,
+   "status": "none archived"
+  },
+  "snapshots": 597,
+  "rth_snapshots": 378,
+  "first_snapshot": "06:00:02",
+  "last_snapshot": "16:14:07",
+  "decision_time_settled_oi": {
+   "contracts_with_oi_at_0930": 142,
+   "contracts": 142,
+   "last_oi_change_before_open": "09:04:45",
+   "clearing_date": "not recorded; inferred prior session"
+  },
+  "spot": {
+   "rth_snapshots_with_single_spot": 378,
+   "source": "snapshot UnderlyingPrice at snapshot time"
+  },
+  "gamma": {
+   "rth_contract_cells": 50652,
+   "usable": 50652,
+   "usable_share": 1.0,
+   "timestamp": "snapshot filename time, ET"
+  },
+  "captured_strikes": {
+   "count": 79,
+   "low": 667.0,
+   "high": 745.0,
+   "note": "0DTE chain rows in each snapshot; the strike set moves with the collector's window"
+  },
+  "cumulative_volume": {
+   "rth_contract_cells": 50652,
+   "usable": 50652
+  },
+  "rth_gaps_over_120s": [],
+  "strongest_estimate": "unsigned only: settled-OI gamma concentration (OA-171 C) and unsigned minute volume activity (OA-171 A) by strike and time. Signed flow, the OA-178 S-B dealer accumulation and its attribution endpoints are unsupported: no trade prints or preceding quotes were archived."
+ }
+]

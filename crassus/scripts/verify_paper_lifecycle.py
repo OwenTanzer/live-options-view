@@ -210,6 +210,12 @@ def main() -> int:
         check("roster exposes no stale holding", card["positions"] == [], json.dumps(card["positions"]))
         check("multi-client roster does not enumerate KV", stats()["lists"] == before["lists"],
               f"{before['lists']} -> {after['lists']}")
+        # Issue #208 acceptance: the entire lifecycle -- register, login,
+        # sessions, trades, settlement, roster, restart -- runs without touching
+        # a KV namespace. The harness turns any KV access into a hard error and
+        # counts it, so this is measured, not assumed.
+        check("zero KV operations across the whole lifecycle", after["kv_touches"] == 0,
+              str(after["kv_touches"]))
 
         ledger = records(ledger_dir)
         filled = [r for r in ledger if r["outcome_class"] == Outcome.FILLED]
@@ -228,7 +234,8 @@ def main() -> int:
             "sequence": ["registered", "entered_711", "atm_changed_712_deferred", "restart_deferred",
                          "sold_711", "entered_712", "settled_flat", "roster_fresh"],
             "settled_balance": state.balance_cash,
-            "operation_counts": {"kv_lists": after["lists"], "r2_gets": after["gets"], "r2_puts": after["puts"]},
+            "operation_counts": {"kv_touches": after["kv_touches"], "kv_lists": after["lists"],
+                                  "r2_gets": after["gets"], "r2_puts": after["puts"]},
             "ledger_records": len(ledger),
         }, indent=2))
         print(f"\nlifecycle: {'PASS' if FAIL == 0 else 'FAIL'}")

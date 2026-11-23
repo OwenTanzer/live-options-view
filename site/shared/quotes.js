@@ -254,12 +254,27 @@ function sameSet(a, b) {
   return true;
 }
 
+// An error response's JSON body, without letting an empty or malformed one
+// replace the HTTP failure with a parse failure. The producer's error
+// documents are a few hundred bytes; nothing here buffers a quote payload.
+async function readErrorBody(response) {
+  try {
+    if (typeof response?.json !== 'function') return null;
+    const value = await response.json();
+    return value && typeof value === 'object' ? value : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 class LiveQuotePoller {
   constructor(service, {
     fetchFn = (...args) => fetch(...args),
     endpoint = '/api/live-quotes',
+    requestedSymbols = () => service.interestSymbols(),
     foregroundIntervalMs = 5_000,
     hiddenIntervalMs = 60_000,
+    closedIntervalMs = 60_000,
     maxQuoteAgeMs = 15_000,
     requestTimeoutMs = 8_000,
     maxBackoffMs = 120_000,
@@ -270,8 +285,10 @@ class LiveQuotePoller {
     this.service = service;
     this.fetchFn = fetchFn;
     this.endpoint = endpoint;
+    this.requestedSymbols = requestedSymbols;
     this.foregroundIntervalMs = foregroundIntervalMs;
     this.hiddenIntervalMs = hiddenIntervalMs;
+    this.closedIntervalMs = closedIntervalMs;
     this.maxQuoteAgeMs = maxQuoteAgeMs;
     this.requestTimeoutMs = requestTimeoutMs;
     this.maxBackoffMs = maxBackoffMs;
@@ -286,7 +303,7 @@ class LiveQuotePoller {
     this.health = {
       state: 'idle', lastAttemptAt: null, lastSuccessAt: null,
       retryAt: null, quoteAgeMs: null, requested: 0, returned: 0,
-      httpStatus: null, message: 'Waiting for quote interests',
+      httpStatus: null, serviceState: null, sessionState: null, message: 'Waiting for quote interests',
     };
     this.unsubscribeInterests = service.subscribeInterests(() => this.kick());
   }
@@ -323,7 +340,7 @@ class LiveQuotePoller {
 
   async poll() {
     if (!this.running || this.inFlight) return this.inFlight;
-    const symbols = this.service.interestSymbols();
+    const symbols = this.requestedSymbols();
     if (!symbols.length) {
       this._setHealth({
         state: 'idle', requested: 0, returned: 0, retryAt: null,
@@ -355,6 +372,11 @@ class LiveQuotePoller {
         const error = new Error(`HTTP ${response.status}`);
         error.status = response.status;
         error.retryAfter = response.headers?.get?.('Retry-After');
+        // The collector answers an option request with 503 + a health block
+        // when its quote feed has no session. That is a definite answer
+        // ("closed"), not a transient failure, so the body has to survive
+        // into the handler instead of being discarded with the error.
+        error.body = await readErrorBody(response);
         throw error;
       }
       const payload = await response.json();
@@ -379,20 +401,41 @@ class LiveQuotePoller {
         requested: symbols.length,
         returned: quotes.length,
         httpStatus: 200,
+        serviceState: payload.health?.state ?? null,
+        sessionState: payload.health?.session ?? null,
         message: stale ? 'Live quotes are stale' : partial ? 'Some live quotes are unavailable' : 'Live quotes healthy',
       });
       this._schedule(this._normalInterval());
     } catch (error) {
-      this.failureCount += 1;
-      const retryMs = this._retryDelay(error);
+      const health = error.body?.health || {};
+      const serviceState = typeof health.state === 'string' ? health.state : null;
+      const sessionState = typeof health.session === 'string' ? health.session : null;
+      // 'offline' alone is ambiguous: the producer reports it before the
+      // collector has opened a session, while the scheduler deliberately waits
+      // for the next one, after a session ended, and after one died. Only the
+      // two deliberate outside-session values may be shown as a closed lane:
+      // `session_closed` (a session ran and ended) and `waiting_for_session`
+      // (a cold start or the scheduler waiting outside the option session).
+      // Anything else offline is an outage while the lane should be up, and
+      // must keep the ordinary failure and backoff behaviour; labelling a
+      // trading-hours failure "session closed" would hide it.
+      const closed = error.status === 503 &&
+        (sessionState === 'session_closed' || sessionState === 'waiting_for_session');
+      if (!closed) this.failureCount += 1;
+      const retryMs = closed
+        ? this.closedIntervalMs
+        : this._retryDelay(error);
       const rateLimited = error.status === 429;
-      const unavailable = !rateLimited && this.failureCount === 1;
+      const unavailable = !rateLimited && !closed && this.failureCount === 1;
       this._setHealth({
-        state: rateLimited ? 'rate-limited' : unavailable ? 'unavailable' : 'backing-off',
+        state: closed ? 'closed' : rateLimited ? 'rate-limited' : unavailable ? 'unavailable' : 'backing-off',
         returned: 0,
         httpStatus: error.status || null,
+        serviceState,
+        sessionState,
         retryAt: new Date(this.nowFn() + retryMs).toISOString(),
-        message: rateLimited ? 'Live quotes rate limited' : 'Live quotes unavailable',
+        message: closed ? 'The option quote feed is closed for this session'
+          : rateLimited ? 'Live quotes rate limited' : 'Live quotes unavailable',
       });
       this._schedule(retryMs);
     } finally {

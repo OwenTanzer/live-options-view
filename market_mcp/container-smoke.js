@@ -43,7 +43,7 @@ async function run() {
       assert.equal(r.status, 200); assert.ok(!r.body.error); return r.body.result;
     };
     await call('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'container-fixture', version: '1' } });
-    assert.equal((await call('tools/list')).tools.length, 7);
+    assert.equal((await call('tools/list')).tools.length, 8);
     const query = await call('tools/call', { name: 'market_context', arguments: { limit: 1 } });
     assert.equal(query.structuredContent.status, 'available');
     const detail = await call('tools/call', { name: 'result_detail', arguments: { reference: query.structuredContent.rows[0].detail_reference, limit: 1 } });

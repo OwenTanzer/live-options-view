@@ -162,7 +162,7 @@ This comes from source on `master` and the public 2026-10-09 artifacts.
   duration of 306 s. One sweep is about 1.5 MB gzip and about **20 MB
   expanded**.
 - **The MCP's existing bounds** (`market_mcp/README.md`) are 12 source
-  requests, 64 MiB of total query bytes, 24 MiB per expanded artifact, a
+  requests, 64 MiB of total query bytes, 48 MiB per expanded artifact, a
   15 s deadline and 256 KiB of output.
 - **#131 forbids duplicating producer calculations in the consumer.** The
   ranking must come from `oa203_returns.py`'s own build.

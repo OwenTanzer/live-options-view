@@ -27,11 +27,30 @@ HEARTBEAT_FD = "_CRASSUS_HEARTBEAT_FD"
 FAILURE_EXIT = 75
 
 
+#: The only events the supervisor's Progress consumer understands. This channel
+#: is a strict lifecycle protocol, not a log sink: `Progress.accept` raises on
+#: anything else, which the supervisor turns into a `supervisor_failure` and a
+#: nonzero exit, so an unrecognised event emitted here restarts the runner.
+HEARTBEAT_EVENTS = frozenset({"cycle_started", "cycle_completed", "cycle_failed"})
+
+
 def report_cycle(name: str, **fields: Any) -> None:
-    """Small atomic pipe records, separate from logs and durable trading state."""
+    """Small atomic pipe records, separate from logs and durable trading state.
+
+    Deliberately limited to the three lifecycle events above. Diagnostics --
+    key health, memory, quote errors, anything an operator wants to read -- go
+    through `observability.event()` as ordinary structured logging. A name
+    outside the protocol is dropped with a warning rather than written: the
+    consumer fails closed on unknown events, so writing one would turn a
+    diagnostic into a supervisor restart.
+    """
     fd = os.environ.get(HEARTBEAT_FD)
     if fd is None:
         return  # Direct Runner users and --once retain their existing lifecycle.
+    if name not in HEARTBEAT_EVENTS:
+        event(log, "heartbeat_event_rejected", level=logging.WARNING,
+              rejected_event=str(name), allowed=sorted(HEARTBEAT_EVENTS))
+        return
     payload = (json.dumps({"event": name, **fields}, sort_keys=True) + "\n").encode()
     try:
         if len(payload) > 4096:

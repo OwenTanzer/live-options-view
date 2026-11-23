@@ -1,6 +1,6 @@
 # Tradier archive collector: operation and recovery
 
-This service archives time-and-sales; it does not supply the displayed Live chain.
+This service archives time-and-sales and supplies the QQQ order-flow plot at /order-flow.html. The Live chain has a separate source. After each accepted event enters the archive spool, a bounded display projection retains up to 2,048 recent option prints. A background writer publishes changed snapshots at most every three seconds to order-flow/qqq/v1/recent.json. Failures leave archive intake running. Last print time is provider event time. The display can omit older prints during bursts.
 See [archive consumers and compatibility](ARCHIVE_ONLY.md). The stable entry is
 [launcher.py](launcher.py), which launches the
 [compatibility script](__main__.py) over this package.

@@ -84,9 +84,17 @@ def fetch(key: str, attempts: int = 4) -> bytes:
 
 def validate_manifest(manifest: list[dict], summary: dict, day: str,
                       selected: dict[str, dict[str, str | None]] | None = None) -> None:
-    """Reject torn or amended sweep indexes before treating a replay as final."""
-    if summary.get("assessment", {}).get("status") != "complete":
-        raise RuntimeError(f"{day}: daily assessment is not complete")
+    """Reject torn or amended sweep indexes before treating a replay as final.
+
+    A final day assessed "partial" is admitted: its manifest must still be
+    fully valid (contiguous sweeps, no truncated non-final sweep, valid
+    chain evidence); the partiality is carried as session_partial reasons
+    by the caller, never hidden. Any other assessment status, a missing
+    assessment, or a torn manifest is still refused fail-closed.
+    """
+    status = summary.get("assessment", {}).get("status")
+    if status not in ("complete", "partial"):
+        raise RuntimeError(f"{day}: daily assessment is not complete or partial (status={status!r})")
     if not manifest or [m.get("sweep") for m in manifest] != list(range(1, len(manifest) + 1)):
         raise RuntimeError(f"{day}: non-contiguous manifest")
     files = [m.get("file") for m in manifest]
@@ -146,7 +154,8 @@ def validate_contract_identity(symbol: str, row: dict) -> None:
         raise RuntimeError(f"OCC symbol disagrees with archive contract metadata: {symbol}")
 
 
-def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled: dict) -> dict:
+def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled: dict, *,
+                 max_row_bytes: int | None = None) -> dict:
     prefix = f"oa203/scanner/{day}/"
     summary = json.loads(fetch(prefix + "summary.json"))
     if summary.get("trade_date") != day or not summary.get("final"):
@@ -177,7 +186,13 @@ def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled:
         in_session_counts: dict[tuple[str, str], int] = defaultdict(int)
         raw_count = 0
         raw = gzip.GzipFile(fileobj=io.BytesIO(fetch(prefix + "sweeps/" + entry["file"])))
-        for line in io.TextIOWrapper(raw, encoding="utf-8"):
+        # Live builds bound even a corrupt, highly compressible JSON line.
+        text = io.TextIOWrapper(raw, encoding="utf-8")
+        lines = (iter(lambda: text.readline(max_row_bytes + 1), "")
+                 if max_row_bytes is not None else text)
+        for line in lines:
+            if max_row_bytes is not None and len(line.encode("utf-8")) > max_row_bytes:
+                raise ValueError(f"{day}: window row byte budget exceeded")
             if not line.strip():
                 continue
             raw_count += 1
@@ -223,6 +238,7 @@ def load_session(day: str, underlyings: set[str], rows_by_symbol: dict, sampled:
     return {"day": day, "session": w.Session(day, summary["session_open_ms"], summary["session_close_ms"]),
             "sweeps": len(manifest), "rows_kept": kept, "final": bool(summary.get("final")),
             "assessment": summary["assessment"]["status"],
+            "assessment_reasons": list(summary["assessment"].get("reasons") or []),
             "excluded_final_sweep": excluded_final_sweep,
             "universe_selection_version": universe.get("selection_version"),
             "universe_selected_at": universe.get("selected_at"),

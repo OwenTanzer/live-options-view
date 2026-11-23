@@ -62,6 +62,8 @@ per-account wrapper the registry calls, selecting that account's own tracker.
 
 from __future__ import annotations
 
+from dataclasses import replace
+import math
 import re
 import threading
 from typing import Any
@@ -153,6 +155,18 @@ class SessionImbalanceTracker:
     def has_history(self) -> bool:
         return bool(self._observations)
 
+    @property
+    def session_start_observed_at(self) -> str | None:
+        """Snapshot timestamp of the session-start reading (the anchor)."""
+        if not self._observations:
+            return None
+        return self._observations[0][0]
+
+    @property
+    def session_key(self) -> str | None:
+        """The reset key (UTC calendar date) the current anchor belongs to."""
+        return self._session_key
+
 
 def _near_money_oi(snapshot: Any, near_money_pct: float) -> tuple[float, float, int]:
     """Sum call/put OpenInterest within `near_money_pct` of the underlying.
@@ -188,7 +202,7 @@ def _near_money_oi(snapshot: Any, near_money_pct: float) -> tuple[float, float, 
     return call_oi, put_oi, len(strikes_with_oi)
 
 
-def _decide_core(ctx: StrategyContext, tracker: SessionImbalanceTracker) -> Decision:
+def _decide_core(ctx: StrategyContext, tracker: SessionImbalanceTracker, *, band=None) -> Decision:
     def no(reason: str, **meta: Any) -> Decision:
         return Decision.no_trade(
             reason=reason,
@@ -204,7 +218,7 @@ def _decide_core(ctx: StrategyContext, tracker: SessionImbalanceTracker) -> Deci
     min_band_strikes = params.get("min_band_strikes", DEFAULT_MIN_BAND_STRIKES)
 
     snapshot = ctx.snapshot
-    call_oi, put_oi, band_strikes = _near_money_oi(snapshot, near_money_pct)
+    call_oi, put_oi, band_strikes = band if band is not None else _near_money_oi(snapshot, near_money_pct)
     total_oi = call_oi + put_oi
     imbalance = (call_oi - put_oi) / total_oi if total_oi > 0 else None
 
@@ -223,6 +237,18 @@ def _decide_core(ctx: StrategyContext, tracker: SessionImbalanceTracker) -> Deci
         session_start_imbalance=session_start,
         delta_from_session_start=delta,
         band_strikes=band_strikes,
+        # Provenance for the read-only meter projection (Skew + Direction H1).
+        # Additive only: no gate reads these. The anchor's identity is the
+        # reset key plus when the anchor reading was observed; together with
+        # the ledger's run_id that distinguishes a restart reset.
+        session_key=tracker.session_key,
+        anchor_observed_at=tracker.session_start_observed_at,
+        params={
+            "near_money_pct": near_money_pct,
+            "imbalance_threshold": imbalance_threshold,
+            "min_change_from_session_start": min_change,
+            "min_band_strikes": min_band_strikes,
+        },
     )
 
     if ctx.session_phase != "open":
@@ -443,7 +469,7 @@ def _close(
     )
 
 
-_trackers: dict[tuple[str, float], SessionImbalanceTracker] = {}
+_trackers: dict[tuple[str, str, float], SessionImbalanceTracker] = {}
 _trackers_lock = threading.Lock()
 
 
@@ -463,7 +489,7 @@ def _account_key(ctx: StrategyContext) -> str:
     return str(username) if username else "unknown"
 
 
-def _tracker_for(ctx: StrategyContext, near_money_pct: float) -> SessionImbalanceTracker:
+def _tracker_for(ctx: StrategyContext, near_money_pct: float, strategy_id=STRATEGY_ID) -> SessionImbalanceTracker:
     """One session tracker per (account, near-money band).
 
     The imbalance is computed with that account's own `near_money_pct`, so
@@ -474,7 +500,7 @@ def _tracker_for(ctx: StrategyContext, near_money_pct: float) -> SessionImbalanc
     account once per snapshot; a shared tracker made every account after the
     first look stale (#107 comment, F3).
     """
-    key = (_account_key(ctx), float(near_money_pct))
+    key = (strategy_id, _account_key(ctx), float(near_money_pct))
     with _trackers_lock:
         tracker = _trackers.get(key)
         if tracker is None:
@@ -482,10 +508,12 @@ def _tracker_for(ctx: StrategyContext, near_money_pct: float) -> SessionImbalanc
         return tracker
 
 
-def _reset_state() -> None:
+def _reset_state(strategy_id=STRATEGY_ID) -> None:
     """Forget every account's session history (independent replay boundary)."""
     with _trackers_lock:
-        _trackers.clear()
+        for key in list(_trackers):
+            if key[0] == strategy_id:
+                del _trackers[key]
 
 
 register_state_resetter(STRATEGY_ID, _reset_state)
@@ -500,3 +528,65 @@ def _decide(ctx: StrategyContext) -> Decision:
 _decide.strategy_id = STRATEGY_ID
 _decide.strategy_version = STRATEGY_VERSION
 oi_skew_qqq = register(_decide)
+
+
+REFERENCE_ROOTS = {
+    "oi_skew_spy": "SPY",
+    "oi_skew_ibit_adaptive": "IBIT",
+    "oi_skew_slv_adaptive": "SLV",
+    "oi_skew_dram_adaptive": "DRAM",
+}
+# Roots whose strike spacing is wide relative to price, so a fixed ±2% band can
+# hold one or two strikes. They use the adaptive window (4th-nearest OI strike,
+# floor ±2%, cap ±10%, no reading beyond the cap) instead of the fixed band.
+ADAPTIVE_ROOTS = frozenset({"IBIT", "SLV", "DRAM"})
+
+
+def _finite_number(value):
+    return type(value) in (float, int) and math.isfinite(value)
+
+
+def _reference_decision(ctx, strategy_id):
+    root = REFERENCE_ROOTS[strategy_id]
+    snapshot = ctx.snapshot
+    symbol_pattern = rf"{root}\d{{6}}[CP]\d{{8}}"
+    symbols = [row.get("OptionSymbol") for row in snapshot.rows]
+    symbols.extend(_open_positions(ctx))
+    if not symbols or any(not re.fullmatch(symbol_pattern, str(symbol)) for symbol in symbols):
+        return Decision.no_trade(f"Missing or mismatched {root} contract board or holding.", strategy_id, STRATEGY_VERSION)
+    spot = snapshot.underlying_price
+    if not _finite_number(spot) or spot <= 0:
+        return Decision.no_trade("Missing valid spot.", strategy_id, STRATEGY_VERSION)
+    params = dict(ctx.params or {})
+    width = params.get("near_money_pct", DEFAULT_NEAR_MONEY_PCT)
+    rows = [row for row in snapshot.rows if _finite_number(row.get("Strike"))
+            and _finite_number(row.get("OpenInterest")) and row["OpenInterest"] > 0
+            and row.get("Type") in ("call", "put")]
+    tracker = _tracker_for(ctx, width, strategy_id)
+    if root in ADAPTIVE_ROOTS:
+        distances = sorted(abs(strike - spot) / spot for strike in {row["Strike"] for row in rows})
+        width = max(0.02, distances[3]) if len(distances) >= 4 else math.inf
+        if width > 0.10 + 1e-12:
+            rows = []
+            width = 0.10
+        width = min(width, 0.10)
+        params.update(near_money_pct=width, min_band_strikes=4)
+    in_band = [row for row in rows if abs(row["Strike"] - spot) / spot <= width + (1e-12 if root in ADAPTIVE_ROOTS else 0)]
+    band = (sum(r["OpenInterest"] for r in in_band if r["Type"] == "call"),
+            sum(r["OpenInterest"] for r in in_band if r["Type"] == "put"),
+            len({r["Strike"] for r in in_band}))
+    result = _decide_core(replace(ctx, params=params), tracker, band=band)
+    return replace(result, strategy_id=strategy_id)
+
+
+def _register_reference(strategy_id):
+    def decide(ctx):
+        return _reference_decision(ctx, strategy_id)
+    decide.strategy_id = strategy_id
+    decide.strategy_version = STRATEGY_VERSION
+    register(decide)
+    register_state_resetter(strategy_id, lambda: _reset_state(strategy_id))
+
+
+for reference_id in REFERENCE_ROOTS:
+    _register_reference(reference_id)

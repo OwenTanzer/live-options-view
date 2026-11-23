@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+<title>TechCrunch (SYNTHETIC TEST FIXTURE)</title>
+<link>https://techcrunch.com/</link>
+<description>SYNTHETIC TEST FIXTURE - not real news</description>
+<item>
+<title>Nvidia GPU supply loosens as new foundry capacity comes online</title>
+<link>https://techcrunch.com/2026/11/09/nvidia-gpu-supply-loosens/</link>
+<guid isPermaLink="false">https://techcrunch.com/?p=900001</guid>
+<description>Synthetic: lead times for accelerators shortened.</description>
+<pubDate>Mon, 09 Nov 2026 13:15:00 +0000</pubDate>
+<category>AI</category>
+</item>
+<item>
+<title>The best weather apps for your phone</title>
+<link>https://techcrunch.com/2026/11/09/best-weather-apps/</link>
+<guid isPermaLink="false">https://techcrunch.com/?p=900002</guid>
+<description>Synthetic: an AI forecast feature is now in most apps.</description>
+<pubDate>Mon, 09 Nov 2026 12:00:00 +0000</pubDate>
+</item>
+<item>
+<title>Startup raises seed round for scheduling software</title>
+<link>https://techcrunch.com/2026/11/09/scheduling-seed-round/</link>
+<guid isPermaLink="false">https://techcrunch.com/?p=900003</guid>
+<description>Synthetic: the company makes calendar tools.</description>
+<pubDate>Mon, 09 Nov 2026 11:00:00 +0000</pubDate>
+</item>
+</channel>
+</rss>

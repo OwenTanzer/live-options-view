@@ -1,0 +1,18 @@
+# OI Skew forward paper comparison, v1
+
+Four new simulator accounts share a start, the original OI strategy, ordinary one-contract sizing, 0DTE selection, mandatory flatten, and the existing Crassus market snapshot and rate limiter. Each has its own cash, fills, cookie, decision ledger attribution and durable chain. The original account is outside the comparison. The cohort is appended after existing accounts. Arrival and fill times can differ within a cycle.
+
+| Account suffix | Policy |
+| --- | --- |
+| baseline | Original OI strategy with the deployed risk layer (50% premium stop, no fixed profit target, 15-minute cooldown). |
+| stop35 | Full-quantity exit at a fresh executable bid at or below 65% of actual fill basis. After stop, same-side re-entry requires an observed invalidation and a new valid signal. The stopped symbol also observes its 15-minute cooldown. |
+| protect | Stop35 plus OA-236 v1.1: arm at +20% net, protect positive gains at +5% or less or on fresh directional breakdown. |
+| recover | Identical protection with same-contract recovery re-entry using the accepted event, skew, time and count limits. Each fill restarts the basis and direction context. |
+
+The shared direction input is a read-only Yahoo Finance QQQ five-minute chart request, at most once per active regular-session cycle. Only completed, regular-session bars with a successor and actual local receipt qualify. Preserve the source close, source event time, receipt time and actual bars on the volume. Each arm's challenger is the OA-229 position-relative adapter at directional-move-lab revision 1c967eda. Missing intervals clear its scale. A stale source, missing row, warm-up, or interval gap cannot supply a breakdown or recovery. An executable protective price floor and premium stop continue without a directional signal. Option fills come only from the existing Options View simulator. No live broker endpoint or second quote stream is involved.
+
+A proposal writes a pending transition before submission. The runner's persisted execution UUID follows that proposal through retries. The overlay consumes the transition only when the book contains its fill. A rejected sale leaves the holding intact. A re-entry uses the server-confirmed basis rather than the proposal ask. Cohort version, runner revision and cycle join the standard private decision record, including no-trades, rejects, bid/ask and quote times, positions and balance. Daily bar and chain files live under the existing persistent state root.
+
+At final review, join by common regular-session snapshot and cycle, preserve missing or retired accounts in denominators, and report unmatched exposures. Reconstruct fills including settlement from server histories. Mark open longs at eligible executable bids, retain unmarked intervals, and report realized results separately. Compare drawdown, peak-to-exit giveback, winners cut short and subsequent baseline continuation, recovered continuation after re-entry, turnover and rejected attempts. Show observed simulator economics separately from modeled fees/slippage. Treat gaps or sparse opportunities as limits. Parameter changes start a new versioned comparison period.
+
+Rollback disables only the four account catalog entries and keeps their histories, private ledgers and volume. If positions exist, reconcile holdings first and preserve their authorized paper close path.

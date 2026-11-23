@@ -1,54 +1,162 @@
 name: Web CI
 
-# The Worker and front end had no PR gate: crassus-ci.yml is path-filtered to
-# crassus/**, so a change to worker.js or site/ showed a green tick that had
-# tested none of it -- while merging to master fires deploy.yml straight into
-# production. This runs the JS suites on any PR that touches those paths.
+# Tests exact candidate inputs for the separate asset/API release lanes.
+# Neither deployment workflow auto-promotes on push; each requires explicit
+# dispatch, successful Web CI for its candidate and production approval.
 on:
   pull_request:
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
+      - "frontend/**"
       - "tests/**"
       - "wrangler.toml"
+      - "wrangler.assets.toml"
+      - "wrangler.api.toml"
+      - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
+      - "scripts/build-assets.mjs"
+      - "scripts/prepare-asset-release.mjs"
+      - "scripts/preview-local.mjs"
+      - "scripts/deploy-staged-payload.mjs"
+      - ".github/workflows/deploy-staged.yml"
       - "scripts/stamp-build.mjs"
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
+      - "market_data/news/**"
+      - "research/options_replay/**"
   push:
     branches: [master]
     paths:
       - "backend/**"
+      - "market_data/prediction/**"
       - "site/**"
+      - "frontend/**"
       - "tests/**"
       - "wrangler.toml"
+      - "wrangler.assets.toml"
+      - "wrangler.api.toml"
+      - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
+      - "scripts/build-assets.mjs"
+      - "scripts/prepare-asset-release.mjs"
+      - "scripts/preview-local.mjs"
+      - "scripts/deploy-staged-payload.mjs"
+      - ".github/workflows/deploy-staged.yml"
       - "scripts/stamp-build.mjs"
       - "scripts/generate-quote-instruments.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/web-ci.yml"
+      - "market_data/news/**"
+      - "research/options_replay/**"
 
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
+      # Full history: the rollback-restoration test clones this checkout and
+      # checks out the recorded combined build 6c1051a, which is absent from
+      # a shallow (fetch-depth: 1) clone. A shallow checkout fails that test
+      # in CI even though it passes locally (see crassus-ci.yml, which
+      # already uses fetch-depth: 0 for the same reason).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install locked API dependencies
+        run: npm ci --prefix backend --ignore-scripts
+      - name: Check modeled daily D1 rows
+        run: |
+          npm ci --prefix tests/d1-budget --ignore-scripts
+          node --experimental-sqlite --test tests/d1-budget/usage.test.mjs
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
+      - name: One Clock source and cursor contract
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
+      - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
+        run: node --test tests/order_flow_exposure.test.js tests/order_flow_model.test.js tests/order_flow_render.test.js tests/order_flow_profile.test.js tests/order_flow_heatmap.test.js
+      - name: bounded legacy r2-proxy (#225, G4b)
+        run: node --test tests/r2_proxy_bounded.test.js
       - name: historical archive loading
         run: node tests/historical_archive.test.js
+      - name: Prediction market fixture acceptance
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: |
+          node tests/prediction.test.mjs
+          node tests/prediction_ui.test.mjs
+          node --test tests/kalshi.test.mjs
       - name: worker logic
         run: node tests/worker_logic.test.js
+      - name: D1 account/session storage (#208)
+        env:
+          # node:sqlite is behind this flag on Node 22 (unflagged on 24).
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/storage_d1.test.mjs
+      - name: KV to D1 migration and rollback (#208)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/migrate_d1.test.mjs
+      - name: KV page cache (#208)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/kv_page_cache.test.mjs
+      - name: Auth logout regression (#208)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/auth_logout.test.mjs
+      - name: Verify stays within the CPU budget (#208)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/verify_bounded.test.mjs
+      - name: No runtime KV bindings (#208)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/no_runtime_kv.test.mjs
+      - name: Trade journal reader (OA-238)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/trade_journal.test.mjs
+      - name: Trade journal market context (OA-238)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/trade_journal_context.test.mjs
+      - name: Trade journal page load ordering (OA-238)
+        run: node tests/trade_journal_loads.test.mjs
+      - name: Independent asset, preview and rollback contracts (#225)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node --test tests/asset_boundary.test.mjs tests/asset_rollback.test.mjs tests/preview_isolation.test.mjs tests/preview_transport.test.mjs tests/preview_storage_boundary.test.mjs tests/deploy_sequencing.test.mjs
+      - name: Changed-path boundaries (#225, Brian)
+        run: python tests/test_changed_paths.py
+      - name: News bounded launcher and pilot config (MediaFlow)
+        run: python -m unittest discover -s tests -p test_news_launcher.py -v
+      - name: News history checkpoint and bounded run listing (MediaFlow)
+        run: python -m unittest discover -s tests -p test_news_checkpoint.py -v
+      - name: News panel dedicated origin and generation contract (MediaFlow)
+        run: |
+          node tests/news_panel_view.test.js
+          node tests/news_generation_contract.test.js
       - name: bot registration probe contract
         run: node tests/preflight_worker_contract.test.js
+      - name: capture-prefix R2 write boundary (G4a)
+        run: node tests/capture_write_boundary.test.js
       - name: bot account closure and identity compatibility
         run: node tests/account_closure.test.js
       - name: automated tab panel
         run: node tests/bots_panel.test.js
+      - name: automated tab floor and session-lane views
+        run: node tests/bot_floor.test.js
       - name: live quote service
         run: node tests/live_quote_service.test.js
       - name: adaptive quote instruments projection
@@ -63,6 +171,12 @@ jobs:
         run: node tests/vwap_rvol_display.test.js
       - name: momentum display
         run: node tests/momentum_display.test.js
+      - name: OI skew meter (parity with the bot, display states, wiring)
+        run: node tests/oi_skew_meter.test.js
+      - name: SPY + IBIT reference OI skew meters (states, thin band, wiring)
+        run: node tests/reference_oi_skew_meters.test.js
+      - name: truth layer (shared state chips + About this reading)
+        run: node tests/truth_layer.test.js
       - name: chain underlying (QQQ/SPY)
         run: node tests/chain_underlying.test.js
       - name: eia steo calibration display
@@ -73,14 +187,83 @@ jobs:
         run: node tests/squeeze_scanner_display.test.js
       - name: squeeze scanner panel
         run: node tests/squeeze_panel.test.js
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Collector-to-API and UI BTC fixtures
+        # Cross-language fixtures run real FULL wire events through the collector.
+        # Importing its package requires the existing producer dependencies.
+        run: |
+          pip install -r deployment/python/requirements.txt
+          node tests/btc_options.test.mjs
+          node tests/btc_options_ui.test.mjs
+      - name: One Clock Python binding and blind Trainer invariants
+        run: |
+          python -m unittest tests.test_one_clock_python tests.test_options_replay
+          python scripts/one-clock-calendar.py --check
       - name: paper trading workflow
         run: node tests/paper_trading.test.js
       - name: multi-underlying chain and settlement (#182)
         run: node tests/multi_underlying.test.js
+      - name: settlement cron outcome logging (E2)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node --test tests/settlement_cron_outcome.test.mjs
+      - name: API settlement cron schedule (24/7 events, guarded equities)
+        run: node --test tests/api_cron_schedule.test.mjs
       - name: Install browser test dependencies
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: One Clock dashboard and Order Flow desktop/mobile fixture workflows
+        run: |
+          node tests/one_clock_dashboard_browser.test.cjs
+          node tests/one_clock_encounter_browser.mjs
+          node tests/order_flow_clock_browser.mjs
+      - name: BTC monthly mobile fixture workflow
+        run: |
+          node --test tests/btc_owner_link.test.mjs
+          node --test tests/btc_github_link.test.mjs tests/credit_tape_site.test.mjs
+          node tests/btc_options_browser.test.mjs
+          node tests/btc_mobile_chain.test.mjs
+          node tests/btc_compact_chain.test.mjs
+          node tests/btc_owner_link_browser.test.mjs
+          node tests/btc_github_browser.test.mjs
+      - name: News reader visible and hidden browser workflow
+        run: node tests/one_clock_news_browser.mjs
+      - name: Private Kalshi phone and desktop fixture workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/kalshi_browser.test.mjs
+      - name: Disposable preview rendered workflow (#225)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/preview_browser.test.mjs
+      - name: Strategy archive shared intake and browser workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: |
+          node --test tests/strategy_archive.test.mjs
+          node tests/strategy_archive_browser.mjs
+
+      - name: Prediction desktop and mobile fixture workflow (#293)
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+          PREDICTION_EVIDENCE_DIR: ${{ runner.temp }}/prediction-browser-evidence
+        run: node tests/prediction_browser.test.mjs
+      - name: Retain prediction rendered acceptance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-browser-${{ github.sha }}
+          path: ${{ runner.temp }}/prediction-browser-evidence
+          if-no-files-found: ignore
+      - name: Private journal passkey enrollment and sign-in
+        run: node tests/journal_passkeys_browser.mjs
+      - name: Reference OI skew desktop and mobile browser workflow
+        env:
+          NODE_OPTIONS: --experimental-sqlite
+        run: node tests/reference_oi_skew_browser.test.mjs
       - name: Historical rendered browser workflow
         run: node tests/historical_browser.test.js
       # Catches syntax errors in the inline <script> that the panel test would

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News Panel Harness</title>
+<!-- Tests-only harness. Not part of the site. Loads fixture views from
+     ?root= (default ../fixtures/news/views/) and renders them with the site's
+     only panel copy, site/js/news-panel.js, through its checked fetcher. The
+     panel CSS lives only in site/index.html: this page copies that marked
+     block at load. Colour tokens and type follow site/index.html. -->
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --fg: #c9d1d9; --dim: #6e7681; --bright: #f0f6fc;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--fg); min-height: 100vh; padding: 1.25rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 0.85rem; line-height: 1.4;
+  }
+  #title { font-size: 1.05rem; font-weight: 700; color: var(--bright); margin-bottom: 0.6rem; }
+  @media (max-width: 600px) { body { padding: 16px 0; } #title { padding: 0 16px; } }
+</style>
+</head>
+<body>
+<div id="title">News panel · fixture harness (tests only)</div>
+<div id="news-panel" aria-live="polite"></div>
+<script src="../../site/js/news-panel.js"></script>
+<script>
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var root = params.get('root') || '../fixtures/news/views/';
+    if (!/^(\.\.\/|\/)?[A-Za-z0-9_\-./]*$/.test(root)) root = '../fixtures/news/views/';
+    // Copy the panel's CSS block from the site page, so there is one stylesheet.
+    var css = fetch('../../site/index.html', { credentials: 'omit' }).then(function (r) { return r.text(); })
+      .then(function (html) {
+        var m = /\/\* ── news panel[\s\S]*?\/\* ── end news panel ── \*\//.exec(html);
+        if (!m) throw new Error('news panel CSS block not found in site/index.html');
+        var style = document.createElement('style');
+        style.textContent = m[0];
+        document.head.appendChild(style);
+      });
+    var fetchJson = NewsPanel.makeFetcher(root, function (url, opts) { return fetch(url, opts); }, Date.now);
+    window.newsPanelReady = css.then(function () {
+      return NewsPanel.mount(document, document.getElementById('news-panel'), fetchJson, NewsPanel.INDEX_KEY);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -116,3 +116,94 @@ assert.equal(format.normalizeShareOrder({ side: 'sell', quantity: 5, heldQuantit
   'You cannot sell more shares than you hold.');
 assert.deepEqual(format.normalizeShareOrder({ side: 'sell', quantity: 2, heldQuantity: 2 }),
   { value: { side: 'sell', qty: 2, order_type: 'market' } });
+
+// --- #178: the chain header's snapshot line (session, price age, retention). ---
+// The session comes from the producer's own ET stamp, so a reader in another
+// time zone cannot relabel it; the age comes from the same `timestamp` the
+// status dot judges.
+assert.equal(format.chainSessionFromEtTime('09:29 ET'), 'premarket');
+assert.equal(format.chainSessionFromEtTime('09:30 ET'), 'regular');
+assert.equal(format.chainSessionFromEtTime('15:59 ET'), 'regular');
+assert.equal(format.chainSessionFromEtTime('16:00 ET'), 'afterhours');
+assert.equal(format.chainSessionFromEtTime('16:14 ET'), 'afterhours');
+assert.equal(format.chainSessionFromEtTime('19:59 ET'), 'afterhours');
+assert.equal(format.chainSessionFromEtTime('20:00 ET'), 'overnight');
+assert.equal(format.chainSessionFromEtTime('04:00 ET'), 'premarket');
+assert.equal(format.chainSessionFromEtTime('12:00'), null, 'no ET stamp means no session claim');
+assert.equal(format.chainSessionFromEtTime(''), null);
+assert.equal(format.chainSessionFromEtTime(null), null);
+assert.equal(format.formatSnapshotAge(30_000), 'just now');
+assert.equal(format.formatSnapshotAge(12 * 60_000), '12m ago');
+assert.equal(format.formatSnapshotAge(7 * 3_600_000 + 3 * 60_000), '7h 3m ago');
+assert.equal(format.formatSnapshotAge(2 * 3_600_000), '2h ago');
+assert.equal(format.formatSnapshotAge(26 * 3_600_000), '1d 2h ago');
+assert.equal(format.formatSnapshotAge(NaN), 'age unknown');
+
+const CHAIN_SNAPSHOT = {
+  symbol: 'QQQ', snapshot_time: '16:14 ET', timestamp: '11/10/2026 13:14:45',
+  date: '2026-11-10', tier: '0DTE_Regular', underlying_price: 675.34,
+};
+// `timestamp` is the collector's Pacific wall clock beside an ET label, so the
+// instant must not depend on the reader's zone: 13:14:45 PST is 21:14:45Z.
+const SNAP_MS = Date.UTC(2026, 10, 10, 21, 14, 45);
+assert.equal(format.chainSnapshotInstant(CHAIN_SNAPSHOT), SNAP_MS,
+  'the producer clock is read as Pacific, not as browser-local time');
+assert.equal(format.chainSnapshotInstant({ ...CHAIN_SNAPSHOT, timestamp: 'nonsense' }), Date.UTC(2026, 10, 10, 21, 14, 0),
+  'without a parseable timestamp the ET pair (date + snapshot_time) still fixes the instant, to the minute');
+assert.equal(format.chainSnapshotInstant({}), null, 'no evidence, no instant');
+assert.equal(format.chainSnapshotInstant({
+  ...CHAIN_SNAPSHOT,
+  underlying_market: { spot_ts: '2026-11-10T13:14:48.084735-08:00' },
+}), Date.parse('2026-11-10T13:14:48.084735-08:00'), 'an offset-bearing spot timestamp wins: it carries its own zone');
+// Decisive zone independence: the same page code run under a Tokyo clock must
+// print the same header line as under a Pacific one.
+{
+  const { execFileSync } = require('node:child_process');
+  const script = `
+    const f = require(${JSON.stringify(require.resolve('../site/shared/format.js'))});
+    process.stdout.write(f.formatChainSnapshot(${JSON.stringify(CHAIN_SNAPSHOT)}, ${SNAP_MS + 7_200_000}).text);`;
+  const tokyo = execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: 'Asia/Tokyo' } });
+  const pacific = execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: 'America/Los_Angeles' } });
+  assert.equal(tokyo, 'snapshot 16:14 ET · After hours · 2h ago · retained');
+  assert.equal(tokyo, pacific, 'the header age is identical in every reader time zone');
+}
+{
+  // The live-case #178 mismatch: a chain captured at 16:14 ET, read hours
+  // later, must say so rather than looking like a current price.
+  const f = format.formatChainSnapshot(CHAIN_SNAPSHOT, SNAP_MS + 3_600_000);
+  assert.equal(f.state, 'retained', 'an hour-old chain snapshot is a retained reading');
+  assert.equal(f.session, 'afterhours', '"Regular" is the tier, not the session: 16:14 ET is after hours');
+  assert.equal(f.sessionLabel, 'After hours');
+  assert.equal(f.ageMs, 3_600_000);
+  assert.equal(f.text, 'snapshot 16:14 ET · After hours · 1h ago · retained');
+  assert.match(f.detail, /historical snapshot taken at 16:14 ET during the after hours, 1h ago/);
+  assert.match(f.detail, /not current prices/);
+  assert.match(f.detail, /Core markets shows live prices/);
+
+  const live = format.formatChainSnapshot(CHAIN_SNAPSHOT, SNAP_MS + 20_000);
+  assert.equal(live.state, 'live', 'a 20-second-old snapshot is live');
+  assert.equal(live.text, 'snapshot 16:14 ET · After hours · just now');
+  assert.match(live.detail, /Chain snapshot taken at 16:14 ET during the after hours, just now/);
+
+  const middle = format.formatChainSnapshot({ ...CHAIN_SNAPSHOT, snapshot_time: '11:42 ET' }, SNAP_MS + 3_600_000);
+  assert.equal(middle.session, 'regular', '11:42 ET is the regular session');
+  assert.equal(middle.text, 'snapshot 11:42 ET · Regular session · 1h ago · retained');
+
+  const exactly = format.formatChainSnapshot(CHAIN_SNAPSHOT, SNAP_MS + format.CHAIN_SNAPSHOT_LIVE_MS);
+  assert.equal(exactly.state, 'live', 'the live bound is the same 2 minutes the status dot uses');
+  assert.equal(format.formatChainSnapshot(CHAIN_SNAPSHOT, SNAP_MS + format.CHAIN_SNAPSHOT_LIVE_MS + 1).state, 'retained');
+
+  // A payload whose wall clock is unusable still has its ET label, so the age
+  // is minute-accurate rather than absent.
+  const etOnly = format.formatChainSnapshot({ ...CHAIN_SNAPSHOT, timestamp: 'not a time' }, SNAP_MS);
+  assert.equal(etOnly.state, 'live');
+  assert.equal(etOnly.ageMs, 45_000, 'the ET label is used, to the minute, when the clock string is junk');
+
+  const untimed = format.formatChainSnapshot({ ...CHAIN_SNAPSHOT, timestamp: 'not a time', date: undefined, snapshot_time: undefined }, SNAP_MS);
+  assert.equal(untimed.state, 'untimed', 'with no usable time evidence at all the age is reported, never guessed');
+  assert.equal(untimed.ageMs, null);
+  assert.match(untimed.text, /age unknown$/);
+  assert.equal(format.formatChainSnapshot({}, SNAP_MS).state, 'untimed', 'no snapshot at all is untimed');
+  assert.match(format.formatChainSnapshot({}, SNAP_MS).text, /snapshot time unknown/);
+}
+console.log('format: vwap/momentum/squeeze/STEO/order checks and the #178 chain snapshot line passed');

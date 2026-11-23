@@ -110,6 +110,7 @@ def bootstrap_day(
     mode: str = "block",
     block_size: int = 6,
     start_price: float | None = None,
+    sampled_volume: list | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Returns (closes, intrabar_range_pct), each length BARS_PER_SESSION.
 
@@ -128,6 +129,8 @@ def bootstrap_day(
         idx = rng.integers(0, len(sessions))
         rets = all_returns[idx]
         ranges = all_ranges[idx]
+        if sampled_volume is not None:
+            sampled_volume.extend(sessions[idx].v.tolist())
     elif mode == "block":
         rets = np.empty(n)
         ranges = np.empty(n)
@@ -142,6 +145,8 @@ def bootstrap_day(
             start = pos
             rets[pos:pos + take] = all_returns[day_idx][start:start + take]
             ranges[pos:pos + take] = all_ranges[day_idx][start:start + take]
+            if sampled_volume is not None:
+                sampled_volume.extend(sessions[day_idx].v[start:start + take].tolist())
             pos += take
     else:
         raise ValueError(f"unknown mode {mode!r}")

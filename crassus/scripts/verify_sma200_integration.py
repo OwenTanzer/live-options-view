@@ -46,6 +46,17 @@ from crassus.config import Account  # noqa: E402
 from crassus.daily_bars import DailyBar, is_trading_day, save_cached_bars  # noqa: E402
 from crassus.runner import Runner  # noqa: E402
 from crassus.strategies.sma200 import STRATEGY_ID  # noqa: E402
+import crassus.strategies.sma200 as sma200_module  # noqa: E402
+
+# The strategy resolves its data root (daily-bar cache and per-account strategy
+# state) at import time as `CRASSUS_DATA_ROOT` or CWD. This test runs from the
+# repository's `crassus/` directory, so without this the strategy reads a real
+# `crassus/state/sma200/` cache and the persisted `sma_integration` state from
+# an earlier run instead of the synthetic bars written to TMP. That is what made
+# the fixture ineffective: the bull/bear series never reached the strategy, so
+# no crossover was ever seen and `after_buy.trades[0]` raised IndexError. Pin the
+# module's root to this run's temp directory so the fixture is authoritative.
+sma200_module.DEFAULT_STATE_DIR = TMP / "state"
 from harness_process import assert_alive, start_harness  # noqa: E402
 
 ET = ZoneInfo("America/New_York")

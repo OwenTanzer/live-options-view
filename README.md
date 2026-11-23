@@ -1,8 +1,10 @@
 # Options View
 
-Options View connects a live QQQ/SPY options chain, historical QQQ heatmaps, a scheduled squeeze scanner and paper-trading accounts. The browser is one reader of a larger system: collectors publish market artifacts, a Cloudflare Worker serves the website and account API, and a read-only Model Context Protocol (MCP) server makes selected artifacts queryable by an assistant.
+Options View connects a live QQQ/SPY options chain, historical QQQ heatmaps, a scheduled squeeze scanner and paper-trading accounts. The browser is one reader of a larger system: collectors publish market artifacts, separate Cloudflare Workers serve the website and account API, and a read-only Model Context Protocol (MCP) server makes selected artifacts queryable by an assistant.
 
 Open [the website](https://options.moopertonic.net), then use the [system map](ARCHITECTURE.md) to locate a component or follow the [walkthrough](docs/WALKTHROUGH.md) from a displayed value to its source. The [documentation index](docs/README.md) separates current navigation, specifications, operations and historical design records.
+
+Agents working in this repository must read [AGENTS.md](AGENTS.md) for release boundaries, documentation routes and the no-KV rule.
 
 ## The shortest route through the repository
 
@@ -10,14 +12,14 @@ Open [the website](https://options.moopertonic.net), then use the [system map](A
 |---|---|---|
 | Where is the page? | [site/index.html](site/index.html), [site/js](site/js) | Page shell and browser features; the source directory is not a public URL prefix |
 | Where do prices and chain snapshots come from? | [market_data/live_market/](market_data/live_market) → [collector guide](market_data/live_market/README.md) | tastytrade/DXLink acquisition, snapshot-derived readings and optional EIA forecasts |
-| What serves data and accounts? | [Backend guide](backend/README.md), [wrangler.toml](wrangler.toml) | Static assets, allowlisted archive access, live-quote proxy, paper-trading API and scheduled settlement |
+| What serves data and accounts? | [Backend guide](backend/README.md), [release procedure](docs/SITE_RELEASES.md) | Asset gateway plus separate API for archive access, live quotes, accounts and settlement |
 | What decides paper trades? | [crassus/README.md](crassus/README.md) | Strategy runner; consumes market snapshots and calls the Worker account API |
 | What produces Big Banana rankings? | [market_data/options_scanner/__main__.py](market_data/options_scanner/__main__.py), [scanner contract](site/plans/2026-09-options-return-scanner.md) | Tradier chain sampling, stored sweeps and retrospective return products |
 | What stores Tradier time-and-sales? | [launcher](market_data/tradier/launcher.py), [market_data/tradier/OPERATIONS.md](market_data/tradier/OPERATIONS.md) | Separate daily archive collector; it does not feed the displayed chain |
 | How does an assistant read it? | [market_mcp/README.md](market_mcp/README.md) | Bounded read-only tools over producer artifacts, not an alternate ranking engine |
 | Where is strategy backtesting? | [Synthetic days](research/synthetic_days/README.md) | Offline replay against the current Crassus strategies |
 
-Each service owns its implementation and operating guide. The three market-data producers share [Python image packaging](deployment/python/README.md); their launch paths and schedules are documented with each component. [wrangler.toml](wrangler.toml) stays at root so both Cloudflare deployment routes discover the same configuration.
+Each service owns its implementation and operating guide. The three market-data producers share [Python image packaging](deployment/python/README.md); their launch paths and schedules are documented with each component. [Site releases](docs/SITE_RELEASES.md) use staged `wrangler.assets.toml`; separate API releases use `wrangler.api.toml`. Root `wrangler.toml` is retained only for combined restoration.
 
 ## Folder boundaries
 
@@ -54,6 +56,6 @@ node --test market_mcp/*.test.js
 node market_mcp/smoke.js --out fixture-smoke.json
 ```
 
-The [Web CI](.github/workflows/web-ci.yml), [Collector suite](.github/workflows/collector-ci.yml) and [MCP consumer workflow](.github/workflows/market-mcp-ci.yml) are the executable test inventories. A local test pass is not a deployment receipt. `npx wrangler dev` starts the Worker development path but does not provision production bindings or secrets. Do not run a credentialed collector, scanner or Crassus runner merely to read this guide.
+The [Web CI](.github/workflows/web-ci.yml), [Collector suite](.github/workflows/collector-ci.yml) and [MCP consumer workflow](.github/workflows/market-mcp-ci.yml) are the executable test inventories. A local test pass is not a deployment receipt. `node scripts/preview-local.mjs` starts the disposable fixture preview; see [local preview](docs/SITE_RELEASES.md#local-preview-and-artifact-inspection). Do not run a credentialed collector, scanner or Crassus runner merely to read this guide.
 
-Changes to site assets or Worker/deploy tooling can deploy Cloudflare after a matching `master` push; root prose alone does not match that workflow's path filter. Railway settings are service-specific and may be broader than the repository's manifests, so documentation-only is not a blanket promise of no production rebuild. Chej owns review and integration; no merge, deployment or live setting change is authorized by this guide.
+Cloudflare releases require explicit dispatch and production approval for the exact checked revision; merging alone publishes nothing. Use the [site-release procedure](docs/SITE_RELEASES.md), not bare `wrangler deploy`. Railway settings remain service-specific; prose inside a producer watch scope may still rebuild that producer. Review affected services before merging.

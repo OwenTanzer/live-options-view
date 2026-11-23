@@ -1,0 +1,16 @@
+diff --git a/site/DEPLOYMENTS.md b/site/DEPLOYMENTS.md
+--- a/site/DEPLOYMENTS.md
++++ b/site/DEPLOYMENTS.md
+@@ -1,5 +1,12 @@
+ # Deployment Contract
+
++For the reviewed #225 independent-site procedure, use
++[SITE_RELEASES.md](../docs/SITE_RELEASES.md) and the accepted revision of
++[RELEASE_BOUNDARIES.md](../docs/RELEASE_BOUNDARIES.md). Their provider gates remain
++effective; a proposed procedure is not proof that production topology changed.
++
++## Pre-#225 reference snapshot (not a current provider readback)
++
+ This document defines how services associated with `OwenTanzer/live-options-view`
+ are released, started, verified, and recovered. It is a living operational
+ contract, not an incident report.

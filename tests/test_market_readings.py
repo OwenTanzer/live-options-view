@@ -154,7 +154,7 @@ class CoverageAndParameters(unittest.TestCase):
         built = build()
         self.assertEqual([r["reading_id"] for r in built], [
             "reference_vwap", "reference_rvol", "reference_momentum",
-            "reference_pcr", "reference_max_pain", "reference_oi_skew"])
+            "reference_pcr", "reference_max_pain", "reference_oi_skew", "qqq_iv_header"])
         by_id = {r["reading_id"]: r for r in built}
         # VWAP/RVOL/reference momentum describe the published underlying_market
         # values; they are not recomputed differently here.
@@ -359,12 +359,16 @@ def strike(symbol, strike_price):
 class PublishedWithTheSnapshot(unittest.TestCase):
     def test_readings_and_join_digest_publish_without_any_bot(self):
         s3 = FakeS3()
+        # The contract symbols must follow the same clock as strike(): after
+        # 00:00Z a hardcoded YYMMDD no longer matches TODAY and the snapshot is
+        # (correctly) archived without option quotes.
+        option_date = TODAY.strftime("%y%m%d")
         state = {
             "QQQ": {"bid": 600.0, "ask": 600.2,
                     "bid_ts": (NOW - timedelta(seconds=2)).isoformat(),
                     "ask_ts": (NOW - timedelta(seconds=1)).isoformat(), "volume": 1000},
-            ".QQQ261109C600": {"bid": 1.0, "ask": 1.2, "oi": 100, "volume": 5},
-            ".QQQ261109P600": {"bid": 1.1, "ask": 1.3, "oi": 300, "volume": 5},
+            f".QQQ{option_date}C600": {"bid": 1.0, "ask": 1.2, "oi": 100, "volume": 5},
+            f".QQQ{option_date}P600": {"bid": 1.1, "ask": 1.3, "oi": 300, "volume": 5},
         }
         us = collector.UnderlyingSession("QQQ")
         collector.take_snapshot(s3, FakeFeed(state), [strike("QQQ", 600)], EXP,
@@ -376,7 +380,7 @@ class PublishedWithTheSnapshot(unittest.TestCase):
         sidecar = s3.json(csv_key[:-4] + ".provenance.json")
         ids = [r["reading_id"] for r in latest["market_readings"]]
         self.assertEqual(ids, ["reference_vwap", "reference_rvol", "reference_momentum",
-                               "reference_pcr", "reference_max_pain", "reference_oi_skew"])
+                               "reference_pcr", "reference_max_pain", "reference_oi_skew", "qqq_iv_header"])
         self.assertEqual(latest["market_readings_digest"], readings_digest(latest["market_readings"]))
         self.assertEqual(sidecar["market_readings_digest"], latest["market_readings_digest"])
         self.assertIn("market", sidecar)

@@ -1,0 +1,46 @@
+# APPLIED SOURCE — C2 decision packet, 2026-11-11. Separate one-time
+# independent API service; NOT part of ordinary asset releases. This is the
+# config the API lane deploys (gate --target api). It must never deploy the
+# combined public worker: that is wrangler.toml, and the gate refuses any
+# api deploy whose config is not this file. Reconciled from
+# patches/musef-225/wrangler.api.toml.proposed (kept as history).
+# Account ID matches wrangler.toml (32 hex). The live snapshot transcribed
+# it as 31 chars; the repo configs agree on this value.
+name = "live-options-api"
+main = "backend/worker-entry.js"
+compatibility_date = "2026-06-23"
+account_id = "413bc8abe4485cf2a2e0d9f534436ade"
+
+[vars]
+# Enable the owner-identity-gated personal research account.
+KALSHI_PERSONAL_ENABLED = "1"
+KALSHI_ENTRIES = "1"
+BOT_INDEX_READS = "r2"
+# Requires additive 0005_one_clock_catalog.sql before this API revision deploys.
+# Uses the existing cron invocation; no provider feed or new trigger.
+ONE_CLOCK_CATALOG = "enabled"
+# Requires reviewed migrations 0004 and 0010. No second trigger or feed.
+ONE_CLOCK_OBSERVER = "enabled"
+ONE_CLOCK_PUBLICATIONS = "enabled"
+# R2_ORIGIN mirrors backend/common.js (the repo's own public R2 origin).
+R2_ORIGIN = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
+# LIVE_QUOTE_ORIGIN: operator-set from the live Worker env readback before
+# cutover (value not in the repo; do not guess it). LIVE_QUOTE_KEY is a
+# secret and is NEVER in this file — set it with `wrangler secret put`.
+
+[[r2_buckets]]
+binding = "PAPER_TRADES"
+bucket_name = "qqq-options-chain-data"
+# This existing production bucket is intentional only for API G4a/G4b integration.
+# Never copy this config into preview; code wrapper is not provider IAM.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "live-options"
+database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"
+
+[triggers]
+crons = ["*/15 * * * *"]
+# Named weekdays: the provider read numeric 1-5 as Sunday-Thursday (fixed live 11-14).
+# Transfer exact settlement trigger ownership once; never run both crons.
+# No asset binding, legacy KV or migration entry. Secrets remain operator-managed.

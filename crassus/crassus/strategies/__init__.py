@@ -8,6 +8,7 @@ the MOO-24 contract explicitly defers rolling out every strategy before one
 complete loop is demonstrably alive.
 """
 
+from . import gated_strangle  # noqa: F401
 from . import canopus_down_day  # noqa: F401
 from . import looking_glass_straddle  # noqa: F401
 from . import max_pain  # noqa: F401

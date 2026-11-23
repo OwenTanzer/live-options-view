@@ -3,27 +3,46 @@
 // KV/R2 and a deterministic local SPY quote origin. Both listeners bind
 // OS-assigned loopback ports and announce a nonce identity to the parent.
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import worker, { updateBotIndex } from '../../backend/index.js';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const HOST = '127.0.0.1';
 const BOT_KEY = 'sma-integration-key';
 const nonce = randomUUID();
 
-const users = new Map();
-const sessions = new Map();
 const objects = new Map();
 let revision = 0;
 
-function kv(store) {
-  return {
-    async get(key) { return store.get(key) ?? null; },
-    async put(key, value) { store.set(key, String(value)); },
-    async delete(key) { store.delete(key); },
-    async list({ prefix = '', limit = 1000 } = {}) {
-      return { keys: [...store.keys()].filter(k => k.startsWith(prefix)).slice(0, limit).map(name => ({ name })), list_complete: true };
+// Issue #208: D1 is the account/session store. Any residual KV access is a hard
+// error so this harness cannot quietly keep the old dependency alive.
+const sqlite = new DatabaseSync(':memory:');
+sqlite.exec(fs.readFileSync(
+  path.join(REPO_ROOT, 'backend', 'migrations', '0001_accounts_sessions.sql'), 'utf8',
+));
+function prepared(sql) {
+  let params = [];
+  const statement = {
+    bind(...values) { params = values; return statement; },
+    async run() {
+      const result = sqlite.prepare(sql).run(...params);
+      return { success: true, meta: { changes: result.changes, last_row_id: result.lastInsertRowid } };
     },
+    async first() { return sqlite.prepare(sql).get(...params) ?? null; },
+    async all() { return { results: sqlite.prepare(sql).all(...params), success: true, meta: {} }; },
   };
+  return statement;
+}
+const DB = { prepare: prepared, async exec(sql) { sqlite.exec(sql); },
+             async batch(statements) { return statements.map(statement => statement.run()); } };
+function forbiddenNamespace(name) {
+  const fail = () => { throw new Error(`KV namespace ${name} touched at runtime; #208 requires zero KV operations`); };
+  return { get: fail, put: fail, delete: fail, list: fail };
 }
 
 const r2 = {
@@ -46,13 +65,18 @@ const r2 = {
 };
 
 const env = {
-  USERS: kv(users), SESSIONS: kv(sessions), PAPER_TRADES: r2,
+  DB, USERS: forbiddenNamespace('USERS'), SESSIONS: forbiddenNamespace('SESSIONS'), PAPER_TRADES: r2,
   BOT_REGISTRATION_KEY: BOT_KEY,
   LIVE_QUOTE_ORIGIN: null,
   LIVE_QUOTE_KEY: 'local-quote-key',
   BOT_INDEX_READS: 'r2',
   ASSETS: { async fetch() { return new Response('not found', { status: 404 }); } },
 };
+
+// Publish the R2 membership index before serving, exactly as the lifecycle
+// harness does: metadata sync (strategy_state) writes membership, and an
+// unready index would make that write fail.
+await updateBotIndex(env, [], { ready: true });
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

@@ -50,6 +50,13 @@
   #underlying-select:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
   .chain-note { font-size: 0.72rem; color: var(--dim); }
   #price { font-size: 1.6rem; font-weight: 700; color: var(--bright); letter-spacing: -0.02em; }
+  /* #178: the chain header's price is a snapshot spot, not a live quote. This
+     line carries its time, session and age, and dims once the value is a
+     retained historical reading rather than a current one. */
+  .chain-snapshot { font-size: 0.72rem; color: var(--dim); }
+  .chain-snapshot[data-state="live"] { color: #00a844; }
+  .chain-snapshot[data-state="retained"], .chain-snapshot[data-state="untimed"] { color: #d49a00; }
+  #price[data-state="retained"], #price[data-state="untimed"] { opacity: 0.72; }
   #tier-badge {
     font-size: 0.72rem; font-weight: 600;
     padding: 2px 8px; border-radius: 4px;
@@ -87,6 +94,7 @@
   .transport-health.live { color: #00a844; }
   .transport-health.stale, .transport-health.rate-limited { color: #d49a00; }
   .transport-health.backing-off, .transport-health.unavailable { color: #ee3300; }
+  .transport-health.closed { color: var(--dim); font-style: italic; }
 
   /* ── heatmap table ───────────────────────────────────────────────────── */
   #heatmap-wrap {
@@ -420,6 +428,127 @@
     .pin-candidate-name { display: none; }
   }
 
+  /* ── OI skew meter (Skew + Direction H1) ──────────────────────────────── */
+  #oi-skew-meter {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px 10px;
+    margin-bottom: 1rem;
+  }
+  #oi-skew-meter .oi-skew-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  }
+  #oi-skew-meter h2 { font-size: 0.85rem; font-weight: 600; color: var(--bright); }
+  #oi-skew-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--bright); }
+  #oi-skew-lean { font-size: 0.85rem; font-weight: 600; }
+  #oi-skew-meter[data-lean="put-heavy"] #oi-skew-lean { color: var(--put5); }
+  #oi-skew-meter[data-lean="call-heavy"] #oi-skew-lean { color: var(--call5); }
+  #oi-skew-meta { font-size: 0.72rem; color: var(--dim); }
+  #oi-skew-meter[data-state="stale"] #oi-skew-meta,
+  #oi-skew-meter[data-state="closed"] #oi-skew-meta { color: #d49a00; }
+  #oi-skew-meter[data-state="stale"] .oi-skew-scale,
+  #oi-skew-meter[data-state="closed"] .oi-skew-scale,
+  #oi-skew-meter[data-state="unavailable"] .oi-skew-scale,
+  #oi-skew-meter[data-state="no_data"] .oi-skew-scale { opacity: 0.55; }
+  .oi-skew-scale { margin: 8px 0 2px; }
+  #oi-skew-track {
+    position: relative; height: 14px; border-radius: 7px;
+    background: linear-gradient(to right, var(--put4) 0%, var(--put2) 35%, #21262d 50%, var(--call2) 65%, var(--call4) 100%);
+    border: 1px solid var(--border);
+  }
+  #oi-skew-track .oi-skew-tick {
+    position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--fg); opacity: 0.6;
+  }
+  #oi-skew-track .oi-skew-zero { border-left-style: solid; opacity: 0.35; }
+  #oi-skew-marker {
+    position: absolute; top: -5px; width: 4px; height: 22px; margin-left: -2px;
+    background: var(--bright); border-radius: 2px; box-shadow: 0 0 0 2px var(--bg);
+  }
+  .oi-skew-labels {
+    display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--dim); margin-top: 3px;
+  }
+  /* ── Truth layer (shared/truth-layer.js): state chip + "About this reading" ── */
+  .truth-chip {
+    display: inline-block; font-size: 0.74rem; font-weight: 600; line-height: 1.5;
+    padding: 0 8px; border-radius: 10px; border: 1px solid var(--border);
+    color: var(--fg); white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  /* Trust, never direction: no call/put or gain/loss colours here. */
+  .truth-chip[data-tone="ok"]    { color: var(--bright); border-color: #6e7681; }
+  .truth-chip[data-tone="warn"]  { color: #e8b339; border-color: #8a6a1f; }
+  .truth-chip[data-tone="muted"] { color: var(--dim); border-style: dashed; }
+  .truth-about { margin-top: 6px; }
+  .truth-about > summary {
+    cursor: pointer; font-size: 0.74rem; color: var(--dim); min-height: 24px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .truth-about > summary:hover, .truth-about[open] > summary { color: var(--fg); }
+  .truth-about > p { font-size: 0.76rem; color: var(--dim); margin: 4px 0 0; white-space: normal; }
+  /* ── SPY / IBIT reference OI skew meters: same look as #oi-skew-meter ── */
+  .ref-oi-skew {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px 10px; margin-bottom: 1rem;
+  }
+  .ref-oi-skew .oi-skew-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .ref-oi-skew h2 { font-size: 0.85rem; font-weight: 600; color: var(--bright); }
+  .ref-oi-skew-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--bright); }
+  .ref-oi-skew-lean { font-size: 0.85rem; font-weight: 600; }
+  .ref-oi-skew[data-lean="put-heavy"] .ref-oi-skew-lean { color: var(--put5); }
+  .ref-oi-skew[data-lean="call-heavy"] .ref-oi-skew-lean { color: var(--call5); }
+  .ref-oi-skew-meta { font-size: 0.72rem; color: var(--dim); }
+  .ref-oi-skew[data-state="stale"] .ref-oi-skew-meta,
+  .ref-oi-skew[data-state="closed"] .ref-oi-skew-meta,
+  .ref-oi-skew[data-coverage="thin"] .ref-oi-skew-meta { color: #d49a00; }
+  .ref-oi-skew[data-state="stale"] .oi-skew-scale,
+  .ref-oi-skew[data-state="closed"] .oi-skew-scale,
+  .ref-oi-skew[data-state="unavailable"] .oi-skew-scale,
+  .ref-oi-skew[data-state="no_data"] .oi-skew-scale { opacity: 0.55; }
+  .ref-oi-skew-track {
+    position: relative; height: 14px; border-radius: 7px;
+    background: linear-gradient(to right, var(--put4) 0%, var(--put2) 35%, #21262d 50%, var(--call2) 65%, var(--call4) 100%);
+    border: 1px solid var(--border);
+  }
+  .ref-oi-skew-track .oi-skew-tick {
+    position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--fg); opacity: 0.6;
+  }
+  .ref-oi-skew-track .oi-skew-zero { border-left-style: solid; opacity: 0.35; }
+  .ref-oi-skew-marker {
+    position: absolute; top: -5px; width: 4px; height: 22px; margin-left: -2px;
+    background: var(--bright); border-radius: 2px; box-shadow: 0 0 0 2px var(--bg);
+  }
+  /* IBIT adaptive reading: visually subordinate and distinct from the published one */
+  .adaptive-oi-skew {
+    margin-top: 8px; padding: 6px 10px 8px; border: 1px dashed var(--border); border-radius: 5px;
+  }
+  .adaptive-oi-skew h3 { font-size: 0.8rem; font-weight: 600; color: var(--bright); }
+  .adaptive-oi-skew-tag { font-size: 0.68rem; color: var(--dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+  /* Don't inherit the published reading's thin-band amber from the IBIT panel. */
+  .ref-oi-skew .adaptive-oi-skew .ref-oi-skew-meta { color: var(--dim); }
+  .adaptive-oi-skew[data-lean="put-heavy"] .ref-oi-skew-lean { color: var(--put5); }
+  .adaptive-oi-skew[data-lean="call-heavy"] .ref-oi-skew-lean { color: var(--call5); }
+  .ref-oi-skew .adaptive-oi-skew[data-state="stale"] .ref-oi-skew-meta,
+  .ref-oi-skew .adaptive-oi-skew[data-state="closed"] .ref-oi-skew-meta,
+  .adaptive-oi-skew[data-state="insufficient"] .ref-oi-skew-lean { color: #d49a00; }
+  .adaptive-oi-skew[data-state="stale"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="closed"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="unavailable"] .oi-skew-scale,
+  .adaptive-oi-skew[data-state="insufficient"] .oi-skew-scale { opacity: 0.55; }
+  .oi-skew-bot-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 6px; }
+  #oi-skew-bot {
+    font-size: 0.78rem; font-weight: 600; padding: 1px 8px; border-radius: 4px;
+    border: 1px solid var(--border); color: var(--fg);
+  }
+  #oi-skew-bot[data-state="bullish"] { color: var(--call5); border-color: var(--call3); }
+  #oi-skew-bot[data-state="bearish"] { color: var(--put5); border-color: var(--put3); }
+  #oi-skew-bot[data-availability="not_published"] { color: var(--dim); border-style: dashed; }
+  #oi-skew-bot-detail, #oi-skew-thresholds, .oi-skew-caveat { font-size: 0.72rem; color: var(--dim); }
+  #oi-skew-thresholds, .oi-skew-caveat { margin-top: 3px; white-space: normal; }
+  @media (max-width: 640px) {
+    #oi-skew-meter { padding: 8px 10px; }
+    .oi-skew-labels .oi-skew-label-gate { display: none; }
+  }
+
   /* ── crude calibration panel ─────────────────────────────────────────── */
   #steo-panel {
     display: flex;
@@ -716,7 +845,111 @@
   .analysis-link:hover { background: var(--panel); }
   .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
-  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden { display: none; }
+  #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden,
+  #news-panel.hidden { display: none; }
+
+  /* ── news panel (MediaFlow M4b) ──────────────────────────────────────── */
+  /* Scoped to #news-panel; tests/news_panel/harness.html copies this block. */
+  #news-panel {
+    max-width: 1100px; display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem 1rem;
+    font-size: 0.85rem; line-height: 1.4;
+  }
+  #news-panel > div { display: flex; flex-direction: column; gap: 0.6rem; }
+  #news-panel .np-head, #news-panel .np-coverage, #news-panel .np-rows, #news-panel .np-picker {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;
+  }
+  #news-panel .np-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  #news-panel .np-header, #news-panel .np-meta, #news-panel .np-line, #news-panel .np-nav, #news-panel .np-filter {
+    display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: baseline;
+  }
+  #news-panel .np-meta { margin-top: 0.35rem; font-size: 0.75rem; }
+  #news-panel .np-badge {
+    font-size: 0.7rem; font-weight: 600; padding: 1px 7px; border-radius: 4px;
+    background: #1c2128; border: 1px solid var(--border); white-space: nowrap;
+  }
+  #news-panel .np-synthetic { color: #d29922; border-color: #d29922; }
+  #news-panel .np-hindsight { color: #ffaa88; border-color: #881100; }
+  #news-panel .np-mode { color: #4a90d9; }
+  #news-panel .np-bad { color: #ee3300; border-color: #ee3300; }
+  #news-panel .np-dim, #news-panel .np-note { color: var(--dim); }
+  #news-panel .np-missed { color: #d29922; margin-left: 0.4rem; }
+  #news-panel .np-note { font-size: 0.75rem; margin: 0.2rem 0; }
+  #news-panel .np-incomplete {
+    background: #2a0a0a; border: 1px solid #ee3300; color: #ffaa88; border-radius: 6px; padding: 0.5rem 0.75rem;
+  }
+  #news-panel .np-incomplete strong { color: var(--bright); }
+  #news-panel .np-nav { justify-content: space-between; }
+  #news-panel .np-btn, #news-panel .np-select {
+    font: inherit; font-size: 0.8rem; color: var(--bright); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; max-width: 100%;
+  }
+  #news-panel .np-btn:disabled { color: var(--dim); }
+  #news-panel .np-btn:focus-visible, #news-panel .np-select:focus-visible { outline: 2px solid #4a90d9; outline-offset: 1px; }
+  #news-panel h3 { font-size: 0.85rem; color: var(--bright); margin: 0 0 0.25rem; }
+  #news-panel .np-table-wrap { overflow-x: auto; max-width: 100%; }
+  #news-panel .np-table { border-collapse: collapse; width: 100%; min-width: 0; font-size: 0.75rem; }
+  /* Reset the heatmap's global table/th/td rules (fixed cell size, bold, uppercase, 420px minimum). */
+  #news-panel .np-table th, #news-panel .np-table td {
+    border-bottom: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top;
+    width: auto; height: auto; font-size: 0.75rem; font-weight: 400; line-height: 1.4;
+    position: static; text-transform: none; letter-spacing: normal;
+  }
+  #news-panel .np-table th { color: var(--dim); font-weight: 600; }
+  #news-panel .np-mono, #news-panel .np-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+  #news-panel .np-src { min-width: 12rem; }
+  #news-panel .np-seg.np-quiet td:nth-child(2) { color: #00cc55; }
+  #news-panel .np-seg.np-covered td:nth-child(2) { color: var(--fg); }
+  #news-panel .np-seg.np-partial td:nth-child(2), #news-panel .np-unknown,
+  #news-panel .np-seg.np-unknown td:nth-child(2) { color: #d29922; }
+  #news-panel .np-seg.np-pending_availability td:nth-child(2) { color: #ffaa88; }
+  #news-panel .np-facts { list-style: none; margin: 0.4rem 0 0; padding: 0; font-size: 0.75rem; display: flex; flex-direction: column; gap: 2px; }
+  #news-panel .np-price-missing { color: #ee3300; }
+  #news-panel .np-price-stale { color: #d29922; }
+  #news-panel .np-price-matched { color: #00cc55; }
+  #news-panel .np-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+  #news-panel .np-count { color: var(--dim); font-size: 0.75rem; }
+  #news-panel .np-empty { color: var(--dim); font-style: italic; margin: 0; }
+  #news-panel .np-row {
+    border-top: 1px solid var(--border); padding-top: 0.45rem;
+    display: flex; flex-direction: column; gap: 0.2rem; overflow-wrap: anywhere;
+  }
+  #news-panel .np-title { color: var(--bright); font-weight: 600; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; }
+  #news-panel .np-title a { color: var(--bright); }
+  #news-panel .np-line { font-size: 0.75rem; }
+  #news-panel .np-row .np-mono { white-space: normal; }
+  #news-panel .np-later { font-size: 0.75rem; color: var(--dim); border-left: 2px solid var(--border); padding-left: 0.5rem; }
+  #news-panel .np-price { font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  /* Critical Design Theory pass: headline first, one glance line, provenance and coverage one click away. */
+  #news-panel .np-title { font-size: 0.95rem; }
+  #news-panel .np-glance { display: flex; flex-wrap: wrap; gap: 0.3rem 0.75rem; align-items: baseline; font-size: 0.8rem; color: var(--fg); }
+  #news-panel .np-when { color: var(--bright); }
+  #news-panel .np-price-chip { font-size: 0.75rem; }
+  #news-panel details.np-prov > summary, #news-panel details.np-coverage-detail > summary {
+    cursor: pointer; color: var(--dim); font-size: 0.75rem; min-height: 24px; }
+  #news-panel details.np-prov[open] > summary, #news-panel details.np-coverage-detail[open] > summary { color: var(--fg); }
+  #news-panel details.np-prov > .np-line, #news-panel details.np-prov > .np-later, #news-panel details.np-prov > .np-price { margin-top: 0.2rem; }
+  #news-panel .np-strip { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: center; margin-bottom: 0.3rem; }
+  #news-panel .np-strip-cells { display: flex; flex-wrap: wrap; gap: 2px; }
+  /* One meaning per colour: trust tones only (no gain/loss green); every cell also carries a glyph. */
+  #news-panel .np-cell { display: inline-block; min-width: 14px; height: 16px; line-height: 16px; text-align: center;
+    font-size: 0.7rem; border-radius: 2px; background: #1c2128; color: var(--fg); }
+  #news-panel .np-cell.np-quiet { color: var(--dim); }
+  #news-panel .np-cell.np-partial, #news-panel .np-cell.np-unknown { color: #e8b339; background: #2d220a; }
+  #news-panel .np-cell.np-pending_availability { color: var(--dim); border: 1px dashed #6e7681; }
+  #news-panel .np-cell-missed { outline: 1px solid #e8b339; }
+  #news-panel .np-strip-text { font-size: 0.78rem; color: var(--fg); }
+  @media (max-width: 600px) {
+    #news-panel { padding: 0.75rem 16px; }
+    /* Coverage rows stack into cards instead of scrolling sideways. */
+    #news-panel .np-table, #news-panel .np-table tbody, #news-panel .np-table tr, #news-panel .np-table td { display: block; width: 100%; }
+    #news-panel .np-table tr:first-child { display: none; }
+    #news-panel .np-table tr { border-bottom: 1px solid var(--border); padding: 4px 0; }
+    #news-panel .np-table td { border: 0; padding: 1px 0; }
+    #news-panel .np-src { min-width: 0; }
+  }
+  /* MediaFlow P1 research view (js/news-research.js styles its own content): shown with the News tab. */
+  #news-panel.hidden + #news-research, #news-panel + #news-research[hidden], #news-panel > div[hidden] { display: none; }
+  /* ── end news panel ── */
 
   /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
   #squeeze-header {
@@ -739,8 +972,16 @@
     margin-bottom: 0.7rem;
   }
   #squeeze-warning.hidden { display: none; }
-  #squeeze-hint { color: var(--dim); font-size: 0.74rem; margin-bottom: 0.9rem; }
-  #squeeze-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  #squeeze-claim { color: var(--fg); font-size: 0.8rem; margin: 0 0 4px; }
+  #squeeze-about { margin: 0 0 0.9rem; }
+  /* Sized to its content (five to ten rows, six columns), not stretched across the wall. */
+  #squeeze-table { width: 100%; max-width: 860px; border-collapse: collapse; font-size: 0.85rem; }
+  .squeeze-score { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .squeeze-score-missing { color: var(--dim); }
+  /* One hue, lightness fixed: length carries the value, so the bar never borrows the gain/loss colours. */
+  .squeeze-bar { display: inline-block; vertical-align: middle; width: 64px; height: 6px; margin-right: 8px;
+    background: #21262d; border-radius: 3px; overflow: hidden; }
+  .squeeze-bar > span { display: block; height: 100%; background: #8fb8de; }
   #squeeze-table th {
     text-align: right;
     color: var(--dim);
@@ -753,7 +994,16 @@
   #squeeze-table td a { color: #58a6ff; text-decoration: none; }
   #squeeze-table td a:hover { text-decoration: underline; }
   .squeeze-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  #squeeze-caption { caption-side: top; text-align: left; color: var(--dim); font-size: 0.74rem; padding: 0 0 6px; }
+  #squeeze-table.squeeze-stale tbody { filter: saturate(0.3); }
+  #squeeze-table.squeeze-stale #squeeze-caption { color: #e8c84b; }
   .squeeze-first-seen { color: var(--dim); font-size: 0.72rem; }
+  @media (max-width: 600px) {
+    #squeeze-table { table-layout: fixed; min-width: 0; font-size: 0.76rem; }
+    #squeeze-table th, #squeeze-table td { padding: 5px 3px; overflow-wrap: anywhere; }
+    #squeeze-table .squeeze-score { white-space: normal; }
+    .squeeze-bar { display: block; width: 32px; margin: 0 0 3px auto; }
+  }
   .squeeze-new-badge {
     background: #167a3f;
     color: #fff;
@@ -831,6 +1081,98 @@
   .bot-pnl.down { color: #ee3300; }
   .bot-pnl.flat { color: var(--dim); }
   .bot-meta { font-size: 0.72rem; color: var(--dim); margin-top: 4px; }
+
+  /* ── automated: floor + session-lane views (js/bot-floor.js) ─────────── */
+  #bots-cards.hidden, #bot-floor.hidden { display: none; }
+  #bots-view { margin-left: auto; display: inline-flex; gap: 4px; }
+  .bots-view-btn {
+    background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; min-height: 30px; font-size: 0.74rem; cursor: pointer;
+  }
+  .bots-view-btn[aria-pressed="true"] { color: #0a0605; background: #ffb300; border-color: #ffb300; }
+  .bf-wall {
+    --bf-pixel: 'VT323', 'DotGothic16', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bf-dot: 'DotGothic16', 'VT323', ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #0a0605;
+    background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1.4px);
+    background-size: 5px 5px;
+    color: #ff3b30; font-family: var(--bf-dot);
+    border: 1px solid #3a1210; border-radius: 6px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+  }
+  .bf-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+  .bf-title { font-size: 1.35rem; letter-spacing: 3px; text-shadow: 0 0 8px rgba(255,59,48,.6); margin-right: auto; }
+  .bf-clock { color: #ffb300; }
+  .bf-dim { color: #c08a84; }
+  .bf-in { color: #ffb300; } .bf-out { color: #5ac8fa; }
+  .bf-green { color: #4cd964; } .bf-red { color: #ff6b5f; } .bf-blue { color: #5ac8fa; } .bf-amber { color: #ffb300; }
+  .bf-tape {
+    margin: 0 -14px; height: 46px; overflow: hidden; display: flex; align-items: center;
+    background: #120605; border-top: 3px solid #3a1210; border-bottom: 3px solid #3a1210;
+    font-family: var(--bf-pixel); font-size: 1.9rem;
+  }
+  .bf-crawl { display: flex; gap: 56px; padding-left: 14px; white-space: nowrap; animation: bf-crawl 45s linear infinite; }
+  .bf-crawl span { text-shadow: 0 0 6px currentColor; }
+  .bf-tape-empty { padding-left: 14px; color: #c08a84; font-size: 1.4rem; }
+  @keyframes bf-crawl { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .bf-body { display: flex; flex-wrap: wrap; gap: 12px; }
+  .bf-main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .bf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .bf-stat { border: 2px solid #3a1210; background: #120605; padding: 6px 10px; }
+  .bf-stat-label { font-size: 0.72rem; color: #c08a84; }
+  .bf-stat-value { font-size: 1.7rem; line-height: 1.15; text-shadow: 0 0 8px currentColor; }
+  .bf-stat-value small { font-size: 0.75rem; text-shadow: none; color: #c08a84; }
+  .bf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .bf-tile {
+    border: 2px solid #3a1210; padding: 6px 8px; min-height: 84px; color: #fff;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 4px; min-width: 0;
+  }
+  .bf-tile.bf-closed { opacity: 0.55; }
+  .bf-edge-in { border-color: #ffb300; box-shadow: 0 0 12px rgba(255,179,0,.55); }
+  .bf-edge-out { border-color: #5ac8fa; box-shadow: 0 0 12px rgba(90,200,250,.55); }
+  .bf-tile-top, .bf-tile-mid, .bf-tile-low { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .bf-alias { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #f3e6e4; font-size: 0.8rem; }
+  .bf-tile-mid { font-size: 0.74rem; color: #f3e6e4; }
+  .bf-pnl { font-size: 1.45rem; line-height: 1; color: #fff; }
+  .bf-tile-low { font-size: 0.68rem; color: #ead2ce; }
+  .bf-tag { font-size: 0.66rem; padding: 0 5px; flex-shrink: 0; background: #0a0605; }
+  .bf-tag-call { color: #4cd964; } .bf-tag-put { color: #ff8a80; }
+  .bf-tag-flat { color: #ead2ce; background: transparent; border: 1px solid #c08a84; }
+  .bf-tag-other { color: #d9a6ff; }
+  .bf-flash { animation: bf-blink 1s steps(1) infinite; }
+  @keyframes bf-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .4; } }
+  .bf-log { flex: 1 1 260px; border: 2px solid #3a1210; background: #120605; padding: 8px 10px; }
+  .bf-log h4 { margin: 0 0 6px; font-weight: 400; color: #ffb300; font-size: 0.9rem; }
+  .bf-log ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .bf-log li { display: flex; gap: 8px; font-size: 0.74rem; border-bottom: 1px dashed #3a1210; padding-bottom: 4px; }
+  .bf-log-tag { width: 45px; flex-shrink: 0; }
+  .bf-log-text { color: #ead2ce; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bf-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 0.7rem; color: #c08a84; }
+  .bf-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.72rem; color: #c08a84; }
+  .bf-sw { display: inline-block; width: 12px; height: 10px; margin-right: 5px; vertical-align: middle; }
+  .bf-lanes { overflow-x: auto; overflow-y: hidden; display: flex; flex-direction: column; gap: 4px; }
+  .bf-lane { display: flex; align-items: center; min-width: 760px; min-height: 28px; }
+  .bf-lane-unavailable { padding: 0 8px; font-size: 0.68rem; }
+  .bf-lane-label { width: 200px; flex-shrink: 0; display: flex; justify-content: space-between; gap: 6px; padding-right: 10px; font-size: 0.74rem; }
+  .bf-track { position: relative; flex-grow: 1; height: 24px; border: 1px solid #3a1210; }
+  .bf-axis { min-height: 16px; }
+  .bf-ticks { position: relative; flex-grow: 1; height: 16px; font-size: 0.66rem; color: #c08a84; }
+  .bf-ticks span { position: absolute; transform: translateX(-50%); }
+  .bf-seg { position: absolute; top: 3px; bottom: 3px; overflow: hidden; }
+  .bf-seg span { font-size: 0.62rem; color: #0a0605; padding-left: 12px; white-space: nowrap; line-height: 16px; }
+  .bf-seg-call { background: #4cd964; box-shadow: 0 0 8px rgba(76,217,100,.6); }
+  .bf-seg-put { background: #ff6b5f; box-shadow: 0 0 8px rgba(255,107,95,.6); }
+  .bf-seg-other { background: #d9a6ff; box-shadow: 0 0 8px rgba(217,166,255,.6); }
+  .bf-seg-closed { opacity: 0.45; box-shadow: none; }
+  .bf-mk { position: absolute; top: 3px; transform: translateX(-50%); font-size: 0.72rem; }
+  /* Same timestamp, opposite sides of the tick so both reversal markers stay legible. */
+  .bf-mk-reversal-out { transform: translateX(calc(-100% - 2px)); }
+  .bf-mk-reversal-in { transform: translateX(2px); }
+  .bf-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f3e6e4; box-shadow: 0 0 6px #f3e6e4; }
+  @media (prefers-reduced-motion: reduce) {
+    .bf-crawl, .bf-flash { animation: none; }
+    .bf-tape { overflow-x: auto; }
+  }
   .bot-last-trade { font-size: 0.8rem; line-height: 1.5; color: var(--fg); }
   .bot-card table { width: 100%; min-width: 0; margin-top: 8px; font-size: 0.72rem; }
   .bot-card th { color: var(--dim); font-weight: 500; text-align: right; }
@@ -863,6 +1205,30 @@
     background: #1c2128; border: 1px solid var(--border);
   }
   #hist-status { font-size: 0.76rem; color: var(--dim); }
+  /* Session strip: bounded time has a shape. One hue; filled vs hollow carries archived vs not. */
+  #hist-strip-wrap { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+  #hist-strip { display: flex; flex-wrap: wrap; gap: 4px 18px; flex: 1 1 auto; min-width: 0; }
+  .hs-month { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--dim); }
+  .hs-label { width: 4.8em; color: var(--fg); white-space: nowrap; }
+  .hs-cells { display: flex; gap: 2px; min-width: 0; }
+  .hs-cell { width: 9px; height: 14px; padding: 0; border: 1px solid #58a6ff; background: #2f5d8a; border-radius: 1px; cursor: pointer; }
+  .hs-cell:hover, .hs-cell:focus-visible { background: #58a6ff; outline: none; }
+  .hs-cell.hs-sel { background: var(--bright); border-color: var(--bright); box-shadow: 0 0 0 2px #58a6ff; }
+  .hs-cell.hs-gap { background: transparent; border: 1px dashed #6e7681; cursor: default; }
+  .hs-count { font-variant-numeric: tabular-nums; }
+  .hs-step { background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
+    min-width: 32px; min-height: 28px; cursor: pointer; }
+  .hs-step:disabled { color: var(--dim); cursor: default; }
+  #hist-strip-key { font-size: 0.72rem; color: var(--dim); margin: 0 0 0.75rem; }
+  @media (pointer: coarse) { .hs-cell { width: 12px; height: 22px; } .hs-step { min-width: 44px; min-height: 44px; } }
+  /* Phone: one month per row, cells share the row instead of overflowing it. */
+  @media (max-width: 600px) {
+    .hs-month { flex: 1 1 100%; min-width: 0; }
+    .hs-cells { flex: 1 1 auto; }
+    .hs-cell { flex: 1 1 0; width: auto; min-width: 4px; max-width: 12px; }
+    .hs-label { width: 4.8em; flex: none; }
+    .hs-step { min-width: 28px; }
+  }
   #hist-no-data {
     padding: 3rem;
     text-align: center;
@@ -982,6 +1348,72 @@
     }
     select.paper-btn { font-size: 1rem; }
   }
+#qqq-iv {display:inline-flex;align-items:baseline;gap:.65rem;position:relative;flex-wrap:wrap}
+#qqq-iv[hidden],#qqq-iv [hidden]{display:none}
+#qqq-iv button{font:inherit;font-size:.76rem;border:0;background:none;padding:3px 0;color:var(--dim);cursor:pointer}
+#qqq-iv button b{color:var(--bright);font-variant-numeric:tabular-nums}
+#qqq-iv button[data-band=standard] b{color:#79c0ff}#qqq-iv button[data-band=low] b{color:#7ee787}#qqq-iv button[data-band=elevated] b{color:#ff8985}
+#qqq-iv time{font-size:.68rem;color:var(--dim)}
+.iv-pop{position:absolute;top:100%;left:0;z-index:50;width:min(285px,88vw);padding:10px;background:var(--panel,#161b22);border:1px solid var(--border,#30363d);border-radius:6px;box-shadow:0 5px 18px #0009}
+.iv-pop canvas{display:block;width:100%;height:78px}.iv-pop small{color:var(--dim);line-height:1.4}
+@media(max-width:650px){#qqq-iv{flex-basis:100%}}
+  #btc-panel { padding: 12px; max-width: 100%; }
+  body[data-chain="BTC"] :is(#price, #price-age, #tier-badge, #vwap-rvol, #momentum, #chain-note, #qqq-iv,
+    #status-bar, #cal-error, #oi-skew-meter, #spy-oi-skew-meter, #ibit-oi-skew-meter,
+    #price-strip, #steo-panel, #no-data, #heatmap-wrap, #tab-history, #footer) { display:none !important; }
+  body[data-chain="BTC"] #paper-panel h3 { flex-wrap:wrap; }
+  body[data-chain="BTC"] #user-bar { flex-wrap:wrap; overflow-wrap:anywhere; max-width:100%; }
+  #btc-panel { max-width:860px; margin:12px 0; }
+  #btc-panel[hidden] { display:none; }
+  #btc-panel button { font:inherit; color:var(--bright); background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px; min-height:44px; cursor:pointer; }
+  #btc-panel button:focus-visible { outline:2px solid #79c0ff; outline-offset:2px; }
+  #btc-panel button:disabled { opacity:.55; cursor:default; }
+  .btc-status, .btc-contract { border:1px solid var(--border); border-radius:8px; background:var(--panel); padding:12px; margin-bottom:10px; overflow-wrap:anywhere; }
+  .btc-status p, .btc-contract p { margin:6px 0; font-size:.82rem; line-height:1.45; }
+  .btc-contract h3 { font-size:1rem; color:var(--bright); }
+  .btc-position { color:#79c0ff; }
+  .btc-sides { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
+  .btc-side { min-width:0; }
+  #btc-panel .btc-buy { border-color:#238636; width:100%; }
+  #btc-panel .btc-sell { border-color:#da3633; width:100%; }
+  .btc-reason { color:#d2a85b; min-height:2.5em; }
+  .btc-freshness { color:#a3adb7; }
+  #btc-panel .btc-ticket { width:100%; }
+  #btc-panel .btc-github-login { display:inline-block; padding:10px; min-height:44px; color:#79c0ff; }
+  body[data-chain="BTC"] #underlying-select { border-color:#79c0ff; }
+  .btc-series { border:1px solid var(--border); border-radius:6px; margin:6px 0; overflow:hidden; }
+  .btc-series h3 { padding:6px; font-size:.72rem; font-weight:500; }
+  .btc-chain-head, .btc-strike-row { display:grid; grid-template-columns:minmax(0,1fr) 62px minmax(0,1fr); align-items:center; text-align:center; }
+  .btc-chain-head { background:var(--panel); font-size:.8rem; font-weight:600; padding:4px 0; }
+  .btc-chain-columns { display:grid; grid-template-columns:1fr 1fr 62px 1fr 1fr; text-align:center; font-size:.68rem; color:#a3adb7; padding:3px 0; }
+  .btc-strike-row { border-top:1px solid var(--border); min-height:52px; }
+  .btc-strike { font-size:.76rem; font-variant-numeric:tabular-nums; }
+  .btc-contract { min-width:0; position:relative; padding:0 0 8px; margin:0; border:0; border-radius:0; }
+  .btc-sides { gap:0; margin:0; }
+  .btc-reference-mark { font-size:10px; position:absolute; bottom:0; right:18px; color:var(--muted); }
+  .btc-position { font-size:10px; position:absolute; bottom:1px; left:4px; }
+  #btc-panel .btc-sides button { width:100%; border:0; border-radius:0; background:transparent; padding:4px 1px; font-size:.76rem; font-variant-numeric:tabular-nums; }
+  #btc-panel .btc-buy:not(:disabled) { color:#7ee787; background:#123321; }
+  #btc-panel .btc-sell:not(:disabled) { color:#ffa198; background:#331c20; }
+  #btc-panel .btc-sides button:disabled { color:#a3adb7; opacity:1; text-decoration:underline dotted; text-underline-offset:3px; }
+  #btc-panel .btc-ticket { position:absolute; bottom:0; right:0; width:auto; padding:0 5px; min-height:16px; line-height:16px; border:0; background:transparent; color:#a3adb7; }
+  .btc-empty { color:#6e7681; }
+  .btc-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; min-height:0; }
+  .btc-status { padding:4px 0; border:0; margin:0; background:transparent; }
+  .btc-status p { margin:4px 0; font-size:.72rem; }
+  #btc-panel .btc-owner-unlink { min-height:24px; padding:2px 5px; font-size:.68rem; }
+  body[data-chain="BTC"] #header { gap:8px; margin:4px 0; }
+  body[data-chain="BTC"] #title { font-size:.82rem; }
+  body[data-chain="BTC"] #btc-panel { padding:0; margin:4px 0; }
+  .btc-ticket-details { font-size:.75rem; max-width:320px; line-height:1.4; margin-top:6px; }
+  @media(max-width:650px) {
+    body[data-chain="BTC"] { padding:8px; }
+    body[data-chain="BTC"] #tab-bar { gap:2px; margin-bottom:6px; }
+    body[data-chain="BTC"] #tab-bar .analysis-link { display:none; }
+    body[data-chain="BTC"] #tab-bar .tab-btn { padding:8px; font-size:.72rem; }
+  }
+  #trade-ticket { max-width:calc(100vw - 16px); }
+  #trade-ticket .t-row { flex-wrap:wrap; }
 </style>
 </head>
 <body>
@@ -991,6 +1423,12 @@
   <button id="tab-history" class="tab-btn">Historical</button>
   <button id="tab-bots" class="tab-btn">Automated</button>
   <button id="tab-squeeze" class="tab-btn">Squeeze</button>
+  <button id="tab-news" class="tab-btn">News</button>
+  <a class="analysis-link" href="https://trainer.moopertonic.net/">Options Trainer</a>
+  <a class="analysis-link" href="/strategy-archive.html">Strategy Archive</a>
+  <a class="analysis-link" href="/order-flow.html">Order flow</a>
+  <a class="analysis-link" href="/credit-tape/">Credit tape</a>
+  <a class="analysis-link" href="/kalshi.html">Private Kalshi research</a>
   <a id="directional-analysis-link" class="analysis-link"
      href="https://directional-analysis-production.up.railway.app/"
      target="_blank" rel="noopener noreferrer"
@@ -998,6 +1436,45 @@
      title="Historical research workbench. Opens the analysis app in a new tab.">Move analysis ↗</a>
 </div>
 
+<div id="clock-navigation" hidden>
+  <label>Session clock <select id="clock-mode"><option value="live">Live · now</option><option value="replay">Replay · fixed cursor</option></select></label>
+  <span id="clock-scope" role="status"></span>
+</div>
+  <section id="history-clock" hidden aria-label="Shared session cursor">
+    <form id="history-clock-form" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+      <label>Session <input id="history-clock-date" type="date" required></label>
+      <label>Instrument <input id="history-clock-instrument" value="QQQ" list="history-clock-instruments" pattern="[A-Z][A-Z0-9.\-]{0,14}" maxlength="15" required></label>
+      <datalist id="history-clock-instruments"><option value="QQQ"><option value="SPY"><option value="IBIT"></datalist>
+      <label>Cursor (New York) <input id="history-clock-time" type="time" step="0.001" value="10:00:00" required></label>
+      <button type="submit">Show at cursor</button>
+    </form>
+    <p id="clock-journal-nav" hidden><a id="clock-journal">Open private journal at this cursor</a> · <a id="history-order-flow-link">Order flow and estimated gamma at this cursor</a></p>
+    <a id="history-clock-btc" hidden>Open private Bitcoin quote samples at this cursor</a>
+    <a id="history-clock-credit" hidden>Open private credit tape at this cursor</a>
+    <a id="history-clock-kalshi" hidden>Open private Kalshi receipts at this cursor</a>
+    <section id="clock-chain-view" aria-label="Chain at shared cursor">
+    <p id="history-clock-status" role="status">Choose a session and cursor.</p>
+    <p id="history-clock-skew"></p><p id="history-clock-adaptive"></p>
+    <p>Anchored bot decisions appear with their publication receipts on the Automated tab.</p>
+    <div style="overflow:auto"><table style="width:100%"><thead><tr><th>Calls</th><th>Strike</th><th>Puts</th></tr></thead><tbody id="history-clock-rows"></tbody></table></div>
+    <details><summary>Source and coverage</summary><pre id="history-clock-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    </section>
+    <section id="clock-shortlist-view" aria-label="Published Squeeze shortlist at shared cursor">
+      <h3>Published Squeeze shortlist</h3>
+      <p id="history-clock-shortlist-status" role="status">Choose a cursor to check retained publications.</p>
+      <pre id="history-clock-shortlist-evidence" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    </section>
+    <section id="clock-floor-view" aria-label="Bot ledger at shared cursor">
+      <h3>PAPER bot ledger at this cursor</h3>
+      <label>Public bot <select id="history-clock-bot"><option value="">Select a bot</option></select></label>
+      <button id="history-clock-load-bots" type="button">Load current public roster</button>
+      <p id="history-clock-bot-status" role="status">Choose a bot to read its retained fill receipts. Current membership does not establish historical strategy assignments.</p>
+      <p id="clock-decisions-status" role="status">Select a bot to see recorded decisions.</p>
+      <div style="overflow:auto"><table><thead><tr><th>Decision time</th><th>Published by</th><th>Outcome</th><th>Action</th><th>Input age (ms)</th><th>Recorded anchor</th></tr></thead><tbody id="clock-decisions"></tbody></table></div>
+      <pre id="history-clock-bot-inventory" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+      <div style="overflow:auto"><table><thead><tr><th>Event time</th><th>Visible from</th><th>Contract</th><th>Side</th><th>Quantity</th><th>Price</th></tr></thead><tbody id="history-clock-bot-rows"></tbody></table></div>
+    </section>
+  </section>
 <div id="live-panel">
 
 <div id="header">
@@ -1005,15 +1482,21 @@
     <option value="QQQ">QQQ</option>
     <option value="SPY">SPY</option>
     <option value="IBIT">IBIT</option>
+    <option value="SLV">SLV (silver)</option>
+    <option value="DRAM">DRAM (memory)</option>
+    <option value="BTC">Bitcoin</option>
   </select>
   <span id="title">QQQ 0DTE Live OI</span>
   <span id="price">—</span>
+  <span id="price-age" class="chain-snapshot" role="status"></span>
   <span id="tier-badge" style="display:none"></span>
   <span id="vwap-rvol" class="vwap-rvol"></span>
   <span id="momentum" class="momentum"></span>
-  <span id="chain-note" class="chain-note"></span>
+  <span id="qqq-iv"><button type="button" aria-controls="iv-pop" aria-expanded="false">IV <b>&#8212;</b></button><button type="button" aria-controls="iv-pop" aria-expanded="false">Put IV premium <b>&#8212;</b></button><time></time><span class="iv-pop" id="iv-pop" hidden><canvas width="285" height="80" aria-label="Intraday volatility history"></canvas><small></small></span></span>
+    <span id="chain-note" class="chain-note"></span>
 </div>
 
+<section id="btc-panel" hidden aria-label="Bitcoin futures options"><div id="btc-chain"></div></section>
 <div id="status-bar">
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
@@ -1023,6 +1506,110 @@
 </div>
 
 <div id="cal-error">Calibration data (OIranges.csv) failed to load — heatmap colors are unreliable. OI level 5 (wall) may be shown for all nonzero cells.</div>
+
+<section id="oi-skew-meter" data-state="unavailable" aria-labelledby="oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="oi-skew-heading">QQQ near-money OI skew</h2>
+    <span id="oi-skew-value">—</span>
+    <span id="oi-skew-lean">Waiting for snapshot</span>
+    <span id="oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
+    <span id="oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="oi-skew-track" role="meter" aria-labelledby="oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span class="oi-skew-label-gate">−0.3 bot gate</span><span>0</span><span class="oi-skew-label-gate">+0.3 bot gate</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <div class="oi-skew-bot-row">
+    <span id="oi-skew-bot" data-state="unknown" data-availability="not_published">Bot signal: not published</span>
+  </div>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p class="oi-skew-caveat">(call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+    <p id="oi-skew-thresholds"></p>
+    <p id="oi-skew-bot-detail"></p>
+  </details>
+</section>
+
+<section id="spy-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="spy-oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="spy-oi-skew-heading">SPY near-money OI skew</h2>
+    <span id="spy-oi-skew-value" class="ref-oi-skew-value">—</span>
+    <span id="spy-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="spy-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
+    <span id="spy-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="spy-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="spy-oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="SPY OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="spy-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p class="oi-skew-caveat">Reference reading only: no bot trades SPY. (call OI − put OI) ÷ (call OI + put OI) over strikes within ±2% of spot. Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+    <p id="spy-oi-skew-detail" class="oi-skew-caveat"></p>
+  </details>
+</section>
+
+<section id="ibit-oi-skew-meter" class="ref-oi-skew" data-state="unavailable" aria-labelledby="ibit-oi-skew-heading">
+  <div class="oi-skew-head">
+    <h2 id="ibit-oi-skew-heading">IBIT near-money OI skew</h2>
+    <span id="ibit-oi-skew-value" class="ref-oi-skew-value">—</span>
+    <span id="ibit-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+    <span id="ibit-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
+    <span id="ibit-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+  </div>
+  <div class="oi-skew-scale">
+    <div id="ibit-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="ibit-oi-skew-heading"
+         aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="IBIT OI skew unavailable">
+      <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+      <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+      <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+      <span id="ibit-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+    </div>
+    <div class="oi-skew-labels" aria-hidden="true">
+      <span>−1 all puts</span><span>−0.3</span><span>0</span><span>+0.3</span><span>+1 all calls</span>
+    </div>
+  </div>
+  <div id="ibit-adaptive-oi-skew" class="adaptive-oi-skew" data-state="unavailable" aria-labelledby="ibit-adaptive-oi-skew-heading">
+    <div class="oi-skew-head">
+      <h3 id="ibit-adaptive-oi-skew-heading">Adaptive near-money OI skew</h3>
+      <span class="adaptive-oi-skew-tag">page-calculated · not the published reading or a bot signal</span>
+    </div>
+    <div class="oi-skew-head">
+      <span id="ibit-adaptive-oi-skew-value" class="ref-oi-skew-value">—</span>
+      <span id="ibit-adaptive-oi-skew-lean" class="ref-oi-skew-lean">Waiting for snapshot</span>
+      <span id="ibit-adaptive-oi-skew-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
+      <span id="ibit-adaptive-oi-skew-meta" class="ref-oi-skew-meta" role="status"></span>
+    </div>
+    <div class="oi-skew-scale">
+      <div id="ibit-adaptive-oi-skew-track" class="ref-oi-skew-track" role="meter" aria-labelledby="ibit-adaptive-oi-skew-heading"
+           aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" aria-valuetext="IBIT adaptive OI skew unavailable">
+        <span class="oi-skew-tick" style="left:35%" aria-hidden="true"></span>
+        <span class="oi-skew-tick oi-skew-zero" style="left:50%" aria-hidden="true"></span>
+        <span class="oi-skew-tick" style="left:65%" aria-hidden="true"></span>
+        <span id="ibit-adaptive-oi-skew-marker" class="ref-oi-skew-marker" hidden aria-hidden="true"></span>
+      </div>
+    </div>
+    <p id="ibit-adaptive-oi-skew-detail" class="oi-skew-caveat"></p>
+  </div>
+  <details class="truth-about"><summary>About this reading</summary>
+    <p id="ibit-oi-skew-detail" class="oi-skew-caveat"></p>
+    <p class="oi-skew-caveat">No bot trades IBIT. The top reading is the published reference (±2% of spot). IBIT's $1 strikes are roughly 2.5–3% of its price, so ±2% can hold only a strike or two and fewer than 4 is flagged thin. The adaptive reading below it widens the window from ±2% to the 4th-nearest strike with OI (strikes tied at the edge included), capped at ±10%, and shows nothing when coverage is insufficient. Both are (call OI − put OI) ÷ (call OI + put OI). Open interest is prior-day settled positioning: not fresh intraday flow, and not a win probability.</p>
+  </details>
+</section>
 
 <div id="price-strip" aria-label="Quote cards">
   <section class="quote-section" aria-labelledby="qp-core-heading">
@@ -1118,6 +1705,7 @@
       <span id="user-bar"><span id="user-name"></span><button id="auth-logout" class="paper-btn">log out</button></span>
     </span>
   </h3>
+  <p><a href="/prediction.html">Prediction markets / paper portfolio</a></p>
   <div id="paper-hint">Click an option cell or listed equity tile to buy/sell. Options use ×100; shares use ×1. Balance persists across devices.</div>
   <div id="paper-order-status" role="status" aria-live="polite"></div>
   <div id="paper-positions"></div>
@@ -1137,6 +1725,12 @@
 </div>
 
 <div id="history-panel" class="hidden">
+  <div style="margin:12px 0;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+    <label>Historical view <select id="history-view"><option value="daily">Daily archive · retrospective</option><option value="clock">One Clock · as of cursor</option></select></label>
+    <a href="/one-clock.html">Event Builder and Results</a>
+  </div>
+  <div id="history-daily">
+  <p>Daily retrospective archive. These full-session values do not follow an intraday cursor.</p>
 
   <div id="hist-header">
     <span id="hist-title">Historical OI</span>
@@ -1145,6 +1739,12 @@
     <span id="hist-tier-badge" style="display:none"></span>
     <span id="hist-status">Loading archive…</span>
   </div>
+  <div id="hist-strip-wrap">
+    <button type="button" id="hist-prev" class="hs-step" aria-label="Previous archived session" disabled>←</button>
+    <div id="hist-strip" role="group" aria-label="Archived sessions by month; filled = archived, hollow = no archive"></div>
+    <button type="button" id="hist-next" class="hs-step" aria-label="Next archived session" disabled>→</button>
+  </div>
+  <p id="hist-strip-key">■ archived session · □ weekday with no archive (holiday or missing capture) · outlined = on screen</p>
 
   <div id="hist-no-data">Loading historical archive…</div>
 
@@ -1182,6 +1782,7 @@
     </div>
   </div>
 
+</div> <!-- /history-daily -->
 </div> <!-- /history-panel -->
 
 <div id="bots-panel" class="hidden">
@@ -1189,7 +1790,14 @@
   <div id="bots-header">
     <span id="bots-title">Automated Accounts</span>
     <span id="bots-status">—</span>
+    <span id="bots-view" role="group" aria-label="Automated accounts view">
+      <button type="button" class="bots-view-btn" data-view="cards" aria-pressed="true">Cards</button>
+      <button type="button" class="bots-view-btn" data-view="floor" aria-pressed="false">Floor</button>
+      <button type="button" class="bots-view-btn" data-view="lanes" aria-pressed="false">Session lanes</button>
+    </span>
   </div>
+  <div id="bot-floor" class="hidden"></div>
+  <div id="bots-cards">
   <div id="bots-hint">
     Crassus / Golden Goose paper-trading bots. Equity = cash + open positions marked at
     the live mid. Positions are marked against the same quotes the Live tab polls, so a
@@ -1197,6 +1805,7 @@
   </div>
   <div id="bots-by-strategy"></div>
   <div id="bots-grid"></div>
+  </div> <!-- /bots-cards -->
 
 </div> <!-- /bots-panel -->
 
@@ -1204,17 +1813,26 @@
 
   <div id="squeeze-header">
     <span id="squeeze-title">Ranked Candidates</span>
+    <span id="squeeze-truth" class="truth-chip" data-truth="pending" data-tone="muted">○ waiting</span>
     <span id="squeeze-status" data-state="fallback">—</span>
   </div>
+  <p id="squeeze-claim">Experimental ranking · scores 0–1 · not a squeeze probability</p>
   <div id="squeeze-warning" class="hidden"></div>
-  <div id="squeeze-hint">
+  <details class="truth-about" id="squeeze-about"><summary>About this reading</summary>
+  <p id="squeeze-hint">
     Experimental short-squeeze scanner (<a href="https://linear.app/objecta/issue/OA-191" target="_blank" rel="noopener">OA-191</a>),
     an independently maintained producer (<a href="https://github.com/OwenTanzer/short-squeeze-scanner" target="_blank" rel="noopener">source</a>) --
     this page only displays what it publishes. Scores are experimental screening
     measures, not calibrated squeeze probabilities. Updates at 9 a.m. and noon New York time on exchange session days; 20-candidate pilot. Historical outcomes and research
     comparisons are archived separately and not shown here.
-  </div>
+  </p>
+  <p>Each score is the scanner's weighted mean of components it clamps to 0–1, so the bars share one fixed 0–1 scale.
+    Combined is a blend of factor and options scores; when no usable options chain was found, options reads
+    "unavailable" and combined falls back to the factor score. A longer bar ranks higher on this screen; it is not a
+    larger chance of a squeeze.</p>
+  </details>
   <table id="squeeze-table">
+    <caption id="squeeze-caption"></caption>
     <thead>
       <tr>
         <th>Ticker</th>
@@ -1230,19 +1848,25 @@
 
 </div> <!-- /squeeze-panel -->
 
+<div id="news-panel" class="hidden" aria-live="polite"></div> <!-- MediaFlow news views (js/news-panel.js) -->
+<div id="news-research" aria-live="polite"></div> <!-- MediaFlow P1 research view (js/news-research.js); hidden with #news-panel -->
+
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
-  Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a>
+  Data: tastytrade / DXLink. Snapshots every 60s. ±20 strikes from ATM shown. <a href="/">← Download desktop app</a><br>
+  Deployment: isolated — assets live-options-view · data live-options-api.
 </div>
 
 <script src="shared.js?v=050c96a265673ac3"></script>
 <script src="shared/csv-ranges.js?v=2037c69afbe5d94b"></script>
-<script src="shared/heatmap.js?v=c4a883a5bc99b558"></script>
-<script src="shared/quotes.js?v=734ed3e60dc3333c"></script>
-<script src="shared/format.js?v=132e6deb03cda939"></script>
+<script src="shared/heatmap.js?v=eb4842977a7fc73e"></script>
+<script src="shared/quotes.js?v=3b80b4397c3c4608"></script>
+<script src="shared/format.js?v=3443e4a7b83f1c13"></script>
 <script src="shared/instruments.js?v=860821b9e03c4a08"></script>
 <script src="shared/quote-panel.js?v=3806793be069e8a7"></script>
-<script src="shared/chain.js?v=477ee1ce1d6f08f2"></script>
+<script src="shared/chain.js?v=14619b6a01ae4033"></script>
+<script src="shared/oi-skew.js?v=eaf1d6a0da079f08"></script>
+<script src="shared/truth-layer.js?v=d520608fbd4ffaa2"></script>
 <script>// ── stale-page protection ──────────────────────────────────────────────────────
 // Cache-Control: no-store (set by the Worker) stops new responses from being// cached, but it can't evict a copy a device already cached before that header
 // existed, and it does nothing for iOS Safari's back-forward cache (bfcache),
@@ -1291,6 +1915,11 @@ const R2 = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev";
 // Only the production website uses the bounded same-origin route.
 const BROWSER_DATA = location.origin === 'https://live-options-view.otmooper12.workers.dev'
   ? '/browser-data' : R2;
+// MediaFlow News views live in a dedicated public News bucket, never at the shared market origin
+// above. null until that bucket's public origin is provisioned (mirrors NEWS_R2_ORIGIN in
+// backend/browser-data.js). The bounded same-origin route serves both wherever BROWSER_DATA uses it.
+const NEWS_R2 = 'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev';
+const NEWS_DATA = BROWSER_DATA === '/browser-data' ? '/browser-data' : NEWS_R2;
 const REFRESH  = 60;  // seconds between data refreshes
 let liveQuotePoller = null;
 
@@ -1304,7 +1933,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. No test slices up to this banner;
 // it stays here as the section's marker.
 </script>
-<script src="js/oi-ranges-loader.js?v=a5bf07b374d77fb2"></script>
+<script src="js/oi-ranges-loader.js?v=db2b3cfec9383d0d"></script>
 <script>
 
 // ── render heatmap (live panel) ─────────────────────────────────────────────────
@@ -1312,7 +1941,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. No test slices up to this banner;
 // it stays here as the section's marker.
 </script>
-<script src="js/render-heatmap.js?v=749be5273663fc72"></script>
+<script src="js/render-heatmap.js?v=2f82e1564ca76714"></script>
 <script>
 
 // ── paper trading ─────────────────────────────────────────────────────────────
@@ -1320,7 +1949,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/paper-trading.js?v=e818b25d06e43ab5"></script>
+<script src="js/paper-trading.js?v=bc5a79b95d8523c3"></script>
 <script>
 
 // ── auth ───────────────────────────────────────────────────────────────────────
@@ -1328,7 +1957,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/auth.js?v=602f112254101ca9"></script>
+<script src="js/auth.js?v=04caee94e896af21"></script>
 <script>
 
 // ── trade ticket popover ──────────────────────────────────────────────────────
@@ -1336,7 +1965,9 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/trade-ticket.js?v=85fc34910f5d761f"></script>
+<script src="js/trade-ticket.js?v=139825bda8755a1b"></script>
+<script src="js/btc-owner-link.js?v=c4ef6c2534eaf95b"></script>
+<script src="js/btc-options.js?v=e7b9e46b496866ea"></script>
 <script>
 
 // ── data fetch cycle ──────────────────────────────────────────────────────────
@@ -1345,7 +1976,10 @@ let timerHandle = null;
 // loads the module instead of slicing up to the countdown banner; the banner
 // stays here as the section's marker.
 </script>
-<script src="js/data-fetch-cycle.js?v=80a9bb163ca7c436"></script>
+<script src="js/qqq-iv.js?v=3d367be7c00bcf71"></script>
+<script src="js/data-fetch-cycle.js?v=6587a027edd3a618"></script>
+<script src="js/oi-skew-meter.js?v=e4f1fc4047f80a6f"></script>
+<script src="js/reference-oi-skew-meters.js?v=684a55cfdd32ce6c"></script>
 <script>
 
 // ── countdown timer ───────────────────────────────────────────────────────────
@@ -1378,7 +2012,15 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/squeeze-panel.js?v=29307f6a6d2645a7"></script>
+<script src="js/squeeze-panel.js?v=b6f669daf5c8af53"></script>
+<script>
+
+// ── news panel (MediaFlow M4b) ──────────────────────────────────────────────
+// Lives in js/news-panel.js, loaded below; the News tab mounts it on first
+// open. The banner stays here as the section's marker.
+</script>
+<script src="js/news-research.js?v=aac117405484746a"></script>
+<script src="js/news-panel.js?v=c63fdda00f5c36c4"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────
@@ -1386,7 +2028,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/tab-switching.js?v=eb4da7c54f71b804"></script>
+<script src="js/tab-switching.js?v=d8df60ae0f25d227"></script>
 <script>
 
 // ── automated (bot) panel ────────────────────────────────────────────────────
@@ -1394,7 +2036,8 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/bots-panel.js?v=d381cc4ee2155fd9"></script>
+<script src="js/bots-panel.js?v=29ec7cc8cc237f15"></script>
+<script src="js/bot-floor.js?v=5499bc245c9b3033"></script>
 <script>
 
 // ── historical panel ─────────────────────────────────────────────────────────
@@ -1402,7 +2045,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/historical-panel.js?v=f8fd93e0e91f24f5"></script>
+<script src="js/historical-panel.js?v=970238b59d914cf3"></script>
 <script>
 
 // ── sidebar widgets: Top 5 OI, Intraday, Daily context, Similar Sessions ──────
@@ -1426,4 +2069,5 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/boot.js?v=1a582324e77c6419"></script></body></html>
+<script src="js/boot.js?v=b1a8185594efc5e3"></script>
+<script type="module" src="js/one-clock-history.js"></script></body></html>

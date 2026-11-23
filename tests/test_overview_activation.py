@@ -19,12 +19,12 @@ class Activation(unittest.TestCase):
         self.assertNotIn('JPY/USD', yahoo)
         self.assertEqual(yahoo['USD/JPY'], 'JPY=X')
 
-    def test_resolver_uses_active_contract_and_clears_stale_resolution(self):
+    def test_resolver_uses_active_contract_and_preserves_it_on_failure(self):
         items = [{'active-month': True, 'active': True, 'expiration-date': '2099-01-20',
             'future-product': {'code': 'CL'}, 'streamer-symbol': '/CLF99:XNYM'},
             {'active-month': False, 'active': True, 'expiration-date': '2099-02-20',
             'future-product': {'code': 'CL'}, 'streamer-symbol': '/CLG99:XNYM'}]
-        with patch.object(sources, 'PRICE_TICKERS', {}), patch.object(sources, 'RESOLVED_CONTRACTS', {}), patch.object(sources, '_RESOLVED_FOR_DATE', None), patch.object(sources.requests, 'get') as get:
+        with patch.object(sources, 'PRICE_TICKERS', {}), patch.object(sources, 'RESOLVED_CONTRACTS', {}), patch.object(sources, '_RESOLVED_FOR_DATE', None), patch.object(sources, '_RESOLVE_RETRY_AT', None), patch.object(sources, '_RESOLVE_ATTEMPTS', 0), patch.object(sources.requests, 'get') as get:
             get.return_value.json.return_value = {'data': {'items': items}}
             sources.resolve_futures('test')
             self.assertEqual(sources.PRICE_TICKERS['/CL'], '/CLF99:XNYM')
@@ -33,10 +33,15 @@ class Activation(unittest.TestCase):
             # caller cannot clear the other's symbols mid-publish.
             sources.resolve_futures('test')
             self.assertEqual(get.call_count, 1)
+            # A failed forced refresh keeps the last good contract subscribed
+            # and records a bounded retry. Clearing it here is exactly the
+            # November 9 defect that froze every futures row for an evening.
             get.side_effect = RuntimeError('provider unavailable')
             sources.resolve_futures('test', force=True)
-            self.assertIsNone(sources.PRICE_TICKERS['/CL'])
-            self.assertEqual(sources.RESOLVED_CONTRACTS, {})
+            self.assertEqual(sources.PRICE_TICKERS['/CL'], '/CLF99:XNYM')
+            self.assertEqual(sources.RESOLVED_CONTRACTS['/CL']['root'], 'CL')
+            self.assertIsNotNone(sources._RESOLVE_RETRY_AT)
+            self.assertEqual(sources.resolution_status()['last_error'], 'RuntimeError')
 
     def test_treasury_dates_sort_and_yield_units_are_preserved(self):
         xml = '<root><properties><NEW_DATE>2026-11-06T00:00:00</NEW_DATE><BC_2YEAR>4.12</BC_2YEAR></properties><properties><NEW_DATE>2026-11-05T00:00:00</NEW_DATE><BC_2YEAR>4.10</BC_2YEAR></properties></root>'

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<title>Kalshi contract chain · Options View</title><link rel="stylesheet" href="/kalshi.css"></head>
+<body><main>
+<header><div><a class="back" href="/">← Options View</a><h1>Kalshi <span>contract chain</span></h1></div><span class="badge">PAPER ONLY</span></header>
+<nav><a id="login" href="/credit-tape/auth/login?return=kalshi">Sign in with GitHub</a><button id="check">Check access</button><button id="logout">Sign out</button></nav>
+<p id="status" role="status" aria-live="polite">Checking private access…</p>
+<section id="frozen" hidden>
+<h2>Archived market evidence</h2>
+<p id="frozen-time"></p><p>Retained private observations by capture time. Coverage is limited to saved receipts.</p>
+<div id="frozen-list"></div><button id="frozen-more" hidden>Older observations</button><pre id="frozen-detail"></pre>
+</section>
+<section id="workspace" hidden>
+<div class="account"><div><small>Paper cash</small><strong id="cash">—</strong></div><div><small>Open contracts</small><strong id="held">0</strong></div><p>Private research · simulated fills<br>No orders sent to Kalshi</p></div>
+<div class="tools"><input id="search" type="search" aria-label="Search contracts" placeholder="Search contracts…" autocomplete="off"><select id="category" aria-label="Category"><option value="">All categories</option></select><button id="refresh">Refresh prices</button><button id="discover">Update markets</button></div>
+<div class="chain-meta"><span id="count"></span><span id="clock">Loading books…</span></div>
+<p class="trade-note">Tap a price to place a paper market order. Buys use the ask; sells use the bid. Fresh price and size checked at execution; fees added.</p>
+<p id="receipt" role="status" aria-live="polite"></p>
+<div class="chain-head"><span>CONTRACT / CLOSE</span><span>YES · BUY / SELL</span><span>NO · BUY / SELL</span><span>QTY</span></div>
+<div id="markets"></div>
+<div class="pager"><button id="prev">← Previous</button><span id="page"></span><button id="next">Next →</button></div>
+<details id="holdings"><summary>Holdings <span id="position-count"></span></summary><div id="positions"></div></details>
+<details id="detail" hidden><summary id="title">Contract terms</summary><p id="comparison"></p><pre id="rules"></pre></details>
+<details><summary>Fill history & receipts</summary><pre id="fills"></pre></details>
+<details><summary>Research & replay</summary><p id="scope"></p><button id="archives">Load observations</button><p>Archived observations cannot fill orders.</p><div id="archive-list"></div><pre id="replay"></pre><p id="health"></p></details>
+</section></main><script type="module" src="/js/kalshi.js"></script></body></html>

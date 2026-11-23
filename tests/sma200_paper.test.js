@@ -2,14 +2,10 @@ const assert = require('node:assert/strict');
 
 (async () => {
   const { default: worker, derivePasswordHash, randomSaltBase64, updateBotIndex } = await import('../backend/index.js');
-  const users = new Map(), sessions = new Map(), objects = new Map();
+  const { withD1 } = await import('./helpers/test_env.mjs');
+  const { createStorage } = await import('../backend/storage.js');
+  const objects = new Map();
   let revision = 0;
-  const kv = store => ({
-    get: async key => store.get(key) ?? null,
-    put: async (key, value) => { store.set(key, value); },
-    delete: async key => { store.delete(key); },
-    list: async ({ prefix }) => ({ keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) }),
-  });
   const bucket = {
     async get(key) {
       const item = objects.get(key);
@@ -24,11 +20,11 @@ const assert = require('node:assert/strict');
       return { etag };
     },
   };
-  const env = {
-    USERS: kv(users), SESSIONS: kv(sessions), PAPER_TRADES: bucket,
+  const env = withD1({
+    PAPER_TRADES: bucket,
     BOT_REGISTRATION_KEY: 'fixture-operator',
     LIVE_QUOTE_ORIGIN: 'https://fixture.invalid', LIVE_QUOTE_KEY: 'fixture-key',
-  };
+  });
   const realFetch = global.fetch;
   let quote = { bid: 499, ask: 500 };
   global.fetch = async () => Response.json({ quotes: [{
@@ -41,6 +37,7 @@ const assert = require('node:assert/strict');
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }), env);
   const password = 'fixture-password';
+  const storage = createStorage(env);
   async function seed(username, extra = {}) {
     const salt = randomSaltBase64();
     const record = {
@@ -48,8 +45,9 @@ const assert = require('node:assert/strict');
       version: 0, balance_cash: 10_000, starting_balance: 10_000, trades: [], is_bot: true,
       strategy_id: 'spy_sma200_double_or_out', ...extra,
     };
-    users.set(`user:${username}`, JSON.stringify(record));
-    sessions.set(`sess:${username}`, JSON.stringify({ username }));
+    await storage.users.insert(username, record);
+    await storage.botMarkers.put(username, { username });
+    await storage.sessions.create(username, username, 3600);
     return `session=${username}`;
   }
   const uuid = n => `12345678-1234-4234-8234-1234567890${String(n).padStart(2, '0')}`;
@@ -59,7 +57,7 @@ const assert = require('node:assert/strict');
       execution_request_id: uuid(1), sym: 'SPY', instrument_type: 'share', side: 'buy', qty: 40,
     }, cookie);
     assert.equal(buy.status, 201, await buy.text());
-    const bought = JSON.parse(users.get('user:sma_fixture'));
+    const bought = await storage.users.get('sma_fixture');
     assert.equal(bought.balance_cash, -10_000, '2x share entry creates a paper loan');
     assert.equal(bought.trades.length, 1);
     assert.equal(bought.trades[0].instrument_type, 'share');
@@ -68,13 +66,13 @@ const assert = require('node:assert/strict');
 
     // Backdate the entry to exercise one year of 6% financing on the loan.
     bought.trades[0].ts = new Date(Date.now() - 365 * 86_400_000).toISOString();
-    users.set('user:sma_fixture', JSON.stringify(bought));
+    await storage.users.put('sma_fixture', bought);
     quote = { bid: 510, ask: 511 };
     const sell = await call('/api/paper-trade', {
       execution_request_id: uuid(2), sym: 'SPY', instrument_type: 'share', side: 'sell', qty: 40,
     }, cookie);
     assert.equal(sell.status, 201, await sell.text());
-    const sold = JSON.parse(users.get('user:sma_fixture'));
+    const sold = await storage.users.get('sma_fixture');
     assert.equal(sold.trades.length, 2);
     assert.equal(sold.trades[1].side, 'sell');
     assert.ok(Math.abs(sold.trades[1].financing_cost - 600) < 1, JSON.stringify(sold.trades[1]));
@@ -96,7 +94,7 @@ const assert = require('node:assert/strict');
         reason: 'fixture signal' },
     }, '', { 'X-Bot-Registration-Key': 'fixture-operator' });
     assert.equal(ok.status, 200, await ok.text());
-    const state = JSON.parse(users.get('user:sma_fixture')).strategy_state;
+    const state = (await storage.users.get('sma_fixture')).strategy_state;
     assert.equal(state.signal, 'bullish_cross');
     assert.equal(state.target, '2x_long');
     await updateBotIndex(env, ['sma_fixture'], { ready: true });
@@ -121,7 +119,7 @@ const assert = require('node:assert/strict');
       execution_request_id: uuid(5), sym: 'SPY', instrument_type: 'share', side: 'buy', qty: 1,
     }, levered);
     assert.equal(extra.status, 400, 'a leveraged bot cannot add a second non-flat entry');
-    assert.equal(JSON.parse(users.get('user:sma_extra')).account_closed, true);
+    assert.equal((await storage.users.get('sma_extra')).account_closed, true);
     console.log('PASS: SPY share, 2x paper margin, financing, flat-entry guard and strategy-state allowlist');
   } finally {
     global.fetch = realFetch;

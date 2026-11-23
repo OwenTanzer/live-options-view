@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Optional
@@ -21,6 +22,7 @@ from ..overview.readings import build_snapshot_readings, finish_publication, rea
 from . import market_signals as ms
 from .config import (
     ET,
+    ONE_CLOCK_PUBLICATIONS,
     MOMENTUM_LOOKBACK_MINUTES,
     MOMENTUM_MAX_ANCHOR_OVERSHOOT_MIN,
     MOMENTUM_NEUTRAL_BAND_PCT,
@@ -226,7 +228,19 @@ def _older_observed(*pairs: tuple[str | None, str | None]) -> str | None:
     return min(parsed, key=lambda item: item[0])[1]
 
 
+def _finite_price(value: Any) -> float | None:
+    """A recorded price only when it is a real finite number; else unknown."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
 def _quote_contributing(qqq: dict) -> dict[str, Any]:
+    # `last_price` is the last trade's own price, recorded beside the receipt
+    # (`last_ts`) and provider event time (`last_observed_at`) that the feed
+    # writes with it in the same Trade/TradeETH event. It is evidence only:
+    # selection never reads it, so it cannot change the selected spot, and a
+    # missing or non-finite price stays None rather than being inferred.
     return {
         "bid_ts": qqq.get("bid_ts"),
         "ask_ts": qqq.get("ask_ts"),
@@ -234,6 +248,7 @@ def _quote_contributing(qqq: dict) -> dict[str, Any]:
         "bid_observed_at": qqq.get("bid_observed_at"),
         "ask_observed_at": qqq.get("ask_observed_at"),
         "last_observed_at": qqq.get("last_observed_at"),
+        "last_price": _finite_price(qqq.get("last")),
     }
 
 
@@ -590,9 +605,39 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         "market_readings":  readings,
         "market_readings_digest": readings_sha,
     }
+    if us.symbol == "QQQ" and (ts_et.hour, ts_et.minute) >= (9, 30):
+        # This independent artifact cannot stop minute publication. The
+        # exchange calendar, not a late restart, establishes the opening slot.
+        try:
+            from .opening_oi import publish_opening_oi, opening_calendar
+            bounds, prior = opening_calendar(today)
+            if bounds and bounds[0] <= ts_et < bounds[1] and prior:
+                publish_opening_oi(s3, R2_BUCKET, payload=payload, state=state, strikes=strikes,
+                                   captured=ts_et, session_open=bounds[0], previous_session=prior.isoformat(), cursor=us.opening_oi_cursor)
+        except Exception as error:
+            log.warning("opening OI reference unavailable: %s", error)
     if us.symbol != "QQQ":
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
+
+    from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
+    if ONE_CLOCK_PUBLICATIONS and us.symbol in ONE_CLOCK_INSTRUMENTS:
+        from .one_clock import publish_snapshot
+        try:
+            # Authoritative immutable commit precedes the mutable compatibility
+            # view. A crash after this point is recovered by sequence, not by
+            # guessing whether latest.json happened to be updated.
+            publication = publish_snapshot(s3, R2_BUCKET, payload, csv_buf.getvalue().encode())
+            provenance["one_clock_publication"] = publication
+            payload["one_clock_publication"] = publication
+        except Exception:
+            provenance["publication"] = {"status": "archived_unpublished", "reason": "one_clock_commit_failed"}
+            finish_publication(readings, published_at=None, status="archived_unpublished", reason="one_clock_commit_failed")
+            provenance["market_readings_digest"] = readings_digest(readings)
+            _put_snapshot_provenance(s3, provenance)
+            counters.inc_failure()
+            log.error("Immutable One Clock commit failed; latest view not advanced")
+            raise
 
     try:
         s3.put_object(

@@ -37,7 +37,7 @@ function makeEl(id) {
 }
 const EL_IDS = ['underlying-select', 'auth-form', 'auth-username', 'auth-password',
   'auth-error', 'auth-submit', 'auth-toggle', 'auth-logout', 'margin-call-continue',
-  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'hist-date'];
+  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'hist-date', 'hist-prev', 'hist-next'];
 
 function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   const els = {};
@@ -67,6 +67,10 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     chainSelection: { symbol: 'QQQ' },
     session: null,
     authMode: 'login',
+    authRevision: 0, sessionVerified: false,
+    readSavedUnderlying: () => 'QQQ',
+    btcOptions: { refresh() {} },
+    closeTicket() {},
     liveQuotes: { _liveQuotes: true },
     liveQuotePoller: null,
     tickerPoller: null,
@@ -89,6 +93,7 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     hideMarginCallScreen: () => { calls.hideMarginCallScreen++; },
     showTab: tab => { calls.showTab.push(tab); },
     loadHistoryDate: value => { calls.loadHistoryDate.push(value); },
+    stepHistoryDate() {},
     setStatus: (a, b) => { calls.setStatus.push([a, b]); },
     loadRanges: async () => { calls.loadRanges++; sandbox.ranges = { '0DTE_Regular': {} }; },
     fetchLatest: async () => { calls.fetchLatest++; },
@@ -107,6 +112,8 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     fetchSqueezeLatest: () => { calls.fetchSqueezeLatest++; },
   };
   const context = vm.createContext(sandbox);
+  const auth = fs.readFileSync(path.join(__dirname, '../site/js/auth.js'), 'utf8');
+  vm.runInContext(auth.slice(auth.indexOf('async function logoutPaperAccount'), auth.indexOf('async function openPaperLogin')), context);
   vm.runInContext(moduleSource, context, { filename: 'site/js/boot.js' });
   const flush = () => new Promise(r => setTimeout(r, 20));
   return { els, calls, pollers, sandbox, context, flush, getTickerSubscribeCb: () => tickerSubscribeCb };
@@ -132,6 +139,17 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   assert.ok(boot.pollers.every(p => p.started), 'both pollers must start');
   assert.equal(boot.pollers[0].healthFns.length, 1, 'live poller subscribes renderQuoteHealth');
   assert.equal(boot.pollers[1].opts.maxQuoteAgeMs, 90_000, 'ticker poller gets the share-quote max age');
+  const symbols = boot.pollers[1].opts.requestedSymbols;
+  boot.sandbox.tickerState.interestSymbols = () => ['QQQ', 'SPY'];
+  boot.sandbox.computeBook = () => ({});
+  assert.deepEqual([...symbols()], ['QQQ', 'SPY']);
+  boot.sandbox.btcOptions.active = true;
+  assert.deepEqual([...symbols()], [], 'no hidden ticker request in an empty BTC book');
+  boot.sandbox.computeBook = () => ({ SPY: { instrument_type: 'share', pos: 3 },
+    QQQ: { instrument_type: 'share', pos: 0 }, opt: { instrument_type: 'option', pos: 1 } });
+  assert.deepEqual([...symbols()], ['SPY'], 'keep live marks for open shares');
+  boot.sandbox.btcOptions.active = false;
+  assert.deepEqual([...symbols()], ['QQQ', 'SPY'], 'restore full ticker demand');
   assert.equal(boot.calls.startCountdown, 1, 'boot must start the 60s refresh cycle');
   assert.equal(boot.calls.fetchSteoCalibration, 1, 'boot must fetch STEO once at startup');
   assert.equal(boot.calls.fetchSqueezeLatest, 1, 'boot must fetch the squeeze panel once at startup');
@@ -152,7 +170,8 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   boot.els['tab-squeeze'].onclick();
   boot.els['tab-history'].onclick();
   boot.els['tab-live'].onclick();
-  assert.deepEqual(boot.calls.showTab, ['bots', 'squeeze', 'history', 'live'], 'tab buttons must route to their tabs');
+  boot.els['tab-news'].onclick();
+  assert.deepEqual(boot.calls.showTab, ['bots', 'squeeze', 'history', 'live', 'news'], 'tab buttons must route to their tabs');
   boot.els['hist-date'].value = '2026-09-18';
   boot.els['hist-date'].onchange({ target: boot.els['hist-date'] });
   assert.deepEqual(boot.calls.loadHistoryDate, ['2026-09-18'], 'history date picker must load the chosen date');

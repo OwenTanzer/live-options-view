@@ -13,7 +13,7 @@ async function run() {
     const challenge = await request(server, { jsonrpc: '2.0', id: 1, method: 'ping' }); assert.equal(challenge.status, 401);
     const metadata = await request(server, null, { path: '/.well-known/oauth-protected-resource/mcp', method: 'GET' }); assert.equal(metadata.status, 200);
     const init = await rpc({ jsonrpc: '2.0', id: ++id, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'production-fixture-smoke', version: '1' } } });
-    await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }); const listed = await rpc({ jsonrpc: '2.0', id: ++id, method: 'tools/list' }); assert.equal(listed.result.tools.length, 7);
+    await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }); const listed = await rpc({ jsonrpc: '2.0', id: ++id, method: 'tools/list' }); assert.equal(listed.result.tools.length, 8);
     await tool('discover_sources', { session: SESSION });
     const overview = await tool('market_overview', { symbols: ['AAPL'], limit: 1 });
     assert.equal(overview.rows[0].id, 'AAPL');

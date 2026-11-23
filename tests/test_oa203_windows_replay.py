@@ -98,8 +98,14 @@ class ReplayIntegrity(unittest.TestCase):
                     good + [dict(good[0], sweep=2, file="sweep_0002.jsonl.gz", started_ms=999)]):
             with self.assertRaises(RuntimeError):
                 replay.validate_manifest(bad, summary, "2026-10-05")
-        with self.assertRaises(RuntimeError):
-            replay.validate_manifest(good, {"assessment": {"status": "partial"}}, "2026-10-05")
+        # A final day assessed "partial" is admitted (its partiality
+        # is carried as session_partial reasons, never hidden); only a
+        # missing or other assessment status is refused.
+        self.assertFalse(replay.validate_manifest(good, {"assessment": {"status": "partial"}}, "2026-10-05"))
+        for bad_status in ({}, {"assessment": {}}, {"assessment": {"status": "failed"}},
+                           {"assessment": {"status": "complete "}}):
+            with self.assertRaises(RuntimeError):
+                replay.validate_manifest(good, bad_status, "2026-10-05")
         # A truncated NON-final sweep is still a real mid-session gap.
         two = [dict(good[0], truncated=True),
                dict(good[0], sweep=2, file="sweep_0002.jsonl.gz", started_ms=1000, ended_ms=2000)]

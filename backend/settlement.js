@@ -1,3 +1,5 @@
+import { settleBtcAccount } from './btc-options.js';
+import { btcAllowed } from './btc-owner-link.js';
 // backend/settlement.js (B4) -- settlement: the pure pricing/validation
 // functions (this slice), plus the settlement machinery and the /api/settle
 // route (slice e). Moved verbatim from worker.js; the entry re-exports the
@@ -7,14 +9,15 @@
 
 import {
   ISO_DATE, R2_ORIGIN,
-  botKey, checkOrigin, clearedSessionCookieHeader, computeBookFromTrades,
-  jsonResponse, readJsonBody, requireSession, sessionKey, userKey,
+  checkOrigin, clearedSessionCookieHeader, computeBookFromTrades,
+  jsonResponse, readJsonBody, requireSession,
   withUserRecord,
 } from './common.js';
+import { createStorage } from './storage.js';
 import { botUsernames } from './bots.js';
 
 const SETTLEMENT_ID_PREFIX = 'settle';
-const UNDERLYINGS = new Set(['QQQ', 'SPY', 'IBIT']);
+const UNDERLYINGS = new Set(['QQQ', 'SPY', 'IBIT', 'SLV', 'DRAM']);
 export function settlementMark(b, marks) {
   const underlying = b.underlying ?? 'QQQ'; // pre-migration books were QQQ only
   const value = marks[`${underlying}:${b.exp}`] ?? (underlying === 'QQQ' ? marks[b.exp] : null);
@@ -126,21 +129,22 @@ async function settleAccount(env, username, as_of, spot_marks) {
 // that token in hand, so SESSIONS.delete on a token that was never passed
 // is a harmless no-op rather than an attempt to clear a specific session.
 async function liquidateAccount(env, username, token) {
-  const raw = await env.USERS.get(userKey(username));
-  if (raw && JSON.parse(raw).is_bot) {
+  const store = createStorage(env);
+  const record = await store.users.get(username);
+  if (record && (record.is_bot || record.trades?.some(t => ['futures_option', 'prediction'].includes(t.instrument_type)))) {
     const outcome = await withUserRecord(env, username, (record) => ({
       record: { ...record, account_closed: true, closed_at: record.closed_at ?? new Date().toISOString(),
         closure_reason: record.closure_reason ?? 'insolvent_settlement' }, result: { closed: true },
     }));
     if (outcome.error) throw new Error('Bot closure could not be persisted');
-    return; // Retain identity and history; never auto-provision a wiped bot.
+    return; // Retain bot identity and event obligations/correction history.
   }
-  await env.USERS.delete(userKey(username));
+  await store.users.delete(username);
   // Drop the roster index entry too, or a liquidated bot leaves a pointer to
   // an account that no longer exists. handleBots tolerates the dangling case,
   // but leaving one behind would slowly turn the roster into a graveyard.
-  await env.USERS.delete(botKey(username));
-  if (token) await env.SESSIONS.delete(sessionKey(token));
+  await store.botMarkers.delete(username);
+  if (token) await store.sessions.delete(token);
 }
 // Exclusive upper bound for expired contracts. Before 16:15 ET it is today's
 // date, so today's contracts remain live. At/after 16:15 ET it advances by one
@@ -224,18 +228,50 @@ export async function fetchSpotMarkForDate(dateStr, underlying = 'QQQ') {
 // Cron entry point (see the `scheduled` handler above). Settles every bot
 // account's expired positions against end-of-day spot marks pulled from the
 // archived chain data, independent of whether anyone's dashboard is open.
+//
+// Returns a counts-only summary of what the sweep did (E2: the scheduled
+// handler logs it as the run's outcome). The summary never carries usernames,
+// balances, trades or prices -- only counts and the as-of date -- and building
+// it does not change what is read, written or settled.
 export async function settleAllBots(env, now = new Date()) {
   const asOf = settlementAsOfNY(now);
   const usernames = await botUsernames(env);
+  const summary = {
+    as_of: asOf,
+    accounts_indexed: usernames.length,
+    accounts_ineligible: 0,          // not a bot, or already closed
+    accounts_with_expired: 0,
+    expirations_needed: 0,
+    marks_resolved: 0,
+    marks_missing: 0,                // source answered without a usable mark
+    mark_errors: 0,                  // source threw; obligations stay pending
+    accounts_settled: 0,
+    positions_settled: 0,
+    accounts_unchanged: 0,           // nothing settleable yet (e.g. short awaiting a mark)
+    accounts_liquidated: 0,
+    accounts_retry: 0,               // not_found / conflict: left for the next run
+    no_op_reason: null,
+  };
+
+  const btcUsers = await createStorage(env).users.listUsernames();
+  for (const name of btcUsers) {
+    const record = await createStorage(env).users.get(name);
+    if (record?.trades?.some(t => t.instrument_type === 'futures_option')) {
+      const btc = await settleBtcAccount(env, name, now.getTime());
+      if (btc.error) summary.accounts_retry++;
+      else if (btc.result.settled.length) {
+        summary.accounts_settled++; summary.positions_settled += btc.result.settled.length;
+      }
+    }
+  }
 
   const pendingByUsername = new Map();
   const neededExpirations = new Set();
 
   for (const username of usernames) {
-    const raw = await env.USERS.get(userKey(username));
-    if (!raw) throw new Error('Indexed settlement account unavailable');
-    const record = JSON.parse(raw);
-    if (!record.is_bot || record.account_closed) continue;
+    const record = await createStorage(env).users.get(username);
+    if (!record) throw new Error('Indexed settlement account unavailable');
+    if (!record.is_bot || record.account_closed) { summary.accounts_ineligible++; continue; }
     const book = computeBookFromTrades(record.trades);
     const expired = Object.entries(book).filter(([, b]) =>
       b.instrument_type === 'option' && b.pos !== 0 && b.exp && b.exp < asOf);
@@ -243,27 +279,45 @@ export async function settleAllBots(env, now = new Date()) {
     pendingByUsername.set(username, true);
     for (const [, b] of expired) neededExpirations.add(`${b.underlying}:${b.exp}`);
   }
+  summary.accounts_with_expired = pendingByUsername.size;
+  summary.expirations_needed = neededExpirations.size;
 
-  if (!pendingByUsername.size) return;
+  if (!pendingByUsername.size) {
+    summary.no_op_reason = summary.accounts_settled ? null : (usernames.length ? 'no_expired_positions' : 'no_bot_accounts');
+    return summary;
+  }
 
   const spotMarks = {};
   for (const identity of neededExpirations) {
     const [underlying, exp] = identity.split(':');
     try {
       const spot = await fetchSpotMarkForDate(exp, underlying);
-      if (spot != null) spotMarks[identity] = spot;
-    } catch { /* A failed source leaves only its own obligations pending. */ }
+      if (spot != null) { spotMarks[identity] = spot; summary.marks_resolved++; }
+      else summary.marks_missing++;
+    } catch { summary.mark_errors++; /* A failed source leaves only its own obligations pending. */ }
   }
 
   for (const username of pendingByUsername.keys()) {
     const outcome = await settleAccount(env, username, asOf, spotMarks);
     if (outcome.error === 'insolvent') {
       await liquidateAccount(env, username, null);
+      summary.accounts_liquidated++;
+    } else if (outcome.error) {
+      summary.accounts_retry++;
+    } else if (outcome.result?.settled?.length) {
+      summary.accounts_settled++;
+      summary.positions_settled += outcome.result.settled.length;
+    } else {
+      summary.accounts_unchanged++;
     }
     // Any other error (not_found, conflict) is left for the next cron run --
     // settlement is idempotent (see the alreadySettled check in
     // settleAccount), so a transient miss here just gets retried.
   }
+  if (!summary.accounts_settled && !summary.accounts_liquidated) {
+    summary.no_op_reason = summary.accounts_retry ? 'retry_pending' : 'nothing_settleable';
+  }
+  return summary;
 }
 export async function handleSettle(request, env) {
   const session = await requireSession(request, env);
@@ -313,5 +367,9 @@ export async function handleSettle(request, env) {
     return jsonResponse({ error: 'Settlement could not be recorded, try again' }, 503);
   }
 
-  return jsonResponse(kvOutcome.result, 200);
+  const btc = await settleBtcAccount(env, session.username);
+  if (btc.error) return jsonResponse({ error: 'BTC settlement pending retry' }, 503);
+  const allowed = await btcAllowed(env, session, request);
+  return jsonResponse({ ...kvOutcome.result, settled: [...kvOutcome.result.settled, ...(allowed ? btc.result.settled : [])],
+    pending_btc: allowed ? btc.result.pending : [], balance_cash: btc.result.balance_cash }, 200);
 }

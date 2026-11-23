@@ -1,0 +1,17 @@
+diff --git a/wrangler.recovery.toml b/wrangler.recovery.toml
+--- a/wrangler.recovery.toml
++++ b/wrangler.recovery.toml
+@@ -18,13 +18,6 @@ main = "backend/recovery.js"
+ compatibility_date = "2026-06-23"
+ account_id = "413bc8abe4485cf2a2e0d9f534436ade"
+
+-[vars]
+-BOT_INDEX_READS = "r2"
+-
+-[[r2_buckets]]
+-binding = "PAPER_TRADES"
+-bucket_name = "qqq-options-chain-data"
+-
+ # Legacy namespaces, bound only in this offline deployment. The production
+ # Worker has no KV binding and no code path that reaches these.
+ [[kv_namespaces]]

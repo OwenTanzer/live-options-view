@@ -5,10 +5,16 @@ on:
     branches: [master]
     paths:
       - "crassus/**"
+      - "tests/oi_skew_meter_parity.py"
+      - "tests/fixtures/oi_skew_parity.json"
+      - "market_data/overview/readings.py"
       - ".github/workflows/crassus-ci.yml"
   pull_request:
     paths:
       - "crassus/**"
+      - "tests/oi_skew_meter_parity.py"
+      - "tests/fixtures/oi_skew_parity.json"
+      - "market_data/overview/readings.py"
       - ".github/workflows/crassus-ci.yml"
 
 jobs:
@@ -22,6 +28,11 @@ jobs:
       - name: Install dependencies
         working-directory: crassus
         run: pip install -r requirements.txt
+      - name: Verify forward paper overlays and matched policies
+        working-directory: crassus
+        run: |
+          python scripts/verify_profit_protection.py
+          python scripts/verify_forward_skew.py
       - name: Run integrity invariant suite
         working-directory: crassus
         run: python scripts/verify_invariants.py
@@ -34,6 +45,24 @@ jobs:
       - name: Run tastytrade brokerage route suite (hermetic, no credentials)
         working-directory: crassus
         run: python scripts/verify_tastytrade_broker.py
+      - name: Reference skew strategies
+        working-directory: crassus
+        run: python scripts/verify_reference_skew.py
+      # The site OI skew meter (site/shared/oi-skew.js) is pinned to the real
+      # bot gates and collector reading by this fixture; a strategy or reading
+      # change that alters any case fails here until the fixture (and, if the
+      # semantics moved, the meter) is updated. Web CI checks the JS side.
+      - name: OI skew meter parity fixture is current
+        run: python tests/oi_skew_meter_parity.py
+      - name: OI skew decision provenance for the meter projection
+        working-directory: crassus
+        run: python scripts/verify_oi_skew_provenance.py
+      - name: "OI skew meter projection (inactive): provenance, privacy, unavailability"
+        working-directory: crassus
+        run: python scripts/verify_oi_skew_projection.py
+      - name: OI skew public projection publisher (fail-safe, sanitized, single key)
+        working-directory: crassus
+        run: python scripts/verify_oi_skew_publisher.py
       - name: Run immutable market-readings join suite (#107)
         working-directory: crassus
         run: python scripts/verify_market_readings_join.py
@@ -73,9 +102,27 @@ jobs:
       - name: Run changing-ATM position-stacking fixture (#86)
         working-directory: crassus
         run: python scripts/verify_position_stacking.py
+      - name: Run configurable profit/protective exit suite (#86)
+        working-directory: crassus
+        run: python scripts/verify_exits.py
       - name: Run bot credential preflight suite (#41)
         working-directory: crassus
         run: python scripts/verify_preflight.py
+      - name: Run supervisor heartbeat protocol suite (#41)
+        working-directory: crassus
+        run: python scripts/verify_heartbeat_protocol.py
+      - name: Run login classification and session recovery suite (#41)
+        working-directory: crassus
+        run: python scripts/verify_session_recovery.py
+      - name: Run bounded registration-key health suite (#41)
+        working-directory: crassus
+        run: python scripts/verify_key_health.py
+      - name: Run pre-merge credential provisioning gate suite (#41)
+        working-directory: crassus
+        run: python scripts/verify_provisioning_gate.py
+      - name: Harness startup handshake (diagnostic lines, single deadline, identity)
+        working-directory: crassus
+        run: python scripts/verify_harness_process.py
       - name: Run isolated paper lifecycle with real Runner + Worker harness (#41/#86/#102)
         working-directory: crassus
         run: python scripts/verify_paper_lifecycle.py
@@ -106,6 +153,33 @@ jobs:
       - name: Run durable archive failure-boundary suite
         working-directory: crassus
         run: python scripts/verify_archive.py
+
+  provisioning-gate:
+    # Review-time control for #41: an entry that becomes active with a
+    # credential variable for the first time must carry redacted provisioning
+    # evidence, or land as active:false. Fetch depth is full so the pull
+    # request's base revision is available to compare against; the script
+    # fails closed when it cannot resolve it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install gate runtime dependencies
+        working-directory: crassus
+        run: pip install -r requirements.txt
+      - name: Gate newly active bot credentials
+        working-directory: crassus
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_REF" ]; then
+            BASE_REF=none
+          fi
+          python scripts/provisioning_gate.py --base-ref "$BASE_REF" --json
 
   docker-build-smoke:
     # Builds the exact image Railway deploys from (see crassus/railway.toml's

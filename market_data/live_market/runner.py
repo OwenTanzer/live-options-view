@@ -20,6 +20,8 @@ import market_data.live_market as _entry  # entry indirection for main()'s test 
 from .config import (
     COLLECT_SPY,
     COLLECT_IBIT,
+    COLLECT_SLV,
+    COLLECT_DRAM,
     ET,
     HEALTH_SECS,
     PRICE_LANE_ENABLED,
@@ -106,7 +108,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
                    "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
-        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or (sym == "IBIT" and not COLLECT_IBIT):
+        opted_out = {"IBIT": not COLLECT_IBIT, "SLV": not COLLECT_SLV, "DRAM": not COLLECT_DRAM}
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or opted_out.get(sym, False):
             continue
         try:
             us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)
@@ -282,7 +285,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
         if feed.needs_reauth():
             if reauth_attempted:
                 feed.stop()
-                quote_registry.clear_session()
+                quote_registry.clear_session(reason="session_failed")
                 raise TastyAuthError(
                     "streamer-reauth-circuit",
                     detail="one-reauth-chain-already-used-this-session",
@@ -295,7 +298,7 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 log.info("streamer token refreshed")
             except TastyAuthError:
                 feed.stop()
-                quote_registry.clear_session()
+                quote_registry.clear_session(reason="session_failed")
                 raise
         feed.restart_if_dead()
 
@@ -344,7 +347,27 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
         finalize_rvol_baseline(s3, today, us)
 
     feed.stop()
-    quote_registry.clear_session()
+    # Deliberate end of a trading session: the only path a client may show as a
+    # closed lane. Every failure path below records session_failed instead.
+    quote_registry.clear_session(reason="session_closed")
+
+
+def announce_scheduler_wait(quote_registry: LiveQuoteRegistry, blocked_session_date: date | None) -> None:
+    """Label the runner's deliberate wait for the next session.
+
+    The registry is built uninitialized and main() then blocks in
+    wait_for_premarket, so a cold restart after hours would report
+    "uninitialized" until the next premarket -- an unexplained outage instead of
+    the closed lane the collector is actually in. Two guards keep that honest:
+    a wait that follows a blocked session is recovery from an auth or startup
+    fault, so the registry keeps session_failed and the client keeps backing
+    off; and a registry that already carries a known state (an ended session,
+    an open one) is left alone rather than overwritten.
+    """
+    if blocked_session_date is not None:
+        return
+    if quote_registry.session_state() == "uninitialized":
+        quote_registry.await_next_session()
 
 
 def main():
@@ -379,17 +402,26 @@ def main():
 
     blocked_session_date: date | None = None
     while True:
+        # A cold start after hours leaves the registry uninitialized for the
+        # whole wait, which would show as an unexplained outage all evening.
+        # Label the deliberate wait -- but never overwrite a failure: a wait
+        # that follows a blocked session is recovery from an auth or startup
+        # fault and must keep reporting session_failed.
+        announce_scheduler_wait(quote_registry, blocked_session_date)
         _entry.wait_for_premarket(blocked_session_date)
         try:
             _entry._run_session(token_manager, quote_registry)
+            # The session ran and ended deliberately; the startup circuit from
+            # an earlier failure no longer applies.
+            blocked_session_date = None
         except TastyAuthError as exc:
-            quote_registry.clear_session()
+            quote_registry.clear_session(reason="session_failed")
             blocked_session_date = datetime.now(ET).date()
             log.critical(
                 f"{exc}; auth circuit open for exchange session {blocked_session_date}"
             )
         except Exception as e:
-            quote_registry.clear_session()
+            quote_registry.clear_session(reason="session_failed")
             blocked_session_date = datetime.now(ET).date()
             log.error(
                 f"session failed: {e}; startup circuit open for exchange session "

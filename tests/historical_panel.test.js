@@ -115,6 +115,27 @@ const rowsFor = (date, spot) => {
   return rows;
 };
 
+// Session strip (CDT pass): one cell per weekday from the first archived date
+// to the newest, grouped by month; weekends never appear; a weekday without
+// an archive is a gap, never dropped and never filled; duplicates collapse.
+{
+  const { ctx, els } = harness();
+  const months = JSON.parse(vm.runInContext(
+    "JSON.stringify(buildHistStripModel(['2026-09-30','2026-09-28','2026-10-02','2026-09-28']))", ctx));
+  assert.deepEqual(months.map(m => m.label), ['Sep 2026', 'Oct 2026']);
+  assert.deepEqual(months[0].days, [{ date: '2026-09-28', archived: true }, { date: '2026-09-29', archived: false },
+    { date: '2026-09-30', archived: true }]);
+  assert.deepEqual(months[1].days.map(d => [d.date, d.archived]), [['2026-10-01', false], ['2026-10-02', true]]);
+  assert.equal(months[0].archived, 2);
+  assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(buildHistStripModel([]))', ctx)), []);
+  vm.runInContext("histManifestDates = ['2026-09-28','2026-09-30']; renderHistStrip('2026-09-30')", ctx);
+  const strip = els['hist-strip'].innerHTML;
+  assert.match(strip, /data-date="2026-09-30"[^>]*aria-current="date"/);
+  assert.match(strip, /hs-gap" title="2026-09-29: no archive \(a market holiday or a missing capture\)"/);
+  assert.equal(els['hist-prev'].disabled, false);
+  assert.equal(els['hist-next'].disabled, true);
+}
+
 // Tier from the expiration date alone (Friday = weekly, 3rd Friday = monthly
 // opex): 2026-09-18 is the 3rd Friday of September, 2026-09-25 a plain
 // Friday, 2026-09-23 a Wednesday; garbage is Regular, not an exception.

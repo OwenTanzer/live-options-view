@@ -10,8 +10,33 @@
 // — all runtime-only, after all scripts load.
 // ── auth ───────────────────────────────────────────────────────────────────────
 let authMode = 'login';
+let authRevision = 0;
+let sessionVerified = false;
+
+async function logoutPaperAccount() {
+  authRevision++;
+  sessionVerified = false;
+  session = null;
+  closeTicket();
+  try { localStorage.removeItem(SESSION_CACHE_KEY); } catch {}
+  renderAuthGate();
+  renderSelectedChain();
+  document.getElementById('auth-submit').disabled = true;
+  try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); }
+  catch { /* Local private state stays cleared even when logout transport fails. */ }
+  finally { document.getElementById('auth-submit').disabled = false; }
+}
+
+async function openPaperLogin() {
+  authMode = 'login';
+  if (session) await logoutPaperAccount();
+  renderAuthGate();
+  document.getElementById('auth-panel').scrollIntoView({ block: 'center' });
+  document.getElementById('auth-username').focus();
+}
 
 function renderAuthGate() {
+  if (typeof btcOptions !== 'undefined') btcOptions.syncSession();
   const authPanel = document.getElementById('auth-panel');
   const paperPanel = document.getElementById('paper-panel');
   if (session) {
@@ -58,12 +83,18 @@ async function submitAuth(username, password) {
 }
 
 async function refreshSessionFromServer() {
+  const revision = authRevision;
   try {
     const response = await fetch('/api/me', { credentials: 'same-origin' });
-    if (!response.ok) { session = null; return; }
-    session = await response.json();
+    if (revision !== authRevision) return;
+    if (!response.ok) { session = null; sessionVerified = false; return; }
+    const result = await response.json();
+    if (revision !== authRevision) return;
+    session = result;
+    sessionVerified = true;
     cacheSessionDisplay();
   } catch (error) {
-    session = null;
+    if (revision !== authRevision) return;
+    session = null; sessionVerified = false;
   }
 }

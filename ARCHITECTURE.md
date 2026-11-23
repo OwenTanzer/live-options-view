@@ -7,7 +7,7 @@ This is the companion to the [front door](README.md). It reuses the service/cont
 | Component | Source / stable launch entry | Trigger and responsibility | Evidence boundary |
 |---|---|---|---|
 | Main collector | [entry](market_data/live_market/__main__.py), [operations](market_data/live_market/README.md) | `python -m market_data.live_market`; session lifecycle, QQQ/SPY chain snapshots, prices, health, weekly archives; EIA thread only with `EIA_API_KEY` | The package has a module entry point. Repository HEAD is not automatically the running collector; no new Railway readback in this documentation pass |
-| Website + account API | [site/index.html](site/index.html), [site/js](site/js), [backend/index.js](backend/index.js), [wrangler.toml](wrangler.toml) | Browser requests plus cron `*/15 12-23 * * 1-5`; serves assets, data proxy, quotes, paper accounts and settlement | Chej reported master Web CI and Cloudflare deployment passed at `2b08a17`; this is not a fresh build-ID browser readback |
+| Website + account API | [site/index.html](site/index.html), [site/js](site/js), [backend/index.js](backend/index.js), [wrangler.toml](wrangler.toml) | Browser requests plus cron `*/15 12-23 * * MON-FRI` (API Worker, [wrangler.api.toml](wrangler.api.toml)); serves assets, data proxy, quotes, paper accounts and settlement | Chej reported master Web CI and Cloudflare deployment passed at `2b08a17`; this is not a fresh build-ID browser readback |
 | Crassus | [runner](crassus/crassus/runner.py), [service config](crassus/railway.toml), [guide](crassus/README.md) | `python -m crassus.runner --interval 300` from `crassus/`; observe → decide → validate → submit → reconcile | Command/configuration, not evidence that a particular bot traded today |
 | Tradier time-and-sales | [launcher](market_data/tradier/launcher.py), [collector](market_data/tradier), [operations](market_data/tradier/OPERATIONS.md) | Service cron `15 12 * * 1-5` UTC; waits for exchange open, archives a daily session | The [deployment guide](market_data/tradier/OPERATIONS.md) records this launcher/cron. No consumer identified in this repository reads these archives; ad-hoc readers outside it and the artifact layout they depend on are recorded in [the lane's note](market_data/tradier/ARCHIVE_ONLY.md). No new service readback here |
 | OA-203 / Big Banana | [scanner](market_data/options_scanner), [module entry](market_data/options_scanner/__main__.py), [operations](market_data/options_scanner/README.md), [contract](site/plans/2026-09-options-return-scanner.md) | Service-managed cron starts a session-aware scanner, approximately five-minute sweeps and final rankings | The service-managed command is the normal `run` launch; readiness is a separate runtime setting. Active publication policy is a separate [specification](docs/specs/OA203_ACTIVE_LOOKUP.md) |
@@ -27,7 +27,7 @@ tastytrade/DXLink ── market_data/live_market/ ── R2 published artifacts 
                                │
                          browser quote store
 
-Crassus ── Worker /api/* ── KV accounts + R2 execution records
+Crassus ── Worker /api/* ── D1 accounts/sessions + R2 execution records
 Cloudflare cron ── same Worker settlement logic ── archive spot marks
 Tradier time-and-sales ── moo144/tradier/...   (archive-only in this repository)
 OA-203 scanner ── oa203/scanner/... ── read-only MCP rankings/detail
@@ -53,7 +53,7 @@ R2 bucket `qqq-options-chain-data` holds several products, not one interchangeab
 | `squeeze-scanner/v1/scheduled/*` | External [short-squeeze-scanner](https://github.com/OwenTanzer/short-squeeze-scanner) | Squeeze panel and MCP; latest successful rows and latest attempt/status remain distinct |
 | `oa203/scanner/<date>/` | OA-203 scanner | Final retrospective rankings and sweep evidence for MCP; active `inprogress/` generations are provisional, digest-pinned and policy-gated |
 | `moo144/tradier[/-ibit]/<date>/` | Separate Tradier collector | Archived time-and-sales; no website/MCP reader in this tree. Product purpose remains a separate decision |
-| `system/bot-membership-v1.json`, `paper-trades/requests/*`, KV `USERS`/`SESSIONS` | Worker | Bot roster, canonical execution records, authenticated account/session state; never conflated with public market readings |
+| `system/bot-membership-v1.json`, `paper-trades/requests/*`, D1 `users`/`sessions`/`bot_markers` | Worker | Bot roster, canonical execution records, authenticated account/session state; never conflated with public market readings |
 
 ## Following one value
 
@@ -61,12 +61,18 @@ Live VWAP follows `take_snapshot` → `_compute_underlying_market` in [market_da
 
 The optional STEO path is `eia_steo_loop` in [market_data/live_market/steo.py](market_data/live_market/steo.py) → [market_data/live_market/crude_calibration.py](market_data/live_market/crude_calibration.py) → `macro/eia_steo.json` → page panel. A forecast level, a release-over-release revision and OVX's current regime are different measurements. Do not promise a revision when only one vintage exists.
 
-Settlement is `scheduled` → `settleAllBots` → bot membership + KV account → `fetchSpotMarkForDate` → `settleAccount` in [backend/settlement.js](backend/settlement.js), using membership from [backend/bots.js](backend/bots.js). The Nov 7/8 trace recorded missing recent daily archives and a retained position on a closed account. Those are dated findings, not a fresh inventory or a new settlement policy. Source-repair Q12 and closed-account semantics Q13 remain outside this organization work.
+Settlement is `scheduled` → `settleAllBots` → bot membership + D1 account → `fetchSpotMarkForDate` → `settleAccount` in [backend/settlement.js](backend/settlement.js), using membership from [backend/bots.js](backend/bots.js). The Nov 7/8 trace recorded missing recent daily archives and a retained position on a closed account. Those are dated findings, not a fresh inventory or a new settlement policy. Source-repair Q12 and closed-account semantics Q13 remain outside this organization work.
+
+The normal Worker has no KV bindings or migration endpoint. Legacy namespaces remain a cold recovery archive; the separately deployed, authenticated recovery entry is documented in [backend/NO_KV.md](backend/NO_KV.md). D1 remains the serving rollback floor after cutover.
 
 ## Release ownership and verification
 
-[deploy.yml](.github/workflows/deploy.yml) runs on matching `master` paths, verifies packaging, runs [stamp-build.mjs](scripts/stamp-build.mjs), then deploys Cloudflare. [web-ci.yml](.github/workflows/web-ci.yml) checks packaging, browser/Worker syntax and rendered Historical behavior before integration. The [MCP workflow](.github/workflows/market-mcp-ci.yml) also builds/runs the narrow non-root image; shared browser imports must be copied into it.
+[deploy-staged.yml](.github/workflows/deploy-staged.yml) publishes staged site assets;
+[deploy.yml](.github/workflows/deploy.yml) publishes the separate API. Both require
+explicit dispatch, exact-revision Web CI and protected production approval.
+Merging does not publish Cloudflare. Follow [SITE_RELEASES.md](docs/SITE_RELEASES.md).
+The [MCP workflow](.github/workflows/market-mcp-ci.yml) also builds/runs the narrow non-root image; shared browser imports must be copied into it.
 
-Railway deploys through service source/watch settings, not a repository deploy workflow. The served [Deployment Contract](site/DEPLOYMENTS.md) is dated September 3 and is not the latest service inventory; for example the October 4 [Crassus inspection](crassus/docs/2026-10-market-reading-contract.md#watch-scope-impact) already superseded its old QQQ/Crassus CI-gate claim. Service readback remains a separate operational record; this documentation pass does not establish every service's current gate or watch scope. A prose-only change under `crassus/**` or an unrestricted Railway watcher may still rebuild a service. Review merge effects explicitly.
+Railway deploys through service source/watch settings, not a repository deploy workflow. The [Deployment Contract](site/DEPLOYMENTS.md) points to the current site-release procedure. Service readback remains a separate operational record; this documentation pass does not establish every service's current gate or watch scope. A prose-only change under `crassus/**` or an unrestricted Railway watcher may still rebuild a service. Review merge effects explicitly.
 
-All served prose remains in [site](site) at unchanged public-relative paths. [The public-prose inventory](docs/PUBLIC_PROSE.md) distinguishes served references from internal specifications; it proposes no unpublishing. The [walkthrough](docs/WALKTHROUGH.md) is the bounded acceptance route: choose a feature, find the implementation, explain its inputs/outputs and identify the producer and consumer without treating an old receipt as current health.
+Markdown references remain in [site](site) in the repository, but are excluded from the separated asset artifact. [The public-prose inventory](docs/PUBLIC_PROSE.md) records the earlier combined-Worker paths. The [walkthrough](docs/WALKTHROUGH.md) is the bounded acceptance route: choose a feature, find the implementation, explain its inputs/outputs and identify the producer and consumer without treating an old receipt as current health.

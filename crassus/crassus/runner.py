@@ -21,11 +21,15 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urljoin
+
+from .strategies.oi_skew import REFERENCE_ROOTS
 from typing import Any
 
 from . import clock, strategies, tastytrade_broker  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
 from .archive import from_environment as archive_from_environment
+from .oi_skew_publisher import from_environment as oi_skew_publisher_from_environment
 from .bs_edge import annotate_buy_decision
 from .client import (
     AccountLiquidated,
@@ -43,7 +47,18 @@ from .config import (
     SNAPSHOT_URL,
     load_accounts,
 )
+from . import forward_skew
+from .skew_bars import ForwardBars
 from .flatten import maybe_flatten
+from .exits import (
+    ExitConfigError,
+    ExitStateStore,
+    activation_from_environment as exits_activated,
+    evaluate as evaluate_exits,
+    reentry_blocked,
+    resolve_policy,
+)
+from .key_health import KeyHealthConfig, KeyHealthMonitor
 from .market import QuoteRateLimited, QuoteReader, SnapshotReader, intent_lineage, unavailable_lineage
 from .observability import configure_logging, event, rejection_reason
 from .supervisor import HEARTBEAT_FD, report_cycle, supervise
@@ -135,6 +150,10 @@ def decision_base(*, decision_id: str, alias: str, strategy_id: str,
         "market_snapshot_lineage": (snapshot.lineage if snapshot
                                     else unavailable_lineage("unavailable")),
         "market_readings_join": join,
+        # Source revision of the running image (Railway sets this for git
+        # deploys; the scanner already records the same variable). Explicitly
+        # null when unknown -- never guessed.
+        "code_revision": os.getenv("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 
@@ -150,6 +169,7 @@ class Runner:
         interval_s: float = 300.0,
         dry_run: bool = False,
         bot_registration_key: str | None = None,
+        key_health: KeyHealthMonitor | None = None,
     ):
         _validate_strategy_ids(accounts)
         key = bot_registration_key if bot_registration_key is not None else BOT_REGISTRATION_KEY
@@ -159,10 +179,38 @@ class Runner:
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)
+        self.forward_directory = self.state_dir / forward_skew.VERSION
+        self.forward_bars = ForwardBars(self.forward_directory)
+        self.forward_bar_sources = {root: (self.forward_bars if root == "QQQ"
+                                           else ForwardBars(self.forward_directory, root))
+                                    for root in forward_skew.FAMILIES}
+        self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
+        if self.forward_accounts:
+            for root, family in forward_skew.FAMILIES.items():
+                active = {a.username for a in self.forward_accounts if forward_skew.root_for(a) == root}
+                if active and active != set(family["arms"]):
+                    raise ValueError(f"activate all {len(family['arms'])} {root} comparison accounts together")
+            if base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
+                raise ValueError("forward comparison requires the Options View paper API")
         self.stop_file = Path(state_dir) / "STOP"
+        # Periodic registration-key health (#41). Constructed by `main()` and
+        # injected, not built here: tests and one-off Runner constructions must
+        # not start probing a live Worker, while every deployed process gets
+        # the check by default. `None` means "this runtime was not asked to
+        # monitor the key", which is a fact worth keeping distinct from
+        # "monitoring is broken".
+        self.key_health = key_health
 
-        self.ledger = DecisionLedger(ledger_dir)
+        self.ledger = DecisionLedger(
+            ledger_dir, account_names={account.alias: account.username for account in accounts},
+            audit_origin="paper" if not dry_run and base_url.rstrip("/") == forward_skew.PAPER_ORIGIN else "simulation",
+        )
         self.snapshots = SnapshotReader(snapshot_url)
+        roots = {REFERENCE_ROOTS[a.strategy_id] for a in accounts if a.strategy_id in REFERENCE_ROOTS}
+        if roots and base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:
+            raise ValueError("Reference skew accounts require the Options View paper API")
+        self.reference_readers = {root: SnapshotReader(urljoin(snapshot_url, f"{root.lower()}/latest.json"), expected_root=root)
+                                  for root in roots}
         self.rate_limiter = RateLimiter()
         # Quotes share the account RateLimiter -- the binding limit is
         # per-IP, so quote polling must draw from the same global budget.
@@ -213,6 +261,17 @@ class Runner:
         self._stop = threading.Event()
         self.retired: set[str] = set()
         self.cycle_count = 0
+        # Re-entry guard state for the exit layer (#86): a small durable record
+        # of recent exits, so a restart immediately after a stop-out cannot
+        # re-open the contract it just closed. It is given the ledger directory
+        # so a corrupt state file can be rebuilt from durable exit rows.
+        self.exit_state = ExitStateStore(
+            self.state_dir, ledger_dir=self.ledger.paths.ledger.parent
+        )
+        # Deployment-level switch for the exit policy. Off unless
+        # CRASSUS_EXITS_ENABLED is set, so this branch is inert until the
+        # reviewed thresholds and precedence are approved.
+        self.exits_activated = exits_activated()
 
     # -- lifecycle --------------------------------------------------------
 
@@ -380,6 +439,22 @@ class Runner:
         log.info("--- cycle @ %s ET (%s) ---", clock.now_et().strftime("%H:%M:%S"), phase)
         event(log, "cycle_started", **fields)
         report_cycle("cycle_started", **fields)
+        # Bounded key health (#41): at most one non-mutating probe per
+        # configured interval, on a monotonic clock, inside the cycle that is
+        # already running. A failed probe is a diagnostic, never a reason to
+        # stop trading -- per-account registration errors remain authoritative.
+        #
+        # The monitor reports through ordinary structured logging
+        # (`event()`/`event(log, "key_health_ok"|...)`). It must never write to
+        # the supervisor pipe: `Progress.accept` accepts only cycle_started,
+        # cycle_completed and cycle_failed and fails closed on anything else,
+        # so a diagnostic there becomes a supervisor restart. That happened in
+        # production once; `report_cycle` now also refuses non-protocol names.
+        if getattr(self, "key_health", None) is not None:
+            try:
+                self.key_health.maybe_check()
+            except Exception as exc:  # never let a diagnostic break a cycle
+                log.warning("key health check failed to run: %s", type(exc).__name__)
         processed = 0
         skipped = 0
         try:
@@ -389,6 +464,12 @@ class Runner:
                 log.error("Snapshot read failed: %s", exc)
                 snapshot = None
 
+            reference_snapshots = {}
+            for root, reader in getattr(self, "reference_readers", {}).items():
+                try:
+                    reference_snapshots[root] = reader.read()
+                except Exception as exc:
+                    log.warning("%s snapshot unavailable: %s", root, type(exc).__name__)
             for account in self.accounts:
                 if self.should_stop:
                     event(
@@ -399,7 +480,8 @@ class Runner:
                 if account.alias in self.retired:
                     skipped += 1
                     continue
-                self._run_account(account, snapshot, phase)
+                root = REFERENCE_ROOTS.get(getattr(account, "strategy_id", None))
+                self._run_account(account, reference_snapshots.get(root) if root else snapshot, phase)
                 processed += 1
         except BaseException as exc:
             report_cycle("cycle_failed", **fields, error_type=type(exc).__name__)
@@ -464,6 +546,15 @@ class Runner:
             snapshot=snapshot,
         )
 
+        arm = forward_skew.arm_for(account)
+        forward_bars = None
+        if arm:
+            sources = getattr(self, "forward_bar_sources", None) or {"QQQ": self.forward_bars}
+            forward_bars = sources[forward_skew.root_for(account)]
+            if phase == "open":
+                forward_bars.read(self.cycle_count, clock.now_et())
+            base.update(comparison_version=forward_skew.VERSION, comparison_arm=arm,
+                        comparison_cycle=self.cycle_count, source_revision=os.getenv("RAILWAY_GIT_COMMIT_SHA"))
         # Reconcile first: the server's view of cash and trades is the only
         # authority, and both the mandatory EOD flatten and the account's own
         # strategy should decide against current reality. This only needs
@@ -498,8 +589,12 @@ class Runner:
         observed_quotes: dict[str, Any] = {}
 
         def quotes_for_decision(symbols: list[str]) -> dict[str, Any]:
-            result = self.quotes.quotes(symbols)
+            missing = [s for s in symbols if s not in observed_quotes] if arm else symbols
+            result = self.quotes.quotes(missing) if missing else {}
             observed_quotes.update(result)
+            if arm:
+                return {s:observed_quotes[s] for s in symbols if s in observed_quotes
+                        and observed_quotes[s].age_seconds is not None and observed_quotes[s].age_seconds >= 0}
             return result
 
         ctx = StrategyContext(
@@ -513,24 +608,70 @@ class Runner:
             account_alias=alias,
         )
 
+        if account.strategy_id == "qqq_gated_strangle" and phase == "open":
+            ctx.params = {**ctx.params, "_completed_bars": self.forward_bars.read(self.cycle_count, ctx.now_et)}
+
         try:
+            exit_policy = None
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
-            elif snapshot is None and getattr(strategy, "requires_snapshot", True):
-                # Ordinary strategy evaluation does need a snapshot -- only
-                # the mandatory flatten and a strategy that declares its own
-                # durable daily-bar source are exempt. No flatten fired above,
-                # so there's nothing safe to decide against this cycle.
-                self.ledger.record(
-                    **base,
-                    outcome_class=Outcome.RUNNER_ERROR,
-                    reason="No market snapshot available this cycle.",
-                    account_state_before=state_before,
-                )
-                return
+            elif arm and arm != "baseline":
+                decision = forward_skew.decide(ctx, account, arm, forward_bars,
+                                               self.forward_directory, decision_id)
             else:
-                decision = strategy(ctx)
+                # Configurable profit/protective exits (#86) sit between the
+                # mandatory flatten and the account's own strategy: session
+                # beats risk control, risk control beats the signal. A bad
+                # `exits` block is recorded against this account only.
+                try:
+                    exit_policy = resolve_policy(
+                        account.strategy_id,
+                        account.params,
+                        activated=bool(getattr(self, "exits_activated", False)),
+                    )
+                except ExitConfigError as exc:
+                    self.ledger.record(
+                        **base,
+                        outcome_class=Outcome.RUNNER_ERROR,
+                        reason=f"Invalid exit configuration: {exc}",
+                        account_state_before=state_before,
+                    )
+                    return
+                # Risk exits are decided from the book, the documented cost
+                # basis and a fresh liquidation quote -- not from the scanner
+                # snapshot. They are therefore evaluated *before* the snapshot
+                # gate below, so a snapshot outage cannot suspend a stop.
+                exit_decision = evaluate_exits(ctx, exit_policy, strategy_id=account.strategy_id)
+                if exit_decision is not None:
+                    decision = exit_decision
+                elif snapshot is None and getattr(strategy, "requires_snapshot", True):
+                    # New entries do need a snapshot. No flatten and no exit
+                    # fired, so there's nothing safe to open this cycle.
+                    self.ledger.record(
+                        **base,
+                        outcome_class=Outcome.RUNNER_ERROR,
+                        reason="No market snapshot available this cycle.",
+                        account_state_before=state_before,
+                    )
+                    return
+                else:
+                    decision = strategy(ctx)
+                    # `exit_state` is created by __init__; a Runner assembled
+                    # directly by a test helper may not have one, in which case
+                    # the cooldown guard is simply absent rather than crashing
+                    # that account's cycle.
+                    store = getattr(self, "exit_state", None)
+                    if store is not None:
+                        blocked = reentry_blocked(
+                            decision,
+                            username=state.username,
+                            store=store,
+                            policy=exit_policy,
+                            book=book,
+                        )
+                        if blocked is not None:
+                            decision = blocked
         except QuoteRateLimited as exc:
             # Classified as rate_limited, not a generic strategy failure --
             # the quote-side 429 already honored Retry-After globally via
@@ -553,6 +694,20 @@ class Runner:
             )
             return
 
+        if arm:
+            if arm == "baseline" and decision.action == "buy":
+                observed = forward_skew.snap_time(snapshot.timestamp) if snapshot else None
+                if not observed or not 0 <= (ctx.now_et-observed).total_seconds() <= 360:
+                    decision = Decision.no_trade("OI reading outside causal freshness window",
+                                                 account.strategy_id, forward_skew.VERSION)
+            # Retain a liquidation mark for every held symbol, including no-trades.
+            try:
+                quotes_for_decision(list(book.positions))
+            except Exception as exc:
+                base["comparison_mark_error"] = type(exc).__name__
+            base["comparison_quotes"] = {sym:vars(q) for sym,q in observed_quotes.items()}
+            base["comparison_positions"] = {sym:vars(pos) for sym,pos in book.positions.items()}
+            base["comparison_decided_at"] = ctx.now_et.isoformat()
         # Annotate the proposal before it enters either the durable intent
         # or the ledger. The strategy's own quote is reused without I/O.
         annotate_buy_decision(decision, snapshot, observed_quotes.get(decision.symbol),
@@ -616,12 +771,29 @@ class Runner:
                 log.warning("%s: strategy_state metadata sync failed: %s", alias, exc)
 
         log.info("%s: %s %s x%s -- %s", alias, decision.action, decision.symbol, decision.quantity, decision.reason)
+        exit_trigger = (decision.metadata or {}).get("exit_trigger")
+        store = getattr(self, "exit_state", None)
+        if exit_trigger and isinstance(decision.symbol, str) and store is not None:
+            # Recorded *before* submission on purpose: the cooldown must hold
+            # even when the exit is rejected or its outcome stays ambiguous.
+            # A stop-out that fails to fill is exactly the moment an
+            # unchanged signal would buy the same contract straight back.
+            store.record(
+                state.username,
+                decision.symbol,
+                trigger=str(exit_trigger),
+                quantity=decision.quantity or 0,
+                decision_id=decision_id,
+            )
+
         try:
             result = executor.submit(
+                **({"execution_request_id": decision_id} if arm else {}),
                 symbol=decision.symbol,
                 side=decision.action,
                 quantity=decision.quantity,
                 instrument_type=decision.instrument_type,
+                **({"limit_price": decision.limit_price} if decision.limit_price is not None else {}),
                 decision_id=decision_id,
                 strategy_id=decision.strategy_id,
                 strategy_version=decision.strategy_version,
@@ -740,10 +912,30 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         interval_s=args.interval,
         dry_run=args.dry_run,
+        # Deployed processes get periodic key health by default (#41). The
+        # cadence, heartbeat and probe timeout come from the environment so
+        # rollout and rollback are configuration changes, not code changes;
+        # CRASSUS_KEY_HEALTH_INTERVAL_S=0 turns the periodic check off. The
+        # cycle period is passed in so the report can state a *conditional*
+        # detection bound and its condition, rather than claiming a hard
+        # maximum the loop cannot enforce.
+        key_health=KeyHealthMonitor(
+            config=KeyHealthConfig.from_environment(cycle_interval_s=args.interval)
+        ),
     )
     archive = archive_from_environment(runner.ledger.paths.ledger.parent, runner.state_dir)
+    from .one_clock_archive_worker import from_environment as archive_projection_from_environment
+    projection = archive_projection_from_environment(archive, runner.state_dir)
+    if projection:
+        projection.start()
+        archive.projection_wake = projection.wake
     if archive:
         archive.start()
+    # Sanitized public OI skew meter projection (H1). Off unless its own
+    # CRASSUS_OI_SKEW_PUBLIC_* settings are complete; never affects trading.
+    oi_skew_publisher = oi_skew_publisher_from_environment()
+    if oi_skew_publisher:
+        runner.ledger.observers.append(oi_skew_publisher.offer)
     try:
         if args.once:
             runner.install_signal_handlers()
@@ -757,6 +949,10 @@ def main(argv: list[str] | None = None) -> int:
         runner.run()
         return 0
     finally:
+        if oi_skew_publisher:
+            oi_skew_publisher.close()
+        if projection:
+            projection.close()
         if archive:
             archive.close()
 

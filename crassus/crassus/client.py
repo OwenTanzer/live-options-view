@@ -82,6 +82,37 @@ class AmbiguousExecution(CrassusError):
     outcome_class = Outcome.AMBIGUOUS
 
 
+#: Non-5xx statuses that mean "the Worker could not answer right now" rather
+#: than "the credentials or the account are wrong". Every 5xx is transient too
+#: (see `is_transient`): a 501 or 505 from an intermediary is no more a
+#: provisioning signal than a 503, and treating it as a configuration error
+#: would stop an account on a proxy fault.
+TRANSIENT_HTTP = frozenset({408, 425, 429})
+
+#: Bounded *rate*, not a capped attempt count: a first-use registration may be
+#: retried after a recoverable failure, with the delay growing 300 -> 900 ->
+#: 1800 s and then staying at 1800 s. Retries continue at that ceiling for as
+#: long as the process lives, so a Worker that recovers is eventually picked up;
+#: there is no permanent give-up and nothing here sleeps or spins. The runner's
+#: own cycle is five minutes, so the first backoff is already one cycle.
+PROVISION_BACKOFF_S = (300.0, 900.0, 1800.0)
+
+#: After a positive "the account already exists but our password was rejected",
+#: stop re-attempting registration for a while. One login per cycle continues,
+#: so a fixed credential is picked up without any register traffic.
+CREDENTIAL_MISMATCH_COOLDOWN_S = 3600.0
+
+
+def is_transient(status: int) -> bool:
+    """Any 5xx, plus the non-5xx statuses that mean "try again later".
+
+    The documented contract is "5xx is the server's fault", and this treats it
+    as one status class rather than enumerating codes: 501 and 505 are as
+    transient as 503, and a 5xx must never be read as a provisioning signal.
+    """
+    return status in TRANSIENT_HTTP or 500 <= status <= 599
+
+
 # --------------------------------------------------------------------------
 # Rate limiting
 # --------------------------------------------------------------------------
@@ -275,6 +306,7 @@ class AccountSession:
         rate_limiter: RateLimiter | None = None,
         timeout_s: float = 20.0,
         bot_registration_key: str | None = None,
+        now: Any = None,
     ):
         self.account = account
         self.base_url = base_url.rstrip("/")
@@ -288,6 +320,13 @@ class AccountSession:
         self.http = requests.Session()
         self.liquidated = False
         self._mutation_lock = threading.Lock()
+        # Bounded provisioning state. `_now` is monotonic and injectable so the
+        # backoff is testable without sleeping.
+        self._now = now or time.monotonic
+        self._provision_attempts = 0
+        self._next_provision_at = 0.0
+        self._credential_mismatch_until = 0.0
+        self._provision_history = ""
 
     # -- plumbing ---------------------------------------------------------
 
@@ -386,51 +425,177 @@ class AccountSession:
         )
 
     def ensure_session(self) -> AccountState:
-        """Log in, provisioning the account on first use.
+        """Log in, provisioning the account on first use, then read its state.
 
-        The six bot accounts do not pre-exist on the server, so the runner
-        registers them itself rather than assuming they are already there.
+        Provisioning used to be attempted whenever *any* login status was >=400.
+        That reads a Worker outage as "account missing", so a 500/503 on login
+        produced a registration attempt that could only answer 409, doubling
+        requests per failing account per cycle. The classification now is:
+
+        * transient (408/425/429/5xx) -> `TransportError`, retried next cycle,
+          and never a registration attempt;
+        * 401 -> the only status that can mean "no such account yet" -> one
+          bounded provisioning attempt, subject to the backoff below;
+        * 409 after a 401 -> the account exists but our password was rejected:
+          a credential mismatch, not a provisioning problem;
+        * any other 4xx -> `ConfigError` (malformed catalog or key), no retries.
+
+        A recoverable failure will not block provisioning forever: attempts are
+        spaced by `PROVISION_BACKOFF_S` and the count resets on success, so a
+        Worker that recovers within the window is picked up on a later cycle.
         """
-        resp = self.login()
-        if resp.status_code >= 400:
-            reg = self.register()
-            if reg.status_code == 403 and "invalid bot registration key" in reg.text.lower():
-                raise ConfigError(
-                    f"Worker rejected BOT_REGISTRATION_KEY while registering "
-                    f"{self.account.alias!r} ({self.account.username}). The "
-                    f"Railway value does not match the Worker secret. Fix both "
-                    f"sides and restart; do not reuse the username as a human "
-                    f"account. Run `python scripts/preflight_accounts.py "
-                    f"--probe` for a non-mutating key check."
-                )
-            if reg.status_code >= 400:
-                raise TransportError(
-                    f"Could not log in or register {self.account.alias}: "
-                    f"login={resp.status_code} register={reg.status_code} {reg.text[:200]}"
-                )
-        else:
-            # Registration already carried the current alias/strategy, so only
-            # an existing account needs re-syncing.
-            sync = self.sync_metadata()
-            if sync.status_code == 403 and "invalid bot registration key" in sync.text.lower():
-                raise ConfigError(
-                    f"Worker rejected BOT_REGISTRATION_KEY while syncing existing "
-                    f"bot {self.account.alias!r}. The Railway value and Worker "
-                    f"secret have drifted; rotate both and restart. Run "
-                    f"`python scripts/preflight_accounts.py --probe` "
-                    f"to distinguish a key mismatch from a missing account."
-                )
-            if sync.status_code >= 400:
-                raise TransportError(
-                    f"Could not sync bot metadata for {self.account.alias}: "
-                    f"{sync.status_code} {sync.text[:200]}"
-                )
+        self._authenticate()
         return self.me()
 
-    def me(self) -> AccountState:
-        """Authoritative account state. The single source of truth for cash
-        and trade history -- never inferred from an execution response."""
+    def _authenticate(self) -> None:
+        """Login (and provision on first use). Never calls `/api/me`."""
+        resp = self.login()
+        status = resp.status_code
+        if is_transient(status):
+            raise TransportError(
+                f"Login for {self.account.alias!r} is temporarily failing "
+                f"(HTTP {status}); retrying on a later cycle without registering. "
+                f"{resp.text[:160]}"
+            )
+        if status >= 400 and status != 401:
+            raise ConfigError(
+                f"Login for {self.account.alias!r} was rejected with HTTP {status} "
+                f"and is not a provisioning case. {resp.text[:200]}"
+            )
+        if status == 401:
+            self._provision()
+            return
+
+        # Registration already carried the current alias/strategy, so only an
+        # existing account needs re-syncing.
+        sync = self.sync_metadata()
+        if sync.status_code == 403 and "invalid bot registration key" in sync.text.lower():
+            raise ConfigError(
+                f"Worker rejected BOT_REGISTRATION_KEY while syncing existing "
+                f"bot {self.account.alias!r}. The Railway value and Worker "
+                f"secret have drifted; rotate both and restart. Run "
+                f"`python scripts/preflight_accounts.py --probe` "
+                f"to distinguish a key mismatch from a missing account."
+            )
+        if is_transient(sync.status_code):
+            raise TransportError(
+                f"Bot metadata sync for {self.account.alias!r} is temporarily failing "
+                f"(HTTP {sync.status_code}); retrying on a later cycle. {sync.text[:160]}"
+            )
+        if sync.status_code >= 400:
+            raise ConfigError(
+                f"Could not sync bot metadata for {self.account.alias!r}: "
+                f"{sync.status_code} {sync.text[:200]}"
+            )
+
+    def _provision(self) -> None:
+        """One bounded registration attempt, with backoff and a mismatch cooldown."""
+        now = self._now()
+        if now < self._credential_mismatch_until:
+            raise ConfigError(
+                f"Account {self.account.alias!r} ({self.account.username}) exists on "
+                f"the Worker but the configured password is rejected. Not re-attempting "
+                f"registration for {self._credential_mismatch_until - now:.0f}s; "
+                f"fix the credential or the catalog entry."
+            )
+        if now < self._next_provision_at:
+            raise TransportError(
+                f"Provisioning for {self.account.alias!r} is in backoff after a "
+                f"recoverable failure; next attempt in "
+                f"{self._next_provision_at - now:.0f}s. {self._provision_history}"
+            )
+
+        try:
+            reg = self.register()
+        except (TransportError, AmbiguousExecution) as exc:
+            # A connection failure or a timeout on the registration POST is the
+            # same kind of recoverable event as a 5xx, and it used to bypass the
+            # backoff entirely: the exception escaped before any delay or
+            # attempt accounting, so a connection-refused Worker could be
+            # hammered once per cycle with no spacing. Route it through the
+            # identical schedule. A timeout is genuinely ambiguous -- the
+            # account may have been created -- and recovery handles that: the
+            # next cycle's login succeeds and metadata sync repairs the record.
+            self._schedule_retry(f"register transport failure: {type(exc).__name__}")
+            raise TransportError(
+                f"Provisioning {self.account.alias!r} failed in transport "
+                f"({type(exc).__name__}); next attempt in "
+                f"{self._next_provision_at - now:.0f}s. {str(exc)[:160]}"
+            ) from exc
+        status = reg.status_code
+        if status in (200, 201):
+            self._provision_attempts = 0
+            self._next_provision_at = 0.0
+            self._provision_history = ""
+            return
+        if status == 409:
+            # The account exists, so the 401 was a rejected password, not a
+            # missing account. Registering again can never help.
+            self._credential_mismatch_until = now + CREDENTIAL_MISMATCH_COOLDOWN_S
+            raise ConfigError(
+                f"Credential mismatch for {self.account.alias!r} "
+                f"({self.account.username}): login was rejected (401) but "
+                f"registration says the username already exists (409). The "
+                f"password in the catalog does not match the Worker's record. "
+                f"Fix the credential; re-registering cannot repair it, and this "
+                f"runner will not attempt it again for "
+                f"{CREDENTIAL_MISMATCH_COOLDOWN_S:.0f}s."
+            )
+        if status == 403 and "invalid bot registration key" in reg.text.lower():
+            raise ConfigError(
+                f"Worker rejected BOT_REGISTRATION_KEY while registering "
+                f"{self.account.alias!r} ({self.account.username}). The "
+                f"Railway value does not match the Worker secret. Fix both "
+                f"sides and restart; do not reuse the username as a human "
+                f"account. Run `python scripts/preflight_accounts.py "
+                f"--probe` for a non-mutating key check."
+            )
+        if is_transient(status):
+            # Recoverable: allow another attempt later, bounded and spaced.
+            delay = self._schedule_retry(f"last register failure: HTTP {status} {reg.text[:160]}")
+            raise TransportError(
+                f"Provisioning {self.account.alias!r} failed transiently "
+                f"(HTTP {status}); next attempt in {delay:.0f}s. {reg.text[:160]}"
+            )
+        raise ConfigError(
+            f"Registration for {self.account.alias!r} was rejected with HTTP "
+            f"{status} and is not recoverable by retrying. {reg.text[:200]}"
+        )
+
+    def _schedule_retry(self, history: str) -> float:
+        """Space the next provisioning attempt and record why. Returns the delay."""
+        index = min(self._provision_attempts, len(PROVISION_BACKOFF_S) - 1)
+        delay = PROVISION_BACKOFF_S[index]
+        self._provision_attempts += 1
+        self._next_provision_at = self._now() + delay
+        self._provision_history = history
+        return delay
+
+    def me(self, *, _retry_after_reauth: bool = True) -> AccountState:
+        """Authoritative account state, re-authenticating once if the session died.
+
+        A Worker restart, a cleared session store, or simply session expiry
+        leaves the cookie stale while the account is perfectly healthy. Raising
+        a transport error on that 401 every cycle would leave the account dark
+        forever, so one bounded re-authentication is attempted before giving up;
+        a second 401 after a fresh login means the credentials are wrong, which
+        is a configuration problem rather than something retrying can fix.
+        """
         resp = self._request("GET", "/api/me")
+        if resp.status_code == 401 and _retry_after_reauth:
+            self._authenticate()
+            return self.me(_retry_after_reauth=False)
+        if resp.status_code == 401:
+            raise ConfigError(
+                f"Worker rejected {self.account.alias!r} even after a fresh login "
+                f"(/api/me 401). The configured credential is wrong for this "
+                f"account; no further automatic attempts this cycle."
+            )
+        if is_transient(resp.status_code):
+            raise TransportError(
+                f"GET /api/me for {self.account.alias!r} is temporarily failing "
+                f"(HTTP {resp.status_code}); retrying on a later cycle."
+            )
         if resp.status_code >= 400:
             raise TransportError(f"GET /api/me -> {resp.status_code} {resp.text[:200]}")
         payload = resp.json()
@@ -581,6 +746,7 @@ class ExecutionClient:
             side=intent["side"],
             quantity=intent["quantity"],
             instrument_type=intent.get("instrument_type"),
+            limit_price=intent.get("limit_price"),
             execution_request_id=request_id,
             decision_id=intent.get("decision_id"),
             strategy_id=intent.get("strategy_id"),
@@ -605,6 +771,7 @@ class ExecutionClient:
         side: str,
         quantity: int,
         instrument_type: str | None = None,
+        limit_price: float | None = None,
         execution_request_id: str | None = None,
         decision_id: str | None = None,
         strategy_id: str | None = None,
@@ -640,6 +807,7 @@ class ExecutionClient:
                 "side": side,
                 "quantity": quantity,
                 "instrument_type": instrument_type,
+                "limit_price": limit_price,
                 "decision_id": decision_id,
                 "strategy_id": strategy_id,
                 "strategy_version": strategy_version,
@@ -660,6 +828,8 @@ class ExecutionClient:
                 "side": side,
                 "qty": quantity,
             }
+            if limit_price is not None:
+                body.update(order_type="limit", limit_price=limit_price)
             if instrument_type is not None:
                 body["instrument_type"] = instrument_type
 

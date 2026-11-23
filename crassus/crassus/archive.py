@@ -38,6 +38,7 @@ class LedgerArchive:
             self.state = {"version": 1, "bucket": bucket, "namespace": uuid.uuid4().hex,
                           "files": {}, "last_success_at": None}
             self._save()
+        self.projection_wake = None
         self.stop = threading.Event()
         self.thread = None
 
@@ -178,6 +179,8 @@ class LedgerArchive:
                 # SDK exception strings may contain request details. Never echo them.
                 event(log, "archive_failed", level=logging.ERROR, error_type=type(exc).__name__,
                       last_success_at=self.state["last_success_at"])
+            if self.projection_wake is not None:
+                self.projection_wake.set()
             self.stop.wait(30)
 
     def start(self):

@@ -1,0 +1,407 @@
+[
+ {
+  "day": "2026-09-25",
+  "manifest": "moo144/tradier/2026-09-25/manifest-2fe15b0976d1.json",
+  "session": [
+   "2026-09-25T09:30:00-04:00",
+   "2026-09-25T16:00:00-04:00"
+  ],
+  "audit_matches_oa180_results": true,
+  "windows": {
+   "full_session": {
+    "window_ms": [
+     1790343000000,
+     1790366400000
+    ],
+    "window_et": [
+     "09:30:00.000",
+     "16:00:00.000"
+    ],
+    "display": {
+     "buy": {
+      "prints": 269875,
+      "contracts": 1798966
+     },
+     "sell": {
+      "prints": 281278,
+      "contracts": 1826314
+     },
+     "unknown": {
+      "prints": 129008,
+      "contracts": 1158309
+     },
+     "total": {
+      "prints": 680161,
+      "contracts": 4783589
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 269875,
+      "contracts": 1798966
+     },
+     "sell": {
+      "prints": 281278,
+      "contracts": 1826314
+     },
+     "unknown": {
+      "prints": 129008,
+      "contracts": 1158309
+     },
+     "total": {
+      "prints": 680161,
+      "contracts": 4783589
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 680161,
+    "same_side": 680161,
+    "side_pairs": {}
+   },
+   "published_replay": {
+    "window_ms": [
+     1790343000094,
+     1790343045136
+    ],
+    "window_et": [
+     "09:30:00.094",
+     "09:30:45.136"
+    ],
+    "display": {
+     "buy": {
+      "prints": 955,
+      "contracts": 4814
+     },
+     "sell": {
+      "prints": 1011,
+      "contracts": 4995
+     },
+     "unknown": {
+      "prints": 600,
+      "contracts": 5022
+     },
+     "total": {
+      "prints": 2566,
+      "contracts": 14831
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 955,
+      "contracts": 4814
+     },
+     "sell": {
+      "prints": 1011,
+      "contracts": 4995
+     },
+     "unknown": {
+      "prints": 600,
+      "contracts": 5022
+     },
+     "total": {
+      "prints": 2566,
+      "contracts": 14831
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 2566,
+    "same_side": 2566,
+    "side_pairs": {},
+    "published_file_vs_display_path": {
+     "rows": 2565,
+     "identical": true,
+     "display_rows_in_window_not_published": 1,
+     "in_receipt_order_not_time_order": true
+    }
+   },
+   "screen_at_close": {
+    "window_ms": [
+     1790366220587,
+     1790366399736
+    ],
+    "window_et": [
+     "15:57:00.587",
+     "15:59:59.736"
+    ],
+    "display": {
+     "buy": {
+      "prints": 683,
+      "contracts": 6688
+     },
+     "sell": {
+      "prints": 829,
+      "contracts": 9633
+     },
+     "unknown": {
+      "prints": 536,
+      "contracts": 9235
+     },
+     "total": {
+      "prints": 2048,
+      "contracts": 25556
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 683,
+      "contracts": 6688
+     },
+     "sell": {
+      "prints": 829,
+      "contracts": 9633
+     },
+     "unknown": {
+      "prints": 536,
+      "contracts": 9235
+     },
+     "total": {
+      "prints": 2048,
+      "contracts": 25556
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 2048,
+    "same_side": 2048,
+    "side_pairs": {},
+    "note": "the 2,048 rows retained when the last print arrived, against the audit over the same provider-time span"
+   }
+  },
+  "display_only_reasons": {},
+  "audit_only": 0
+ },
+ {
+  "day": "2026-09-29",
+  "manifest": "moo144/tradier/2026-09-29/manifest-64d13a1597e1.json",
+  "session": [
+   "2026-09-29T09:30:00-04:00",
+   "2026-09-29T16:00:00-04:00"
+  ],
+  "audit_matches_oa180_results": true,
+  "windows": {
+   "full_session": {
+    "window_ms": [
+     1790688600000,
+     1790712000000
+    ],
+    "window_et": [
+     "09:30:00.000",
+     "16:00:00.000"
+    ],
+    "display": {
+     "buy": {
+      "prints": 263021,
+      "contracts": 1669865
+     },
+     "sell": {
+      "prints": 278475,
+      "contracts": 1729777
+     },
+     "unknown": {
+      "prints": 118088,
+      "contracts": 996585
+     },
+     "total": {
+      "prints": 659584,
+      "contracts": 4396227
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 263021,
+      "contracts": 1669865
+     },
+     "sell": {
+      "prints": 278475,
+      "contracts": 1729777
+     },
+     "unknown": {
+      "prints": 118088,
+      "contracts": 996585
+     },
+     "total": {
+      "prints": 659584,
+      "contracts": 4396227
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 659584,
+    "same_side": 659584,
+    "side_pairs": {}
+   },
+   "screen_at_close": {
+    "window_ms": [
+     1790711796299,
+     1790711999436
+    ],
+    "window_et": [
+     "15:56:36.299",
+     "15:59:59.436"
+    ],
+    "display": {
+     "buy": {
+      "prints": 754,
+      "contracts": 11146
+     },
+     "sell": {
+      "prints": 838,
+      "contracts": 7419
+     },
+     "unknown": {
+      "prints": 440,
+      "contracts": 5684
+     },
+     "total": {
+      "prints": 2032,
+      "contracts": 24249
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 754,
+      "contracts": 11146
+     },
+     "sell": {
+      "prints": 839,
+      "contracts": 7420
+     },
+     "unknown": {
+      "prints": 440,
+      "contracts": 5684
+     },
+     "total": {
+      "prints": 2033,
+      "contracts": 24250
+     }
+    },
+    "display_only": 0,
+    "audit_only": 1,
+    "joined": 2032,
+    "same_side": 2032,
+    "side_pairs": {},
+    "note": "the 2,048 rows retained when the last print arrived, against the audit over the same provider-time span"
+   }
+  },
+  "display_only_reasons": {},
+  "audit_only": 0
+ },
+ {
+  "day": "2026-10-01",
+  "manifest": "moo144/tradier/2026-10-01/manifest-66314af0dcf4.json",
+  "session": [
+   "2026-10-01T09:30:00-04:00",
+   "2026-10-01T16:00:00-04:00"
+  ],
+  "audit_matches_oa180_results": true,
+  "windows": {
+   "full_session": {
+    "window_ms": [
+     1790861400000,
+     1790884800000
+    ],
+    "window_et": [
+     "09:30:00.000",
+     "16:00:00.000"
+    ],
+    "display": {
+     "buy": {
+      "prints": 257267,
+      "contracts": 1719670
+     },
+     "sell": {
+      "prints": 271975,
+      "contracts": 1695914
+     },
+     "unknown": {
+      "prints": 109813,
+      "contracts": 977012
+     },
+     "total": {
+      "prints": 639055,
+      "contracts": 4392596
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 257267,
+      "contracts": 1719670
+     },
+     "sell": {
+      "prints": 271975,
+      "contracts": 1695914
+     },
+     "unknown": {
+      "prints": 109813,
+      "contracts": 977012
+     },
+     "total": {
+      "prints": 639055,
+      "contracts": 4392596
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 639055,
+    "same_side": 639055,
+    "side_pairs": {}
+   },
+   "screen_at_close": {
+    "window_ms": [
+     1790884681265,
+     1790884799898
+    ],
+    "window_et": [
+     "15:58:01.265",
+     "15:59:59.898"
+    ],
+    "display": {
+     "buy": {
+      "prints": 756,
+      "contracts": 5525
+     },
+     "sell": {
+      "prints": 792,
+      "contracts": 13484
+     },
+     "unknown": {
+      "prints": 500,
+      "contracts": 5533
+     },
+     "total": {
+      "prints": 2048,
+      "contracts": 24542
+     }
+    },
+    "audit": {
+     "buy": {
+      "prints": 756,
+      "contracts": 5525
+     },
+     "sell": {
+      "prints": 792,
+      "contracts": 13484
+     },
+     "unknown": {
+      "prints": 500,
+      "contracts": 5533
+     },
+     "total": {
+      "prints": 2048,
+      "contracts": 24542
+     }
+    },
+    "display_only": 0,
+    "audit_only": 0,
+    "joined": 2048,
+    "same_side": 2048,
+    "side_pairs": {},
+    "note": "the 2,048 rows retained when the last print arrived, against the audit over the same provider-time span"
+   }
+  },
+  "display_only_reasons": {},
+  "audit_only": 0
+ }
+]

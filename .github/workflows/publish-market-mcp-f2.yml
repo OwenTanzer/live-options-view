@@ -1,0 +1,153 @@
+name: Publish reviewed F2 live windows market MCP image
+
+# Builds only reviewed integrated source 044139d3 from master after merge.
+# No push/merge auto-publication. Historical release workflows are preserved.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/publish-market-mcp-f2.yml
+      - .github/scripts/market_mcp_f2_guard.py
+      - .github/scripts/test_market_mcp_f2_guard.py
+      - .github/scripts/market_mcp_source_guard.py
+      - .github/scripts/test_market_mcp_source_guard.py
+      - .github/scripts/market_mcp_tag_guard.py
+      - .github/scripts/test_market_mcp_tag_guard.py
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed Renaissance commit (must equal ACCEPTED_SOURCE_SHA)
+        required: true
+        type: string
+        default: 044139d38f268d800c1c7e72c00f413ab199ece4
+
+permissions: {}
+
+concurrency:
+  group: publish-market-mcp-f2
+  cancel-in-progress: false
+
+env:
+  ACCEPTED_SOURCE_SHA: 044139d38f268d800c1c7e72c00f413ab199ece4
+  REVIEWED_BASE_SHA: 3b6b8e1b5a978e85de39d7db42496ee0bd37e2a3
+
+jobs:
+  guard-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out publisher for read-only tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test source, release and registry guards
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_market_mcp_source_guard.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_market_mcp_tag_guard.py' -v
+          python3 -m unittest discover -s .github/scripts -p 'test_market_mcp_f2_guard.py' -v
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'OwenTanzer/live-options-view' && github.ref == 'refs/heads/master'
+    needs: guard-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      IMAGE: ghcr.io/owentanzer/market-mcp-read-only
+      RELEASE_TAG: 044139d38f268d800c1c7e72c00f413ab199ece4-run-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Require the pinned accepted source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_SHA" = "$ACCEPTED_SOURCE_SHA"
+          printf 'Publishing reviewed Renaissance source %s\n' "$SOURCE_SHA"
+      - name: Check out reviewed publisher from master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: publisher
+          persist-credentials: false
+      - name: Check out exact reviewed Renaissance commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce reviewed base, ancestry, cleanliness and exact reviewed paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C source fetch --no-tags origin master
+          python3 publisher/.github/scripts/market_mcp_f2_guard.py \
+            --repo source \
+            --sha "$SOURCE_SHA" \
+            --base "$REVIEWED_BASE_SHA" \
+            --master-ref FETCH_HEAD
+      - name: Use Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Set up Python 3.11
+        # Mirrors Collector CI (.github/workflows/collector-ci.yml) exactly:
+        # setup-python@v5, Python 3.11, then the shared producer
+        # requirements. The one addition is pytest, pinned to the
+        # MSI-verified 9.1.1: pytest appears nowhere else in the repo and
+        # deployment/python/requirements.txt has no pytest, yet the step
+        # below invokes `python3 -m pytest`. Without this step that
+        # invocation fails on a fresh ubuntu-latest runner (no pytest).
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bounded Python dependencies
+        working-directory: source
+        run: |
+          python3 -m pip install -r deployment/python/requirements.txt
+          python3 -m pip install pytest==9.1.1
+      - name: Check approved Renaissance source
+        working-directory: source
+        run: |
+          node --test market_mcp/*.test.js
+          node market_mcp/smoke.js --out market-mcp-fixture-smoke.json
+          node market_mcp/production-smoke.js --out market-mcp-production-smoke.json
+          node --max-old-space-size=256 market_mcp/load.js --out market-mcp-production-load.json
+          python3 -m pytest tests -q -k oa203_windows
+          python3 -m pytest tests/test_market_readings.py -q
+      - name: Build commit-tagged image
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          docker build -f market_mcp/Dockerfile \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/OwenTanzer/live-options-view" \
+            -t "$IMAGE:$RELEASE_TAG" .
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SOURCE_SHA"
+      - name: Verify exact image without network access
+        shell: bash
+        working-directory: source
+        run: bash market_mcp/verify-image.sh "$IMAGE:$RELEASE_TAG"
+      - name: Log in to existing GitHub container package
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require explicit registry absence for this run's unique tag
+        run: python3 publisher/.github/scripts/market_mcp_tag_guard.py
+      - name: Publish run-tagged image and verify immutable digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$IMAGE:$RELEASE_TAG"
+          push_output="$(docker push "$image")"
+          digest="$(printf '%s\n' "$push_output" | sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' | tail -n 1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          tag_digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)"
+          pinned_digest="$(docker buildx imagetools inspect "$IMAGE@$digest" --format '{{json .Manifest}}' | jq -r .digest)"
+          test "$tag_digest" = "$digest"
+          test "$pinned_digest" = "$digest"
+          printf 'Published %s@%s from %s\n' "$IMAGE" "$digest" "$SOURCE_SHA"
+          printf 'Image: `%s@%s`\nRun-specific tag: `%s`\nSource commit: `%s`\nTags are not registry-enforced immutable; deploy by digest.\n' "$IMAGE" "$digest" "$RELEASE_TAG" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"

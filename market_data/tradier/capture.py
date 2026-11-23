@@ -49,6 +49,7 @@ def capture_session(
     now_et: Callable[[], datetime] = lambda: datetime.now(ET),
     result: CaptureResult | None = None,
     session_open: datetime | None = None,
+    recent=None,
 ) -> CaptureResult:
     """Run the stream-read loop until session close, a lost lease, or an
     exhausted spool.
@@ -117,7 +118,10 @@ def capture_session(
                             "reconnect": result.reconnects,
                             "outage_seconds": round(outage_seconds, 3),
                         }
-                        spool.write(stats.observe(resumed))
+                        resumed = stats.observe(resumed)
+                        spool.write(resumed)
+                        if recent is not None:
+                            recent.observe(resumed)
                         print(json.dumps({"event": "stream_reconnect_resumed", **resumed}), flush=True)
                         gap_open = False
                         gap_started_at = None
@@ -177,7 +181,10 @@ def capture_session(
                                              "provider_payload": event})
                                 stats.observe_excluded(event, reason)
                                 continue
-                    spool.write(stats.observe(event))
+                    observed = stats.observe(event)
+                    spool.write(observed)
+                    if recent is not None:
+                        recent.observe(observed)
                 if stop_requested() or now_et() >= session_close:
                     break
                 raise requests.ConnectionError("Tradier stream ended cleanly before session close")

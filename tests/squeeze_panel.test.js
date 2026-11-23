@@ -42,14 +42,23 @@ const finished = {run_id:'morning',status:'finished',acquisition_status:'complet
 const reset = () => { responses = {'latest.json':response(morning),'latest-attempt.json':response(morning),
   'latest-schedule.json':response(finished),'squeeze-calendar.json':response(calendar)}; };
 (async () => {
+  responses = { 'latest.json': new Error('offline') };
+  await panel.fetchSqueezeLatest();
+  assert.equal(el('squeeze-status').dataset.state, 'unavailable');
+  assert.doesNotMatch(el('squeeze-status').textContent, /showing last known/);
+  assert.match(el('squeeze-tbody').innerHTML, /Scan unavailable/);
   reset(); await panel.fetchSqueezeLatest();
   assert.equal(el('squeeze-status').dataset.state,'live');
   assert.match(el('squeeze-tbody').innerHTML,/AAA/);
   assert.match(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  // Scores are bars on the scanner's fixed 0-1 scale, with the number kept beside them.
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:56%"><\/span><\/span><span class="squeeze-num">0\.560</);
+  assert.match(el('squeeze-tbody').innerHTML,/<span style="width:60%">/);
   assert.equal(el('squeeze-warning').textContent,'');
   assert.ok(calls.filter(([u]) => !u.startsWith('/squeeze-calendar')).every(([u])=>u.includes('/v1/scheduled/')));
   assert.ok(calls.every(([,o])=>o.cache==='no-store'));
   panel.now='2026-09-23T16:12:00Z';
+  const calendarReads = calls.filter(([url]) => url.startsWith('/squeeze-calendar')).length;
   for (const status of ['missed','interrupted','claimed']) {
     responses['latest-schedule.json']=response({status,scheduled_for:'2026-09-23T16:00:00Z'});
     await panel.fetchSqueezeLatest();
@@ -57,6 +66,7 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
     assert.match(el('squeeze-warning').textContent,status==='claimed'?/awaiting publication/:new RegExp(status));
     assert.match(el('squeeze-tbody').innerHTML,/AAA/);
   }
+  assert.equal(calls.filter(([url]) => url.startsWith('/squeeze-calendar')).length, calendarReads);
   responses['latest-schedule.json']=response({status:'finished',acquisition_status:'partial',scheduled_for:'2026-09-23T16:00:00Z'});
   responses['latest-attempt.json']=response({status:'partial',started_at:'2026-09-23T16:00:02Z'});
   await panel.fetchSqueezeLatest();assert.match(el('squeeze-warning').textContent,/partial/);
@@ -89,5 +99,7 @@ const reset = () => { responses = {'latest.json':response(morning),'latest-attem
   panel.now='2026-09-24T12:00:00Z';await panel.fetchSqueezeLatest();
   assert.equal(el('squeeze-status').dataset.state,'stale');
   assert.doesNotMatch(el('squeeze-tbody').innerHTML,/squeeze-new-badge/);
+  assert.equal(el('squeeze-caption').textContent,'Earlier session — results from the 2026-09-23 scan (New York)',
+    'a prior-session shortlist is captioned with its scan date and marked as earlier');
   console.log('PASS scheduled panel: atomic fetches, concurrency, statuses, rows, escaping and prior-session badges');
 })().catch(e=>{console.error(e);process.exitCode=1;});

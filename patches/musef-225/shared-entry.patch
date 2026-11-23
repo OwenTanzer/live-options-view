@@ -1,0 +1,11 @@
+diff --git a/backend/index.js b/backend/index.js
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -94,6 +94,7 @@ export default {
+       return handleLiveQuotes(url, env);
+     }
+
++    if (!env.ASSETS) return new Response('Not found', { status: 404 });
+     const response = await env.ASSETS.fetch(request);
+
+     // HTML documents (the single-file app + diagnostic page) must never be

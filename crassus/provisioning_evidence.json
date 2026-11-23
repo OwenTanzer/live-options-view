@@ -1,0 +1,53 @@
+{
+  "schema": "provisioning_evidence.v1",
+  "entries": {
+    "CRASSUS_PW_OIF_BASELINE": {
+      "provisioned_at": "2026-11-15",
+      "by": "Steve",
+      "ticket": "OA-236",
+      "note": "Runner variable provisioned with deploy skipped and presence read back. Exact non-mutating Worker registration preflight passed."
+    },
+    "CRASSUS_PW_OIF_STOP35": {
+      "provisioned_at": "2026-11-15",
+      "by": "Steve",
+      "ticket": "OA-236",
+      "note": "Runner variable provisioned with deploy skipped and presence read back. Exact non-mutating Worker registration preflight passed."
+    },
+    "CRASSUS_PW_OIF_PROTECT": {
+      "provisioned_at": "2026-11-15",
+      "by": "Steve",
+      "ticket": "OA-236",
+      "note": "Runner variable provisioned with deploy skipped and presence read back. Exact non-mutating Worker registration preflight passed."
+    },
+    "CRASSUS_PW_OIF_RECOVER": {
+      "provisioned_at": "2026-11-15",
+      "by": "Steve",
+      "ticket": "OA-236",
+      "note": "Runner variable provisioned with deploy skipped and presence read back. Exact non-mutating Worker registration preflight passed."
+    },
+    "CRASSUS_PW_OA233": {
+      "by": "Chej",
+      "ticket": "OA-233",
+      "provisioned_at": "2026-11-15",
+      "note": "Verified variable present on production crassus-runner."
+    },
+    "CRASSUS_PW_OIF_IBIT_BASELINE": {
+      "provisioned_at": "2026-11-20",
+      "by": "Steve",
+      "ticket": "PR-277",
+      "note": "Railway stdin secret set with deploy skipped and secure readback matched. Explicit simulator registration returned 201; authenticated /api/me confirmed $10000 and zero trades. No orders."
+    },
+    "CRASSUS_PW_OIF_IBIT_PROTECT": {
+      "provisioned_at": "2026-11-20",
+      "by": "Steve",
+      "ticket": "PR-277",
+      "note": "Railway stdin secret set with deploy skipped and secure readback matched. Explicit simulator registration returned 201; authenticated /api/me confirmed $10000 and zero trades. No orders."
+    },
+    "CRASSUS_PW_OIF_IBIT_RECOVER": {
+      "provisioned_at": "2026-11-20",
+      "by": "Steve",
+      "ticket": "PR-277",
+      "note": "Railway stdin secret set with deploy skipped and secure readback matched. Explicit simulator registration returned 201; authenticated /api/me confirmed $10000 and zero trades. No orders."
+    }
+  }
+}
