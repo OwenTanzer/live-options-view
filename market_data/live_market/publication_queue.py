@@ -8,8 +8,9 @@ import json
 import re
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from ..overview.readings import finish_publication, readings_digest
 from .config import log
 from .one_clock import publish_snapshot
 from .publications import EVIDENCE_BYTES, _missing
@@ -46,7 +47,7 @@ class PublicationQueue:
 
     def enqueue(self, payload, provenance, csv_bytes):
         snapshot_key = payload["snapshot_key"]
-        pending = {"payload": payload, "provenance": provenance,
+        pending = {"first_attempt_at": None, "payload": payload, "provenance": provenance,
                    "csv_sha256": hashlib.sha256(csv_bytes).hexdigest()}
         raw = encode(pending)
         if len(raw) > 2 * EVIDENCE_BYTES:
@@ -57,8 +58,22 @@ class PublicationQueue:
                                ContentType="application/json", IfNoneMatch="*")
         except Exception:
             # Resolve a lost acknowledgement against the serialized item.
-            existing, _ = read(self.s3, self.bucket, key, len(raw))
-            if existing != raw:
+            try:
+                existing, _ = read(self.s3, self.bucket, key, 2 * EVIDENCE_BYTES)
+            except Exception as read_error:
+                if not _missing(read_error):
+                    raise
+                # Another in-flight wake may already have finished this job.
+                meta_key = snapshot_key[:-4] + ".provenance.json"
+                final, _ = read(self.s3, self.bucket, meta_key, EVIDENCE_BYTES)
+                receipt = json.loads(final)
+                if receipt.get("snapshot_key") == snapshot_key and receipt.get("one_clock_publication"):
+                    return
+                raise
+            restored = json.loads(existing)
+            if "first_attempt_at" in restored:
+                restored["first_attempt_at"] = None
+            if encode(restored) != raw:
                 raise ValueError("pending snapshot collision")
         self.wake.set()
 
@@ -67,7 +82,7 @@ class PublicationQueue:
         if not page.get("Contents"):
             return False
         key = page["Contents"][0]["Key"]
-        raw, _ = read(self.s3, self.bucket, key, 2 * EVIDENCE_BYTES)
+        raw, metadata = read(self.s3, self.bucket, key, 2 * EVIDENCE_BYTES)
         pending = json.loads(raw)
         payload, provenance = pending["payload"], pending["provenance"]
         csv_key = payload["snapshot_key"]
@@ -80,6 +95,18 @@ class PublicationQueue:
         csv, _ = read(self.s3, self.bucket, csv_key, EVIDENCE_BYTES)
         if hashlib.sha256(csv).hexdigest() != pending["csv_sha256"]:
             raise ValueError("archived CSV differs from queued snapshot")
+        # Older queued jobs already carry exact prepared envelopes. Changing
+        # their bytes could conflict with a previously saved immutable intent.
+        if "first_attempt_at" in pending:
+            if pending["first_attempt_at"] is None:
+                pending["first_attempt_at"] = datetime.now(timezone.utc).isoformat()
+                self.s3.put_object(Bucket=self.bucket, Key=key, Body=encode(pending),
+                                   ContentType="application/json", IfMatch=metadata["ETag"])
+            readings = payload["market_readings"]
+            finish_publication(readings, published_at=datetime.fromisoformat(pending["first_attempt_at"]),
+                               status="published")
+            provenance["market_readings"] = readings
+            payload["market_readings_digest"] = provenance["market_readings_digest"] = readings_digest(readings)
         publication = publish_snapshot(self.s3, self.bucket, payload, csv)
         payload["one_clock_publication"] = provenance["one_clock_publication"] = publication
         published = self.advance_latest(self.lane.latest_key, payload)
@@ -109,7 +136,12 @@ class PublicationQueue:
             if existing.get("snapshot_key") == payload["snapshot_key"]:
                 if existing.get("one_clock_publication") != payload["one_clock_publication"]:
                     raise ValueError("latest publication identity mismatch")
-                return response["LastModified"].isoformat()
+                # S3 Last-Modified can be rounded down to a whole second.
+                # Use a confirmed upper bound when recovering a lost PUT ack.
+                modified = response["LastModified"]
+                if not modified.microsecond:
+                    modified = min(datetime.now(timezone.utc), modified + timedelta(seconds=1))
+                return modified.isoformat()
             if datetime.fromisoformat(existing["timestamp"]) >= datetime.fromisoformat(payload["timestamp"]):
                 return None
             condition = {"IfMatch": response["ETag"]}

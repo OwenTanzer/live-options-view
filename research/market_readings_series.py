@@ -63,6 +63,9 @@ def _rows(sidecar: dict, digest_status: str) -> list[dict]:
         "published_at": sidecar.get("latest_published_at"),
         "snapshot_constructed_at": sidecar.get("constructed_at"),
     }
+    queued = sidecar.get("market_readings_availability_basis") == "confirmed_latest_publication"
+    confirmed = (sidecar.get("latest_published_at")
+                 if (sidecar.get("publication") or {}).get("status") == "published" else None)
     rows = []
     if isinstance(readings, list) and readings:
         for reading in readings:
@@ -76,7 +79,7 @@ def _rows(sidecar: dict, digest_status: str) -> list[dict]:
                 "freshness": (reading.get("freshness") or {}).get("status"),
                 "observed_at": reading.get("observed_at"),
                 "calculated_at": reading.get("calculated_at"),
-                "reading_published_at": reading.get("published_at"),
+                "reading_published_at": confirmed if queued else reading.get("published_at"),
                 "values": reading.get("values"),
                 "units": reading.get("units"),
                 "parameters": (reading.get("calculation") or {}).get("parameters"),

@@ -128,8 +128,11 @@ queue; capture continues. The pending key in logs identifies the instrument.
 Only the active producer may own these writes. A rollback stops the new workers
 and leaves any outstanding R2 items for later recovery.
 
-Retain the observation timestamp for market chronology. An individual reading's
-stamp is the publication attempt timestamp. Use the immutable entry's R2 upload
+Retain the observation timestamp for market chronology. Queued readings have a null
+publication stamp. On the first worker attempt the queue durably freezes its
+timestamp before preparing immutable bytes. The prepared reading stamp is the
+first attempt, including on delayed retries. The research export reports the
+confirmed latest publication time for queued readings, or null until confirmed. Use the immutable entry's R2 upload
 time for native availability and the successful latest write recorded in the
 final sidecar for compatibility-view availability. A pending sidecar establishes
 archive capture only.

@@ -289,6 +289,16 @@ class PendingQueueTests(unittest.TestCase):
         from market_data.live_market import market, state
         from market_data.live_market.publication_queue import PublicationQueue
 
+        from research.market_readings_series import collect
+        from market_data.overview.readings import readings_digest
+        now = datetime(2026, 11, 20, 16, 0, tzinfo=timezone.utc)
+        worker_time = now + timedelta(minutes=3)
+        class WorkerClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return worker_time.astimezone(tz)
+        self.enterContext(patch("market_data.live_market.publication_queue.datetime", WorkerClock))
+
         class QueueStore(Store):
             def list_objects_v2(self, *, Bucket, Prefix, MaxKeys):
                 keys = sorted(k for k in self.data if k.startswith(Prefix))
@@ -298,9 +308,8 @@ class PendingQueueTests(unittest.TestCase):
                 del self.data[Key]
 
             def get_object(self, **kwargs):
-                return {**super().get_object(**kwargs), "LastModified": datetime.now(timezone.utc)}
+                return {**super().get_object(**kwargs), "LastModified": worker_time}
 
-        now = datetime(2026, 11, 20, 16, 0, tzinfo=timezone.utc)
         s = QueueStore()
         queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
         counters, tracker = state.Counters(), state.SnapshotTracker()
@@ -313,6 +322,11 @@ class PendingQueueTests(unittest.TestCase):
                                      counters, tracker, us, publication_queue=queue,
                                      capture=(instant, feed.get_state()))
         capture(now)
+        first_sidecar = next(key for key in s.data if key.endswith(".provenance.json"))
+        pending = json.loads(s.data[first_sidecar])
+        self.assertTrue(all(r["publication"]["status"] == "pending" and r["published_at"] is None
+                            for r in pending["market_readings"]))
+        self.assertTrue(all(r["reading_published_at"] is None for r in collect([(first_sidecar, pending)])))
         stalled, release = Event(), Event()
         def block_entry(key):
             if "/entries/" in key:
@@ -333,6 +347,8 @@ class PendingQueueTests(unittest.TestCase):
         self.assertNotIn(us.latest_key, s.data)
         self.assertEqual(len([k for k in s.data if k.startswith(queue.prefix)]), 2)
 
+        self.assertEqual(json.loads(s.data[first_sidecar]), pending)
+        worker_time += timedelta(minutes=7)
         queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
         s.before = None
         def lose_ack(key):
@@ -359,7 +375,14 @@ class PendingQueueTests(unittest.TestCase):
             self.assertEqual(sidecar["market_readings_digest"], row["market_readings_digest"])
             self.assertEqual(sidecar["publication"]["status"], "published")
             self.assertEqual(sidecar["constructed_at"], row["timestamp"])
-            self.assertIsNotNone(sidecar["latest_published_at"])
+            self.assertEqual(sidecar["latest_published_at"], worker_time.isoformat())
+            expected_attempt = now + timedelta(minutes=3) if row is first else worker_time
+            self.assertTrue(all(r["published_at"] == expected_attempt.isoformat() for r in row["market_readings"]))
+            entry = json.loads(s.data[row["one_clock_publication"]["key"]])
+            immutable = json.loads(s.data[entry["evidence"][1]["key"]])
+            self.assertEqual(immutable["market_readings"], row["market_readings"])
+            self.assertEqual(readings_digest(immutable["market_readings"]), sidecar["market_readings_digest"])
+            self.assertTrue(all(r["reading_published_at"] == worker_time.isoformat() for r in collect([(key, sidecar)])))
 
 if __name__ == "__main__":
     unittest.main()

@@ -591,8 +591,11 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     # The payload is only observable if the write succeeds, so its readings
     # carry the publication attempt time as `published_at`; a failed write
     # leaves no payload and the sidecar records `archived_unpublished`.
-    publication_time = datetime.now(timezone.utc)
-    finish_publication(readings, published_at=publication_time, status="published")
+    deferred = publication_queue is not None and ONE_CLOCK_PUBLICATIONS
+    publication_time = None if deferred else datetime.now(timezone.utc)
+    finish_publication(readings, published_at=publication_time,
+                       status="pending" if deferred else "published",
+                       reason="awaiting_one_clock" if deferred else None)
     readings_sha = readings_digest(readings)
     provenance["market_readings_digest"] = readings_sha
 
@@ -625,16 +628,18 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         payload["subscription_coverage"] = _spy_subscription_coverage(
             us.subscription_coverage, _fresh_spy_spot(quote, ts_utc)[0])
 
-    if publication_queue is not None and ONE_CLOCK_PUBLICATIONS:
+    if deferred:
         # Persist the exact payload and CSV digest before returning to capture.
         # The sidecar can report pending while the publisher is catching up.
+        provenance["market_readings_availability_basis"] = "confirmed_latest_publication"
         provenance["publication"] = {"status": "pending", "reason": "awaiting_one_clock"}
         _put_snapshot_provenance(s3, provenance)
         try:
             publication_queue.enqueue(payload, provenance, csv_buf.getvalue().encode())
         except Exception:
-            provenance["publication"] = {"status": "archived_unpublished", "reason": "outbox_write_failed"}
-            _put_snapshot_provenance(s3, provenance)
+            # An ambiguous write may already be in flight. Leave the pending
+            # sidecar (or a concurrent successful finalization) intact.
+            log.error("Could not confirm queued publication %s", csv_key)
             counters.inc_failure()
             raise
         return
