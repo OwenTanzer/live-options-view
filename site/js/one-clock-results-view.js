@@ -1,3 +1,4 @@
+import {renderEncounterSummary} from './one-clock-encounter-summary.js';
 import {projectResults,compareResults,ruleKey} from '../shared/one-clock-results.js';
 const el=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);return node;};
 const number=value=>value==null?'—':typeof value==='number'?value.toLocaleString(undefined,{maximumFractionDigits:4}):JSON.stringify(value);
@@ -28,6 +29,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
   comparisonSelect('a','Group A',[['','Choose A']]);comparisonSelect('b','Group B',[['','Choose B']]);comparisonSelect('category','Category rate',[['','Choose category']]);
   const comparisonText=el('p');comparisonText.className='muted';comparison.append(comparisonText);
   panel.append(scope);container.after(distribution,comparison);
+  const encounterTable=el('div');encounterTable.className='table-wrap';distribution.before(encounterTable);
   let dataset=null,view=null,lastOwner=null,outcomeChosen=false;
   function drawComparison() {
     comparisonText.textContent='Choose two groups with the same measurement and horizon.';
@@ -47,6 +49,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       view=projectResults({...dataset,outcome,filters:{ruleKeys:controls.class.value?[controls.class.value]:[],
         instruments:controls.instrument.value?[controls.instrument.value]:[],collections:controls.collection.value?[controls.collection.value]:[],
         states:controls.state.value?[controls.state.value]:[],query:search.value}});
+      renderEncounterSummary(encounterTable,view.rows.map(r=>r.event),dataset.rules.filter(r=>!controls.class.value||ruleKey(r)===controls.class.value));
       const s=view.summary;
       scope.textContent=`${view.origin} evidence · ${s.occurrences} matching rows from ${dataset.events.length} loaded occurrences at ${new Date(view.cutoff).toISOString()}. Statistics use measured outcomes only; incompatible or absent measurements are counted separately.`;
       stats.replaceChildren(...[['Occurrences',s.occurrences],['Sessions',s.sessions],['Measured',s.measured],['Pending',s.pending],['Missing',s.missing],['Unscored',s.unscored],['Mean',number(s.mean)],['Median',number(s.median)]].map(([name,value])=>{
@@ -54,7 +57,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       }));
       ledger.replaceChildren(...view.rows.map(({event,outcome})=>{
         const tr=el('tr'),definition=dataset.rules.find(r=>ruleKey(r)===ruleKey(event));
-        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}`,new Date(event.triggeredAt).toISOString(),
+        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,new Date(event.triggeredAt).toISOString(),
           event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.collection??'replay',
           outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
@@ -68,14 +71,14 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       const groups=new Map();for(const {event} of view.rows){const value=compare.field.value==='rule'?ruleKey(event):event[compare.field.value]??'replay';groups.set(value,compare.field.value==='rule'?`${event.ruleId} v${event.ruleVersion}`:value);}
       options(compare.a,[['','Choose A'],...groups]);options(compare.b,[['','Choose B'],...groups]);
       options(compare.category,[['','Choose category'],...s.categories.map(c=>[JSON.stringify(c.value),`${typeof c.value}: ${JSON.stringify(c.value)}`])]);drawComparison();
-    }catch(error){stats.textContent='';ledger.replaceChildren();distribution.replaceChildren();comparisonText.textContent='';scope.textContent=error.message;}
+    }catch(error){encounterTable.replaceChildren();stats.textContent='';ledger.replaceChildren();distribution.replaceChildren();comparisonText.textContent='';scope.textContent=error.message;}
   }
   const filterChanged=()=>{onFilter?.();draw();};
   for(const control of Object.values(controls))control.onchange=filterChanged;search.oninput=filterChanged;
   controls.outcome.onchange=()=>{outcomeChosen=true;filterChanged();};
   compare.field.onchange=draw;for(const id of ['a','b','category'])compare[id].onchange=drawComparison;
   return {
-    clear({forget=false}={}){dataset=null;view=null;panel.hidden=true;comparison.hidden=true;stats.textContent='';ledger.replaceChildren();distribution.replaceChildren();scope.textContent='';comparisonText.textContent='';
+    clear({forget=false}={}){dataset=null;view=null;encounterTable.replaceChildren();panel.hidden=true;comparison.hidden=true;stats.textContent='';ledger.replaceChildren();distribution.replaceChildren();scope.textContent='';comparisonText.textContent='';
       if(forget){for(const id of ['class','outcome','instrument'])options(controls[id],[['','No loaded results']]);for(const id of ['a','b','category'])options(compare[id],[['','Choose a group']]);controls.collection.value='';controls.state.value='';search.value='';lastOwner=null;outcomeChosen=false;}},
     update(value){
       const owner=value.owner??'fixture';if(lastOwner!==null&&lastOwner!==owner)this.clear({forget:true});lastOwner=owner;

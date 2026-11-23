@@ -151,6 +151,10 @@ export async function publicChainAt(env,selection) {
   catch { legacy={rows:[],coverage:{reason:'legacy-chain-unavailable'}}; }
   if(legacy.rows[0]?.eventAt>selected.eventAt) return legacy;
   const coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified',legacyCoverage:legacy.coverage};
+  return verifiedNativeChain(env.PAPER_TRADES, selection, selected, coverage);
+}
+export async function verifiedNativeChain(bucket,{session,instrument,cutoff},selected,coverage={reason:null,availabilityBasis:'immutable-publication',digestVerification:'verified'}) {
+  const stream='collector-chain/'+instrument;
   const refs=selected.details.evidence;
   const spot=selected.value?.spot??null;
   if(selected.value===null && !refs.some(ref=>['collector.snapshot.csv.v1','collector.snapshot.payload.v1'].includes(ref.schema)))
@@ -162,9 +166,9 @@ export async function publicChainAt(env,selection) {
     const [ref]=matches;
     if(!/^[a-f0-9]{64}$/.test(ref.sha256) || ref.key!=='publications/v1/'+stream+'/blobs/'+ref.sha256 ||
        ref.bytes<1 || ref.bytes>MAX_OBJECT) throw new Error('invalid native chain evidence');
-    const object=await env.PAPER_TRADES.get(ref.key);
+    const object=await bucket.get(ref.key);
     if(!object || object.size!==ref.bytes) throw new Error('native chain evidence size');
-    const bytes=new Uint8Array(await object.arrayBuffer());
+    const bytes=typeof object.arrayBuffer==='function' ? new Uint8Array(await object.arrayBuffer()) : new TextEncoder().encode(await object.text());
     if(bytes.length!==ref.bytes || await publicationDigest(bytes)!==ref.sha256) throw new Error('native chain evidence digest');
     return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
   }
@@ -182,7 +186,7 @@ export async function publicChainAt(env,selection) {
   return {coverage,rows:[observation({source:'chain',id:selected.id,revision:selected.revision,session,instrument,origin:'recorded',
     eventAt,availableAt:selected.availableAt,evidence:selected.evidence,
     details:{availabilityBasis:coverage.availabilityBasis,digestVerification:coverage.digestVerification,sequence:selected.details.sequence},
-    value:{symbol:instrument,date:session,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
+    value:{symbol:instrument,date:session,tier:payload.tier,expiration:expirations[0],timestamp,snapshot_time:timestamp,snapshot_key:csvKey,
       underlying_price:spot,rows:spot===null?rows.map(row=>({...row,UnderlyingPrice:null})):rows,market_readings:(payload.market_readings??[]).map(r=>readingProjection(r,{cutoff,instrument,csvKey,eventAt})).filter(Boolean)}})]};
 }
 export async function handleOneClockChain(request,env,url) {

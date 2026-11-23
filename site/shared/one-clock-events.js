@@ -47,6 +47,10 @@ export function eventRule(input) {
   });
   if (rule.levelEncounter !== undefined) {
     validateEncounter(rule.levelEncounter);
+    if(rule.instruments.length!==1 || rule.instruments[0]!=='QQQ' || rule.conditions.length!==1 ||
+      rule.conditions[0].source!=='oi-levels' || rule.conditions[0].field!=='qualified' ||rule.conditions[0].op!=='==' || rule.conditions[0].value!==true)
+      throw new Error('Invalid calibrated OI study input');
+    if(rule.combine!=='all' || rule.transition!=='rising' || rule.missingInput!=='reset')throw new Error('Invalid encounter transition');
     if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='price' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
   }
   return immutable(rule);

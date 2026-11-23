@@ -1,3 +1,4 @@
+import {replayEncounter} from './one-clock-encounter-replay.js';
 import {fanoutChanges,snapshotVersion,generationWrites,finishHistory} from './one-clock-reevaluation.js';
 import { requireSession,checkOrigin,readJsonBody,jsonResponse } from './common.js';
 import { cutoverFenceActive } from './fence.js';
@@ -60,6 +61,7 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
     const parsed=await readJsonBody(request);if(parsed.error)return parsed.error;
     const body=parsed.body,now=Date.now();
+    if(body?.action==='replay-encounters')return jsonResponse(await replayEncounter(env,namespace,body,now));
     if(body?.action==='save') {
       const rule=validatedRule(body.rule);
       await registerObservedRule(db,{namespace,rule,registeredAt:now});

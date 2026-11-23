@@ -54,7 +54,7 @@ export function encounterEvents(rule, rows, selection, close, activationWindows)
         const admitted=!activationWindows || activationWindows.some(w=>at>=w.started_at && (w.ended_at===null || at<w.ended_at));
         if(admitted && (config.approach==='either'||config.approach===approach) && from!==to) {
           for(const [strike,flag] of flags) {
-            if(flag.row.availableAt>prevTime || from===strike || (from-strike)*(to-strike)>0) continue;
+            if(flag.row.availableAt>previous.availableAt || from===strike || (from-strike)*(to-strike)>0) continue;
             const contact=to===strike?'exact':'bracketed';
             if(!config.groups.includes(flag.group) || (config.contact==='exact' && contact!=='exact')) continue;
             events.push(makeEvent(rule,selection,previous,row,flag,strike,approach,contact));

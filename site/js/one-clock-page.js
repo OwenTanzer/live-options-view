@@ -1,3 +1,4 @@
+import {encounterForm} from './one-clock-encounter-form.js';
 import { createClock, createSourceRegistry, selectAsOf,observation } from '../shared/one-clock.js';
 import { eventRule, saveRule, evaluateEvents } from '../shared/one-clock-events.js';
 import { demoRules, demoRows, demoStart, demoClose, demoSelection, demoSources } from '../shared/one-clock-demo.js';
@@ -6,6 +7,7 @@ import {ruleKey} from '../shared/one-clock-results.js';
 import {loadFlowStudy} from '../shared/one-clock-flow-study.js';
 
 const $ = id => document.getElementById(id);
+const levelForm=encounterForm(document);
 const archiveMode = new URLSearchParams(location.search).get('dataset') === 'order-flow';
 const dataset = $('offline-dataset');
 dataset.value=archiveMode?'order-flow':'synthetic';
@@ -116,6 +118,8 @@ function comparisonValue(value) {
   return value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : value;
 }
 function formRule() {
+  const level=levelForm.definition();
+  if(level)return eventRule({id:editing.id,version:editing.version,name:$('rule-name').value,...level});
   return eventRule({ ...(editing.archiveHandoff ? {archiveHandoff:editing.archiveHandoff} : {}), id: editing.id, version: editing.version, name: $('rule-name').value,
     instruments: [$('instrument').value], combine: $('combine').value, transition: $('transition').value, missingInput: $('missing').value,
     conditions: [...$('conditions').children].map(row => ({ source: get(row,'source'), field: get(row,'field'), op: get(row,'op'),
@@ -135,6 +139,8 @@ function versionOptions() {
 }
 function openRule(rule) {
   editing = rule;
+  levelForm.open(rule);
+  $('archive-encounter-controls').hidden=!rule.levelEncounter || archiveMode;
   $('rule-origin').hidden=!rule.archiveHandoff;
   $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
@@ -237,6 +243,7 @@ function updateAccountControls(state) {
     if (id === 'observed-instrument') choices.unshift(['ALL','All instruments']);
     setChoices($(id), choices, $(id).value);
   }
+  if(!$('encounter-day').value)$('encounter-day').value=accountState.defaultSession;
   if(!$('observed-day').value)$('observed-day').value=accountState.defaultSession;
   if(!$('observed-end').value)$('observed-end').value=accountState.defaultSession;
   return accountState;
@@ -300,11 +307,40 @@ function commitObserved(live) {
   readObserved(selection,generation);
   if(live)timer=setInterval(()=>readObserved(selection,generation),60000);
 }
-$('show-observed').onclick=async()=>{
-  const generation=++observedGeneration;observedSelection=null;
+function showObservedPanel() {
+  observedGeneration++;observedSelection=null;
   observedMode=true;clearInterval(timer);timer=null;$('builder').hidden=true;$('results').hidden=true;document.querySelector('.replay').hidden=true;$('observed-results').hidden=false;
   $('show-observed').setAttribute('aria-pressed','true');$('show-builder').setAttribute('aria-pressed','false');$('show-results').setAttribute('aria-pressed','false');
   document.querySelector('.notice').hidden=true;retainedResults.clear();$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
+  return observedGeneration;
+}
+$('encounter-run').onclick=async()=>{
+  const button=$('encounter-run'), progress=$('encounter-progress');
+  const session=$('encounter-day').value, rule=editing, generation=++observedGeneration;
+  button.disabled=true;
+  try {
+    if(!session)throw new Error('Choose an archived session.');
+    if(JSON.stringify(formRule().levelEncounter)!==JSON.stringify(rule.levelEncounter) ||
+      JSON.stringify(formRule().outcomes)!==JSON.stringify(rule.outcomes))throw new Error('Save your edited study to your account before replaying it.');
+    progress.textContent='Opening the archived session…';
+    for(let batch=0;batch<100;batch++) {
+      const body=await accountRequest({action:'replay-encounters',session,ruleId:rule.id,version:rule.version});
+      if(generation!==observedGeneration || editing!==rule)return;
+      const c=body.coverage;
+      progress.textContent=c.retainedVersions+' archived snapshots indexed · '+c.pending+' pending · '+c.gaps+' with gaps.';
+      if(body.complete) {
+        showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent='Archived replay · '+session+' · '+body.events.length+' encounters';
+        $('observed-coverage').textContent=progress.textContent+' Source availability gates every encounter. Replay may include evidence the observer retained later.';
+        retainedResults.update({events:body.events,rules:[body.rule],origin:'recorded',cutoff:body.cutoff});
+        return;
+      }
+      if(!c.indexComplete || !c.processed || !c.pending){progress.textContent+=' '+c.reason;return;}
+    }
+    progress.textContent+=' Choose Replay saved study to continue.';
+  }catch(error){progress.textContent=error.message;}finally{button.disabled=false;}
+};
+$('show-observed').onclick=async()=>{
+  const generation=showObservedPanel();
   try{await loadAccount();if(!observedMode||generation!==observedGeneration)return;commitObserved(true);}catch(error){if(observedMode&&generation===observedGeneration)$('observed-status').textContent=error.message;}
 };
 $('observed-read').onclick=()=>commitObserved(false);
