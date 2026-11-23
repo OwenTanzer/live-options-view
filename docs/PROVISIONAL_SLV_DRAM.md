@@ -28,7 +28,9 @@ With an origin but missing key it fails closed. The quote server accepts only
 its startup contract window. Release API changes through the exact-revision
 protected API workflow before enabling the paper runner.
 
-The new runner uses `crassus/accounts.provisional.json` explicitly, containing
+The new runner uses `deployment/python/Dockerfile.provisional-paper` from the
+repository root with service-managed settings (no inherited Crassus manifest).
+It uses `crassus/accounts.provisional.json` explicitly, containing
 only the eleven new paper accounts. It requires a separate persistent `/data`
 volume (`CRASSUS_DATA_ROOT=/data`), fresh account credentials, and the existing
 bot registration capability. Do not copy the shared runner's account roster,

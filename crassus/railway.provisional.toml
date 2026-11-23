@@ -1,8 +1,0 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-
-[deploy]
-startCommand = "python -m crassus.runner --accounts /app/accounts.provisional.json --interval 300"
-restartPolicyType = "NEVER"
-numReplicas = 1
