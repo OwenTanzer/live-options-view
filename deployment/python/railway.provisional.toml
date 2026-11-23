@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deployment/python/Dockerfile"
+
+[deploy]
+startCommand = "python -m market_data.live_market.provisional"
+restartPolicyType = "NEVER"
+numReplicas = 1
