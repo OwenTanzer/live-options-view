@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -84,6 +86,14 @@ def main() -> int:
         check("both bullish -> buy one ATM call", d.action == "buy" and d.symbol == call and d.quantity == 1, d.reason)
         check("decision is labelled with its own strategy id and root",
               d.strategy_id == sid and d.metadata["root"] == root and d.metadata["agreement"] == "both")
+        base = runner.decision_base(decision_id="fixture", alias=root, strategy_id=sid,
+                                    strategy_version=d.strategy_version,
+                                    snapshot=ctx(root, SKEWED_BULLISH_ROWS, stamp(60)).snapshot)
+        record = json.loads(json.dumps({**base, "decision": d.to_dict()}))
+        check("ledger envelope preserves account, both readings and observation identities",
+              record["account_alias"] == root and record["strategy_id"] == sid
+              and record["decision"]["metadata"]["skew"]["observed_at"] == stamp(60)
+              and record["decision"]["metadata"]["trump"]["fetched_at"] == mood(0.5).fetched_at)
 
         reset_strategy_state(sid)
         t.decide_core(ctx(root, FLAT_ROWS, stamp(0), phase="pre_open"), sid, None, None)
@@ -130,6 +140,58 @@ def main() -> int:
         check("held call, Trump feed down -> retain even on a neutral skew", d.action == "no_trade" and "retaining" in d.reason, d.reason)
         d = held_case(FLAT_ROWS, mood(0.5), repeat=True)
         check("held call, duplicate snapshot -> retain (no new observation)", d.action == "no_trade" and "retaining" in d.reason, d.reason)
+
+        # Give every case an executable held quote: absence of a quote must not
+        # conceal an erroneous close on missing/foreign observations.
+        for label, mutate in (
+            ("missing snapshot", lambda c: replace(c, snapshot=None)),
+            ("empty board", lambda c: replace(c, snapshot=replace(c.snapshot, rows=[]))),
+            ("missing spot", lambda c: replace(c, snapshot=replace(c.snapshot, underlying_price=None))),
+            ("foreign board", lambda c: replace(c, snapshot=ctx("QQQ", FLAT_ROWS, stamp(60)).snapshot)),
+            ("missing timestamp", lambda c: replace(c, snapshot=replace(c.snapshot, timestamp=""))),
+            ("invalid timestamp", lambda c: replace(c, snapshot=replace(c.snapshot, timestamp="invalid"))),
+            ("expired snapshot", lambda c: replace(c, now_et=datetime.fromisoformat(stamp(67)))),
+            ("future snapshot", lambda c: replace(c, now_et=datetime.fromisoformat(stamp(59)))),
+        ):
+            reset_strategy_state(sid)
+            c = ctx(root, FLAT_ROWS, stamp(60), held=call)
+            c.quotes = lambda symbols: {s: fresh_quote(s) for s in symbols}
+            d = t.decide_core(mutate(c), sid, mood(0.5), None)
+            check(f"{label} retains despite executable quote", d.action == "no_trade", d.reason)
+        reset_strategy_state(sid)
+        c = ctx(root, THIN_ROWS, stamp(60), held=call)
+        c.quotes = lambda symbols: {s: fresh_quote(s) for s in symbols}
+        d = t.decide_core(c, sid, mood(0.5), None)
+        check("observed thin band closes", d.action == "sell", d.reason)
+        d = t.decide_core(c, sid, mood(0.5), None)
+        check("duplicate thin band retains", d.action == "no_trade", d.reason)
+        for bad_mood in (replace(mood(0.5), fetched_at=stamp(0)), mood(float("nan"))):
+            reset_strategy_state(sid)
+            c = ctx(root, FLAT_ROWS, stamp(60), held=call)
+            c.now_et = datetime.fromisoformat(stamp(60))
+            d = t.decide_core(c, sid, bad_mood, None)
+            check("stale or invalid Trump observation retains", d.action == "no_trade"
+                  and d.metadata["trump"]["lean"] == "unavailable", d.reason)
+
+        reset_strategy_state(sid)
+        c = ctx(root, FLAT_ROWS, stamp(0), phase="pre_open")
+        c.account_alias = "first"
+        t.decide_core(c, sid, None, None)
+        c.account_alias = "second"
+        d = t.decide_core(c, sid, None, None)
+        check("two accounts independently observe the same timestamp",
+              d.metadata["skew"]["session_start_imbalance"] == 0)
+        reset_strategy_state(sid)
+        t.decide_core(ctx(root, FLAT_ROWS, stamp(0), phase="pre_open"), sid, None, None)
+        c = ctx(root, SKEWED_BULLISH_ROWS, stamp(60))
+        c.now_et = datetime.fromisoformat(stamp(60))
+        d = t.decide_core(c, sid, mood(0.5), None)
+        check("aligned current observations permit entry", d.action == "buy", d.reason)
+        reset_strategy_state(sid)
+        t.decide_core(ctx(root, FLAT_ROWS, stamp(0), phase="pre_open"), sid, None, None)
+        c.quotes = lambda symbols: {s: replace(fresh_quote(s), server_ts="2024-01-01T15:05:00") for s in symbols}
+        d = t.decide_core(c, sid, mood(0.5), None)
+        check("stale executable-side quote blocks entry", d.action == "no_trade", d.reason)
 
         print(f"\n-- {root}: isolation")
         reset_strategy_state(sid)

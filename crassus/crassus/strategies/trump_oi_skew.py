@@ -35,6 +35,7 @@ it never shares session history with the root's reference skew account.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
@@ -56,6 +57,9 @@ from .oi_skew import (
 )
 
 STRATEGY_VERSION = "1.0.0"
+# Match the forward-skew causal window; the runner normally cycles every 300s.
+MAX_OBSERVATION_AGE_S = 360
+_last_observations = {}
 ROOTS = {
     "trump_whisperer_oi_skew_ibit": "IBIT",
     "trump_whisperer_oi_skew_slv": "SLV",
@@ -63,22 +67,52 @@ ROOTS = {
 }
 
 
+def observation_time(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def observation_current(value, now):
+    observed = observation_time(value)
+    return observed is not None and (now is None or
+        0 <= (now - observed).total_seconds() <= MAX_OBSERVATION_AGE_S)
+
+
+def reset_state(strategy_id):
+    _reset_state(strategy_id)
+    for key in list(_last_observations):
+        if key[0] == strategy_id:
+            del _last_observations[key]
+
+
 def skew_reading(ctx: StrategyContext, strategy_id: str, root: str) -> dict[str, Any]:
     """Observe this snapshot on the strategy's own anchor and classify it.
 
     `lean` is "call", "put", "neutral" (a current read that supports
-    neither side), "stale" (no new observation) or "unavailable" (board,
-    spot or band unusable)."""
+    neither side), "thin" (observed insufficient OI), "stale" (no new
+    observation) or "unavailable" (missing/invalid board, spot or time)."""
     snapshot = ctx.snapshot
     if snapshot is None:
         return {"lean": "unavailable", "why": "No market snapshot."}
     pattern = rf"{root}\d{{6}}[CP]\d{{8}}"
     symbols = [row.get("OptionSymbol") for row in snapshot.rows] + list(_open_positions(ctx))
-    if not symbols or any(not re.fullmatch(pattern, str(s)) for s in symbols):
+    if not snapshot.rows or any(not re.fullmatch(pattern, str(s)) for s in symbols):
         return {"lean": "unavailable", "why": f"Missing or mismatched {root} contract board or holding."}
     spot = snapshot.underlying_price
     if not _finite_number(spot) or spot <= 0:
         return {"lean": "unavailable", "why": "Missing valid spot."}
+    timestamp = getattr(snapshot, "timestamp", None)
+    if not observation_current(timestamp, ctx.now_et):
+        return {"lean": "unavailable", "why": "Market observation outside causal freshness window."}
+    observed = observation_time(timestamp)
+    key = (strategy_id, ctx.account_alias)
+    if key in _last_observations and observed <= _last_observations[key]:
+        return {"lean": "stale", "why": "Snapshot is not a new observation."}
+    _last_observations[key] = observed
+    timestamp = observed.isoformat()
     params = dict(ctx.params or {})
     tracker = _tracker_for(ctx, params.get("near_money_pct", DEFAULT_NEAR_MONEY_PCT), strategy_id)
     (call_oi, put_oi, strikes), params = reference_band(snapshot, root, params)
@@ -87,11 +121,11 @@ def skew_reading(ctx: StrategyContext, strategy_id: str, root: str) -> dict[str,
     min_strikes = params.get("min_band_strikes", DEFAULT_MIN_BAND_STRIKES)
     total = call_oi + put_oi
     imbalance = (call_oi - put_oi) / total if total > 0 else None
-    timestamp = getattr(snapshot, "timestamp", None)
     recorded = bool(imbalance is not None and timestamp and tracker.observe(timestamp, imbalance))
     start = tracker.session_start_imbalance
     delta = imbalance - start if imbalance is not None and start is not None else None
     reading = {
+        "observed_at": timestamp,
         "imbalance_ratio": imbalance,
         "session_start_imbalance": start,
         "delta_from_session_start": delta,
@@ -104,7 +138,7 @@ def skew_reading(ctx: StrategyContext, strategy_id: str, root: str) -> dict[str,
     if imbalance is not None and not recorded:
         return {**reading, "lean": "stale", "why": "Snapshot is not a new observation."}
     if imbalance is None or strikes < min_strikes:
-        return {**reading, "lean": "unavailable",
+        return {**reading, "lean": "thin",
                 "why": f"Near-money band has {strikes} strike(s) with OI (need {min_strikes})."}
     if abs(imbalance) < threshold:
         return {**reading, "lean": "neutral", "why": f"Imbalance {imbalance:.3f} is below {threshold}."}
@@ -122,6 +156,8 @@ def trump_reading(ctx: StrategyContext, snapshot: TrumpSentimentSnapshot | None,
         return {"lean": "unavailable", "why": f"Trump sentiment unavailable: {fetch_error}"}
     if snapshot is None:
         return {"lean": "neutral", "why": "No Trump sentiment snapshot."}
+    if not observation_current(snapshot.fetched_at, ctx.now_et):
+        return {"lean": "unavailable", "why": "Trump observation outside causal freshness window."}
     params = ctx.params or {}
     min_sample = params.get("min_sample_size", trump_whisperer.DEFAULT_MIN_SAMPLE_SIZE)
     bullish = params.get("bullish_threshold", trump_whisperer.DEFAULT_BULLISH_THRESHOLD)
@@ -130,8 +166,11 @@ def trump_reading(ctx: StrategyContext, snapshot: TrumpSentimentSnapshot | None,
         "sample_size": snapshot.sample_size,
         "mean_compound": snapshot.mean_compound,
         "latest_post_at": snapshot.latest_post_at,
+        "fetched_at": snapshot.fetched_at,
     }
     mean = snapshot.mean_compound
+    if mean is not None and not _finite_number(mean):
+        return {**reading, "lean": "unavailable", "why": "Trump sentiment is not finite."}
     if snapshot.sample_size < min_sample:
         return {**reading, "lean": "neutral",
                 "why": f"Only {snapshot.sample_size} fresh Trump post(s); need {min_sample}."}
@@ -189,8 +228,8 @@ def decide_core(ctx: StrategyContext, strategy_id: str, trump_snapshot: TrumpSen
         held_type = _option_type_from_symbol(held)
         if position.quantity < 0 or held_type is None:
             return no(f"Unexpected holding {held} ({position.quantity}); standing down.", symbol=held)
-        if skew["lean"] == "stale" or trump["lean"] == "unavailable":
-            return no(f"Missing observation ({skew['why'] if skew['lean'] == 'stale' else trump['why']}); "
+        if skew["lean"] in ("stale", "unavailable") or trump["lean"] == "unavailable":
+            return no(f"Missing observation ({skew['why'] if skew['lean'] in ('stale', 'unavailable') else trump['why']}); "
                       f"retaining the held {held_type}.", symbol=held)
         opposite = "put" if held_type == "call" else "call"
         if skew["lean"] != held_type:
@@ -228,7 +267,7 @@ def _register(strategy_id: str) -> None:
     decide.strategy_id = strategy_id
     decide.strategy_version = STRATEGY_VERSION
     register(decide)
-    register_state_resetter(strategy_id, lambda: _reset_state(strategy_id))
+    register_state_resetter(strategy_id, lambda: reset_state(strategy_id))
 
 
 for _strategy_id in ROOTS:
