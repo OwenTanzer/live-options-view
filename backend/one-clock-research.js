@@ -129,15 +129,20 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
   if(nativeEnabled && discovery.state!=='indexing') {
     const backlog=await list(stmt(db,'SELECT * FROM one_clock_historical_rules WHERE retry_at<=? ORDER BY retry_at,enqueued_at LIMIT 2',now));
-    // Give a due historical rule its own turn even when the regular live job
-    // covers the same scope. Only the historical turn can back off a broken
-    // frozen target; repeatedly dropping it would hide every job behind it.
-    if(backlog.length) {
-      if(jobs.length) {
-        jobs.splice(1,1);
-        if(Math.floor(now/900000)%2===0) jobs.unshift(backlog[0]); else jobs.push(backlog[0]);
-      } else jobs.push(...backlog);
-    }
+    const target=backlog[0];
+    if(target && jobs.length) {
+      // The ordinary turn can satisfy a queued generation using all evidence
+      // available now. Give it one chance before running the frozen target.
+      const overlap=jobs.find(j=>j.namespace===target.namespace && j.session===target.session && j.instrument===target.instrument);
+      if(!overlap || overlap.updated_at>=target.retry_at) {
+        // A failed live turn must not hide the historical retry. Run each
+        // scope at most once per tick so frozen and live results cannot race.
+        const other=jobs.find(j=>j!==overlap);
+        jobs.length=0;
+        if(other) jobs.push(other);
+        if(Math.floor(now/900000)%2===0) jobs.unshift(target); else jobs.push(target);
+      }
+    } else if(target) jobs.push(...backlog);
   }
   const reads=new Map(),sourceReads=new Map(),results=[];let statementBudget=800;
   for(const job of jobs) {
