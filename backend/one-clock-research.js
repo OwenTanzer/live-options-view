@@ -216,10 +216,12 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       })());
       const data=await reads.get(key);
       const ruleCutoffs={};
+      const partialRules=new Set();
       const outputsOf=source=>Array.isArray(source.outputs)?source.outputs:Object.keys(source.outputs);
       const providerOutputs=new Map([...sources,...publicationSources].map(source=>[source.id,outputsOf(source)]));
       const beforeFilter=chosen.length;
-      const incomplete=c=>!c.indexComplete || c.pending>0;
+      const incomplete=c=>!c.indexComplete || (c.pending>0 &&
+        !(c.verifiedAvailabilityPrefix && Number.isSafeInteger(c.through) && c.through>=bounds.open));
       chosen=chosen.filter(rule=>{
         const used=inputs(rule);
         if(data.coverage.some(c=>incomplete(c) && (providerOutputs.get(c.source)??[]).some(output=>used.includes(output))))return false;
@@ -232,10 +234,12 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         for(const adapter of dependencies){
           const receipt=data.coverage.find(c=>c.source===adapter.id);
           if(!receipt || incomplete(receipt))return false;
-          if(historic && receipt.through<targetThrough)return false;
+          if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?snapshotAt:targetThrough))return false;
+          if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<snapshotAt)
+            partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           // Once the session is fully indexed, later publication can correct
           // an in-session endpoint supplied by another source.
-          if(receipt.through!==undefined && receipt.through<bounds.close){
+          if(receipt.through!==undefined && (receipt.through<bounds.close || receipt.pending>0)){
             const key=JSON.stringify([rule.rule_id,rule.version]);
             ruleCutoffs[key]=Math.min(ruleCutoffs[key]??snapshotAt,receipt.through);
           }
@@ -260,9 +264,9 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         (namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(namespace,session,instrument,rule_id,version,attempted_at) DO UPDATE SET state=excluded.state,reason=excluded.reason
         WHERE excluded.state='evaluated'`,job.namespace,job.session,job.instrument,r.rule_id,r.version,now,state,reason));
-      const completeRules=()=>chosen.filter(r=>{const horizon=ruleCutoffs[JSON.stringify([r.rule_id,r.version])];return horizon===undefined || horizon>=targetThrough;});
+      const completeRules=()=>chosen.filter(r=>{const horizon=ruleCutoffs[JSON.stringify([r.rule_id,r.version])];return !partialRules.has(JSON.stringify([r.rule_id,r.version])) && (horizon===undefined || horizon>=targetThrough);});
       const evaluate=()=>observeBatch(db,{namespace:job.namespace,batchId:historic?`history:${job.target}:${job.rule_id}:${job.version}`:`tick:${job.session}:${job.instrument}:${now}:${start}`,source:'public-registry',cursor:String(start),
-        selection,ruleCutoffs,committedAt:now,targetGeneration:version?.generation,completionStatements:[...attempts(chosen,'evaluated',null),...(version?generationWrites(db,job,completeRules(),version.generation,now):[])],sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
+        selection,ruleCutoffs,committedAt:now,targetGeneration:version?.generation,completionStatements:[...attempts(chosen.filter(r=>!partialRules.has(JSON.stringify([r.rule_id,r.version]))),'evaluated',null),...(version?generationWrites(db,job,completeRules(),version.generation,now):[])],sessionClose:bounds.close,collection:'prospective',observations:[],sourceRecords,activationWindows:windows,maxStatements:statementBudget,
         ruleKeys:chosen.map(r=>JSON.stringify([r.rule_id,r.version]))});
       let result,failure=null;
       try{result=await evaluate();}catch(error){

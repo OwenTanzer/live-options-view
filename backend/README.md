@@ -30,6 +30,14 @@ the namespace and source, project an allowlisted payload, prove availability and
 declare prospective/replay/backfill collection before calling it. A namespace is
 an internal access boundary, never a client-supplied substitute for authentication.
 
+The calibrated opening-level adapter selects native prices within the exchange
+session. It reads up to 20 artifacts and 8 MiB per turn and retains a watermark
+immediately before the earliest unverified publication time. The observer can
+record crossings and mature outcomes through that watermark while the
+remaining time range stays pending. A complete evaluation receipt requires
+coverage through the requested cutoff. Other adapters retain their existing
+budgets and coverage policy.
+
 Rule versions and observation revisions are immutable. Source observations,
 event/outcome revisions, source checkpoint and batch receipt commit in one D1
 batch. A generation trigger rejects concurrent stale evaluations; retry with the
