@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
+from .strategies.me_bots import IDS as ME_BOTS
+from .strategies.me_bots_inputs import Inputs as MeBotInputs
 from .strategies.oi_skew import REFERENCE_ROOTS
 from typing import Any
 
@@ -179,6 +181,7 @@ class Runner:
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)
+        self.me_inputs = MeBotInputs(self.state_dir / "me-bots")
         self.forward_directory = self.state_dir / forward_skew.VERSION
         self.forward_bars = ForwardBars(self.forward_directory)
         self.forward_bar_sources = {"QQQ": self.forward_bars,
@@ -576,6 +579,10 @@ class Runner:
             params=account.params,
             account_alias=alias,
         )
+
+        if account.strategy_id in ME_BOTS:
+            ctx.params = {**ctx.params, "_me_inputs": self.me_inputs.read(self.cycle_count, ctx.now_et, phase),
+                          "_me_directory": self.me_inputs.directory}
 
         if account.strategy_id == "qqq_gated_strangle" and phase == "open":
             ctx.params = {**ctx.params, "_completed_bars": self.forward_bars.read(self.cycle_count, ctx.now_et)}
