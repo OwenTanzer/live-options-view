@@ -96,7 +96,7 @@ export async function observeBatch(db, input) {
       }
       const inputs = event.inputEvidence.map(e => ({ record:lineage(e), anchor:lineage(e.anchorEvidence) }));
       const eventCollection = classify(inputs.flatMap(e => [e.record,e.anchor]),
-        event.triggeredAt < registered.registered_at ? 'retrospective' : 'prospective');
+        (event.decisionAt ?? event.triggeredAt) < registered.registered_at || event.decisionAt < event.triggeredAt ? 'retrospective' : 'prospective');
       // An observed trigger and its later measurement can have different
       // collection histories. Never upgrade an endpoint or anchor on redelivery.
       const outcomes = Object.fromEntries(event.outcomes.map(outcome => {

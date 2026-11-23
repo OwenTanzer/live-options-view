@@ -1,3 +1,4 @@
+import {oiSkewAuditRule} from '../shared/one-clock-decision-events.js';
 import {renderReceipt} from './one-clock-encounter-summary.js';
 import {encounterForm} from './one-clock-encounter-form.js';
 import { createClock, createSourceRegistry, selectAsOf,observation } from '../shared/one-clock.js';
@@ -205,6 +206,14 @@ $('cursor').oninput = () => setCursor(studyStart + Number($('cursor').value)*100
 $('show-builder').onclick = () => showResults(false); $('show-results').onclick = () => { showResults(true); render(); };
 $('add-condition').onclick = () => condition(); $('add-outcome').onclick = () => outcome();
 $('reopen').onclick = () => { openRule(choose($('versions').value)); $('result-version').value = key(currentRule); status('Saved definition reopened.'); };
+$('oi-skew-audit').hidden = archiveMode;
+$('oi-skew-audit').onclick = async () => {
+  try {
+    await loadAccount();
+    openRule(oiSkewAuditRule(crypto.randomUUID()));
+    status('OI Skew audit draft. All regular-session decisions count, including passes. Save to your account to retain the definition.');
+  } catch (error) { status(error.message, true); }
+};
 $('new-rule').onclick = () => {
   openRule({ id: crypto.randomUUID(), version: 1, name:'', instruments:['QQQ'], combine:'all', transition:'rising', missingInput:'hold', conditions:[], outcomes:[] });
   status('New event class. Add conditions and optional outcomes, then preview or save.');
