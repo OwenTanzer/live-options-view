@@ -360,7 +360,8 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
   const chartStepPx = 80;
   function renderB(S) {
     const box = $('#view');
-    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
+    const col = { b: '#3fd0a4', s: '#f07a64', u: '#ffffff' };
+    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span class="buy">buy</span> / <span class="sell">sell</span> / <span style="color:${col.u}">unknown side</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
     const cv = $('#cv'),
       dpr = devicePixelRatio || 1,
       Wd = cv.clientWidth,
@@ -389,7 +390,6 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const X = (t) => L + ((Wd - L - R) * t) / dur;
     const Y = (v) => T + ((Hd - T - B) * (hi - v)) / (hi - lo);
     const big = S.prints.filter((p) => prem(p) >= BIG).sort((a, b) => prem(b) - prem(a));
-    const col = { b: '#3fd0a4', s: '#f07a64', u: '#9aa6ad' };
     const rad = (p) => 3 + Math.sqrt(prem(p) / 270000) * 16;
     function paint() {
       const offset = Math.min(K.length - count, Math.round(box.scrollTop / chartStepPx));
@@ -487,7 +487,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         const x = X(p[0]),
           y = Y(K[p[1]]) + (p[2] === 'C' ? -6 : 6),
           r = rad(p);
-        c.globalAlpha = 0.85;
+        c.globalAlpha = p[5] === 'u' ? 1 : 0.85;
         c.fillStyle = col[p[5]];
         c.beginPath();
         c.arc(x, y, r, 0, 7);
