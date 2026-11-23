@@ -81,6 +81,8 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/one_clock*.test.mjs
+      - name: Crypto panel fixtures
+        run: node --test tests/crypto_panel.test.js
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
