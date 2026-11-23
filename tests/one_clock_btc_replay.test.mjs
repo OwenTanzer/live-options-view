@@ -56,7 +56,9 @@ test('receipt pages detect a changed candidate set and retain CME contract ident
 });
 
 test('revocation during receipt storage I/O withholds already-read private evidence',async()=>{
-  const env=withD1({PAPER_TRADES:{async get(path){
+  let reads=0;
+  const env=withD1({LIVE_QUOTE_ORIGIN:'https://fixture.invalid',PAPER_TRADES:{async get(path){
+    reads++;
     const object=await bucket().get(path);
     await env.DB.prepare("DELETE FROM trade_journal_members WHERE member='Owen'").run();
     return object;
@@ -66,5 +68,5 @@ test('revocation during receipt storage I/O withholds already-read private evide
   const request=new Request('https://options.moopertonic.net/api/one-clock/btc-replay?one_clock_at='+uploaded,
     {headers:{Cookie:SESSION_COOKIE+'=revoking'}});
   const response=await handleBitcoinReplay(request,env);
-  assert.equal(response.status,403);assert.ok(!(await response.text()).includes(key));
+  assert.equal(reads,1);assert.equal(response.status,403);assert.ok(!(await response.text()).includes(key));
 });
