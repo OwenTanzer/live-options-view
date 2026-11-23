@@ -13,7 +13,7 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   if(!validSession(session)||!adapter.instruments.includes(instrument)||!['prospective','backfill','replay'].includes(collection))throw new Error('invalid public ingestion scope');
   const scope={source:adapter.id,session,instrument},args=scopeArgs(scope);
   const prior=await stmt(db,'SELECT * FROM one_clock_ingestion_work WHERE source=? AND session=? AND instrument=?',...args).first();
-  const versions=(await stmt(db,'SELECT artifact,version,status FROM one_clock_ingestion_versions WHERE source=? AND session=? AND instrument=? LIMIT 2001',...args).all()).results;
+  const versions=(await stmt(db,'SELECT artifact,version,status,detail FROM one_clock_ingestion_versions WHERE source=? AND session=? AND instrument=? LIMIT 2001',...args).all()).results;
   if(versions.length>INGESTION_LIMITS.versions)throw new Error('source revision bound');
   const index=await adapter.discover(bucket,{session,instrument,cutoff:now},db);
   if(!Array.isArray(index.artifacts)||index.artifacts.length>1000)throw new Error('source index bound');
@@ -66,6 +66,10 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     final:false,...(index.through==null?{}:{through:index.through}),reason:!index.complete?(index.reason??'metadata-index-bound'):candidates.length>completed.length?'catching-up':'periodic-archive-observation',
     limitations:['No producer finality guarantee. Older sessions may receive late evidence.',
       'Versions overwritten between polls cannot be reconstructed. Retained versions remain available.']};
+  if(adapter.reportGapReasons) {
+    const reasons=[...versions.filter(v=>v.status==='gap').map(v=>v.detail),...completed.filter(v=>v.result.gap||!v.result.rows.length).map(v=>v.result.reason)];
+    coverage.gapReasons=Object.fromEntries([...new Set(reasons)].map(r=>[r,reasons.filter(v=>v===r).length]));
+  }
   const generation=(prior?.generation??0)+1;
   const statements=[stmt(db,`INSERT INTO one_clock_ingestion_work(source,session,instrument,generation,updated_at,coverage) VALUES(?,?,?,?,?,?)
     ON CONFLICT(source,session,instrument) DO UPDATE SET generation=excluded.generation,updated_at=excluded.updated_at,coverage=excluded.coverage`,...args,generation,now,JSON.stringify(coverage))];

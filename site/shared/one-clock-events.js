@@ -1,3 +1,4 @@
+import { validateEncounter, encounterEvents, signedOutcome } from './one-clock-level-encounters.js';
 import { instant, observation, observationKey, selectAsOf } from './one-clock.js';
 
 const OPS = { '>=': (a, b) => a >= b, '>': (a, b) => a > b, '<=': (a, b) => a <= b,
@@ -44,6 +45,14 @@ export function eventRule(input) {
     if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
+  if (rule.levelEncounter !== undefined) {
+    validateEncounter(rule.levelEncounter);
+    if(rule.instruments.length!==1 || rule.instruments[0]!=='QQQ' || rule.conditions.length!==1 ||
+      rule.conditions[0].source!=='oi-levels' || rule.conditions[0].field!=='qualified' ||rule.conditions[0].op!=='==' || rule.conditions[0].value!==true)
+      throw new Error('Invalid calibrated OI study input');
+    if(rule.combine!=='all' || rule.transition!=='rising' || rule.missingInput!=='reset')throw new Error('Invalid encounter transition');
+    if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='level-spot' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
+  }
   return immutable(rule);
 }
 
@@ -71,6 +80,12 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   // Validate duplicate revision contents once, then advance a source index by
   // availability. Do not rescan/clone the full archive per condition per tick.
   const finalRows = selectAsOf(rows, selection);
+  if (rule.levelEncounter) {
+    const endpoints=finalRows.filter(r=>r.source==='level-spot' && Number.isFinite(r.value?.spot))
+      .sort((a,b)=>(a.valueAt??a.eventAt)-(b.valueAt??b.eventAt) || a.availableAt-b.availableAt);
+    return immutable(encounterEvents(rule, rows, selection, close, activationWindows).map(event=>({...event,
+      outcomes:rule.outcomes.map(o=>measureOutcome(event,o,endpoints,selection,close))})));
+  }
   const arrivals = new Map();
   for (const row of rows) {
     if (!arrivals.has(row.availableAt)) arrivals.set(row.availableAt, []);
@@ -159,7 +174,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
 }
 
 function measureOutcome(event, outcome, rows, selection, close) {
-  const targetAt = event.triggeredAt + outcome.horizonMs;
+  const targetAt = (event.encounter?.upperTime ?? event.triggeredAt) + outcome.horizonMs;
   const deadline = Math.min(targetAt + outcome.toleranceMs, close);
   const cutoff = instant(selection.cutoff);
   const base = { id: outcome.id, targetAt, value: null, measuredAt: null, availableAt: null, evidence: null };
@@ -169,11 +184,11 @@ function measureOutcome(event, outcome, rows, selection, close) {
     return { ...base, state: 'missing', reason: 'trigger-baseline-unavailable' };
   }
   const eligible = rows.filter(r => r.source === outcome.source);
-  const validValue = value => numeric(value) || outcome.measure === 'category' && ['string','boolean'].includes(typeof value);
+  const validValue = value => numeric(value) || outcome.measure === 'category' && !event.encounter && ['string','boolean'].includes(typeof value);
   const row = eligible.find(r => (r.valueAt ?? r.eventAt) >= targetAt && (r.valueAt ?? r.eventAt) <= deadline && validValue(field(r.value, outcome.field)));
   if (!row) return { ...base, state: cutoff > deadline ? 'missing' : 'pending', reason: cutoff > deadline ? 'no-qualified-endpoint' : null };
   const endpoint = field(row.value, outcome.field);
-  const value = outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
+  const value = event.encounter ? signedOutcome(event, endpoint) : outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
   if(outcome.measure!=='category'&&!numeric(value))return {...base,state:'missing',reason:'nonfinite-measurement'};
   return { ...base, state: 'measured', value, measuredAt: row.valueAt ?? row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
 }

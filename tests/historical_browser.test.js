@@ -22,6 +22,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
   try {
     const page = await browser.newPage();
     await page.clock.setFixedTime(new Date('2026-11-08T12:00:00Z'));
+    const missingOpening = ' · Opening OI unavailable · unqualified cells are uncolored';
     const staleWarning = ' \u2014 archive stale: newest date 2026-10-27 is 8 trading days old';
     const errors = [];
     page.on('pageerror',e=>errors.push(e.message));
@@ -42,7 +43,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
     await page.goto(APP);
     await page.locator('#tab-history').click();
     await page.waitForFunction(expected => document.querySelector('#hist-status').textContent === expected,
-      'Trade date 2026-10-27' + staleWarning);
+      'Trade date 2026-10-27' + missingOpening + staleWarning);
     assert.equal(await page.locator('#hist-date option').count(),2);
     assert.ok(await page.locator('#hist-heatmap-wrap').isVisible());
     assert.ok(await page.locator('#hist-sidebar').isVisible());
@@ -62,7 +63,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
     if (process.env.HIST_EVIDENCE) await page.screenshot({path:process.env.HIST_EVIDENCE,fullPage:true});
     await page.locator('#hist-date').selectOption('2026-10-26');
     await page.waitForFunction(expected => document.querySelector('#hist-status').textContent === expected,
-      'Trade date 2026-10-26' + staleWarning);
+      'Trade date 2026-10-26' + missingOpening + staleWarning);
     assert.equal(await page.locator('#widget-intraday-label').textContent(),'2026-10-26');
     assert.ok(requests.some(u=>u.includes('/browser-data/prices/qqq_intraday_')));
     assert.ok(!requests.some(u=>/r2\.dev\/(manifest|raw|prices)/.test(u)));
@@ -80,7 +81,7 @@ const APP = 'https://live-options-view.otmooper12.workers.dev';
     archives['manifest.json']=JSON.stringify({dates});
     await page.locator('#tab-live').click(); await page.locator('#tab-history').click();
     await page.waitForFunction(expected => document.querySelector('#hist-status').textContent === expected,
-      'Trade date 2026-10-27' + staleWarning);
+      'Trade date 2026-10-27' + missingOpening + staleWarning);
     console.log('Chromium: Historical dates, chain, sidebar/similarity, date switch, empty/malformed manifest and retry passed (synthetic production-origin routing, not deployed acceptance)');
   } finally { global.fetch = originalFetch; await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1});

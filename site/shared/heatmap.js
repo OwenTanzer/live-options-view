@@ -140,6 +140,10 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     Object.keys(byStrike).map(Number).filter(Number.isFinite).sort((a,b)=>b-a)
       .map(strike=>({strike,offset:null}));
 
+  // A supplied opening reference controls OI only. Current strikes, ATM,
+  // volume, quotes and option selection still use the displayed snapshot.
+  const frozen=Object.hasOwn(opts,'openingOi');
+  const opening=new Map((opts.openingOi?.levels??[]).map(level=>[level.strike,level]));
   // One row per PUBLISHED strike in the window, highest first. No row is
   // emitted for a strike the snapshot never carried (#219), so the table can
   // no longer show a strike with two empty cells beside it.
@@ -149,8 +153,9 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     const putRow  = byStrike[strKey]?.put;
     const isAtm   = offset === 0;
 
-    const callOI    = parseInt(callRow?.OpenInterest ?? 0) || 0;
-    const putOI     = parseInt(putRow?.OpenInterest  ?? 0) || 0;
+    const level=opening.get(strike);
+    const callOI = callRow?.OpenInterest == null ? null : parseInt(callRow.OpenInterest);
+    const putOI = putRow?.OpenInterest == null ? null : parseInt(putRow.OpenInterest);
     const callVol   = parseInt(callRow?.Volume    ?? 0) || 0;
     const putVol    = parseInt(putRow?.Volume     ?? 0) || 0;
     const callDelta = parseInt(callRow?.VolDelta  ?? 0) || 0;
@@ -162,19 +167,20 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
     const putBid    = getQuote ? (putQuote?.bid ?? null) : (putRow?.Bid ?? null);
     const putAsk    = getQuote ? (putQuote?.ask ?? null) : (putRow?.Ask ?? null);
 
-    const ct = getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
-    const pt = getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
-    const cb = offset===null ? 0 : oiBucket(callOI, ct);
-    const pb = offset===null ? 0 : oiBucket(putOI, pt);
+    const ct = frozen ? null : getThresh(ranges, tier || '0DTE_Regular', offset, 'call');
+    const pt = frozen ? null : getThresh(ranges, tier || '0DTE_Regular', offset, 'put');
+    const cb = frozen ? (level?.call??0) : offset===null ? 0 : oiBucket(callOI??0, ct);
+    const pb = frozen ? (level?.put??0) : offset===null ? 0 : oiBucket(putOI??0, pt);
 
     const tr = document.createElement('tr');
     if (isAtm) tr.classList.add('atm-row');
 
     // Call cell
     const callTd = document.createElement('td');
+    if(frozen)callTd.title=level?.callOI!=null?'Snapshot OI; color uses opening reference OI '+level.callOI:'Snapshot OI; opening color unavailable';
     callTd.className = `call-cell c${cb}`;
     const callPos = getPosition ? (getPosition(callRow?.OptionSymbol) || 0) : 0;
-    callTd.innerHTML = fmtOI(callOI) +
+    callTd.innerHTML = (frozen && !Number.isFinite(callOI)?'—':fmtOI(callOI)) +
       quoteHtml(callBid, callAsk) +
       (callVol ? `<span class="vol">${fmtVol(callVol)}</span>` : '') +
       flowHtml(callDelta) +
@@ -197,9 +203,10 @@ function buildHeatmapRows(tbody, data, ranges, opts = {}) {
 
     // Put cell
     const putTd = document.createElement('td');
+    if(frozen)putTd.title=level?.putOI!=null?'Snapshot OI; color uses opening reference OI '+level.putOI:'Snapshot OI; opening color unavailable';
     putTd.className = `put-cell p${pb}`;
     const putPos = getPosition ? (getPosition(putRow?.OptionSymbol) || 0) : 0;
-    putTd.innerHTML = fmtOI(putOI) +
+    putTd.innerHTML = (frozen && !Number.isFinite(putOI)?'—':fmtOI(putOI)) +
       quoteHtml(putBid, putAsk) +
       (putVol ? `<span class="vol">${fmtVol(putVol)}</span>` : '') +
       flowHtml(putDelta) +
