@@ -263,8 +263,9 @@ test('account audit preserves each bot decision and its own settlement on delaye
   assert.deepEqual((await (await call('alice')).json()).activations, []);
   assert.equal((await call('alice', {action:'activate', ruleId:rule.id, version:1})).status, 200);
 
-  const decision = (id, m, posted, action = 'no_trade', bot = 'crassus_oiskew') => ({
-    source:'bot-decision', id, eventAt:open+m*minute, availableAt:open+posted*minute, value:{bot,action}
+  const decisionKey = id => Buffer.from(id).toString('hex').padEnd(64,'0');
+  const decision = (id, m, posted, action = 'no_trade', bot = 'crassus_oiskew', key = id) => ({
+    source:'bot-evaluation', id, eventAt:open+m*minute, availableAt:open+posted*minute, value:{bot,action,decisionKey:decisionKey(key)}
   });
   const price = (m, spot, posted = m) => ({
     source:'price', id:'price-'+m, eventAt:open+m*minute, availableAt:open+posted*minute, value:{spot}
@@ -272,7 +273,9 @@ test('account audit preserves each bot decision and its own settlement on delaye
   const records = [
     price(1,100), price(2,101), price(11,103), price(12,104), price(20,110), price(30,109),
     decision('a',1,20), decision('b',2,20), decision('a',1,20),
-    decision('different-bot',1,20,'no_trade','foreign')
+    decision('different-bot',1,20,'no_trade','foreign'),
+    {...decision('legacy-error',1,20),source:'bot-decision'},
+    decision('a-recovered',1,21,'no_trade','crassus_oiskew','a')
   ];
   async function ingest(rows) {
     for (const row of rows) {
@@ -284,7 +287,7 @@ test('account audit preserves each bot decision and its own settlement on delaye
   const tick = async cutoff => {
     now = cutoff;
     const results = await advanceOneClockResearch({...env,PAPER_TRADES:{}}, {now,
-      sources:[{...emptySource,outputs:['price','bot-decision']}],publicationSources:[]});
+      sources:[{...emptySource,outputs:['price','bot-evaluation']}],publicationSources:[]});
     assert.ok(results.some(r=>r.state === 'evaluated'), JSON.stringify(results));
   };
   const events = async cutoff => (await (await call('alice',null,'?'+new URLSearchParams({
@@ -304,15 +307,15 @@ test('account audit preserves each bot decision and its own settlement on delaye
   assert.deepEqual((await events(now)).map(e=>e.id).sort(), original.map(e=>e.id).sort());
   const beforeCorrection = now;
   await ingest([
-    {...decision('a',1,31,'buy'),revision:2}, decision('sell',30,31,'sell'), price(40,105),
+    {...decision('a',1,31),revision:2}, decision('sell',30,31,'sell'), decision('buy',30,31,'buy'), price(40,105),
     decision('no-baseline',50,51), decision('late',205,220), decision('closed',210,220),
     decision('missing-endpoint',80,81), price(80,117)
   ]);
   await tick(close+11*minute);
   const revised = await events(now), byId = id => revised.find(e=>e.inputEvidence[0].id === id);
-  assert.equal(revised.length,6);
-  assert.equal(byId('a').id,original[0].id);
-  assert.equal(byId('a').inputEvidence[0].value.action,'buy');
+  assert.equal(revised.length,7);
+  assert.ok(revised.some(e=>e.id===original[0].id));
+  assert.equal(byId('buy').inputEvidence[0].value.action,'buy');
   assert.equal(byId('sell').outcomes[0].value,-4);
   assert.equal(byId('no-baseline').outcomes[0].reason,'trigger-baseline-unavailable');
   assert.equal(byId('late').outcomes[0].reason,'session-closed-before-horizon');

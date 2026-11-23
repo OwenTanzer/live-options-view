@@ -1,18 +1,17 @@
 import { sessionInstant } from './one-clock-session.js';
-import { observationKey } from './one-clock.js';
 
 export function oiSkewAuditRule(id) {
   return {
     id, version: 1, name: 'OI Skew decisions · ten-minute QQQ change',
     instruments: ['QQQ'], combine: 'all', transition: 'per-decision', missingInput: 'hold',
-    conditions: [{source: 'bot-decision', field: 'bot', op: '==', value: 'crassus_oiskew', maxAgeMs: 0}],
+    conditions: [{source: 'bot-evaluation', field: 'bot', op: '==', value: 'crassus_oiskew', maxAgeMs: 0}],
     outcomes: [{id: 'qqq-change', source: 'price', field: 'spot', measure: 'change',
       horizonMs: 600000, maxAgeMs: 60000, toleranceMs: 60000}],
   };
 }
 
 export function validateDecisionRule(rule) {
-  if (rule.conditions.length !== 1 || rule.conditions[0].source !== 'bot-decision' ||
+  if (rule.conditions.length !== 1 || rule.conditions[0].source !== 'bot-evaluation' ||
       rule.conditions[0].field !== 'bot' || rule.conditions[0].op !== '==' ||
       typeof rule.conditions[0].value !== 'string' || !rule.conditions[0].value.trim() ||
       rule.conditions[0].relativeToAnchor || rule.outcomes.some(o =>
@@ -40,10 +39,20 @@ export function decisionEvents(rule, rows, selection, close, windows, evidence) 
   const bot = rule.conditions[0].value;
   const quotes = rows.filter(r => r.source === 'price' && sampleAt(r) >= open && sampleAt(r) <= close)
     .sort((a, b) => sampleAt(a) - sampleAt(b) || a.availableAt - b.availableAt || a.id.localeCompare(b.id));
-  const result = [];
+  const decisions = new Map();
   for (const receipt of rows) {
+    if (receipt.source !== 'bot-evaluation' || receipt.value?.bot !== bot) continue;
+    const {decisionKey, action} = receipt.value;
+    if (!/^[a-f0-9]{64}$/.test(decisionKey) || !['buy', 'sell', 'no_trade'].includes(action)) continue;
+    const previous = decisions.get(decisionKey);
+    if (previous && (previous.eventAt !== receipt.eventAt || previous.value.action !== action))
+      throw new Error('Conflicting immutable bot evaluation');
+    if (!previous || receipt.availableAt < previous.availableAt) decisions.set(decisionKey, receipt);
+  }
+  const result = [];
+  for (const [decisionKey, receipt] of decisions) {
     const at = receipt.eventAt;
-    if (receipt.source !== 'bot-decision' || receipt.value?.bot !== bot || at < open || at >= close) continue;
+    if (at < open || at >= close) continue;
     if (windows && !windows.some(w => at >= w.started_at && (w.ended_at === null || at < w.ended_at))) continue;
     const quote = quotes[lowerBound(quotes, at + 1) - 1];
     const age = quote ? at - sampleAt(quote) : null;
@@ -73,10 +82,11 @@ export function decisionEvents(rule, rows, selection, close, windows, evidence) 
       return {...empty, state: selection.cutoff > deadline ? 'missing' : 'pending',
         reason: selection.cutoff > deadline ? 'no-qualified-endpoint' : null};
     });
-    result.push({id: JSON.stringify([rule.id, rule.version, observationKey(receipt)]),
+    result.push({id: JSON.stringify([rule.id, rule.version, selection.origin, selection.session, selection.instrument, bot, decisionKey]),
       ruleId: rule.id, ruleVersion: rule.version, session: selection.session, instrument: selection.instrument,
       origin: selection.origin, triggeredAt: receipt.availableAt, decisionAt: at, matchingObservations: 1,
-      decisionEvidence: 'published-audit-receipt', predictionCommitment: null,
+      decisionEvidence: 'published-strategy-evaluation', predictionCommitment: null,
+      predictiveStatus: receipt.availableAt > at ? 'retrospective' : 'unsealed',
       inputEvidence: [{...evidence(receipt), value: receipt.value}], baselines, outcomes});
   }
   return result;

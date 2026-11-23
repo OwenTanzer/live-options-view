@@ -57,11 +57,22 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       }));
       ledger.replaceChildren(...view.rows.map(({event,outcome})=>{
         const tr=el('tr'),definition=dataset.rules.find(r=>ruleKey(r)===ruleKey(event));
-        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,new Date(event.triggeredAt).toISOString(),
+        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
+            ? 'Decision ' + new Date(event.decisionAt).toISOString() + ' · published ' + new Date(event.triggeredAt).toISOString()
+            : new Date(event.triggeredAt).toISOString(),
           event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.collection??'replay',
           outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
-        if(onReplay){const replay=el('button','Replay trigger');replay.onclick=()=>onReplay(event);cell.append(replay);}
+        if(onReplay) {
+          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : 'Replay publication');
+          replay.onclick = () => onReplay(event, event.triggeredAt);
+          cell.append(replay);
+          if (event.decisionAt !== undefined) {
+            const decision = el('button', 'Replay decision');
+            decision.onclick = () => onReplay(event, event.decisionAt);
+            cell.append(decision);
+          }
+        }
         tr.append(cell);return tr;
       }));
       distribution.replaceChildren(el('h3',s.kind==='category'?'Measured category counts and rates':'Measured outcome distribution'));

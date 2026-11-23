@@ -57,11 +57,11 @@ for (const source of studySources) registry.register({ ...source, version: '1', 
 const clock = createClock({ registry, initial: { ...studySelection, mode: 'replay', cutoff: studyStart + 301000 } });
 const fixtureResults=createResultsView({container:$('stats'),stats:$('stats'),ledger:$('ledger'),fixture:true,
   onFilter:()=>{selectedId=null;$('order-flow-evidence').hidden=true;$('event-evidence').hidden=true;$('selected-event').textContent='Choose an occurrence in the filtered table to inspect its evidence.';},
-  onInspect:event=>{selectedId=event.id;render();},onReplay:event=>{selectedId=event.id;$('result-scope').value='cursor';setCursor(event.triggeredAt);}});
+  onInspect:event=>{selectedId=event.id;render();},onReplay:(event,at)=>{selectedId=event.id;$('result-scope').value='cursor';setCursor(at);}});
 const retainedResults=createResultsView({container:$('observed-stats'),stats:$('observed-stats'),ledger:$('observed-ledger'),
   onFilter:()=>{$('observed-evidence').hidden=true;},
   onInspect:event=>renderReceipt($('observed-evidence'),event),
-  onReplay:event=>{location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(event.triggeredAt)})+'#history-clock';}});
+  onReplay:(event,at)=>{location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(at)})+'#history-clock';}});
 
 function option(value, label = value) { const el = document.createElement('option'); el.value = value; el.textContent = label; return el; }
 function selectControl(label, name, options, value) {

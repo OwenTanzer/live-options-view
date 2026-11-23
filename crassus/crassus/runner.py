@@ -352,6 +352,7 @@ class Runner:
             account_strategy_id=intent.get("account_strategy_id") or account.strategy_id,
             outcome_class=recovered.outcome_class,
             decision=intent.get("decision"),
+            strategy_decided_at=intent.get("strategy_decided_at"),
             reason=recovered.note,
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
@@ -669,6 +670,9 @@ class Runner:
                 if not observed or not 0 <= (ctx.now_et-observed).total_seconds() <= 360:
                     decision = Decision.no_trade("OI reading outside causal freshness window",
                                                  account.strategy_id, forward_skew.VERSION)
+        # Freeze the final action before further quotes, metadata sync or submission.
+        decided_at = clock.iso_utc()
+        if arm:
             # Retain a liquidation mark for every held symbol, including no-trades.
             try:
                 quotes_for_decision(list(book.positions))
@@ -689,6 +693,7 @@ class Runner:
         # record can still be grouped by account/strategy.
         decision_fields = {
             **base,
+            "strategy_decided_at": decided_at,
             "strategy_id": decision.strategy_id,
             "strategy_version": decision.strategy_version,
             "account_strategy_id": account.strategy_id,
@@ -764,6 +769,7 @@ class Runner:
                 instrument_type=decision.instrument_type,
                 **({"limit_price": decision.limit_price} if decision.limit_price is not None else {}),
                 decision_id=decision_id,
+                strategy_decided_at=decided_at,
                 strategy_id=decision.strategy_id,
                 strategy_version=decision.strategy_version,
                 account_strategy_id=account.strategy_id,
