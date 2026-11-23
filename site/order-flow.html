@@ -212,19 +212,15 @@
     tr:focus-visible {
       outline: 2px solid #62e3bd;
     }
-    #optional-tape {margin-block: 12px; min-width: 0}
-    #optional-tape h2, dialog h2 {margin: 0 0 8px}
-    #optional-tape p {color: #bdcace; font-size: 13px}
-    .flow-scroll {overflow: auto; max-height: 460px; margin-top: 8px; scrollbar-gutter: stable}
-    .flow-line {display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #314047; border-radius: 0; background: transparent; font: 13px/1.5 monospace}
-    .flow-line.ticket, .foot-ticket {border-left: 3px solid #f2c96b; font-weight: 700}
-    .flow-group {color: #c3cdd0}
-    .flow-chart {display:block; width:100%; height:auto; background:#101d23}
-    #optional-tape td {padding:2px}
-    #optional-tape td button {min-width:65px; font:13px/1.5 monospace}
-    #optional-tape td small {display:block}
-    #optional-tape th {position:sticky; top:0; background:#101d23}
-    .spot-cell {outline:2px solid #f2c96b; outline-offset:-2px}
+    #tape-view {display:flex;flex-wrap:wrap;gap:1px;margin:10px 0}
+    #tape-view button {background:#0b0f12;color:#aab6bc;font:600 14px system-ui;border:1px solid #253037;border-radius:0}
+    #tape-view button:first-child {border-radius:8px 0 0 8px}
+    #tape-view button:last-child {border-radius:0 8px 8px 0}
+    #tape-view button[aria-pressed=true] {background:#1b252b;color:#e6edf0}
+    #optional-tape {margin-block:12px;min-width:0}
+    body.alternate-tape main {max-width:1100px;padding:16px}
+    body.alternate-tape {background:#0b0f12}
+    body.alternate-tape h1 {font-size:22px;letter-spacing:normal}
     dialog {color:inherit; background:#101d23; border:1px solid #63787e; width:min(640px,94vw); max-height:85vh}
     dialog::backdrop {background:#000a}
     dialog ol {max-height:47vh; overflow:auto; padding-left:3em}
@@ -263,7 +259,7 @@
         </select></label
       >
     </nav>
-    <label> Tape view <select id="tape-view"></select></label>
+    <div id="tape-view" role="group" aria-label="Tape view"></div>
     <div class="legend" id="tape-legend">
       <b class="buy">+ Inferred buy</b><b class="sell">− Inferred sell</b
       ><b class="unknown">· Unknown side</b><span>○ Call　◇ Put</span
@@ -285,6 +281,125 @@
       aria-label="Prints by time and strike over the last minute to the displayed time. Select a print or strike to inspect it."
     ></canvas>
     </section>
+    <template id="tape-design"><style>
+:host{
+  --bg:#0b0f12; --panel:#11171b; --line:#1f2a30; --ink:#e6edf0; --dim:#8a9aa3; --faint:#4b5a62;
+  --buy:#3fd0a4; --sell:#f07a64; --unk:#9aa6ad; --spot:#ffd166; --gap:#c58b2a;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+:host{display:block;margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--dim);margin:0 0 14px;max-width:760px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--dim);border:0;padding:8px 12px;font:600 14px system-ui;cursor:pointer}
+.seg button[aria-pressed=true]{background:#1b252b;color:var(--ink)}
+.opt-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;margin:6px 0 10px}
+.opt-head h2{font-size:18px;margin:0}
+.opt-head p{margin:0;color:var(--dim);max-width:640px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.now{display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;font-family:var(--mono);margin-bottom:10px}
+.now .q{font-size:22px;color:var(--spot);font-weight:700}
+.now .t{color:var(--dim)}
+.key{color:var(--dim);font-size:13px;margin-top:8px}
+.key b{font-weight:600}
+.buy{color:var(--buy)} .sell{color:var(--sell)} .unk{color:var(--unk)}
+/* A: Time & Sales */
+.tape{font-family:var(--mono);font-size:14px;max-height:620px;overflow:auto;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:110px 78px 1fr 84px 70px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid #151d22}
+.row .tm{color:var(--dim)}
+.row.big{font-size:16px;font-weight:700}
+.row.big .tm{color:var(--ink)}
+.row .prem{text-align:right}
+.row .bar{height:6px;border-radius:3px;margin:0}
+.row .ctr{white-space:nowrap}
+.run{color:var(--dim);cursor:pointer}
+.run:hover{background:#151d22}
+.run .ctr{grid-column:2 / span 2;white-space:normal}
+.run .mix{display:flex;height:6px;border-radius:3px;overflow:hidden;width:100%}
+.run.open{background:#141c21}
+.inner .row{font-size:13px;padding:3px 4px 3px 18px;color:var(--dim)}
+.cross{padding:7px 4px;color:var(--spot);border-bottom:1px solid #151d22;font-family:var(--mono)}
+.cross:before{content:"";display:inline-block;width:24px;height:2px;background:var(--spot);vertical-align:middle;margin-right:8px}
+.lost{padding:9px 6px;color:#f1c27d;border:1px dashed var(--gap);margin:4px 0;border-radius:6px;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
+.quiet{padding:7px 6px;color:var(--dim);border-bottom:1px solid #151d22;font-style:italic}
+/* B and C */
+canvas{display:block;width:100%;touch-action:pan-y}
+.detail{margin-top:10px;min-height:52px;font-family:var(--mono);font-size:14px;border-top:1px solid var(--line);padding-top:8px}
+.detail .list{max-height:240px;overflow:auto}
+.grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;table-layout:fixed}
+.grid th{color:var(--dim);font-weight:500;padding:4px;text-align:right;border-bottom:1px solid var(--line)}
+.grid td{padding:5px 4px;text-align:right;border-bottom:1px solid #151d22;cursor:pointer;position:relative}
+.grid td.t{color:var(--dim);text-align:left;cursor:default}
+.grid td .n{font-size:14px}
+.grid td .s{display:block;font-size:11px;color:var(--dim)}
+.grid td.hasbig .n{font-weight:800;text-decoration:underline;text-decoration-color:var(--ink)}
+.grid td.spotcol{box-shadow:inset 3px 0 0 var(--spot)}
+.grid tr.lostrow td{color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
+.gridwrap{overflow-x:auto}.grid{min-width:var(--grid-width,0)}
+.honest{color:var(--dim);font-size:13px;margin-top:16px;max-width:820px}
+/* D: mirrored ladder */
+.dctl{display:flex;gap:10px;align-items:center;font-family:var(--mono);color:var(--dim);margin-bottom:8px;flex-wrap:wrap}
+.dctl input{flex:1;min-width:160px;accent-color:var(--spot)}
+.dctl button{background:#1b252b;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:600 13px system-ui;cursor:pointer}
+.ladder{position:relative;font-family:var(--mono)}
+.lrow{display:grid;grid-template-columns:1fr 64px 1fr;align-items:center;height:44px;border-bottom:1px solid #151d22}
+.lrow .k{text-align:center;font-size:15px;color:var(--ink)}
+.lrow .k small{display:block;font-size:11px;color:var(--dim)}
+.side-l,.side-r{display:flex;align-items:center;height:26px;gap:4px;cursor:pointer}
+.side-l{flex-direction:row-reverse}
+.stack{display:flex;height:100%;border-radius:3px;overflow:hidden;min-width:0}
+.side-l .stack{flex-direction:row-reverse}
+.stack i{display:block;height:100%}
+.amt{font-size:12px;color:var(--dim);white-space:nowrap}
+.chip{font-size:11px;font-weight:700;padding:1px 5px;border-radius:9px;background:#0b0f12;border:1px solid currentColor;white-space:nowrap}
+.spotline{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--spot);pointer-events:none;z-index:0}
+.lrow{position:relative;z-index:1}
+.lrow .k span,.amt{background:var(--panel);padding:0 3px}
+.spotline span{position:absolute;right:0;top:-18px;color:var(--spot);font-size:12px;background:var(--panel);padding:0 4px}
+.dbanner{padding:7px 9px;margin-bottom:8px;border:1px dashed var(--gap);border-radius:6px;color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
+.dhead{display:grid;grid-template-columns:1fr 64px 1fr;color:var(--dim);font-size:12px;margin-bottom:4px}
+.dhead span:first-child{text-align:right}.dhead span:nth-child(2){text-align:center}
+/* E: event feed */
+.feed{max-height:620px;overflow:auto;border-top:1px solid var(--line)}
+.ev{padding:9px 6px;border-bottom:1px solid #151d22;cursor:pointer;display:grid;grid-template-columns:78px 1fr;gap:10px}
+.ev:hover{background:#151d22}
+.ev .when{font-family:var(--mono);color:var(--dim);font-size:13px;padding-top:2px}
+.ev .say{font-size:16px}
+.ev .say b{font-weight:700}
+.ev .meta{display:block;font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:2px}
+.ev.small .say{font-size:14px;color:var(--dim)}
+.ev.xing .say{color:var(--spot);font-size:14px}
+.ev.lost{background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
+.ev.lost .say{color:#f1c27d;font-size:14px}
+.ev.quiet .say{color:var(--dim);font-style:italic;font-size:14px;cursor:default}
+.ev .list{grid-column:1 / -1;font-family:var(--mono);font-size:12px;color:var(--dim);max-height:220px;overflow:auto}
+@media (max-width:640px){
+  .lrow{grid-template-columns:1fr 50px 1fr}
+  .dhead{grid-template-columns:1fr 50px 1fr}
+  .amt{display:none}
+  .ev{grid-template-columns:74px 1fr;gap:6px}
+  .ev .when{font-size:11px}
+  .ev .say{font-size:14px}
+}
+@media (max-width:640px){
+  .row{grid-template-columns:88px 46px 1fr 58px;gap:6px;font-size:12px}
+  .run .ctr{grid-column:2 / span 2}
+  .row .side{display:none}
+  .row.big{font-size:14px}
+  .grid td .s{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+[hidden]{display:none!important}
+.row[data-record]{cursor:pointer}
+.controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+.controls button,#view>button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
+.controls:has(label[hidden]):has(button[hidden]){display:none}
+.controls label{font-weight:600}.controls input{accent-color:var(--spot)}
+</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div id="view"></div><div class="detail" id="detail"></div></div></template>
     <section id="optional-tape" hidden></section>
     <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output
@@ -701,7 +816,7 @@
       if (tapeViews.optional()) {
         const shown = new Set(strikes);
         filtered = windowView ? visible.filter(p => shown.has(p.strike)) : visible;
-        tapeViews.render(filtered, tapeSpots(start), view?.coverage?.gaps || [], start, end);
+        tapeViews.render(filtered, tapeSpots(start), view?.coverage?.gaps || [], start, end, strikes);
       } else {
         drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot});
       }
