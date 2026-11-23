@@ -47,6 +47,40 @@ try {
     const chain = page.locator('#flow-history');
     const first = await chain.getAttribute('href');
     assert.equal(new URL(first, origin).searchParams.get('one_clock_at'), String(archiveCutoff));
+    // Read each optional view on a short screen. A wheel should move the panel
+    // when there is more content, then continue down the page at its boundary.
+    await page.setViewportSize({width,height:600});
+    const panel = page.locator('#optional-tape #view');
+    for (const id of ['sales','chart','footprint','ladder','events']) {
+      await page.locator('[data-view="'+id+'"]').click();
+      await page.locator('#optional-tape #view[data-view="'+id+'"]').waitFor();
+      await panel.focus();
+      const before = await panel.evaluate(el=>({overflowY:el.scrollHeight>el.clientHeight+2,
+        overflowX:el.scrollWidth>el.clientWidth+2}));
+      if (width===390 && ['sales','chart','ladder'].includes(id)) assert.ok(before.overflowX,id);
+      if (before.overflowY) {
+        if (width===390) await page.keyboard.press('PageDown');
+        else {
+          await panel.hover();
+          await page.mouse.wheel(0,160);
+        }
+        await page.waitForFunction(()=>document.querySelector('#optional-tape').shadowRoot.querySelector('#view').scrollTop>0);
+      }
+      if (before.overflowX) {
+        await page.keyboard.press('ArrowRight');
+        await page.waitForFunction(()=>document.querySelector('#optional-tape').shadowRoot.querySelector('#view').scrollLeft>0);
+      }
+      if (width===1440) {
+        await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
+        await panel.hover();
+        const pageTop = await page.evaluate(()=>scrollY);
+        await page.mouse.wheel(0,300);
+        await page.waitForFunction(top=>scrollY>top,pageTop);
+      }
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),id);
+    }
+    await page.locator('[data-view="classic"]').click();
+    await page.setViewportSize({width,height:900});
     await page.locator('#seek').fill('350');
     await page.waitForFunction(previous => document.querySelector('#flow-history').getAttribute('href') !== previous, first);
     for (const [url, message] of [

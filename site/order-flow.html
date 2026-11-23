@@ -106,7 +106,7 @@
     #strike-range { font-variant-numeric: tabular-nums; }
     #strike-nav button[aria-pressed="true"] { color: #62e3bd; border-color: #62e3bd; }
     #strike-nav input { width: clamp(80px, 18vw, 220px); }
-    body.strike-navigation canvas:first-of-type { touch-action: none; }
+    body.strike-navigation:not(.alternate-tape) canvas:first-of-type { touch-action: none; }
     #state,
     #fresh {
       font-family: monospace;
@@ -307,7 +307,7 @@ h1{font-size:22px;margin:0 0 4px}
 .key b{font-weight:600}
 .buy{color:var(--buy)} .sell{color:var(--sell)} .unk{color:var(--unk)}
 /* A: Time & Sales */
-.tape{font-family:var(--mono);font-size:14px;max-height:620px;overflow:auto;border-top:1px solid var(--line)}
+.tape{font-family:var(--mono);font-size:14px;border-top:1px solid var(--line)}
 .row{display:grid;grid-template-columns:110px 78px 1fr 84px 70px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid #151d22}
 .row .tm{color:var(--dim)}
 .row.big{font-size:16px;font-weight:700}
@@ -326,9 +326,8 @@ h1{font-size:22px;margin:0 0 4px}
 .lost{padding:9px 6px;color:#f1c27d;border:1px dashed var(--gap);margin:4px 0;border-radius:6px;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
 .quiet{padding:7px 6px;color:var(--dim);border-bottom:1px solid #151d22;font-style:italic}
 /* B and C */
-canvas{display:block;width:100%;touch-action:pan-y}
+canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-zoom}
 .detail{margin-top:10px;min-height:52px;font-family:var(--mono);font-size:14px;border-top:1px solid var(--line);padding-top:8px}
-.detail .list{max-height:240px;overflow:auto}
 .grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;table-layout:fixed}
 .grid th{color:var(--dim);font-weight:500;padding:4px;text-align:right;border-bottom:1px solid var(--line)}
 .grid td{padding:5px 4px;text-align:right;border-bottom:1px solid #151d22;cursor:pointer;position:relative}
@@ -338,7 +337,7 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .grid td.hasbig .n{font-weight:800;text-decoration:underline;text-decoration-color:var(--ink)}
 .grid td.spotcol{box-shadow:inset 3px 0 0 var(--spot)}
 .grid tr.lostrow td{color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
-.gridwrap{overflow-x:auto}.grid{min-width:var(--grid-width,0)}
+.grid{min-width:var(--grid-width,0)}
 .honest{color:var(--dim);font-size:13px;margin-top:16px;max-width:820px}
 /* D: mirrored ladder */
 .dctl{display:flex;gap:10px;align-items:center;font-family:var(--mono);color:var(--dim);margin-bottom:8px;flex-wrap:wrap}
@@ -363,7 +362,7 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .dhead{display:grid;grid-template-columns:1fr 64px 1fr;color:var(--dim);font-size:12px;margin-bottom:4px}
 .dhead span:first-child{text-align:right}.dhead span:nth-child(2){text-align:center}
 /* E: event feed */
-.feed{max-height:620px;overflow:auto;border-top:1px solid var(--line)}
+.feed{border-top:1px solid var(--line)}
 .ev{padding:9px 6px;border-bottom:1px solid #151d22;cursor:pointer;display:grid;grid-template-columns:78px 1fr;gap:10px}
 .ev:hover{background:#151d22}
 .ev .when{font-family:var(--mono);color:var(--dim);font-size:13px;padding-top:2px}
@@ -379,18 +378,23 @@ canvas{display:block;width:100%;touch-action:pan-y}
 @media (max-width:640px){
   .lrow{grid-template-columns:1fr 50px 1fr}
   .dhead{grid-template-columns:1fr 50px 1fr}
-  .amt{display:none}
   .ev{grid-template-columns:74px 1fr;gap:6px}
   .ev .when{font-size:11px}
   .ev .say{font-size:14px}
 }
-@media (max-width:640px){
-  .row{grid-template-columns:88px 46px 1fr 58px;gap:6px;font-size:12px}
-  .run .ctr{grid-column:2 / span 2}
-  .row .side{display:none}
-  .row.big{font-size:14px}
-  .grid td .s{display:none}
+#view {
+  max-height:min(68vh, 620px);
+  overflow:auto;
+  scrollbar-gutter:stable;
+  touch-action:pan-x pan-y pinch-zoom;
 }
+#view:focus-visible,.detail:focus-visible {outline:2px solid var(--spot);outline-offset:2px}
+.tape {min-width:560px}
+.grid thead th {position:sticky;top:0;background:var(--panel);z-index:1}
+.grid td.t,.grid thead th:first-child {position:sticky;left:0;background:var(--panel);z-index:1}
+.grid thead th:first-child {z-index:2}
+.ladder,.dhead {min-width:490px}
+.detail {max-height:min(40vh,280px);overflow:auto}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 [hidden]{display:none!important}
@@ -399,7 +403,7 @@ canvas{display:block;width:100%;touch-action:pan-y}
 .controls button,#view>button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
 .controls:has(label[hidden]):has(button[hidden]){display:none}
 .controls label{font-weight:600}.controls input{accent-color:var(--spot)}
-</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div id="view"></div><div class="detail" id="detail"></div></div></template>
+</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
     <section id="optional-tape" hidden></section>
     <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output
@@ -602,7 +606,7 @@ canvas{display:block;width:100%;touch-action:pan-y}
     el("zoom-in").onclick = () => { strikeWindow.zoom(-1); repaint(); };
     el("zoom-out").onclick = () => { strikeWindow.zoom(1); repaint(); };
     function navigateWheel(e) {
-      if (!live() || !allPrices.length || !e.deltaY) return;
+      if (tapeViews.optional() || !live() || !allPrices.length || !e.deltaY) return;
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) strikeWindow.zoom(Math.sign(e.deltaY));
       else strikeWindow.pan(Math.sign(e.deltaY) * Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 45))));

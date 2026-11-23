@@ -857,15 +857,13 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         $('#detail').textContent = '';
         return;
       }
-      const scroll = $('.tape,.feed,.gridwrap'),
-        top = scroll?.scrollTop,
-        left = scroll?.scrollLeft;
+      const viewport = $('#view');
+      const sameView = viewport.dataset.view === id;
+      const top = sameView ? viewport.scrollTop : 0;
+      const left = sameView ? viewport.scrollLeft : 0;
+      viewport.dataset.view = id;
       draw(S);
-      const next = $('.tape,.feed,.gridwrap');
-      if (next) {
-        next.scrollTop = top || 0;
-        next.scrollLeft = left || 0;
-      }
+      viewport.scrollTo(left, top);
       $('.panel').style.setProperty('--grid-width', 65 + K.length * 36 + 'px');
     },
   };
