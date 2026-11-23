@@ -259,5 +259,95 @@ class PublisherTests(unittest.TestCase):
             self.assertNotIn("config", client.call_args.kwargs)
 
 
+
+class PendingQueueTests(unittest.TestCase):
+    def test_exchange_minute_schedule_and_real_overrun(self):
+        from market_data.live_market.runner import next_capture_delay
+        from market_data.live_market.state import SnapshotTracker
+        from datetime import datetime, timezone
+        start = 0
+        tracker = SnapshotTracker()
+        occupied = []
+        for i in range(390):
+            occupied.append(int(start // 60))
+            tracker.record(datetime.fromtimestamp(start, timezone.utc))
+            completed = start + (3, 22, 50)[i % 3]
+            start = completed + next_capture_delay(start, completed)
+        self.assertEqual(occupied, list(range(390)))
+        self.assertEqual(tracker.get()["missed_snapshot_count"], 0)
+        completed = start + 145
+        self.assertEqual(next_capture_delay(start, completed), 0)
+        tracker.record(datetime.fromtimestamp(completed, timezone.utc))
+        self.assertEqual(tracker.get()["missed_snapshot_count"], 2)
+        self.assertEqual(next_capture_delay(completed, completed + 10), 25)
+
+    def test_capture_through_stall_restart_and_ambiguous_latest(self):
+        from datetime import datetime, timedelta, timezone
+        from test_snapshot_provenance import EXP, TODAY, NOW, QQQ_STRIKES, FakeFeed, state_for
+        from market_data.live_market import market, state
+        from market_data.live_market.publication_queue import PublicationQueue
+
+        class QueueStore(Store):
+            def list_objects_v2(self, *, Bucket, Prefix, MaxKeys):
+                keys = sorted(k for k in self.data if k.startswith(Prefix))
+                return {"Contents": [{"Key": k} for k in keys[:MaxKeys]]}
+
+            def delete_object(self, *, Bucket, Key):
+                del self.data[Key]
+
+            def get_object(self, **kwargs):
+                return {**super().get_object(**kwargs), "LastModified": datetime.now(timezone.utc)}
+
+        s = QueueStore()
+        queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
+        counters, tracker = state.Counters(), state.SnapshotTracker()
+        us = state.UnderlyingSession("QQQ")
+        def capture(instant):
+            feed = FakeFeed(state_for({"bid": 600, "ask": 600.2, "bid_ts": instant.isoformat(),
+                                       "ask_ts": instant.isoformat()}))
+            with patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
+                market.take_snapshot(s, feed, QQQ_STRIKES, EXP, "0DTE_Regular", TODAY,
+                                     counters, tracker, us, publication_queue=queue,
+                                     capture=(instant, feed.get_state()))
+        capture(NOW)
+        def block_entry(key):
+            if "/entries/" in key:
+                raise StoreError("Unavailable")
+        s.before = block_entry
+        with self.assertRaises(PublicationError):
+            queue.publish_oldest()
+        capture(NOW + timedelta(minutes=1))
+        self.assertEqual(tracker.get()["snapshot_sequence"], 2)
+        self.assertNotIn(us.latest_key, s.data)
+        self.assertEqual(len([k for k in s.data if k.startswith(queue.prefix)]), 2)
+
+        queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
+        s.before = None
+        def lose_ack(key):
+            if key == us.latest_key:
+                raise StoreError("LostAck")
+        s.after = lose_ack
+        with self.assertRaises(StoreError):
+            queue.publish_oldest()
+        first = json.loads(s.data[us.latest_key])
+        s.after = None
+        self.assertTrue(queue.publish_oldest())
+        self.assertTrue(queue.publish_oldest())
+        self.assertFalse(queue.publish_oldest())
+        latest = json.loads(s.data[us.latest_key])
+        self.assertEqual([first["one_clock_publication"]["sequence"],
+                          latest["one_clock_publication"]["sequence"]], [1, 2])
+        self.assertEqual(latest["timestamp"], (NOW + timedelta(minutes=1)).isoformat())
+        self.assertEqual(len([k for k in s.data if "/entries/" in k]), 2)
+        self.assertIsNone(queue.advance_latest(us.latest_key, first))
+        self.assertEqual(json.loads(s.data[us.latest_key]), latest)
+        for row in (first, latest):
+            key = row["snapshot_key"]
+            sidecar = json.loads(s.data[key[:-4] + ".provenance.json"])
+            self.assertEqual(sidecar["market_readings_digest"], row["market_readings_digest"])
+            self.assertEqual(sidecar["publication"]["status"], "published")
+            self.assertEqual(sidecar["constructed_at"], row["timestamp"])
+            self.assertIsNotNone(sidecar["latest_published_at"])
+
 if __name__ == "__main__":
     unittest.main()
