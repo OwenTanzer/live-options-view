@@ -648,6 +648,10 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         const ki = K.indexOf(k),
           cl = cells[r][ki],
           n = cl.b + cl.s + cl.u;
+        if (S.tradeStrikes && !S.tradeStrikes.includes(k)) {
+          h += `<td class="unrecorded" aria-label="$${k}: individual trades unavailable" title="Individual trades unavailable">—</td>`;
+          continue;
+        }
         const a = n ? 0.08 + 0.5 * Math.sqrt(n / maxN) : 0;
         const isSpot = sv != null && Math.floor(sv) === k;
         h += `<td data-r="${r}" data-k="${ki}" class="${cl.big ? 'hasbig' : ''} ${isSpot ? 'spotcol' : ''}" style="background:rgba(120,170,190,${a.toFixed(2)})" title="${isSpot ? 'QQQ ' + sv.toFixed(2) + ' (between ' + k + ' and ' + (k + 1) + ')' : ''}">${n ? `<span class="n">${n.toLocaleString()}</span><span class="s"><span class="buy">${cl.b}</span>/<span class="sell">${cl.s}</span>${cl.u ? '/<span class="unk">' + cl.u + '</span>' : ''}</span>` : '<span style="color:var(--faint)">·</span>'}</td>`;
@@ -723,7 +727,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
         }
     }
     $('#view').innerHTML =
-      `<div class="dctl"><span id="dnow"></span><input type="range" id="dslider" min="0" max="${dur}" step="1000" value="${DCUR}" aria-label="Move now through the scene"><button id="dlive">Back to end</button></div><div id="dban"></div><div class="dhead"><span>◀ calls · premium, last 60 s</span><span>strike</span><span>puts · premium, last 60 s ▶</span></div><div class="ladder" id="ladder"></div><div class="key">Bars: <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>; bright = last 10 s, dim = 10–60 s ago. The bar scale stays fixed while you scrub this window and recalculates when the window updates. Chip = largest ticket ≥ $10k in the window (+n = more). <span style="color:var(--spot)">━ QQQ</span> at "now". Tap a bar for its prints.</div>`;
+      `<div class="ladder-head"><div class="dctl"><span id="dnow"></span><input type="range" id="dslider" min="0" max="${dur}" step="1000" value="${DCUR}" aria-label="Move now through the scene"><button id="dlive">Back to end</button></div><div id="dban"></div><div class="dhead"><span>◀ calls · premium, last 60 s</span><span>strike</span><span>puts · premium, last 60 s ▶</span></div></div><div class="ladder" id="ladder"></div><div class="key">Bars: <span class="buy">buy</span> / <span class="sell">sell</span> / <span class="unk">side ?</span>; bright = last 10 s, dim = 10–60 s ago. The bar scale stays fixed while you scrub this window and recalculates when the window updates. Chip = largest ticket ≥ $10k in the window (+n = more). <span style="color:var(--spot)">━ QQQ</span> at "now". Tap a bar for its prints.</div>`;
     const ks = K.slice().reverse(),
       ROW = 44;
     const draw = () => {
@@ -753,6 +757,8 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       for (const k of ks) {
         const a = agg[K.indexOf(k)];
         const half = (t) => {
+          if (S.tradeStrikes && !S.tradeStrikes.includes(k))
+            return '<span class="unrecorded" title="Individual trades unavailable">—</span>';
           const x = a[t],
             tot = x.hb + x.hs + x.hu + x.ob + x.os + x.ou;
           const big = x.ps.filter((p) => prem(p) >= BIG).sort((p, q) => prem(q) - prem(p));
@@ -942,7 +948,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       DCUR = null;
     },
     render(id, rows, spots, rawGaps, start, end, strikes, showAll, cappedFrom = null, chainStrikes) {
-      const fullChain = id === 'chart' && Array.isArray(chainStrikes);
+      const fullChain = ['chart', 'footprint', 'ladder'].includes(id) && Array.isArray(chainStrikes);
       K = Array.from(new Set([...(fullChain ? chainStrikes : []), ...strikes, ...rows.map((p) => p.strike)]))
         .filter(Number.isFinite)
         .sort((a, b) => a - b);
@@ -976,10 +982,10 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       $('#oh').textContent = OPT[letter][0];
       $('#op').textContent = OPT[letter][1];
       renderNow(S);
-      $('#chart-footer').hidden =
-        $('#inspect-strikes').hidden =
-        $('#chart-strikes').hidden =
-          id !== 'chart' || !K.length;
+      const footer = $('#chart-footer');
+      footer.replaceChildren();
+      footer.hidden = !K.length;
+      $('#inspect-strikes').hidden = $('#chart-strikes').hidden = id !== 'chart' || !K.length;
       if (!K.length) {
         $('#view').onscroll = null;
         $('#view').textContent = 'Waiting for strikes';
@@ -993,7 +999,15 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       viewport.dataset.view = id;
       viewport.onscroll = null;
       draw(S);
-      if (id === 'chart' && !sameView && K.length > 17) {
+      if (id !== 'chart') footer.append(viewport.querySelector('.key'));
+      if (id === 'footprint' || id === 'ladder') {
+        const axis = id === 'footprint' ? 'Scroll across strikes' : 'Scroll up or down through strikes';
+        const coverage = S.tradeStrikes ? ' · — individual trades unavailable' : '';
+        const guide = $('#chart-strikes');
+        guide.hidden = false;
+        guide.textContent = axis + ' · $' + K[0] + '–$' + K.at(-1) + coverage;
+      }
+      if (['chart', 'footprint', 'ladder'].includes(id) && !sameView && K.length > 17) {
         // Enter a wide chain near the observed market. Every collected strike
         // above and below remains in the same scroll track.
         const target = spots.at(-1)?.spot ?? rows.at(-1)?.strike ?? K[Math.floor(K.length / 2)];
@@ -1001,9 +1015,26 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
           (best, k, i) => (Math.abs(k - target) < Math.abs(K[best] - target) ? i : best),
           0,
         );
-        viewport.scrollTo(0, Math.max(0, Math.min(K.length - 5, K.length - 3 - closest)) * chartStepPx);
+        const index = K.length - 1 - closest;
+        if (id === 'footprint') {
+          const heads = viewport.querySelector('.grid thead tr').cells;
+          const cell = heads[index + 1];
+          viewport.scrollLeft =
+            cell.getBoundingClientRect().left -
+            viewport.getBoundingClientRect().left +
+            viewport.scrollLeft -
+            (viewport.clientWidth + heads[0].clientWidth - cell.clientWidth) / 2;
+        } else if (id === 'ladder') {
+          const row = viewport.querySelectorAll('.lrow')[index];
+          viewport.scrollTop =
+            row.getBoundingClientRect().top -
+            viewport.getBoundingClientRect().top +
+            viewport.scrollTop -
+            (viewport.clientHeight + viewport.querySelector('.ladder-head').offsetHeight - row.clientHeight) /
+              2;
+        } else
+          viewport.scrollTo(0, Math.max(0, Math.min(K.length - 5, K.length - 3 - closest)) * chartStepPx);
       } else viewport.scrollTo(left, top);
-      $('.panel').style.setProperty('--grid-width', 65 + K.length * 36 + 'px');
     },
   };
 }

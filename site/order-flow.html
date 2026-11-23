@@ -329,7 +329,7 @@ h1{font-size:22px;margin:0 0 4px}
 /* B and C */
 canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
 .detail{margin-top:10px;min-height:52px;font-family:var(--mono);font-size:14px;border-top:1px solid var(--line);padding-top:8px}
-.grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;table-layout:fixed}
+.grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
 .grid th{color:var(--dim);font-weight:500;padding:4px;text-align:right;border-bottom:1px solid var(--line)}
 .grid td{padding:5px 4px;text-align:right;border-bottom:1px solid #151d22;cursor:pointer;position:relative}
 .grid td.t{color:var(--dim);text-align:left;cursor:default}
@@ -338,7 +338,11 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
 .grid td.hasbig .n{font-weight:800;text-decoration:underline;text-decoration-color:var(--ink)}
 .grid td.spotcol{box-shadow:inset 3px 0 0 var(--spot)}
 .grid tr.lostrow td{color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
-.grid{min-width:var(--grid-width,0)}
+.grid th,.grid td{white-space:nowrap}
+.grid th:not(:first-child){min-width:9ch}
+.unrecorded{color:var(--dim);text-align:center}
+.grid td.unrecorded{cursor:default}
+.ladder-head{position:sticky;top:0;z-index:3;background:var(--panel)}
 .honest{color:var(--dim);font-size:13px;margin-top:16px;max-width:820px}
 /* D: mirrored ladder */
 .dctl{display:flex;gap:10px;align-items:center;font-family:var(--mono);color:var(--dim);margin-bottom:8px;flex-wrap:wrap}
@@ -390,18 +394,25 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
   touch-action:pan-x pan-y pinch-zoom;
 }
 #view:focus-visible,.detail:focus-visible {outline:2px solid var(--spot);outline-offset:2px}
+#view[data-view="footprint"] {scrollbar-gutter:auto}
 #view[data-view="chart"] {--chart-height:clamp(180px,60vh,440px);height:var(--chart-height);max-height:none;overflow-x:hidden}
 .coverage-cap {color:#f2c96b}
 .strike-track {height:calc(100% + var(--strike-travel));position:relative}
 .strike-track canvas {position:sticky;top:0;height:var(--chart-height);background:var(--panel)}
 #chart-strikes {margin:0 0 6px;font:13px var(--mono);color:var(--dim)}
 #inspect-strikes {margin-bottom:8px}
-#chart-strikes::after {content:" · Scroll vertically to browse strikes"}
+.panel:has(#view[data-view="chart"]) #chart-strikes::after {content:" · Scroll vertically to browse strikes"}
 .tape {min-width:560px}
 .grid thead th {position:sticky;top:0;background:var(--panel);z-index:1}
 .grid td.t,.grid thead th:first-child {position:sticky;left:0;background:var(--panel);z-index:1}
 .grid thead th:first-child {z-index:2}
-.ladder,.dhead {min-width:490px}
+.row .tm {position:sticky;left:0;background:var(--panel);z-index:1}
+@media (max-width:640px){
+  .dhead,.lrow{grid-template-columns:minmax(0,1fr) 48px minmax(0,1fr)}
+  .side-l,.side-r{position:relative;min-width:0;align-items:flex-end}
+  .side-l .chip,.side-r .chip{position:absolute;bottom:100%;font-size:10px}
+  .stack{flex-shrink:1}
+}
 .detail {max-height:min(40vh,280px);overflow:auto}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 

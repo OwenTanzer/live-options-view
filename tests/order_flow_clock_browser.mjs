@@ -57,8 +57,8 @@ try {
       await panel.focus();
       const before = await panel.evaluate(el=>({overflowY:el.scrollHeight>el.clientHeight+2,
         overflowX:el.scrollWidth>el.clientWidth+2}));
-      if (width===390 && ['sales','ladder'].includes(id)) assert.ok(before.overflowX,id);
-      if (id==='chart') assert.equal(before.overflowX,false);
+      if (width===390 && id==='sales') assert.ok(before.overflowX,id);
+      if (['chart','ladder'].includes(id)) assert.equal(before.overflowX,false);
       if (before.overflowY) {
         if (width===390) await page.keyboard.press('PageDown');
         else {
@@ -76,6 +76,11 @@ try {
         await panel.hover();
         const pageTop = await page.evaluate(()=>scrollY);
         await page.mouse.wheel(0,300);
+        // A wheel gesture can remain latched to the inner scroller on its final frame.
+        if (await page.evaluate(top=>scrollY<=top,pageTop)) {
+          await page.waitForTimeout(180);
+          await page.mouse.wheel(0,300);
+        }
         await page.waitForFunction(top=>scrollY>top,pageTop);
       }
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),id);
@@ -106,6 +111,41 @@ try {
     await page.getByRole('button',{name:'Inspect 2564 prints at these strikes · 37 tickets ≥ $10k'}).waitFor();
     await page.mouse.wheel(0,-240);
     await range.getByText('Strikes $743–$747 of $709–$775',{exact:true}).waitFor();
+    // Browse the complete archived chain in both the footprint and ladder.
+    await page.locator('[data-view="footprint"]').click();
+    const headers=panel.locator('thead th');
+    await headers.nth(67).waitFor({state:'attached'});
+    assert.equal(await headers.nth(1).textContent(),'775');
+    assert.equal(await headers.last().textContent(),'709');
+    await panel.evaluate(el=>el.scrollLeft=el.scrollWidth);
+    const edges=await panel.evaluate(el=>{
+      const heads=el.querySelectorAll('th'), rect=el.getBoundingClientRect();
+      return [Math.abs(heads[0].getBoundingClientRect().left-rect.left),
+        heads[heads.length-1].getBoundingClientRect().right-rect.left-el.clientWidth];
+    });
+    assert.ok(edges.every(n=>Math.abs(n)<=2));
+    assert.equal(await panel.locator('tbody tr').first().locator('td').last().getAttribute('title'),'Individual trades unavailable');
+    await page.locator('[data-view="ladder"]').click();
+    const levels=panel.locator('.lrow');
+    await levels.nth(66).waitFor({state:'attached'});
+    assert.equal(await levels.first().locator('.k').textContent(),'775');
+    assert.equal(await levels.last().locator('.k').textContent(),'709');
+    await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
+    assert.equal(await levels.last().locator('.unrecorded').count(),2);
+    assert.ok(await panel.locator('.ladder-head').evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.parentElement.getBoundingClientRect().top)<=1));
+    await page.locator('[data-view="sales"]').click();
+    await page.locator('#optional-tape .controls input').check();
+    await panel.locator('[data-record]').nth(3322).waitFor({state:'attached'});
+    assert.equal(await panel.locator('[data-record]').count(),3323);
+    await page.locator('[data-view="events"]').click();
+    await panel.locator('.ev[data-i]').first().waitFor();
+    const eventPrints=await panel.evaluate(el=>{
+      const groups=[...el.querySelectorAll('.ev[data-i]')];
+      for(const group of groups) group.click();
+      return [...el.querySelectorAll('.ev .list>div')].map(row=>row.textContent.match(/archive row (\d+)/)?.[1]);
+    });
+    assert.equal(eventPrints.length,3323);
+    assert.equal(new Set(eventPrints).size,3323);
     await page.goto(origin+'/order-flow.html?source=capture&tape=chart');
     await statusContains('887 prints in view');
     await range.getByText('Strikes $649–$653 of $500–$900',{exact:true}).waitFor();
