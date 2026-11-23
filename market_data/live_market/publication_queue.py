@@ -5,6 +5,8 @@ immutable commit, compatible latest update and provenance write retire an item.
 """
 import hashlib
 import json
+import sqlite3
+from pathlib import Path
 import re
 import time
 import threading
@@ -34,12 +36,22 @@ def read(s3, bucket, key, limit):
 
 
 class PublicationQueue:
-    def __init__(self, s3, bucket, symbol):
+    def __init__(self, s3, bucket, symbol, *, spool_dir=None):
         self.s3, self.bucket = s3, bucket
         self.lane = UNDERLYING_SESSIONS[symbol]
         self.prefix = f"collector-pending/v1/{symbol}/"
         self.wake = threading.Event()
         self.session = None
+        self.spool = None
+        if spool_dir is not None:
+            directory = Path(spool_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            self.spool = directory / f"{symbol}.sqlite3"
+            with self._spool_connection() as db:
+                db.execute("CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, body BLOB NOT NULL)")
+
+    def _spool_connection(self):
+        return sqlite3.connect(self.spool)
 
     def start(self):
         threading.Thread(target=self.run, name=self.prefix, daemon=True).start()
@@ -54,18 +66,40 @@ class PublicationQueue:
             raise ValueError("publication item exceeds size bound")
         key = self.prefix + snapshot_key + ".json"
         try:
-            self.s3.put_object(Bucket=self.bucket, Key=key, Body=raw,
+            self._admit(self.s3, key, raw, snapshot_key)
+        except ValueError:
+            raise  # immutable identity collision, never enqueue different bytes
+        except Exception as error:
+            if self.spool is None:
+                raise
+            # Both the create and its reconciliation were inconclusive. Keep
+            # exact inputs across process restart while R2 is unavailable.
+            with self._spool_connection() as db:
+                added = db.execute("INSERT OR IGNORE INTO pending VALUES (?, ?)", (key, raw))
+                if not added.rowcount and db.execute(
+                    "SELECT body FROM pending WHERE key = ?", (key,)
+                ).fetchone()[0] != raw:
+                    raise ValueError("local pending snapshot collision")
+            log.warning("Queue admission parked for retry %s: %s", snapshot_key, error)
+            self.wake.set()
+            return False
+        self.wake.set()
+        return True
+
+    def _admit(self, store, key, raw, snapshot_key):
+        try:
+            store.put_object(Bucket=self.bucket, Key=key, Body=raw,
                                ContentType="application/json", IfNoneMatch="*")
         except Exception:
             # Resolve a lost acknowledgement against the serialized item.
             try:
-                existing, _ = read(self.s3, self.bucket, key, 2 * EVIDENCE_BYTES)
+                existing, _ = read(store, self.bucket, key, 2 * EVIDENCE_BYTES)
             except Exception as read_error:
                 if not _missing(read_error):
                     raise
                 # Another in-flight wake may already have finished this job.
                 meta_key = snapshot_key[:-4] + ".provenance.json"
-                final, _ = read(self.s3, self.bucket, meta_key, EVIDENCE_BYTES)
+                final, _ = read(store, self.bucket, meta_key, EVIDENCE_BYTES)
                 receipt = json.loads(final)
                 if receipt.get("snapshot_key") == snapshot_key and receipt.get("one_clock_publication"):
                     return
@@ -75,10 +109,31 @@ class PublicationQueue:
                 restored["first_attempt_at"] = None
             if encode(restored) != raw:
                 raise ValueError("pending snapshot collision")
-        self.wake.set()
 
     def publish_oldest(self):
         page = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=self.prefix, MaxKeys=1)
+        remote = next(iter(page.get("Contents", [])), {}).get("Key")
+        if self.spool is not None:
+            with self._spool_connection() as db:
+                item = db.execute("SELECT key, body FROM pending ORDER BY key LIMIT 1").fetchone()
+            if item and (remote is None or item[0] <= remote):
+                key, raw = item
+                # Restart after a remote worker already completed this item.
+                csv_key = json.loads(raw)["payload"]["snapshot_key"]
+                try:
+                    meta, _ = read(self.s3, self.bucket, csv_key[:-4] + ".provenance.json", EVIDENCE_BYTES)
+                except Exception as exc:
+                    if not _missing(exc):
+                        raise
+                    completed = False
+                else:
+                    record = json.loads(meta)
+                    completed = record.get("snapshot_key") == csv_key and record.get("one_clock_publication")
+                if not completed:
+                    self._admit(self.s3, key, raw, csv_key)
+                with self._spool_connection() as db:
+                    db.execute("DELETE FROM pending WHERE key = ? AND body = ?", (key, raw))
+                return True
         if not page.get("Contents"):
             return False
         key = page["Contents"][0]["Key"]

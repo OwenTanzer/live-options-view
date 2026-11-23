@@ -10,6 +10,8 @@ points (start_live_quote_server, make_s3, wait_for_premarket, _run_session)
 resolve through the package entry, as they did in the flat file.
 """
 
+import os
+import tempfile
 import secrets
 import threading
 import time
@@ -84,7 +86,9 @@ def _publication_queue(us, today, counters):
     if not ONE_CLOCK_PUBLICATIONS:
         return None
     if us.symbol not in _publication_queues:
-        queue = PublicationQueue(make_s3(publication=True), R2_BUCKET, us.symbol)
+        spool_root = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or tempfile.gettempdir()
+        queue = PublicationQueue(make_s3(publication=True), R2_BUCKET, us.symbol,
+                                 spool_dir=os.path.join(spool_root, "collector-publication-v1", R2_BUCKET))
         _publication_queues[us.symbol] = queue
         queue.start()
     queue = _publication_queues[us.symbol]
