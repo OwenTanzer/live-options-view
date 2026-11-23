@@ -358,20 +358,20 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
 
   /* ---------- B: price chart + tickets ---------- */
   const chartStepPx = 80;
+  const chartSize = new ResizeObserver(() => {
+    const viewport = $('#view');
+    if (viewport.dataset.view === 'chart') viewport.onscroll?.();
+  });
+  chartSize.observe($('#view'));
   function renderB(S) {
     const box = $('#view');
     const col = { b: '#42ff83', s: '#ff626b', u: '#ffffff' };
-    box.innerHTML = `<div class="strike-track"><canvas id="cv"></canvas></div><div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span style="color:${col.b}">buy</span> / <span style="color:${col.s}">sell</span> / <span style="color:${col.u}">unknown side</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
-    const cv = $('#cv'),
-      dpr = devicePixelRatio || 1,
-      Wd = cv.clientWidth,
-      Hd = Math.min(520, Math.max(180, Math.floor(innerHeight * 0.6)), Math.max(360, Wd * 0.55));
-    box.style.setProperty('--chart-height', Hd + 'px');
-    cv.width = Wd * dpr;
-    cv.height = Hd * dpr;
-    cv.style.height = Hd + 'px';
+    box.innerHTML = '<div class="strike-track"><canvas id="cv"></canvas></div>';
+    const footer = $('#chart-footer');
+    footer.innerHTML = `<div class="key"><b style="color:var(--spot)">━ QQQ</b> · ● ticket ≥ $10k at its strike (area = premium, ▲ call ▼ put, colour = <span style="color:${col.b}">buy</span> / <span style="color:${col.s}">sell</span> / <span style="color:${col.u}">unknown side</span>) · pale ticks = prints below $10k (stacked at the same chart time) · <span style="color:#f1c27d">hatched</span> = feed lost</div>`;
+    const cv = $('#cv');
     const c = cv.getContext('2d');
-    c.scale(dpr, dpr);
+    let Wd, Hd;
     const L = 44,
       R = 10,
       T = 10,
@@ -381,7 +381,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     // five-strike price window; ticket picking uses the same projection.
     const count = Math.min(5, K.length);
     const travel = (K.length - count) * chartStepPx;
-    $('.strike-track').style.height = Hd + travel + 'px';
+    box.style.setProperty('--strike-travel', travel + 'px');
     const range = $('#chart-strikes');
     const inspector = $('#inspect-strikes');
     let visible = [];
@@ -392,6 +392,17 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const big = S.prints.filter((p) => prem(p) >= BIG).sort((a, b) => prem(b) - prem(a));
     const rad = (p) => 3 + Math.sqrt(prem(p) / 270000) * 16;
     function paint() {
+      Wd = cv.clientWidth;
+      Hd = cv.clientHeight;
+      if (!Wd || !Hd) return;
+      const dpr = devicePixelRatio || 1;
+      const width = Math.round(Wd * dpr),
+        height = Math.round(Hd * dpr);
+      if (cv.width !== width || cv.height !== height) {
+        cv.width = width;
+        cv.height = height;
+      }
+      c.setTransform(width / Wd, 0, 0, height / Hd, 0, 0);
       const offset = Math.min(K.length - count, Math.round(box.scrollTop / chartStepPx));
       const first = K.length - count - offset;
       const bottomStrike = K[first],
@@ -540,7 +551,7 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
     const list = document.createElement('button');
     list.textContent = 'Inspect chart prints (' + S.prints.length + ')';
     list.onclick = () => inspect(S.prints.map((p) => p[6]).reverse(), 'Chart prints');
-    box.append(list);
+    footer.append(list);
     const pick = (e) => {
       const rc = cv.getBoundingClientRect(),
         x = e.clientX - rc.left,
@@ -933,7 +944,10 @@ function createDesign(shadow, formatClock, getMultiplier, inspect) {
       $('#oh').textContent = OPT[letter][0];
       $('#op').textContent = OPT[letter][1];
       renderNow(S);
-      $('#inspect-strikes').hidden = $('#chart-strikes').hidden = id !== 'chart' || !K.length;
+      $('#chart-footer').hidden =
+        $('#inspect-strikes').hidden =
+        $('#chart-strikes').hidden =
+          id !== 'chart' || !K.length;
       if (!K.length) {
         $('#view').onscroll = null;
         $('#view').textContent = 'Waiting for strikes';

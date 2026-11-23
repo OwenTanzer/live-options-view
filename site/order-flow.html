@@ -327,7 +327,7 @@ h1{font-size:22px;margin:0 0 4px}
 .lost{padding:9px 6px;color:#f1c27d;border:1px dashed var(--gap);margin:4px 0;border-radius:6px;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
 .quiet{padding:7px 6px;color:var(--dim);border-bottom:1px solid #151d22;font-style:italic}
 /* B and C */
-canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-zoom}
+canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
 .detail{margin-top:10px;min-height:52px;font-family:var(--mono);font-size:14px;border-top:1px solid var(--line);padding-top:8px}
 .grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px;table-layout:fixed}
 .grid th{color:var(--dim);font-weight:500;padding:4px;text-align:right;border-bottom:1px solid var(--line)}
@@ -390,10 +390,10 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
   touch-action:pan-x pan-y pinch-zoom;
 }
 #view:focus-visible,.detail:focus-visible {outline:2px solid var(--spot);outline-offset:2px}
-#view[data-view="chart"] {max-height:var(--chart-height, 520px)}
+#view[data-view="chart"] {--chart-height:clamp(180px,60vh,440px);height:var(--chart-height);max-height:none;overflow-x:hidden}
 .coverage-cap {color:#f2c96b}
-.strike-track {min-width:560px}
-.strike-track canvas {position:sticky;top:0;background:var(--panel)}
+.strike-track {height:calc(100% + var(--strike-travel));position:relative}
+.strike-track canvas {position:sticky;top:0;height:var(--chart-height);background:var(--panel)}
 #chart-strikes {margin:0 0 6px;font:13px var(--mono);color:var(--dim)}
 #inspect-strikes {margin-bottom:8px}
 #chart-strikes::after {content:" · Scroll vertically to browse strikes"}
@@ -408,10 +408,10 @@ canvas{display:block;width:100%;min-width:560px;touch-action:pan-x pan-y pinch-z
 [hidden]{display:none!important}
 .row[data-record]{cursor:pointer}
 .controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px}
-.controls button,#view>button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
+.controls button,#view>button,#chart-footer button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
 .controls:has(label[hidden]):has(button[hidden]){display:none}
 .controls label{font-weight:600}.controls input{accent-color:var(--spot)}
-</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div class="key" id="spot-source"></div><div id="chart-strikes" hidden></div><button id="inspect-strikes" hidden></button><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
+</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div class="key" id="spot-source"></div><div id="chart-strikes" hidden></div><button id="inspect-strikes" hidden></button><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div id="chart-footer" hidden></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
     <section id="optional-tape" hidden></section>
     <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output

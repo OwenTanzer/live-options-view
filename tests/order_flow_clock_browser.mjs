@@ -57,7 +57,8 @@ try {
       await panel.focus();
       const before = await panel.evaluate(el=>({overflowY:el.scrollHeight>el.clientHeight+2,
         overflowX:el.scrollWidth>el.clientWidth+2}));
-      if (width===390 && ['sales','chart','ladder'].includes(id)) assert.ok(before.overflowX,id);
+      if (width===390 && ['sales','ladder'].includes(id)) assert.ok(before.overflowX,id);
+      if (id==='chart') assert.equal(before.overflowX,false);
       if (before.overflowY) {
         if (width===390) await page.keyboard.press('PageDown');
         else {
@@ -93,6 +94,13 @@ try {
     await page.mouse.wheel(0,240);
     await range.getByText('Strikes $740–$744 of $740–$747',{exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>scrollY),pageY);
+    await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
+    const geometry=await panel.evaluate(el=>{
+      const cv=el.querySelector('canvas').getBoundingClientRect(), viewport=el.getBoundingClientRect();
+      return [el.scrollWidth-el.clientWidth,el.scrollHeight-el.clientHeight,cv.top-viewport.top,cv.height-el.clientHeight];
+    });
+    assert.deepEqual(geometry,[0,240,0,0]);
+    await page.getByRole('button',{name:'Inspect 2564 prints at these strikes · 37 tickets ≥ $10k'}).waitFor();
     await page.mouse.wheel(0,-240);
     await range.getByText('Strikes $743–$747 of $740–$747',{exact:true}).waitFor();
     await page.goto(origin+'/order-flow.html?source=capture&tape=chart');
