@@ -266,6 +266,28 @@ class MeBots(unittest.TestCase):
         self.assertIsNotNone(
             resolve()
         )  # No prior-range edge or rising-range condition.
+        # A long breakout may gap up and finish on the top quartile of a red candle.
+        # The Runner's enumerated test is independent of candle-body direction.
+        exact = [
+            replace(b, open=100.9, high=101, low=100, close=100.75) for b in current
+        ]
+        exact_prior = [replace(b, high=91) for b in prior]
+        self.assertIsNotNone(
+            resolve(
+                exact_prior,
+                current_rows=exact,
+                plan={
+                    "levels": [
+                        {
+                            "price": 100.5,
+                            "side": "long",
+                            "first_target": 102,
+                            "source": "fixture",
+                        }
+                    ]
+                },
+            )
+        )
         self.assertIsNone(resolve(prior[:7]))
         self.assertIsNone(resolve(prior[:-1]))
         self.assertIsNone(resolve(seen=current[-1].end + timedelta(microseconds=1)))

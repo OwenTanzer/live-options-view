@@ -144,7 +144,7 @@ def qualified_trigger(kind, trigger, previous, sequence, plan):
         if target is None or not admitted(trigger.close, price, target, side):
             continue
         op, hi, lo, cl = prices(trigger, side)
-        if hi >= side * target or cl <= op:
+        if hi >= side * target or (not runner and cl <= op):
             continue
         if kind != "opening" and cl < hi - trigger.span / 4:
             continue
