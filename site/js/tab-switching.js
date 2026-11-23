@@ -8,11 +8,14 @@
 // `lastTs`/`lastData` (slice 5). `loadHistoryManifest` and `setBotsPolling`
 // are defined by the later historical / bot sections and are only called
 // at runtime, after all scripts load. `loadNewsPanel` is defined by
-// js/news-panel.js, loaded just before this file. `showTab` is wired up by boot.
+// js/news-panel.js, loaded just before this file. `loadNasdaqPanel` is defined
+// by js/nasdaq-panel.js, loaded just before this file. `showTab` is wired up by boot.
 // ── tab switching ────────────────────────────────────────────────────────────
 let historyLoaded = false;
 // The News panel (js/news-panel.js) mounts once, on first open, like history.
 let newsLoaded = false;
+// The Stocks panel (js/nasdaq-panel.js) mounts once, on first open, like News.
+let nasdaqLoaded = false;
 
 // tab id -> [panel element id, tab button id]
 const TABS = {
@@ -21,6 +24,7 @@ const TABS = {
   bots:    ['bots-panel',    'tab-bots'],
   squeeze: ['squeeze-panel', 'tab-squeeze'],
   news:    ['news-panel',    'tab-news'],
+  nasdaq: ['nasdaq-panel',  'tab-nasdaq'],
 };
 
 function showTab(tab) {
@@ -38,8 +42,21 @@ function showTab(tab) {
     newsLoaded = true;
     loadNewsPanel();
   }
+  if (tab === 'nasdaq' && !nasdaqLoaded) {
+    nasdaqLoaded = true;
+    if (typeof loadNasdaqPanel === 'function') loadNasdaqPanel();
+  }
   // The bot roster is only polled while its tab is on screen -- no point
   // holding an extra request cycle open behind a hidden panel.
   const replay = typeof window !== 'undefined' && window.oneClockDashboard?.showTab(tab);
   setBotsPolling(tab === 'bots' && !replay);
+}
+
+// boot.js wires the other five tab buttons; the Stocks button is wired here,
+// next to the tab map that owns it, so this panel's change stays in its own
+// files. Guarded: the tab-switching test drives showTab with a stub document
+// that has no tab-nasdaq element, and showTab itself is the wiring boot uses.
+if (typeof document !== 'undefined' && document.getElementById) {
+  const nasdaqBtn = document.getElementById('tab-nasdaq');
+  if (nasdaqBtn) nasdaqBtn.onclick = () => showTab('nasdaq');
 }

@@ -12,6 +12,7 @@ Agents working in this repository must read [AGENTS.md](AGENTS.md) for release b
 |---|---|---|
 | Where is the page? | [site/index.html](site/index.html), [site/js](site/js) | Page shell and browser features; the source directory is not a public URL prefix |
 | Where do prices and chain snapshots come from? | [market_data/live_market/](market_data/live_market) → [collector guide](market_data/live_market/README.md) | tastytrade/DXLink acquisition, snapshot-derived readings and optional EIA forecasts |
+| Where does the NASDAQ-100 snapshot come from? | [market_data/nasdaq_collector/](market_data/nasdaq_collector) → [collector guide](market_data/nasdaq_collector/README.md), [snapshot contract](docs/specs/NASDAQ_SNAPSHOT.md) | Public Nasdaq/Yahoo/Google News sources only; hourly `nasdaq/latest.json` plus provenance sidecar; no account or auth |
 | What serves data and accounts? | [Backend guide](backend/README.md), [release procedure](docs/SITE_RELEASES.md) | Asset gateway plus separate API for archive access, live quotes, accounts and settlement |
 | What decides paper trades? | [crassus/README.md](crassus/README.md) | Strategy runner; consumes market snapshots and calls the Worker account API |
 | What produces Big Banana rankings? | [market_data/options_scanner/__main__.py](market_data/options_scanner/__main__.py), [scanner contract](site/plans/2026-09-options-return-scanner.md) | Tradier chain sampling, stored sweeps and retrospective return products |
