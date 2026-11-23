@@ -33,6 +33,10 @@ export function observation(input) {
   if (!ORIGINS.has(row.origin)) throw new TypeError('origin must be explicit');
   if (!Number.isSafeInteger(row.revision) || row.revision < 1) throw new TypeError('revision must be a positive integer');
   row.eventAt = instant(row.eventAt, 'eventAt');
+  if (row.valueAt !== undefined) {
+    row.valueAt = instant(row.valueAt, 'valueAt');
+    if (row.valueAt > row.eventAt) throw new TypeError('value observation follows state change');
+  }
   row.availableAt = row.availableAt == null ? null : instant(row.availableAt, 'availableAt');
   if (row.availableAt !== null && row.availableAt < row.eventAt) throw new TypeError('availability precedes observation');
   if (!Object.hasOwn(row, 'value')) throw new TypeError('value is required (null may represent a retraction)');
@@ -91,7 +95,7 @@ export function readingAsOf(inputs, selection, { maxAgeMs } = {}) {
   if (!row) return Object.freeze({ state: 'unavailable', row: null, ageMs: null, publicationAgeMs: null });
   // Retractions do not resurrect a prior value. Coverage/retraction is a source
   // fact; freshness measures the observation's age, not recent transport activity.
-  const ageMs = at.cutoff - row.eventAt;
+  const ageMs = at.cutoff - (row.valueAt ?? row.eventAt);
   const state = row.value === null ? 'unavailable' : ageMs > maxAgeMs ? 'stale' : 'fresh';
   return Object.freeze({ state, row, ageMs, publicationAgeMs: at.cutoff - row.availableAt });
 }

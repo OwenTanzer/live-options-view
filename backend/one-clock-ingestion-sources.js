@@ -1,3 +1,4 @@
+import { shortlistIngestion } from './one-clock-shortlist-ingestion.js';
 import { readArchivedChain } from './one-clock-chain.js';
 import { observation } from '../site/shared/one-clock.js';
 import { snapshotInstant } from '../site/shared/one-clock-session.js';
@@ -58,4 +59,4 @@ export const chainIngestion=Object.freeze({id:'archived-chain',version:'1',owner
   }
 });
 // A stream joins once here; all accounts share the same public ingestion pass.
-export const publicIngestionSources=Object.freeze([chainIngestion]);
+export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion]);

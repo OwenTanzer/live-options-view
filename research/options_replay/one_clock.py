@@ -37,6 +37,10 @@ def observation(value):
     if row.get("origin") not in ORIGINS or type(row.get("revision")) is not int or not 1 <= row["revision"] <= 2**53 - 1:
         raise ValueError("explicit origin and positive integer revision required")
     row["eventAt"] = instant(row["eventAt"])
+    if "valueAt" in row:
+        row["valueAt"] = instant(row["valueAt"])
+        if row["valueAt"] > row["eventAt"]:
+            raise ValueError("value observation follows state change")
     row["availableAt"] = None if row.get("availableAt") is None else instant(row["availableAt"])
     if row["availableAt"] is not None and row["availableAt"] < row["eventAt"]:
         raise ValueError("availability precedes observation")
@@ -114,7 +118,7 @@ def reading_as_of(inputs,selection,max_age_ms):
     if not rows:
         return dict(state='unavailable',row=None,ageMs=None,publicationAgeMs=None)
     row=rows[-1]
-    age=instant(selection['cutoff'])-row['eventAt']
+    age=instant(selection['cutoff'])-row.get('valueAt',row['eventAt'])
     return dict(state='unavailable' if row['value'] is None else 'stale' if age>max_age_ms else 'fresh',
         row=row,ageMs=age,publicationAgeMs=instant(selection['cutoff'])-row['availableAt'])
 
