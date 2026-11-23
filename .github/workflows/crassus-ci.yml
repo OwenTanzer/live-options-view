@@ -33,6 +33,9 @@ jobs:
         run: |
           python scripts/verify_profit_protection.py
           python scripts/verify_forward_skew.py
+      - name: Verify inactive acceleration strategies
+        working-directory: crassus
+        run: python scripts/verify_me_bots.py
       - name: Run integrity invariant suite
         working-directory: crassus
         run: python scripts/verify_invariants.py

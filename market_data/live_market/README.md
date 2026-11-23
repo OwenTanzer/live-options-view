@@ -107,3 +107,32 @@ it across connection epochs, and supplies counts-only raw time-field diagnostics
 on the private BTC route. No added connection, subscription budget, public data
 route or archive writer is involved. See the product guide for limits and the
 collector/API/asset rollout order; old API/UI revisions cannot use this fallback.
+
+## Minute capture and One Clock recovery
+
+All enabled chains share the feed snapshot and capture time taken at the start
+of a cycle. The next capture targets the next wall-clock minute. If an overrun
+crosses a minute boundary, the next cycle captures the current feed immediately.
+Health counts a snapshot after the CSV upload; latest-view uploads retain their
+own success counter. An unobserved minute remains missing.
+
+With One Clock enabled, acquisition stages the exact payload, sidecar and CSV
+digest in R2 under `collector-pending/v1/<symbol>/`. A single background worker
+per symbol recovers the oldest pending item, verifies the archived CSV, and
+commits the existing immutable UUID before conditionally advancing latest. The
+worker retires the pending copy only after the sidecar write. Ambiguous failures
+retry from exact bytes with exponential delays up to 60 seconds. Each immutable
+attempt has a 20-second cooperative budget, at most 40 requests, and bounded
+socket timeouts. A permanently invalid item holds that instrument's publication
+queue; capture continues. The pending key in logs identifies the instrument.
+Only the active producer may own these writes. A rollback stops the new workers
+and leaves any outstanding R2 items for later recovery.
+
+Retain the observation timestamp for market chronology. Queued readings have a null
+publication stamp. On the first worker attempt the queue durably freezes its
+timestamp before preparing immutable bytes. The prepared reading stamp is the
+first attempt, including on delayed retries. The research export reports the
+confirmed latest publication time for queued readings, or null until confirmed. Use the immutable entry's R2 upload
+time for native availability and the successful latest write recorded in the
+final sidecar for compatibility-view availability. A pending sidecar establishes
+archive capture only.

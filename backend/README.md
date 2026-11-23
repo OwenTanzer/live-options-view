@@ -30,6 +30,14 @@ the namespace and source, project an allowlisted payload, prove availability and
 declare prospective/replay/backfill collection before calling it. A namespace is
 an internal access boundary, never a client-supplied substitute for authentication.
 
+The calibrated opening-level adapter selects native prices within the exchange
+session. It reads up to 20 artifacts and 8 MiB per turn and retains a watermark
+immediately before the earliest unverified publication time. The observer can
+record crossings and mature outcomes through that watermark while the
+remaining time range stays pending. A complete evaluation receipt requires
+coverage through the requested cutoff. Other adapters retain their existing
+budgets and coverage policy.
+
 Rule versions and observation revisions are immutable. Source observations,
 event/outcome revisions, source checkpoint and batch receipt commit in one D1
 batch. A generation trigger rejects concurrent stale evaluations; retry with the
@@ -265,3 +273,5 @@ Apply additive migration `0013_one_clock_reevaluation.sql` before releasing this
 Web CI runs the production catalog and account lookups against local Miniflare and uses its per-statement row counters. The scenario models full unchanged catalog pages on the configured cron, 1,000 historical lookups plus 10,000 authenticated account lookups and 500 session creation/logout pairs per day. These request counts are test assumptions. Update the scenario when adding high-volume workloads or changing the traffic model. Reproduce with `npm ci --prefix tests/d1-budget --ignore-scripts` and `node --experimental-sqlite --test tests/d1-budget/usage.test.mjs`.
 
 The separate **D1 daily account budget** workflow checks Cloudflare Analytics every half hour for all databases in the account since midnight UTC. Both checks fail at 80% of either daily free-tier allowance (5,000,000 rows read or 100,000 rows written). Production telemetry runs on master, never in pull requests. It needs Account Analytics Read permission. Use the repository secret `D1_ANALYTICS_READ_TOKEN` if the existing Cloudflare credential lacks it. A failed usage check is an alert; it leaves serving and collection running. Inspect D1 Insights by rows read and rows written, then reproduce the expensive path in the offline fixture. Analytics reporting and scheduled runs can lag, and a burst can consume the remaining allowance between checks.
+
+Historical queue targets set a minimum generation for reevaluation. The worker reconciles current event revisions against the retained evidence at the scheduled tick and acknowledges the generation it actually read. Calibrated rules with a partial availability prefix can advance on live turns. A historical retry waits for complete calibrated coverage before replacing the event set. Results reports pending while calibrated coverage awaits complete evaluation.

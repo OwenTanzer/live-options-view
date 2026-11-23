@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
+WORKDIR /app
+COPY crassus/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY crassus/ ./
+ENV CRASSUS_ACCOUNTS_FILE=/app/accounts.me-bots.provisional.json \
+    CRASSUS_DATA_ROOT=/data \
+    CRASSUS_ONE_CLOCK_PUBLICATION=disabled
+CMD ["sh", "-c", "exec python -m crassus.runner --me-paper-roster --accounts \"$CRASSUS_ACCOUNTS_FILE\" --interval 15"]

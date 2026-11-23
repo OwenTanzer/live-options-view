@@ -65,3 +65,44 @@ test('invalid decision query is rejected before storage',async()=>{
   const req=new Request('https://test/api/one-clock/bot-decisions?bot=raw&scope=private');
   assert.equal((await handleBotDecisions(req,{},new URL(req.url))).status,400);
 });
+test('publisher and observer keep the original action clock across recovery and ignore legacy audit-only rows',async t=>{
+  const cmd=`import sys,json,hashlib
+sys.path.insert(0,'tests')
+from test_one_clock_bot_decisions import Store,decision,publish_chunk
+a=decision()
+a.update(strategy_decided_at='2026-11-20T14:31:00Z',timestamp_utc='2026-11-20T14:31:15Z',outcome_class='ambiguous',decision={'action':'buy'})
+retry={**a,'timestamp_utc':'2026-11-20T14:50:00Z','outcome_class':'reconciled_after_ambiguity'}
+b=decision()
+b.update(strategy_decided_at='2026-11-20T14:32:00Z',timestamp_utc='2026-11-20T14:33:00Z')
+error=decision()
+error.update(decision=None,outcome_class='runner_error')
+data=b''.join(json.dumps(r).encode()+b'\\n' for r in (a,retry,b,error,decision()))
+public,private=Store(),Store()
+key='crassus-ledger/v1/'+('a'*32)+'/decisions-test.jsonl/'+f'{0:020d}-{len(data):020d}-{hashlib.sha256(data).hexdigest()}.jsonl'
+private.objects[key]=data
+publish_chunk(private,'private',public,'public',key)
+print(json.dumps({k:v.decode() for k,v in public.objects.items() if '/entries/' in k}))`;
+  const built=spawnSync('python3',['-c',cmd],{encoding:'utf8'});
+  assert.equal(built.status,0,built.stderr);
+  const entries=JSON.parse(built.stdout);
+  const db=makeStorage();t.after(()=>db.db.close());
+  await db.exec(fs.readFileSync(new URL('../backend/migrations/0011_one_clock_publications.sql',import.meta.url),'utf8'));
+  const bucket={async get(key){if(!entries[key])return null;const wire=new TextEncoder().encode(entries[key]);
+    return {size:wire.length,uploaded:new Date(T-2000),arrayBuffer:async()=>wire.buffer};}};
+  await ingestPublicationStream(db,bucket,botAuditPublication,{instrument:'QQQ',now:T});
+  const rows=db.raw('SELECT payload FROM one_clock_publication_records').map(r=>JSON.parse(r.payload));
+  assert.equal(rows.filter(r=>r.source==='bot-decision').length,5);
+  const evaluations=rows.filter(r=>r.source==='bot-evaluation');
+  assert.equal(evaluations.length,3);
+  const {oiSkewAuditRule}=await import('../site/shared/one-clock-decision-events.js');
+  const {evaluateEvents}=await import('../site/shared/one-clock-events.js');
+  const open=Date.parse('2026-11-20T14:30:00Z'),minute=60000;
+  const selection={...scope,origin:'recorded'};
+  for(const [m,spot] of [[1,100],[2,101],[11,103],[12,104]])rows.push({
+    source:'price',id:String(m),revision:1,session:scope.session,instrument:'QQQ',origin:'recorded',
+    eventAt:open+m*minute,availableAt:open+m*minute,value:{spot},evidence:'fixture://quote/'+m
+  });
+  const events=evaluateEvents({rule:oiSkewAuditRule('audit'),observations:rows,selection,sessionClose:open+390*minute});
+  assert.deepEqual(events.map(e=>[e.inputEvidence[0].value.action,e.decisionAt,e.outcomes[0].value]),
+    [['buy',open+minute,3],['no_trade',open+2*minute,3]]);
+});

@@ -1,0 +1,39 @@
+{
+  "accounts": [
+    {
+      "alias": "Golden-Time Breakout",
+      "username": "crassus_me_golden",
+      "password_env": "CRASSUS_PW_ME_GOLDEN",
+      "strategy_id": "me_golden_qqq",
+      "active": false
+    },
+    {
+      "alias": "Trend-Day Runner",
+      "username": "crassus_me_runner",
+      "password_env": "CRASSUS_PW_ME_RUNNER",
+      "strategy_id": "me_runner_qqq",
+      "active": false
+    },
+    {
+      "alias": "Opening-Drive Micro-Accel",
+      "username": "crassus_me_opening",
+      "password_env": "CRASSUS_PW_ME_OPENING",
+      "strategy_id": "me_opening_qqq",
+      "active": false
+    },
+    {
+      "alias": "LOD/HOD Breakdown + Phelps",
+      "username": "crassus_me_phelps",
+      "password_env": "CRASSUS_PW_ME_PHELPS",
+      "strategy_id": "me_phelps_qqq",
+      "active": false
+    },
+    {
+      "alias": "Candle-Ratchet",
+      "username": "crassus_me_ratchet",
+      "password_env": "CRASSUS_PW_ME_RATCHET",
+      "strategy_id": "me_ratchet_qqq",
+      "active": false
+    }
+  ]
+}

@@ -74,3 +74,25 @@ test('late-fill opening revisions are visible at actual publication only; restar
   const draws=run([...maps,price(1,699),price(2,701),price(16*60000,699),price(16*60000+1,701)]);
   assert.equal(draws.length,1);assert.equal(draws[0].encounter.cohort,'call-only');assert.equal(draws[0].triggeredAt,base+16*60000+1);
 });
+
+test('level adapter budgets apply only to prices inside the calendar session and retain opening revisions',async t=>{
+  const {levelIngestion}=await import('../backend/one-clock-level-ingestion.js');
+  const {makeStorage}=await import('./helpers/d1_shim.mjs');
+  const {equitySession}=await import('../backend/one-clock-calendar.js');
+  const db=makeStorage();t.after(()=>db.db.close());
+  await db.exec(`CREATE TABLE one_clock_publication_status(stream,checked_at,generation,coverage);
+    CREATE INDEX one_clock_publication_status_cutoff ON one_clock_publication_status(stream,checked_at,generation);
+    CREATE TABLE one_clock_publication_records(stream,session,source,event_at,available_at,received_at,sequence,record_id,revision,payload);
+    CREATE INDEX one_clock_native_chain_replay ON one_clock_publication_records(stream,session,source,event_at,available_at,record_id,revision);`);
+  const day='2026-11-27',bounds=equitySession(day),cutoff=bounds.close+300000,stream='collector-chain/QQQ';
+  await db.prepare('INSERT INTO one_clock_publication_status VALUES(?,?,?,?)').bind(stream,cutoff,1,JSON.stringify({reason:'tail-at-check',nextSequence:200})).run();
+  const times=[...Array.from({length:100},(_,i)=>bounds.open-(100-i)*60000),bounds.open,bounds.open+60000,bounds.close,bounds.close+120000];
+  await db.batch(times.map((eventAt,i)=>db.prepare('INSERT INTO one_clock_publication_records VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .bind(stream,day,'price',eventAt,eventAt+200,eventAt+1000,i+1,'price'+i,1,
+      JSON.stringify({id:'price'+i,eventAt,availableAt:eventAt+200,revision:1,details:{sequence:i+1}}))));
+  const key='intraday/20261127/opening-oi/v1/0001.json',bucket={list:async()=>({objects:[{key,etag:'frozen',uploaded:new Date(bounds.open+500)}]})};
+  const discovered=await levelIngestion.discover(bucket,{instrument:'QQQ',session:day,cutoff},db);
+  assert.equal(discovered.complete,true);
+  assert.deepEqual(discovered.artifacts.filter(a=>a.price).map(a=>a.price.id),['price100','price101','price102']);
+  assert.deepEqual(discovered.artifacts.filter(a=>a.opening).map(a=>a.key),[key]);
+});
