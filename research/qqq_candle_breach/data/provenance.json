@@ -1,0 +1,20 @@
+[
+  {
+    "file": "data/QQQ-2026-10-29.csv",
+    "sha256": "969e3245d3b4fb732cb786696cb759509130ce25e2655788f4c24c51df7bd6a9",
+    "source": "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?period1=1793232000&period2=1793318400&interval=1m&includePrePost=false",
+    "response_sha256": "85369ecee0b95d2c29593f33887aa5ea18febcdac8b8bc87ed8ad3d9fde6f508"
+  },
+  {
+    "file": "data/QQQ-2026-10-30.csv",
+    "sha256": "715f7adf51442539cc3f382e8b222107895dfb858cd7e7f2289a62170882ac03",
+    "source": "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?period1=1793318400&period2=1793404800&interval=1m&includePrePost=false",
+    "response_sha256": "baf8cc2aaef46073b9e8ff8dc2c6152a76a24611ea5ba159b6bf8a059fba8f75"
+  },
+  {
+    "file": "data/QQQ-2026-11-02.csv",
+    "sha256": "93cba78941faa18495699fb914589e9774073d94d28fa09bde858ec31d322d15",
+    "source": "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?period1=1793577600&period2=1793664000&interval=1m&includePrePost=false",
+    "response_sha256": "c5d672a8c213db2997301d60770d78845a61ff1e42eea08dc9e926390ef10987"
+  }
+]

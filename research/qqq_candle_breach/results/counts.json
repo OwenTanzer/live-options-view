@@ -1,0 +1,62 @@
+{
+  "rule": "qqq.1m.opposite_color_breach.v1",
+  "sessions": [
+    {
+      "session": "2026-10-29",
+      "bars": 390,
+      "status": "included",
+      "up_eligible": 172,
+      "down_eligible": 195,
+      "down_events": 36,
+      "beyond": 49,
+      "open_beyond": 0,
+      "both_extremes": 32,
+      "inside_and_both": 12,
+      "unknown_5m": 1,
+      "up_events": 44,
+      "at_or_inside": 31
+    },
+    {
+      "session": "2026-10-30",
+      "bars": 390,
+      "status": "included",
+      "up_eligible": 184,
+      "down_eligible": 163,
+      "down_events": 35,
+      "beyond": 51,
+      "open_beyond": 0,
+      "both_extremes": 13,
+      "inside_and_both": 7,
+      "unknown_5m": 2,
+      "up_events": 37,
+      "at_or_inside": 21
+    },
+    {
+      "session": "2026-11-02",
+      "bars": 390,
+      "status": "included",
+      "down_eligible": 147,
+      "down_events": 47,
+      "at_or_inside": 36,
+      "open_beyond": 0,
+      "both_extremes": 23,
+      "inside_and_both": 12,
+      "unknown_5m": 1,
+      "up_eligible": 196,
+      "up_events": 42,
+      "beyond": 53
+    }
+  ],
+  "total": {
+    "up_eligible": 552,
+    "down_eligible": 505,
+    "down_events": 118,
+    "beyond": 153,
+    "open_beyond": 0,
+    "both_extremes": 68,
+    "inside_and_both": 31,
+    "unknown_5m": 4,
+    "up_events": 123,
+    "at_or_inside": 88
+  }
+}
