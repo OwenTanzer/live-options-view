@@ -197,6 +197,27 @@ Which one to run is a risk decision for the account owner.
   but still lets the bot close.
 - The existing `state/STOP` file stops the runner entirely.
 
+## SLV and DRAM routes
+
+Two more routed bots use the same executor, risk guard and approvals:
+
+| Alias | Username | Strategy | May open |
+| --- | --- | --- | --- |
+| SLV OI Skew (tastytrade) | `tasty_oiskew_slv` | `oi_skew_slv_adaptive` | SLV only |
+| DRAM OI Skew (tastytrade) | `tasty_oiskew_dram` | `oi_skew_dram_adaptive` | DRAM only |
+
+Both run the IBIT adaptive near-money window on their nearest listed
+expiration and keep the default limits (1 contract, $3.00 premium cap, $250
+entry stop, 4 opens a day). `OPEN_ALLOWED_UNDERLYING` ties every strategy to
+one root, so no routed bot can open another bot's underlying. Each alias has
+its own ownership and loss state. With `entry_stop_basis: both`, the account
+leg of the entry stop is shared: one bot's loss can stop the others' opens.
+
+Activation also needs the collector to publish the chain (`COLLECT_SLV=1` or
+`COLLECT_DRAM=1`) and an observed paper record for the matching
+`crassus_skew_slv` or `crassus_skew_dram` account. Both entries are
+`"active": false`.
+
 ## Activation (account owner only)
 
 Credentials never go in source, commits, issues, logs or screenshots. This

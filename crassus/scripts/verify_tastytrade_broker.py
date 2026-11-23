@@ -479,6 +479,36 @@ def scenario_open_and_close(tmp: Path) -> None:
     check("account flat after close", Book(session.me().trades).is_flat)
 
 
+def scenario_slv_dram_routes(tmp: Path) -> None:
+    print("\n-- SLV / DRAM routes: each strategy opens only its own underlying")
+    slv, dram = "SLV301220C00030000", "DRAM301220C00040000"
+    qmap = {CALL: quote(CALL, 1.20, 1.25), slv: quote(slv, 0.40, 0.42), dram: quote(dram, 1.10, 1.15)}
+    for root, symbol, strategy, wrong in (("SLV", slv, "oi_skew_slv_adaptive", dram),
+                                          ("DRAM", dram, "oi_skew_dram_adaptive", slv)):
+        for label, other in ((f"{root} strategy may not open QQQ", CALL),
+                             (f"{root} strategy may not open the other new root", wrong)):
+            fake = FakeTasty()
+            session, ex, _ = build(tmp / f"{root}-x-{other}", fake, quotes=qmap)
+            session.ensure_session()
+            r = submit(ex, symbol=other, strategy_id=strategy)
+            check(label, r.outcome_class == Outcome.REJECTED and "underlying" in (r.note or ""), r.note or "")
+            check(f"{label}: nothing sent", fake.posts_to_orders() == 0)
+        fake = FakeTasty()
+        session, ex, _ = build(tmp / f"{root}-open", fake, quotes=qmap)
+        session.ensure_session()
+        r = submit(ex, symbol=symbol, strategy_id=strategy)
+        body = [kw["json"] for m, u, kw in fake.calls if m == "POST" and u.endswith("/orders")]
+        check(f"{root} strategy opens {root}", r.outcome_class == Outcome.FILLED, r.note or "")
+        check(f"{root} leg uses the padded tastytrade symbol",
+              bool(body) and body[0]["legs"][0]["symbol"] == tb.to_tasty_symbol(symbol)
+              and body[0]["legs"][0]["action"] == "Buy to Open")
+    fake = FakeTasty()
+    session, ex, _ = build(tmp / "qqq-x-slv", fake, quotes=qmap)
+    session.ensure_session()
+    r = submit(ex, symbol=slv, strategy_id="oi_skew_qqq")
+    check("QQQ strategy may not open SLV", r.outcome_class == Outcome.REJECTED and "underlying" in (r.note or ""), r.note or "")
+
+
 def scenario_ownership(tmp: Path) -> None:
     print("\n-- F1 ownership: only the bot's own contracts are managed")
     fake = FakeTasty()
@@ -1462,6 +1492,7 @@ def main() -> int:
         scenario_limits_and_symbols()
         scenario_limit_boundaries(tmp)
         scenario_open_and_close(tmp)
+        scenario_slv_dram_routes(tmp)
         scenario_ownership(tmp)
         scenario_guard(tmp)
         scenario_open_counting(tmp)

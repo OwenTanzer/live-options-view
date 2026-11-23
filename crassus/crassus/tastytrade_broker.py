@@ -136,8 +136,15 @@ LATE_FILL_WATCH_S = 2 * 24 * 3600
 # Only these strategies may *open* a position on the real account. Closing
 # is always allowed (it can only reduce exposure), which keeps the mandatory
 # EOD flatten (`eod_flatten`) working.
-OPEN_ALLOWED_STRATEGIES = frozenset({"oi_skew_qqq"})
-ALLOWED_UNDERLYINGS = frozenset({"QQQ"})
+# Each strategy may open only its own underlying: the SLV bot can never open
+# a QQQ or DRAM contract, and so on.
+OPEN_ALLOWED_UNDERLYING = {
+    "oi_skew_qqq": "QQQ",
+    "oi_skew_slv_adaptive": "SLV",
+    "oi_skew_dram_adaptive": "DRAM",
+}
+OPEN_ALLOWED_STRATEGIES = frozenset(OPEN_ALLOWED_UNDERLYING)
+ALLOWED_UNDERLYINGS = frozenset(OPEN_ALLOWED_UNDERLYING.values())
 
 FILLED = "Filled"
 WORKING_STATUSES = frozenset({"Received", "Routed", "In Flight", "Live", "Contingent", "Cancel Requested", "Replace Requested"})
@@ -1068,6 +1075,9 @@ class RiskGuard:
             return f"strategy {strategy_id!r} is not allowed to open positions on the brokerage account"
         if underlying_of(symbol) not in ALLOWED_UNDERLYINGS:
             return f"{symbol} is not an allowed underlying"
+        if underlying_of(symbol) != OPEN_ALLOWED_UNDERLYING[strategy_id]:
+            return (f"{symbol} is not {strategy_id}'s underlying "
+                    f"({OPEN_ALLOWED_UNDERLYING[strategy_id]})")
         if state.ownership_discrepancies:
             return ("ownership discrepancy unresolved for "
                     f"{sorted(state.ownership_discrepancies)} (bot owns more than the broker shows, unexplained); "
