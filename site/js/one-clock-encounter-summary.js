@@ -27,3 +27,29 @@ export function renderEncounterSummary(container,events,rules) {
     container.append(table);
   }
 }
+
+export function renderReceipt(container,event) {
+  container.replaceChildren();
+  const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');
+  summary.textContent='Full receipt';pre.textContent=JSON.stringify(event,null,2);details.append(summary,pre);
+  if(event.encounter) {
+    const {strike,cohort,contact,approach,calibration,lowerTime,upperTime}=event.encounter;
+    const iso=t=>new Date(t).toISOString();
+    const heading=document.createElement('h3');
+    heading.textContent=event.instrument+' $'+strike+' · '+cohort+' · '+contact+' encounter';
+    container.append(heading);
+    const paragraph=text=>{const p=document.createElement('p');p.textContent=text;container.append(p);};
+    const [flag,from,to]=event.inputEvidence;
+    paragraph('The '+calibration.tier+' calibration qualified this strike at '+iso(flag.availableAt)+'. Call bucket '+flag.value.call+', put bucket '+flag.value.put+'.');
+    paragraph('Price moved '+approach+' from $'+from.value+' at '+iso(lowerTime)+' to $'+to.value+' at '+iso(upperTime)+'. The encounter became observable at '+iso(event.triggeredAt)+'.');
+    for(const outcome of event.outcomes) {
+      const horizon=(outcome.targetAt-upperTime)/60000;
+      const measurement=outcome.state==='measured'?outcome.value+' at '+iso(outcome.measuredAt):outcome.state+(outcome.reason?' · '+outcome.reason.replaceAll('-',' '):'');
+      paragraph(horizon+' min · '+measurement);
+    }
+    const link=document.createElement('a');
+    link.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(event.triggeredAt)})+'#history-clock';
+    link.textContent='Open Historical at the encounter';container.append(link);
+  } else details.open=true;
+  container.append(details);container.hidden=false;
+}

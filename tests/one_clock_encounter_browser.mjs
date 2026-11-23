@@ -75,7 +75,7 @@ try {
   assert.ok(ticks.some(t=>t.state==='evaluated' && t.session===session),JSON.stringify(ticks));
   simulatedNow+=60000;
   await page.click('#show-observed');await page.waitForSelector('#observed-ledger button');
-  await page.locator('#observed-ledger button').first().click();assert.match(await page.locator('#observed-evidence').innerText(),/observerRevision/);
+  await page.locator('#observed-ledger button').first().click();assert.match(await page.locator('#observed-evidence pre').textContent(),/observerRevision/);
   const observed=await page.locator('#observed-ledger tr').count();
   await page.click('#show-builder');
   await page.fill('#encounter-day',session);await page.click('#encounter-run');
@@ -85,6 +85,9 @@ try {
   assert.equal(await page.locator('#observed-ledger tr').count(),observed);
   for(const group of ['put-only','call-only','both'])assert.ok(Number(await table.locator('tbody tr').filter({has:page.getByText(group,{exact:true})}).first().locator('td').nth(2).innerText())>0);
   await page.locator('#observed-ledger button').first().click();assert.match(await page.locator('#observed-evidence').innerText(),/calibration/);
+  const historical=new URL(await page.getByRole('link',{name:'Open Historical at the encounter'}).getAttribute('href'),origin);
+  assert.equal(historical.hash,'#history-clock');assert.equal(historical.searchParams.get('one_clock_session'),session);
+  assert.equal(Number(historical.searchParams.get('one_clock_at')),start+60000);
   await page.click('#show-builder');await page.selectOption('#level-bucket','4');await page.selectOption('#level-approach','down');
   await page.fill('#level-horizons','2, 5');await page.uncheck('#both');await page.click('#account-save');
   await page.waitForFunction(()=>document.querySelector('#form-status').textContent.includes('v2 to your account'));
