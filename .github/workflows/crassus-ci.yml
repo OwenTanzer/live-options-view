@@ -33,6 +33,9 @@ jobs:
         run: |
           python scripts/verify_profit_protection.py
           python scripts/verify_forward_skew.py
+      - name: Verify opening OI associator share strategies
+        working-directory: crassus
+        run: python scripts/verify_oi_associator.py
       - name: Verify inactive acceleration strategies
         working-directory: crassus
         run: python scripts/verify_me_bots.py
