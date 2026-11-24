@@ -194,6 +194,8 @@ const el = (id) => elements[id] ||= {
 };
 function loadPanel(fakeModule) {
   for (const key of Object.keys(elements)) delete elements[key];
+  let expiry;
+  let poll;
   const scope = {
     document: { getElementById: el },
     BROWSER_DATA: '/browser-data',
@@ -201,14 +203,19 @@ function loadPanel(fakeModule) {
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
     fetch: async () => { throw new Error('no fetch in this harness'); },
     window: { CryptoPredictions: fakeModule },
+    setTimeout: (callback, delay) => { expiry = { callback, delay }; return 1; },
+    clearTimeout: () => {},
+    setInterval: callback => { poll = callback; return 1; },
   };
-  return new Function(...Object.keys(scope), panelSource + `
+  const panel = new Function(...Object.keys(scope), panelSource + `
   let clock = Date.parse('2026-11-24T00:45:00Z');
   function cryptoNow() { return clock; }
-  return { fetchCryptoPredictions, renderCryptoPredictions,
+  return { fetchCryptoPredictions, renderCryptoPredictions, loadCryptoPanel,
+    set now(value) { clock = value; },
     get prediction() { return cryptoPrediction; },
     get predictionError() { return cryptoPredictionError; } };
 `)(...Object.values(scope));
+  return Object.assign(panel, { expiry: () => expiry, poll: () => poll });
 }
 
 function fakeResult(state, rowValue) {
@@ -218,6 +225,7 @@ function fakeResult(state, rowValue) {
     reading: rowValue === undefined ? null : {
       state, row: rowValue === null ? { value: null } : {
         id: 'BTC|1h|2026-11-24T00:00:00Z',
+        availableAt: Date.parse(GENERATED_AT),
         value: estimateValue('2026-11-24T00:00:00Z', '2026-11-24T01:00:00Z'),
       },
       ageMs: 45 * 60 * 1000, publicationAgeMs: 12 * 60 * 1000,
@@ -248,6 +256,12 @@ function fakeResult(state, rowValue) {
   assert.match(rendered, /last-hour momentum/, 'the basis is shown');
   assert.match(rendered, /00:00 UTC/, 'the estimate/target times are shown');
   assert.match(rendered, /01:00 UTC/, 'the target hour end is shown');
+  assert.equal(panel.expiry().delay, 15 * 60 * 1000);
+  panel.now = Date.parse('2026-11-24T01:00:00Z');
+  panel.expiry().callback();
+  assert.match(el('crypto-predictions').innerHTML, /No live next-hour estimate/);
+  assert.doesNotMatch(el('crypto-predictions').innerHTML, /\$61,192/);
+  await Promise.resolve();
 
   // A passed prediction renders as "no live estimate" — and
   // the estimated price appears nowhere in the section, even
@@ -279,5 +293,17 @@ function fakeResult(state, rowValue) {
   assert.ok(!panelSource.includes('estimated_price ='),
     'the panel must never compute an estimate itself');
 }
+
+let refreshes = 0;
+const refreshing = loadPanel({ readPredictionsAsOf: async () => {
+  refreshes++;
+  return fakeResult('unavailable', null);
+} });
+refreshing.loadCryptoPanel();
+await Promise.resolve();
+assert.equal(refreshes, 1);
+refreshing.poll()();
+await Promise.resolve();
+assert.equal(refreshes, 2);
 
 console.log('crypto predictions panel tests passed');

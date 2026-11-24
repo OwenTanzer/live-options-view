@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Consumer } = require('./consumer');
 const { Source, DataError } = require('./source');
-const { tools } = require('./server');
+const { Protocol, tools } = require('./server');
 
 const NOW = Date.parse('2026-11-23T22:00:00Z');
 const KEY = 'crypto/latest.json';
@@ -70,6 +70,35 @@ test('crypto_snapshot is a registered read-only tool', () => {
   const tool = tools.find(t => t.name === 'crypto_snapshot');
   assert.ok(tool);
   assert.equal(tool.annotations.readOnlyHint, true);
+});
+
+test('crypto_snapshot tools/call returns fixture rows over MCP', async () => {
+  const { consumer } = setup();
+  const protocol = new Protocol(consumer);
+  await protocol.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+    protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'fixture', version: '1' },
+  } });
+  await protocol.handle({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const reply = await protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+    params: { name: 'crypto_snapshot', arguments: { symbol: 'BTC' } } });
+  assert.equal(reply.result.isError, false);
+  assert.equal(reply.result.structuredContent.rows[0].symbol, 'BTC');
+});
+
+test('live 50 and fallback 39 preserve membership and full counts', async () => {
+  for (const [count, membership] of [[50, 'live'], [39, 'embedded_fallback']]) {
+    const data = JSON.parse(fixture());
+    data.coins = Array.from({ length: count }, (_, index) => coin('C' + index, 'coinbase'));
+    data.universe = { membership_source: membership, coins: count };
+    const { consumer } = setup({ files: { [KEY]: JSON.stringify(data) } });
+    const out = await consumer.call('crypto_snapshot', { limit: 50 });
+    assert.equal(out.rows.length, count);
+    assert.equal(out.actual.universe.membership_source, membership);
+    const discovery = await consumer.call('discover_sources');
+    const capability = discovery.capabilities.find(item => item.dataset === 'crypto_snapshot');
+    assert.equal(capability.availability, 'available');
+    assert.equal(capability.actual.universe.coins, count);
+  }
 });
 
 test('discover_sources lists crypto_snapshot with its fields and cadence', async () => {

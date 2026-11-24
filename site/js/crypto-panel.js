@@ -74,12 +74,14 @@ async function fetchCryptoLatest() {
   try {
     const url = `${BROWSER_DATA}/crypto/latest.json?_=${cryptoNow()}`;
     const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    if (version !== cryptoFetchVersion) return;
     if (response.status === 404) {
       cryptoSnapshot = null;
       cryptoError = 'no snapshot published yet';
     } else {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const value = await response.json();
+      if (version !== cryptoFetchVersion) return;
       if (!value || typeof value !== 'object' || Array.isArray(value) ||
           !Array.isArray(value.coins)) throw new Error('Invalid crypto snapshot');
       cryptoSnapshot = value;
@@ -105,8 +107,11 @@ async function fetchCryptoLatest() {
 // a checked-in prediction seed; per-coin expansion is future scope.
 let cryptoPrediction = null;
 let cryptoPredictionError = null;
+let cryptoPredictionVersion = 0;
+let cryptoPredictionExpiry = null;
 
 async function fetchCryptoPredictions() {
+  const version = ++cryptoPredictionVersion;
   const predictionsModule = typeof window !== 'undefined' ? window.CryptoPredictions : null;
   if (!predictionsModule) {
     cryptoPrediction = null;
@@ -116,11 +121,21 @@ async function fetchCryptoPredictions() {
   }
   try {
     const result = await predictionsModule.readPredictionsAsOf({ coin: 'BTC', cutoff: cryptoNow() });
+    if (version !== cryptoPredictionVersion) return;
     cryptoPrediction = result;
     cryptoPredictionError = null;
   } catch (e) {
+    if (version !== cryptoPredictionVersion) return;
     cryptoPrediction = null;
     cryptoPredictionError = e.message || 'fetch failed';
+  }
+  clearTimeout(cryptoPredictionExpiry);
+  const end = Date.parse(cryptoPrediction?.reading?.row?.value?.target_end);
+  if (Number.isFinite(end) && end > cryptoNow()) {
+    cryptoPredictionExpiry = setTimeout(() => {
+      renderCryptoPredictions();
+      fetchCryptoPredictions();
+    }, end - cryptoNow());
   }
   renderCryptoPredictions();
 }
@@ -138,6 +153,11 @@ function renderCryptoPredictions() {
     return;
   }
   const value = result.reading.row.value;
+  const targetEnd = Date.parse(value.target_end);
+  if (!Number.isFinite(targetEnd) || targetEnd <= cryptoNow()) {
+    predictionsEl.innerHTML = '<p class="crypto-empty">No live next-hour estimate — target hour has passed; retained as historical evidence.</p>';
+    return;
+  }
   const window = value.data_window || {};
   const basis = Array.isArray(value.basis) ? value.basis.join(', ') : '';
   predictionsEl.innerHTML =
@@ -150,7 +170,7 @@ function renderCryptoPredictions() {
     ' · data: ' + (window.bars_1h == null ? '—' : window.bars_1h + ' 1h bars') +
     (window.first_bar ? ' (' + formatAsOf(window.first_bar) + ' – ' + formatAsOf(window.last_bar) + ')' : '') +
     (basis ? ' · basis: ' + escapeHtml(basis) : '') + '</p>' +
-    '<p>Estimate made ' + formatAsOf(value.target_start) +
+    '<p>Estimate available ' + formatAsOf(new Date(result.reading.row.availableAt).toISOString()) +
     ' · target hour ' + formatAsOf(value.target_start) + ' – ' + formatAsOf(value.target_end) +
     ' · reading ' + escapeHtml(result.state) + '</p>';
 }
@@ -244,7 +264,9 @@ function renderCryptoPanel() {
     tbody.innerHTML = rows.map(cryptoRowHtml).join('');
   }
   if (captionEl) {
-    captionEl.textContent = `39 coins by market-cap rank · snapshot ${formatAsOf(constructed)}` +
+    const membership = cryptoSnapshot.universe?.membership_source;
+    const label = membership === 'live' ? 'live top 50' : membership === 'embedded_fallback' ? 'embedded fallback' : 'membership source unknown';
+    captionEl.textContent = `${rows.length} coins by market-cap rank · ${label} · snapshot ${formatAsOf(constructed)}` +
       (ageState === 'stale' ? ' · stale' : '');
   }
 
@@ -264,5 +286,8 @@ function renderCryptoPanel() {
 function loadCryptoPanel() {
   fetchCryptoLatest();
   fetchCryptoPredictions();
-  if (!cryptoPollHandle) cryptoPollHandle = setInterval(fetchCryptoLatest, CRYPTO_POLL_MS);
+  if (!cryptoPollHandle) cryptoPollHandle = setInterval(() => {
+    fetchCryptoLatest();
+    fetchCryptoPredictions();
+  }, CRYPTO_POLL_MS);
 }

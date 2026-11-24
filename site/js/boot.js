@@ -59,7 +59,9 @@
   document.getElementById('tab-history').onclick = () => showTab('history');
   document.getElementById('tab-bots').onclick    = () => showTab('bots');
   document.getElementById('tab-squeeze').onclick = () => showTab('squeeze');
-  document.getElementById('tab-news').onclick    = () => showTab('news');
+  for (const [tab, [, button]] of Object.entries(TABS)) {
+    document.getElementById(button).onclick = () => showTab(tab);
+  }
   document.getElementById('hist-date').onchange  = (e) => loadHistoryDate(e.target.value);
   document.getElementById('hist-prev').onclick = () => stepHistoryDate(-1);
   document.getElementById('hist-next').onclick = () => stepHistoryDate(1);

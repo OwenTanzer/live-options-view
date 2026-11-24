@@ -94,6 +94,18 @@ function loadPanel() {
   assert.match(el('crypto-tbody').innerHTML, /21:55 UTC/);
   assert.match(el('crypto-patterns').innerHTML, /Extreme/);
   assert.match(el('crypto-patterns').innerHTML, /Fear &amp; Greed at 11/);
+  for (const [count, membership, label] of [[50, 'live', 'live top 50'], [39, 'embedded_fallback', 'embedded fallback']]) {
+    const expanded = snapshot();
+    expanded.coins = Array.from({ length: count }, (_, index) => ({ ...expanded.coins[0], symbol: 'C' + index }));
+    expanded.universe = { membership_source: membership };
+    responses = { 'latest.json': response(expanded) };
+    await panel.fetchCryptoLatest();
+    assert.match(el('crypto-caption').textContent, new RegExp(count + ' coins'));
+    assert.ok(el('crypto-caption').textContent.includes(label));
+    assert.equal((el('crypto-tbody').innerHTML.match(/<tr/g) || []).length, count);
+  }
+  responses = { 'latest.json': response(snapshot()) };
+  await panel.fetchCryptoLatest();
 
   // Stale snapshot: the status says so instead of looking current.
   panel.now = '2026-11-24T01:00:00Z';
@@ -116,6 +128,16 @@ function loadPanel() {
   await retry.fetchCryptoLatest();
   assert.match(el('crypto-status').textContent, /showing last known/);
   assert.equal(el('crypto-tbody').innerHTML, goodTable);
+
+  let finishOld;
+  responses = { 'latest.json': { ok: true, status: 200, json: () => new Promise(resolve => { finishOld = resolve; }) } };
+  const oldRequest = retry.fetchCryptoLatest();
+  await Promise.resolve();
+  responses = { 'latest.json': response({ ...snapshot(), constructed_at: '2026-11-23T22:00:00Z' }) };
+  await retry.fetchCryptoLatest();
+  finishOld(snapshot());
+  await oldRequest;
+  assert.equal(retry.snapshot.constructed_at, '2026-11-23T22:00:00Z');
 
   console.log('crypto panel tests passed');
 })().catch(e => { console.error(e); process.exit(1); });

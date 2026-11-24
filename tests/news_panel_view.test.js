@@ -520,7 +520,7 @@ test('site wiring: one hashed script between squeeze and tab switching, a hidden
   assert.ok(html.includes('// ── news panel (MediaFlow M4b)'), 'section banner stays in index.html');
   assert.ok(/<div id="news-panel" class="hidden"[^>]*><\/div>/.test(html), 'the News panel starts hidden and empty');
   assert.ok(html.includes('<button id="tab-news" class="tab-btn">News</button>'));
-  assert.ok(/#squeeze-panel\.hidden,\s*#news-panel\.hidden \{ display: none; \}/.test(html));
+  assert.ok(/[^{}]*#news-panel\.hidden[^{}]*\{\s*display:\s*none;\s*\}/.test(html));
   // One panel copy: the harness loads the site file.
   assert.ok(!fs.existsSync(path.join(__dirname, 'news_panel/news-panel.js')), 'no tests-only copy of the panel');
   const harness = fs.readFileSync(path.join(__dirname, 'news_panel/harness.html'), 'utf8');

@@ -118,7 +118,7 @@ export async function readPredictionsAsOf({
   if (reading.state !== 'unavailable' && reading.row && reading.row.value) {
     const targetEnd = reading.row.value.target_end
       ? Date.parse(reading.row.value.target_end) : null;
-    if (targetEnd !== null && targetEnd <= at) {
+    if (!Number.isFinite(targetEnd) || targetEnd <= at) {
       return { state: 'unavailable', rows, reading,
         reason: `no live estimate for this hour — the latest prediction `
           + `(target ${reading.row.value.target_start}–${reading.row.value.target_end}) `

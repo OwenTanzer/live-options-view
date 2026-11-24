@@ -127,7 +127,7 @@ const CRYPTO_SOURCES = ['coinbase', 'coingecko'];
 const CRYPTO_FRESHNESS = ['fresh', 'stale', 'unavailable'];
 const CRYPTO_ROW_STATUS = ['ok', 'partial', 'source_unavailable'];
 function cryptoSnapshot(p) {
-  check(object(p) && p.schema_version === 'crypto_snapshot.v1' && Array.isArray(p.coins) && p.coins.length <= 39 &&
+  check(object(p) && p.schema_version === 'crypto_snapshot.v1' && Array.isArray(p.coins) && p.coins.length <= 50 &&
     p.coins.every(r => object(r) && typeof r.symbol === 'string' && CRYPTO_SOURCES.includes(r.source) &&
       r.price_basis === r.source && // No substitution: a row's price basis must be its own source.
       (r.price === null || (typeof r.price === 'number' && Number.isFinite(r.price))) &&
@@ -362,7 +362,7 @@ class Consumer {
         const p = probe.value;
         out.capabilities.push({ dataset: id, producer_schema: 'crypto_snapshot.v1',
           availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : 'available',
-          actual: p ? { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null } : null,
+          actual: p ? { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, universe: p.universe ?? null } : null,
           freshness: p ? {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'} : { status: 'unknown' },
           source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
           fields: ['rank','symbol','name','source','price_basis','price','high_24h','low_24h','change_24h_pct','change_1h_pct','change_7d_pct','volume_24h','market_cap','provider_observed_at','as_of','freshness','status','patterns','market'],
@@ -448,7 +448,7 @@ class Consumer {
     if (a.symbol !== undefined) check(typeof a.symbol === 'string' && /^[A-Z0-9]{1,10}$/.test(a.symbol), 'Invalid symbol.', 'invalid_filter');
     if (a.source !== undefined) check(CRYPTO_SOURCES.includes(a.source), 'source must be coinbase or coingecko.', 'invalid_filter');
     const p = await q.json('crypto/latest.json'); cryptoSnapshot(p);
-    out.actual = { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
+    out.actual = { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, universe: p.universe ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
     out.producer_times.acquisition_end = p.constructed_at;
     out.freshness = {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'};
     out.market = p.market ?? null;
