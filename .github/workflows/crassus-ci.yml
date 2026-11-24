@@ -51,6 +51,9 @@ jobs:
       - name: Trump Whisperer x OI skew paper bots (IBIT, SLV, DRAM)
         working-directory: crassus
         run: python scripts/verify_trump_oi_skew.py
+      - name: Order-flow skew paper bot (flow_skew_qqq)
+        working-directory: crassus
+        run: python scripts/verify_flow_skew.py
       # The site OI skew meter (site/shared/oi-skew.js) is pinned to the real
       # bot gates and collector reading by this fixture; a strategy or reading
       # change that alters any case fails here until the fixture (and, if the

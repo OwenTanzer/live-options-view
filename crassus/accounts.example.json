@@ -504,6 +504,13 @@
       "password_env": "CRASSUS_PW_TWSKEW_DRAM",
       "strategy_id": "trump_whisperer_oi_skew_dram",
       "active": false
+    },
+    {
+      "alias": "Flow Skew",
+      "username": "crassus_flowskew",
+      "password_env": "CRASSUS_PW_FLOW_SKEW",
+      "strategy_id": "flow_skew_qqq",
+      "active": false
     }
   ]
 }
