@@ -35,6 +35,10 @@ bucket_name = "qqq-options-chain-data"
 # This existing production bucket is intentional only for API G4a/G4b integration.
 # Never copy this config into preview; code wrapper is not provider IAM.
 
+[[r2_buckets]]
+binding = "ARCHIVE_HISTORY"
+bucket_name = "optionsview-private-history"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "live-options"
