@@ -268,7 +268,11 @@ def build_snapshot(quotes, index_quote, news_by_symbol=None,
     Pure apart from the clock: no network, no files.
     """
     now = now or datetime.now(UTC)
-    news_by_symbol = news_by_symbol or {}
+    # Read-time enforcement of the 12-hour publication window: anything
+    # stored or passed in that is older than 12 hours (or undated) is
+    # cycled out here, so nothing older is ever published.
+    news_by_symbol = {symbol: news_mod.filter_recent(items, now)
+                      for symbol, items in (news_by_symbol or {}).items()}
     candles_by_symbol = candles_by_symbol or {}
     name_by_symbol = names()
     validate()
@@ -415,6 +419,8 @@ def collect(symbols=None, include_news=True, include_candles=True,
     Returns ``(snapshot, stats)`` where ``stats`` counts fetched/failed
     quotes, news and candles plus per-symbol errors. A failed source marks
     its symbols source-unavailable; it never aborts the whole collection.
+    News is re-fetched fresh on every run (hourly, and on demand) and only
+    headlines published within the last 12 hours are kept — see ``news.py``.
     """
     now = now or datetime.now(UTC)
     symbols = list(symbols) if symbols else [s for s, _ in SYMBOLS]
@@ -444,7 +450,7 @@ def collect(symbols=None, include_news=True, include_candles=True,
         news_by_symbol = {}
         if include_news:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = {pool.submit(_safe_news, session, s): s for s in symbols}
+                futures = {pool.submit(_safe_news, session, s, now): s for s in symbols}
                 for future in as_completed(futures):
                     symbol = futures[future]
                     items = future.result()
@@ -493,9 +499,9 @@ def _safe_quote(session, symbol):
         return None
 
 
-def _safe_news(session, symbol):
+def _safe_news(session, symbol, now=None):
     try:
-        return news_mod.fetch_news(symbol, session)
+        return news_mod.fetch_news(symbol, session, now=now)
     except Exception:  # noqa: BLE001 - per-symbol failure is recorded by caller
         return None
 
@@ -507,3 +513,4 @@ def _safe_candles(session, symbol):
         return {"bars_1m": bars["bars"], "daily": daily["bars"]}
     except Exception:  # noqa: BLE001 - per-symbol failure is recorded by caller
         return None
+

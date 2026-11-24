@@ -37,7 +37,11 @@ collector, or deploys.
   (`interval=1d`, `range=10d`).
 - **News:** Google News RSS per ticker,
   `https://news.google.com/rss/search?q=<SYMBOL>+stock&hl=en-US&gl=US&ceid=US:en`,
-  re-fetched only when stored headlines are more than 12h old.
+  re-fetched fresh on every collector run (hourly, and on demand). Only
+  headlines published within the last 12 hours are stored or published —
+  older or undated headlines are excluded. The 12-hour publication window
+  is enforced at fetch time, in storage (stored headlines are pruned), and
+  at read time in `build_snapshot`, so nothing older is ever shown.
 
 ## Universe
 
@@ -211,7 +215,8 @@ are unchanged. `market_context`'s QQQ/SPY-only contract is unchanged.
 
 - `tests/test_nasdaq_collector.py` (pytest, offline): universe count,
   snapshot schema, provenance shape, candle aggregation incl. 9m bucketing
-  from 1-minute bars, the two `%` labels, news parsing/refresh, session
+  from 1-minute bars, the two `%` labels, news parsing / the 12-hour
+  publication window, session
   model, R2 key order with a fake client.
 - `market_mcp/nasdaq_snapshot.test.js` (node:test, offline fixtures):
   discovery, query, filters/sort, retained detail, missing vs failed,
@@ -253,3 +258,4 @@ they are **not** in this PR.
    `market_mcp/window.test.js:307` (append `'nasdaq_snapshot'` after
    `'cross_market_overview'`). `market_mcp/smoke.js:20` asserts the same
    tool count (8 → 9) for the fixture smoke run.
+

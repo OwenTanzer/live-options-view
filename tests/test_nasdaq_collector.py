@@ -7,7 +7,7 @@ No provider calls, no R2, no clock dependence beyond fixed fixtures:
 Covers the embedded universe (101 listings), the snapshot schema and its
 two differently-labelled percentage bases, the provenance sidecar shape,
 candle aggregation (including 9m bucketing from 1-minute bars), news
-parsing/refresh and the equity session model.
+parsing / the 12-hour publication window and the equity session model.
 """
 
 from __future__ import annotations
@@ -356,13 +356,65 @@ def test_news_rss_parsing():
     assert news_mod.news_url("AAPL").startswith("https://news.google.com/rss/search?q=AAPL+stock")
 
 
-def test_news_refresh_after_12h():
-    assert news_mod.should_refresh(None) is True
-    assert news_mod.should_refresh("2026-11-23T03:00:00+00:00",
-                                   now=datetime(2026, 11, 23, 15, 0, tzinfo=UTC)) is False
-    assert news_mod.should_refresh("2026-11-23T02:59:00+00:00",
-                                   now=datetime(2026, 11, 23, 15, 0, tzinfo=UTC)) is True
-    assert news_mod.should_refresh("garbage") is True
+def _headline(title, published_at):
+    return {"title": title, "source": None, "link": None,
+            "published_at": published_at}
+
+
+def test_news_12h_window_filters_old_and_undated():
+    # NOW is 15:00 UTC. 11h old and exactly-12h old are kept; 12h+1m,
+    # undated, and garbage-dated headlines are excluded.
+    items = [_headline("fresh", "2026-11-23T04:00:00+00:00"),
+             _headline("edge", "2026-11-23T03:00:00+00:00"),
+             _headline("stale", "2026-11-23T02:59:00+00:00"),
+             _headline("undated", None),
+             _headline("garbage", "not a date")]
+    kept = news_mod.filter_recent(items, now=NOW)
+    assert [i["title"] for i in kept] == ["fresh", "edge"]
+    assert news_mod.prune_news(items, now=NOW) == kept
+
+
+def test_news_fetch_filters_to_last_12h():
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>test</title>
+<item><title>Fresh headline</title><link>https://example.invalid/fresh</link>
+<pubDate>Mon, 23 Nov 2026 14:00:00 GMT</pubDate></item>
+<item><title>Stale headline</title><link>https://example.invalid/stale</link>
+<pubDate>Mon, 23 Nov 2026 02:00:00 GMT</pubDate></item>
+<item><title>Undated headline</title><link>https://example.invalid/nodate</link>
+</item>
+</channel></rss>"""
+
+    class _Resp:
+        text = rss
+
+        def raise_for_status(self):
+            return None
+
+    class _Session:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, timeout=20):
+            self.calls += 1
+            return _Resp()
+
+    session = _Session()
+    # Fetching is fresh on every call — no reuse window: two calls, two
+    # fetches, same single recent headline each time.
+    assert [i["title"] for i in news_mod.fetch_news("AAPL", session, now=NOW)] == ["Fresh headline"]
+    assert [i["title"] for i in news_mod.fetch_news("AAPL", session, now=NOW)] == ["Fresh headline"]
+    assert session.calls == 2
+
+
+def test_snapshot_prunes_old_news_at_read_time():
+    items = [_headline("fresh", "2026-11-23T12:00:00+00:00"),
+             _headline("stale", "2026-11-22T12:00:00+00:00"),
+             _headline("undated", None)]
+    snap = build_snapshot(_quotes(), _index(), news_by_symbol={"AAPL": items}, now=NOW)
+    aapl = [r for r in snap["stocks"] if r["symbol"] == "AAPL"][0]
+    assert [i["title"] for i in aapl["news"]] == ["fresh"]
+    assert snap["coverage"]["with_news"] == 1
 
 
 # ---------------------------------------------------------------- session
@@ -373,3 +425,4 @@ def test_market_status_session_model():
     assert market_status(datetime(2026, 11, 21, 15, 0, tzinfo=UTC)) == {"status": "closed", "reason": "weekend"}  # Sat
     assert market_status(datetime(2026, 11, 26, 15, 0, tzinfo=UTC)) == {"status": "closed", "reason": "holiday_2026"}  # Thanksgiving
     assert market_status(datetime(2026, 11, 23, 21, 0, tzinfo=UTC))["status"] == "closed"  # Mon 16:00 ET, close
+

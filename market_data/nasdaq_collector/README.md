@@ -19,7 +19,7 @@ python -m market_data.nasdaq_collector collect --publish   # opt-in R2 write
 |---|---|---|
 | Prices, day range | Nasdaq official quote API (`api.nasdaq.com/api/quote/<SYM>/info`), browser-style User-Agent | One request per listing plus NDX; day range from `keyStats.dayrange`, falling back to the latest Yahoo daily bar. Each quote carries a last-trade timestamp (`primaryData.lastTradeTimestamp`); freshness is measured from it when present — date-only stamps (as published for NDX) fall back to collector receipt. Market cap is not in the quote response; it comes from one `list-type/nasdaq100` request per run (same official source as the universe) |
 | Candles | Yahoo Finance chart API (`query1.finance.yahoo.com/v8/finance/chart/`) | Real 1-minute bars; the non-standard 3m/9m/2h/4h intervals are aggregated from them on America/New_York time, bucketed from the 09:30 ET open (see `candles.py`) |
-| News | Google News RSS per ticker (`news.google.com/rss/search`) | Daily per ticker; re-fetched only when stored headlines are more than 12h old |
+| News | Google News RSS per ticker (`news.google.com/rss/search`) | Re-fetched fresh on every run (hourly, and on demand); only headlines published within the last 12 hours are kept — older or undated headlines are excluded |
 
 ## Universe
 
@@ -93,5 +93,6 @@ python -m pytest tests/test_nasdaq_collector.py
 
 Offline: universe count, snapshot schema, provenance shape, candle
 aggregation (including 9m bucketing from 1-minute bars), the two `%`
-labels, news parsing/refresh and the session model. No test touches a
+labels, news parsing / the 12-hour publication window and the session model. No test touches a
 provider or R2.
+
