@@ -9,11 +9,11 @@ import {demoRows,demoRules,demoStart,demoClose,demoSelection} from '../site/shar
 import {sessionAt,sessionInstant} from '../site/shared/one-clock-session.js';
 import {equitySession,observerSessions} from '../backend/one-clock-calendar.js';
 import {evaluateEvents} from '../site/shared/one-clock-events.js';
-async function setup(t) {
+async function setup(t, sessionTtl = 3600) {
   const DB=makeStorage();t.after(()=>DB.db.close());
   for(const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql'])await DB.exec(fs.readFileSync(new URL('../backend/migrations/'+file,import.meta.url),'utf8'));
   const env={DB,ONE_CLOCK_OBSERVER:'enabled'},storage=createStorage(env);
-  for(const name of ['alice','other']) {await storage.users.insert(name,{username:name,version:0});await storage.sessions.create(name+'-token',name,3600);}
+  for(const name of ['alice','other']) {await storage.users.insert(name,{username:name,version:0});await storage.sessions.create(name+'-token',name,sessionTtl);}
   const call=(user,body,query='',origin='https://options.moopertonic.net')=>handleOneClockResearch(new Request('https://options.moopertonic.net/api/one-clock/research'+query,{headers:{...(user?{Cookie:'session='+user+'-token'}:{}),Origin:origin,'Content-Type':'application/json'},...(body?{method:'POST',body:JSON.stringify(body)}:{})}),env);
   return {DB,env,call};
 }
@@ -31,6 +31,14 @@ test('account authorization, origin, immutable versions and source allowlist pre
   assert.equal((await call('other')).status,200);assert.equal((await (await call('other')).json()).rules.length,0);
   assert.equal((await call('alice',{action:'deactivate',ruleId:rule.id,version:1})).status,200);
   assert.ok(DB.raw('SELECT ended_at FROM one_clock_activations')[0].ended_at);
+});
+test('anchored skew is registerable only for its documented producer instrument',async t=>{
+  const {call}=await setup(t);
+  const conditions=[{source:'bot-anchored-skew',field:'delta',op:'>=',value:0.1,maxAgeMs:60000}];
+  for(const instrument of ['QQQ','SPY','IBIT']) {
+    const candidate={...rule,id:'anchor-'+instrument,instruments:[instrument],conditions};
+    assert.equal((await call('alice',{action:'save',rule:candidate})).status,instrument==='QQQ'?201:400);
+  }
 });
 test('activation intervals retain old events/outcomes and limited rule batches do not retract other rules',async t=>{
   const {DB}=await setup(t),namespace='account:alice',cutoff=demoClose+1000;
@@ -160,4 +168,183 @@ test('oversized rules retain visible as-of failures and do not starve following 
   assert.deepEqual(after.evaluation.map(r=>r.state),['failed','evaluated']);
   assert.match(after.evaluation[0].reason,/capacity/);
   const other=await result('other',now+1000);assert.equal(other.events.length,0);assert.equal(other.evaluation.length,0);
+});
+
+test('a shortlist rule is editable; unresolved catalog only defers dependent rules',async t=>{
+  const {DB,env,call}=await setup(t);
+  const at=sessionInstant('2026-11-20',9,30);
+  const shortlist={...rule,id:'b-shortlist',
+    conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:60000}]};
+  assert.equal((await call('alice',{action:'save',rule:shortlist})).status,201);
+  await activate(DB,rule,at);
+  await activate(DB,shortlist,at);
+  const source={id:'shortlist-fixture',version:'1',instruments:['QQQ'],outputs:['shortlist'],demandDriven:true,
+    discover:async()=>({complete:false,artifacts:[]}),read:()=>{throw Error('no objects');}};
+  const now=at+5000;
+  const result=await advanceOneClockResearch({...env,PAPER_TRADES:{}},{now,sources:[emptySource,source]});
+  assert.equal(result[0].state,'evaluated');
+  assert.deepEqual(DB.raw("SELECT rule_id FROM one_clock_evaluation_history WHERE state='evaluated'").map(x=>x.rule_id),[rule.id]);
+});
+
+test('a rule using an indexed source cannot mature beyond that source watermark',async t=>{
+  const {DB}=await setup(t);
+  const session='2026-11-20',at=sessionInstant(session,9,30),through=at+1000,now=at+60000;
+  const r={...rule,conditions:[{source:'shortlist',field:'listed',op:'==',value:true,maxAgeMs:60000}],
+    outcomes:[{id:'later',source:'price',field:'spot',measure:'value',horizonMs:5000,toleranceMs:1000,maxAgeMs:1000}]};
+  await activate(DB,r,at);
+  const row={source:'shortlist',id:'fixture',revision:1,session,instrument:'QQQ',origin:'recorded',
+    eventAt:at,availableAt:at,evidence:'fixture://receipt',value:{listed:true}};
+  const selection={session,instrument:'QQQ',origin:'recorded',cutoff:now};
+  const request={namespace:'account:alice',source:'test',cursor:'0',selection,sessionClose:equitySession(session).close,
+    observations:[],sourceRecords:[{payload:JSON.stringify(row),received_at:now,collection:'prospective'}],
+    ruleCutoffs:{[JSON.stringify([r.id,r.version])]:through}};
+  await observeBatch(DB,{...request,batchId:'first'});
+  const events=(cutoff)=>observedEventsAsOf(DB,{namespace:request.namespace,selection:{...selection,cutoff}});
+  assert.deepEqual(await events(now-1),[]);
+  assert.equal((await events(now))[0].outcomes[0].state,'pending');
+  await observeBatch(DB,{...request,batchId:'second',ruleCutoffs:{},committedAt:now+1});
+  assert.equal((await events(now+1))[0].outcomes[0].state,'missing');
+});
+
+test('a registered native-only output needs an actual stream receipt before rule evaluation',async t=>{
+  const {DB,env}=await setup(t),at=sessionInstant('2026-11-20',9,30);
+  await activate(DB,{...rule,id:'bot',conditions:[{source:'bot-decision',field:'acted',op:'==',value:true,maxAgeMs:1000}]},at);
+  const nativeOnly={id:'bot-audit',instruments:['QQQ'],outputs:{'bot-decision':{acted:'boolean'}}};
+  const result=await advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:at+1000,sources:[emptySource],publicationSources:[nativeOnly]});
+  assert.equal(result[0].state,'catching-up');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+});
+
+test('level studies retain the known prefix before catch-up and acknowledge coverage after draining',async t=>{
+  const {DB,env}=await setup(t),session='2026-11-23',at=equitySession(session).open;
+  const r={...rule,id:'bright-encounter',conditions:[{source:'oi-levels',field:'qualified',op:'==',value:true,maxAgeMs:150000}],
+    levelEncounter:{minimumBucket:5,approach:'either',contact:'exact-or-bracketed',maxGapMs:150000,groups:['call-only']},
+    outcomes:[1,3,9,27].map(n=>({id:'h'+n,source:'level-spot',field:'spot',measure:'category',horizonMs:n*60000,toleranceMs:30000,maxAgeMs:150000}))};
+  await activate(DB,r,at);
+  const price=(i,spot)=>({source:'level-spot',id:'price'+i,eventAt:at+i*60000,availableAt:at+i*60000+2000,
+    revision:1,session,instrument:'QQQ',origin:'recorded',evidence:'fixture/'+i,value:{spot},valueAt:at+i*60000});
+  const opening={...price(0,652.34),source:'oi-levels',id:'opening',availableAt:at+1000,
+    value:{qualified:true,levels:[{strike:650,call:5,put:1}],calibration:{etag:'opening',tier:'0DTE_Regular'}}};
+  const rows=[opening,...Array.from({length:32},(_,i)=>price(i,i<2?652.34:648.31))];
+  const source={id:'levels',version:'2',instruments:['QQQ'],outputs:['oi-levels','level-spot'],demandDriven:true,orderedAvailability:true,
+    discover:async()=>({complete:true,artifacts:rows.map(row=>({key:row.id,version:String(row.revision),eventAt:row.eventAt,availableAt:row.availableAt,row})).reverse()}),
+    read:async(bucket,scope,a)=>({rows:[a.row]})};
+  const now=at+40*60000,tick=cutoff=>advanceOneClockResearch({...env,PAPER_TRADES:{}},{now:cutoff,sources:[source],publicationSources:[]});
+  await tick(now);
+  const events=cutoff=>observedEventsAsOf(DB,{namespace:'account:alice',selection:{session,instrument:'QQQ',origin:'recorded',cutoff}});
+  const [early]=await events(now);
+  assert.equal(early.encounter.strike,650);assert.equal(early.triggeredAt,at+122000);
+  assert.equal(early.outcomes.at(-1).state,'pending');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+  const first=JSON.parse(DB.raw("SELECT coverage FROM one_clock_ingestion_work WHERE source='levels'")[0].coverage);
+  assert.equal(first.pending,13);assert.equal(first.processed,20);assert.equal(first.through,rows[20].availableAt-1);
+  // The next normal tick supplies another fifteen fresh observations.
+  for(let i=32;i<47;i++)rows.push(price(i,648.31));
+  await tick(now+15*60000);
+  const [maturing]=await events(now+15*60000);
+  assert.equal(maturing.id,early.id);assert.equal(maturing.outcomes.at(-1).state,'measured');
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_evaluation_history')[0].n,0);
+  // An older native change is discovered after live evidence matured.
+  for(const name of ['0011_one_clock_publications','0012_one_clock_handoff','0013_one_clock_reevaluation'])
+    await DB.exec(fs.readFileSync(new URL('../backend/migrations/'+name+'.sql',import.meta.url),'utf8'));
+  env.ONE_CLOCK_PUBLICATIONS='enabled';
+  await DB.prepare('INSERT INTO one_clock_native_changes(generation,stream,sequence,session,instrument,received_at) VALUES(84,?,?,?,?,?)')
+    .bind('bot-audit/QQQ',58,session,'QQQ',at-1).run();
+  for(let i=47;i<69;i++)rows.push(price(i,648.31));
+  const retry=await tick(now+30*60000);
+  assert.ok(retry.some(r=>r.state==='catching-up'));
+  assert.deepEqual(await events(now+30*60000),[maturing]);
+  assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_event_history WHERE state='retracted'")[0].n,0);
+  assert.equal(DB.raw('SELECT COUNT(*) n FROM one_clock_generation_receipts')[0].n,0);
+  assert.equal(DB.raw('SELECT target FROM one_clock_historical_rules')[0].target,84);
+  await tick(now+45*60000);
+  const finished=await events(now+45*60000);
+  assert.equal(finished.length,1);assert.equal(finished[0].id,early.id);
+  assert.equal(DB.raw("SELECT COUNT(*) n FROM one_clock_evaluation_history WHERE state='evaluated'")[0].n,1);
+  assert.deepEqual((await events(now))[0].outcomes,early.outcomes);
+  // A late-discovered map revision available before the trigger can
+  // legitimately remove it on a covered pass. The old as-of view survives.
+  rows.push({...opening,revision:2,availableAt:opening.availableAt+1,
+    value:{...opening.value,levels:[]}});
+  await tick(now+60*60000);
+  assert.equal((await events(now+60*60000)).length,0);
+  assert.equal((await events(now+45*60000))[0].id,early.id);
+});
+test('account audit preserves each bot decision and its own settlement on delayed/repeated delivery', async t => {
+  const {oiSkewAuditRule} = await import('../site/shared/one-clock-decision-events.js');
+  const session = '2026-11-27', {open,close} = equitySession(session);
+  const minute = 60000;
+  let now = open;
+  t.mock.method(Date, 'now', () => now);
+  const {DB,env,call} = await setup(t, 8 * 3600);
+  const rule = oiSkewAuditRule('audit');
+  const save = await call('alice', {action:'save', rule});
+  assert.equal(save.status, 201);
+  assert.deepEqual((await (await call('alice')).json()).activations, []);
+  assert.equal((await call('alice', {action:'activate', ruleId:rule.id, version:1})).status, 200);
+
+  const decisionKey = id => Buffer.from(id).toString('hex').padEnd(64,'0');
+  const decision = (id, m, posted, action = 'no_trade', bot = 'crassus_oiskew', key = id) => ({
+    source:'bot-evaluation', id, eventAt:open+m*minute, availableAt:open+posted*minute, value:{bot,action,decisionKey:decisionKey(key)}
+  });
+  const price = (m, spot, posted = m) => ({
+    source:'price', id:'price-'+m, eventAt:open+m*minute, availableAt:open+posted*minute, value:{spot}
+  });
+  const records = [
+    price(1,100), price(2,101), price(11,103), price(12,104), price(20,110), price(30,109),
+    decision('a',1,20), decision('b',2,20), decision('a',1,20),
+    decision('different-bot',1,20,'no_trade','foreign'),
+    {...decision('legacy-error',1,20),source:'bot-decision'},
+    decision('a-recovered',1,21,'no_trade','crassus_oiskew','a')
+  ];
+  async function ingest(rows) {
+    for (const row of rows) {
+      const full = {...row, revision:row.revision??1, session, instrument:'QQQ', origin:'recorded', evidence:'fixture://'+row.id};
+      await DB.prepare('INSERT INTO one_clock_ingested(source,session,instrument,origin,record_id,revision,event_at,available_at,received_at,collection,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+        .bind(row.source,session,'QQQ','recorded',row.id,full.revision,row.eventAt,row.availableAt,row.availableAt,'prospective',JSON.stringify(full)).run();
+    }
+  }
+  const tick = async cutoff => {
+    now = cutoff;
+    const results = await advanceOneClockResearch({...env,PAPER_TRADES:{}}, {now,
+      sources:[{...emptySource,outputs:['price','bot-evaluation']}],publicationSources:[]});
+    assert.ok(results.some(r=>r.state === 'evaluated'), JSON.stringify(results));
+  };
+  const events = async cutoff => (await (await call('alice',null,'?'+new URLSearchParams({
+    session,instrument:'QQQ',cutoff:String(cutoff)
+  }))).json()).events;
+  await ingest(records);
+  await tick(open+19*minute);
+  assert.deepEqual(await events(now), []);
+  await tick(open+20*minute);
+  const original = (await events(now)).sort((a,b)=>a.decisionAt-b.decisionAt);
+  assert.deepEqual(original.map(e=>[e.inputEvidence[0].id,e.decisionAt,e.triggeredAt,e.baselines['qqq-change'].value,
+    e.outcomes[0].targetAt,e.outcomes[0].endpointValue,e.outcomes[0].value,e.collection]), [
+    ['a',open+minute,now,100,open+11*minute,103,3,'retrospective'],
+    ['b',open+2*minute,now,101,open+12*minute,104,3,'retrospective']
+  ]);
+  await tick(open+30*minute);
+  assert.deepEqual((await events(now)).map(e=>e.id).sort(), original.map(e=>e.id).sort());
+  const beforeCorrection = now;
+  await ingest([
+    {...decision('a',1,31),revision:2}, decision('sell',30,31,'sell'), decision('buy',30,31,'buy'), price(40,105),
+    decision('no-baseline',50,51), decision('late',205,220), decision('closed',210,220),
+    decision('missing-endpoint',80,81), price(80,117),
+    decision('prompt',100,100), price(100,108,111), price(110,113)
+  ]);
+  await tick(close+11*minute);
+  const revised = await events(now), byId = id => revised.find(e=>e.inputEvidence[0].id === id);
+  assert.equal(revised.length,8);
+  assert.ok(revised.some(e=>e.id===original[0].id));
+  assert.equal(byId('buy').inputEvidence[0].value.action,'buy');
+  assert.equal(byId('sell').outcomes[0].value,-4);
+  const prompt = byId('prompt');
+  assert.equal(prompt.collection,'prospective');
+  assert.equal(prompt.baselines['qqq-change'].visibleAtDecision,false);
+  assert.equal(prompt.outcomes[0].baselineTiming,'reconstructed');
+  assert.equal(prompt.lineage.outcomes['qqq-change'].collection,'retrospective');
+  assert.equal(byId('no-baseline').outcomes[0].reason,'trigger-baseline-unavailable');
+  assert.equal(byId('late').outcomes[0].reason,'session-closed-before-horizon');
+  assert.equal(byId('missing-endpoint').outcomes[0].reason,'no-qualified-endpoint');
+  assert.equal((await events(beforeCorrection)).find(e=>e.id===original[0].id).inputEvidence[0].revision,1);
 });

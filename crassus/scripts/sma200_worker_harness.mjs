@@ -6,6 +6,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { mock } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import worker, { updateBotIndex } from '../../backend/index.js';
@@ -87,12 +88,15 @@ function readBody(req) {
   });
 }
 
+// Optional deterministic clock for intraday share-strategy lifecycle tests.
+const clockFile = process.env.CRASSUS_TEST_CLOCK_FILE;
+if (clockFile) mock.timers.enable({ apis: ['Date'], now: Number(fs.readFileSync(clockFile, 'utf8')) });
 const quoteServer = http.createServer((req, res) => {
   const now = new Date().toISOString();
   const body = JSON.stringify({
     server_ts: now,
     quotes: [{
-      symbol: 'SPY', instrument_class: 'equity', bid: 499.9, ask: 500.1,
+      symbol: new URL(req.url, 'http://localhost').searchParams.get('symbols') === 'QQQ' ? 'QQQ' : 'SPY', instrument_class: 'equity', bid: 499.9, ask: 500.1,
       quote_ts: now, bid_ts: now, ask_ts: now,
     }],
   });
@@ -102,6 +106,7 @@ const quoteServer = http.createServer((req, res) => {
 
 const workerServer = http.createServer(async (req, res) => {
   try {
+    if (clockFile) mock.timers.setTime(Number(fs.readFileSync(clockFile, 'utf8')));
     if (req.url === '/__control/identity') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({

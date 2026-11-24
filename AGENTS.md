@@ -133,6 +133,20 @@ serving and follow its current procedure. This exception is not permission to
 reintroduce runtime KV. Preserve offline legacy migration tests and mocks; they
 do not authorize contacting a real namespace.
 
+## What counts as shipped
+
+When the user asks to ship, make the work usable at the intended destination
+and verify it there. For an ordinary production feature, complete the
+applicable protected release path and check the exact revision and user-facing
+flow. Do not leave routine activation for the user. Report merged-only,
+preview-only, local-only or disabled work as such; for docs-only changes,
+verify the merged documentation instead of deploying anything.
+
+Split activation out only when it carries a distinct consequence or requires
+separate approval. Name that boundary up front and state any step still pending.
+This definition does not grant authority to bypass protections, interrupt
+collectors, operate live trading or take other restricted production actions.
+
 ## Verify and hand over proportionately
 
 Run the affected checks listed in the component's workflow; do not launch

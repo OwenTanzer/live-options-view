@@ -85,18 +85,28 @@ class SnapshotTracker:
         self.expected_next: Optional[datetime] = None
         self.missed                          = 0
 
-    def record(self):
+    def record(self, captured_at=None):
+        captured_at = captured_at or datetime.now(timezone.utc)
+        bucket = datetime.fromtimestamp(
+            int(captured_at.timestamp()) // SNAPSHOT_SECS * SNAPSHOT_SECS, timezone.utc)
         with self._lock:
+            self._count_missing_before(bucket)
             self.seq += 1
-            self.expected_next = datetime.now(timezone.utc) + timedelta(seconds=SNAPSHOT_SECS)
+            self.expected_next = bucket + timedelta(seconds=SNAPSHOT_SECS)
 
-    def check_missed(self):
+    def _count_missing_before(self, bucket):
+        if self.expected_next is not None and bucket > self.expected_next:
+            skipped = int((bucket - self.expected_next).total_seconds()) // SNAPSHOT_SECS
+            self.missed += skipped
+            log.warning("missed %s snapshot bucket(s) starting %s", skipped, self.expected_next)
+            self.expected_next += timedelta(seconds=skipped * SNAPSHOT_SECS)
+
+    def check_missed(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        bucket = datetime.fromtimestamp(int(now.timestamp()) // SNAPSHOT_SECS * SNAPSHOT_SECS,
+                                        timezone.utc)
         with self._lock:
-            if (self.expected_next is not None and
-                    datetime.now(timezone.utc) > self.expected_next + timedelta(seconds=60)):
-                self.missed += 1
-                log.warning(f"missed snapshot (expected by {self.expected_next.isoformat()})")
-                self.expected_next = None
+            self._count_missing_before(bucket)
 
     def get(self) -> dict:
         with self._lock:
@@ -140,6 +150,7 @@ class UnderlyingSession:
         self.prev_vol: dict[str, int] = {}     # persists across calls to compute per-minute delta
         self.last_spot: list = [None, None]     # [price|None, observed_at_iso|None] -- yfinance/CSV fallback
         self.subscription_coverage: dict | None = None  # SPY's fixed startup strike window
+        self.opening_oi_cursor = {}
         self.first_snapshot_written = False     # guard so first.csv is only written once per session
         self.session_date: date | None = None
         self.vwap_state: "ms.VwapState" = ms.VwapState()  # session-scoped VWAP accumulator, see market_signals.py

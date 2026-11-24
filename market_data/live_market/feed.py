@@ -388,7 +388,7 @@ class DXLinkFeed:
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
                     "Quote":    ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime", "bidSize", "askSize"],
-                    "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice", "prevDayId"],
+                    "Summary":  ["eventType", "eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice", "prevDayId", "dayId"],
                     "Trade":    ["eventType", "eventSymbol", "dayVolume", "price", "time"],
                     "TradeETH": ["eventType", "eventSymbol", "price", "time"],
                     "Greeks":   ["eventType", "eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
@@ -749,9 +749,10 @@ class DXLinkFeed:
                         s["ask_ts"] = now.isoformat()
                         s["ask_observed_at"] = ask_time
                 elif et == "Summary":
-                    oi = self._to_int(event.get("openInterest"))
+                    oi = self._to_exact_int(event.get("openInterest"))
                     if oi is not None:
                         s["oi"] = oi
+                        s["oi_for_date"] = self._day_id(event.get("prevDayId"))
                     pc = self._to_float(event.get("prevDayClosePrice"))
                     if pc is not None:
                         s["prev_close"] = pc
@@ -760,6 +761,7 @@ class DXLinkFeed:
                     do = self._to_float(event.get("dayOpenPrice"))
                     if do is not None:
                         s["day_open"] = do
+                        s["day_open_date"] = self._day_id(event.get("dayId"))
                 elif et == "Trade":
                     vol = self._to_int(event.get("dayVolume"))
                     if vol is not None:

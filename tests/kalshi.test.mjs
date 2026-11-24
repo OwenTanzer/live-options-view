@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { handleKalshi, kalshiTick, settleKalshiMarket } from '../backend/kalshi.js';
+import { handleKalshi, captureKalshiMinute, kalshiTick, settleKalshiMarket } from '../backend/kalshi.js';
 import { ACCOUNT, CREDIT_ORIGIN, SITE, OWNER_ID } from '../backend/kalshi-access.js';
 import { kalshiFee, kalshiSnapshot } from '../backend/kalshi-model.js';
-import { fetchMarket, displayMarket, effectiveFee, publicRead } from '../backend/kalshi-source.js';
+import { discover, fetchMarket, displayMarket, effectiveFee, publicRead } from '../backend/kalshi-source.js';
 import { quoteEvent, compareEvent } from '../backend/prediction-model.js';
-import { archive, getArchive, budget, pruneArchive } from '../backend/kalshi-store.js';
+import { claimMinute, readState, writeMinuteCatalog, archive, getArchive, budget, pruneArchive } from '../backend/kalshi-store.js';
 import { createStorage } from '../backend/storage.js';
 import worker from '../backend/index.js';
 import { fixture, envFixture, network, request, COOKIE, TICKER } from './helpers/kalshi_fixture.mjs';
@@ -54,7 +54,7 @@ test('event overrides, cleared overrides, future schedule and unknown multiplier
   assert.throws(() => effectiveFee(f.series,{...f.fees,cursor:'more'},f.raw,Date.now()));
 });
 test('all endpoints deny anonymous, ordinary sessions, spoofed identities, other GitHub users and aliases', async () => scenario(async (env,f) => {
-  const paths = ['status','markets','portfolio','archive','archive?id=00000000-0000-0000-0000-000000000000'];
+  const paths = ['status','markets','portfolio','archive','archive?one_clock_at=1700000000000','archive?id=00000000-0000-0000-0000-000000000000'];
   for (const cookie of ['', 'session=ordinary', '__Host-cds-session=short']) for (const p of paths)
     assert.equal((await worker.fetch(request(p,null,cookie),env)).status,401);
   assert.equal(f.requests.length,0);
@@ -231,4 +231,157 @@ test('chain protocol repeats ticker parameters and checks every response identit
   assert.equal(Object.keys(result.quotes).length,2);
   const url=new URL(f.requests.find(r=>r.url.includes('/markets/orderbooks?')).url);
   assert.deepEqual(url.searchParams.getAll('tickers'),tickers);
+}));
+
+test('frozen private evidence enforces the same cutoff on indexes and details', async () => scenario(async env=>{
+  const at=1700000000123, id=(await archive(env,TICKER,{synthetic:true})).id;
+  env.DB.db.prepare('UPDATE kalshi_evidence SET received_at=? WHERE id=?').run(new Date(at).toISOString(),id);
+  const read=(cutoff,suffix='')=>handleKalshi(request('archive?one_clock_at='+cutoff+suffix),env);
+  assert.deepEqual((await (await read(at-1)).json()).archives,[]);
+  assert.equal((await read(at-1,'&id='+id)).status,404);
+  const result=await (await read(at)).json();
+  assert.equal(result.archives[0].id,id);
+  assert.deepEqual((await (await read(at,'&id='+id)).json()).evidence,{synthetic:true});
+  assert.equal((await read(at,'&one_clock_at='+at)).status,400);
+  assert.equal((await read(at,'&before_id='+id)).status,400);
+  assert.equal((await read(at,'&before='+new Date(at+1).toISOString()+'&before_id='+id)).status,400);
+  assert.equal(env.DB.db.prepare('SELECT count(*) AS n FROM users').get().n,0);
+}));
+
+for (const [series, asset] of Object.entries({ KXBTC15M: 'BTC', KXETH15M: 'ETH', KXSOL15M: 'SOL', KXXRP15M: 'XRP' })) {
+  test(`${series} discovers the new window and rejects paper entries after cutoff`, async () => scenario(async (env, f) => {
+    f.series.ticker = f.event.series_ticker = series;
+    f.event.category = 'Crypto';
+    f.series.settlement_sources = [{ name: 'Synthetic crypto index', url: 'https://example.invalid' }];
+    f.raw.rules_primary = 'Synthetic index up/down contract';
+    f.raw.title = `${asset} 15 min`;
+    for (const window of ['FIRST', 'NEXT']) {
+      f.event.event_ticker = f.raw.event_ticker = `${series}-${window}`;
+      f.raw.ticker = f.raw.event_ticker + '-15';
+      f.raw.close_time = new Date(Date.now() + 900000).toISOString();
+      const { markets } = await discover(env);
+      assert.deepEqual(markets.map(m => m.ticker), [f.raw.ticker]);
+      const { market } = await fetchMarket(env, f.raw.ticker);
+      assert.equal(market.rules.underlying, asset);
+      assert.equal(market.rules.cutoff, f.raw.close_time);
+      assert.equal(quoteEvent(market, 'YES', 'buy', 1, Date.now()).error, undefined);
+      assert.ok(quoteEvent(market, 'YES', 'buy', 1, Date.parse(f.raw.close_time)).error);
+    }
+  }));
+}
+
+test('private One Clock captures with no browser, rolls BTC, preserves displayed quotes and refuses lookahead', async t => scenario(async (env,f) => {
+  let now = Date.UTC(2026,10,24,2,14,1);
+  // Archive timestamps use the actual wall clock; mock both Date constructors and Date.now.
+  t.mock.timers.enable({apis:['Date'],now});
+  env.KALSHI_MINUTE_CAPTURE = '1';
+  function window(suffix) {
+    f.event.series_ticker = f.series.ticker = 'KXBTC15M';
+    f.raw.event_ticker = f.event.event_ticker = 'KXBTC15M-' + suffix;
+    f.raw.ticker = f.raw.event_ticker + '-15';
+    f.raw.close_time = new Date(now + 60000).toISOString();
+  }
+  const tick = () => worker.scheduled({cron:'* * * * *',scheduledTime:now},{...env},{waitUntil(){throw Error('Unexpected settlement work');}});
+  const history = async at => (await (await handleKalshi(request('archive?one_clock_at='+at),env)).json()).archives;
+  const read = async (at,id) => (await (await handleKalshi(request('archive?one_clock_at='+at+'&id='+id),env)).json()).evidence;
+  window('FIRST');
+  await tick();
+  const oldTicker = f.raw.ticker, before = now;
+  const first = (await history(now)).find(row => row.market === 'Minute chain');
+  const snapshot = await read(now, first.id);
+  assert.equal(snapshot.books[0].quotes[oldTicker].YES.ask, .45);
+  assert.ok(!snapshot.gaps.includes('No open window: KXBTC15M'));
+  assert.equal((await history(now-1)).length,0);
+  const requests = f.requests.length;
+  await tick();
+  assert.equal(f.requests.length, requests);
+  now += 60000; t.mock.timers.setTime(now);
+  window('NEXT');
+  await tick();
+  const next = (await history(now)).find(row => row.market === 'Minute chain');
+  assert.notEqual(next.id,first.id);
+  assert.deepEqual(Object.keys((await read(now,next.id)).books[0].quotes), [f.raw.ticker]);
+  assert.equal((await history(before)).some(row=>row.id===next.id),false);
+  assert.equal((await read(now,snapshot.catalog_receipt)).markets[0].ticker,oldTicker);
+  const live = await (await handleKalshi(request('quotes',{markets:[f.raw.ticker]}),env)).json();
+  const receipt = (await history(now)).find(row => row.market === 'Displayed chain quotes');
+  assert.deepEqual((await read(now,receipt.id)).quotes,live.quotes);
+  assert.equal((await handleKalshi(request('archive?one_clock_at='+now,null,''),env)).status,401);
+}));
+
+test('deep crypto ladders preserve the best whole-contract levels in the displayed archive', async () => scenario(async (env,f) => {
+  f.book.orderbook_fp.yes_dollars = Array.from({length:140}, (_,i) => [((i+1)/1000).toFixed(4),'3.00']);
+  const response = await handleKalshi(request('quotes',{markets:[TICKER]}),env);
+  assert.equal((await response.json()).quotes[TICKER].YES.bid,0.14);
+  const row = env.DB.db.prepare("SELECT payload FROM kalshi_evidence WHERE market='Displayed chain quotes'").get();
+  assert.equal(JSON.parse(row.payload).quotes[TICKER].NO.ask,0.86);
+}));
+
+test('overlapping ticks under shared provider load publish one successful minute', async t => scenario(async (env,f) => {
+  const now = Date.UTC(2026,10,24,2,15,1);
+  t.mock.timers.enable({apis:['Date'],now});
+  f.raw.close_time = new Date(now+900000).toISOString();
+  env.KALSHI_MINUTE_CAPTURE = '1';
+  await budget(env,'provider-minute',60,60000,now,10);
+  await Promise.all([captureKalshiMinute(env,now),captureKalshiMinute(env,now)]);
+  const rows = env.DB.db.prepare("SELECT payload FROM kalshi_evidence WHERE market='Minute chain'").all();
+  assert.equal(rows.length,1);
+  assert.equal(JSON.parse(rows[0].payload).books[0].quotes[TICKER].YES.ask,.45);
+  assert.equal(f.requests.filter(r=>r.url.includes('/markets/orderbooks?')).length,1);
+  assert.equal(env.DB.db.prepare("SELECT used FROM kalshi_budget WHERE scope='minute-provider-day'").get().used,27);
+}));
+
+test('expired lease can be reclaimed; superseded writer cannot publish cache or evidence', async t => scenario(async env => {
+  const now = Date.UTC(2026,10,24,2,15,1), minute = Math.floor(now/60000), id = crypto.randomUUID();
+  t.mock.timers.enable({apis:['Date'],now});
+  const lost = await claimMinute(env,minute,id);
+  assert.equal(await claimMinute(env,minute,id),null);
+  t.mock.timers.setTime(now+16000);
+  const owner = await claimMinute(env,minute,id);
+  assert.ok(owner);
+  await assert.rejects(lost.renew());
+  await writeMinuteCatalog(env,{receipt:'winner'},owner,minute);
+  await writeMinuteCatalog(env,{receipt:'stale'},lost,minute);
+  assert.equal((await readState(env,'minute-catalog')).receipt,'winner');
+  await assert.rejects(archive(env,'Minute chain',{empty:true},'minute',id,lost));
+  await archive(env,'Minute chain',{winner:true},'minute',id,owner);
+  assert.deepEqual(await getArchive(env,id),{winner:true});
+  t.mock.timers.setTime(now+32000);
+  assert.equal(await claimMinute(env,minute,id),null);
+}));
+
+test('stale active BTC listing leaves a visible gap and recovers inside the same quarter', async t => scenario(async (env,f) => {
+  let now = Date.UTC(2026,10,24,2,15,1);
+  t.mock.timers.enable({apis:['Date'],now});
+  env.KALSHI_MINUTE_CAPTURE = '1';
+  f.event.series_ticker = f.series.ticker = 'KXBTC15M';
+  f.raw.ticker = 'KXBTC15M-OLD-15';
+  f.raw.close_time = new Date(now-1).toISOString();
+  await captureKalshiMinute(env,now);
+  const last = () => JSON.parse(env.DB.db.prepare("SELECT payload FROM kalshi_evidence WHERE market='Minute chain' ORDER BY received_at DESC LIMIT 1").get().payload);
+  assert.deepEqual(last().books,[]);
+  assert.ok(last().gaps.includes('No open window: KXBTC15M'));
+  assert.ok((await readState(env,'minute-catalog')).retry.includes('KXBTC15M'));
+  now += 60000; t.mock.timers.setTime(now);
+  f.raw.ticker = 'KXBTC15M-NEXT-15';
+  f.raw.close_time = new Date(now+840000).toISOString();
+  await captureKalshiMinute(env,now);
+  assert.deepEqual(Object.keys(last().books[0].quotes),[f.raw.ticker]);
+  assert.ok(!(await readState(env,'minute-catalog')).retry.includes('KXBTC15M'));
+}));
+
+test('catalog survives through its last retained minute and ages out with that minute', async t => scenario(async env => {
+  const start = Date.UTC(2026,10,24,2,0,0), day = 86400000;
+  t.mock.timers.enable({apis:['Date'],now:start});
+  const catalog = await archive(env,'Market catalog',{markets:[]},'minute');
+  t.mock.timers.setTime(start+600000);
+  const sample = await archive(env,'Minute chain',{catalog_receipt:catalog.id},'minute');
+  t.mock.timers.setTime(start+7*day+300000);
+  await pruneArchive(env);
+  assert.deepEqual(await getArchive(env,catalog.id),{markets:[]});
+  assert.equal((await getArchive(env,sample.id)).catalog_receipt,catalog.id);
+  t.mock.timers.setTime(start+7*day+600001);
+  await pruneArchive(env);
+  await assert.rejects(getArchive(env,sample.id));
+  await assert.rejects(getArchive(env,catalog.id));
 }));

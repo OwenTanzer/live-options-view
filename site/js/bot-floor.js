@@ -314,7 +314,8 @@ function bfLanesHtml(scored, data, nowMs) {
 function renderBotFloor(scored, data, markFn) {
   const host = document.getElementById('bot-floor');
   if (!host || bfView === 'cards') return;
-  const nowMs = Date.now();
+  const nowMs = typeof window !== 'undefined' && window.oneClockDashboard
+    ? window.oneClockDashboard.liveTime() : Date.now();
   host.innerHTML = bfView === 'lanes'
     ? bfLanesHtml(scored || [], data, nowMs)
     : bfFloorHtml(scored || [], data, markFn || (() => null), nowMs);

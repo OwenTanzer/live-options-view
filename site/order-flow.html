@@ -106,7 +106,7 @@
     #strike-range { font-variant-numeric: tabular-nums; }
     #strike-nav button[aria-pressed="true"] { color: #62e3bd; border-color: #62e3bd; }
     #strike-nav input { width: clamp(80px, 18vw, 220px); }
-    body.strike-navigation canvas:first-of-type { touch-action: none; }
+    body.strike-navigation:not(.alternate-tape) canvas:first-of-type { touch-action: none; }
     #state,
     #fresh {
       font-family: monospace;
@@ -212,6 +212,20 @@
     tr:focus-visible {
       outline: 2px solid #62e3bd;
     }
+    #tape-view {display:flex;flex-wrap:wrap;gap:1px;margin:10px 0}
+    #tape-view button {background:#0b0f12;color:#aab6bc;font:600 14px system-ui;border:1px solid #253037;border-radius:0}
+    #tape-view button:first-child {border-radius:8px 0 0 8px}
+    #tape-view button:last-child {border-radius:0 8px 8px 0}
+    #tape-view button[aria-pressed=true] {background:#1b252b;color:#e6edf0}
+    #optional-tape {margin-block:12px;min-width:0}
+    body.alternate-tape main {max-width:1100px;padding:16px}
+    body.alternate-tape {background:#0b0f12}
+    body.alternate-tape h1 {font-size:22px;letter-spacing:normal}
+    dialog {color:inherit; background:#101d23; border:1px solid #63787e; width:min(640px,94vw); max-height:85vh}
+    dialog::backdrop {background:#000a}
+    dialog ol {max-height:47vh; overflow:auto; padding-left:3em}
+    dialog li {padding:8px 0; border-bottom:1px solid #405359; overflow-wrap:anywhere; font:13px/1.6 monospace}
+    [hidden] {display:none !important}
   </style>
   <main>
     <header>
@@ -226,7 +240,8 @@
         >Source
         <select id="source">
           <option value="live">Live</option>
-          <option value="replay">Archive replay</option>
+          <option value="replay">September 25 · archive replay</option>
+          <option value="capture">November 23 · recorded close</option>
           <option value="simulation">Simulation · 30-point move</option>
         </select></label
       ><span id="state" role="status"></span
@@ -245,12 +260,15 @@
         </select></label
       >
     </nav>
-    <div class="legend">
+    <div id="tape-view" role="group" aria-label="Tape view"></div>
+    <div class="legend" id="tape-legend">
       <b class="buy">+ Inferred buy</b><b class="sell">− Inferred sell</b
       ><b class="unknown">· Unknown side</b><span>○ Call　◇ Put</span
       ><span>Area = contracts</span><span class="gap">▨ No coverage</span>
     </div>
     <span id="fresh"></span>
+    <a href="/one-clock.html?dataset=order-flow">Study September 25 flow in Event Builder</a>
+    <a id="flow-history" hidden>Historical chain at this cursor</a>
     <div id="strike-nav" hidden aria-label="Strike navigation">
       <button id="follow-spot" aria-pressed="true">Follow QQQ</button>
       <label>Strike <input id="strike-center" type="range" min="0" max="0" value="0" /></label>
@@ -259,12 +277,158 @@
       <span id="strike-range"></span>
       <button id="sim-jump" hidden>Move QQQ $30</button>
     </div>
+    <section id="classic-tape">
     <canvas
       aria-label="Prints by time and strike over the last minute to the displayed time. Select a print or strike to inspect it."
-    ></canvas
-    ><output id="details" aria-live="polite"
+    ></canvas>
+    </section>
+    <template id="tape-design"><style>
+:host{
+  --bg:#0b0f12; --panel:#11171b; --line:#1f2a30; --ink:#e6edf0; --dim:#8a9aa3; --faint:#4b5a62;
+  --buy:#3fd0a4; --sell:#f07a64; --unk:#9aa6ad; --spot:#ffd166; --gap:#c58b2a;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+:host{display:block;margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--dim);margin:0 0 14px;max-width:760px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:transparent;color:var(--dim);border:0;padding:8px 12px;font:600 14px system-ui;cursor:pointer}
+.seg button[aria-pressed=true]{background:#1b252b;color:var(--ink)}
+.opt-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;margin:6px 0 10px}
+.opt-head h2{font-size:18px;margin:0}
+.opt-head p{margin:0;color:var(--dim);max-width:640px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.now{display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;font-family:var(--mono);margin-bottom:10px}
+.now .q{font-size:22px;color:var(--spot);font-weight:700}
+.now .t{color:var(--dim)}
+.key{color:var(--dim);font-size:13px;margin-top:8px}
+.key b{font-weight:600}
+.buy{color:var(--buy)} .sell{color:var(--sell)} .unk{color:var(--unk)}
+/* A: Time & Sales */
+.tape{font-family:var(--mono);font-size:14px;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:110px 78px 1fr 84px 70px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid #151d22}
+.row .tm{color:var(--dim)}
+.row.big{font-size:16px;font-weight:700}
+.row.big .tm{color:var(--ink)}
+.row .prem{text-align:right}
+.row .bar{height:6px;border-radius:3px;margin:0}
+.row .ctr{white-space:nowrap}
+.run{color:var(--dim);cursor:pointer}
+.run:hover{background:#151d22}
+.run .ctr{grid-column:2 / span 2;white-space:normal}
+.run .mix{display:flex;height:6px;border-radius:3px;overflow:hidden;width:100%}
+.run.open{background:#141c21}
+.inner .row{font-size:13px;padding:3px 4px 3px 18px;color:var(--dim)}
+.cross{padding:7px 4px;color:var(--spot);border-bottom:1px solid #151d22;font-family:var(--mono)}
+.cross:before{content:"";display:inline-block;width:24px;height:2px;background:var(--spot);vertical-align:middle;margin-right:8px}
+.lost{padding:9px 6px;color:#f1c27d;border:1px dashed var(--gap);margin:4px 0;border-radius:6px;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
+.quiet{padding:7px 6px;color:var(--dim);border-bottom:1px solid #151d22;font-style:italic}
+/* B and C */
+canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
+.detail{margin-top:10px;min-height:52px;font-family:var(--mono);font-size:14px;border-top:1px solid var(--line);padding-top:8px}
+.grid{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+.grid th{color:var(--dim);font-weight:500;padding:4px;text-align:right;border-bottom:1px solid var(--line)}
+.grid td{padding:5px 4px;text-align:right;border-bottom:1px solid #151d22;cursor:pointer;position:relative}
+.grid td.t{color:var(--dim);text-align:left;cursor:default}
+.grid td .n{font-size:14px}
+.grid td .s{display:block;font-size:11px;color:var(--dim)}
+.grid td.hasbig .n{font-weight:800;text-decoration:underline;text-decoration-color:var(--ink)}
+.grid td.spotcol{box-shadow:inset 3px 0 0 var(--spot)}
+.grid tr.lostrow td{color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
+.grid th,.grid td{white-space:nowrap}
+.grid th:not(:first-child){min-width:9ch}
+.unrecorded{color:var(--dim);text-align:center}
+.grid td.unrecorded{cursor:default}
+.ladder-head{position:sticky;top:0;z-index:3;background:var(--panel)}
+.honest{color:var(--dim);font-size:13px;margin-top:16px;max-width:820px}
+/* D: mirrored ladder */
+.dctl{display:flex;gap:10px;align-items:center;font-family:var(--mono);color:var(--dim);margin-bottom:8px;flex-wrap:wrap}
+.dctl input{flex:1;min-width:160px;accent-color:var(--spot)}
+.dctl button{background:#1b252b;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:600 13px system-ui;cursor:pointer}
+.ladder{position:relative;font-family:var(--mono)}
+.lrow{display:grid;grid-template-columns:1fr 64px 1fr;align-items:center;height:44px;border-bottom:1px solid #151d22}
+.lrow .k{text-align:center;font-size:15px;color:var(--ink)}
+.lrow .k small{display:block;font-size:11px;color:var(--dim)}
+.side-l,.side-r{display:flex;align-items:center;height:26px;gap:4px;cursor:pointer}
+.side-l{flex-direction:row-reverse}
+.stack{display:flex;height:100%;border-radius:3px;overflow:hidden;min-width:0}
+.side-l .stack{flex-direction:row-reverse}
+.stack i{display:block;height:100%}
+.amt{font-size:12px;color:var(--dim);white-space:nowrap}
+.chip{font-size:11px;font-weight:700;padding:1px 5px;border-radius:9px;background:#0b0f12;border:1px solid currentColor;white-space:nowrap}
+.spotline{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--spot);pointer-events:none;z-index:0}
+.lrow{position:relative;z-index:1}
+.lrow .k span,.amt{background:var(--panel);padding:0 3px}
+.spotline span{position:absolute;right:0;top:-18px;color:var(--spot);font-size:12px;background:var(--panel);padding:0 4px}
+.dbanner{padding:7px 9px;margin-bottom:8px;border:1px dashed var(--gap);border-radius:6px;color:#f1c27d;background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px)}
+.dhead{display:grid;grid-template-columns:1fr 64px 1fr;color:var(--dim);font-size:12px;margin-bottom:4px}
+.dhead span:first-child{text-align:right}.dhead span:nth-child(2){text-align:center}
+/* E: event feed */
+.feed{border-top:1px solid var(--line)}
+.ev{padding:9px 6px;border-bottom:1px solid #151d22;cursor:pointer;display:grid;grid-template-columns:78px 1fr;gap:10px}
+.ev:hover{background:#151d22}
+.ev .when{font-family:var(--mono);color:var(--dim);font-size:13px;padding-top:2px}
+.ev .say{font-size:16px}
+.ev .say b{font-weight:700}
+.ev .meta{display:block;font-family:var(--mono);font-size:12px;color:var(--dim);margin-top:2px}
+.ev.small .say{font-size:14px;color:var(--dim)}
+.ev.xing .say{color:var(--spot);font-size:14px}
+.ev.lost{background:repeating-linear-gradient(135deg,transparent 0 8px,rgba(197,139,42,.12) 8px 16px);cursor:default}
+.ev.lost .say{color:#f1c27d;font-size:14px}
+.ev.quiet .say{color:var(--dim);font-style:italic;font-size:14px;cursor:default}
+.ev .list{grid-column:1 / -1;font-family:var(--mono);font-size:12px;color:var(--dim);max-height:220px;overflow:auto}
+@media (max-width:640px){
+  .lrow{grid-template-columns:1fr 50px 1fr}
+  .dhead{grid-template-columns:1fr 50px 1fr}
+  .ev{grid-template-columns:74px 1fr;gap:6px}
+  .ev .when{font-size:11px}
+  .ev .say{font-size:14px}
+}
+#view {
+  max-height:min(68vh, 620px);
+  overflow:auto;
+  scrollbar-gutter:stable;
+  touch-action:pan-x pan-y pinch-zoom;
+}
+#view:focus-visible,.detail:focus-visible {outline:2px solid var(--spot);outline-offset:2px}
+#view[data-view="footprint"] {scrollbar-gutter:auto}
+#view[data-view="chart"] {--chart-height:clamp(180px,60vh,440px);height:var(--chart-height);max-height:none;overflow-x:hidden}
+.coverage-cap {color:#f2c96b}
+.strike-track {height:calc(100% + var(--strike-travel));position:relative}
+.strike-track canvas {position:sticky;top:0;height:var(--chart-height);background:var(--panel)}
+#chart-strikes {margin:0 0 6px;font:13px var(--mono);color:var(--dim)}
+#inspect-strikes {margin-bottom:8px}
+.panel:has(#view[data-view="chart"]) #chart-strikes::after {content:" · Scroll vertically to browse strikes"}
+.tape {min-width:560px}
+.grid thead th {position:sticky;top:0;background:var(--panel);z-index:1}
+.grid td.t,.grid thead th:first-child {position:sticky;left:0;background:var(--panel);z-index:1}
+.grid thead th:first-child {z-index:2}
+.row .tm {position:sticky;left:0;background:var(--panel);z-index:1}
+@media (max-width:640px){
+  .dhead,.lrow{grid-template-columns:minmax(0,1fr) 48px minmax(0,1fr)}
+  .side-l,.side-r{position:relative;min-width:0;align-items:flex-end}
+  .side-l .chip,.side-r .chip{position:absolute;bottom:100%;font-size:10px}
+  .stack{flex-shrink:1}
+}
+.detail {max-height:min(40vh,280px);overflow:auto}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+[hidden]{display:none!important}
+.row[data-record]{cursor:pointer}
+.controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+.controls button,#view>button,#chart-footer button{color:var(--ink);background:#1b252b;border:1px solid var(--line);border-radius:5px;padding:6px;cursor:pointer}
+.controls:has(label[hidden]):has(button[hidden]){display:none}
+.controls label{font-weight:600}.controls input{accent-color:var(--spot)}
+</style><div class="opt-head"><h2 id="oh"></h2><p id="op"></p></div><div class="panel"><div class="now" id="now"></div><div class="controls"><label hidden><input type="checkbox"> All prints</label><button id="resume" hidden>Resume updates</button></div><div class="key" id="spot-source"></div><div id="chart-strikes" hidden></div><button id="inspect-strikes" hidden></button><div id="view" role="region" aria-labelledby="oh" tabindex="0"></div><div id="chart-footer" hidden></div><div class="detail" id="detail" role="region" aria-label="Print details" tabindex="0"></div></div></template>
+    <section id="optional-tape" hidden></section>
+    <output id="details" aria-live="polite"
       >Tap a print or a strike to inspect it.</output
     >
+    <button id="inspect-available">Inspect available prints</button>
+    <dialog id="print-inspector" aria-labelledby="inspector-title"><h2 id="inspector-title"></h2><p id="inspect-context"></p><ol></ol><button id="inspect-prev">Previous</button> <button id="inspect-next">Next</button> <button id="inspect-close">Return to tape</button></dialog>
     <footer>
       <button id="play">Pause</button
       ><label
@@ -384,7 +548,21 @@
   <script src="./shared/order-flow-render.js"></script>
   <script src="./shared/order-flow-profile.js"></script>
   <script src="./shared/order-flow-heatmap.js"></script>
-  <script>
+  <script type="module">
+    import { createTapeViews } from "./shared/order-flow-views.js";
+    import { createClock, createSourceRegistry } from "./shared/one-clock.js";
+    import { sessionAt } from "./shared/one-clock-session.js";
+    import { replaySelection } from "./shared/one-clock-replay-link.js";
+
+    const cursor = createClock({
+      registry: createSourceRegistry(),
+      initial: {mode: "live", session: sessionAt(Date.now()), instrument: "QQQ", origin: "recorded"}
+    });
+    function selectCutoff(cutoff) {
+      const current = cursor.snapshot();
+      cursor.select({...current, cutoff: Math.round(cutoff)});
+    }
+
     const X = window.OrderFlowExposure,
       M = window.OrderFlowModel,
       PF = window.OrderFlowProfile,
@@ -410,11 +588,12 @@
       el = (id) => document.getElementById(id);
     const SIDE = ["buy", "sell", "unknown"],
       COLOR = { buy: "#62e3bd", sell: "#ff967c", unknown: "#b7bbd5" };
+    let strikeIndex = null;
     let replay = null,
       feed = null,
       chain = null,
       liveRows = [],
-      end = Date.now(),
+      end = cursor.snapshot().cutoff,
       playing = true,
       last = performance.now(),
       hits = [],
@@ -428,15 +607,21 @@
       dirty = true,
       tableAt = 0,
       forceTable = true;
+    cursor.subscribe(selection => { end = selection.cutoff; });
     const live = () => el("source").value !== "replay";
+    const capture = () => el("source").value === "capture";
+    const capturedScale = PF.liveScale(null);
     const simulation = () => el("source").value === "simulation";
     const strikeWindow = createStrikeWindow();
     const simScale = PF.liveScale(null);
     let allPrices = [], windowView = null, simStep = 0;
     function repaint() { dirty = forceTable = true; }
+    function publishedRows(feed) {
+      return feed.rows.map((p,i) => ({...p, publishedRow:i+1})).sort((a,b) => a.t-b.t);
+    }
     function simulationTick() {
       ({feed, chain} = simulateOrderFlow(simStep, Date.now()));
-      liveRows = feed.rows;
+      liveRows = feed.rows.map((p,i) => ({...p, publishedRow:i+1}));
       status = "Simulated market";
       repaint();
     }
@@ -446,7 +631,7 @@
     el("zoom-in").onclick = () => { strikeWindow.zoom(-1); repaint(); };
     el("zoom-out").onclick = () => { strikeWindow.zoom(1); repaint(); };
     function navigateWheel(e) {
-      if (!live() || !allPrices.length || !e.deltaY) return;
+      if (tapeViews.optional() || !live() || !allPrices.length || !e.deltaY) return;
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) strikeWindow.zoom(Math.sign(e.deltaY));
       else strikeWindow.pan(Math.sign(e.deltaY) * Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 45))));
@@ -471,35 +656,70 @@
     });
     canvas.addEventListener("lostpointercapture", () => { drag = null; });
     const part = () => Number(el("participation").value);
-    const clock = (t) =>
-      new Date(t).toLocaleTimeString("en-US", {
+    const etClock = new Intl.DateTimeFormat("en-US", {
+        hour:"2-digit", minute:"2-digit", second:"2-digit",
         timeZone: "America/New_York",
         hour12: false,
       });
+    const clock = t => etClock.format(t);
     const R = window.OrderFlowRender,
       { money, unsigned, contractsCount } = R;
 
-    // Prints within [start, end] for the plot.
+    function archivePrint(i) {
+      const c = replay.cols, k = replay.contracts[c.contract[i]];
+      return { archiveRow:i+1, seq:replay.json.prints.seq?.[i], t:c.t[i], size:c.size[i],
+        price:c.cents[i]/100, symbol:k.symbol, strike:k.strike, type:k.type, side:SIDE[c.side[i]] };
+    }
+    function wantContract(type) {
+      const filter = el("filter").value;
+      return filter === "All" || type === filter[0];
+    }
     function visiblePrints(start, stop) {
-      const f = el("filter").value,
-        want = (type) => f === "All" || type === f[0];
       if (!live() && replay) {
-        const c = replay.cols,
-          out = [];
+        const c = replay.cols, out = [];
         for (let i = X.ofLowerBound(c.t, start); i < c.t.length && c.t[i] <= stop; i++) {
-          const k = replay.contracts[c.contract[i]];
-          if (want(k.type))
-            out.push({ t: c.t[i], size: c.size[i], price: c.cents[i] / 100, symbol: k.symbol,
-              strike: k.strike, type: k.type, side: SIDE[c.side[i]] });
+          if (wantContract(replay.contracts[c.contract[i]].type)) out.push(archivePrint(i));
         }
         return out;
       }
-      return liveRows.filter((p) => p.t >= start && p.t <= stop && want(p.type));
+      return liveRows.filter(p => p.t >= start && p.t <= stop && wantContract(p.type));
+    }
+    function availablePrints() {
+      if (live() || !replay) return visiblePrints(-Infinity,end).reverse();
+      // Pin the cutoff and filter. Materialize only the page being inspected.
+      const count = X.ofLowerBound(replay.cols.t, Math.floor(end)+1);
+      let indices = null;
+      if (el("filter").value !== "All") {
+        indices = [];
+        const wanted = replay.contracts.map(k => wantContract(k.type));
+        for (let i=0; i<count; i++) if (wanted[replay.cols.contract[i]]) indices.push(i);
+      }
+      const length = indices ? indices.length : count;
+      return {length, slice(start,stop) {
+        return Array.from({length:Math.min(stop,length)-start}, (_,n) => {
+          const index = length-1-start-n;
+          return archivePrint(indices ? indices[index] : index);
+        });
+      }};
     }
 
+    let spotHistory = [], replaySpotSource, replaySpotTimes;
+    const tapeViews = createTapeViews(el, clock, availablePrints,
+      () => live() ? X.OF_MULTIPLIER : replay?.multiplier ?? X.OF_MULTIPLIER);
+    el("tape-view").oninput = repaint;
+    function tapeSpots(start) {
+      const points = live() ? spotHistory : replay?.snapshots || [];
+      if (live()) return points.filter(p => p.t >= start && p.t <= end);
+      if (points !== replaySpotSource) {
+        replaySpotSource = points;
+        replaySpotTimes = points.map(p => p.t);
+      }
+      return points.slice(X.ofLowerBound(replaySpotTimes, start), X.ofLowerBound(replaySpotTimes, Math.floor(end) + 1))
+        .filter(p => Number.isFinite(p.spot) && p.spot > 0);
+    }
     function currentView() {
       if (!live()) return replay ? M.replayAt(replay, end) : null;
-      return feed ? M.liveAt(feed, chain, Date.now()) : null;
+      return feed ? M.liveAt(feed, chain, end) : null;
     }
 
     function freshnessText(v) {
@@ -509,42 +729,7 @@
       return R.freshnessText(v, clock, extra);
     }
 
-    function draw() {
-      const w = canvas.clientWidth,
-        h = canvas.clientHeight,
-        d = devicePixelRatio || 1;
-      if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
-        canvas.width = Math.round(w * d);
-        canvas.height = Math.round(h * d);
-      }
-      ctx.setTransform(d, 0, 0, d, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      hits = [];
-      strikeHits = [];
-      view = currentView();
-      const left = 48,
-        right = w - 14,
-        top = 30,
-        bottom = h - 36,
-        start = end - 60000,
-        visible = visiblePrints(start, end);
-      allPrices = view && view.strikes.length
-        ? view.strikes.map((s) => s.strike)
-        : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
-      const spot = live() && view?.snapshot && !view.snapshot.stale ? chain?.underlying_price : null;
-      windowView = live() ? strikeWindow.update(allPrices, spot) : null;
-      const strikes = windowView ? windowView.prices : allPrices;
-      if (windowView) {
-        el("follow-spot").setAttribute("aria-pressed", String(windowView.follow));
-        const slider = el("strike-center");
-        slider.max = Math.max(0, allPrices.length - 1);
-        slider.value = allPrices.length - 1 - (windowView.center || 0);
-        slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
-        el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
-        el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
-        el("strike-range").textContent = strikes.length ? (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
-          " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
-      }
+    function drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot}) {
       const high = strikes[0],
         low = strikes[strikes.length - 1];
       const strikeY = (strike) =>
@@ -613,10 +798,69 @@
         hits.push({ x, y, p, r: Math.max(8, p.type === "C" ? r : k) });
       }
       for (const s of strikes) strikeHits.push({ y: strikeY(s), strike: s });
+    }
+
+    function draw() {
+      const w = canvas.clientWidth,
+        h = canvas.clientHeight,
+        d = devicePixelRatio || 1;
+      if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
+        canvas.width = Math.round(w * d);
+        canvas.height = Math.round(h * d);
+      }
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      hits = [];
+      strikeHits = [];
+      view = currentView();
+      const observed = view?.snapshot;
+      if (live() && Number.isFinite(observed?.spot) && observed.t > (spotHistory.at(-1)?.t ?? 0)) {
+        spotHistory = spotHistory.filter(p => p.t >= end - 60000);
+        spotHistory.push({t: observed.t, spot: observed.spot});
+      }
+      const left = 48,
+        right = w - 14,
+        top = 30,
+        bottom = h - 36,
+        start = end - 60000,
+        visible = visiblePrints(start, end);
+      allPrices = view && view.strikes.length
+        ? view.strikes.map((s) => s.strike)
+        : [...new Set(visible.map((p) => p.strike))].sort((a, b) => b - a);
+      const spot = live() ? view?.snapshot?.spot : null;
+      windowView = live() ? strikeWindow.update(allPrices, spot) : null;
+      const strikes = windowView ? windowView.prices : allPrices;
+      if (windowView) {
+        el("follow-spot").setAttribute("aria-pressed", String(windowView.follow));
+        const slider = el("strike-center");
+        slider.max = Math.max(0, allPrices.length - 1);
+        slider.value = allPrices.length - 1 - (windowView.center || 0);
+        slider.setAttribute("aria-valuetext", String(allPrices[windowView.center] ?? "No strikes"));
+        el("zoom-in").disabled = windowView.level === 0 || !strikes.length;
+        el("zoom-out").disabled = windowView.level === windowView.lastLevel || strikes.length === allPrices.length;
+        el("strike-range").textContent = strikes.length ? (tapeViews.optional() ? "Profile window · " : "") + (windowView.follow ? (Number.isFinite(spot) ? "Following" : "Waiting for fresh spot") : "Inspecting") +
+          " · $" + strikes.at(-1) + "–$" + strikes[0] + (Number.isFinite(spot) ? " · QQQ $" + spot.toFixed(2) : "") : "Waiting for strikes";
+      }
+      if (tapeViews.optional()) {
+        const oldest = liveRows[0]?.t;
+        const cappedFrom = live() && feed?.cap > 0 && liveRows.length >= feed.cap &&
+          oldest > start && (feed.session?.prints == null || feed.session.prints > liveRows.length) ? oldest : null;
+        const chainStrikes = !live() && view?.snapshot && strikeIndex?.changes.findLast(([t]) => t <= view.snapshot.t)?.[1];
+        tapeViews.render(visible, tapeSpots(start), view?.coverage?.gaps || [], start, end, allPrices, cappedFrom, chainStrikes);
+      } else {
+        drawClassicTape({w,h,left,right,top,bottom,start,visible,strikes,spot});
+      }
       updateScale();
       drawProfile();
       drawHeatmap();
-      el("state").textContent = status + " · " + hits.length + " prints in view";
+      el("state").textContent = status + (view ? " · " + (tapeViews.optional() ? visible.length : hits.length) + " prints in view" : "");
+      const link = el("flow-history");
+      link.hidden = live() || !view;
+      if (!link.hidden) {
+        const at = cursor.snapshot();
+        link.href = "/?" + new URLSearchParams({one_clock_session: at.session,
+          one_clock_instrument: at.instrument, one_clock_at: String(at.cutoff)}) + "#history-clock";
+      }
       if (forceTable || performance.now() - tableAt > 1000) {
         el("fresh").textContent = freshnessText(view);
         el("profile-summary").textContent = PF.profileSummary(view, part(), scale, selected, clock, money);
@@ -638,10 +882,10 @@
         return;
       }
       const day = feed && feed.session && feed.session.day;
-      const s = view ? (simulation() ? simScale : liveScale).update(view, day, Date.now()) : null;
+      const s = view ? (capture() ? capturedScale : simulation() ? simScale : liveScale).update(view, day, end) : null;
       scale = s || { flow: 0, conc: 0 };
       el("profile-scale").textContent = s
-        ? simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
+        ? capture() ? "Scale: recorded close" : simulation() ? "Scale: largest value in this simulation" : "Scale: largest value seen live since " + clock(s.since) + " ET in this browser (kept across reconnects); 50% and 100% share it"
         : "Scale: waiting for session history";
     }
 
@@ -967,7 +1211,7 @@
       k = Math.max(0, Math.min(grid.strikes.length - 1, k));
       playing = false;
       el("play").textContent = "Play";
-      end = grid.times[j];
+      selectCutoff(grid.times[j]);
       el("seek").value = (1000 * (end - replay.coverage.open)) / span();
       dirty = forceTable = true;
       draw();
@@ -1008,7 +1252,7 @@
       if (!view) return;
       const s = view.strikes.find((r) => r.strike === strike);
       if (!s) return;
-      const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (live() ? "live" : "archive replay") + ")"];
+      const lines = ["$" + strike + " strike at " + clock(end) + " ET (" + (capture() ? "recorded close" : live() ? "live" : "archive replay") + ")"];
       for (const c of s.contracts) {
         const src = view.contracts.find((r) => r.symbol === c.symbol) || {};
         const obs = c.observed;
@@ -1111,7 +1355,7 @@
     const span = () => replay.coverage.close - replay.coverage.open;
     el("seek").oninput = () => {
       if (!replay) return;
-      end = replay.coverage.open + (span() * el("seek").value) / 1000;
+      selectCutoff(replay.coverage.open + (span() * el("seek").value) / 1000);
       dirty = forceTable = true;
     };
     el("filter").onchange = el("participation").onchange = el("hm-uncertain").onchange = () => (dirty = forceTable = true);
@@ -1137,13 +1381,13 @@
     };
     function frame(now) {
       if (!live() && playing && replay) {
-        end += (now - last) * Number(el("speed").value);
-        if (end > replay.coverage.close) end = replay.coverage.open + 15000;
+        const next = end + (now - last) * Number(el("speed").value);
+        selectCutoff(next > replay.coverage.close ? replay.coverage.open + 15000 : next);
         el("seek").value = (1000 * (end - replay.coverage.open)) / span();
         dirty = true;
       }
-      if (live()) {
-        end = Date.now();
+      if (live() && !capture()) {
+        cursor.tick();
         dirty = true;
       }
       last = now;
@@ -1163,18 +1407,22 @@
         if (gen !== generation) return { stale: true };
         if (res.status === 404) return { missing: true };
         if (!res.ok) throw Error("HTTP " + res.status);
-        return { json: await res.json() };
+        const json = await res.json();
+        return gen === generation ? { json } : { stale: true };
       } finally {
         clearTimeout(timeout);
+        controllers = controllers.filter(item => item !== controller);
       }
     }
 
-    async function changeSource() {
+    async function changeSource(linked = null, invalid = false) {
       const gen = ++generation;
       timers.forEach(clearTimeout);
       controllers.forEach((c) => c.abort());
       timers = [];
       controllers = [];
+      tapeViews.reset();
+      spotHistory = [];
       feed = chain = null;
       liveRows = [];
       selected = null;
@@ -1188,7 +1436,43 @@
       document.querySelector("footer").style.display = isLive ? "none" : "flex";
       el("mode").textContent = isLive ? "QQQ · Live feed" : "Archive replay · September 25, 2026";
       el("details").textContent = "Tap a print or a strike to inspect it.";
-      history.replaceState(null, "", "?source=" + el("source").value);
+      if (!linked && !invalid) {
+        const params = new URLSearchParams({source:el("source").value});
+        const tape = el("tape-view").querySelector('[aria-pressed="true"]')?.dataset.view;
+        if (tape && tape !== "classic") params.set("tape", tape);
+        history.replaceState(null, "", "?" + params);
+      }
+      el("seek").disabled = el("play").disabled = !isLive;
+      if (invalid || (linked && (linked.instrument !== "QQQ" || linked.session !== "2026-09-25"))) {
+        replay = replayScale = null;
+        grids = {};
+        playing = false;
+        status = invalid ? "Invalid One Clock cursor" : "Order flow archive unavailable at this cursor";
+        el("mode").textContent = invalid ? "Invalid selection" : linked.instrument + " · " + linked.session;
+        if (linked) cursor.select({...linked, origin: "reconstructed"});
+        return;
+      }
+      if (capture()) {
+        el("mode").textContent = "QQQ · Recorded close · November 23, 2026";
+        status = "Loading recorded feed";
+        try {
+          const {json} = await getJson("./order-flow-capture-20261123.json", gen, 15000);
+          if (gen !== generation) return;
+          cursor.select({mode:"replay", origin:"recorded", session:json.feed.session.day, instrument:"QQQ", cutoff:json.asOf});
+          feed = json.feed;
+          chain = json.chain;
+          liveRows = publishedRows(feed);
+          status = "Recorded feed · " + clock(json.asOf) + " ET";
+        } catch {
+          if (gen === generation) status = "Recorded feed unavailable";
+        }
+        repaint();
+        return;
+      }
+      if (isLive) {
+        cursor.select({mode: "live", session: sessionAt(Date.now()), instrument: "QQQ",
+          origin: simulation() ? "synthetic" : "recorded"});
+      }
       if (simulation()) {
         el("mode").textContent = "QQQ · Simulation";
         simStep = 0; simulationTick();
@@ -1202,16 +1486,34 @@
       if (!isLive) {
         status = "Loading archive";
         try {
-          const r = replay || (await getJson("./order-flow-replay.json", gen, 60000)).json;
+          const [r, index] = await Promise.all([
+            replay || getJson("./order-flow-replay.json", gen, 60000).then(result => result.json),
+            strikeIndex || getJson("./order-flow-replay-strikes.json", gen, 10000).then(result => result.json).catch(() => null)
+          ]);
           if (gen !== generation) return;
           replay = replay || M.decodeReplay(r);
+          if (index?.session === replay.session) strikeIndex = index;
           replayScale = replayScale || PF.replayScale(replay);
-          end = replay.coverage.open + 15000;
-          status = "Archive · " + replay.cols.t.length.toLocaleString() + " audited prints";
+          const cutoff = linked ? linked.cutoff : replay.coverage.open + 15000;
+          cursor.select({mode: "replay", origin: "reconstructed", session: replay.session, instrument: "QQQ", cutoff});
+          if (linked && (linked.session !== replay.session || cutoff < replay.coverage.open || cutoff > replay.coverage.close)) {
+            replay = replayScale = null;
+            grids = {};
+            status = "Outside archive coverage at this cursor";
+            repaint();
+            return;
+          }
+          playing = !linked;
+          last = performance.now();
+          el("seek").disabled = el("play").disabled = false;
+          el("play").textContent = playing ? "Pause" : "Play";
+          el("seek").value = 1000 * (end - replay.coverage.open) / span();
+          status = "Reconstructed archive · print times and snapshots";
+          el("mode").textContent = "QQQ · reconstructed archive · " + replay.session;
         } catch (e) {
           if (gen === generation) status = "Archive unavailable";
         }
-        dirty = true;
+        repaint();
         return;
       }
       status = "Waiting for feed";
@@ -1220,7 +1522,7 @@
         if (gen !== generation) return;
         try {
           const r = await getJson(LIVE_URL + "?_=" + Date.now(), gen, 8000);
-          if (r.stale) return;
+          if (r.stale || gen !== generation) return;
           if (r.missing) {
             feed = null;
             liveRows = [];
@@ -1228,7 +1530,7 @@
           } else {
             if (!r.json || !Array.isArray(r.json.rows)) throw Error("Invalid feed");
             feed = r.json;
-            liveRows = feed.rows.slice().sort((a, b) => a.t - b.t);
+            liveRows = publishedRows(feed);
             received = feed.lastReceived;
             const age = received == null ? Infinity : Date.now() - received;
             status = (age > 15000 ? "Stale" : "Receiving") + (received ? " · last print " + new Date(received).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "");
@@ -1247,7 +1549,7 @@
         if (gen !== generation) return;
         try {
           const r = await getJson(CHAIN_URL + "?_=" + Date.now(), gen, 10000);
-          if (r.stale) return;
+          if (r.stale || gen !== generation) return;
           chain = r.missing ? null : r.json;
         } catch (e) {
           // Keep the last chain; its age marks it stale once it passes two minutes.
@@ -1262,10 +1564,13 @@
       readChain();
     }
     const initialSource = new URLSearchParams(location.search).get("source");
-    el("source").value = ["simulation", "replay"].includes(initialSource) ? initialSource : "live";
-    el("source").onchange = changeSource;
+    el("source").value = ["simulation", "replay","capture"].includes(initialSource) ? initialSource : "live";
+    let linked = null, invalid = false;
+    try { linked = replaySelection(location.search); } catch { invalid = true; }
+    if (linked || invalid) el("source").value = "replay";
+    el("source").onchange = () => changeSource();
     window.addEventListener("resize", () => (dirty = true));
-    changeSource();
+    changeSource(linked, invalid);
     requestAnimationFrame(frame);
   </script>
 </html>

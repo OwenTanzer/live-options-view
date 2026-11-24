@@ -6,7 +6,7 @@ evidence, not a current live-service inventory. The current browser helper and c
 home is `site/`; external documentation URLs retain their own `/docs/` paths.
 For the accepted active-publication policy, see [the daily-session specification](../docs/specs/OA203_ACTIVE_LOOKUP.md#activation-policy--november-8-2026); older candidate-state statements below do not supersede it.
 
-Seven read-only tools expose existing producer artifacts. Node 22+; no package
+Eight read-only tools expose existing producer artifacts. Node 22+; no package
 install, provider token, R2 credentials, scanner invocation or trading imports.
 The module remains in this repository because it consumes the existing calendar,
 schedule semantics and producer contracts. Its transports and tests are separate
@@ -61,6 +61,20 @@ producer product. A missing current-day snapshot never selects yesterday.
 This tool is an undeployed review candidate: the producer publication gate,
 remote retention policy and live client verification remain outstanding.
 
+For One Clock replay, pass `as_of_ms` (UTC epoch milliseconds) to
+`return_rankings` with an explicit session, or to `active_rankings` with a
+session and sweep number. The pinned sweep path skips moving latest/attempt
+pointers. Each required body must have qualifying evidence for that exact
+revision, including later detail pages. For the fixed public archive, the R2
+HTTP response must supply one strong ETag and a Last-Modified date; the conservative
+availability bound is the following whole second. The producer’s own
+`published_at` can precede the upload. The envelope carries per-member
+digests, availability bounds and the latest bound of the selected members.
+A rebuilt or untimed revision yields a coverage gap. Filesystem modification
+times have no publication meaning. Active ranks measure freshness against the
+chosen cursor, while final ranks remain retrospective. Omitting `as_of_ms`
+preserves the existing tools’ behavior.
+
 The smoke client includes standard `_meta` and verifies text/structured results
 agree. Stdout contains only newline-delimited JSON-RPC server messages.
 
@@ -92,13 +106,16 @@ Its Linux image checks pass; live client/grant gates remain pending. See
 
 | Tool | Existing products and supported scope |
 | --- | --- |
-| `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`, `spy_snapshot` (appended, so earlier positions are unchanged), plus an `underlyings` summary of chain coverage and availability; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
+| `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`, `spy_snapshot` (appended, so earlier positions are unchanged), plus `crypto_snapshot` (appended), plus an `underlyings` summary of chain coverage and availability; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
+| `discover_sources` | Stable IDs `qqq_snapshot`, `scheduled_squeeze`, `options_returns`, `spy_snapshot` (appended, so earlier positions are unchanged), plus `nasdaq_snapshot` (appended after `cross_market_overview`, so earlier positions are unchanged), plus an `underlyings` summary of chain coverage and availability; current parse/read availability, fields/units, filters, cadence, limits and unsupported capabilities. Optional explicit return session; no historical index. |
 | `market_context` | Optional `underlying` (`QQQ` default, or `SPY`; #121). QQQ reads `intraday/latest.json` (dataset `qqq_snapshot`), SPY reads `intraday/spy/latest.json` (dataset `spy_snapshot`). Returns `requested_underlying` and `actual.underlying`, the underlying block and a chain page filtered by expiry/type/strike/OCC contract. The payload's symbol, `underlying_market.symbol` and every contract root must match the request or it fails as `symbol_mismatch`; an archive locator outside the requested underlying's layout fails as `incompatible_schema`. Unsupported symbols, a contract for the other underlying, or a missing SPY publication return explicit errors; QQQ is never substituted. Detail references keep the originating underlying and snapshot. |
 | `squeeze_results` | Scheduled `latest.json`, `latest-attempt.json`, `latest-schedule.json`; uses the existing exported XNYS calendar and `formatSqueezeScheduleStatus`. `runs` compares last success and latest attempt (run ID, status, schedule/acquisition/publication times, eligible/excluded denominators, `attempt_relation`); `rows_basis` names the run the rows came from. `run=latest_attempt` reads that attempt's own manifest and `results.json` (digest-verified), pages every row (eligible by producer rank, then excluded) and reports `reconciliation` against its coverage counts. |
+| `crypto_snapshot` | Reads `crypto/latest.json` (dataset `crypto_snapshot`): 39 coins by market-cap rank with per-coin source, as-of time and freshness, the read-only trend-pattern section and the market block (total cap, BTC dominance, Fear & Greed). Filters: `symbol`, `source`, `limit`, `offset`. A row whose `price_basis` disagrees with its `source` fails closed; a missing source is `source_unavailable` with a null price, never a substituted one. Does not change `market_context`'s QQQ/SPY-only contract. |
 | `return_rankings` | One exact date's `summary.json` and bounded shortlist: legacy `leaderboard.csv` for all/clean, or `qualified_ask_bid_v1.csv` for `view: "qualified_ask_bid_v1"`. Preserves producer ranks, policy, reasons, underlying/type filters, and pagination. Older sessions report the qualified view as unavailable. |
 | `active_rankings` | Current or explicit XNYS session's immutable, producer-built cutoff generation. All/clean/qualified views, bounded filters and explicit retained sweep selection. Provisional state, cutoff, cadence and newer attempts stay visible; a final daily result uses the final path. Requires producer publication, currently disabled. |
 | `window_rankings` | One explicit #130 window (`oa203/windows/oa203-windows-v1/<kind>/<window_id>/`): `summary.json` plus the per-basis `rankings.csv` shortlist (at most 200 rows per basis, ranks cut after full-universe ranking) and the `paths.csv.gz` full path record. Basis `mid`/`exec`/`qualified` (default `qualified`); tops differ by basis. `final` serves rows, `partial` serves rows with its reasons, `in_progress` returns the summary only (no exit is invented), an unknown policy or state is `unsupported`, a missing window is `missing`. Pinned detail verifies the summary/rankings digests and the matching paths row. Weekly detail streams the complete gzip through a bounded scan, retains the selected contract row, and verifies its compressed digest against the publication pointer when present. |
 | `market_overview` | #132 exact-100 registry from `market_data/overview/universe.json`, consuming the existing `intraday/prices.json` artifact (v2 or legacy). All 100 configured members remain visible even without prices; all 100 are enabled; unavailable providers remain explicit missing rows. Source-dependent yen identities and ETF identities are preserved. V2 observations/references retain dates, timezone, precision, sessions, adjustments, acquisition and failed-refresh evidence; arithmetic uses the normalized exact pair. Legacy producer percentages remain partial and receipt-only evidence is never live. Unresolved/rolled futures cannot acquire comparable changes. Filters: `asset_class`, `symbols`, `sort`, `limit`, `offset`. |
+| `nasdaq_snapshot` | Latest NASDAQ-100 snapshot (`nasdaq/latest.json`, `schema_version=1`): 101 listings plus the NDX index block, per-stock news and 1h/7d changes. Per-stock `percent_change` is Nasdaq's latest reported move (after-hours move after the close); the index `percent_change` is the regular-session move vs previous close — the two bases are labelled differently and are never reconciled. Freshness is measured from Nasdaq's last-trade timestamp when published, else collector receipt, on an hourly cadence. Source-unavailable stocks carry null price fields. Filters: `symbols`, `sort` (`strip`/`percent_desc`/`percent_asc`), `limit`, `offset`. |
 | `result_detail` | Retained snapshot JSON row; exact squeeze run's manifest/results/normalized inputs; selected return contract from bounded sweep pages with producer calculation cells/flags. Window rows pin the summary/rankings and verify the matching paths row. |
 
 The qualified return view's provisional thresholds and evidence rules are in

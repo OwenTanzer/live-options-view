@@ -10,6 +10,8 @@ points (start_live_quote_server, make_s3, wait_for_premarket, _run_session)
 resolve through the package entry, as they did in the flat file.
 """
 
+import os
+import tempfile
 import secrets
 import threading
 import time
@@ -20,9 +22,13 @@ import market_data.live_market as _entry  # entry indirection for main()'s test 
 from .config import (
     COLLECT_SPY,
     COLLECT_IBIT,
+    COLLECT_SLV,
+    COLLECT_DRAM,
     ET,
+    ONE_CLOCK_PUBLICATIONS,
     HEALTH_SECS,
     PRICE_LANE_ENABLED,
+    R2_BUCKET,
     PRICES_SECS,
     PRICE_TICKERS,
     SNAPSHOT_SECS,
@@ -39,6 +45,8 @@ from .chain import load_chain
 from .steo import eia_steo_loop
 from .health import health_loop, push_health
 from .market import take_snapshot
+from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
+from .publication_queue import PublicationQueue
 from .prices import (
     _classify_startup,
     _log_ticker_health,
@@ -74,6 +82,29 @@ def price_writer_plan() -> str:
     """
     return "continuous_price_lane" if PRICE_LANE_ENABLED else "in_session_legacy"
 
+_publication_queues = {}
+
+
+def _publication_queue(us, today, counters):
+    if not ONE_CLOCK_PUBLICATIONS or us.symbol not in ONE_CLOCK_INSTRUMENTS:
+        return None
+    if us.symbol not in _publication_queues:
+        spool_root = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or tempfile.gettempdir()
+        queue = PublicationQueue(make_s3(publication=True), R2_BUCKET, us.symbol,
+                                 spool_dir=os.path.join(spool_root, "collector-publication-v1", R2_BUCKET))
+        _publication_queues[us.symbol] = queue
+        queue.start()
+    queue = _publication_queues[us.symbol]
+    queue.session = (today.isoformat(), counters)
+    return queue
+
+
+def next_capture_delay(start, now, interval=SNAPSHOT_SECS):
+    # If acquisition itself crossed a boundary, take the current bucket
+    # immediately. Never manufacture an observation for a skipped bucket.
+    return max(0.0, (int(start) // interval + 1) * interval - now)
+
+
 def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegistry):
     run_id        = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
     process_start = datetime.now(timezone.utc)
@@ -106,7 +137,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
                    "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
-        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or (sym == "IBIT" and not COLLECT_IBIT):
+        opted_out = {"IBIT": not COLLECT_IBIT, "SLV": not COLLECT_SLV, "DRAM": not COLLECT_DRAM}
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or opted_out.get(sym, False):
             continue
         try:
             us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)
@@ -277,6 +309,10 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
 
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS}s, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 
+    queues = {QQQ_SESSION.symbol: _publication_queue(QQQ_SESSION, today, counters)}
+    for us, _, _ in extra_chains:
+        queues[us.symbol] = _publication_queue(us, today, extra_trackers[us.symbol][0])
+
     reauth_attempted = False
     while not past_stop():
         if feed.needs_reauth():
@@ -305,21 +341,25 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
                 if not feed.get_subscription_delivery()["pending_event_pairs"]:
                     context.update(status="collecting", reason=None)
 
-        tracker.check_missed()
+        captured_state = feed.get_state()
+        capture = (datetime.now(timezone.utc), captured_state)
+        tracker.check_missed(capture[0])
         try:
-            take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker)
+            take_snapshot(s3, feed, strikes, exp_date, tier, today, counters, tracker,
+                          publication_queue=queues[QQQ_SESSION.symbol], capture=capture)
         except Exception as e:
             log.error(f"snapshot error: {e}")
         for us, us_strikes, us_exp in extra_chains:
             if extra_contexts.get(us.symbol, {}).get("status") != "collecting":
                 continue
             us_counters, us_tracker = extra_trackers[us.symbol]
-            us_tracker.check_missed()
+            us_tracker.check_missed(capture[0])
             try:
-                take_snapshot(s3, feed, us_strikes, us_exp, tier, today, us_counters, us_tracker, us)
+                take_snapshot(s3, feed, us_strikes, us_exp, tier, today, us_counters, us_tracker, us,
+                              publication_queue=queues[us.symbol], capture=capture)
             except Exception as e:
                 log.error(f"{us.symbol} snapshot error: {e}")
-        time.sleep(SNAPSHOT_SECS)
+        time.sleep(next_capture_delay(capture[0].timestamp(), time.time()))
 
     trk = tracker.get()
     ctr = counters.get()

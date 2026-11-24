@@ -38,6 +38,9 @@ class Quote:
     ask: float | None
     quote_ts: str | None
     server_ts: str | None
+    instrument_class: str | None = None
+    bid_ts: str | None = None
+    ask_ts: str | None = None
 
     @property
     def age_seconds(self) -> float | None:
@@ -180,7 +183,7 @@ def _snapshot_key(payload: dict[str, Any]) -> tuple[str | None, str]:
     key = payload["snapshot_key"]
     if not isinstance(key, str):
         return None, "invalid"
-    match = re.fullmatch(r"intraday/(?:spy/|ibit/)?([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
+    match = re.fullmatch(r"intraday/(?:spy/|ibit/|slv/|dram/)?([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
     if match is None:
         return None, "invalid"
     date_part, time_part = match.groups()
@@ -476,6 +479,9 @@ class QuoteReader:
                     ask=q.get("ask"),
                     quote_ts=q.get("quote_ts"),
                     server_ts=server_ts,
+                    instrument_class=q.get("instrument_class"),
+                    bid_ts=q.get("bid_ts"),
+                    ask_ts=q.get("ask_ts"),
                 )
                 for q in payload.get("quotes", [])
             }

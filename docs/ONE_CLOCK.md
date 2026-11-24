@@ -235,6 +235,23 @@ cursor.
 
 ## Verification and release
 
+The main dashboard shares one committed selection across Live, Historical and
+Automated. Choose Replay in the Session clock control, set the session,
+instrument and New York time, and apply it. Navigating between tabs preserves
+the instant. Live displays the eligible archived chain. Automated displays
+public fill receipts and carried inventory, keeping live balances, marks and
+paper-trading controls outside the replay. Historical combines the sources
+and links to the private journal at the same instant. A selected instant from
+Event Results opens the same dashboard clock with millisecond precision.
+
+Returning to Live resumes the current roster on the Automated tab. The
+QQQ/SPY/IBIT meters use one shared age tick; their acquisition schedules and
+the account quote service still own their respective live fetches. Dashboard
+readers can subscribe to the window event `one-clock-selection`, with the
+immutable selection in `event.detail`, and use
+`window.oneClockDashboard.snapshot()` on mount. A live-mode notification
+releases the fixed cutoff.
+
 The Historical tab now has an explicit **One Clock · as of cursor** reader,
 alongside the original daily retrospective view. `/api/one-clock/chain` accepts
 only session, QQQ/SPY/IBIT instrument and epoch-millisecond cutoff. It derives
@@ -514,3 +531,7 @@ not pretend a later observer receipt existed at trigger time. Missing source
 evidence is shown as unavailable. Roll back this Results API and asset slice
 together to the compatible observer release; it adds no schema migration,
 publisher, cron or KV operation.
+
+The Order Flow tape selector keeps the current view as its default. Time & Sales, the QQQ price chart, the ten-second strike footprint, the mirrored premium ladder and the event feed share the displayed minute and contract filter. All optional views receive the whole collected strike universe. Zooming the main tape or profile changes its viewport. Inspect available prints opens the published live tail or archive through the selected cursor with the contract filter applied. Each optional view scrolls within its panel. The price chart fits the full minute across the viewport. Scroll vertically to browse five strikes at a time. Scroll horizontally through strike columns in the footprint, or vertically through strike rows in the mirrored ladder. Its header shows the visible and available strike ranges. When the live display cap shortens the minute, the summary shows the earliest retained print time. Ticket highlighting begins at $10,000 in premium. Archive rows without provider sequences retain their archive row number.
+
+The November 23 recorded close freezes the public QQQ recent-print feed through its last recorded print (15:59:56.507 ET), including the session contract roster and the original sequences. The matching QQQ chain comes from the publication-qualified One Clock chain reader at that cutoff. The capture keeps only the chain fields the page consumes. Its 201 recorded strikes span $500–$900. The September 25 trade archive covers 16 contracts at eight strikes ($740–$747). The chart, footprint and ladder also show strikes from the chain snapshot at the replay cursor. At 09:31 ET that snapshot spans $709–$775. Strikes outside the trade archive have unavailable individual trade data.

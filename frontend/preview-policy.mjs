@@ -1,6 +1,8 @@
 // No backend imports or configurable network destinations in the asset gateway.
 export const API_PATHS = new Set([
   '/api/one-clock/chain',
+  '/api/one-clock/opening-oi',
+  '/api/one-clock/btc-replay',
   '/api/one-clock/squeeze',
   '/api/one-clock/bots',
   '/api/one-clock/bots/roster',
@@ -20,7 +22,11 @@ export const OI_SKEW_PROJECTION_KEY = 'crassus/oi-skew/v1/latest.json';
 export const OI_SKEW_PROJECTION_PUBLIC = true;
 const PUBLIC_KEYS = new Set([
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json',
+  'intraday/slv/latest.json', 'intraday/dram/latest.json',
   'intraday/prices.json', 'intraday/health.json', 'derived/OIranges.csv',
+  'crypto/latest.json',
+  'crypto/predictions/BTC.json',
+  'nasdaq/latest.json',
   'macro/eia_steo.json', 'manifest.json',
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',

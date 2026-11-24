@@ -33,6 +33,12 @@ jobs:
         run: |
           python scripts/verify_profit_protection.py
           python scripts/verify_forward_skew.py
+      - name: Verify opening OI associator share strategies
+        working-directory: crassus
+        run: python scripts/verify_oi_associator.py
+      - name: Verify inactive acceleration strategies
+        working-directory: crassus
+        run: python scripts/verify_me_bots.py
       - name: Run integrity invariant suite
         working-directory: crassus
         run: python scripts/verify_invariants.py
@@ -45,6 +51,12 @@ jobs:
       - name: Reference skew strategies
         working-directory: crassus
         run: python scripts/verify_reference_skew.py
+      - name: Trump Whisperer x OI skew paper bots (IBIT, SLV, DRAM)
+        working-directory: crassus
+        run: python scripts/verify_trump_oi_skew.py
+      - name: Order-flow skew paper bot (flow_skew_qqq)
+        working-directory: crassus
+        run: python scripts/verify_flow_skew.py
       # The site OI skew meter (site/shared/oi-skew.js) is pinned to the real
       # bot gates and collector reading by this fixture; a strategy or reading
       # change that alters any case fails here until the fixture (and, if the

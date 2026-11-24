@@ -550,6 +550,29 @@ const settle = () => new Promise(r => setImmediate(r));
     assert.ok(h.calls.ingested.includes('IBIT'), 'IBIT reaches underlying-specific paper state');
   }
 
+  // SLV (silver) and DRAM (memory) are nearest-expiry like IBIT: each renders
+  // from its own tree under its expiry date, and rejects mixed expirations.
+  for (const [root, price] of [['SLV', 30], ['DRAM', 40]]) {
+    const strike = String(price * 1000).padStart(8, '0');
+    const rows = exp => [
+      { OptionSymbol: `${root}261120C${strike}`, Strike: price, Type: 'call', OpenInterest: 10, Bid: 1, Ask: 1.2, Expiration: '2026-11-20' },
+      { OptionSymbol: `${root}261120P${strike}`, Strike: price, Type: 'put', OpenInterest: 20, Bid: 1, Ask: 1.2, Expiration: exp },
+    ];
+    const h = harness(root);
+    h.routes['intraday/latest.json'] = h.reply(snapshot('QQQ'));
+    h.routes[`intraday/${root.toLowerCase()}/latest.json`] = h.reply(snapshot(root, { price, date: '2026-11-16', expiration: '2026-11-20', rows: rows('2026-11-20') }));
+    await h.api.fetchLatest();
+    assert.equal(h.el('title').textContent, `${root} exp 2026-11-20 Live OI`, `${root} is labeled by its expiry`);
+    assert.deepEqual(h.calls.heatmap.at(-1), { symbol: root, dataSymbol: root, price });
+
+    const bad = harness(root);
+    bad.routes['intraday/latest.json'] = bad.reply(snapshot('QQQ'));
+    bad.routes[`intraday/${root.toLowerCase()}/latest.json`] = bad.reply(snapshot(root, { price, date: '2026-11-16', expiration: '2026-11-20', rows: rows('2026-11-27') }));
+    await bad.api.fetchLatest();
+    assert.equal(bad.calls.heatmap.length, 0, `${root} mixed expirations are rejected`);
+    assert.match(bad.el('no-data').textContent, /missing or mixed expiration/);
+  }
+
   // IBIT without an expiration is rejected, never rendered as a chain.
   {
     const h = harness('IBIT');

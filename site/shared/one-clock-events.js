@@ -1,3 +1,5 @@
+import { validateDecisionRule, decisionEvents } from './one-clock-decision-events.js';
+import { validateEncounter, encounterEvents, signedOutcome } from './one-clock-level-encounters.js';
 import { instant, observation, observationKey, selectAsOf } from './one-clock.js';
 
 const OPS = { '>=': (a, b) => a >= b, '>': (a, b) => a > b, '<=': (a, b) => a <= b,
@@ -24,7 +26,7 @@ export function eventRule(input) {
   if (!Array.isArray(rule.instruments) || !rule.instruments.length) throw new Error('choose instruments');
   rule.instruments.forEach(v => text(v, 'instrument'));
   if (!['all', 'any'].includes(rule.combine)) throw new Error('choose all or any conditions');
-  if (!['rising', 'once-per-session'].includes(rule.transition)) throw new Error('invalid transition');
+  if (!['rising', 'once-per-session', 'per-decision'].includes(rule.transition)) throw new Error('invalid transition');
   if (!['hold', 'reset'].includes(rule.missingInput)) throw new Error('choose missing-input policy');
   if (!Array.isArray(rule.conditions) || !rule.conditions.length || rule.conditions.length > 20) throw new Error('one to twenty conditions required');
   rule.conditions.forEach(c => {
@@ -44,6 +46,15 @@ export function eventRule(input) {
     if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
+  if (rule.transition === 'per-decision') validateDecisionRule(rule);
+  if (rule.levelEncounter !== undefined) {
+    validateEncounter(rule.levelEncounter);
+    if(rule.instruments.length!==1 || rule.instruments[0]!=='QQQ' || rule.conditions.length!==1 ||
+      rule.conditions[0].source!=='oi-levels' || rule.conditions[0].field!=='qualified' ||rule.conditions[0].op!=='==' || rule.conditions[0].value!==true)
+      throw new Error('Invalid calibrated OI study input');
+    if(rule.combine!=='all' || rule.transition!=='rising' || rule.missingInput!=='reset')throw new Error('Invalid encounter transition');
+    if (rule.outcomes.length === 0 || rule.outcomes.some(o=>o.source!=='level-spot' || o.field!=='spot' || o.measure!=='category')) throw new Error('Level encounters require spot category outcomes');
+  }
   return immutable(rule);
 }
 
@@ -57,7 +68,7 @@ export function saveRule(versions, input) {
 
 function evidence(row) {
   return row ? { source: row.source, id: row.id, revision: row.revision,
-    eventAt: row.eventAt, availableAt: row.availableAt, evidence: row.evidence } : null;
+    eventAt: row.eventAt, ...(row.valueAt===undefined?{}:{valueAt:row.valueAt}), availableAt: row.availableAt, evidence: row.evidence } : null;
 }
 
 export function evaluateEvents({ rule: input, observations, selection, sessionClose, activationWindows }) {
@@ -71,6 +82,15 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   // Validate duplicate revision contents once, then advance a source index by
   // availability. Do not rescan/clone the full archive per condition per tick.
   const finalRows = selectAsOf(rows, selection);
+  if (rule.transition === 'per-decision') {
+    return immutable(decisionEvents(rule, finalRows, {...selection, cutoff}, close, activationWindows, evidence));
+  }
+  if (rule.levelEncounter) {
+    const endpoints=finalRows.filter(r=>r.source==='level-spot' && Number.isFinite(r.value?.spot))
+      .sort((a,b)=>(a.valueAt??a.eventAt)-(b.valueAt??b.eventAt) || a.availableAt-b.availableAt);
+    return immutable(encounterEvents(rule, rows, selection, close, activationWindows).map(event=>({...event,
+      outcomes:rule.outcomes.map(o=>measureOutcome(event,o,endpoints,selection,close))})));
+  }
   const arrivals = new Map();
   for (const row of rows) {
     if (!arrivals.has(row.availableAt)) arrivals.set(row.availableAt, []);
@@ -81,7 +101,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   const boundaries = new Set(arrivals.keys());
   for (const row of rows) for (const condition of rule.conditions) {
     if (row.source !== condition.source) continue;
-    const expires = row.eventAt + condition.maxAgeMs + 1;
+    const expires = (row.valueAt ?? row.eventAt) + condition.maxAgeMs + 1;
     if (Number.isSafeInteger(expires) && expires > row.availableAt && expires <= cutoff) boundaries.add(expires);
   }
   const bySource = new Map();
@@ -100,7 +120,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   }
   function readingAt(source, at, maxAgeMs) {
     const row = latest.get(source) ?? null;
-    return { row, state: !row || row.value === null ? 'unavailable' : at - row.eventAt > maxAgeMs ? 'stale' : 'fresh' };
+    return { row, state: !row || row.value === null ? 'unavailable' : at - (row.valueAt ?? row.eventAt) > maxAgeMs ? 'stale' : 'fresh' };
   }
   const anchors = new Map();
   const events = [];
@@ -159,7 +179,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
 }
 
 function measureOutcome(event, outcome, rows, selection, close) {
-  const targetAt = event.triggeredAt + outcome.horizonMs;
+  const targetAt = (event.encounter?.upperTime ?? event.triggeredAt) + outcome.horizonMs;
   const deadline = Math.min(targetAt + outcome.toleranceMs, close);
   const cutoff = instant(selection.cutoff);
   const base = { id: outcome.id, targetAt, value: null, measuredAt: null, availableAt: null, evidence: null };
@@ -169,13 +189,13 @@ function measureOutcome(event, outcome, rows, selection, close) {
     return { ...base, state: 'missing', reason: 'trigger-baseline-unavailable' };
   }
   const eligible = rows.filter(r => r.source === outcome.source);
-  const validValue = value => numeric(value) || outcome.measure === 'category' && ['string','boolean'].includes(typeof value);
-  const row = eligible.find(r => r.eventAt >= targetAt && r.eventAt <= deadline && validValue(field(r.value, outcome.field)));
+  const validValue = value => numeric(value) || outcome.measure === 'category' && !event.encounter && ['string','boolean'].includes(typeof value);
+  const row = eligible.find(r => (r.valueAt ?? r.eventAt) >= targetAt && (r.valueAt ?? r.eventAt) <= deadline && validValue(field(r.value, outcome.field)));
   if (!row) return { ...base, state: cutoff > deadline ? 'missing' : 'pending', reason: cutoff > deadline ? 'no-qualified-endpoint' : null };
   const endpoint = field(row.value, outcome.field);
-  const value = outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
+  const value = event.encounter ? signedOutcome(event, endpoint) : outcome.measure === 'return' ? (endpoint / baseline - 1) * 100 : outcome.measure === 'change' ? endpoint - baseline : endpoint;
   if(outcome.measure!=='category'&&!numeric(value))return {...base,state:'missing',reason:'nonfinite-measurement'};
-  return { ...base, state: 'measured', value, measuredAt: row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
+  return { ...base, state: 'measured', value, measuredAt: row.valueAt ?? row.eventAt, availableAt: row.availableAt, evidence: evidence(row), reason: null };
 }
 
 export function aggregateEvents(events, outcomeId) {

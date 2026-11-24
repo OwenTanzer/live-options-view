@@ -15,6 +15,8 @@ on:
       - "wrangler.assets.toml"
       - "wrangler.api.toml"
       - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
       - "scripts/build-assets.mjs"
       - "scripts/prepare-asset-release.mjs"
       - "scripts/preview-local.mjs"
@@ -38,6 +40,8 @@ on:
       - "wrangler.assets.toml"
       - "wrangler.api.toml"
       - "patches/musef-225/wrangler.assets.toml.proposed"
+      - "scripts/d1-usage.mjs"
+      - ".github/workflows/d1-usage.yml"
       - "scripts/build-assets.mjs"
       - "scripts/prepare-asset-release.mjs"
       - "scripts/preview-local.mjs"
@@ -67,14 +71,24 @@ jobs:
           node-version: "22"
       - name: Install locked API dependencies
         run: npm ci --prefix backend --ignore-scripts
+      - name: Check modeled daily D1 rows
+        run: |
+          npm ci --prefix tests/d1-budget --ignore-scripts
+          node --experimental-sqlite --test tests/d1-budget/usage.test.mjs
       - name: Verify build packaging before merge
         run: node --test tests/build_stamp.test.mjs
       - name: One Clock source and cursor contract
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/one_clock*.test.mjs
+      - name: Crypto panel fixtures
+        run: node --test tests/crypto_panel.test.js tests/crypto_predictions_panel.test.mjs
       - name: public browser data allowlist
-        run: node tests/browser_data.test.js
+        run: node --test tests/browser_data.test.js tests/provisional_quotes.test.mjs
+      - name: Nasdaq panel fixtures
+        run: node --test tests/nasdaq_panel.test.js
+      - name: Nasdaq MCP fixtures
+        run: node --test market_mcp/nasdaq_snapshot.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
         run: node --test tests/order_flow_exposure.test.js tests/order_flow_model.test.js tests/order_flow_render.test.js tests/order_flow_profile.test.js tests/order_flow_heatmap.test.js
       - name: bounded legacy r2-proxy (#225, G4b)
@@ -209,6 +223,11 @@ jobs:
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
           npx playwright install --with-deps chromium
+      - name: One Clock dashboard and Order Flow desktop/mobile fixture workflows
+        run: |
+          node tests/one_clock_dashboard_browser.test.cjs
+          node tests/one_clock_encounter_browser.mjs
+          node tests/order_flow_clock_browser.mjs
       - name: BTC monthly mobile fixture workflow
         run: |
           node --test tests/btc_owner_link.test.mjs
@@ -218,6 +237,8 @@ jobs:
           node tests/btc_compact_chain.test.mjs
           node tests/btc_owner_link_browser.test.mjs
           node tests/btc_github_browser.test.mjs
+      - name: News reader visible and hidden browser workflow
+        run: node tests/one_clock_news_browser.mjs
       - name: Private Kalshi phone and desktop fixture workflow
         env:
           NODE_OPTIONS: --experimental-sqlite

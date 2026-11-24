@@ -1,0 +1,122 @@
+name: Publish reviewed scanner cursor market MCP image
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/publish-market-mcp-scanner-cursor.yml
+      - .github/scripts/market_mcp_source_guard.py
+      - .github/scripts/market_mcp_tag_guard.py
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  SOURCE_SHA: 5c73446f62949e923e06e3e7a263bdd149e56289
+  IMAGE: ghcr.io/owentanzer/market-mcp-read-only
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image_id: ${{ steps.build.outputs.image_id }}
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+    steps:
+      - name: Check out publisher guards
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: publisher
+          persist-credentials: false
+      - name: Check out the reviewed scanner merge
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: source
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source ancestry and the reviewed change
+        run: |
+          python3 publisher/.github/scripts/market_mcp_source_guard.py --repo source \
+            --sha "$SOURCE_SHA" --master-ref refs/remotes/origin/master \
+            --allow market_mcp/README.md --allow market_mcp/consumer.js \
+            --allow market_mcp/scanner_cursor.test.js --allow market_mcp/server.js \
+            --allow market_mcp/source.js
+          python3 -m unittest discover -s publisher/.github/scripts -p 'test_market_mcp_source_guard.py'
+          python3 -m unittest discover -s publisher/.github/scripts -p 'test_market_mcp_tag_guard.py'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Exercise the scanner consumer with local fixtures
+        working-directory: source
+        run: |
+          node --test market_mcp/*.test.js
+          node market_mcp/smoke.js --out "$RUNNER_TEMP/fixture-smoke.json"
+          node market_mcp/production-smoke.js --out "$RUNNER_TEMP/auth-smoke.json"
+      - name: Build and verify the non-root image offline
+        id: build
+        working-directory: source
+        run: |
+          local_image="scanner-cursor:$SOURCE_SHA"
+          docker build -f market_mcp/Dockerfile \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/OwenTanzer/live-options-view" \
+            -t "$local_image" .
+          bash market_mcp/verify-image.sh "$local_image"
+          echo "image_id=$(docker image inspect --format '{{.Id}}' "$local_image")" >> "$GITHUB_OUTPUT"
+      - name: Save the verified image for this master dispatch
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'OwenTanzer/live-options-view' && github.ref == 'refs/heads/master'
+        run: docker save "scanner-cursor:$SOURCE_SHA" -o "$RUNNER_TEMP/verified-image.tar"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: archive
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'OwenTanzer/live-options-view' && github.ref == 'refs/heads/master'
+        with:
+          name: scanner-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified-image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'OwenTanzer/live-options-view' && github.ref == 'refs/heads/master'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_TAG: 5c73446f62949e923e06e3e7a263bdd149e56289-run-${{ github.run_id }}-${{ github.run_attempt }}
+      VERIFIED_ID: ${{ needs.verify.outputs.image_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/scanner-image
+      - name: Match the verified image and check the run tag
+        run: |
+          docker load -i "$RUNNER_TEMP/scanner-image/verified-image.tar"
+          local_image="scanner-cursor:$SOURCE_SHA"
+          test "$(docker image inspect --format '{{.Id}}' "$local_image")" = "$VERIFIED_ID"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$local_image")" = "$SOURCE_SHA"
+          docker tag "$local_image" "$IMAGE:$RELEASE_TAG"
+          python3 .github/scripts/market_mcp_tag_guard.py
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the run tag and verify its immutable manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$IMAGE:$RELEASE_TAG"
+          output="$(docker push "$image")"
+          digest="$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' <<< "$output" | tail -n 1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          for ref in "$image" "$IMAGE@$digest"; do
+            test "$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)" = "$digest"
+          done
+          printf 'Image: `%s@%s`\nSource: `%s`\n' "$IMAGE" "$digest" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"

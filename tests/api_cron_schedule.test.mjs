@@ -1,5 +1,4 @@
-// The API Worker owns the one settlement trigger, on named weekdays.
-// Cloudflare read numeric "1-5" as Sunday-Thursday; MON-FRI is unambiguous.
+// The API owns separate capture and settlement schedules.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,7 +16,7 @@ test('API config owns exactly one 24/7 event settlement trigger', () => {
   const lines = cronLines(api);
   assert.equal(lines.length, 1);
   const crons = JSON.parse(lines[0].replace(/^crons\s*=\s*/, ''));
-  assert.deepEqual(crons, ['*/15 * * * *']);
+  assert.deepEqual(crons, ['*/15 * * * *', '* * * * *']);
   const [minute, hour, dom, month, dow] = crons[0].split(' ');
   assert.equal(minute, '*/15'); assert.equal(hour, '*');
   assert.equal(dom, '*'); assert.equal(month, '*');

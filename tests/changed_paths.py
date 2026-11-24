@@ -600,6 +600,10 @@ def parse_workflow_triggers(text: str, name: str = "<workflow>") -> dict:
         if not in_on:
             continue
 
+        if event == "schedule" and indent == 4 and body.startswith("- cron: "):
+            events[event].setdefault("cron", []).append(_unquote(body[len("- cron: "):]))
+            continue
+
         if body.startswith("- "):
             if event is None or subkey is None:
                 raise UnsupportedWorkflow(f"{name}: list item outside a path list")

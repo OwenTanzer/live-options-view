@@ -6,6 +6,11 @@
 <header><div><a class="back" href="/">← Options View</a><h1>Kalshi <span>contract chain</span></h1></div><span class="badge">PAPER ONLY</span></header>
 <nav><a id="login" href="/credit-tape/auth/login?return=kalshi">Sign in with GitHub</a><button id="check">Check access</button><button id="logout">Sign out</button></nav>
 <p id="status" role="status" aria-live="polite">Checking private access…</p>
+<section id="frozen" hidden>
+<h2>Archived market evidence</h2>
+<p id="frozen-time"></p><p>Retained private observations by capture time. Coverage is limited to saved receipts.</p>
+<div id="frozen-list"></div><button id="frozen-more" hidden>Older observations</button><pre id="frozen-detail"></pre>
+</section>
 <section id="workspace" hidden>
 <div class="account"><div><small>Paper cash</small><strong id="cash">—</strong></div><div><small>Open contracts</small><strong id="held">0</strong></div><p>Private research · simulated fills<br>No orders sent to Kalshi</p></div>
 <div class="tools"><input id="search" type="search" aria-label="Search contracts" placeholder="Search contracts…" autocomplete="off"><select id="category" aria-label="Category"><option value="">All categories</option></select><button id="refresh">Refresh prices</button><button id="discover">Update markets</button></div>

@@ -2,28 +2,35 @@
 import math
 import json
 import time
+import threading
 from botocore.client import BaseClient
 
 from .publications import PublicationLog, PublicationError, BudgetedS3, snapshot_publication_id
 from .config import log
 
 OUTPUTS = {"price": {"spot": "number"}, "skew": {"imbalance": "number", "strikes": "number", "callOI": "number", "putOI": "number"}}
+# Instruments registered with the One Clock backend sources. Other collected
+# chains (SLV, DRAM) keep the latest/archive path but are not committed here
+# until their One Clock source registration lands.
+INSTRUMENTS = frozenset({"QQQ", "SPY", "IBIT"})
 _publication_client = None
+_client_lock = threading.Lock()
 
 
 def publication_transport(client):
     global _publication_client
     if isinstance(client, BaseClient):
-        if _publication_client is None:
-            from .prices import make_s3
-            _publication_client = make_s3(publication=True)
+        with _client_lock:
+            if _publication_client is None:
+                from .prices import make_s3
+                _publication_client = make_s3(publication=True)
         client = _publication_client
-    return BudgetedS3(client)
+    return BudgetedS3(client, seconds=20, requests=40)
 
 
 def project_snapshot(payload):
     symbol, key, timestamp = payload["symbol"], payload["snapshot_key"], payload["timestamp"]
-    if symbol not in {"QQQ", "SPY", "IBIT"}:
+    if symbol not in INSTRUMENTS:
         raise PublicationError("unregistered snapshot instrument")
     market = payload.get("underlying_market", {})
     live = market.get("freshness") == "live"

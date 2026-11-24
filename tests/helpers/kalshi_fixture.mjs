@@ -25,6 +25,7 @@ export function envFixture() {
   const env = withD1({ KALSHI_PERSONAL_ENABLED: '1', KALSHI_ENTRIES: '1',
     PAPER_TRADES: new Proxy({}, { get() { throw Error('Kalshi must not touch R2'); } }) });
   env.DB.db.exec(readFileSync(new URL('../../backend/migrations/0006_kalshi_private.sql', import.meta.url), 'utf8'));
+  env.DB.db.exec(readFileSync(new URL('../../backend/migrations/0015_kalshi_minute_capture.sql', import.meta.url), 'utf8'));
   return env;
 }
 export function network(f) {
@@ -38,7 +39,7 @@ export function network(f) {
     else if (path.includes('/orderbook')) data = f.book;
     else if (path.startsWith('/markets/')) data = { market: f.raw };
     else if (path.startsWith('/events/fee_changes')) data = f.fees;
-    else if (path.startsWith('/events?')) data = { events: path.includes('series_ticker=KXHIGHNY') ? [f.event] : [], cursor: '' };
+    else if (path.startsWith('/events?')) data = { events: new URL(u).searchParams.get('series_ticker') === f.series.ticker ? [f.event] : [], cursor: '' };
     else if (path.startsWith('/events/')) data = { event: f.event };
     else if (path.startsWith('/series/fee_changes')) data = { series_fee_change_arr: [] };
     else if (path.startsWith('/series/')) data = { series: f.series };

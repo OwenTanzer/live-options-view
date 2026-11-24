@@ -59,6 +59,10 @@ test('catalog rescans write only added and removed gap buckets',async t=>{
     return actual.length;
   }
   assert.ok(await checkChanges(now)>0);
+  const cleanup = db.queries.find(sql => sql.startsWith('DELETE FROM one_clock_catalog_gaps'));
+  assert.ok(cleanup);
+  const plan = db.raw('EXPLAIN QUERY PLAN ' + cleanup, squeezeCatalog.id, 'sample', '[]');
+  assert.ok(plan.some(row => row.detail.includes('one_clock_catalog_gap_group (source=? AND record_group=?)')));
   assert.equal(await checkChanges(now+1),0);
   objects.push(object(1,'finished',T+1000));
   assert.ok(await checkChanges(now+2)>0);

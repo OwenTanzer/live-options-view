@@ -5,7 +5,7 @@ const { formatSqueezeScheduleStatus } = require('../site/shared.js');
 const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 const overview = require('./overview');
 
-const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows'];
+const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows', 'crypto_snapshot', 'nasdaq_snapshot'];
 // Chain underlyings (#121). QQQ keeps its original artifact and dataset id, so
 // an omitted selector behaves exactly as before; SPY has its own tree.
 const UNDERLYINGS = Object.freeze({
@@ -123,11 +123,45 @@ function snapshot(p, symbol = 'QQQ') {
   check(p.rows.every(r => occRoot(r.OptionSymbol) === symbol), `Snapshot contains non-${symbol} contracts.`, 'symbol_mismatch');
   check(p.snapshot_key == null || UNDERLYINGS[symbol].archive.test(p.snapshot_key), 'Invalid snapshot locator.');
 }
+const CRYPTO_SOURCES = ['coinbase', 'coingecko'];
+const CRYPTO_FRESHNESS = ['fresh', 'stale', 'unavailable'];
+const CRYPTO_ROW_STATUS = ['ok', 'partial', 'source_unavailable'];
+function cryptoSnapshot(p) {
+  check(object(p) && p.schema_version === 'crypto_snapshot.v1' && Array.isArray(p.coins) && p.coins.length <= 50 &&
+    p.coins.every(r => object(r) && typeof r.symbol === 'string' && CRYPTO_SOURCES.includes(r.source) &&
+      r.price_basis === r.source && // No substitution: a row's price basis must be its own source.
+      (r.price === null || (typeof r.price === 'number' && Number.isFinite(r.price))) &&
+      (r.rank == null || Number.isInteger(r.rank)) &&
+      CRYPTO_FRESHNESS.includes(r.freshness) && CRYPTO_ROW_STATUS.includes(r.status)),
+    'Unsupported crypto snapshot contract.');
+  check(p.session_model === 'continuous_24_7', 'Crypto snapshot must carry the continuous 24/7 session model.');
+}
 function squeeze(p, isSuccess = false) {
   check(object(p) && p.schema_version === 1 && new RegExp('^' + UUID + '$').test(p.run_id) &&
     p.archive === `squeeze-scanner/v1/scheduled/runs/${p.run_id}` && ['complete', 'empty', 'partial', 'failed'].includes(p.status), 'Unsupported squeeze pointer contract.');
   if (isSuccess) check(['complete', 'empty'].includes(p.status) && p.display_schema_version === 1 && Array.isArray(p.candidates) && p.candidates.length <= 10 &&
     p.candidates.every(r => object(r) && SYMBOL.test(r.ticker) && object(r.scores) && object(r.ranks) && Number.isInteger(r.ranks.combined)), 'Invalid squeeze shortlist.');
+}
+const NASDAQ_KEY = 'nasdaq/latest.json';
+const NASDAQ_STALE_SECONDS = 3600; // hourly collector cadence
+function nasdaqSnapshot(p) {
+  check(object(p) && p.schema_version === 1 && p.dataset === 'nasdaq_snapshot' &&
+    typeof p.as_of === 'string' && Number.isFinite(Date.parse(p.as_of)) &&
+    object(p.universe) && Number.isInteger(p.universe.listings) && p.universe.listings > 0 &&
+    Array.isArray(p.stocks) &&
+    p.stocks.length <= p.universe.listings && object(p.index) && p.index.symbol === 'NDX' &&
+    object(p.coverage), 'Unsupported NASDAQ snapshot contract.');
+  check(p.stocks.every(r => object(r) && SYMBOL.test(r.symbol) && typeof r.name === 'string' &&
+    (r.price === null || typeof r.price === 'number') &&
+    (r.percent_change === null || typeof r.percent_change === 'number') &&
+    typeof r.percent_change_basis === 'string' && typeof r.status === 'string' &&
+    ['available', 'source_unavailable'].includes(r.status) &&
+    Array.isArray(r.news) && r.news.every(n => object(n) && typeof n.title === 'string')),
+    'Invalid NASDAQ snapshot rows.');
+  check(typeof p.index.percent_change_basis === 'string' &&
+    p.index.percent_change_basis !== (p.stocks[0]?.percent_change_basis ?? null) &&
+    p.stocks.every(r => r.percent_change_basis === (p.stocks[0]?.percent_change_basis ?? r.percent_change_basis)),
+    'NASDAQ per-stock and index percent-change bases must be labelled differently.');
 }
 // Last success and latest attempt side by side. The pointer carries no
 // producer reason for a partial/failed outcome, so only the coverage counts
@@ -241,8 +275,10 @@ const units = {
 };
 units.spy_snapshot = units.qqq_snapshot;
 units.options_active = units.options_returns;
+units.nasdaq_snapshot = { price: 'USD/share', change: 'USD/share', percent_change: 'percentage points', market_cap: 'USD', volume: 'shares', change_1h_pct: 'percentage points', change_7d_pct: 'percentage points', 'index.level': 'index points', 'index.percent_change': 'percentage points' };
 units.options_windows = { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms': 'UTC epoch milliseconds', '*_entry_delay_from_boundary_s, *_exit_lead_before_close_s': 'seconds from the session boundary', '*_quote_age_s': 'seconds between quote observation and sample', '*_relative_spread': 'spread / midpoint', '*_size': 'contracts at quoted side', rank: 'producer ordinal rank within the selected basis', contracts_evaluated: 'contracts evaluated in this window, eligible plus excluded' };
 units.cross_market_overview = overview.units;
+units.crypto_snapshot = { price: 'USD', high_24h: 'USD', low_24h: 'USD', change_24h_pct: 'percentage points', change_1h_pct: 'percentage points', change_7d_pct: 'percentage points', volume_24h: 'USD', market_cap: 'USD', rank: 'producer market-cap rank' };
 const warnings = {
   cross_market_overview: overview.warnings,
   qqq_snapshot: ['Snapshot timestamp is collection time; retrieval is not observation. Publication time is unavailable.', 'VWAP is approximate; historical VWAP/RVOL are unavailable from snapshot CSVs.', 'OI is lagged and zero versus missing is conflated; Greeks and option quotes have no supplied observation timestamps.', 'Archive locator does not establish checksum verification. Shared PCR/max-pain/reference-skew publication remains owned by #107; merged #116 preserves Crassus lineage but does not publish these readings.'],
@@ -253,6 +289,11 @@ warnings.options_windows = ['Sampled quotes (~5-minute sweeps); between-sample m
 warnings.spy_snapshot = [...warnings.qqq_snapshot,
   'SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.',
   'SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.'];
+warnings.crypto_snapshot = ['A Coinbase price is never substituted for a CoinGecko price or vice versa; a missing source publishes a null price with status source_unavailable.', 'Rank, market cap and 1h/7d change are CoinGecko metadata, not the price basis.', 'Fear & Greed is best-effort; an unavailable feed publishes value null, never a fabricated value.', 'Crypto trades 24/7; freshness is judged against each provider observation time, not an equity session clock.'];
+warnings.nasdaq_snapshot = ['Per-stock percent_change is Nasdaq\'s latest reported move (after-hours move after the close); the index percent_change is the regular-session move vs previous close. The two bases differ and are labelled on every row.',
+  'Freshness is measured from Nasdaq\'s last-trade timestamp when published, else collector receipt; date-only stamps (as for NDX) carry no usable time.',
+  'News headlines are evidence only; they do not establish a cause for any price move.',
+  'A source-unavailable stock carries null price fields; no price is substituted or carried forward.'];
 
 class Consumer {
   constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); this.retainedBytes = 0; }
@@ -271,22 +312,41 @@ class Consumer {
   async call(name, a = {}) {
     const q = this.source.query();
     const marketDataset = supportedUnderlying(underlyingOf(a)) ? UNDERLYINGS[underlyingOf(a)].dataset : 'unsupported_underlying';
-    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
+    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview', crypto_snapshot:'crypto_snapshot', nasdaq_snapshot:'nasdaq_snapshot'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
     let out = this.envelope(dataset, a, q);
     try {
       if (name === 'discover_sources') out = await this.discover(a, q, out);
       else if (name === 'market_context') out = await this.market(a, q, out);
+      else if (name === 'crypto_snapshot') out = await this.crypto(a, q, out);
       else if (name === 'squeeze_results') out = await this.squeeze(a, q, out);
       else if (name === 'return_rankings') out = await this.returns(a, q, out);
       else if (name === 'active_rankings') out = await this.active(a, q, out);
       else if (name === 'window_rankings') out = await this.window(a, q, out);
       else if (name === 'market_overview') out = await this.overview(a, q, out);
+      else if (name === 'nasdaq_snapshot') out = await this.nasdaq(a, q, out);
       else if (name === 'result_detail') out = await this.detail(a, q, out);
       else throw new DataError('invalid_filter', 'Unknown tool.');
     } catch (e) { out.errors.push(errorRecord(e)); out.status = e.code === 'missing_artifact' ? 'missing' : 'failed'; }
     // An absent publication is a typed answer, not a failed call: same
     // vocabulary as discover_sources, and not flagged isError, which clients
     // can relabel as a generic argument error.
+    const cutoff = name === 'result_detail' ? this.references.get(a?.reference)?.value.cursor : a?.as_of_ms;
+    if(out.errors.some(e=>e.code==='unavailable_at_cursor')) {
+      // Keep only the scoped request and eligible revision receipts. A later
+      // detail artifact cannot leave a half-assembled retrospective payload.
+      const unavailable=this.envelope(out.dataset,a,q);
+      unavailable.status='unavailable'; unavailable.availability='unproven_at_cursor';
+      unavailable.errors=out.errors; out=unavailable;
+    }
+    if(Number.isSafeInteger(cutoff) && ['active_rankings','return_rankings','result_detail'].includes(name) && out.status!=='failed') {
+      const proofs=out.sources.map(s=>s.available_by_ms).filter(Number.isSafeInteger);
+      out.as_of={cutoff_ms:cutoff,available_by_ms:proofs.length && !['missing','unavailable'].includes(out.status)
+        ? Math.max(...proofs) : null,scope:'retained revisions read for this result'};
+      if(name==='active_rankings' && out.producer_times.publication) {
+        out.producer_times.reported_publication=out.producer_times.publication;
+        out.producer_times.publication=null;
+      }
+    }
     if (out.status === 'missing') out.availability = 'missing_publication';
     if (name === 'result_detail') out.sources = out.sources.map(e => ({...e, retained:e.retained === true}));
     if (Buffer.byteLength(JSON.stringify(out)) > LIMITS.output_bytes) {
@@ -300,12 +360,12 @@ class Consumer {
     // spy_snapshot is appended so existing clients' capability positions stay put.
     const probes = [['qqq_snapshot', 'intraday/latest.json'], ['scheduled_squeeze', 'squeeze-scanner/v1/scheduled/latest.json'],
       ['options_returns', a.session ? `oa203/scanner/${a.session}/summary.json` : null], ['spy_snapshot', UNDERLYINGS.SPY.key],
-      ['cross_market_overview', overview.KEY]];
+      ['cross_market_overview', overview.KEY], ['crypto_snapshot', 'crypto/latest.json'], ['nasdaq_snapshot', NASDAQ_KEY]];
     const chainSymbol = id => id === 'qqq_snapshot' ? 'QQQ' : id === 'spy_snapshot' ? 'SPY' : null;
     out.capabilities = [];
     for (const [id, key] of probes) {
       const probe = key ? await q.optionalJson(key) : {value:null,error:null};
-      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else returnSummary(probe.value, a.session); }
+      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else if (id === 'crypto_snapshot') cryptoSnapshot(probe.value); else if (id === 'nasdaq_snapshot') nasdaqSnapshot(probe.value); else returnSummary(probe.value, a.session); }
       catch (e) { probe.error = errorRecord(e, key); probe.value = null; }
       if (id === 'cross_market_overview') {
         const p = probe.value;
@@ -325,15 +385,29 @@ class Consumer {
           coverage: p ? { strip_labels: Object.keys(p.prices).length, identified:listed.known.length, unmapped:listed.unmapped.length } : null, historical_index: 'not_supported' });
         continue;
       }
+      if (id === 'crypto_snapshot') {
+        const p = probe.value;
+        out.capabilities.push({ dataset: id, producer_schema: 'crypto_snapshot.v1',
+          availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : 'available',
+          actual: p ? { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, universe: p.universe ?? null } : null,
+          freshness: p ? {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'} : { status: 'unknown' },
+          source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
+          fields: ['rank','symbol','name','source','price_basis','price','high_24h','low_24h','change_24h_pct','change_1h_pct','change_7d_pct','volume_24h','market_cap','provider_observed_at','as_of','freshness','status','patterns','market'],
+          filters: ['symbol','source','limit','offset'],
+          cadence: 'hourly publication; continuous 24/7 session model, no equity session close',
+          coverage: p ? `${p.coins.length} coins by market-cap rank; ${p.counts?.source_unavailable ?? 0} source-unavailable` : null,
+          historical_index: 'not_supported' });
+        continue;
+      }
       const chain = chainSymbol(id);
-      out.capabilities.push({ dataset: id, ...(chain ? {underlying: chain} : {}), producer_schema: chain ? 'unversioned collector snapshot (symbol-labeled since #121)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : 'oa203-returns-v1',
+      out.capabilities.push({ dataset: id, ...(chain ? {underlying: chain} : {}), producer_schema: chain ? 'unversioned collector snapshot (symbol-labeled since #121)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : id === 'nasdaq_snapshot' ? 'schema_version=1, dataset nasdaq_snapshot' : 'oa203-returns-v1',
         availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : key ? 'available' : 'explicit_session_required',
-        actual:probe.value ? chain?{underlying:chain,snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
-        freshness: probe.value ? chain ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : {status:'historical'} : {status:'unknown'},
+        actual:probe.value ? chain?{underlying:chain,snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:id==='nasdaq_snapshot'?{as_of:probe.value.as_of,listings:probe.value.universe?.listings??null,available:probe.value.coverage?.available??null,index_level:probe.value.index?.level??null,index_status:probe.value.index?.status??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
+        freshness: probe.value ? chain ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : id === 'nasdaq_snapshot' ? {...age(probe.value.as_of,this.now(),NASDAQ_STALE_SECONDS),basis:'collector receipt; hourly cadence'} : {status:'historical'} : {status:'unknown'},
         source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
-        fields: chain ? ['symbol','timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','qualified_ask_bid_v1','selected_contract_quote_path'],
-        filters: chain ? ['underlying','expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : ['session','underlying','type','view','limit','offset'],
-        cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
+        fields: chain ? ['symbol','timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : id === 'nasdaq_snapshot' ? ['symbol','name','price','change','percent_change','percent_change_basis','market_cap','rank','day_high','day_low','volume','change_1h_pct','change_7d_pct','news','status','index','coverage'] : ['summary','universe','leaderboard','qualified_ask_bid_v1','selected_contract_quote_path'],
+        filters: chain ? ['underlying','expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : id === 'nasdaq_snapshot' ? ['symbols','sort','limit','offset'] : ['session','underlying','type','view','limit','offset'],
+        cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : id === 'nasdaq_snapshot' ? 'hourly collector run; snapshot as_of governs age' : 'selected finalized session; about five-minute samples',
         coverage: probe.value?.coverage || probe.value?.assessment || (chain ? `latest ${chain} 0DTE snapshot only` : null), historical_index: 'not_supported' });
     }
     // Windows have no global index or window list to probe: the producer writes
@@ -394,6 +468,59 @@ class Consumer {
     const incomplete = !object(m) || m.spot == null || m.vwap == null || m.vwap_partial_session || m.rvol?.status !== 'ok' || m.momentum?.status !== 'ok';
     if(incomplete && object(m)) out.warnings.push(`Partial readings: VWAP ${m.vwap==null?'missing':m.vwap_partial_session?'partial_session':'available'}; RVOL ${m.rvol?.status??'missing'}; reference momentum ${m.momentum?.status??'missing'}.`);
     out.status = incomplete ? 'partial' : p.rows.length ? 'available' : 'empty';
+    return out;
+  }
+  async crypto(a, q, out) {
+    args(a, ['symbol', 'source', 'limit', 'offset']); const {limit, offset} = page(a);
+    if (a.symbol !== undefined) check(typeof a.symbol === 'string' && /^[A-Z0-9]{1,10}$/.test(a.symbol), 'Invalid symbol.', 'invalid_filter');
+    if (a.source !== undefined) check(CRYPTO_SOURCES.includes(a.source), 'source must be coinbase or coingecko.', 'invalid_filter');
+    const p = await q.json('crypto/latest.json'); cryptoSnapshot(p);
+    out.actual = { constructed_at: p.constructed_at, session_model: p.session_model, counts: p.counts ?? null, universe: p.universe ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
+    out.producer_times.acquisition_end = p.constructed_at;
+    out.freshness = {...age(p.constructed_at, this.now(), 7200), basis: 'collector construction time; each row carries its own provider observation time'};
+    out.market = p.market ?? null;
+    out.patterns = Array.isArray(p.patterns) ? p.patterns : [];
+    const rows = p.coins.filter(r => (!a.symbol || r.symbol === a.symbol) && (!a.source || r.source === a.source));
+    const paged = slice(rows, limit, offset); out.pagination = paged.pagination;
+    out.rows = paged.rows;
+    const unavailable = p.coins.filter(r => r.status === 'source_unavailable').length;
+    if (unavailable) out.warnings.push(`${unavailable} coin${unavailable === 1 ? '' : 's'} source-unavailable; no price was substituted from the other source.`);
+    out.coverage = {source_rows: p.coins.length, matched_rows: rows.length, unavailable_rows: unavailable};
+    out.status = unavailable ? 'partial' : p.coins.length ? 'available' : 'empty';
+    return out;
+  }
+  // NASDAQ-100 snapshot: read-only, same envelope/freshness shape as
+  // market_context. Per-stock percent_change is Nasdaq's latest reported
+  // move (after-hours move after the close); the index percent_change is
+  // the regular-session move vs previous close. The two bases are labelled
+  // on the payload and never reconciled into one number.
+  async nasdaq(a, q, out) {
+    args(a, ['symbols', 'sort', 'limit', 'offset']); const {limit, offset} = page(a);
+    if (a.symbols !== undefined) check(Array.isArray(a.symbols) && a.symbols.length >= 1 && a.symbols.length <= LIMITS.rows && a.symbols.every(s => typeof s === 'string' && SYMBOL.test(s)), `symbols must be 1..${LIMITS.rows} NASDAQ-100 tickers.`, 'invalid_filter');
+    const sort = a.sort ?? 'strip'; check(['strip', 'percent_desc', 'percent_asc'].includes(sort), 'sort must be strip, percent_desc or percent_asc.', 'invalid_filter');
+    const p = await q.json(NASDAQ_KEY); nasdaqSnapshot(p);
+    const now = this.now();
+    out.actual = { universe_version: `${p.universe.listings} listings as of ${p.universe.as_of}`, as_of: p.as_of, generated_at: p.generated_at ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
+    out.producer_times = { observation: null, acquisition_start: p.as_of, acquisition_end: null, publication: null };
+    out.freshness = {...age(p.as_of, now, NASDAQ_STALE_SECONDS), basis: 'collector receipt; hourly cadence'};
+    out.index = p.index;
+    const wanted = a.symbols ? new Set(a.symbols) : null;
+    const filtered = p.stocks.filter(r => !wanted || wanted.has(r.symbol));
+    if (sort !== 'strip') {
+      const sign = sort === 'percent_desc' ? -1 : 1;
+      filtered.sort((x, y) => (x.percent_change === null) - (y.percent_change === null) || sign * ((x.percent_change ?? 0) - (y.percent_change ?? 0)) || x.symbol.localeCompare(y.symbol));
+    }
+    const paged = slice(filtered, limit, offset); out.pagination = { ...paged.pagination, sort, ranked_over: sort === 'strip' ? null : 'all matching rows; rows without a percent change sort last' };
+    out.rows = paged.rows.map(row => ({ ...row, detail_reference: this.reference({ dataset: 'nasdaq_snapshot', row, actual: out.actual, evidence: [...q.evidence] }) }));
+    const available = p.stocks.filter(r => r.status === 'available').length;
+    out.coverage = { listings: p.universe.listings, available, source_unavailable: p.stocks.length - available,
+      with_news: p.stocks.filter(r => r.news.length).length, matched_rows: filtered.length,
+      advancers: p.index.breadth?.advancers ?? null, decliners: p.index.breadth?.decliners ?? null,
+      unchanged: p.index.breadth?.unchanged ?? null, index_status: p.index.status };
+    out.unmatched_symbols = wanted ? [...wanted].filter(s => !p.stocks.some(r => r.symbol === s)).map(s => ({ symbol: s, status: 'not_in_nasdaq_100' })) : [];
+    if (out.unmatched_symbols.length) out.warnings.push(`Symbols outside the NASDAQ-100 universe: ${out.unmatched_symbols.map(s => s.symbol).join(', ')}.`);
+    if (p.index.status !== 'available') out.warnings.push('NDX index block is source-unavailable; stock rows still stand on their own.');
+    out.status = p.stocks.length - available || p.index.status !== 'available' ? 'partial' : filtered.length ? 'available' : 'empty';
     return out;
   }
   async overview(a, q, out) {
@@ -519,13 +646,22 @@ class Consumer {
     out.status = attempt.status === 'failed' ? 'failed' : attempt.status === 'partial' || !matches || out.errors.length ? 'partial' : results.length ? 'available' : 'empty';
     return out;
   }
+  scannerCutoff(a,q) {
+    if (a.as_of_ms === undefined) return;
+    check(Number.isSafeInteger(a.as_of_ms) && a.as_of_ms >= 1e12 && a.as_of_ms <= this.now(),
+      'as_of_ms must be a past or present UTC epoch millisecond cutoff.', 'invalid_filter');
+    q.atCutoff(a.as_of_ms);
+  }
   async returns(a,q,out) {
-    args(a,['session','underlying','type','view','limit','offset'],['session']); const {limit,offset}=page(a);
+    args(a,['session','underlying','type','view','limit','offset','as_of_ms'],['session']);
+    this.scannerCutoff(a,q); const {limit,offset}=page(a);
     check(dates(a.session),'Select a real YYYY-MM-DD session (2020..2100).','invalid_filter');
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'view must be all, clean, or qualified_ask_bid_v1.','invalid_filter');
     const prefix=`oa203/scanner/${a.session}/`; const p=await q.json(prefix+'summary.json'); returnSummary(p,a.session);
+    if(a.as_of_ms !== undefined) check(p.final && Number.isFinite(Date.parse(p.finalized_at)) &&
+      Date.parse(p.finalized_at)<=a.as_of_ms, 'Finalized ranking unavailable at this cutoff.', 'unavailable_at_cursor');
     out.actual={session:a.session,final:p.final,return_policy:p.return_policy,qualified_policy:p.qualified_policy??null};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:null,publication:null,finalized_at:p.finalized_at ?? null};
     out.session_window={open_ms:p.session_open_ms??null,close_ms:p.session_close_ms??null,meaning:'exchange boundaries; not acquisition timestamps'};
@@ -569,11 +705,15 @@ class Consumer {
     const filtered=rows.filter(r=>r[field]!==null && (!a.underlying||r.underlying===a.underlying) && (!a.type||r.option_type===a.type));
     filtered.sort((x,y)=>Number(x[field])-Number(y[field])); // producer rank, never re-score
     const paged=slice(filtered,limit,offset); out.pagination=paged.pagination;
-    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
+    out.rows=paged.rows.map(row=>({...row,detail_reference:this.reference({dataset:'options_returns',cursor:a.as_of_ms,p,row,prefix,board,actual:out.actual,evidence:q.evidence.slice(-4)})}));
     out.status=p.assessment.status==='partial'||!p.final?'partial':filtered.length?'available':'empty';return out;
   }
   async active(a,q,out) {
-    args(a,['session','sweep','underlying','type','view','limit','offset']);
+    args(a,['session','sweep','underlying','type','view','limit','offset','as_of_ms']);
+    this.scannerCutoff(a,q);
+    if(a.as_of_ms !== undefined) check(dates(a.session) && Number.isInteger(a.sweep),
+      'A cursor lookup requires an explicit session and retained sweep.', 'invalid_filter');
+    const clockAt = a.as_of_ms ?? this.now();
     const {limit,offset}=page(a);
     const session=a.session??'current';
     check(session==='current'||dates(session),'session must be current or one valid date.','invalid_filter');
@@ -581,7 +721,7 @@ class Consumer {
     if(a.underlying!==undefined) check(SYMBOL.test(a.underlying),'Invalid underlying.','invalid_filter');
     if(a.type!==undefined) check(['call','put'].includes(a.type),'Invalid option type.','invalid_filter');
     check(['all','clean','qualified_ask_bid_v1'].includes(a.view??'all'),'Invalid active view.','invalid_filter');
-    const selected=session==='current'?exchangeDate(this.now()):session;
+    const selected=session==='current'?exchangeDate(clockAt):session;
     out.actual={session:selected,selector:session,sweep:a.sweep??null,final:false};
     const calendarPoint=Date.parse(selected+'T12:00:00Z');
     const calendarValid=Date.parse(this.calendar?.valid_from)<=calendarPoint &&
@@ -601,7 +741,7 @@ class Consumer {
           return result;
         }
       } else if(final.error.code!=='missing_artifact') out.errors.push(final.error);
-      if(open!==null&&this.now()<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
+      if(open!==null&&clockAt<open){out.status='before_open';out.session_window={open_ms:open,close_ms:null};return out;}
     }
     let pointer=null, sweep=a.sweep;
     if(sweep===undefined) {
@@ -621,17 +761,19 @@ class Consumer {
       activeRevision(selected,sweep,pointer);
       if(out.attempt?.sweep>sweep||out.attempt?.sweep===sweep&&out.attempt.status==='failed')
         out.warnings.push(`Newer or matching snapshot attempt ${out.attempt.sweep} is ${out.attempt.status}: ${out.attempt.reason??'reason unavailable'}.`);
-      if(out.attempt?.status==='building'&&this.now()-Date.parse(out.attempt.at)>300000)
+      if(out.attempt?.status==='building'&&clockAt-Date.parse(out.attempt.at)>300000)
         out.warnings.push(`Snapshot attempt ${out.attempt.sweep} has exceeded the 240-second build budget; completion is unconfirmed.`);
     }
     if(!pointer){
       const found=await q.optionalJson(activePrefix(selected,sweep).slice(0,-1)+'.json');
-      if(found.error){out.errors.push(found.error);out.status=found.error.code==='missing_artifact'?'missing':'failed';return out;}
+      if(found.error){throw new DataError(found.error.code,found.error.message,found.error.locator);}
       pointer=found.value;
     }
     const prefix=activeRevision(selected,sweep,pointer);
     const p=await q.json(prefix+'summary.json');activeSummary(p,selected,sweep);
     const summaryEvidence=q.evidence.at(-1);
+    if(a.as_of_ms !== undefined) check(p.cutoff_ms<=a.as_of_ms,
+      'Pinned sweep was acquired after this cutoff.', 'unavailable_at_cursor');
     if(pointer) check(pointer.members['summary.json']===summaryEvidence.retrieved_sha256&&pointer.cutoff_ms===p.cutoff_ms,
       'Active pointer and summary disagree.','source_changed');
     const board=a.view==='qualified_ask_bid_v1'?'qualified_ask_bid_v1.csv':'leaderboard.csv';
@@ -670,10 +812,10 @@ class Consumer {
          !qualified&&(!Number.isFinite(quoteAge)||quoteAge<0))
         return {status:'unknown',observed_at:null,age_seconds:null,stale_after_seconds:600,basis,
           sample_at:Number.isSafeInteger(endpoint)?new Date(endpoint).toISOString():null};
-      return {...age(new Date(quote).toISOString(),this.now(),600),basis,sample_at:new Date(endpoint).toISOString()};
+      return {...age(new Date(quote).toISOString(),clockAt,600),basis,sample_at:new Date(endpoint).toISOString()};
     };
     out.rows=paged.rows.map(row=>({...row,ranked_evidence_freshness:evidenceAge(row),
-      detail_reference:this.reference({dataset:'options_active',p,row,prefix,board,
+      detail_reference:this.reference({dataset:'options_active',cursor:a.as_of_ms,p,row,prefix,board,
       actual:out.actual,evidence:[...q.evidence],digests:{summary:summaryEvidence.retrieved_sha256,board:boardEvidence.retrieved_sha256,
         manifest:p.member_sha256['manifest.jsonl']}})}));
     out.summary=p;out.coverage=p.assessment;
@@ -686,7 +828,7 @@ class Consumer {
     // A pinned sweep's own age says nothing about whether a newer snapshot
     // exists; overdue is judged only from the current latest pointer.
     let head=a.sweep===undefined?pointer:null;
-    if(a.sweep!==undefined){
+    if(a.sweep!==undefined && a.as_of_ms===undefined){
       const latest=await q.optionalJson(`oa203/scanner/${selected}/inprogress/latest.json`);
       if(!latest.error&&object(latest.value)&&Number.isInteger(latest.value.sweep)&&Number.isFinite(Date.parse(latest.value.published_at)))head=latest.value;
       else if(latest.error&&latest.error.code!=='missing_artifact')out.errors.push(latest.error);
@@ -694,8 +836,8 @@ class Consumer {
         {available:null,sweep:null,published_at:null,reason:'latest snapshot pointer unavailable'};
       if(head&&head.sweep>sweep)out.warnings.push(`Pinned sweep ${sweep} is not the newest snapshot; sweep ${head.sweep} was published at ${head.published_at}.`);
     }
-    const sincePublication=head?.published_at?(this.now()-Date.parse(head.published_at))/1000:null;
-    const overdue=this.now()<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
+    const sincePublication=head?.published_at?(clockAt-Date.parse(head.published_at))/1000:null;
+    const overdue=clockAt<p.session_close_ms&&Number.isFinite(sincePublication)&&sincePublication>lateAfter;
     out.cadence={expected_seconds:expectedCadence,observed_seconds:observed,previous_publication:pointer?.previous_published_at??null,
       late_after_seconds:lateAfter,seconds_since_publication:Number.isFinite(sincePublication)?Math.round(sincePublication):null,
       since_publication_of:head?{sweep:head.sweep,basis:'latest snapshot pointer'}:null,
@@ -709,7 +851,7 @@ class Consumer {
     out.session_window={open_ms:p.session_open_ms,close_ms:p.session_close_ms,meaning:'exchange boundaries; not acquisition timestamps'};
     out.producer_times={observation:null,acquisition_start:null,acquisition_end:new Date(p.cutoff_ms).toISOString(),
       publication:pointer?.published_at??null,built_at:pointer?.built_at??p.built_at??null};
-    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),this.now(),3600);
+    const cutoffAge=age(new Date(p.cutoff_ms).toISOString(),clockAt,3600);
     const rowAges=out.rows.map(row=>row.ranked_evidence_freshness);
     const knownAges=rowAges.map(x=>x.age_seconds).filter(Number.isFinite);
     out.freshness={...cutoffAge,
@@ -719,7 +861,7 @@ class Consumer {
       ranked_evidence:{basis:'actual quote timestamp at the ranked endpoint',stale_after_seconds:600,
         oldest_age_seconds:knownAges.length?Math.max(...knownAges):null,
         stale_rows:rowAges.filter(x=>x.status==='stale').length,unknown_rows:rowAges.filter(x=>x.status==='unknown').length}};
-    out.active_state=this.now()>=p.session_close_ms?'closed_pending_final':'in_progress';
+    out.active_state=clockAt>=p.session_close_ms?'closed_pending_final':'in_progress';
     out.status=out.active_state==='closed_pending_final'?'closed_pending_final':filtered.length?'in_progress':'empty';
     if(p.assessment.truncated_sweeps||Object.keys(p.assessment.chain_status_counts??{}).some(s=>s!=='ok')) out.status='partial';
     if(rowAges.some(x=>x.status==='stale'||x.status==='unknown')&&out.status==='in_progress')out.status='partial';
@@ -826,7 +968,9 @@ class Consumer {
     args(a,['reference','offset','limit'],['reference']); const {limit,offset}=page(a);
     check(typeof a.reference==='string' && new RegExp('^'+UUID+'$').test(a.reference),'Invalid detail reference.','invalid_reference');
     const entry=this.references.get(a.reference); check(entry && entry.expires>=this.now(),'Reference expired, was evicted by the count/byte limit, or is not from this server; repeat the originating query.','invalid_reference');
-    const v=entry.value; Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
+    const v=entry.value;
+    if(v.cursor!==undefined) q.atCutoff(v.cursor);
+    Object.assign(out,this.envelope(v.dataset,a,q));out.actual=v.actual;out.row=v.row;out.sources.push(...v.evidence.map(e => ({...e, retained:true})));out.status='available';
     if(v.dataset==='qqq_snapshot'||v.dataset==='spy_snapshot') {
       out.requested_underlying=v.underlying;
       out.producer_times.acquisition_end=v.p.timestamp;out.freshness={...age(v.p.timestamp,this.now()),basis:'collection_timestamp'};out.readings=this.readings(v.p.underlying_market);
@@ -992,6 +1136,12 @@ class Consumer {
       if(out.status!=='partial')out.status='in_progress';
       out.warnings.push('Calculation cells and ranks are producer values from the exact immutable cutoff; no after-cutoff observations are used.');
       return out;
+    }
+    if(v.dataset==='nasdaq_snapshot') {
+      out.producer_times={observation:null,acquisition_start:v.actual.as_of??null,acquisition_end:null,publication:null};
+      out.freshness={...age(v.actual.as_of,this.now(),NASDAQ_STALE_SECONDS),basis:'collector receipt; hourly cadence',note:'freshness as of the originating query; repeat nasdaq_snapshot for current age'};
+      out.coverage={scope:'one retained row from the exact queried snapshot'};
+      out.warnings.push('Detail uses the retained queried row; a newer snapshot publication does not change it.');return out;
     }
     // OA-203 session files are mutable rebuild products. Detect change instead
     // of attaching a new quote path to an old ranking/reference.
