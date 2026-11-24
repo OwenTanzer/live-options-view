@@ -1,0 +1,10 @@
+[Unit]
+Description=Options View %i minute prices
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/optionsview-panel-minute/app
+UMask=0077
+EnvironmentFile=%h/.local/share/optionsview-panel-publishers/r2.env
+ExecStart=/usr/bin/flock -n %h/.local/share/optionsview-panel-minute/%i.lock %h/.local/share/optionsview-panel-publishers/venv/bin/python -m market_data.panel_minute publish %i --root %h/.local/share/optionsview-panel-minute
+TimeoutStartSec=55s
+NoNewPrivileges=yes
