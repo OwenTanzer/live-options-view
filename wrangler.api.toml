@@ -15,6 +15,7 @@ account_id = "413bc8abe4485cf2a2e0d9f534436ade"
 # Enable the owner-identity-gated personal research account.
 KALSHI_PERSONAL_ENABLED = "1"
 KALSHI_ENTRIES = "1"
+KALSHI_MINUTE_CAPTURE = "1"
 BOT_INDEX_READS = "r2"
 # Requires additive 0005_one_clock_catalog.sql before this API revision deploys.
 # Uses the existing cron invocation; no provider feed or new trigger.
@@ -40,7 +41,6 @@ database_name = "live-options"
 database_id = "94c7c9ad-228b-471b-b760-48cd18c58d1b"
 
 [triggers]
-crons = ["*/15 * * * *"]
-# Named weekdays: the provider read numeric 1-5 as Sunday-Thursday (fixed live 11-14).
-# Transfer exact settlement trigger ownership once; never run both crons.
+crons = ["*/15 * * * *", "* * * * *"]
+# The minute trigger samples private event markets only. Settlement runs on the quarter-hour trigger.
 # No asset binding, legacy KV or migration entry. Secrets remain operator-managed.

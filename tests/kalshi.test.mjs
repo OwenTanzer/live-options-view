@@ -269,3 +269,50 @@ for (const [series, asset] of Object.entries({ KXBTC15M: 'BTC', KXETH15M: 'ETH',
     }
   }));
 }
+
+test('private One Clock captures with no browser, rolls BTC, preserves displayed quotes and refuses lookahead', async t => scenario(async (env,f) => {
+  let now = Date.UTC(2026,10,24,2,14,1);
+  // Archive timestamps use the actual wall clock; mock both Date constructors and Date.now.
+  t.mock.timers.enable({apis:['Date'],now});
+  env.KALSHI_MINUTE_CAPTURE = '1';
+  function window(suffix) {
+    f.event.series_ticker = f.series.ticker = 'KXBTC15M';
+    f.raw.event_ticker = f.event.event_ticker = 'KXBTC15M-' + suffix;
+    f.raw.ticker = f.raw.event_ticker + '-15';
+    f.raw.close_time = new Date(now + 60000).toISOString();
+  }
+  const tick = () => worker.scheduled({cron:'* * * * *',scheduledTime:now},{...env},{waitUntil(){throw Error('Unexpected settlement work');}});
+  const history = async at => (await (await handleKalshi(request('archive?one_clock_at='+at),env)).json()).archives;
+  const read = async (at,id) => (await (await handleKalshi(request('archive?one_clock_at='+at+'&id='+id),env)).json()).evidence;
+  window('FIRST');
+  await tick();
+  const oldTicker = f.raw.ticker, before = now;
+  const first = (await history(now)).find(row => row.market === 'Minute chain');
+  const snapshot = await read(now, first.id);
+  assert.equal(snapshot.books[0].quotes[oldTicker].YES.ask, .45);
+  assert.deepEqual(snapshot.gaps, []);
+  assert.equal((await history(now-1)).length,0);
+  const requests = f.requests.length;
+  await tick();
+  assert.equal(f.requests.length, requests);
+  now += 60000; t.mock.timers.setTime(now);
+  window('NEXT');
+  await tick();
+  const next = (await history(now)).find(row => row.market === 'Minute chain');
+  assert.notEqual(next.id,first.id);
+  assert.deepEqual(Object.keys((await read(now,next.id)).books[0].quotes), [f.raw.ticker]);
+  assert.equal((await history(before)).some(row=>row.id===next.id),false);
+  assert.equal((await read(now,snapshot.catalog_receipt)).markets[0].ticker,oldTicker);
+  const live = await (await handleKalshi(request('quotes',{markets:[f.raw.ticker]}),env)).json();
+  const receipt = (await history(now)).find(row => row.market === 'Displayed chain quotes');
+  assert.deepEqual((await read(now,receipt.id)).quotes,live.quotes);
+  assert.equal((await handleKalshi(request('archive?one_clock_at='+now,null,''),env)).status,401);
+}));
+
+test('deep crypto ladders preserve the best whole-contract levels in the displayed archive', async () => scenario(async (env,f) => {
+  f.book.orderbook_fp.yes_dollars = Array.from({length:140}, (_,i) => [((i+1)/1000).toFixed(4),'3.00']);
+  const response = await handleKalshi(request('quotes',{markets:[TICKER]}),env);
+  assert.equal((await response.json()).quotes[TICKER].YES.bid,0.14);
+  const row = env.DB.db.prepare("SELECT payload FROM kalshi_evidence WHERE market='Displayed chain quotes'").get();
+  assert.equal(JSON.parse(row.payload).quotes[TICKER].NO.ask,0.86);
+}));

@@ -9,9 +9,13 @@ export const KALSHI_API = 'https://external-api.kalshi.com/trade-api/v2';
 const ticker = value => typeof value === 'string' && /^[A-Z0-9][A-Z0-9.-]{0,100}$/.test(value);
 export async function publicRead(env, path) {
   if (!configured(env)) throw Error('Personal research is not enabled');
-  if (!/^\/(markets|events|series)(\/|\?)/.test(path) || path.includes('..') || path.includes('#')) throw Error('Unsupported source path');
   await budget(env, 'provider-day', 2000, 86400000);
   await budget(env, 'provider-minute', 60, 60000);
+  return readSource(env, path);
+}
+async function readSource(env, path) {
+  if (!configured(env)) throw Error('Personal research is not enabled');
+  if (!/^\/(markets|events|series)(\/|\?)/.test(path) || path.includes('..') || path.includes('#')) throw Error('Unsupported source path');
   const start = Date.now();
   const response = await fetch(KALSHI_API + path, { method: 'GET', cache: 'no-store', redirect: 'manual',
     headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(5000) });
@@ -87,11 +91,11 @@ export async function fetchMarket(env, market) {
   return { schema: 'kalshi.private.evidence.v1', source: 'public_kalshi_rest', environment: 'production',
     market: normalized, receipts: [mr, er, sr, fr, br, sc] };
 }
-export async function discover(env) {
+export async function discover(env, read = publicRead, seriesList = Object.keys(SERIES_SUBJECT)) {
   // Sample distinct subjects before adding city temperature series; keep the catalog bounded.
   const result = [];
-  for (const series of [...Object.keys(SERIES_SUBJECT).filter(s => !WEATHER_SERIES.includes(s)), ...WEATHER_SERIES]) {
-    const r = await publicRead(env, `/events?series_ticker=${series}&status=open&with_nested_markets=true&limit=2`);
+  for (const series of [...seriesList.filter(s => !WEATHER_SERIES.includes(s)), ...seriesList.filter(s => WEATHER_SERIES.includes(s))]) {
+    const r = await read(env, `/events?series_ticker=${series}&status=open&with_nested_markets=true&limit=2`);
     for (const e of (r.data.events || []).slice(0, 2)) {
       if (e.series_ticker !== series) continue;
       for (const m of (e.markets || []).slice(0, WEATHER_SERIES.includes(series) ? 3 : 6)) {
@@ -116,18 +120,20 @@ export function displayMarket(evidence, now = Date.now()) {
 
 // Display-only batch books. Orders still fetch full rules, fee evidence and a
 // fresh sized book through fetchMarket; these rows never authorize a fill.
-export async function chainQuotes(env, markets) {
+export async function chainQuotes(env, markets, read = publicRead) {
   if (!Array.isArray(markets) || markets.length < 1 || markets.length > 16 ||
       new Set(markets).size !== markets.length || markets.some(m => !ticker(m) ||
         !Object.keys(SERIES_SUBJECT).some(s => m.startsWith(s + '-')))) throw Error('Invalid chain page');
-  const r = await publicRead(env, '/markets/orderbooks?' + markets.map(m => 'tickers=' + encodeURIComponent(m)).join('&'));
+  const r = await read(env, '/markets/orderbooks?' + markets.map(m => 'tickers=' + encodeURIComponent(m)).join('&'));
   if (!Array.isArray(r.data.orderbooks) || r.data.orderbooks.length !== markets.length ||
       new Set(r.data.orderbooks.map(b => b.ticker)).size !== markets.length ||
       r.data.orderbooks.some(b => !markets.includes(b.ticker))) throw Error('Book identity mismatch');
   const quotes = {};
   for (const row of r.data.orderbooks) {
     try {
-      const b = kalshiSnapshot(row), yes = b.yes[0], no = b.no[0];
+      // Batch responses include the full ladder. There are at most 10,001
+      // distinct prices at the supported $0.0001 precision, including 0 and 1.
+      const b = kalshiSnapshot(row, 10001), yes = b.yes[0], no = b.no[0];
       if ([...b.yes, ...b.no].some(([p]) => p < 0 || p > 10000) ||
           (yes && no && yes[0] + no[0] > 10000)) throw Error('Invalid book');
       quotes[row.ticker] = {
@@ -140,4 +146,19 @@ export async function chainQuotes(env, markets) {
   }
   return { quotes, provider_response_ts: r.provider_response_ts, received_at: r.receive_ts,
     mode: 'display_only', clock_basis: 'Provider HTTP response time; exchange quote timestamp unavailable' };
+}
+
+/** Reserve the maximum subrequests before the scheduled capture starts.
+ * Separate daily allowance keeps interactive/paper requests available.
+ * Both clients still share the same 60-read minute ceiling.
+ */
+export async function reserveMinuteReads(env, count) {
+  const now = Date.now();
+  await budget(env, 'minute-provider-day', 18000, 86400000, now, count);
+  await budget(env, 'provider-minute', 60, 60000, now, count);
+  let remaining = count;
+  return async (env, path) => {
+    if (Math.floor(Date.now() / 60000) !== Math.floor(now / 60000) || remaining-- <= 0) throw Error('Scheduled source budget exceeded');
+    return readSource(env, path);
+  };
 }

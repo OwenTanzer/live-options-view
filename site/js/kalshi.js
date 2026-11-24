@@ -236,7 +236,20 @@ function startReplay(params) {
           $('frozen-detail').textContent='';
           try {
             const result=await api(query+'&id='+encodeURIComponent(row.id));
-            if(read===detail) $('frozen-detail').textContent=JSON.stringify(result.evidence,null,2);
+            if (read !== detail) return;
+            const evidence = result.evidence;
+            if (evidence.kind === 'minute_chain' || evidence.kind === 'chain_quotes') {
+              const books = evidence.books || [evidence];
+              const lines = books.flatMap(book => Object.entries(book.quotes).map(([ticker, quote]) =>
+                ticker + ' · ' + new Date(book.received_at).toLocaleTimeString() + (quote
+                  ? ' · YES ' + cents(quote.YES.bid) + ' / ' + cents(quote.YES.ask) +
+                    ' · NO ' + cents(quote.NO.bid) + ' / ' + cents(quote.NO.ask)
+                  : ' · Book unavailable')));
+              const missing = (evidence.missing_tickers || []).map(t => t + ' · Book unavailable');
+              $('frozen-detail').textContent = ['Archived bid / ask', ...lines, ...missing, ...(evidence.gaps || [])].join('\n');
+            } else {
+              $('frozen-detail').textContent = JSON.stringify(evidence,null,2);
+            }
           } catch(error) { if(read===detail){clear();login.hidden=false;throw error;} }
         });
         $('frozen-list').append(button);

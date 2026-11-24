@@ -6,6 +6,7 @@ import { Miniflare } from 'miniflare';
 import { createStorage } from '../../backend/storage.js';
 import { advanceSourceCatalog, publicationCatalogPage, CATALOG_PAGE_SIZE } from '../../backend/one-clock-source-catalog.js';
 import { squeezeCatalog, catalogSources } from '../../backend/one-clock-catalog-sources.js';
+import { archive, budget, writeState, pruneArchive } from '../../backend/kalshi-store.js';
 import { limits, warningFraction, checkUsage } from '../../scripts/d1-usage.mjs';
 
 test('account monitor checks both row limits and refuses missing counters', () => {
@@ -56,7 +57,7 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
   // Let SQLite parse whole migrations (including trigger bodies), then install their schema in D1.
   const schema = new DatabaseSync(':memory:');
   try {
-    for (const migration of ['0001_accounts_sessions.sql', '0005_one_clock_catalog.sql'])
+    for (const migration of ['0001_accounts_sessions.sql', '0005_one_clock_catalog.sql', '0006_kalshi_private.sql'])
       schema.exec(readFileSync(new URL('../../backend/migrations/' + migration, import.meta.url), 'utf8'));
     for (const {sql} of schema.prepare('SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid').all())
       await db.prepare(sql).run();
@@ -91,7 +92,7 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
     return costs;
   }
   const config = readFileSync(new URL('../../wrangler.api.toml', import.meta.url), 'utf8');
-  const cron = config.match(/^crons\s*=\s*\["\*\/(\d+) \* \* \* \*"\]/m);
+  const cron = config.match(/^crons\s*=\s*\["\*\/(\d+) \* \* \* \*", "\* \* \* \* \*"\]/m);
   assert.ok(cron, 'Update the modeled cadence when the production cron changes');
   const interval = Number(cron[1]);
   assert.ok(interval > 0 && interval <= 60);
@@ -109,6 +110,20 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
     await storage.sessions.create('another-token', 'user-1', 3600);
     await storage.sessions.delete('another-token');
   });
+  const env = {DB:db};
+  await measure('minute sample and reserved provider reads', 1440, async () => {
+    await budget(env, 'minute-provider-day', 18000, 86400000, now, 11);
+    await budget(env, 'provider-minute', 60, 60000, now, 11);
+    await archive(env, 'Minute chain', {books:[]}, 'minute');
+  });
+  await measure('scheduled catalog rollover or discovery retry', 1440, async () => {
+    await archive(env, 'Market catalog', {markets:[]}, 'minute');
+    await writeState(env, 'minute-catalog', {markets:[]});
+  });
+  await measure('private displayed snapshot', 2000, () => archive(env, 'Displayed chain quotes', {quotes:{}}, 'display'));
+  // Model steady-state expiration, including the evidence indexes.
+  await db.prepare("UPDATE kalshi_evidence SET received_at = '2000-01-01'").run();
+  await measure('private evidence expiration', Math.ceil((1440+1440+2000+400)/3), () => pruneArchive(env));
   console.log('Modeled rows per UTC day', daily);
   for (const [key, limit] of Object.entries(limits))
     assert.ok(daily[key] < warningFraction * limit, key + ' modeled daily use: ' + daily[key]);

@@ -8,11 +8,11 @@ export function fixed(value, scale) {
   if (!Number.isSafeInteger(result)) throw Error('Unsafe decimal');
   return result;
 }
-export function kalshiSnapshot(payload) {
+export function kalshiSnapshot(payload, maxLevels = 100) {
   const book = payload.orderbook_fp;
   if (!book) throw Error('Expected documented fixed-point orderbook');
   const levels = rows => {
-    if (!Array.isArray(rows) || rows.length > 100) throw Error('Invalid book depth');
+    if (!Array.isArray(rows) || rows.length > maxLevels) throw Error('Invalid book depth');
     // Only integer orders are supported; fractional displayed liquidity is rounded DOWN.
     return rows.map(([price, size]) => [fixed(price, 10000), Math.floor(fixed(size, 100) / 100)])
       .filter(x => x[1] > 0).sort((a, b) => b[0] - a[0]);

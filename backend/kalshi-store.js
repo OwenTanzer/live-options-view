@@ -10,22 +10,31 @@ export async function writeState(env, key, value) {
     .bind(ACCOUNT, key, JSON.stringify(value)).run();
 }
 // Atomic counters survive concurrent tabs, Worker restarts and cron overlap.
-export async function budget(env, scope, limit, windowMs, now = Date.now()) {
+export async function budget(env, scope, limit, windowMs, now = Date.now(), amount = 1) {
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > limit) throw Error('Invalid budget reservation');
   const slot = Math.floor(now / windowMs);
-  const row = await env.DB.prepare(`INSERT INTO kalshi_budget (account_id, scope, slot, used) VALUES (?, ?, ?, 1)
+  const row = await env.DB.prepare(`INSERT INTO kalshi_budget (account_id, scope, slot, used) VALUES (?, ?, ?, ?)
     ON CONFLICT(account_id, scope) DO UPDATE SET slot = excluded.slot,
-      used = CASE WHEN kalshi_budget.slot = excluded.slot THEN kalshi_budget.used + 1 ELSE 1 END
-    WHERE kalshi_budget.slot != excluded.slot OR kalshi_budget.used < ? RETURNING used`)
-    .bind(ACCOUNT, scope, slot, limit).first();
+      used = CASE WHEN kalshi_budget.slot = excluded.slot THEN kalshi_budget.used + excluded.used ELSE excluded.used END
+    WHERE kalshi_budget.slot != excluded.slot OR kalshi_budget.used + excluded.used <= ? RETURNING used`)
+    .bind(ACCOUNT, scope, slot, amount, limit).first();
   if (!row) throw Error('Private research request budget reached; try later');
 }
-export async function archive(env, market, payload) {
+export async function archive(env, market, payload, scope = 'archive', id = crypto.randomUUID()) {
   const text = JSON.stringify(payload), digest = await hashSessionToken(text);
-  const id = crypto.randomUUID(), received = new Date().toISOString();
+  const received = new Date().toISOString();
   if (text.length > 100000) throw Error('Evidence exceeds storage bound');
-  await budget(env, 'archive', 400, 86400000);
-  await env.DB.prepare('INSERT INTO kalshi_evidence (account_id, id, received_at, market, digest, payload) VALUES (?, ?, ?, ?, ?, ?)')
+  // Live display records share the existing 2,000/day interactive source budget.
+  // Scheduled records are bounded by one accepted tick per minute.
+  if (scope !== 'minute') await budget(env, scope, scope === 'display' ? 2000 : 400, 86400000);
+  const inserted = await env.DB.prepare('INSERT INTO kalshi_evidence (account_id, id, received_at, market, digest, payload) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(account_id,id) DO NOTHING')
     .bind(ACCOUNT, id, received, market, digest, text).run();
+  if (inserted.meta?.changes === 0) {
+    const prior = await env.DB.prepare('SELECT digest,received_at FROM kalshi_evidence WHERE account_id=? AND id=?')
+      .bind(ACCOUNT,id).first();
+    if (scope !== 'minute' || !prior) throw Error('Archive identity conflict');
+    return { id, ...prior };
+  }
   return { id, digest, received_at: received };
 }
 export async function getArchive(env, id) {
