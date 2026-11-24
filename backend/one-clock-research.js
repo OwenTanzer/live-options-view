@@ -140,6 +140,25 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   let discovery=null;
   if(nativeEnabled) discovery=await fanoutChanges(db,now);
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
+  // The 24h headline target and its 24h observation window can extend into
+  // a third New York date. Share the same two-job budget and rotate the
+  // oldest due account first. Only retained open outcomes justify this read.
+  const oldestHeadlineDay=sessionAt(now-2*86400000);
+  if(oldestHeadlineDay<previous) {
+    const due=await stmt(db,`SELECT w.* FROM one_clock_evaluation_work w INDEXED BY one_clock_evaluation_due
+      WHERE w.session>=? AND w.session<? AND EXISTS (
+        SELECT 1 FROM one_clock_events e INDEXED BY one_clock_event_scope
+        WHERE e.namespace=w.namespace AND e.session=w.session AND e.instrument=w.instrument AND e.origin='recorded'
+        AND e.state='active' AND json_type(e.payload,'$.headline')='object'
+        AND EXISTS (SELECT 1 FROM json_each(e.payload,'$.outcomes') o
+          WHERE o.value->>'$.state'='pending' AND o.value->>'$.deadlineAt'>=w.updated_at))
+      ORDER BY w.updated_at,w.namespace,w.session,w.instrument LIMIT 1`,oldestHeadlineDay,previous).first();
+    if(due) {
+      jobs.push({...due,headlineOnly:true});
+      jobs.sort((a,b)=>a.updated_at-b.updated_at || a.session.localeCompare(b.session));
+      jobs.splice(2);
+    }
+  }
   if(nativeEnabled && discovery.state!=='indexing') {
     const backlog=await list(stmt(db,'SELECT * FROM one_clock_historical_rules WHERE retry_at<=? ORDER BY retry_at,enqueued_at LIMIT 2',now));
     const target=backlog[0];
@@ -161,7 +180,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   for(const job of jobs) {
     try {
       const historic=job.target!==undefined;
-      const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
+      const version=!job.headlineOnly && nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
       if(historic && version.generation<job.target) {
         await finishHistory(db,job,now,'Queued evidence is not yet visible.');
         continue;
@@ -181,6 +200,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       const bounds=equitySession(job.session);
       const rules=(await ruleList(db,job.namespace)).filter(r=>{
         const rule=JSON.parse(r.payload);
+        if(job.headlineOnly && rule.transition!=='per-headline')return false;
         const interval=rule.transition==='per-headline'?headlineDay(job.session):bounds;
         return rule.instruments.includes(job.instrument) && (windows[JSON.stringify([r.rule_id,r.version])]??[])
           .some(w=>w.started_at<=interval.close && (w.ended_at===null || w.ended_at>=interval.open));
@@ -196,7 +216,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       const key=JSON.stringify([job.session,job.instrument,now,version?.generation,historic,optional.map(a=>a.id)]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
-        if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
+        if(!job.headlineOnly && env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
           const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
             maxSequence:version ? (version.sequences[descriptor.id+'/'+job.instrument]??0) : null,
             currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
@@ -208,7 +228,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
             owners.set(source,{descriptor,native});
           }
         }
-        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument))) {
+        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument) && (!job.headlineOnly || optional.includes(a)))) {
           if(adapter.outputs.every(source=>owners.get(source)?.descriptor.supersedes?.[source]===adapter.id))continue;
           if(adapter.demandDriven && !optional.includes(adapter))continue;
           if(!historic || adapter.demandDriven) {

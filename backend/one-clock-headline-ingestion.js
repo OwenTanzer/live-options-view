@@ -95,7 +95,7 @@ export const headlineQuoteIngestion={...shared,id:'mapped-price-strip',outputs:[
     if(doc.schema_version!==2 || raw?.instrument_id!==providerId || raw.source_symbol!==instrument ||
       !Number.isFinite(raw.price) || raw.price<=0 || ![quoteAt,received,published,uploaded].every(Number.isSafeInteger) ||
       quoteAt>received || Math.max(received,published)>uploaded || uploaded>cutoff ||
-      quoteAt<bounds.open)
+      quoteAt<bounds.open || quoteAt>bounds.close+2*86400000)
       return {artifacts:[],complete:true,missingMinutes:1};
     const id=JSON.stringify([instrument,raw.source,raw.price_basis,quoteAt,received,raw.price]);
     const row={source:quoteSource,instrument,session,origin:'recorded',id,revision:1,eventAt:quoteAt,availableAt:uploaded,

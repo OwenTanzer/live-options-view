@@ -1,3 +1,4 @@
+import {headlineOutcomeAt} from '../site/shared/one-clock-headlines.js';
 // Trusted ingestion boundary: callers supply already-authorized, allowlisted
 // source observations. This module has no HTTP route, capture or trading path.
 import { eventRule, evaluateEvents } from '../site/shared/one-clock-events.js';
@@ -142,6 +143,12 @@ export async function observeBatch(db, input) {
   return { duplicate:false,generation,events:current.size,statements:statements.length };
 }
 
+function retainedEventAt(row,cutoff) {
+  const event=JSON.parse(row.payload);
+  if(event.headline)event.outcomes=event.outcomes.map(o=>headlineOutcomeAt(o,cutoff));
+  return {...event,observerRevision:row.revision,recordedAt:row.recorded_at,correctionBatch:row.batch_id};
+}
+
 export async function observedEventsAsOf(db, { namespace, selection }) {
   boundedText(namespace,'namespace');
   const cutoff=instant(selection.cutoff);
@@ -154,8 +161,7 @@ export async function observedEventsAsOf(db, { namespace, selection }) {
         WHERE h2.namespace=h.namespace AND h2.event_id=h.event_id AND h2.recorded_at<=?)
     ORDER BY h.event_id LIMIT 10001`,...scopeArgs(namespace,selection),cutoff,cutoff));
   if(rows.length>10000) throw new Error('result exceeds scope bound');
-  return rows.filter(r=>r.state==='active').map(row=>({ ...JSON.parse(row.payload),
-    observerRevision:row.revision,recordedAt:row.recorded_at,correctionBatch:row.batch_id }));
+  return rows.filter(r=>r.state==='active').map(row=>retainedEventAt(row,cutoff));
 }
 
 export async function observedEventsRangeAsOf(db,{namespace,from,to,instruments,cutoff}) {
@@ -174,5 +180,5 @@ export async function observedEventsRangeAsOf(db,{namespace,from,to,instruments,
   const rows=await list(bind(db,`SELECT h.* ${scope}`,...args));
   if(rows.reduce((n,r)=>n+new TextEncoder().encode(r.payload).byteLength,0)>4*1024*1024)throw new Error('result exceeds scope byte bound; choose fewer sessions');
   if(rows.length>10000)throw new Error('result exceeds scope bound; choose fewer sessions');
-  return rows.filter(r=>r.state==='active').map(row=>({...JSON.parse(row.payload),observerRevision:row.revision,recordedAt:row.recorded_at,correctionBatch:row.batch_id}));
+  return rows.filter(r=>r.state==='active').map(row=>retainedEventAt(row,cutoff));
 }

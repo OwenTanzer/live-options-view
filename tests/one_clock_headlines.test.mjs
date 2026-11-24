@@ -7,6 +7,8 @@ import {createStorage} from '../backend/storage.js';
 import {handleOneClockResearch,advanceOneClockResearch} from '../backend/one-clock-research.js';
 import {handleOneClockResults} from '../backend/one-clock-results.js';
 import {headlineIngestion,headlineQuoteIngestion,projectHeadlines} from '../backend/one-clock-headline-ingestion.js';
+import {evaluateEvents} from '../site/shared/one-clock-events.js';
+import {observedEventsAsOf} from '../backend/one-clock-observer.js';
 import {headlineDefinition} from '../site/shared/one-clock-headlines.js';
 import {projectResults,ruleKey} from '../site/shared/one-clock-results.js';
 
@@ -78,8 +80,44 @@ test('authenticated save, activate, twice-delivered revision, Results and origin
   const projection={events:[event],rules:[rule],origin:'recorded',cutoff:tick,outcome:{ruleKey:ruleKey(rule),id:'return-5'}};
   assert.equal(projectResults({...projection,filters:{endpointTiming:'exact'}}).summary.measured,0);
   assert.equal(projectResults({...projection,filters:{endpointTiming:'delayed'}}).summary.measured,1);
-  quoteAt=storyAt+86400000+minute;price=110;tick=quoteAt+1000;await observe();
-  const [tomorrow]=(await results(tick)).events;
-  assert.equal(tomorrow.outcomes[3].evidence.value.price,110);
-  assert.equal(tomorrow.outcomes[3].elapsedMs,86400000+minute);
+  await research({action:'deactivate',ruleId:rule.id,version:1});
+  const dayDeadline=storyAt+2*86400000;
+  tick=dayDeadline;
+  const [stillPending]=(await results(dayDeadline)).events;
+  // Move the service clock without invoking the observer. Both Results routes
+  // must project expiry from the saved window for a rolled-off, paused rule.
+  tick=dayDeadline+1;
+  const [expired]=(await results(tick)).events;
+  assert.equal(stillPending.outcomes[3].state,'pending');
+  assert.equal(expired.outcomes[3].state,'missing');
+  assert.equal((await observedEventsAsOf(db,{namespace:'account:'+user,selection:{...scope,cutoff:tick}}))[0].outcomes[3].state,'missing');
+  // On Wednesday the normal jobs are Wednesday and Tuesday. A Monday price
+  // measured at its last eligible millisecond arrives one second later.
+  quoteAt=dayDeadline;price=110;tick=dayDeadline+1000;await observe();
+  const [closed]=(await results(tick)).events;
+  assert.equal(closed.outcomes[3].evidence.value.price,110);
+  assert.equal(closed.outcomes[3].elapsedMs,2*86400000);
+  assert.equal((await replay(tick-1))[0].outcomes[3].state,'missing');
+  assert.equal((await replay(tick))[0].outcomes[3].state,'measured');
+});
+
+test('headline endpoint window is inclusive and rejects weekend spillover',()=>{
+  const session='2026-11-06',start=Date.parse(session+'T20:55:00Z');
+  const rule={id:'weekend',name:'Friday NVDA',version:1,...headlineDefinition('NVDA')};
+  function run(sample,receipt,cutoff){
+    const observations=[
+      {source:'company-quote',id:'base',eventAt:start-2,availableAt:start-1,value:{price:100}},
+      {source:'company-headline',id:'story',eventAt:start,availableAt:start,value:{title:'NVDA'}},
+      {source:'company-quote',id:'forward',eventAt:sample,availableAt:receipt,value:{price:105}},
+    ].map(r=>({...r,revision:1,session,origin:'recorded',instrument:'NVDA',evidence:r.id,
+      value:{...r.value,ticker:'NVDA',instrumentId:'eq.nvda'}}));
+    return evaluateEvents({rule,observations,selection:{session,instrument:'NVDA',origin:'recorded',cutoff},
+      sessionClose:start+5*minute})[0].outcomes[0];
+  }
+  const deadline=start+5*minute+86400000,monday=Date.parse('2026-11-09T14:30:00Z');
+  assert.equal(run(deadline,deadline+2,deadline).state,'pending');
+  assert.equal(run(deadline,deadline+2,deadline+1).state,'missing');
+  assert.equal(run(deadline,deadline+2,deadline+2).state,'measured');
+  assert.equal(run(deadline+1,deadline+2,deadline+2).state,'missing');
+  assert.equal(run(monday,monday+1,monday+1).state,'missing');
 });

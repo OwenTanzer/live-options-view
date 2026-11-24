@@ -39,13 +39,13 @@ export function headlineEvents(rule,rows,selection,close,windows,evidence) {
       const quotes=prices.filter(r=>r.value.instrumentId===story.value.instrumentId);
       const base=quotes.filter(r=>r.availableAt<=at && r.eventAt<=at).at(-1);
       const baselines={},outcomes=rule.outcomes.map(spec=>{
-        const targetAt=at+spec.horizonMs, endpoint=quotes.find(r=>r.eventAt>=targetAt);
+        const targetAt=at+spec.horizonMs, deadlineAt=targetAt+spec.toleranceMs;
+        const endpoint=quotes.find(r=>r.eventAt>=targetAt && r.eventAt<=deadlineAt);
         const age=base?at-base.eventAt:null;
         baselines[spec.id]={value:base?.value.price??null,ageMs:age,evidence:base?proof(base):null};
-        const result={id:spec.id,targetAt,value:null,measuredAt:null,availableAt:null,evidence:null,elapsedMs:null,lagMs:null,baseStale:age!==null && age>spec.maxAgeMs};
+        const result={id:spec.id,targetAt,deadlineAt,value:null,measuredAt:null,availableAt:null,evidence:null,elapsedMs:null,lagMs:null,baseStale:age!==null && age>spec.maxAgeMs};
         if(!base)return {...result,state:'missing',reason:hasHeadlinePriceRoute(ticker)?'no-event-known-mapped-price':'no-configured-price-route'};
-        if(!endpoint)return {...result,state:selection.cutoff>targetAt+spec.toleranceMs?'missing':'pending',
-          reason:selection.cutoff>=targetAt?'awaiting-eligible-quote':null};
+        if(!endpoint)return headlineOutcomeAt({...result,state:'pending',reason:selection.cutoff>=targetAt?'awaiting-eligible-quote':null},selection.cutoff);
         return {...result,state:'measured',value:(endpoint.value.price/base.value.price-1)*100,
           measuredAt:endpoint.eventAt,availableAt:endpoint.availableAt,evidence:proof(endpoint),
           elapsedMs:endpoint.eventAt-at,lagMs:endpoint.eventAt-targetAt,reason:null};
@@ -54,4 +54,12 @@ export function headlineEvents(rule,rows,selection,close,windows,evidence) {
         ruleId:rule.id,ruleVersion:rule.version,session:selection.session,instrument:ticker,origin:selection.origin,
         triggeredAt:at,headline:story.value,matchingObservations:1,inputEvidence:[proof(story)],baselines,outcomes};
     });
+}
+
+// Expiry is determined by the saved measurement window even if observation
+// was paused or its session has left the service's normal job rotation.
+export function headlineOutcomeAt(outcome,cutoff) {
+  if(outcome.state==='pending' && Number.isSafeInteger(outcome.deadlineAt) && cutoff>outcome.deadlineAt)
+    return {...outcome,state:'missing',reason:'no-retained-quote-in-endpoint-window'};
+  return outcome;
 }
