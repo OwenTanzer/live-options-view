@@ -4,15 +4,13 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import json
-import logging
-import sqlite3
 import os
 from pathlib import Path
 import subprocess
 
 from .panel_prices import Capture, collect, crypto_time, utcnow, ET
 from .crypto_collector.publish import _error_code
-from .crypto_collector.spot_receipts import retain
+from .crypto_collector import spot_receipts
 
 MAX_BYTES = 128 * 1024
 FEEDS = ("crypto", "nasdaq")
@@ -153,6 +151,8 @@ def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     condition = {"IfNoneMatch": "*"}
     if previous:
         raw, etag = previous
+        if feed == "crypto" and crypto_receipts is not None:
+            spot_receipts.reconcile(crypto_receipts, "minute", raw, utcnow())
         prior = json.loads(raw)
         if crypto_time(prior["started_at"]) >= stamp:
             return "superseded"
@@ -162,14 +162,13 @@ def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
         protect_observations(candidate, prior, feed, now)
     candidate["coverage"] = dict(Counter(v["freshness"] for v in candidate["prices"].values()))
     body = encode(candidate)
+    attempt = None
+    if feed == "crypto" and crypto_receipts is not None:
+        attempt = spot_receipts.prepare(crypto_receipts, "minute", body, utcnow())
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
                       CacheControl="no-store", **condition)
-    if feed == "crypto" and crypto_receipts is not None:
-        try:
-            retain(crypto_receipts, body, utcnow())
-        except (OSError, sqlite3.Error):
-            logging.exception("Crypto price publication succeeded but its private receipt failed")
-            return "published_without_receipt"
+    if attempt is not None:
+        spot_receipts.confirm(crypto_receipts, attempt, utcnow())
     return "published"
 
 

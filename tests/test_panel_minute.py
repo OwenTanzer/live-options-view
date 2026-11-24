@@ -83,33 +83,68 @@ def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quot
         assert good["prices"]["X"]["price_usd"] == 123
 
 
-def test_crypto_as_of_tracks_confirmed_publications(tmp_path):
-    from market_data.crypto_collector.spot_receipts import read_as_of, retain
+def test_crypto_replay_uses_confirmed_baseline_and_actual_panel_rules(tmp_path, monkeypatch):
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector.spot_receipts import read_as_of
+
     path = tmp_path / "private" / "spot.sqlite3"
-    client = Mock()
-    old = doc("coinbase")
-    old.update(feed="crypto", started_at=(NOW-timedelta(minutes=1)).isoformat())
-    def prior():
-        return {"Body": BytesIO(json.dumps(old).encode()), "ETag": "prior"}
-    client.get_object.side_effect = lambda **kwargs: prior()
-    candidate = doc("coinbase", NOW-timedelta(minutes=2))
+    store = FakeObjectStore()
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(path))
+    candidate = doc("coinbase")
     candidate["feed"] = "crypto"
-    confirmed = NOW+timedelta(seconds=2)
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW-timedelta(minutes=1)):
+        _publish_snapshot(baseline, store, "test")
+    confirmed = NOW+timedelta(seconds=1)
     with patch("market_data.panel_minute.utcnow", return_value=confirmed):
-        assert publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=path) == "published"
-    body = client.put_object.call_args.kwargs["Body"]
-    retain(path, body, confirmed+timedelta(minutes=2))
-    assert read_as_of(path, NOW) is None
-    result = read_as_of(path, confirmed)
-    assert result["snapshot"] == json.loads(body)
-    assert result["snapshot"]["prices"]["X"]["provider_observed_at"] == NOW.isoformat()
-    later = confirmed+timedelta(minutes=1)
-    candidate["prices"]["X"]["price_usd"] = 234
-    with patch("market_data.panel_minute.utcnow", return_value=later):
-        assert publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=path) == "published"
-    assert read_as_of(path, later)["snapshot"]["prices"]["X"]["price_usd"] == 234
-    assert read_as_of(path, confirmed) == result
-    client.put_object.side_effect = RuntimeError("conditional write failed")
-    with pytest.raises(RuntimeError):
-        publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=tmp_path / "failed.db")
-    assert not (tmp_path / "failed.db").exists()
+        publish(store, "test", "crypto", candidate, NOW, crypto_receipts=path)
+    assert read_as_of(path, NOW)["state"] == "unmeasurable"
+    assert read_as_of(path, NOW+timedelta(seconds=119, milliseconds=999))["rows"][0]["price"] == 123
+    assert read_as_of(path, NOW+timedelta(seconds=120))["rows"] == baseline["coins"]
+    later = NOW+timedelta(seconds=40)
+    newer = {"constructed_at": later.isoformat(),
+             "coins": [{"symbol": "X", "source": "coinbase", "price": 101}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=later):
+        _publish_snapshot(newer, store, "test")
+    assert read_as_of(path, later)["rows"] == newer["coins"]
+    assert read_as_of(path, later-timedelta(microseconds=1))["rows"][0]["price"] == 123
+
+
+def test_ack_failure_leaves_gap_and_identical_retry_recovers(tmp_path, monkeypatch):
+    import sqlite3
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector import spot_receipts
+
+    db = tmp_path / "private" / "spot.sqlite3"
+    store = FakeObjectStore()
+    candidate = doc("coinbase")
+    candidate["feed"] = "crypto"
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(db))
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
+        _publish_snapshot(baseline, store, "bucket")
+    with patch("market_data.panel_minute.utcnow", return_value=NOW):
+        publish(store, "bucket", "crypto", candidate, NOW, crypto_receipts=db)
+    second = NOW+timedelta(seconds=30)
+    update = doc("coinbase", second)
+    update.update(feed="crypto", started_at=(second-timedelta(seconds=1)).isoformat(),
+                  completed_at=second.isoformat())
+    update["prices"]["X"] = mark("coinbase", 110, second, second)
+    with patch("market_data.panel_minute.utcnow", return_value=second), \
+            patch.object(spot_receipts, "confirm", side_effect=sqlite3.OperationalError("disk error")), \
+            pytest.raises(sqlite3.OperationalError):
+        publish(store, "bucket", "crypto", update, second, crypto_receipts=db)
+    assert json.loads(store.objects["crypto/prices.json"][0])["prices"]["X"]["price_usd"] == 110
+    assert spot_receipts.read_as_of(db, second)["unverified_stream"] == "minute"
+    count = len(store.writes)
+    retry = second+timedelta(seconds=1)
+    with patch("market_data.panel_minute.utcnow", return_value=retry):
+        assert publish(store, "bucket", "crypto", update, retry, crypto_receipts=db) == "superseded"
+    assert len(store.writes) == count
+    assert spot_receipts.read_as_of(db, retry)["rows"][0]["price"] == 110
+    assert spot_receipts.read_as_of(db, second)["state"] == "unmeasurable"
+    assert spot_receipts.read_as_of(db, second-timedelta(seconds=1))["rows"][0]["price"] == 123
