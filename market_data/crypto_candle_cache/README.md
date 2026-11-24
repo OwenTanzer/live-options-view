@@ -1,107 +1,27 @@
-# Crypto candle cache
+# Crypto candle history
 
-R2-backed historical candles for the top-50 crypto, with One Clock
-synchronisation. The contract is
-[`docs/specs/CRYPTO_CANDLE_CACHE.md`](../../docs/specs/CRYPTO_CANDLE_CACHE.md).
+Cian’s historical crypto ZIPs are immutable archive inputs. Each import has a private SQLite snapshot with per-series source, kind, count and date range. Coinbase and Tiingo candles retain their price fields. CoinGecko market-chart observations retain their single price. Replay begins at the import receipt, including for bars whose exchange dates are years earlier. The panel publishes coverage and a small BTC hourly sample from the selected snapshot.
 
-## What it publishes
+```sh
+python -m market_data.crypto_candle_cache.archive import crypto-backend.zip snapshots
+python -m market_data.crypto_candle_cache.archive read DATABASE ETH 1h --as-of 2026-11-24T08:01:00Z --limit 24
+python -m market_data.crypto_candle_cache.archive panel DATABASE
+```
 
-| Object key (R2 bucket `qqq-options-chain-data`, expected — unconfirmed) | Contents |
-|---|---|
-| `crypto/candles/<COIN>/<interval>.json` | One interval file per coin per interval, `schema_version: 1`, `dataset: "crypto_candles"` |
-| `crypto/candles/<COIN>/provenance.json` | `snapshot_provenance.v1` sidecar for the coin |
+The import prints the database path to substitute for `DATABASE`. Use the corresponding delivery’s database for a historical query. The operational instructions cover regenerating the panel asset. [Linux archive operations](../../ops/panel-minute/README.md#historical-crypto-archive)
 
-Eleven intervals per coin (1m, 3m, 5m, 9m, 15m, 30m, 1h, 2h, 4h,
-1d, 1w). Only the three bases (1m, 1h, 1d) are ever fetched; the
-rest are derived locally. Crypto trades 24/7, so buckets align to
-00:00 UTC — there is no equity session open and no session filter.
+## Provider cache
 
-## Universe (dynamic top 50)
-
-Every run resolves the live top 50 by market cap before
-collecting (`collector.resolve_universe`): the CoinGecko markets
-list (top 100) is re-fetched, tokenized assets are excluded under
-the tracker's standing rule, and the first 50 are collected, with
-each entrant's source probed live (a Coinbase Exchange USD pair
-that answers means `coinbase`, otherwise `coingecko`). The
-embedded 50 in `coins.py` is the fallback and the diff baseline,
-used only when the live list is missing or partial. Membership
-changes (added/removed with symbol, rank, source and date) are
-recorded in every sidecar's `universe` block; a coin that leaves
-the top 50 keeps its stored files, and a coin that enters it is
-backfilled from scratch. CoinGecko-labelled entrants get the 1d
-base only, like every other CoinGecko-labelled coin. `universe`
-prints the resolved list with its changes; `backfill`/`update`
-without `--symbols` collect the resolved universe.
-
-## Sources
-
-- **Coinbase** (public candles, no key): the three bases for the 32
-  Coinbase-labelled coins. Paging walks backward, 300 bars a page;
-  BTC daily reaches 2015-07-20 (verified by the parallel Crypto
-  Backend job).
-- **Tiingo crypto** (token-authenticated, `TIINGO_API_TOKEN` in the
-  environment only): the deep-history backstop, from December 2017.
-  The route exists (an unauthenticated request is refused with
-  "Please supply a token", not a 404) but no authenticated Tiingo
-  crypto call has been made from this repository yet.
-- **CoinGecko** (public OHLC, no key): the 1d base only, for the
-  CoinGecko-labelled coins. CoinGecko free OHLC has no 1m/1h series,
-  so those coins' intraday intervals are absent by design and
-  labelled as such — never interpolated.
-- **CoinGecko markets** (public, no key): the top-100 list that
-  resolves the live top-50 universe on every run (see above).
-
-The full backfill data lives in the parallel Crypto Backend job
-(`~/workspace/crypto-backend/`) and its Notion page "Crypto
-Backend", not in this repository. This package is the contract, the
-seed, and the steady-state update path.
-
-## Commands
+The collector writes per-coin interval files and a provenance sidecar under `<out>/crypto/candles/`. It supports 1m, 1h and 1d bases where available and eight UTC-aligned derived intervals. A missing constituent labels a derived bucket partial. Exchange and Tiingo candles can include volume. The separate CoinGecko public OHLC collector builds a daily candle from six complete four-hour constituents per UTC day. Coverage follows the source actually available for each interval.
 
 ```sh
 python -m market_data.crypto_candle_cache universe
-python -m market_data.crypto_candle_cache backfill --out cache-out [--symbols BTC ETH] [--days-1m 7] [--days-1h 90] [--max-requests N] [--publish]
-python -m market_data.crypto_candle_cache update --out cache-out [--symbols BTC] [--publish]
-python -m market_data.crypto_candle_cache status --out cache-out [--symbols BTC]
-python -m market_data.crypto_candle_cache seed --out cache-out   # checked-in BTC seed only
+python -m market_data.crypto_candle_cache backfill --out cache-out --symbols BTC ETH
+python -m market_data.crypto_candle_cache update --out cache-out --symbols BTC
+python -m market_data.crypto_candle_cache status --out cache-out --symbols BTC
+python -m market_data.crypto_candle_cache seed --out fresh-seed
 ```
 
-`--publish` is opt-in and needs `R2_ENDPOINT_URL`,
-`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`, `CRYPTO_R2_BUCKET`
-(all unconfirmed against live service config). Without it, files
-are written locally and the sidecar says `not_published`.
+Backfill and seed initialize an empty coin destination. Update follows the stored interval and provider, preserves first availability for unchanged completed bars and fails on a conflicting completed observation. Store a revision in a separate snapshot. Optional R2 publication uses `--publish`, `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `CRYPTO_R2_BUCKET`. Keep internal-only data in the private archive.
 
-## One Clock
-
-Every bar carries its source time (`t`), observed time
-(`observed_at`) and state chip (`origin`: `recorded` for a fetched
-base bar, `reconstructed` for a locally derived bar; `synthetic`
-is never written). The reader (`one_clock.py`) maps bars to One
-Clock observations — session `"continuous"`, event at the bar's
-close, value at its start, available at its fetch time — and serves
-them through `select_as_of` / `reading_as_of`, a faithful Python
-port of `selectAsOf` / `readingAsOf` in `site/shared/one-clock.js`.
-The still-forming latest bar is stored with `"forming": true` and
-is never served as a price. Gaps are labelled ("coverage partial",
-"price gap"), never smoothed over.
-
-## Seed
-
-`seed/BTC/` holds a small seeded sample — BTC only, the three
-bases, a few hundred real bars fetched live from Coinbase public
-candles on 2026-11-24 (see `seed/README.md` for the exact windows
-and fetch time). It is a seed for local testing and for the `seed`
-command, not the backfill: no other coin, no other data, is
-checked in.
-```
-
-## Tests
-
-```sh
-python -m pytest tests/test_crypto_candle_cache.py -q
-```
-
-Offline fixtures only; the seed files are the only live data, and
-they are checked in. No provider calls, no R2, no clock dependence
-beyond fixed fixtures.
+The offline unit tests cover collection, aggregation, gaps and replay. The BTC seed contains 378 real Coinbase bars collected in November 2026. [Full file and replay contract](../../docs/specs/CRYPTO_CANDLE_CACHE.md)

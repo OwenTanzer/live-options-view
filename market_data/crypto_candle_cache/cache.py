@@ -40,8 +40,8 @@ Rules the writer enforces and the reader checks:
   :mod:`one_clock` (its close is in the future at fetch time).
 - Bars are stored sorted by ``t``, deduped by ``t``; a re-fetch
   that changes a stored bar is a new revision of the same bar, and
-  the writer refuses to silently overwrite a stored bar with
-  different OHLC unless ``force`` is given — see :func:`merge_bars`.
+  the updater preserves the original receipt and refuses to overwrite
+  a completed bar with different OHLC — see :func:`merge_bars`.
   A missing interval file means the interval is absent (labelled
   in provenance), never an empty file standing in for data.
 """
@@ -49,10 +49,10 @@ Rules the writer enforces and the reader checks:
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .one_clock import ORIGINS
 from .resample import BASE_INTERVALS, DERIVED_FROM, INTERVALS
 
 SCHEMA_VERSION = 1
@@ -86,42 +86,32 @@ def validate_bar(bar, interval):
         if field not in bar:
             raise ValueError(f"bar missing {field}: {bar!r}")
     for field in ("open", "high", "low", "close"):
-        if not isinstance(bar[field], (int, float)) or isinstance(bar[field], bool):
+        if not isinstance(bar[field], (int, float)) or isinstance(bar[field], bool) or not math.isfinite(bar[field]):
             raise ValueError(f"bar {field} is not a number: {bar!r}")
     if bar["high"] < max(bar["open"], bar["close"]) or bar["low"] > min(bar["open"], bar["close"]):
         raise ValueError(f"bar high/low inconsistent with open/close: {bar!r}")
     if bar.get("volume") is not None and not isinstance(bar["volume"], (int, float)):
         raise ValueError(f"bar volume is not a number: {bar!r}")
-    if bar.get("origin", "recorded") not in ORIGINS:
+    if bar.get("volume") is not None and (not math.isfinite(bar["volume"]) or bar["volume"] < 0):
+        raise ValueError("volume must be finite and nonnegative")
+    if bar.get("origin", "recorded") not in ("recorded", "reconstructed"):
         raise ValueError(f"bar origin is not a state chip: {bar!r}")
     if interval in BASE_INTERVALS and bar.get("bars") is not None:
         raise ValueError(f"base bar carries derived bars count: {bar!r}")
     return bar
 
 
-def merge_bars(stored, incoming, interval, force=False):
-    """Merge incoming bars into stored bars, deduped by ``t``.
-
-    Bars are keyed by ``t``. An incoming bar with the same ``t``
-    and identical OHLC/volume replaces the stored bar (same
-    revision, new ``observed_at``). An incoming bar with the same
-    ``t`` but different OHLC is a new revision of the same bar: it
-    replaces the stored bar only when ``force`` is given, and the
-    caller must record the revision bump; otherwise a
-    ``ValueError`` is raised rather than silently overwriting
-    evidence. Returns the merged list sorted by ``t``.
-    """
+def merge_bars(stored, incoming, interval):
+    """Preserve the earliest receipt; require a separate snapshot for corrections."""
     merged = {bar["t"]: dict(bar) for bar in stored}
     for bar in incoming:
         validate_bar(bar, interval)
         previous = merged.get(bar["t"])
-        if previous is not None:
-            same = all(previous.get(f) == bar.get(f)
-                       for f in ("open", "high", "low", "close", "volume"))
-            if not same and not force:
-                raise ValueError(
-                    f"bar {bar['t']} changed OHLC; refusing silent overwrite "
-                    "(pass force=True to record a new revision)")
+        if previous is not None and not previous.get("forming"):
+            if any(previous.get(f) != bar.get(f) for f in
+                   ("open", "high", "low", "close", "volume", "bars", "partial")):
+                raise ValueError(f"changed {interval} candle at {bar['t']}; keep a separate revision")
+            continue
         merged[bar["t"]] = dict(bar)
     return [merged[key] for key in sorted(merged)]
 

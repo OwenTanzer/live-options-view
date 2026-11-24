@@ -87,9 +87,6 @@ def _parse_args(argv):
     backfill.add_argument("--days-1h", type=int, default=90)
     backfill.add_argument("--max-requests", type=int, default=None)
     backfill.add_argument("--publish", action="store_true")
-    backfill.add_argument("--force", action="store_true",
-                          help="allow a re-fetch to replace a stored bar with different OHLC")
-
     update = sub.add_parser("update", help="fetch only bars newer than stored")
     update.add_argument("--out", required=True)
     update.add_argument("--symbols", nargs="*")
@@ -198,6 +195,8 @@ def cmd_seed(args):
     if not seed_dir.exists():
         raise SystemExit("seed directory missing from the package")
     out = Path(args.out)
+    if any((out / "crypto" / "candles" / "BTC").glob("*.json")):
+        raise SystemExit("existing BTC history; seed an empty directory")
     copied = []
     for name in ("1m.json", "1h.json", "1d.json", "provenance.json"):
         src = seed_dir / name

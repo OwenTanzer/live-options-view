@@ -286,8 +286,8 @@ class DynamicUniverseTest(unittest.TestCase):
     def test_collect_coin_records_universe_in_sidecar(self):
         import tempfile
         rows = []
-        for i in range(10):
-            moment = datetime(2026, 11, 14, tzinfo=UTC) + timedelta(days=i)
+        for i in range(1, 61):
+            moment = datetime(2026, 11, 14, tzinfo=UTC) + timedelta(hours=4*i)
             rows.append([int(moment.timestamp() * 1000), 1.0, 1.1, 0.9, 1.05])
         clients = {"coinbase": CoinbaseClient(session=FakeCoinbaseSession({}),
                                               delay_seconds=0),
@@ -419,20 +419,19 @@ class CoinGeckoTest(unittest.TestCase):
     def test_parse_ohlc_row_has_no_volume(self):
         # 2026-11-17T00:00:00Z in epoch ms (a daily bar: midnight UTC).
         parsed = parse_ohlc_row([1794873600000, 64841.0, 65087.0, 64362.0, 65003.0])
-        self.assertEqual(parsed["t"], "2026-11-17T00:00:00Z")
+        self.assertEqual(parsed["t"], "2026-11-16T20:00:00Z")
         self.assertEqual(parsed["close"], 65003.0)
         self.assertNotIn("volume", parsed)
 
     def test_fetch_daily_dedupes(self):
-        rows = [[1794873600000, 1, 2, 0.5, 1.5],
-                [1794873600000, 1, 2, 0.5, 1.5],
-                [1794960000000, 1, 2, 0.5, 1.5]]
+        rows = [[1794873600000 + i*4*3600000, 1, 2, 0.5, 1.5] for i in range(1, 14)]
+        rows.append(rows[0])
         session = FakeCoinGeckoSession({"bitcoin": rows})
         client = CoinGeckoClient(session=session, delay_seconds=0)
         bars, made = client.fetch_daily("bitcoin")
         self.assertEqual(made, 1)
         self.assertEqual(len(bars), 2)
-        self.assertIn("days=365", session.calls[0])
+        self.assertIn("days=30", session.calls[0])
 
 
 class ResampleTest(unittest.TestCase):
@@ -475,6 +474,22 @@ class ResampleTest(unittest.TestCase):
         self.assertEqual(out[0]["volume"], 70.0)
         self.assertEqual(out[1]["bars"], 3)
         self.assertEqual(out[1]["t"], "2026-11-23T00:00:00Z")
+
+    def test_missing_hours_stay_in_their_utc_buckets(self):
+        bars = [bar("2026-11-23T00:00:00Z"), bar("2026-11-23T03:00:00Z", close=101)]
+        first, second = resample_mod.aggregate_hourly(list(reversed(bars)), "2h")
+        self.assertEqual((first["t"], first["close"]), (bars[0]["t"], 100.5))
+        self.assertEqual(second["t"], "2026-11-23T02:00:00Z")
+        self.assertTrue(first["partial"] and second["partial"])
+        first.update(observed_at=FETCHED_AT, origin="reconstructed")
+        self.assertTrue(oc.bar_to_observation(first, "BTC", "2h", "fixture")["value"]["partial"])
+        self.assertEqual(oc.coverage_label([first], "2h", oc.instant_ms(first["t"]),
+                                          oc.bar_end_ms(first, "2h"))["label"], "coverage partial")
+
+    def test_week_start_is_monday_even_when_first_daily_bar_is_wednesday(self):
+        partial, = resample_mod.aggregate_weekly([bar("2026-11-18T00:00:00Z")])
+        self.assertEqual(partial["t"], "2026-11-16T00:00:00Z")
+        self.assertTrue(partial["partial"])
 
     def test_derive_all_coingecko_coin_has_only_daily_and_weekly(self):
         daily = [bar((datetime(2026, 11, 16, tzinfo=UTC) + timedelta(days=i)
@@ -548,8 +563,8 @@ class CacheTest(unittest.TestCase):
         changed = [bar("2026-11-23T00:00:00Z", close=99.5)]
         with self.assertRaises(ValueError):
             cache_mod.merge_bars(stored, changed, "1m")
-        merged = cache_mod.merge_bars(stored, changed, "1m", force=True)
-        self.assertEqual(merged[0]["close"], 99.5)
+        refetched = dict(stored[0], observed_at="2026-11-24T02:00:00Z")
+        self.assertEqual(cache_mod.merge_bars(stored, [refetched], "1m"), stored)
         same = [bar("2026-11-23T00:01:00Z", close=100.5)]
         merged = cache_mod.merge_bars(stored, same, "1m")
         self.assertEqual(len(merged), 2)
@@ -830,8 +845,8 @@ class CollectorTest(unittest.TestCase):
     def test_collect_coingecko_coin_has_no_intraday(self):
         import tempfile
         rows = []
-        for i in range(10):
-            moment = datetime(2026, 11, 14, tzinfo=UTC) + timedelta(days=i)
+        for i in range(1, 61):
+            moment = datetime(2026, 11, 14, tzinfo=UTC) + timedelta(hours=4*i)
             rows.append([int(moment.timestamp() * 1000), 1.0, 1.1, 0.9, 1.05])
         clients = {"coinbase": CoinbaseClient(session=FakeCoinbaseSession({}),
                                               delay_seconds=0),
@@ -851,6 +866,21 @@ class CollectorTest(unittest.TestCase):
                  ).read_text(encoding="utf-8"))
             self.assertEqual(sidecar["files"]["1m"]["coverage"], "absent")
             self.assertIn("no 1m/1h series", sidecar["files"]["1m"]["reason"])
+
+    def test_no_daily_fallback_or_overwrite_for_archived_hourly_points(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            symbol = "TRX"
+            bars = [bar("2026-11-23T00:00:00Z")]
+            stored = cache_mod.build_interval_file(symbol, "1h", bars, "coingecko", FETCHED_AT)
+            path = cache_mod.write_interval_file(tmp, symbol, "1h", stored)
+            original = path.read_bytes()
+            coin = coins_mod.BY_SYMBOL[symbol]
+            update = collector_mod.update_coin(coin, {}, tmp, NOW)
+            self.assertIn("no update route for stored coingecko 1h", update["reason"])
+            self.assertEqual(collector_mod.collect_coin(coin, {}, tmp, NOW)["status"],
+                             "source_unavailable")
+            self.assertEqual(path.read_bytes(), original)
 
     def test_update_merges_new_bars(self):
         import tempfile

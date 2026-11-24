@@ -9,14 +9,14 @@ Source plan per coin (fixed by :mod:`coins`):
   Tiingo backstop (:mod:`tiingo`) is tried for that base and the
   interval file records the source that actually supplied it.
 - CoinGecko-labelled coins: the ``1d`` base only, from
-  :mod:`coingecko` (public OHLC, 365 days). There is no 1m/1h base
+  :mod:`coingecko` (public four-hour OHLC over 30 days, reconstructed daily). There is no 1m/1h base
   — CoinGecko free OHLC has no 1m/1h series — so the intraday
   intervals are absent by design and the sidecar says so. The
   ``1w`` file is derived from the 1d base.
 
 Windows (``backfill`` defaults; overridable on the CLI): 1m covers
 7 days, 1h covers 90 days, 1d covers the source's full depth
-(Coinbase paging back to the product's first bar; CoinGecko 365
+(Coinbase paging back to the product's first bar; CoinGecko 30
 days). The deep first fill for the whole universe runs in the
 parallel Crypto Backend job (``~/workspace/crypto-backend/``), not
 here: this collector is the contract, the seed, and the steady-state
@@ -75,7 +75,7 @@ COINGECKO_INTRADAY_ABSENT = "CoinGecko free OHLC has no 1m/1h series"
 
 def _now_iso(now=None):
     moment = now or datetime.now(UTC)
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _mark_forming(bars, interval, now):
@@ -204,7 +204,8 @@ def fetch_coin_bases(coin, clients, now, windows=None, max_requests=None):
                 absent[interval] = "Coinbase fetch failed and Tiingo backstop failed"
                 continue
             bases[interval] = cache_mod.envelope_bars(
-                _mark_forming(bars, interval, now), _now_iso(now), "recorded")
+                _mark_forming(bars, interval, now), _now_iso(),
+                "reconstructed" if source == "coingecko" else "recorded")
             meta[interval] = {"source": source, "requests": made}
     else:  # CoinGecko-labelled: daily base only.
         for interval in ("1m", "1h"):
@@ -218,7 +219,7 @@ def fetch_coin_bases(coin, clients, now, windows=None, max_requests=None):
             absent["1d"] = "CoinGecko fetch failed"
         else:
             bases["1d"] = cache_mod.envelope_bars(
-                _mark_forming(bars, "1d", now), _now_iso(now), "recorded")
+                _mark_forming(bars, "1d", now), _now_iso(), "reconstructed")
             meta["1d"] = {"source": "coingecko", "requests": made}
     if max_requests is not None and requests[0] > max_requests:
         raise RuntimeError(f"request budget exceeded: {requests[0]} > {max_requests}")
@@ -274,6 +275,7 @@ def build_coin_files(coin, bases, meta, absent, generated_at):
             derived_from=None if base else resample_mod.DERIVED_FROM[interval])
         files[interval] = content
         gaps = detect_gaps(enveloped, interval)
+        partial = any(b.get("partial") for b in enveloped)
         prov_meta[interval] = {
             "bars": len(enveloped),
             "first_bar": enveloped[0]["t"] if enveloped else None,
@@ -281,8 +283,8 @@ def build_coin_files(coin, bases, meta, absent, generated_at):
             "derived_from": None if base else resample_mod.DERIVED_FROM[interval],
             "source": source,
             "requests": meta[interval]["requests"] if interval in meta else 0,
-            "coverage": "partial" if gaps else "full",
-            "reason": f"{len(gaps)} price gap(s)" if gaps else None,
+            "coverage": "partial" if gaps or partial else "full",
+            "reason": f"{len(gaps)} price gap(s)" if gaps else "incomplete candle" if partial else None,
         }
     return files, prov_meta
 
@@ -298,13 +300,16 @@ def collect_coin(coin, clients, out_dir, now, windows=None, max_requests=None,
     sidecar, or None. A failed coin returns ``{"symbol", "status":
     "source_unavailable", "reason"}`` with no files written.
     """
-    generated_at = _now_iso(now)
+    if cache_mod.read_symbol_files(out_dir, coin.symbol):
+        return {"symbol": coin.symbol, "status": "source_unavailable",
+                "reason": "existing candle history; use update or a separate snapshot directory"}
     try:
         bases, meta, absent = fetch_coin_bases(
             coin, clients, now, windows=windows, max_requests=max_requests)
     except RuntimeError as exc:
         return {"symbol": coin.symbol, "status": "source_unavailable",
                 "reason": str(exc)}
+    generated_at = _now_iso()
     files, prov_meta = build_coin_files(coin, bases, meta, absent, generated_at)
     for interval, content in files.items():
         cache_mod.write_interval_file(out_dir, coin.symbol, interval, content)
@@ -331,23 +336,18 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None,
     """Fetch only bars newer than the newest stored bar, per base.
 
     A coin with no stored files is backfilled instead (see
-    :func:`collect_coin`). Stored forming bars are dropped before
-    the merge — a forming bar's OHLC is still moving, so it is
-    re-fetched rather than merged against. The Tiingo backstop is
-    a backfill concern: a failed update leaves stored files
+    :func:`collect_coin`). Stored forming bars may be replaced by a later fetch. Completed
+    bars preserve their first receipt and cannot be overwritten. Each
+    update follows its stored provider and interval. A failed update leaves stored files
     untouched and returns ``source_unavailable`` for the run.
     ``universe`` is a :func:`universe_block` dict recorded in the
     sidecar, or None.
     """
-    from .one_clock import bar_end_ms
-
-    generated_at = _now_iso(now)
     stored = cache_mod.read_symbol_files(out_dir, coin.symbol)
     if not stored:
         return collect_coin(coin, clients, out_dir, now,
                             max_requests=max_requests, publish=publish,
                             universe=universe)
-    now_ms = int(now.timestamp() * 1000)
     bases, meta, absent = {}, {}, {}
     requests = [0]
     for interval in ("1m", "1h", "1d"):
@@ -356,27 +356,36 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None,
             if coin.source == "coingecko":
                 absent[interval] = COINGECKO_INTRADAY_ABSENT
             continue
-        stored_bars = [b for b in content["bars"]
-                       if bar_end_ms(b, interval) <= now_ms]
+        if (content.get("symbol"), content.get("interval")) != (coin.symbol, interval):
+            raise ValueError(f"stored identity mismatch for {coin.symbol} {interval}")
+        stored_bars = content["bars"]
         newest = stored_bars[-1]["t"] if stored_bars else None
-        start = (_parse_time(newest) if newest else
-                 now - timedelta(days=7))
+        start = _parse_time(newest) if newest else now - timedelta(days=7)
+        source = content["source"]
         try:
-            if coin.source == "coinbase":
-                bars, made = clients["coinbase"].fetch_history(
+            if source == "coinbase" and coin.coinbase_product:
+                bars, made = clients[source].fetch_history(
                     coin.coinbase_product, interval, start, now)
-                source = "coinbase"
+            elif source == "tiingo":
+                bars, made = clients[source].fetch_bars(
+                    coin.symbol, interval, start.strftime("%Y-%m-%d"),
+                    now.strftime("%Y-%m-%d"))
+            elif source == "coingecko" and interval == "1d":
+                bars, made = clients[source].fetch_daily(coin.coingecko_id)
             else:
-                bars, made = clients["coingecko"].fetch_daily(coin.coingecko_id)
-                bars = [b for b in bars if b["t"] > (newest or "")]
-                source = "coingecko"
+                raise ValueError(f"no update route for stored {source} {interval}")
+            bars = [b for b in bars if _parse_time(b["t"]) >= start]
         except Exception as exc:  # noqa: BLE001 - files untouched
             return {"symbol": coin.symbol, "status": "source_unavailable",
                     "reason": f"{interval} update failed: {exc}"}
         requests[0] += made
         enveloped = cache_mod.envelope_bars(
-            _mark_forming(bars, interval, now), _now_iso(now), "recorded")
-        merged = cache_mod.merge_bars(stored_bars, enveloped, interval)
+            _mark_forming(bars, interval, now), _now_iso(),
+            "reconstructed" if source == "coingecko" else "recorded")
+        try:
+            merged = cache_mod.merge_bars(stored_bars, enveloped, interval)
+        except ValueError as exc:
+            return {"symbol": coin.symbol, "status": "source_unavailable", "reason": str(exc)}
         bases[interval] = merged
         meta[interval] = {"source": source, "requests": made}
     if max_requests is not None and requests[0] > max_requests:
@@ -385,7 +394,17 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None,
     if not bases:
         return {"symbol": coin.symbol, "status": "source_unavailable",
                 "reason": "no stored bases to update"}
+    generated_at = _now_iso()
     files, prov_meta = build_coin_files(coin, bases, meta, absent, generated_at)
+    for interval, content in files.items():
+        if interval not in resample_mod.BASE_INTERVALS and interval in stored:
+            try:
+                content["bars"] = cache_mod.merge_bars(stored[interval]["bars"], content["bars"], interval)
+            except ValueError as exc:
+                return {"symbol": coin.symbol, "status": "source_unavailable", "reason": str(exc)}
+            if len(content["bars"]) != content["bars_count"]:
+                return {"symbol": coin.symbol, "status": "source_unavailable",
+                        "reason": f"derived {interval} membership changed; preserve existing snapshot"}
     for interval, content in files.items():
         cache_mod.write_interval_file(out_dir, coin.symbol, interval, content)
     provenance = build_provenance(

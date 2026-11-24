@@ -164,11 +164,15 @@ def bar_to_observation(bar, coin, interval, key, revision=1, provider=None):
     the bar's close) — callers must filter forming bars first with
     :func:`split_forming`.
     """
+    if bar.get("forming"):
+        raise TypeError("forming candles cannot be observations")
     origin = bar.get("origin", "recorded")
     value = {field: bar[field] for field in ("open", "high", "low", "close")
              if field in bar}
     if bar.get("volume") is not None:
         value["volume"] = bar["volume"]
+    if bar.get("partial"):
+        value["partial"] = True
     if bar.get("bars") is not None:
         value["bars"] = bar["bars"]
     return observation({
@@ -206,7 +210,7 @@ def split_forming(bars, interval, now_ms):
         close_ms = bar_end_ms(bar, interval)
         observed_ms = (instant_ms(bar["observed_at"], "observed_at")
                        if bar.get("observed_at") else None)
-        if close_ms > now_ms or (observed_ms is not None and observed_ms < close_ms):
+        if bar.get("forming") or close_ms > now_ms or (observed_ms is not None and observed_ms < close_ms):
             forming.append(bar)
         else:
             completed.append(bar)
@@ -335,11 +339,13 @@ def coverage_label(bars, interval, window_start_ms, window_end_ms):
     gaps = detect_gaps(ordered, interval)
     first_ms = instant_ms(ordered[0]["t"])
     last_end_ms = bar_end_ms(ordered[-1], interval)
-    if first_ms > window_start_ms or last_end_ms < window_end_ms or gaps:
+    partial = any(b.get("partial") for b in ordered)
+    if partial or first_ms > window_start_ms or last_end_ms < window_end_ms or gaps:
         reason = "; ".join(
             ([f"starts {ordered[0]['t']}"] if first_ms > window_start_ms else [])
             + ([f"ends {ordered[-1]['t']}"] if last_end_ms < window_end_ms else [])
-            + ([f"{len(gaps)} price gap(s)"] if gaps else []))
+            + ([f"{len(gaps)} price gap(s)"] if gaps else [])
+            + (["incomplete candle"] if partial else []))
         return {"label": "coverage partial", "first_bar": ordered[0]["t"],
                 "last_bar": ordered[-1]["t"], "gaps": gaps, "reason": reason}
     return {"label": "coverage full", "first_bar": ordered[0]["t"],

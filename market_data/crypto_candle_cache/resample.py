@@ -90,112 +90,51 @@ def _fold(group):
     return bar
 
 
-def aggregate_intraday(bars_1m, interval):
-    """Aggregate 1-minute bars into a coarser intraday interval.
-
-    ``interval`` is one of ``3m``/``5m``/``9m``/``15m``/``30m``/``1h``;
-    ``1m`` returns the input unchanged. Buckets align to 00:00 UTC
-    of the bar's own UTC date (continuous 24/7 session, no session
-    filter). Returns bars sorted by start, each with ``t`` (bucket
-    start, ISO-8601 UTC), OHLC, ``volume`` (summed, when the base
-    has it) and ``bars`` (input-bar count).
-    """
-    if interval == "1m":
-        return [dict(bar) for bar in sorted(bars_1m, key=lambda b: b["t"])]
-    if interval not in INTRADAY_MINUTES or interval == "1h":
-        # 1h is a fetched base, not a derivation from 1m (60 x 1m bars
-        # would disagree with the source's own wall-clock-hour buckets).
-        raise ValueError(f"unsupported 1-minute aggregation interval: {interval!r}")
-    width = INTRADAY_MINUTES[interval]
-    buckets = {}
-    for bar in bars_1m:
+def _aggregate(bars, base_minutes, width_minutes):
+    """Fold unique UTC slots and flag buckets missing any constituent."""
+    groups = {}
+    for bar in bars:
         start = _parse_time(bar["t"])
-        midnight = _utc_midnight(start)
-        minutes_since_midnight = int((start - midnight).total_seconds() // 60)
-        bucket_start = midnight + timedelta(
-            minutes=(minutes_since_midnight // width) * width)
-        key = bucket_start
-        slot = buckets.get(key)
-        if slot is None:
-            slot = buckets[key] = {"t": _format_time(bucket_start),
-                                   "open": bar["open"], "high": bar["high"],
-                                   "low": bar["low"], "close": bar["close"],
-                                   "bars": 0}
-            if bar.get("volume") is not None:
-                slot["volume"] = 0.0
-        slot["high"] = max(slot["high"], bar["high"])
-        slot["low"] = min(slot["low"], bar["low"])
-        slot["close"] = bar["close"]
-        slot["bars"] += 1
-        if bar.get("volume") is not None:
-            slot["volume"] = slot.get("volume", 0.0) + bar["volume"]
-    out = []
-    for key in sorted(buckets):
-        out.append(buckets[key])
-    return out
+        anchor = _utc_midnight(start)
+        if width_minutes == 7 * 1440:
+            anchor -= timedelta(days=start.weekday())
+        elapsed = (start - anchor).total_seconds()
+        if elapsed % (60 * base_minutes):
+            raise ValueError(f"off-grid base candle at {bar['t']}")
+        bucket = anchor + timedelta(minutes=int(elapsed // (60 * width_minutes)) * width_minutes)
+        group = groups.setdefault(bucket, {})
+        if start in group:
+            raise ValueError(f"duplicate base candle at {bar['t']}")
+        group[start] = bar
+    result = []
+    for start, group in sorted(groups.items()):
+        ordered = [group[t] for t in sorted(group)]
+        out = _fold(ordered)
+        out["t"] = _format_time(start)
+        if len(group) != width_minutes // base_minutes:
+            out["partial"] = True
+        if any(b.get("forming") for b in ordered):
+            out["forming"] = True
+        result.append(out)
+    return result
+
+
+def aggregate_intraday(bars_1m, interval):
+    if interval == "1m":
+        return sorted((dict(b) for b in bars_1m), key=lambda b: b["t"])
+    if DERIVED_FROM.get(interval) != "1m":
+        raise ValueError(f"unsupported 1-minute aggregation interval: {interval!r}")
+    return _aggregate(bars_1m, 1, INTRADAY_MINUTES[interval])
 
 
 def aggregate_hourly(bars_1h, interval):
-    """Aggregate hourly bars into ``2h``/``4h`` bars.
-
-    Groups consecutive hourly bars within the same UTC day (2 bars
-    per 2h group, 4 per 4h group); groups never cross a UTC day, and
-    a partial trailing group is kept as the live, still-forming bar.
-    Each returned bar has ``t`` (first bar's start), OHLC, ``volume``
-    (summed, when the base has it) and ``bars`` (input-bar count).
-    """
     if interval not in HOURLY_GROUP_BARS:
         raise ValueError(f"unsupported hourly aggregation interval: {interval!r}")
-    width = HOURLY_GROUP_BARS[interval]
-    ordered = sorted(bars_1h, key=lambda b: b["t"])
-    out = []
-    current_day = None
-    group = []
-
-    def flush():
-        if group:
-            out.append(_fold(group))
-
-    for bar in ordered:
-        day = _parse_time(bar["t"]).date()
-        if day != current_day or len(group) >= width:
-            flush()
-            group = []
-            current_day = day
-        group.append(bar)
-    flush()
-    return out
+    return _aggregate(bars_1h, 60, INTRADAY_MINUTES[interval])
 
 
 def aggregate_weekly(daily_bars):
-    """Aggregate daily bars into weekly (Monday-Sunday) bars.
-
-    Open = first bar's open, close = last bar's close, high/low =
-    extremes, ``volume`` = sum of daily volumes (a week with no
-    volume anywhere carries no ``volume`` key), ``bars`` = days in
-    the week. A partial current week is kept. ``t`` is the first
-    bar's date (midnight UTC).
-    """
-    ordered = sorted(daily_bars, key=lambda b: b["t"])
-    out = []
-    current_key = None
-    group = []
-
-    def flush():
-        if group:
-            out.append(_fold(group))
-
-    for bar in ordered:
-        day = _parse_time(bar["t"]).date()
-        # ISO calendar week: Monday is the first day.
-        key = (day - timedelta(days=day.weekday())).isoformat()
-        if key != current_key:
-            flush()
-            group = []
-            current_key = key
-        group.append(bar)
-    flush()
-    return out
+    return _aggregate(daily_bars, 1440, 10080)
 
 
 def derive_all(bases):
