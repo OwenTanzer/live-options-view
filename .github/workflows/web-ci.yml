@@ -81,8 +81,14 @@ jobs:
         env:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/one_clock*.test.mjs
+      - name: Crypto panel fixtures
+        run: node --test tests/crypto_panel.test.js tests/crypto_predictions_panel.test.mjs
       - name: public browser data allowlist
         run: node --test tests/browser_data.test.js tests/provisional_quotes.test.mjs
+      - name: Nasdaq panel fixtures
+        run: node --test tests/nasdaq_panel.test.js
+      - name: Nasdaq MCP fixtures
+        run: node --test market_mcp/nasdaq_snapshot.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
         run: node --test tests/order_flow_exposure.test.js tests/order_flow_model.test.js tests/order_flow_render.test.js tests/order_flow_profile.test.js tests/order_flow_heatmap.test.js
       - name: bounded legacy r2-proxy (#225, G4b)
@@ -141,6 +147,8 @@ jobs:
         run: python tests/test_changed_paths.py
       - name: News bounded launcher and pilot config (MediaFlow)
         run: python -m unittest discover -s tests -p test_news_launcher.py -v
+      - name: News optional Fed/Treasury headline mapping
+        run: python -m unittest discover -s tests -p test_news_theme_mapping.py -v
       - name: News history checkpoint and bounded run listing (MediaFlow)
         run: python -m unittest discover -s tests -p test_news_checkpoint.py -v
       - name: News panel dedicated origin and generation contract (MediaFlow)
@@ -219,6 +227,7 @@ jobs:
         run: |
           node tests/one_clock_dashboard_browser.test.cjs
           node tests/one_clock_encounter_browser.mjs
+          node tests/one_clock_candle_browser.mjs
           node tests/order_flow_clock_browser.mjs
       - name: BTC monthly mobile fixture workflow
         run: |

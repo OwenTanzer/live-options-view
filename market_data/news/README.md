@@ -39,6 +39,9 @@ tests or by the default commands.
 
 ## Sources and streams
 
+The [Fed/Treasury headline pilot](THEME_MAPPING_PILOT.md) provides optional,
+versioned topic-to-ticker relevance for these same four sources. The News panel shows matched tickers on headline cards. Python replay is opt-in.
+
 Only OilPrice.com, EIA Today in Energy, TechCrunch and Ars Technica are
 enabled. The other 79 sources from both prototypes are configured but disabled;
 `--enable-source <id>` enables one explicitly. Every entry from an enabled

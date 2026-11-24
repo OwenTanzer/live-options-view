@@ -37,7 +37,8 @@ def stream_label(stream: config.Stream, obs: dict) -> dict:
     return {"member": True, "arc": "UNMAPPED", "basis": "no_rule"}
 
 
-def classify_rules(obs: dict, run_id: str, classified_at, streams=config.STREAMS) -> dict:
+def classify_rules(obs: dict, run_id: str, classified_at, streams=config.STREAMS, *,
+                   fed_treasury_pilot: bool = False) -> dict:
     """Rules classification of one observation revision.
 
     Membership is evaluated for each stream whose configuration includes the
@@ -45,7 +46,7 @@ def classify_rules(obs: dict, run_id: str, classified_at, streams=config.STREAMS
     """
     digest = config.rules_digest(streams)
     labels = {sid: stream_label(streams[sid], obs) for sid in obs["source_streams"] if sid in streams}
-    return {
+    result = {
         "schema_version": config.SCHEMA_VERSION,
         "record_type": "classification",
         "classification_id": sha256_hex(f"{obs['revision_id']}\x00rules\x00{config.RULES_VERSION}\x00{digest}"),
@@ -65,6 +66,10 @@ def classify_rules(obs: dict, run_id: str, classified_at, streams=config.STREAMS
         "instrument_mapping": "unknown",
         "conflict": "unknown",
     }
+    if fed_treasury_pilot:
+        from .theme_mapping import apply_mapping
+        return apply_mapping(result, obs)
+    return result
 
 
 def classify_all(observations: list[dict], run_id: str, clock, classifier=classify_rules) -> tuple[list[dict], list[str], str]:

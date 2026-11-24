@@ -846,7 +846,7 @@
   .analysis-link:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .tab-btn.active { color: var(--bright); border-color: #58a6ff; }
   #live-panel.hidden, #history-panel.hidden, #bots-panel.hidden, #squeeze-panel.hidden,
-  #news-panel.hidden { display: none; }
+  #crypto-panel.hidden, #nasdaq-panel.hidden, #news-panel.hidden { display: none; }
 
   /* ── news panel (MediaFlow M4b) ──────────────────────────────────────── */
   /* Scoped to #news-panel; tests/news_panel/harness.html copies this block. */
@@ -951,6 +951,114 @@
   #news-panel.hidden + #news-research, #news-panel + #news-research[hidden], #news-panel > div[hidden] { display: none; }
   /* ── end news panel ── */
 
+  /* ── NASDAQ-100 stocks panel ─────────────────────────────────────────── */
+  /* Scoped to #nasdaq-panel. */
+  #nasdaq-panel {
+    max-width: 1100px; display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem 1rem;
+    font-size: 0.85rem; line-height: 1.4;
+  }
+  #nasdaq-status { font-size: 0.78rem; color: var(--dim); }
+  #nasdaq-status[data-state="stale"] { color: #d29922; font-weight: 600; }
+  #nasdaq-status[data-state="failed"], #nasdaq-status[data-state="absent"] { color: #ee3300; }
+  #nasdaq-hero, #nasdaq-movers, #nasdaq-controls, #nasdaq-detail, #nasdaq-table-wrap,
+  #nasdaq-heatmap, #nasdaq-changes {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;
+  }
+  #nasdaq-hero:empty, #nasdaq-movers:empty, #nasdaq-changes:empty { display: none; }
+  #nasdaq-heatmap[hidden], #nasdaq-table-wrap[hidden] { display: none; }
+  .nq-changes { font-size: 0.76rem; color: var(--dim); margin: 0; }
+  .nq-view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .nq-view-toggle button {
+    font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--dim); background: var(--bg);
+    border: 0; padding: 3px 10px; cursor: pointer;
+  }
+  .nq-view-toggle button[aria-pressed="true"] { color: var(--bright); background: #1c2128; }
+  .nq-heatmap { position: relative; width: 100%; aspect-ratio: 1000 / 620; }
+  .nq-tile {
+    position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1px; overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.35); border-radius: 2px; color: #fff;
+    font: inherit; cursor: pointer; padding: 2px; text-align: center;
+  }
+  .nq-tile-sym { font-size: 0.72rem; font-weight: 700; line-height: 1.1; }
+  .nq-tile-pct { font-size: 0.66rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .nq-legend { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--dim); margin-top: 0.5rem; }
+  .nq-legend-bar { flex: 1; height: 8px; border-radius: 4px;
+    background: linear-gradient(to right, rgb(238, 51, 0), rgb(42, 47, 55) 50%, rgb(0, 204, 85)); }
+  .nq-hero { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: baseline; }
+  .nq-hero-main { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: baseline; }
+  .nq-hero-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+  .nq-hero-level { font-size: 1.5rem; font-weight: 700; color: var(--bright); font-variant-numeric: tabular-nums; }
+  .nq-hero-change { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .nq-hero-basis { font-size: 0.72rem; color: var(--dim); }
+  .nq-hero-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.74rem; color: var(--dim); }
+  .nq-stale-badge { color: #d29922; font-weight: 700; }
+  .nq-breadth { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; margin-top: 0.5rem; font-size: 0.78rem; }
+  .nq-breadth-bar { display: inline-block; width: 180px; height: 8px; background: #2a0a0a; border-radius: 4px; overflow: hidden; }
+  .nq-breadth-adv { display: block; height: 100%; background: #00cc55; }
+  .nq-movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .nq-movers-grid h3 { font-size: 0.78rem; color: var(--bright); margin: 0 0 0.3rem; }
+  .nq-mover-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .nq-mover { display: grid; grid-template-columns: 3.5rem 1fr auto auto; gap: 0.5rem; align-items: baseline; font-size: 0.76rem; padding: 2px 0; border-bottom: 1px dotted var(--border); }
+  .nq-mover-sym { font-weight: 700; color: var(--bright); }
+  .nq-mover-name { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nq-mover-price, .nq-mover-change { font-variant-numeric: tabular-nums; }
+  #nasdaq-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; font-size: 0.78rem; }
+  #nasdaq-controls input, #nasdaq-controls select {
+    font: inherit; font-size: 0.8rem; color: var(--bright); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px;
+  }
+  #nasdaq-count { color: var(--dim); font-size: 0.74rem; }
+  #nasdaq-detail[hidden] { display: none; }
+  .nq-detail-head { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; align-items: baseline; }
+  .nq-detail-head h3 { font-size: 0.95rem; color: var(--bright); margin: 0; }
+  .nq-detail-price { font-size: 1.1rem; font-weight: 700; color: var(--bright); font-variant-numeric: tabular-nums; }
+  .nq-detail-change { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .nq-close { margin-left: auto; font: inherit; font-size: 0.75rem; color: var(--bright); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .nq-detail-stats { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.74rem; color: var(--dim); margin: 0.4rem 0; }
+  .nq-intervals { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.4rem 0; }
+  .nq-iv-btn {
+    font: inherit; font-size: 0.72rem; font-weight: 600; color: var(--dim); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+  }
+  .nq-iv-btn.active { color: var(--bright); border-color: #58a6ff; }
+  .nq-candles { display: block; max-width: 100%; height: auto; }
+  .nq-chart-meta { font-size: 0.72rem; color: var(--dim); margin: 0.3rem 0 0.6rem; }
+  #nasdaq-detail h4 { font-size: 0.8rem; color: var(--bright); margin: 0.6rem 0 0.3rem; }
+  .nq-news-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  .nq-news-list li { display: flex; flex-direction: column; gap: 1px; font-size: 0.8rem; }
+  .nq-news-list a { color: var(--bright); }
+  .nq-news-meta { font-size: 0.7rem; color: var(--dim); }
+  #nasdaq-table-wrap { overflow-x: auto; padding: 0; }
+  #nasdaq-table { border-collapse: collapse; width: 100%; min-width: 0; font-size: 0.78rem; }
+  #nasdaq-table th, #nasdaq-table td {
+    border-bottom: 1px solid var(--border); padding: 4px 8px; text-align: right; vertical-align: middle;
+    width: auto; height: auto; font-weight: 400; line-height: 1.4; position: static;
+    text-transform: none; letter-spacing: normal;
+  }
+  #nasdaq-table th { color: var(--dim); font-weight: 600; white-space: nowrap; }
+  #nasdaq-table th[data-sort] { cursor: pointer; }
+  #nasdaq-table th[data-sort]:hover { color: var(--bright); }
+  #nasdaq-table th:first-child, #nasdaq-table td:first-child { text-align: left; }
+  #nasdaq-table th:nth-child(2), #nasdaq-table td:nth-child(2) { text-align: left; }
+  #nasdaq-table tbody tr[data-symbol] { cursor: pointer; }
+  #nasdaq-table tbody tr[data-symbol]:hover td { background: #1c2128; }
+  .nq-sym strong { color: var(--bright); margin-right: 0.5rem; }
+  .nq-name { color: var(--dim); font-size: 0.72rem; }
+  .nq-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #nasdaq-panel .up { color: #00cc55; }
+  #nasdaq-panel .down { color: #ee3300; }
+  #nasdaq-panel .flat { color: var(--dim); }
+  .nq-dim { color: var(--dim); }
+  .nq-empty { color: var(--dim); font-style: italic; text-align: center; padding: 12px 0; }
+  #nasdaq-basis { font-size: 0.72rem; color: var(--dim); margin: 0; line-height: 1.5; }
+  @media (max-width: 600px) {
+    .nq-movers-grid { grid-template-columns: 1fr; }
+    .nq-mover { grid-template-columns: 3.5rem 1fr auto; }
+    .nq-mover-name { display: none; }
+  }
+  /* ── end NASDAQ-100 stocks panel ── */
+
   /* ── short-squeeze scanner panel (OA-191) ────────────────────────────── */
   #squeeze-header {
     display: flex;
@@ -1012,6 +1120,90 @@
     padding: 1px 6px;
     border-radius: 4px;
     margin-right: 4px;
+  }
+
+  /* ── crypto panel ──────────────────────────────────────────────────── */
+  /* Read-only display of the hourly crypto/latest.json snapshot; styles
+     mirror the squeeze panel (header + status + table + patterns). */
+  #crypto-panel { max-width: 1100px; }
+  #crypto-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-title { font-weight: 600; color: var(--bright); }
+  #crypto-status { color: var(--dim); font-size: 0.76rem; }
+  #crypto-status[data-state="stale"], #crypto-status[data-state="fallback"] { opacity: 0.72; }
+  #crypto-warning {
+    background: #2d1f0a;
+    border: 1px solid #d49a00;
+    color: #ffcc66;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-warning.hidden { display: none; }
+  #crypto-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 0.7rem;
+    font-size: 0.85rem;
+  }
+  .crypto-hero-price { font-size: 1.15rem; font-weight: 600; color: var(--bright); }
+  #crypto-market {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    color: var(--dim);
+    font-size: 0.78rem;
+    margin-bottom: 0.7rem;
+  }
+  #crypto-claim { color: var(--fg); font-size: 0.8rem; margin: 0 0 4px; }
+  #crypto-about { margin: 0 0 0.9rem; }
+  #crypto-table { width: 100%; max-width: 860px; border-collapse: collapse; font-size: 0.85rem; }
+  #crypto-table th {
+    text-align: right;
+    color: var(--dim);
+    font-weight: 500;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  #crypto-table th:first-child, #crypto-table td:first-child,
+  #crypto-table th:nth-child(2), #crypto-table td:nth-child(2) { text-align: left; }
+  #crypto-table td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .crypto-name { color: var(--dim); font-size: 0.76rem; }
+  .crypto-up { color: #7ee787; }
+  .crypto-down { color: #ffa198; }
+  tr.crypto-unavailable td { color: var(--dim); }
+  .crypto-empty { color: var(--dim); text-align: center !important; padding: 16px 0; }
+  #crypto-caption { caption-side: top; text-align: left; color: var(--dim); font-size: 0.74rem; padding: 0 0 6px; }
+  #crypto-patterns { list-style: none; padding: 0; margin: 0 0 0.9rem; font-size: 0.85rem; }
+  #crypto-patterns li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .crypto-severity {
+    display: inline-block;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
+  .crypto-severity-info { background: #21262d; color: #a3adb7; }
+  .crypto-severity-notable { background: #2d1f0a; color: #ffcc66; }
+  .crypto-severity-extreme { background: #331c20; color: #ffa198; }
+  .crypto-pattern-detail { color: var(--dim); }
+  .crypto-pattern-time { color: var(--dim); font-size: 0.74rem; }
+  @media (max-width: 600px) {
+    #crypto-table { table-layout: fixed; min-width: 0; font-size: 0.76rem; }
+    #crypto-table th, #crypto-table td { padding: 5px 3px; overflow-wrap: anywhere; }
   }
 
   /* ── automated (bot) panel ───────────────────────────────────────────── */
@@ -1424,6 +1616,8 @@
   <button id="tab-bots" class="tab-btn">Automated</button>
   <button id="tab-squeeze" class="tab-btn">Squeeze</button>
   <button id="tab-news" class="tab-btn">News</button>
+  <button id="tab-crypto" class="tab-btn">Crypto</button>
+  <button id="tab-nasdaq" class="tab-btn">Stocks</button>
   <a class="analysis-link" href="https://trainer.moopertonic.net/">Options Trainer</a>
   <a class="analysis-link" href="/strategy-archive.html">Strategy Archive</a>
   <a class="analysis-link" href="/order-flow.html">Order flow</a>
@@ -1848,8 +2042,96 @@
 
 </div> <!-- /squeeze-panel -->
 
+<div id="crypto-panel" class="hidden">
+
+  <div id="crypto-header">
+    <span id="crypto-title">Crypto</span>
+    <span id="crypto-status" data-state="fallback">—</span>
+  </div>
+  <p id="crypto-claim">Hourly spot-crypto snapshot · live top 50, or 39-coin embedded fallback · read-only</p>
+  <div id="crypto-warning" class="hidden"></div>
+  <div id="crypto-hero" aria-label="Bitcoin summary"></div>
+  <div id="crypto-market" aria-label="Market summary"></div>
+  <details class="truth-about" id="crypto-about"><summary>About this reading</summary>
+  <p>
+    Published hourly by the crypto collector
+    (<code>market_data/crypto_collector/</code>) from public Coinbase
+    Exchange prices, with CoinGecko for the 9 top-ranked coins Coinbase
+    cannot supply (USDT, USDC, TRX, XMR, LEO, WBT, DAI, CC, GRAM).
+    Every price carries its source and as-of time; a missing source
+    shows "source unavailable" and is never substituted from the other
+    source. Crypto trades 24/7, so this panel has no equity session
+    close. No trading, no alerts, no favourites. Next-hour
+    estimates, when published, appear below as estimates only —
+    never as live prices.
+  </p>
+  </details>
+  <table id="crypto-table">
+    <caption id="crypto-caption"></caption>
+    <thead>
+      <tr>
+        <th>Rank</th>
+        <th>Coin</th>
+        <th>Price</th>
+        <th>24h change</th>
+        <th>Market cap</th>
+        <th>Source</th>
+        <th>As of (UTC)</th>
+      </tr>
+    </thead>
+    <tbody id="crypto-tbody"></tbody>
+  </table>
+  <h3>Trend patterns</h3>
+  <ul id="crypto-patterns"></ul>
+  <h3>Next hour estimate</h3>
+  <div id="crypto-predictions" aria-label="Next-hour price estimates"></div>
+
+</div> <!-- /crypto-panel -->
+
 <div id="news-panel" class="hidden" aria-live="polite"></div> <!-- MediaFlow news views (js/news-panel.js) -->
 <div id="news-research" aria-live="polite"></div> <!-- MediaFlow P1 research view (js/news-research.js); hidden with #news-panel -->
+
+<div id="nasdaq-panel" class="hidden" aria-live="polite"> <!-- NASDAQ-100 stocks (js/nasdaq-panel.js); mounts once on first open -->
+  <div id="nasdaq-status" role="status" data-state="loading">Loading NASDAQ-100 snapshot…</div>
+  <div id="nasdaq-hero"></div>
+  <div id="nasdaq-movers"></div>
+  <div id="nasdaq-controls">
+    <label>Search <input id="nasdaq-search" type="search" placeholder="Symbol or name" aria-label="Search stocks"></label>
+    <label>Sort <select id="nasdaq-sort" aria-label="Sort stocks">
+      <option value="percent_change:desc">% change ↓</option>
+      <option value="percent_change:asc">% change ↑</option>
+      <option value="price:desc">Price ↓</option>
+      <option value="price:asc">Price ↑</option>
+      <option value="market_cap:desc">Market cap ↓</option>
+      <option value="market_cap:asc">Market cap ↑</option>
+      <option value="name:asc">Name A–Z</option>
+    </select></label>
+    <span class="nq-view-toggle" role="group" aria-label="View">
+      <button type="button" id="nasdaq-view-heatmap" data-view="heatmap" aria-pressed="true">Heatmap</button>
+      <button type="button" id="nasdaq-view-table" data-view="table" aria-pressed="false">Table</button>
+    </span>
+    <span id="nasdaq-count"></span>
+  </div>
+  <div id="nasdaq-changes"></div>
+  <div id="nasdaq-heatmap"></div>
+  <div id="nasdaq-detail" hidden></div>
+  <div id="nasdaq-table-wrap" hidden>
+    <table id="nasdaq-table">
+      <thead>
+        <tr>
+          <th data-sort="rank">#</th>
+          <th data-sort="name">Stock</th>
+          <th data-sort="price">Price</th>
+          <th data-sort="percent_change">% change</th>
+          <th data-sort="market_cap">Market cap</th>
+          <th>News</th>
+        </tr>
+      </thead>
+      <tbody id="nasdaq-tbody"></tbody>
+    </table>
+  </div>
+  <p id="nasdaq-basis">Index % is vs prev close (regular session). Each stock's % is the Nasdaq latest reported move. The two bases are different — do not compare them directly. Every number above carries the snapshot's as-of time; no number is shown without one.</p>
+</div> <!-- /nasdaq-panel -->
 
 <div id="footer">
   OI color = calibrated historical percentile. Cell: OI · top-right = total vol · bottom-right = contracts last 60s (amber=20+, orange=100+, white=500+).<br>
@@ -2015,12 +2297,28 @@ let timerHandle = null;
 <script src="js/squeeze-panel.js?v=b6f669daf5c8af53"></script>
 <script>
 
+// ── crypto panel ─────────────────────────────────────────────────────────
+// Lives in js/crypto-panel.js, loaded below; the Crypto tab mounts it on
+// first open, like the News panel. The banner stays here as the section's
+// marker.
+</script>
+<script src="js/crypto-panel.js?v=28fc15f7f525ae21"></script>
+<script type="module" src="js/crypto-predictions.js?v=8dad1c3df5a1bea9"></script>
+<script>
+
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────
 // Lives in js/news-panel.js, loaded below; the News tab mounts it on first
 // open. The banner stays here as the section's marker.
 </script>
 <script src="js/news-research.js?v=aac117405484746a"></script>
-<script src="js/news-panel.js?v=c63fdda00f5c36c4"></script>
+<script src="js/news-panel.js?v=9919514946c5ca44"></script>
+<script>
+
+// ── NASDAQ-100 stocks panel ───────────────────────────────────────────────
+// Lives in js/nasdaq-panel.js, loaded below; the Stocks tab mounts it on first
+// open. The banner stays here as the section's marker.
+</script>
+<script src="js/nasdaq-panel.js?v=116f3711201233d4"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────
@@ -2028,7 +2326,7 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/tab-switching.js?v=d8df60ae0f25d227"></script>
+<script src="js/tab-switching.js?v=640421545ed2e59a"></script>
 <script>
 
 // ── automated (bot) panel ────────────────────────────────────────────────────
@@ -2069,5 +2367,5 @@ let timerHandle = null;
 // so the page's script order is unchanged. The banner stays here as
 // the section's marker.
 </script>
-<script src="js/boot.js?v=b1a8185594efc5e3"></script>
+<script src="js/boot.js?v=4cb9d9fd8b95006b"></script>
 <script type="module" src="js/one-clock-history.js"></script></body></html>

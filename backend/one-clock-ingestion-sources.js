@@ -1,3 +1,4 @@
+import {candleIngestion} from './one-clock-candle-ingestion.js';
 import {levelIngestion} from "./one-clock-level-ingestion.js";
 import { shortlistIngestion } from './one-clock-shortlist-ingestion.js';
 import { readArchivedChain } from './one-clock-chain.js';
@@ -60,9 +61,14 @@ export const chainIngestion=Object.freeze({id:'archived-chain',version:'1',owner
   }
 });
 // A stream joins once here; all accounts share the same public ingestion pass.
-export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion,levelIngestion]);
+export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion,levelIngestion,candleIngestion]);
 
 export function levelEvaluationStatus(attempt,rule,coverage) {
+  if(rule.transition==='per-candle-pair' && attempt.state==='evaluated') {
+    const c=coverage.find(row=>row.source===candleIngestion.id && row.session===attempt.session && row.instrument===attempt.instrument);
+    if(!c || !c.indexComplete || c.pending || c.gaps || c.processed && c.updatedAt>attempt.attempted_at)
+      return {...attempt,state:'pending',reason:'QQQ minute coverage is incomplete or newly received bars await evaluation.'};
+  }
   if(attempt.state!=='evaluated' || ![...rule.conditions,...rule.outcomes].some(input=>levelIngestion.outputs.includes(input.source)))return attempt;
   const receipt=coverage.find(c=>c.source===levelIngestion.id && c.session===attempt.session && c.instrument===attempt.instrument);
   if(receipt?.gaps>0)return {...attempt,state:'pending',reason:'Calibrated source evidence has recorded gaps. Some occurrences or outcomes may be unknown.'};

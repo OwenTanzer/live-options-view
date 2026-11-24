@@ -10,7 +10,7 @@
 <main>
   <div class="intro"><div><p class="eyebrow">ONE CLOCK</p><h1>Define a moment.<br>Follow what happens.</h1></div>
   <p class="lede">Register a market event, inspect each occurrence, and measure its outcome on the same clock.</p></div>
-  <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option></select></label>
+  <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option><option value="2026-10-29">QQQ candle breaches · 2026-10-29</option><option value="2026-10-30">QQQ candle breaches · 2026-10-30</option><option value="2026-11-02">QQQ candle breaches · 2026-11-02</option></select></label>
   <aside class="notice"><strong>Offline engineering session · SYN-1</strong><span>Hand-authored synthetic data. Fixture results are not market evidence. Account observation has its own recorded evidence and coverage.</span></aside>
   <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Replay Results</button><button id="show-observed" aria-pressed="false">Observed Results</button></nav>
   <section id="builder" aria-labelledby="builder-title">
@@ -23,7 +23,8 @@
       <label>Combine conditions<select id="combine"><option value="all">All conditions</option><option value="any">Any condition</option></select></label>
       <label>Count a new occurrence<select id="transition"><option value="rising">When false becomes true</option><option value="per-decision">Each distinct paper decision (bot identity)</option><option value="once-per-session">First match each session</option></select></label>
       <label>When input is missing<select id="missing"><option value="hold">Keep previous state</option><option value="reset">Reset to non-matching</option></select></label></div>
-      <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option></select></label>
+      <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option><option value="candle">QQQ opposite-color candle breach</option></select></label>
+      <p id="candle-description" hidden>Compare each pair of consecutive one-minute candles. A green candle must exceed the preceding red high, or a red candle must break the preceding green low. Measure the signed change to the close exactly five minutes later. <a href="?dataset=2026-10-29">Replay the October 29 reference session</a>.</p>
       <fieldset id="level-fields" hidden><legend>Strike encounters</legend>
       <p>The session opening map sets each strike’s group using settled open interest and the opening ATM. Encounters qualify once the opening map was available. A fresh approach after leaving the strike can count again.</p>
       <div class="form-grid"><label>Minimum open-interest bucket<select id="level-bucket"><option value="5">Brightest · at or above p90</option><option value="4">At or above p75</option></select></label>

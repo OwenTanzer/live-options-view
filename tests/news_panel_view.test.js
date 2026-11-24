@@ -65,6 +65,23 @@ const pages = Object.fromEntries(pageKeys.map(k => [k, load(k)]));
 const oil = pages[q('news/v1/views/collector/oil/2026-11-09/page-0001.json')];
 const pub = pages[q('news/v1/views/publication/all/2026-11-09/page-0001.json')];
 
+test('News cards show the replay tickers for eligible headlines', () => {
+  const cases = require('./fixtures/news_theme_mapping/cases.json');
+  const page = clone(oil);
+  page.rows = [page.rows[0]];
+  const unicode = require('./fixtures/news_theme_mapping/unicode.json').map(c => ({
+    observation: { title: c.title, source_id: 'oilprice_com' }, expected_instruments: c.expected_instruments
+  }));
+  for (const { observation, expected_instruments } of cases.concat(unicode)) {
+    Object.assign(page.rows[0], { title: observation.title, source_id: observation.source_id });
+    const tags = render(page).byClass('np-title')[0].byClass('np-badge')
+      .map(n => n.textContent).filter(value => value.startsWith('Headline topic: '));
+    assert.deepEqual(tags, expected_instruments.length ? ['Headline topic: ' + expected_instruments.join(', ')] : []);
+  }
+  Object.assign(page.rows[0], { title: 'FOMC minutes', source_id: 'unknown_feed' });
+  assert.ok(!render(page).textContent.includes('Headline topic:'));
+});
+
 test('the index and every fixture page validate and render', () => {
   assert.deepEqual(panel.validateIndex(index), []);
   assert.equal(index.views.length, 9);
@@ -520,7 +537,7 @@ test('site wiring: one hashed script between squeeze and tab switching, a hidden
   assert.ok(html.includes('// ── news panel (MediaFlow M4b)'), 'section banner stays in index.html');
   assert.ok(/<div id="news-panel" class="hidden"[^>]*><\/div>/.test(html), 'the News panel starts hidden and empty');
   assert.ok(html.includes('<button id="tab-news" class="tab-btn">News</button>'));
-  assert.ok(/#squeeze-panel\.hidden,\s*#news-panel\.hidden \{ display: none; \}/.test(html));
+  assert.ok(/[^{}]*#news-panel\.hidden[^{}]*\{\s*display:\s*none;\s*\}/.test(html));
   // One panel copy: the harness loads the site file.
   assert.ok(!fs.existsSync(path.join(__dirname, 'news_panel/news-panel.js')), 'no tests-only copy of the panel');
   const harness = fs.readFileSync(path.join(__dirname, 'news_panel/harness.html'), 'utf8');

@@ -1,3 +1,4 @@
+import {candleDefinition} from '../shared/one-clock-candle-breach.js';
 import {encounterGroups} from '../shared/one-clock-level-encounters.js';
 
 export function encounterForm(root) {
@@ -5,17 +6,19 @@ export function encounterForm(root) {
   const mode=read('study-kind'), fieldset=read('level-fields');
   function visibility() {
     const level=mode.value==='level';
+    const candle=mode.value==='candle', specialized=level || candle;
+    read('candle-description').hidden=!candle;
     fieldset.hidden=!level;
-    for(const id of ['combine','transition','missing'])read(id).closest('label').hidden=level;
-    read('scalar-fields').hidden=level;
-    read('instrument').disabled=level;
-    if(level)read('instrument').value='QQQ';
+    for(const id of ['combine','transition','missing'])read(id).closest('label').hidden=specialized;
+    read('scalar-fields').hidden=specialized;
+    read('instrument').disabled=specialized;
+    if(specialized)read('instrument').value='QQQ';
   }
   mode.addEventListener('change',visibility);
   return {
     open(rule) {
       const config=rule.levelEncounter;
-      mode.value=config?'level':'scalar';
+      mode.value=config?'level':rule.transition==='per-candle-pair'?'candle':'scalar';
       read('level-bucket').value=String(config?.minimumBucket??5);
       read('level-contact').value=config?.contact??'exact-or-bracketed';
       read('level-approach').value=config?.approach??'either';
@@ -26,6 +29,7 @@ export function encounterForm(root) {
       visibility();
     },
     definition() {
+      if(mode.value==='candle')return candleDefinition();
       if(mode.value!=='level')return null;
       const groups=encounterGroups.filter(g=>read(g).checked);
       const horizons=read('level-horizons').value.split(',').map(v=>Number(v.trim()));
