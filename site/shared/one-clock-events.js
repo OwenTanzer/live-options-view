@@ -44,7 +44,10 @@ export function eventRule(input) {
     text(o.id, 'outcome id'); text(o.source, 'outcome source'); fieldName(o.field);
     if (ids.has(o.id)) throw new Error('duplicate outcome id');
     ids.add(o.id);
-    if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
+    // Older saved candle studies used 'change' for the same signed outcome.
+    if(rule.transition==='per-candle-pair' && o.measure==='change')o.measure='directional-change';
+    if (!(rule.transition==='per-candle-pair' && o.measure==='directional-change') &&
+        !['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
   if (rule.transition === 'per-candle-pair') validateCandleRule(rule);

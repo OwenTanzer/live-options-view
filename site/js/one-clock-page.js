@@ -7,7 +7,7 @@ import { createClock, createSourceRegistry, selectAsOf,observation } from '../sh
 import { eventRule, saveRule, evaluateEvents } from '../shared/one-clock-events.js';
 import { demoRules, demoRows, demoStart, demoClose, demoSelection, demoSources } from '../shared/one-clock-demo.js';
 import {createResultsView} from './one-clock-results-view.js';
-import {ruleKey} from '../shared/one-clock-results.js';
+import {measureLabel,ruleKey} from '../shared/one-clock-results.js';
 import {loadFlowStudy} from '../shared/one-clock-flow-study.js';
 
 const $ = id => document.getElementById(id);
@@ -162,7 +162,7 @@ function openRule(rule) {
 }
 function updateOutcomes() {
   $('result-instrument').replaceChildren(...currentRule.instruments.map(v => option(v)));
-  $('outcome-choice').replaceChildren(...currentRule.outcomes.map(o => option(o.id, `${o.field} · ${o.horizonMs / 60000} min · ${o.measure}`)));
+  $('outcome-choice').replaceChildren(...currentRule.outcomes.map(o => option(o.id, `${o.field} · ${o.horizonMs / 60000} min · ${measureLabel(o,currentRule)}`)));
   if (!currentRule.outcomes.length) $('outcome-choice').append(option('', 'Tracking only'));
 }
 function showResults(active) {
@@ -340,7 +340,7 @@ $('encounter-run').onclick=async()=>{
     if(!session)throw new Error('Choose an archived session.');
     const draft=formRule();
     const fields=['transition','conditions','name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
-    if(JSON.stringify(draft,fields)!==JSON.stringify(rule,fields))throw new Error('Save your edited study to your account before replaying it.');
+    if(JSON.stringify(draft,fields)!==JSON.stringify(eventRule(rule),fields))throw new Error('Save your edited study to your account before replaying it.');
     progress.textContent='Opening the archived session…';
     for(let batch=0;batch<100;batch++) {
       const body=await accountRequest({action:rule.transition==='per-candle-pair'?'replay-candles':'replay-encounters',session,ruleId:rule.id,version:rule.version});
@@ -348,8 +348,10 @@ $('encounter-run').onclick=async()=>{
       const c=body.coverage;
       progress.textContent=c.retainedVersions+' archived snapshots indexed · '+c.pending+' pending · '+c.gaps+' with gaps.';
       if(c.gapReasons)progress.textContent+=' '+Object.entries(c.gapReasons).map(([reason,count])=>count+' '+reason.replaceAll('-',' ')).join(', ');
-      if(body.complete) {
-        showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent='Archived replay · '+session+' · '+body.events.length+(body.trials?' breaches among '+body.trials.length+' eligible pairs':' encounters');
+      const candleReplay=Array.isArray(body.trials);
+      if(candleReplay)progress.textContent=c.retainedVersions+' retained minutes · '+c.gaps+' missing at this cutoff.';
+      if(body.complete || candleReplay && c.retainedVersions>0) {
+        showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent=(body.complete?'Archived replay':'Partial replay')+' · '+session+' · '+body.events.length+(body.trials?' breaches among '+body.trials.length+' observed eligible pairs':' encounters');
         $('observed-coverage').textContent=progress.textContent+' Source availability gates every encounter. Replay may include evidence the observer retained later.';
         retainedResults.update({events:body.events,rules:[body.rule],origin:'recorded',cutoff:body.cutoff});
         return;

@@ -228,7 +228,13 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         !(c.verifiedAvailabilityPrefix && Number.isSafeInteger(c.through) && c.through>=bounds.open));
       chosen=chosen.filter(rule=>{
         const used=inputs(rule);
-        if(data.coverage.some(c=>incomplete(c) && (providerOutputs.get(c.source)??[]).some(output=>used.includes(output))))return false;
+        // Each finalized candle pair stands on its own. A missing older minute
+        // cannot invalidate another pair, and the evidence query still enforces
+        // the original tick cutoff. Historical jobs wait for complete coverage.
+        const candlePair=JSON.parse(rule.payload).transition==='per-candle-pair';
+        const partialCandle=c=>candlePair && !historic && c.source==='qqq-closed-minutes' && c.indexComplete;
+        const blocking=c=>incomplete(c) && !partialCandle(c);
+        if(data.coverage.some(c=>blocking(c) && (providerOutputs.get(c.source)??[]).some(output=>used.includes(output))))return false;
         for(const output of used) {
           const nativeOnly=publicationSources.some(source=>outputsOf(source).includes(output)) &&
             !sources.some(source=>source.outputs.includes(output));
@@ -237,7 +243,11 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         const dependencies=optional.filter(a=>a.outputs.some(output=>used.includes(output)));
         for(const adapter of dependencies){
           const receipt=data.coverage.find(c=>c.source===adapter.id);
-          if(!receipt || incomplete(receipt))return false;
+          if(!receipt || blocking(receipt))return false;
+          const unseenBars=receipt.processed>0 && receipt.updatedAt>now;
+          if(historic && candlePair && unseenBars)return false;
+          if(partialCandle(receipt) && (receipt.pending || receipt.gaps || unseenBars))
+            partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?now:targetThrough))return false;
           if(receipt.verifiedAvailabilityPrefix && receipt.pending>0 && receipt.through<now)
             partialRules.add(JSON.stringify([rule.rule_id,rule.version]));

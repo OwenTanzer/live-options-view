@@ -35,8 +35,9 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     work=candidates.slice(0,INGESTION_LIMITS.artifacts);
   } else {
     candidates.sort((a,b)=>a.eventAt-b.eventAt||a.key.localeCompare(b.key));
-    const half=INGESTION_LIMITS.artifacts/2;
-    work=[...candidates.slice(0,half),...candidates.slice(Math.max(half,candidates.length-half))];
+    const oldest=adapter.liveTailSlots ? INGESTION_LIMITS.artifacts-adapter.liveTailSlots : INGESTION_LIMITS.artifacts/2;
+    const newest=INGESTION_LIMITS.artifacts-oldest;
+    work=[...candidates.slice(0,oldest),...candidates.slice(Math.max(oldest,candidates.length-newest))];
   }
   const byteLimit=adapter.orderedAvailability?INGESTION_LIMITS.orderedBytes:INGESTION_LIMITS.bytes;
   let bytes=0,gets=0;

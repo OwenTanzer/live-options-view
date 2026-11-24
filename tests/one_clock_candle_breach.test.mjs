@@ -66,3 +66,58 @@ for(const session of candleSessions)test('Builder, ingestion, observer and repea
   const preview=evaluateEvents({rule,observations:study.rows,selection:{...study.selection,cutoff:study.close},sessionClose:study.close});
   assert.deepEqual(preview.map(e=>e.breach.trialId),replay.events.map(e=>e.breach.trialId));
 });
+
+test('noon activation publishes visible pairs while historical minutes are still pending',async t=>{
+  const {advanceOneClockResearch}=await import('../backend/one-clock-research.js');
+  const db=makeStorage();t.after(()=>db.db.close());
+  for(const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql'])
+    await db.exec(read('backend/migrations/'+file));
+  const session=candleSessions[0],study=candleStudy(session,read(reference+'data/QQQ-'+session+'.csv'),'fixture');
+  const namespace='account:noon', [rule]=study.rules, noon=study.start+150*60000;
+  await registerObservedRule(db,{namespace,rule,registeredAt:noon});
+  await db.prepare('INSERT INTO one_clock_activations(namespace,rule_id,version,started_at) VALUES(?,?,?,?)')
+    .bind(namespace,rule.id,1,noon).run();
+  let tick=noon;
+  t.mock.method(Date,'now',()=>tick+250);
+  const rows=study.rows;
+  t.mock.method(globalThis,'fetch',async()=>Response.json({chart:{result:[{
+    meta:{symbol:'QQQ',dataGranularity:'1m'},timestamp:rows.map(r=>r.eventAt/1000-60),
+    indicators:{quote:[Object.fromEntries(['open','high','low','close'].map(k=>[k,rows.map(r=>r.value[k])]))]}}]}}));
+  const selection={...study.selection,origin:'recorded'};
+  const env={DB:db,ONE_CLOCK_OBSERVER:'enabled',PAPER_TRADES:{}};
+  const eventsAt=cutoff=>observedEventsAsOf(db,{namespace,selection:{...selection,cutoff}});
+  for(;tick<=study.close+30*60000;tick+=15*60000){
+    await advanceOneClockResearch(env,{now:tick,sources:[candleIngestion]});
+    const events=await eventsAt(tick);
+    assert.ok(events.every(e=>e.decisionAt>=noon && e.triggeredAt<=tick));
+    if(tick===noon)assert.equal(events.length,0);
+    if(tick===noon+30*60000)assert.ok(events.length>0);
+    if(tick===study.close){
+      const replay=await replayCandleSession(db,namespace,{session,ruleId:rule.id,version:1},tick+250);
+      assert.equal(replay.complete,false);assert.equal(replay.coverage.indexComplete,false);
+      assert.ok(replay.coverage.gaps>0 && replay.trials.length>0);
+    }
+  }
+  const resolved=await eventsAt(tick);
+  const expected=ledger.filter(r=>r.event && r.decision_at.startsWith(session) && Date.parse(r.decision_at)>=noon);
+  assert.deepEqual(resolved.map(e=>e.breach.trialId).sort(),expected.map(e=>e.trial_id).sort());
+});
+
+test('Results keeps signed candle outcomes apart from raw change for current and prior saved rules',async()=>{
+  const {projectResults,ruleKey}=await import('../site/shared/one-clock-results.js');
+  const session=candleSessions[0],study=candleStudy(session,read(reference+'data/QQQ-'+session+'.csv'),'fixture');
+  const [rule]=study.rules;
+  const event=evaluateEvents({rule,observations:study.rows,selection:{...study.selection,cutoff:study.close},sessionClose:study.close}).find(e=>e.breach.direction==='down');
+  for(const measure of ['directional-change','change']){
+    const candle={...rule,outcomes:[{...rule.outcomes[0],measure}]};
+    const raw={...rule,id:'raw',transition:'rising',outcomes:[{...rule.outcomes[0],measure:'change'}]};
+    const value=event.outcomes[0].value;
+    const rawEvent={...event,id:'raw-event',ruleId:'raw',outcomes:[{...event.outcomes[0],value:-value}]};
+    for(const selected of [raw,candle]){
+      const result=projectResults({events:[event,rawEvent],rules:[raw,candle],cutoff:study.close,origin:'reconstructed',
+        outcome:{ruleKey:ruleKey(selected),id:selected.outcomes[0].id}});
+      assert.equal(result.summary.measured,1);assert.equal(result.summary.unscored,1);
+      assert.equal(result.summary.mean,selected===raw?-value:value);
+    }
+  }
+});

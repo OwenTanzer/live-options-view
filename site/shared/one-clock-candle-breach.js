@@ -5,7 +5,7 @@ const minute = 60000;
 export function candleDefinition() {
   return {instruments:['QQQ'], combine:'all', transition:'per-candle-pair', missingInput:'reset',
     conditions:[{source:candleSource, field:'close', op:'>', value:0, maxAgeMs:0}],
-    outcomes:[{id:'signed-5m', source:candleSource, field:'close', measure:'change',
+    outcomes:[{id:'signed-5m', source:candleSource, field:'close', measure:'directional-change',
       horizonMs:5*minute, toleranceMs:0, maxAgeMs:0}]};
 }
 

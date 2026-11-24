@@ -1,5 +1,5 @@
 import {renderEncounterSummary} from './one-clock-encounter-summary.js';
-import {projectResults,compareResults,ruleKey} from '../shared/one-clock-results.js';
+import {projectResults,compareResults,measureLabel,ruleKey} from '../shared/one-clock-results.js';
 const el=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);return node;};
 const number=value=>value==null?'—':typeof value==='number'?value.toLocaleString(undefined,{maximumFractionDigits:4}):JSON.stringify(value);
 function options(select,items,keepMissing=false) {
@@ -96,7 +96,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       const owner=value.owner??'fixture';if(lastOwner!==null&&lastOwner!==owner)this.clear({forget:true});lastOwner=owner;
       dataset=value;panel.hidden=false;comparison.hidden=false;
       options(controls.class,[['','All classes and versions'],...value.rules.map(r=>[ruleKey(r),`${r.name} v${r.version}`])],true);
-      options(controls.outcome,[['','Tracking only'],...value.rules.flatMap(r=>r.outcomes.map(o=>[JSON.stringify({ruleKey:ruleKey(r),id:o.id}),`${r.name} v${r.version}: ${o.field} · ${o.horizonMs/60000} min · ${o.measure}`]))],true);
+      options(controls.outcome,[['','Tracking only'],...value.rules.flatMap(r=>r.outcomes.map(o=>[JSON.stringify({ruleKey:ruleKey(r),id:o.id}),`${r.name} v${r.version}: ${o.field} · ${o.horizonMs/60000} min · ${measureLabel(o,r)}`]))],true);
       if(!outcomeChosen&&!controls.outcome.value&&controls.outcome.options.length>1)controls.outcome.selectedIndex=1;
       options(controls.instrument,[['','All loaded instruments'],...[...new Set(value.events.map(e=>e.instrument))].map(i=>[i,i])],true);
       draw();

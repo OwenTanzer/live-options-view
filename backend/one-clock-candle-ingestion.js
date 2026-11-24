@@ -31,6 +31,8 @@ export function chartIndex(payload, session, cutoff, receivedAt) {
 
 export const candleIngestion={
   id:'qqq-closed-minutes',version:'1',owner:'One Clock',demandDriven:true,receiptAfterDiscovery:true,
+  // Keep the latest quarter-hour and its preceding bar together during backfill.
+  liveTailSlots:16,
   instruments:['QQQ'],outputs:[candleSource],fields:{[candleSource]:{open:'Open',high:'High',low:'Low',close:'Close'}},
   async discover(bucket,{session,cutoff},db,versions=[]) {
     const bounds=equitySession(session);
@@ -76,7 +78,7 @@ export async function replayCandleSession(db,namespace,{session,ruleId,version},
     signedChange5m:trial.event && endpoint?(trial.direction==='up'?1:-1)*(endpoint.value.close-second.value.close):null}));
   const expected=Math.floor((Math.min(now,bounds.close)-bounds.open)/minute);
   const gaps=Math.max(0,expected-bars.length);
-  const coverage={retainedVersions:bars.length,indexComplete:!gaps,pending:0,gaps,reason:gaps?'Missing finalized minutes':'Retained finalized candles'};
+  const coverage={retainedVersions:bars.length,indexComplete:bars.length>0 && !gaps,pending:0,gaps,reason:gaps?'Missing finalized minutes':'Retained finalized candles'};
   const events=evaluateEvents({rule,observations:bars,selection,sessionClose:bounds.close});
-  return {...selection,rule,coverage,complete:bars.length>0,trials,events:events.map(e=>({...e,collection:'replay'}))};
+  return {...selection,rule,coverage,complete:bars.length>0 && coverage.indexComplete,trials,events:events.map(e=>({...e,collection:'replay'}))};
 }
