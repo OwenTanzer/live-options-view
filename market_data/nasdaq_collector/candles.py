@@ -154,6 +154,8 @@ def fetch_1m_bars(symbol, session, range_="5d"):
                                     "includePrePost": "false"}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
     parsed = parse_yahoo_chart(resp.json())
+    if parsed["meta"].get("symbol") != symbol or parsed["meta"].get("dataGranularity") != "1m":
+        raise ValueError("Yahoo chart identity does not match the request")
     capture_response(symbol, "1m", resp)
     return parsed
 
@@ -164,6 +166,8 @@ def fetch_daily_bars(symbol, session, range_="10d"):
     resp = session.get(url, params={"interval": "1d", "range": range_}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
     parsed = parse_yahoo_chart(resp.json())
+    if parsed["meta"].get("symbol") != symbol or parsed["meta"].get("dataGranularity") != "1d":
+        raise ValueError("Yahoo chart identity does not match the request")
     capture_response(symbol, "1d", resp)
     return parsed
 

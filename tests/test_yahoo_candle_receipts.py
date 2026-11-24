@@ -21,3 +21,19 @@ class YahooReceipts(unittest.TestCase):
                 raw = gzip.decompress((directory / (record["sha256"]+".json.gz")).read_bytes())
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), record["sha256"])
                 self.assertEqual(record["source"], "yahoo_finance_chart")
+
+    def test_wrong_identity_is_rejected_before_receipt_or_panel_use(self):
+        from unittest.mock import Mock, patch
+        from market_data.nasdaq_collector import candles
+        for fetch, symbol, interval in [
+            (candles.fetch_1m_bars, "MSFT", "1m"),
+            (candles.fetch_daily_bars, "AAPL", "1m"),
+        ]:
+            session = Mock()
+            session.get.return_value.json.return_value = {
+                "chart": {"result": [{"meta": {"symbol": symbol, "dataGranularity": interval}}]}}
+            with patch.object(candles, "capture_response") as capture:
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    fetch("AAPL", session)
+                capture.assert_not_called()
+                session.get.assert_called_once()
