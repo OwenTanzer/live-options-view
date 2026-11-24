@@ -251,9 +251,9 @@ class EnvelopeTests(unittest.TestCase):
 
     def test_expired_target_hour_detection(self):
         self.assertFalse(pred_mod.is_expired(
-            self.target_ms, self.target_ms + 3600_000))
+            self.target_ms, self.target_ms + 3599_999))
         self.assertTrue(pred_mod.is_expired(
-            self.target_ms, self.target_ms + 3600_001))
+            self.target_ms, self.target_ms + 3600_000))
 
 
 class FileTests(unittest.TestCase):
@@ -383,7 +383,7 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(status, "absent")
         self.assertEqual(content["coverage"], "absent")
         self.assertEqual(content["observations"], [])
-        self.assertIn("1d base only", content["reason"])
+        self.assertIn("no completed hourly", content["reason"])
 
     def test_history_carried_forward_from_previous_file(self):
         import tempfile
@@ -441,6 +441,100 @@ class ProducerTests(unittest.TestCase):
         self.assertIsNotNone(content["observations"][0]["value"])
         self.assertEqual(content["observations"][0]["id"],
                          "BTC|1h|2026-11-24T06:00:00Z")
+
+    def test_cli_preserves_first_issue_across_retries_new_hours_and_input_outages(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": _up_bars()})
+            out = Path(tmp) / "output"
+            path = pred_mod.prediction_path(out, "BTC")
+            def run(at):
+                cli_mod.main(["predict", "--cache-dir", str(cache_dir), "--out", str(out),
+                              "--symbols", "BTC", "--generated-at", at])
+                return pred_mod.read_prediction_file(path)
+
+            first, = run("2026-11-24T06:05:00Z")["observations"]
+            # Even revised inputs cannot rewrite a prediction that was already issued.
+            self._cache_dir(tmp, {"BTC": _down_bars()})
+            self.assertEqual(run("2026-11-24T06:30:00Z")["observations"], [first])
+            self._cache_dir(tmp, {"BTC": _up_bars(31)})
+            issued = run("2026-11-24T07:05:00Z")["observations"]
+            self.assertEqual(issued[0], first)
+            self.assertEqual(len(issued), 2)
+            (Path(tmp) / "crypto/candles/BTC/1h.json").unlink()
+            gap = run("2026-11-24T08:00:00Z")
+            self.assertEqual(gap["coverage"], "historical")
+            self.assertEqual(gap["observations"], issued)
+            expired = run("2026-12-02T08:00:00Z")
+            self.assertEqual(expired["coverage"], "absent")
+            self.assertEqual(expired["observations"], [])
+
+    def test_archive_bars_must_have_arrived_and_final_pair_must_be_consecutive(self):
+        import tempfile
+        bars = _up_bars()
+        with tempfile.TemporaryDirectory() as tmp:
+            self._cache_dir(tmp, {"BTC": bars})
+            early = "2026-11-24T06:04:59Z"
+            _, state = producer_mod.build_symbol("BTC", tmp, early, _ms(early))
+            self.assertEqual(state, "absent")
+            bars.pop(-2)
+            self._cache_dir(tmp, {"BTC": bars})
+            received = "2026-11-24T06:05:00Z"
+            _, state = producer_mod.build_symbol("BTC", tmp, received, _ms(received))
+            self.assertEqual(state, "absent")
+
+    def test_archive_cli_requires_received_closed_candles_and_a_live_target(self):
+        from market_data.crypto_candle_cache.archive import install
+        import tempfile
+        import zipfile
+
+        now = datetime(2026, 11, 24, 7, 5, tzinfo=UTC)
+        hours = [now.replace(hour=h, minute=0) for h in (4, 5, 6, 7)]
+        coverage = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "fixture.zip"
+            with zipfile.ZipFile(source, "w") as z:
+                for symbol, provider in (("BTC", "coinbase"), ("TRX", "coingecko")):
+                    if provider == "coinbase":
+                        raw = [[int(t.timestamp()), 100, 102, 100, 101, 5] for t in hours]
+                    else:
+                        raw = [{"timestamp_ms": int(t.timestamp()*1000), "date": _iso(t),
+                                "price": 15} for t in hours]
+                    coverage[symbol] = {"1hour": dict(source=provider, bars=len(raw),
+                                                       first=_iso(hours[0]), last=_iso(hours[-1]),
+                                                       updated=_iso(now), done=True)}
+                    z.writestr(f"data/{provider}/{symbol}_1hour.json", json.dumps(raw))
+                # A simultaneous daily price sample from another provider cannot
+                # stand in for an hourly Coinbase candle in the estimator.
+                day = now.replace(hour=0, minute=0)
+                sample = [{"timestamp_ms": int(day.timestamp()*1000),
+                           "date": _iso(day), "price": 999}]
+                coverage["BTC"]["daily"] = dict(source="coingecko", bars=1, first=_iso(day),
+                                                last=_iso(day), updated=_iso(now), done=True)
+                z.writestr("data/coingecko/BTC_daily.json", json.dumps(sample))
+                z.writestr("manifest.json", json.dumps(dict(coins=list(coverage),
+                                                            coverage=coverage, started=_iso(hours[-1]), updated=_iso(now))))
+            with mock.patch("market_data.crypto_candle_cache.archive.datetime", wraps=datetime) as clock:
+                clock.now.return_value = now
+                db = install(source, root / "snapshots")
+            def run(at, subdir):
+                output = root / subdir
+                cli_mod.main(["predict", "--archive", str(db), "--out", str(output),
+                              "--generated-at", _iso(at)])
+                return pred_mod.prediction_path(output, "BTC")
+            self.assertFalse(run(now-timedelta(seconds=1), "early").exists())
+            first, = pred_mod.read_prediction_file(run(now, "issued"))["observations"]
+            self.assertEqual(first["eventAt"], int(hours[-1].timestamp()*1000))
+            self.assertEqual(first["availableAt"], int(now.timestamp()*1000))
+            self.assertEqual(first["input_archive_sha256"], db.stem)
+            self.assertEqual(first["value"]["data_window"]["bars_1h"], 3)
+            self.assertEqual(first["value"]["last_close"], 101)
+            self.assertFalse(pred_mod.prediction_path(root/"issued", "TRX").exists())
+            self.assertFalse(run(now + timedelta(hours=1), "late").exists())
+            retained = pred_mod.read_prediction_file(run(now + timedelta(hours=1), "issued"))
+            self.assertEqual(retained["coverage"], "historical")
+            self.assertEqual(retained["observations"], [first])
 
     def test_unknown_symbol_rejected(self):
         with self.assertRaises(ValueError):

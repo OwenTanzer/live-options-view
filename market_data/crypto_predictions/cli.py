@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,8 +54,9 @@ def _parse_args(argv):
     sub.add_parser("universe", help="print the 50-coin universe")
 
     predict = sub.add_parser("predict", help="build prediction files from cached 1h bars")
-    predict.add_argument("--cache-dir", required=True,
-                         help="candle cache output directory")
+    inputs = predict.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--cache-dir", help="candle cache output directory")
+    inputs.add_argument("--archive", type=Path, help="private Crypto Backend SQLite snapshot")
     predict.add_argument("--out", required=True)
     predict.add_argument("--symbols", nargs="*")
     predict.add_argument("--publish", action="store_true")
@@ -79,14 +81,13 @@ def _publisher(args):
 
     config = publish_mod.read_config()
     client = publish_mod.make_client(config)
-    universe = "crypto_predictions: 50 coins (32 coinbase / 18 coingecko)"
 
     def publish(symbol, content, sidecar):
         result = publish_mod.publish_symbol(
             symbol, content, sidecar, config=config, client=client)
         return result["keys"]
 
-    return publish, universe
+    return publish
 
 
 def cmd_universe(_args):
@@ -97,13 +98,9 @@ def cmd_universe(_args):
           f"{len(coins_mod.COINGECKO_COINS)} coingecko")
 
 
-def _publish_all(publisher, built, generated_at):
-    """Publish built files through the resolved publisher.
-
-    ``publisher`` is the ``(publish, universe)`` pair from
-    :func:`_publisher`. Returns ``{symbol: [keys]}``.
-    """
-    publish, universe = publisher
+def _publish_all(publisher, built, generated_at, written, universe):
+    """Publish built predictions and their provenance per coin."""
+    publish = publisher
     published = {}
     for symbol, (content, status) in built.items():
         sidecar = prov_mod.build_provenance(
@@ -111,20 +108,40 @@ def _publish_all(publisher, built, generated_at):
             publication_status="published",
             publication_reason="published by this run")
         published[symbol] = publish(
-            symbol, content if status != "absent" else None, sidecar)
+            symbol, content if pred_mod.prediction_key(symbol) in written[symbol]["keys"] else None, sidecar)
     return published
 
 
 def cmd_predict(args):
+    # Serialize load/retain/write and optional publication for this output tree.
+    directory = Path(args.out) / "crypto" / "predictions"
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".predict.lock").open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return _predict_locked(args)
+
+
+def _predict_locked(args):
     generated_at = args.generated_at or _now_iso()
     now_ms = oc.instant_ms(generated_at, "generated_at")
     publisher = _publisher(args)
-    built = producer_mod.build_all(args.cache_dir, generated_at, now_ms,
-                                   symbols=args.symbols or None)
-    universe = "crypto_predictions: 50 coins (32 coinbase / 18 coingecko)"
+    if args.archive:
+        built = producer_mod.build_from_archive(args.archive, generated_at, now_ms,
+                                               symbols=args.symbols or None, prior_dir=args.out)
+        universe = "Crypto Backend archive manifest"
+    else:
+        built = producer_mod.build_all(args.cache_dir, generated_at, now_ms,
+                                       symbols=args.symbols or None, prior_dir=args.out)
+        universe = "crypto_predictions: 50 coins (32 coinbase / 18 coingecko)"
     written = producer_mod.write_all(args.out, built, generated_at, universe=universe)
     if publisher is not None:
-        published = _publish_all(publisher, built, generated_at)
+        published = _publish_all(publisher, built, generated_at, written, universe)
         for symbol, info in written.items():
             print(f"{symbol}: {info['status']} (published {len(published[symbol])} keys)")
         return

@@ -31,7 +31,6 @@ Rules:
   after the hour ended), and its value is retained so the
   judgement can still be made.
 - A coin with no 1h file — CoinGecko-labelled coins have a 1d
-- A coin with no 1h file — CoinGecko-labelled coins have a 1d
   base only — produces no prediction file. Its provenance entry
   says ``"absent"`` with the reason; a price is never
   interpolated from daily bars.
@@ -46,6 +45,8 @@ Rules:
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -81,7 +82,12 @@ def load_completed_1h(cache_dir, symbol, now_ms):
     path = cache_mod.interval_path(cache_dir, symbol, "1h")
     content = cache_mod.read_interval_file(path)
     completed, _forming = oc.split_forming(content["bars"], "1h", now_ms)
-    return completed, content.get("source")
+    if content.get("symbol") != symbol or content.get("interval") != "1h":
+        raise ValueError(f"Wrong hourly input identity in {path}")
+    available = [bar for bar in completed
+                 if bar.get("observed_at") and oc.instant_ms(bar["observed_at"]) <= now_ms
+                 and not bar.get("forming") and not bar.get("partial")]
+    return available, content.get("source")
 
 
 def build_seed_history(symbol, bars, generated_at, now_ms, count=7):
@@ -118,48 +124,43 @@ def build_seed_history(symbol, bars, generated_at, now_ms, count=7):
 
 
 def build_symbol_from_bars(symbol, bars, generated_at, now_ms,
-                           btc_bars=None, previous=None):
+                           btc_bars=None, previous=None, archive_receipt=None):
     """Build one coin's prediction file from completed 1h bars.
 
     ``bars`` must already be completed bars only (no forming bar).
     Returns ``(content, status)``; see :func:`build_symbol`.
     """
-    estimate = est_mod.estimate(bars, btc_bars=btc_bars, symbol=symbol)
-    if estimate is None:
-        return pred_mod.build_prediction_file(
-            symbol, [], generated_at, coverage="absent",
-            reason="fewer than 2 completed 1h bars"), "absent"
+    if previous and (previous["symbol"] != symbol or
+                     oc.instant_ms(previous["generated_at"]) > now_ms):
+        raise ValueError(f"Prior prediction file for {symbol} is incompatible with this run")
+    rows = {row["eventAt"]: row for row in (previous or {}).get("observations", [])
+            if row["revision"] == 1 and row["value"] is not None
+            and now_ms - pred_mod.target_end_ms(row["eventAt"]) <= RETENTION_MS}
+    reason = None
+    if bars:
+        target = oc.bar_end_ms(bars[-1], "1h")
+        if archive_receipt and pred_mod.is_expired(target, now_ms):
+            reason = "archive has no completed hourly candle for the current target"
+        elif now_ms - pred_mod.target_end_ms(target) > RETENTION_MS:
+            reason = "latest target is outside the retention window"
+        elif target not in rows:
+            estimate = est_mod.estimate(bars, btc_bars=btc_bars, symbol=symbol)
+            if estimate is None:
+                reason = "fewer than 2 consecutive completed 1h bars"
+            else:
+                rows[target] = pred_mod.prediction_to_observation(
+                    symbol, estimate, target, generated_at)
+                if archive_receipt:
+                    rows[target]["input_archive_sha256"] = archive_receipt
+    else:
+        reason = "no completed hourly bars available at the cutoff"
 
-    last_bar = bars[-1]
-    target_start_ms = oc.bar_end_ms(last_bar, "1h")
-    rows = []
-    # Carry forward previously published predictions whose target
-    # hours have now passed (and are still within the 7-day
-    # retention window): their revision-1 value rows stay as
-    # historical evidence, never retracted. Rows older than the
-    # window are dropped, which bounds the file — it is not a
-    # retraction of anything still in the file.
-    if previous:
-        for row in previous.get("observations", []):
-            if row.get("revision") != 1 or row.get("value") is None:
-                continue
-            event_ms = oc.instant_ms(row["eventAt"], "eventAt")
-            if event_ms == target_start_ms:
-                continue  # superseded by the new estimate below
-            if now_ms - pred_mod.target_end_ms(event_ms) <= RETENTION_MS:
-                rows.append(dict(row))
-    rows.append(pred_mod.prediction_to_observation(
-        symbol, estimate, target_start_ms, generated_at))
-    # A run that lands after the target hour has already passed
-    # publishes the estimate as historical evidence in the same
-    # file: the value row is retained (it was never selectable
-    # during its hour — its availableAt is after the hour
-    # ended), and no retraction row is published.
-    coverage = ("historical" if pred_mod.is_expired(target_start_ms, now_ms)
-                else "current")
-    rows.sort(key=lambda r: (r["eventAt"], r["revision"]))
+    status = "absent"
+    if rows:
+        status = "historical" if pred_mod.is_expired(max(rows), now_ms) else "current"
     return pred_mod.build_prediction_file(
-        symbol, rows, generated_at, coverage=coverage), coverage
+        symbol, [rows[t] for t in sorted(rows)], generated_at, coverage=status,
+        reason=reason), status
 
 
 def build_symbol(symbol, cache_dir, generated_at, now_ms, btc_bars=None,
@@ -176,14 +177,12 @@ def build_symbol(symbol, cache_dir, generated_at, now_ms, btc_bars=None,
     try:
         bars, _source = load_completed_1h(cache_dir, symbol, now_ms)
     except FileNotFoundError:
-        return pred_mod.build_prediction_file(
-            symbol, [], generated_at, coverage="absent",
-            reason="no 1h bars: CoinGecko-labelled coins have a 1d base only"), "absent"
+        bars = []
     return build_symbol_from_bars(symbol, bars, generated_at, now_ms,
                                   btc_bars=btc_bars, previous=previous)
 
 
-def build_all(cache_dir, generated_at, now_ms, symbols=None):
+def build_all(cache_dir, generated_at, now_ms, symbols=None, prior_dir=None):
     """Build prediction files for the universe (or ``symbols``).
 
     Returns ``{symbol: (content, status)}``. BTC is built first
@@ -191,21 +190,50 @@ def build_all(cache_dir, generated_at, now_ms, symbols=None):
     a missing BTC file degrades the others to no-correlation
     estimates rather than failing the run.
     """
-    symbols = list(symbols) if symbols else coins_mod.names()
-    for symbol in symbols:
-        if symbol not in coins_mod.BY_SYMBOL:
-            raise ValueError(f"unknown symbol: {symbol!r}")
-    btc_bars = None
-    if "BTC" in symbols:
+    def load(symbol):
         try:
-            btc_bars, _source = load_completed_1h(cache_dir, "BTC", now_ms)
+            return load_completed_1h(cache_dir, symbol, now_ms)[0]
         except FileNotFoundError:
-            btc_bars = None
+            return []
+
+    return _build_symbols(load, symbols or coins_mod.names(), coins_mod.BY_SYMBOL,
+                          generated_at, now_ms, prior_dir)
+
+
+def build_from_archive(database, generated_at, now_ms, symbols=None, prior_dir=None):
+    """Build current estimates from a read-only, receipt-gated archive snapshot."""
+    from market_data.crypto_candle_cache.archive import read_rows, iso
+
+    uri = Path(database).resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as db:
+        metadata = json.loads(db.execute("SELECT json FROM receipt").fetchone()[0])
+        universe = sorted({item["symbol"] for item in metadata["coverage"]})
+
+        def load(symbol):
+            records = read_rows(db, metadata, symbol, "1h", now_ms, est_mod.HOURS_7D + 1)
+            return [dict(row["value"], t=iso(row["valueAt"]))
+                    for row in records if row["kind"] == "candle"]
+
+        return _build_symbols(load, symbols or universe, universe, generated_at, now_ms,
+                              prior_dir, archive_receipt=metadata["archive_sha256"])
+
+
+def _build_symbols(load, symbols, universe, generated_at, now_ms, prior_dir, archive_receipt=None):
+    for symbol in symbols:
+        if symbol not in universe:
+            raise ValueError(f"unknown symbol: {symbol!r}")
+    btc_bars = load("BTC") if "BTC" in universe else []
     out = {}
     for symbol in symbols:
-        bars_for_corr = None if symbol == "BTC" else btc_bars
-        out[symbol] = build_symbol(symbol, cache_dir, generated_at,
-                                    now_ms, btc_bars=bars_for_corr)
+        previous = None
+        if prior_dir is not None:
+            path = pred_mod.prediction_path(prior_dir, symbol)
+            if path.exists():
+                previous = pred_mod.read_prediction_file(path)
+        bars = btc_bars if symbol == "BTC" else load(symbol)
+        out[symbol] = build_symbol_from_bars(
+            symbol, bars, generated_at, now_ms, btc_bars=btc_bars, previous=previous,
+            archive_receipt=archive_receipt)
     return out
 
 
@@ -222,8 +250,8 @@ def write_all(out_dir, built, generated_at, universe=None):
     written = {}
     for symbol, (content, status) in built.items():
         keys = []
-        if status != "absent":
-            path = pred_mod.write_prediction_file(out_dir, symbol, content)
+        if status != "absent" or pred_mod.prediction_path(out_dir, symbol).exists():
+            pred_mod.write_prediction_file(out_dir, symbol, content)
             keys.append(pred_mod.prediction_key(symbol))
         sidecar = prov_mod.build_provenance(
             symbol, content, generated_at=generated_at, universe=universe)

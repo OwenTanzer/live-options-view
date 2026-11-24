@@ -118,15 +118,13 @@ def _aligned_returns(bars, btc_bars):
     if not btc_bars:
         return None, None
     btc_by_t = {b["t"]: b for b in btc_bars}
-    coin_closes, btc_closes = [], []
-    for bar in bars:
-        other = btc_by_t.get(bar["t"])
-        if other is not None:
-            coin_closes.append(bar["close"])
-            btc_closes.append(other["close"])
-    if len(coin_closes) < MIN_BARS:
-        return None, None
-    return _returns(coin_closes), _returns(btc_closes)
+    coin_returns, btc_returns = [], []
+    for prev, curr in zip(bars, bars[1:]):
+        btc_prev, btc_curr = btc_by_t.get(prev["t"]), btc_by_t.get(curr["t"])
+        if btc_prev and btc_curr and prev["close"] and btc_prev["close"]:
+            coin_returns.append(curr["close"] / prev["close"] - 1)
+            btc_returns.append(btc_curr["close"] / btc_prev["close"] - 1)
+    return coin_returns, btc_returns
 
 
 def estimate(bars, btc_bars=None, symbol="BTC"):
@@ -143,6 +141,13 @@ def estimate(bars, btc_bars=None, symbol="BTC"):
     ``last_close``, ``data_window`` and ``basis``.
     """
     ordered = sorted(bars, key=lambda b: b["t"])
+    # A multi-hour gap cannot be counted as one hourly return.
+    for i in range(len(ordered) - 1, 0, -1):
+        last = datetime.fromisoformat(ordered[i]["t"].replace("Z", "+00:00"))
+        prior = datetime.fromisoformat(ordered[i - 1]["t"].replace("Z", "+00:00"))
+        if last - prior != timedelta(hours=1):
+            ordered = ordered[i:]
+            break
     if len(ordered) < MIN_BARS:
         return None
     closes = [b["close"] for b in ordered]

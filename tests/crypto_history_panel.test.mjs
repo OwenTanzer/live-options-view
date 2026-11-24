@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
-import {archiveAsOf} from '../site/js/crypto-history.js';
+import {archiveAsOf, coverageCells} from '../site/js/crypto-history.js';
 
 const receipt = Date.parse('2026-11-24T07:00:00Z');
 const end = receipt - 3600000;
@@ -34,4 +34,17 @@ test('crypto tab links the shipped archive reader and cutoff control', () => {
   const html = readFileSync(new URL('../site/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="crypto-history-cutoff"/);
   assert.match(html, /type="module" src="js\/crypto-history\.js/);
+});
+
+test('coverage reports source batch state independently of record count and timestamps', () => {
+  const partial = {symbol:'LINK', interval:'1h', provider:'coinbase', kind:'candle', count:5,
+    first:'2026-11-23T00:00:00Z', last:'2026-11-23T04:00:00Z', source_batch_done:false};
+  assert.equal(coverageCells({...partial, primary:true})[2], 'coinbase (primary)');
+  const alternate = coverageCells({...partial, provider:'coingecko', kind:'price_sample',
+    primary:false, source_batch_done:null});
+  assert.deepEqual(alternate.slice(2, 6), ['coingecko (alternate)', 'Price samples', 5, 'Batch status unavailable']);
+  assert.deepEqual(coverageCells(partial).slice(4), [5, 'Batch in progress',
+    '2026-11-23 00:00:00', '2026-11-23 04:00:00']);
+  assert.deepEqual(coverageCells({...partial, count:0, first:null, last:null, source_batch_done:true}).slice(4),
+    [0, 'Batch marked done', '—', '—']);
 });

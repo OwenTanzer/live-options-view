@@ -55,6 +55,8 @@ a retraction.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -88,7 +90,7 @@ def target_end_ms(target_start_ms):
 
 def is_expired(target_start_ms, now_ms):
     """True once the target hour has passed."""
-    return now_ms > target_end_ms(target_start_ms)
+    return now_ms >= target_end_ms(target_start_ms)
 
 
 def _iso(ms):
@@ -182,7 +184,16 @@ def write_prediction_file(out_dir, symbol, content):
     """Write one prediction file under ``out_dir``; return its path."""
     path = prediction_path(out_dir, symbol)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(content, indent=2) + "\n", encoding="utf-8")
+    with tempfile.NamedTemporaryFile(dir=path.parent, mode="w", encoding="utf-8",
+                                     delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(content, stream, indent=2, allow_nan=False)
+            stream.write("\n")
+            stream.close()
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return path
 
 
@@ -206,6 +217,8 @@ def read_prediction_file(path):
         raise ValueError(f"observations_count mismatch in {path}")
     for row in rows:
         checked = oc.observation(row)
+        if checked["source"] != SOURCE or checked["instrument"] != content.get("symbol"):
+            raise ValueError(f"wrong source or instrument in prediction file {path}")
         if checked["origin"] != ORIGIN:
             raise ValueError(f"non-synthetic row in prediction file {path}: {row['id']}")
         if checked["session"] != SESSION:

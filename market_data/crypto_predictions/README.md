@@ -49,6 +49,7 @@ records that their estimates carry no information.
 ```sh
 python -m market_data.crypto_predictions universe
 python -m market_data.crypto_predictions predict --cache-dir cache-out --out pred-out [--symbols BTC ETH] [--publish]
+python -m market_data.crypto_predictions predict --archive /path/to/snapshot.sqlite3 --out pred-out [--symbols BTC ETH]
 python -m market_data.crypto_predictions status --out pred-out [--symbols BTC]
 python -m market_data.crypto_predictions seed --out pred-out   # checked-in BTC seed only
 ```
@@ -57,6 +58,16 @@ python -m market_data.crypto_predictions seed --out pred-out   # checked-in BTC 
 `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`, `CRYPTO_R2_BUCKET`
 (all unconfirmed against live service config). Without it, files
 are written locally and the sidecar says `not_published`.
+
+Use the same durable output directory for successive production runs. The CLI
+locks it while building and publishing, retains the original estimate and
+issuance time per target, and prunes target hours older than seven days. A
+temporary gap in hourly inputs preserves earlier estimates through this window.
+Archive mode reads up to 169 completed hourly candles per coin through the
+private One Clock reader, after the archive receipt cutoff. Price-only samples
+cannot supply OHLC. A stale archive produces no new historical forecasts.
+Previously issued rows still follow the seven-day retention rule. New
+archive-derived predictions record the input snapshot digest.
 
 ## One Clock
 

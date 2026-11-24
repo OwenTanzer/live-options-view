@@ -24,6 +24,15 @@ export function archiveAsOf(archive, cutoff) {
   return { available: true, coverage: archive.coverage, candles };
 }
 
+export function coverageCells(row) {
+  const status = row.source_batch_done === true ? 'Batch marked done'
+    : row.source_batch_done === false ? 'Batch in progress' : 'Batch status unavailable';
+  const source = row.primary === false ? row.provider + ' (alternate)' : row.primary === true
+    ? row.provider + ' (primary)' : row.provider;
+  return [row.symbol, row.interval, source, row.kind === 'price_sample' ? 'Price samples' : 'Candles',
+    row.count, status, row.first == null ? '—' : utc(row.first), row.last == null ? '—' : utc(row.last)];
+}
+
 function replaceRows(body, rows) {
   body.replaceChildren(...rows.map(values => {
     const tr = document.createElement('tr');
@@ -49,10 +58,7 @@ export function mountArchive(panel) {
     if (!archive) return;
     try {
       const selected = archiveAsOf(archive, cutoff.value ? cutoff.value + 'Z' : Date.now());
-      replaceRows(coverage, selected.coverage.map(row => [
-        row.symbol, row.interval, row.provider, row.kind === 'price_sample' ? 'Price samples' : 'Candles',
-        row.count, utc(row.first), utc(row.last),
-      ]));
+      replaceRows(coverage, selected.coverage.map(coverageCells));
       replaceRows(candles, [...selected.candles].reverse().map(row => [
         utc(row.eventAt), row.value.close.toLocaleString('en-US', {maximumFractionDigits: 8}),
       ]));

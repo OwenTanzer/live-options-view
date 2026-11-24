@@ -96,7 +96,10 @@ crypto-hourly-receipts.conf override and reload the user manager.
 
 The Linux host keeps Cian's original Crypto Backend ZIP and a private SQLite
 snapshot per ZIP SHA-256 under ~/.local/share/optionsview-crypto-history.
-Each snapshot reads only the series selected by its manifest. Coinbase and
+Each snapshot retains the manifest-selected series and the separate alternate
+CoinGecko daily price histories supplied in the same ZIP. The reader defaults
+to the manifest selection. Pass --provider coingecko to read the alternate
+price series without substituting a sample for a candle. Coinbase and
 Tiingo rows retain their OHLCV values. CoinGecko market-chart samples have
 a price at a timestamp and do not imply OHLC. The importer verifies member
 counts and date ranges and withholds candles that had not closed when Cian's batch began. A query before the local archive receipt returns no rows. Repeating
