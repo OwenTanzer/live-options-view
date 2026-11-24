@@ -1,3 +1,4 @@
+import { origin as usdcOrigin, usdcFixture } from './helpers/usdc_fixture.mjs';
 // Both shipped auth paths, fixed gateway callback, and production entry HTML.
 // All cookies, accounts, identity responses and quotes are synthetic/local.
 import assert from 'node:assert/strict';
@@ -27,14 +28,14 @@ global.fetch = async (input, options = {}) => {
     } });
     throw Error('Unexpected identity route');
   }
-  if (url.pathname === '/btc-options') return Response.json(scenario.payload);
+  if (url.origin === usdcOrigin) return usdcFixture(url);
   return fixtureNetwork(input, options);
 };
 const browser = await chromium.launch({ headless: true });
 try {
   for (const width of [390, 320]) {
     identity = OWNER_ID; status = 200;
-    const preview = createPreview(); setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
+    const preview = createPreview(); setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_USDC_DATA_ORIGIN = usdcOrigin; preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
     preview.apiEnv.ENVIRONMENT = preview.env.ENVIRONMENT = 'production'; delete preview.apiEnv.ISOLATION;
     for (const k of ['ISOLATION', 'PREVIEW_ORIGIN', 'API_ENVIRONMENT', 'PUBLIC_DATA_ENVIRONMENT']) delete preview.env[k];
     const password = 'synthetic-normal-password', salt = btoa('synthetic-salt'), hash = await derivePasswordHash(password, salt);
@@ -87,7 +88,7 @@ try {
       await page.locator('.btc-buy').click(); await page.locator('#trade-ticket .btn-buy').click();
       await page.waitForFunction(() => document.querySelector('.btc-position')?.textContent.includes('Owned: 1'));
       await page.reload(); await page.locator('.btc-sell:not([disabled])').waitFor();
-      assert.equal(await page.evaluate(() => localStorage.getItem(SESSION_CACHE_KEY).includes('BTCOPT:')), false);
+      assert.equal(await page.evaluate(() => localStorage.getItem(SESSION_CACHE_KEY).includes('USDC:')), false);
       const reads = identityCalls;
       status = 401;
       await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));

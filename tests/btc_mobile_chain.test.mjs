@@ -1,3 +1,4 @@
+import { origin as usdcOrigin, usdcFixture } from './helpers/usdc_fixture.mjs';
 import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 // Production entry HTML/scripts through the disposable gateway and real account API.
 // All accounts, credentials, quotes and fills are local synthetic fixtures.
@@ -5,20 +6,18 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { createPreview, fixtureNetwork, LOCAL_ORIGIN } from '../scripts/preview-local.mjs';
-import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 import { seedAccounts } from './helpers/test_env.mjs';
 import { derivePasswordHash } from '../backend/auth.js';
 const { chromium } = createRequire(import.meta.url)('playwright');
-const cases = Object.fromEntries(btcClockScenarios().map(s => [s.name, s]));
 const OriginalDate = Date, originalFetch = global.fetch;
-let clock = cases.ask_price.now, market = cases.ask_price.payload;
+let clock = Date.parse('2026-11-23T18:00:00Z'), bookTime = clock;
 global.Date = class extends OriginalDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
-global.fetch = async (url, options) => new URL(url).pathname === '/btc-options' ? Response.json(market) : fixtureNetwork(url, options);
+global.fetch = async (url, options) => new URL(url).origin === usdcOrigin ? usdcFixture(url, {timestamp: bookTime}) : fixtureNetwork(url, options);
 const browser = await chromium.launch({ headless: true });
 try {
   for (const width of [390, 320]) {
     const preview = createPreview();
-    setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
+    setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_USDC_DATA_ORIGIN = usdcOrigin; preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
     const password = 'local-fixture-password', salt = btoa('local-test-salt');
     const hash = await derivePasswordHash(password, salt);
     await seedAccounts(preview.apiEnv, ['entitled_fixture', 'wrong_fixture'].map(username => ({
@@ -32,7 +31,7 @@ try {
     await page.addInitScript(now => {
       const D = Date; window.fixtureClock = now;
       window.Date = class extends D { constructor(...args) { super(...(args.length ? args : [window.fixtureClock])); } static now() { return window.fixtureClock; } };
-    }, cases.ask_price.now);
+    }, clock);
     await page.route('**/*', async route => {
       const r = route.request(), url = new URL(r.url());
       assert.equal(url.origin, LOCAL_ORIGIN, 'test must never contact production');
@@ -53,7 +52,7 @@ try {
       await route.fulfill({ status: response.status, body, headers: Object.fromEntries(response.headers) });
     });
     const phase = async name => {
-      market = cases[name].payload; clock = cases[name].now;
+      bookTime = name === 'aged_replay' ? clock - 20000 : clock;
       await page.evaluate(now => { window.fixtureClock = now; }, clock);
       await page.evaluate(() => btcOptions.refresh());
     };
@@ -65,7 +64,7 @@ try {
       await page.waitForFunction(username => document.querySelector('#user-name').textContent === username, username);
     };
     try {
-      market = cases.ask_price.payload; clock = cases.ask_price.now;
+      bookTime = clock;
       await page.goto(LOCAL_ORIGIN + '/?chain=BTC');
       await page.locator('.btc-login').waitFor();
       assert.equal(await page.locator('#underlying-select').inputValue(), 'BTC');
@@ -86,7 +85,7 @@ try {
       assert.match(page.url(), /chain=BTC/);
       assert.equal(requests.includes('/api/register'), false, 'login uses a pre-existing fixture account');
       assert.match(await page.locator('.btc-sell-reason').textContent(), /No position/);
-      assert.match(await page.locator('.btc-ask-time').textContent(), /observed side change/);
+      assert.equal(await page.getByLabel('Bitcoin option product').count(), 0);
       for (const selector of ['#underlying-select', '.btc-contract', '.btc-buy', '.btc-sell', '.btc-ticket']) {
         const box = await page.locator(selector).boundingBox();
         assert.ok(box.x >= 0 && box.x + box.width <= width + 1, `${width}: ${selector}`);
@@ -99,29 +98,23 @@ try {
       }
       // Direct row affordance opens the actual existing ticket for review and submission.
       await page.locator('.btc-buy').click();
-      assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), false);
+      await page.waitForFunction(() => document.querySelector('#trade-ticket .btn-buy')?.disabled === false);
       await page.locator('#trade-ticket .btn-buy').click();
       await page.waitForFunction(() => document.querySelector('.btc-position')?.textContent.includes('Owned: 1'));
-      assert.equal(await page.evaluate(() => localStorage.getItem(SESSION_CACHE_KEY).includes('BTCOPT:')), false, 'private BTC rows never enter display cache');
+      assert.equal(await page.evaluate(() => localStorage.getItem(SESSION_CACHE_KEY).includes('USDC:')), false, 'private BTC rows never enter display cache');
       await page.reload();
       await page.locator('.btc-contract').waitFor();
       assert.equal(await page.locator('#underlying-select').inputValue(), 'BTC');
       assert.match(await page.locator('.btc-position').textContent(), /Owned: 1/);
       await phase('aged_replay');
-      assert.equal(await page.locator('.btc-buy').isDisabled(), true);
-      assert.equal(await page.locator('.btc-sell').isDisabled(), true);
-      assert.match(await page.locator('.btc-sell-reason').textContent(), /stale/);
+      await page.locator('.btc-sell').click();
+      assert.equal(await page.locator('#trade-ticket .btn-sell').isDisabled(), true);
+      await page.locator('.btc-dismiss').click();
       await phase('close_bid');
       assert.equal(await page.locator('.btc-sell').isDisabled(), false);
       await page.locator('.btc-sell').click();
       await page.locator('#trade-ticket .btn-sell').click();
       await page.waitForFunction(() => document.querySelector('.btc-position')?.textContent === 'No open position');
-      // Provider-timed freshness uses the same UI action path as observed clocks.
-      const timed = structuredClone(cases.close_bid.payload), ts = new Date(clock).toISOString();
-      Object.assign(timed.quotes[0], { bid_ts: ts, ask_ts: ts }); market = timed;
-      await page.evaluate(() => btcOptions.refresh());
-      assert.match(await page.locator('.btc-ask-time').textContent(), /provider side time/);
-      assert.equal(await page.locator('.btc-buy').isDisabled(), false);
       // A response begun under BTC cannot restore rows after selecting equity.
       let waiting = hold('/api/btc-options');
       const lateBtc = page.evaluate(() => btcOptions.refresh()); await waiting;
@@ -137,7 +130,7 @@ try {
       await page.locator('#underlying-select').selectOption('BTC');
       releaseHeld();
       await page.locator('.btc-contract').waitFor();
-      assert.equal(await page.locator('#title').textContent(), 'Bitcoin futures options');
+      assert.equal(await page.locator('#title').textContent(), 'Bitcoin options (USDC)');
       assert.equal(await page.locator('#underlying-select').inputValue(), 'BTC');
       // A private response already computed for the old account is discarded at logout.
       waiting = hold('/api/btc-options');

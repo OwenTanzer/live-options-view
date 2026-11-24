@@ -1,3 +1,4 @@
+import { origin as usdcOrigin, instrument, usdcFixture } from './helpers/usdc_fixture.mjs';
 import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +42,7 @@ class Bucket {
 async function harness(c = contract) {
   const bucket = new Bucket();
   const env = withD1({ PAPER_TRADES: bucket, LIVE_QUOTE_ORIGIN: 'https://fixture.invalid', LIVE_QUOTE_KEY: 'fixture',
-    BTC_OPTIONS_ENTRIES: '1' });
+    BTC_USDC_DATA_ORIGIN: usdcOrigin, BTC_OPTIONS_ENTRIES: '1' });
   await seedAccounts(env, [{ username: 'fixture', trades: [], balance_cash: 10000 }]);
   await seedSession(env, 'fixture-session', 'fixture');
   setupBtcOwner(env);
@@ -50,9 +51,7 @@ async function harness(c = contract) {
   const oldFetch = global.fetch, OldDate = Date;
   global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
   global.fetch = async (url, options) => {
-    assert.equal(new URL(url).pathname, '/btc-options');
-    assert.equal(options.redirect, 'manual'); // Supported by workerd; never forward the private origin key.
-    return Response.json(market);
+    return usdcFixture(url, market.quotes[0]);
   };
   const order = body => handlePaperTrade(new Request('https://options.moopertonic.net/api/paper-trade', {
     method: 'POST', headers: { Cookie: `${SESSION_COOKIE}=fixture-session`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -81,23 +80,20 @@ test('side freshness/size, identity, session calendar and one-contract limits', 
   assert.equal(btcSession(Date.parse('2026-07-20T21:01:00Z')), 'maintenance');
 });
 
-test('private collector redirects fail closed without following another origin', async () => {
+test('retired CME display and execution make zero provider calls; USDC is the default', async () => {
   const h = await harness();
   try {
     let calls = 0;
-    global.fetch = async (url, options) => {
-      calls++;
-      assert.equal(options.redirect, 'manual');
-      assert.equal(new URL(url).origin, h.env.LIVE_QUOTE_ORIGIN);
-      return new Response(null, { status: 302, headers: { Location: 'https://other.invalid/redirect' } });
-    };
-    const response = await handleBtcOptions(new Request('https://options.moopertonic.net/api/btc-options', {
-      headers: { Cookie: `${SESSION_COOKIE}=fixture-session` },
-    }), h.env);
-    assert.equal(response.status, 503);
-    assert.equal((await h.order(intent())).status, 503);
-    assert.equal(calls, 2);
-    assert.equal((await h.store.users.get('fixture')).trades.length, 0);
+    global.fetch = async url => { calls++; return usdcFixture(url); };
+    const read = suffix => handleBtcOptions(new Request('https://fixture.invalid/api/btc-options' + suffix,
+      { headers: {Cookie: 'session=fixture-session'} }), h.env);
+    assert.equal((await read('?product=cme')).status, 410);
+    assert.equal((await read('?product=micro')).status, 410);
+    assert.equal((await h.order(intent())).status, 410);
+    assert.equal(calls, 0);
+    await seedLegacyHolding(h);
+    const result = await (await read('')).json();
+    assert.deepEqual(result.contracts.map(c => c.contract_key), ['USDC:' + instrument]);
   } finally { h.restore(); }
 });
 
@@ -144,68 +140,59 @@ test('fallback rejects forged, mismatched, stale and future evidence', () => {
   }
 });
 
-test('observed execution clock and full change evidence survive D1 reload', async () => {
-  const s = btcClockScenarios().find(s => s.name === 'ask_price');
-  const h = await harness(s.payload.quotes[0].contract);
-  try {
-    h.advance(s.now - now);
-    Object.assign(h.market, s.payload);
-    const response = await h.order(intent('buy', { sym: s.payload.quotes[0].symbol }));
-    assert.equal(response.status, 201, await response.clone().text());
-    const entry = (await createStorage(h.env).users.get('fixture')).trades[0];
-    assert.equal(entry.quote_clock_basis, 'observed_side_change');
-    assert.equal(entry.quote_source_ts, null);
-    assert.equal(entry.quote_ts, s.payload.quotes[0].ask_change.at);
-    assert.deepEqual(entry.source_quote, s.payload.quotes[0]);
-    assert.equal(entry.cash_delta, -502.5);
-  } finally { h.restore(); }
-});
-
-for (const type of ['call', 'put']) test(`${type}: persisted 500/600 round trip; duplicates and concurrent closes`, async () => {
+for (const type of ['call', 'put']) test(`${type}: persisted USDC round trip; duplicates and concurrent closes`, async () => {
   const h = await harness({ ...contract, type });
   try {
-    const buy = intent();
+    const key = 'USDC:' + instrument.slice(0,-1) + (type === 'call' ? 'C' : 'P');
+    const buy = intent('buy',{sym:key});
     const opened = await h.order(buy); assert.equal(opened.status, 201, await opened.clone().text());
-    assert.equal((await opened.json()).balance_cash, 9497.5);
+    assert.equal((await opened.json()).balance_cash, 9998.875);
     assert.equal((await h.order(buy)).status, 200);
     const entry = (await h.store.users.get('fixture')).trades[0];
-    assert.equal(entry.cash_delta, -502.5); assert.equal(entry.source_quote.ask_size, 1);
+    assert.equal(entry.cash_delta, -1.125); assert.equal(entry.source_quote.ask_size, 1);
     assert.equal(entry.quote_ts, stamp); assert.equal(entry.contract.type, type);
     h.advance(5000);
     h.market.quotes[0].bid = 120; h.market.quotes[0].ask = 121;
-    const outcomes = await Promise.all([h.order(intent('sell')), h.order(intent('sell'))]);
+    const outcomes = await Promise.all([h.order(intent('sell',{sym:key})), h.order(intent('sell',{sym:key}))]);
     assert.deepEqual(outcomes.map(r => r.status).sort(), [201, 400]);
     const reloaded = await createStorage(h.env).users.get('fixture');
-    assert.equal(reloaded.trades.length, 2); assert.equal(reloaded.balance_cash, 10095);
+    assert.equal(reloaded.trades.length, 2); assert.ok(Math.abs(reloaded.balance_cash - 9999.925) < 1e-8);
     assert.equal(Date.parse(reloaded.trades[1].quote_ts) - Date.parse(reloaded.trades[0].quote_ts), 5000);
-    const b = computeBookFromTrades(reloaded.trades)[sym];
-    assert.equal(b.pos, 0); assert.equal(b.realized_gross, 100); assert.equal(b.realized, 95); assert.equal(b.fees, 5);
+    const b = computeBookFromTrades(reloaded.trades)[key];
+    assert.equal(b.pos, 0); assert.ok(Math.abs(b.realized_gross - 0.2) < 1e-8); assert.ok(Math.abs(b.realized + 0.075) < 1e-8); assert.ok(Math.abs(b.fees - 0.275) < 1e-8);
   } finally { h.restore(); }
 });
 
 test('partial finalization recovery, limits, insufficient cash and entry-only disable', async () => {
   const h = await harness();
+  const key = 'USDC:' + instrument;
   try {
-    assert.equal((await h.order(intent('sell'))).status, 400);
-    assert.equal((await h.order(intent('buy', { order_type: 'limit', limit_price: 99 }))).status, 409);
-    await h.store.users.mutate('fixture', r => ({ record: { ...r, balance_cash: 501 } }));
-    assert.equal((await h.order(intent())).status, 400);
+    assert.equal((await h.order(intent('sell',{sym:key}))).status, 400);
+    assert.equal((await h.order(intent('buy', { sym:key, order_type: 'limit', limit_price: 99 }))).status, 409);
+    await h.store.users.mutate('fixture', r => ({ record: { ...r, balance_cash: 1 } }));
+    assert.equal((await h.order(intent('buy',{sym:key}))).status, 400);
     await h.store.users.mutate('fixture', r => ({ record: { ...r, balance_cash: 10000 } }));
-    const buy = intent('buy', { order_type: 'limit', limit_price: 100 });
+    const buy = intent('buy', { sym:key, order_type: 'limit', limit_price: 100 });
     h.bucket.failFinal = true;
     assert.equal((await h.order(buy)).status, 503);
     assert.equal((await h.order(buy)).status, 200);
     assert.equal((await h.store.users.get('fixture')).trades.length, 1);
     h.env.BTC_OPTIONS_ENTRIES = '0';
-    assert.equal((await h.order(intent())).status, 403);
-    assert.equal((await h.order(intent('sell'))).status, 201);
+    assert.equal((await h.order(intent('buy',{sym:key}))).status, 403);
+    assert.equal((await h.order(intent('sell',{sym:key}))).status, 201);
   } finally { h.restore(); }
 });
+
+async function seedLegacyHolding(h, c = contract) {
+  await h.store.users.mutate('fixture', record => ({record: {...record, balance_cash:9497.5, trades:[
+    {sym, side:'buy', qty:1, price:100, fees:2.5, cash_delta:-502.5, multiplier:5, instrument_type:'futures_option',
+     strike:c.strike, exp:c.exp, type:c.type, contract:c, ts:stamp} ]}}));
+}
 
 for (const type of ['call', 'put']) for (const final of [89000, 90000, 91000]) test(`expiration ${type} final ${final}: pending, official mark, exactly once`, async () => {
   const h = await harness({ ...contract, type });
   try {
-    assert.equal((await h.order(intent())).status, 201);
+    await seedLegacyHolding(h, { ...contract, type });
     const after = Date.parse('2026-11-27T16:01:00Z');
     const pending = await settleBtcAccount(h.env, 'fixture', after);
     assert.deepEqual(pending.result.pending, [sym]);
@@ -239,7 +226,7 @@ test('anonymous/private authorization and alternate public paths', async () => {
 test('revoked display access denies fresh quotes and execution even for holders', async () => {
   const h = await harness();
   try {
-    assert.equal((await h.order(intent())).status, 201);
+    assert.equal((await h.order(intent('buy',{sym:'USDC:'+instrument}))).status, 201);
     h.env.BTC_OWNER_LINK = 'disabled';
     let calls = 0;
     global.fetch = async () => { calls++; throw Error('No provider call after revocation'); };
@@ -247,9 +234,9 @@ test('revoked display access denies fresh quotes and execution even for holders'
       headers: { Cookie: `${SESSION_COOKIE}=fixture-session` },
     }), h.env);
     assert.equal(response.status, 403);
-    assert.equal((await h.order(intent('sell'))).status, 403);
+    assert.equal((await h.order(intent('sell',{sym:'USDC:'+instrument}))).status, 403);
     assert.equal(calls, 0);
-    assert.equal(computeBookFromTrades((await h.store.users.get('fixture')).trades)[sym].pos, 1);
+    assert.equal(computeBookFromTrades((await h.store.users.get('fixture')).trades)['USDC:'+instrument].pos, 1);
   } finally { h.restore(); }
 });
 
@@ -258,7 +245,7 @@ test('verified GitHub ordinary paper session reads, buys and closes; revoked ide
   try {
     await h.env.DB.prepare('DELETE FROM btc_owner_sessions').run();
     global.fetch = async url => String(url).startsWith(CREDIT_ORIGIN)
-      ? Response.json({ github_id: owner ? OWNER_ID : OWNER_ID+1 }) : Response.json(h.market);
+      ? Response.json({ github_id: owner ? OWNER_ID : OWNER_ID+1 }) : usdcFixture(url);
     const headers = { Cookie: 'session=fixture-session; __Host-cds-session=synthetic_github_0123456789',
       Origin: 'https://options.moopertonic.net', 'Content-Type': 'application/json' };
     const link = await handleBtcOwnerLink(new Request('https://options.moopertonic.net/api/btc-options/owner-link', {
@@ -270,11 +257,11 @@ test('verified GitHub ordinary paper session reads, buys and closes; revoked ide
       method: 'POST', headers, body: JSON.stringify(body),
     }), h.env);
     assert.equal((await read()).status, 200);
-    const buy = intent(); assert.equal((await order(buy)).status, 201);
+    const buy = intent('buy',{sym:'USDC:'+instrument}); assert.equal((await order(buy)).status, 201);
     owner = false; assert.equal((await read()).status, 403);
     assert.equal((await order(buy)).status, 403, 'receipt replay must reauthorize');
-    assert.equal((await order(intent('sell'))).status, 403);
-    owner = true; assert.equal((await order(intent('sell'))).status, 201);
+    assert.equal((await order(intent('sell',{sym:'USDC:'+instrument}))).status, 403);
+    owner = true; assert.equal((await order(intent('sell',{sym:'USDC:'+instrument}))).status, 201);
     assert.equal((await h.store.users.get('fixture')).trades.length, 2);
   } finally { h.restore(); }
 });
@@ -282,7 +269,7 @@ test('verified GitHub ordinary paper session reads, buys and closes; revoked ide
 test('equity insolvency retains the BTC ledger and pending obligation', async () => {
   const h = await harness();
   try {
-    assert.equal((await h.order(intent())).status, 201);
+    await seedLegacyHolding(h);
     await h.store.users.mutate('fixture', record => ({ record: { ...record, trades: [...record.trades,
       { sym: 'QQQ261120C00001000', side: 'sell', qty: 1, price: 1, strike: 1, type: 'call', exp: '2026-11-20' }] } }));
     const response = await handleSettle(new Request('https://options.moopertonic.net/api/settle', {
