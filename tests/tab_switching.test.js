@@ -33,6 +33,8 @@ function makeEl() {
   };
 }
 const els = {};
+els['crypto-panel'] = makeEl();
+els['tab-crypto'] = makeEl();
 for (const id of ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 'news-panel', 'nasdaq-panel',
                   'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'tab-nasdaq']) {
   els[id] = makeEl();
@@ -41,6 +43,7 @@ for (const id of ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 
 els['tab-live']._classes.add('active');
 let manifestCalls = 0;
 let newsLoads = 0;
+let cryptoLoads = 0;
 let nasdaqLoads = 0;
 let pollingCalls = [];
 const sandbox = {
@@ -48,6 +51,7 @@ const sandbox = {
   document: { getElementById: id => els[id] },
   loadHistoryManifest: () => { manifestCalls++; },
   loadNewsPanel: () => { newsLoads++; },
+  loadCryptoPanel: () => { cryptoLoads++; },
   loadNasdaqPanel: () => { nasdaqLoads++; },
   setBotsPolling: on => { pollingCalls.push(on); },
 };
@@ -56,7 +60,7 @@ vm.runInContext(moduleSource, context, { filename: 'site/js/tab-switching.js' })
 const get = name => vm.runInContext(name, context);
 
 assert.equal(typeof get('showTab'), 'function', 'module must define showTab');
-assert.deepEqual(Object.keys(get('TABS')).sort(), ['bots', 'history', 'live', 'nasdaq', 'news', 'squeeze'], 'TABS must map the six tabs');
+assert.deepEqual(Object.keys(get('TABS')).sort(), ['bots', 'crypto', 'history', 'live', 'nasdaq', 'news', 'squeeze'], 'TABS must include Crypto');
 
 const visible = id => !els[id]._classes.has('hidden');
 const active = id => els[id]._classes.has('active');
@@ -125,4 +129,13 @@ assert.ok(onlyActive('tab-live'), 'unknown tab falls back to the live button');
 assert.equal(manifestCalls, 1, 'fallback to live must not reload the manifest');
 assert.equal(newsLoads, 1, 'fallback to live must not mount the news panel');
 assert.deepEqual(pollingCalls, [false, false, false, true, false, false], 'fallback to live turns bots polling off');
+vm.runInContext("showTab('crypto')", context);
+assert.ok(visible('crypto-panel'));
+assert.ok(active('tab-crypto'));
+assert.ok(!visible('news-panel'));
+vm.runInContext("showTab('news')", context);
+assert.ok(!visible('crypto-panel'));
+vm.runInContext("showTab('crypto')", context);
+assert.equal(cryptoLoads, 1);
+console.log('tab switching: hash pinned, extraction verified, live/history/bots/squeeze/news/crypto/unknown passed');
 console.log('tab switching: hash pinned, extraction verified, live/history/bots/squeeze/news/nasdaq/unknown passed');

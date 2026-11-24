@@ -25,7 +25,9 @@ from urllib.parse import urljoin
 
 from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
 from .strategies.me_bots_inputs import Inputs as MeBotInputs
-from .strategies.oi_skew import REFERENCE_ROOTS
+from .strategies.oi_associator import IDS as OI_ASSOCIATORS, checked_flatten as oi_share_flatten
+from .strategies.oi_skew import REFERENCE_ROOTS as _OI_REFERENCE_ROOTS
+from .strategies.trump_oi_skew import ROOTS as _TRUMP_OI_SKEW_ROOTS
 from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
@@ -67,6 +69,9 @@ from .supervisor import HEARTBEAT_FD, report_cycle, supervise
 from .strategy import REGISTRY, Decision, StrategyContext, get as get_strategy
 
 log = logging.getLogger("crassus")
+
+# Strategies that read a non-QQQ snapshot, by root.
+REFERENCE_ROOTS = {**_OI_REFERENCE_ROOTS, **_TRUMP_OI_SKEW_ROOTS}
 
 
 def _validate_strategy_ids(accounts: list[Any]) -> None:
@@ -184,8 +189,9 @@ class Runner:
         self.me_inputs = MeBotInputs(self.state_dir / "me-bots")
         self.forward_directory = self.state_dir / forward_skew.VERSION
         self.forward_bars = ForwardBars(self.forward_directory)
-        self.forward_bar_sources = {"QQQ": self.forward_bars,
-                                    "IBIT": ForwardBars(self.forward_directory, "IBIT")}
+        self.forward_bar_sources = {root: (self.forward_bars if root == "QQQ"
+                                           else ForwardBars(self.forward_directory, root))
+                                    for root in forward_skew.FAMILIES}
         self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
         if self.forward_accounts:
             for root, family in forward_skew.FAMILIES.items():
@@ -594,6 +600,8 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
+                if account.strategy_id in OI_ASSOCIATORS and decision.is_trade:
+                    decision = oi_share_flatten(ctx, account.strategy_id, observed_quotes.get("QQQ"))
                 if account.strategy_id in ME_BOTS and decision.is_trade:
                     limit = me_limit_price(ctx, decision.symbol, decision.action)
                     if limit is None:

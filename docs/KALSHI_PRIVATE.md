@@ -69,8 +69,7 @@ No bare Wrangler deploy, combined Worker, collector restart or Railway change.
    `/r2-proxy/` and `/browser-data/` cannot retrieve these records. Keep quote
    bodies/screenshots and cookies out of GitHub, Git, Notion and release logs.
 
-The existing API cron remains `*/15 * * * *`; this adds bounded work to that
-invocation, not another trigger or a producer service. Supervisor owns deploy,
+The API owns two schedules. The quarter-hour trigger retains settlement and existing One Clock jobs. The minute trigger runs only private event-market capture when `KALSHI_MINUTE_CAPTURE=1`. Disable that flag to stop minute sampling independently. Supervisor owns deploy,
 live OAuth acceptance and production paper-trial observation. Source tests
 are not evidence those production steps occurred.
 
@@ -79,7 +78,9 @@ are not evidence those production steps occurred.
 Read-only transport calls only `https://external-api.kalshi.com/trade-api/v2`.
 There is no order/portfolio provider client and no Kalshi credential. Discovery
 samples at most two open events per allowlisted series; weather takes three
-outcomes per event, other subjects six. The 12 series in `SERIES_SUBJECT` span
+outcomes per event, other subjects six. The 16 series in `SERIES_SUBJECT` include 15-minute Bitcoin, Ether, Solana and XRP
+up/down contracts. Use **Update markets** to discover the next window after a
+cutoff; price refreshes only read the currently visible tickers. Other series span
 space, mathematics, music, games, geology, economics, climate, health and four
 city daily highs. This is bounded discovery, not an exhaustive venue scanner.
 No volume threshold excludes small contracts. Unsupported contract shapes stay
@@ -155,7 +156,7 @@ or unsupported results remain pending; this code never guesses a refund. An
 official correction appends a cash adjustment and retains original fills and
 prior resolution evidence. A never-traded market does not create a holding.
 
-Bounds: 60 provider reads/minute, 2,000/day; six detail reads and six order
+Interactive and settlement bounds: shared 60 provider reads/minute, 2,000/day for those clients; six detail reads and six order
 attempts/minute; one discovery/minute; 400 archived observations/day; 100 KB
 per evidence document; seven-day observation retention; latest 100 observations
 listed; 20 lifetime traded markets and 1,000 ledger records per paper trial.
@@ -255,7 +256,7 @@ The visible page refreshes every ten seconds, pauses while hidden or after five
 minutes without interaction, and stops automatic retries after errors. Refresh
 prices resumes it. Display prices expire after ten seconds and disappear on tab
 hiding. Limits are ten chain requests/minute plus the unchanged global provider
-60/minute and 2,000/day caps. Existing account/order limits, fee checks, owner
+shared 60/minute ceiling and interactive 2,000/day cap. Existing account/order limits, fee checks, owner
 identity, archive/settlement writes, and paper-only execution remain unchanged.
 No producer, schema or credential changes. Deploy the API first, then assets;
 old assets remain compatible with the new API. Roll back assets independently.
@@ -263,3 +264,34 @@ old assets remain compatible with the new API. Roll back assets independently.
 ## One Clock replay
 
 Open the private Kalshi archive from the historical cursor to inspect retained captures through that millisecond. The page keeps the existing owner sign-in and reads only the archive endpoint. Both the paginated index and evidence-by-ID lookups apply the cutoff on the server. The receipt records capture time. Retention and the source’s sampling policy limit coverage. The standalone live view keeps its existing order and quote behavior.
+
+
+## Event-market data on the One Clock cursor
+
+Every successful live discovery and displayed batch quote is archived before
+the response is returned. Detail and paper-fill evidence keep their separate
+400/day budget. Display archives allow up to 2,000 receipts/day. Historical
+requests use the authenticated archive only. Receipt time gates both the index
+and the individual record. A scheduled minute is a sampling label, not the
+time at which a quote became available.
+
+With the minute trigger enabled, the API samples all unexpired tickers in its
+supported discovery catalog in batches of 16 even with the browser closed.
+The catalog refreshes each quarter-hour. Failed series and rolling crypto
+series with no open window retry on the next tick. Each minute retains a
+catalog reference, per-batch receive times, best bids/asks and displayed sizes.
+Missing batches, rejected books and discovery failures remain visible gaps.
+A delayed trigger cannot create a historical book using today's live price.
+Ordinary observations expire after seven days; ledger-linked fill evidence is pinned.
+
+The scheduled client reserves provider reads once per invocation. Its separate
+18,000/day cap covers discovery and books across the 16 selected series while
+the 60/minute limit remains shared. Apply additive migration
+`0015_kalshi_minute_capture.sql` before enabling this API revision. It creates
+two reusable capture lease slots and an index linking retained minutes to their
+catalog. A 15-second lease permits an abandoned capture to be reclaimed in the
+same minute. Ownership is checked when publishing. A catalog stays available
+until its last dependent minute ages out. This adds no venue credentials,
+public catalog publications, KV, or producer processes. Validate the minute
+and quarter-hour triggers separately during protected API release, then use the
+private One Clock replay on both sides of a crypto rollover.

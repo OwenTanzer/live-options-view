@@ -530,7 +530,16 @@ _decide.strategy_version = STRATEGY_VERSION
 oi_skew_qqq = register(_decide)
 
 
-REFERENCE_ROOTS = {"oi_skew_spy": "SPY", "oi_skew_ibit_adaptive": "IBIT"}
+REFERENCE_ROOTS = {
+    "oi_skew_spy": "SPY",
+    "oi_skew_ibit_adaptive": "IBIT",
+    "oi_skew_slv_adaptive": "SLV",
+    "oi_skew_dram_adaptive": "DRAM",
+}
+# Roots whose strike spacing is wide relative to price, so a fixed ±2% band can
+# hold one or two strikes. They use the adaptive window (4th-nearest OI strike,
+# floor ±2%, cap ±10%, no reading beyond the cap) instead of the fixed band.
+ADAPTIVE_ROOTS = frozenset({"IBIT", "SLV", "DRAM"})
 
 
 def _finite_number(value):
@@ -549,12 +558,25 @@ def _reference_decision(ctx, strategy_id):
     if not _finite_number(spot) or spot <= 0:
         return Decision.no_trade("Missing valid spot.", strategy_id, STRATEGY_VERSION)
     params = dict(ctx.params or {})
+    tracker = _tracker_for(ctx, params.get("near_money_pct", DEFAULT_NEAR_MONEY_PCT), strategy_id)
+    band, params = reference_band(snapshot, root, params)
+    result = _decide_core(replace(ctx, params=params), tracker, band=band)
+    return replace(result, strategy_id=strategy_id)
+
+
+def reference_band(snapshot, root, params):
+    """(call OI, put OI, strike count) in the root's near-money band, and the
+    params the band was read with. Adaptive roots widen the band to the
+    4th-nearest strike with OI (floor ±2%, cap ±10%, empty beyond the cap).
+    Shared by the reference strategies and trump_oi_skew so both read one
+    band rule."""
+    spot = snapshot.underlying_price
+    params = dict(params)
     width = params.get("near_money_pct", DEFAULT_NEAR_MONEY_PCT)
     rows = [row for row in snapshot.rows if _finite_number(row.get("Strike"))
             and _finite_number(row.get("OpenInterest")) and row["OpenInterest"] > 0
             and row.get("Type") in ("call", "put")]
-    tracker = _tracker_for(ctx, width, strategy_id)
-    if root == "IBIT":
+    if root in ADAPTIVE_ROOTS:
         distances = sorted(abs(strike - spot) / spot for strike in {row["Strike"] for row in rows})
         width = max(0.02, distances[3]) if len(distances) >= 4 else math.inf
         if width > 0.10 + 1e-12:
@@ -562,12 +584,11 @@ def _reference_decision(ctx, strategy_id):
             width = 0.10
         width = min(width, 0.10)
         params.update(near_money_pct=width, min_band_strikes=4)
-    in_band = [row for row in rows if abs(row["Strike"] - spot) / spot <= width + (1e-12 if root == "IBIT" else 0)]
+    in_band = [row for row in rows if abs(row["Strike"] - spot) / spot <= width + (1e-12 if root in ADAPTIVE_ROOTS else 0)]
     band = (sum(r["OpenInterest"] for r in in_band if r["Type"] == "call"),
             sum(r["OpenInterest"] for r in in_band if r["Type"] == "put"),
             len({r["Strike"] for r in in_band}))
-    result = _decide_core(replace(ctx, params=params), tracker, band=band)
-    return replace(result, strategy_id=strategy_id)
+    return band, params
 
 
 def _register_reference(strategy_id):

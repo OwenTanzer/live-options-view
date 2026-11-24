@@ -14,6 +14,7 @@ on:
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
       - "tests/test_btc_options.py"
+      - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
       - "tests/test_one_clock_publisher.py"
@@ -49,6 +50,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
+      - "tests/test_provisional_collector.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -64,6 +66,7 @@ on:
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
       - "tests/test_btc_options.py"
+      - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
       - "tests/test_one_clock_publisher.py"
@@ -99,6 +102,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
+      - "tests/test_provisional_collector.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -116,6 +120,8 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r deployment/python/requirements.txt
+      - name: Crypto collector fixtures
+        run: python -m unittest discover -s tests -p test_crypto_collector.py -v
       - name: Run collector unit suite
         run: python tests/stage2_verification.py
       - name: Run OAuth and auth-circuit safety suite
@@ -160,6 +166,8 @@ jobs:
         run: python tests/verify_collector_spy.py
       - name: Run multi-underlying settlement marks suite (#182)
         run: python -m unittest discover -s tests -p test_multi_underlying.py -v
+      - name: Verify provisional collector isolation
+        run: python -m unittest discover -s tests -p test_provisional_collector.py -v
       - name: Run crude calibration suite
         run: python tests/verify_crude_calibration.py
       - name: Run EIA STEO calibration suite

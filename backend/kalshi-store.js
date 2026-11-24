@@ -10,22 +10,63 @@ export async function writeState(env, key, value) {
     .bind(ACCOUNT, key, JSON.stringify(value)).run();
 }
 // Atomic counters survive concurrent tabs, Worker restarts and cron overlap.
-export async function budget(env, scope, limit, windowMs, now = Date.now()) {
+export async function budget(env, scope, limit, windowMs, now = Date.now(), amount = 1) {
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > limit) throw Error('Invalid budget reservation');
   const slot = Math.floor(now / windowMs);
-  const row = await env.DB.prepare(`INSERT INTO kalshi_budget (account_id, scope, slot, used) VALUES (?, ?, ?, 1)
+  const row = await env.DB.prepare(`INSERT INTO kalshi_budget (account_id, scope, slot, used) VALUES (?, ?, ?, ?)
     ON CONFLICT(account_id, scope) DO UPDATE SET slot = excluded.slot,
-      used = CASE WHEN kalshi_budget.slot = excluded.slot THEN kalshi_budget.used + 1 ELSE 1 END
-    WHERE kalshi_budget.slot != excluded.slot OR kalshi_budget.used < ? RETURNING used`)
-    .bind(ACCOUNT, scope, slot, limit).first();
+      used = CASE WHEN kalshi_budget.slot = excluded.slot THEN kalshi_budget.used + excluded.used ELSE excluded.used END
+    WHERE kalshi_budget.slot != excluded.slot OR kalshi_budget.used + excluded.used <= ? RETURNING used`)
+    .bind(ACCOUNT, scope, slot, amount, limit).first();
   if (!row) throw Error('Private research request budget reached; try later');
 }
-export async function archive(env, market, payload) {
+// The claim and any takeover are single conditional SQL writes. Token checks
+// on publication fence an earlier worker that resumes after takeover.
+export async function claimMinute(env, minute, id) {
+  const slot = minute % 2, token = crypto.randomUUID(), now = Date.now();
+  const duration = 15000;
+  let expiry = now + duration;
+  const row = await env.DB.prepare(`INSERT INTO kalshi_capture_lease (slot,minute,token,expires_at)
+    SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM kalshi_evidence WHERE account_id=? AND id=?)
+    ON CONFLICT(slot) DO UPDATE SET minute=excluded.minute, token=excluded.token, expires_at=excluded.expires_at
+    WHERE kalshi_capture_lease.minute < excluded.minute OR
+      (kalshi_capture_lease.minute = excluded.minute AND kalshi_capture_lease.expires_at <= ?)
+    RETURNING token`).bind(slot,minute,token,expiry,ACCOUNT,id,now).first();
+  if (!row) return null;
+  return {slot,token,async renew() {
+    const at = Date.now();
+    if (at < expiry - 7500) return;
+    const next = at + duration;
+    if (!await env.DB.prepare('UPDATE kalshi_capture_lease SET expires_at=? WHERE slot=? AND token=? RETURNING token')
+      .bind(next,slot,token).first()) throw Error('Minute claim superseded');
+    expiry = next;
+  }};
+}
+const leaseGuard = 'EXISTS (SELECT 1 FROM kalshi_capture_lease WHERE slot=? AND token=?)';
+export async function writeMinuteCatalog(env, value, lease, minute) {
+  await env.DB.prepare(`INSERT INTO kalshi_state (account_id,key,value)
+    SELECT ?, 'minute-catalog', ? WHERE ${leaseGuard}
+    ON CONFLICT(account_id,key) DO UPDATE SET value=excluded.value
+    WHERE COALESCE(json_extract(kalshi_state.value,'$.minute'),-1) <= ?`)
+    .bind(ACCOUNT, JSON.stringify({...value,minute}), lease.slot, lease.token, minute).run();
+}
+export async function archive(env, market, payload, scope = 'archive', id = crypto.randomUUID(), lease = null) {
   const text = JSON.stringify(payload), digest = await hashSessionToken(text);
-  const id = crypto.randomUUID(), received = new Date().toISOString();
+  const received = new Date().toISOString();
   if (text.length > 100000) throw Error('Evidence exceeds storage bound');
-  await budget(env, 'archive', 400, 86400000);
-  await env.DB.prepare('INSERT INTO kalshi_evidence (account_id, id, received_at, market, digest, payload) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(ACCOUNT, id, received, market, digest, text).run();
+  // Live display records share the existing 2,000/day interactive source budget.
+  // Scheduled records are bounded by one accepted tick per minute.
+  if (scope !== 'minute') await budget(env, scope, scope === 'display' ? 2000 : 400, 86400000);
+  const args = [ACCOUNT, id, received, market, digest, text];
+  if (lease) args.push(lease.slot, lease.token);
+  const inserted = await env.DB.prepare(`INSERT INTO kalshi_evidence (account_id,id,received_at,market,digest,payload)
+    SELECT ?,?,?,?,?,? WHERE ${lease ? leaseGuard : '1'} ON CONFLICT(account_id,id) DO NOTHING`).bind(...args).run();
+  if (inserted.meta?.changes === 0) {
+    const prior = await env.DB.prepare('SELECT digest,received_at FROM kalshi_evidence WHERE account_id=? AND id=?')
+      .bind(ACCOUNT,id).first();
+    if (scope !== 'minute' || !prior) throw Error('Archive identity conflict');
+    return { id, ...prior };
+  }
   return { id, digest, received_at: received };
 }
 export async function getArchive(env, id) {
@@ -41,11 +82,16 @@ export async function pruneArchive(env) {
   // A fill's replay remains available as long as its ledger entry references it.
   const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
   await env.DB.prepare(`DELETE FROM kalshi_evidence WHERE account_id = ? AND received_at < ?
+    AND (market != 'Market catalog' OR NOT EXISTS (
+      SELECT 1 FROM kalshi_evidence AS sample WHERE sample.account_id = kalshi_evidence.account_id
+      AND sample.market = 'Minute chain' AND json_extract(sample.payload, '$.catalog_receipt') = kalshi_evidence.id
+      AND sample.received_at >= ?
+    ))
     AND id NOT IN (
       SELECT json_extract(trade.value, '$.provenance.archive.id')
       FROM users, json_each(users.record, '$.trades') AS trade
       WHERE users.username = ? AND json_extract(trade.value, '$.provenance.archive.id') IS NOT NULL
-    )`).bind(ACCOUNT, cutoff, ACCOUNT).run();
+    )`).bind(ACCOUNT, cutoff, cutoff, ACCOUNT).run();
 }
 
 // The receipt is stamped when archived. It supports a retained capture view;

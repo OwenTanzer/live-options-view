@@ -9,6 +9,10 @@ from .publications import PublicationLog, PublicationError, BudgetedS3, snapshot
 from .config import log
 
 OUTPUTS = {"price": {"spot": "number"}, "skew": {"imbalance": "number", "strikes": "number", "callOI": "number", "putOI": "number"}}
+# Instruments registered with the One Clock backend sources. Other collected
+# chains (SLV, DRAM) keep the latest/archive path but are not committed here
+# until their One Clock source registration lands.
+INSTRUMENTS = frozenset({"QQQ", "SPY", "IBIT"})
 _publication_client = None
 _client_lock = threading.Lock()
 
@@ -26,7 +30,7 @@ def publication_transport(client):
 
 def project_snapshot(payload):
     symbol, key, timestamp = payload["symbol"], payload["snapshot_key"], payload["timestamp"]
-    if symbol not in {"QQQ", "SPY", "IBIT"}:
+    if symbol not in INSTRUMENTS:
         raise PublicationError("unregistered snapshot instrument")
     market = payload.get("underlying_market", {})
     live = market.get("freshness") == "live"

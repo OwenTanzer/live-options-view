@@ -1,6 +1,7 @@
+import { SERIES_SUBJECT, WEATHER_SERIES } from './kalshi-model.js';
 import { ACCOUNT, OWNER_ID, SITE, configured, ownerIdentity, privateJSON } from './kalshi-access.js';
-import { archive, archiveIndex, archiveAt, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
-import { discover, fetchMarket, displayMarket, chainQuotes, publicRead, KALSHI_API } from './kalshi-source.js';
+import { claimMinute, writeMinuteCatalog, archive, archiveIndex, archiveAt, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
+import { discover, fetchMarket, displayMarket, chainQuotes, reserveMinuteReads, publicRead, KALSHI_API } from './kalshi-source.js';
 import { computeBookFromTrades, readJsonBody, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
 import { quoteEvent, marketKey, positionKey } from './prediction-model.js';
@@ -92,6 +93,7 @@ export async function handleKalshi(request, env) {
     if (url.pathname === '/api/kalshi/discover') {
       await budget(env, 'discover', 1, 60000);
       const result = await discover(env);
+      await archive(env, 'Market catalog', { kind: 'discovery', ...result }, 'display');
       await writeState(env, 'discovery', result);
       return privateJSON(result);
     }
@@ -99,7 +101,9 @@ export async function handleKalshi(request, env) {
       const body = await readJsonBody(request);
       if (body.error) return privateJSON({ error: body.error }, 400);
       await budget(env, 'chain-quotes', 10, 60000);
-      return privateJSON(await chainQuotes(env, body.body?.markets));
+      const result = await chainQuotes(env, body.body?.markets);
+      await archive(env, 'Displayed chain quotes', { kind: 'chain_quotes', ...result }, 'display');
+      return privateJSON(result);
     }
     if (url.pathname === '/api/kalshi/market') {
       const body = await readJsonBody(request);
@@ -192,4 +196,75 @@ export async function kalshiTick(env) {
   await writeState(env, 'sweep-offset', markets.length ? (offset + 2) % markets.length : 0);
   await writeState(env, 'health', { checked_at: new Date().toISOString(), captured, failures, tracked: markets.length,
     coverage: 'Periodic REST samples only; no continuous book history between observations.' });
+}
+
+function openForSampling(market) {
+  const now = Date.now();
+  return Date.parse(market.cutoff) > now && (!market.opens_at || Date.parse(market.opens_at) <= now);
+}
+
+// Capture independently of browser activity. A scheduled slot identifies the
+// attempt; archiveAt exposes it only at the actual receipt time.
+export async function captureKalshiMinute(env, scheduledTime) {
+  if (env.KALSHI_MINUTE_CAPTURE !== '1' || !configured(env) || await cutoverFenceActive(env)) return;
+  const minute = Math.floor(scheduledTime / 60000);
+  if (minute !== Math.floor(Date.now() / 60000)) return; // Never backfill with a later book.
+  const id = '00000000-0000-4000-8000-' + minute.toString(16).padStart(12, '0');
+  const lease = await claimMinute(env, minute, id);
+  if (!lease) return;
+  let cached = await readState(env, 'minute-catalog');
+  const quarter = Math.floor(minute / 15);
+  const allSeries = Object.keys(SERIES_SUBJECT);
+  const refresh = cached?.quarter !== quarter ? allSeries : allSeries.filter(series =>
+    cached.retry.includes(series) || (series.endsWith('15M') &&
+      !cached.markets.some(m => m.series === series && openForSampling(m))));
+  const sample = { kind: 'minute_chain', scheduled_at: new Date(minute * 60000).toISOString(),
+    catalog_receipt: cached?.receipt ?? null, books: [], missing_tickers: [], gaps: [] };
+  try {
+    const retained = (cached?.markets || []).filter(m => !refresh.includes(m.series));
+    const maxRows = retained.length + refresh.reduce((n, s) => n + (WEATHER_SERIES.includes(s) ? 6 : 12), 0);
+    const count = refresh.length + Math.ceil(maxRows / 16);
+    const reserved = count ? await reserveMinuteReads(env, count) : null;
+    const read = async (env, path) => {
+      await lease.renew();
+      return reserved(env, path);
+    };
+    if (refresh.length) {
+      const markets = [...retained], retry = [];
+      for (const series of refresh) {
+        try {
+          const catalog = await discover(env, read, [series]);
+          markets.push(...catalog.markets);
+          if (series.endsWith('15M') && !catalog.markets.some(openForSampling)) {
+            retry.push(series);
+            sample.gaps.push('No open window: ' + series);
+          }
+        } catch {
+          markets.push(...(cached?.markets || []).filter(m => m.series === series));
+          retry.push(series);
+          sample.gaps.push('Discovery unavailable: ' + series);
+        }
+      }
+      if (Math.floor(Date.now() / 60000) !== minute) throw Error('Capture window ended');
+      const receipt = await archive(env, 'Market catalog', { kind: 'discovery', markets, retry }, 'minute', crypto.randomUUID(), lease);
+      cached = { quarter, receipt: receipt.id, markets, retry };
+      await writeMinuteCatalog(env, cached, lease, minute);
+      sample.catalog_receipt = receipt.id;
+    }
+    const active = (cached?.markets || []).filter(openForSampling).map(m => m.ticker);
+    for (let i = 0; i < active.length; i += 16) {
+      const page = active.slice(i, i + 16);
+      try {
+        if (Math.floor(Date.now() / 60000) !== minute) throw Error('Window ended');
+        const book = await chainQuotes(env, page, read);
+        if (Math.floor(Date.parse(book.received_at) / 60000) !== minute) throw Error('Window ended');
+        sample.books.push(book);
+      } catch {
+        sample.missing_tickers.push(...page);
+      }
+    }
+  } catch {
+    sample.gaps.push('Minute capture incomplete');
+  }
+  await archive(env, 'Minute chain', sample, 'minute', id, lease);
 }

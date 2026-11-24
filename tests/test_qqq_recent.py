@@ -135,5 +135,99 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(feed.payload()["session"]["gaps"], [])
 
 
+class LabelTests(unittest.TestCase):
+    """Tiered ``label``/``basis`` signing; ``side`` must keep its original value."""
+    SYMBOL = "QQQ260925C00745000"
+    T0 = 1790343000000
+
+    @staticmethod
+    def stamp(t):
+        return datetime.fromtimestamp(t / 1000, timezone.utc).isoformat()
+
+    def quote(self, feed, bid, ask, dated, received):
+        feed.observe(dict(type="quote", symbol=self.SYMBOL, bid=bid, ask=ask, biddate=dated, askdate=dated,
+                          collector_receipt_timestamp=self.stamp(received)))
+
+    def trade(self, feed, seq, price, t, received=None):
+        feed.observe(dict(type="timesale", symbol=self.SYMBOL, seq=seq, date=t, last=price, size=3,
+                          collector_receipt_timestamp=self.stamp(received or t + 50)))
+        return feed.rows[-1]
+
+    def test_prevailing_quote_is_used_when_the_newest_quote_followed_the_print(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 10000
+        self.quote(feed, 1.0, 1.2, t - 400, t - 300)
+        self.quote(feed, 1.3, 1.5, t + 20, t + 30)  # arrived after the trade time: not prevailing
+        row = self.trade(feed, 1, 1.18, t, received=t + 40)
+        self.assertEqual(row["side"], "unknown")  # original rule rejects the newest quote
+        self.assertEqual((row["label"], row["basis"]), ("buy", "q1"))
+
+    def test_quote_freshness_requires_both_sides(self):
+        t = self.T0 + 60000
+        for age, basis in ((3000, "q5"), (20000, "q30"), (60000, "none"), (-1, "none")):
+            for bid_age, ask_age in ((age, 10), (10, age)):
+                with self.subTest(bid_age=bid_age, ask_age=ask_age):
+                    feed = recent.RecentPrints()
+                    feed.observe(dict(type="quote", symbol=self.SYMBOL, bid=1.0, ask=1.2,
+                                      biddate=t - bid_age, askdate=t - ask_age,
+                                      collector_receipt_timestamp=self.stamp(t - 5)))
+                    row = self.trade(feed, 1, 1.18, t)
+                    self.assertEqual(row["basis"], basis)
+                    self.assertEqual(row["label"], "unknown" if basis == "none" else "buy")
+
+    def test_regressing_time_does_not_sign_or_replace_the_tick_reference(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 5000
+        self.trade(feed, 1, 1.00, t)
+        self.trade(feed, 2, 1.10, t + 50)
+        late = self.trade(feed, 3, 1.30, t, received=t + 150)
+        following = self.trade(feed, 4, 1.10, t + 50, received=t + 151)
+        self.assertEqual((late["label"], late["basis"]), ("unknown", "none"))
+        self.assertEqual((following["label"], following["basis"]), ("buy", "zero_tick"))
+
+    def test_quote_age_tiers(self):
+        for age, basis in ((800, "q1"), (3000, "q5"), (20000, "q30")):
+            feed = recent.RecentPrints()
+            t = self.T0 + 60000
+            self.quote(feed, 1.0, 1.2, t - age, t - age + 5)
+            row = self.trade(feed, 1, 1.02, t)
+            self.assertEqual((row["label"], row["basis"]), ("sell", basis))
+        feed = recent.RecentPrints()
+        self.quote(feed, 1.0, 1.2, self.T0, self.T0 + 5)
+        row = self.trade(feed, 1, 1.02, self.T0 + 31000)
+        self.assertEqual((row["label"], row["basis"]), ("unknown", "none"))
+
+    def test_same_millisecond_sweep_is_tick_signed_in_sequence_order(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 5000
+        rows = [self.trade(feed, 1, 1.00, t), self.trade(feed, 2, 1.05, t), self.trade(feed, 3, 1.05, t)]
+        self.assertEqual([r["side"] for r in rows], ["unknown", "unknown", "unknown"])
+        self.assertEqual([(r["label"], r["basis"]) for r in rows],
+                         [("unknown", "none"), ("buy", "tick"), ("buy", "zero_tick")])
+
+    def test_midpoint_and_locked_stay_unsigned_without_a_tick(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 5000
+        self.quote(feed, 1.0, 1.2, t - 100, t - 90)
+        self.assertEqual((self.trade(feed, 1, 1.1, t)["label"], feed.rows[-1]["basis"]), ("unknown", "mid"))
+        feed = recent.RecentPrints()
+        self.quote(feed, 1.2, 1.2, t - 100, t - 90)
+        self.assertEqual(self.trade(feed, 1, 1.2, t)["basis"], "locked")
+
+    def test_session_label_totals_partition_volume_and_keep_bsu(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 5000
+        self.trade(feed, 1, 1.00, t)                       # none -> U
+        self.trade(feed, 2, 1.05, t)                       # tick buy -> low
+        self.quote(feed, 1.0, 1.2, t + 10, t + 20)
+        self.trade(feed, 3, 1.19, t + 500)                 # q1 buy (also original-rule buy)
+        self.trade(feed, 4, 1.01, t + 3000)                # q5 sell (original rule: tick sell)
+        c = feed.payload()["session"]["contracts"][self.SYMBOL]
+        self.assertEqual((c["B"], c["S"], c["U"], c["prints"]), (3, 3, 6, 4))
+        self.assertEqual(c["label"], dict(q1=[3, 0], q5=[0, 3], low=[3, 0], U=3))
+        lab = c["label"]
+        self.assertEqual(sum(lab["q1"] + lab["q5"] + lab["low"]) + lab["U"], c["B"] + c["S"] + c["U"])
+
+
 if __name__ == "__main__":
     unittest.main()

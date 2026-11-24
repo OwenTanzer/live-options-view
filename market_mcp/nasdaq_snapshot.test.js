@@ -161,7 +161,7 @@ test('dynamic membership: a snapshot with a changed listing count still validate
 });
 
 test('tools/list exposes nine read-only tools including nasdaq_snapshot', async () => {
-  assert.equal(tools.length, 9);
+  assert.equal(tools.length, 10);
   const entry = tools.find(t => t.name === 'nasdaq_snapshot');
   assert.ok(entry);
   assert.equal(entry.annotations.readOnlyHint, true);

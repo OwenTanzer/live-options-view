@@ -14,6 +14,8 @@
 let historyLoaded = false;
 // The News panel (js/news-panel.js) mounts once, on first open, like history.
 let newsLoaded = false;
+// The Crypto panel (js/crypto-panel.js) mounts once, on first open, like news.
+let cryptoLoaded = false;
 // The Stocks panel (js/nasdaq-panel.js) mounts once, on first open, like News.
 let nasdaqLoaded = false;
 
@@ -24,6 +26,7 @@ const TABS = {
   bots:    ['bots-panel',    'tab-bots'],
   squeeze: ['squeeze-panel', 'tab-squeeze'],
   news:    ['news-panel',    'tab-news'],
+  crypto:  ['crypto-panel',  'tab-crypto'],
   nasdaq: ['nasdaq-panel',  'tab-nasdaq'],
 };
 
@@ -41,6 +44,10 @@ function showTab(tab) {
   if (tab === 'news' && !newsLoaded) {
     newsLoaded = true;
     loadNewsPanel();
+  }
+  if (tab === 'crypto' && !cryptoLoaded) {
+    cryptoLoaded = true;
+    loadCryptoPanel();
   }
   if (tab === 'nasdaq' && !nasdaqLoaded) {
     nasdaqLoaded = true;

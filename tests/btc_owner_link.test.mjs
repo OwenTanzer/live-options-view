@@ -1,3 +1,4 @@
+import {origin as usdcOrigin, usdcFixture, instrument} from './helpers/usdc_fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign, randomUUID } from 'node:crypto';
@@ -146,13 +147,14 @@ test('in-flight source reads fail closed on revocation and missing schema cannot
   const h = await fixture(), originalFetch = global.fetch;
   try {
     assert.equal((await h.verify(await h.options())).status, 200);
-    global.fetch = async () => {
-      await h.call({ action: 'unlink' });
-      return Response.json({ contracts: [{ private: 'must not escape' }], quotes: [] });
+    h.env.BTC_USDC_DATA_ORIGIN = usdcOrigin;
+    global.fetch = async url => {
+      if (new URL(url).pathname.endsWith('/get_instruments')) await h.call({ action: 'unlink' });
+      return usdcFixture(url);
     };
     const response = await worker.fetch(h.request('/api/btc-options'), h.env);
     assert.equal(response.status, 403);
-    assert.equal((await response.text()).includes('must not escape'), false);
+    assert.equal((await response.text()).includes(instrument), false);
     h.env.DB.db.exec('DROP TABLE btc_owner_sessions');
     h.env.BTC_OPTIONS_USERS = 'normal_paper';
     assert.equal(await h.allowed(), false);

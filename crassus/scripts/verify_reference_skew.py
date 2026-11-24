@@ -16,12 +16,14 @@ def context(root, rows, timestamp, widened=False):
     return make_ctx(rows=board, timestamp=timestamp, quote_map=quotes)
 
 
-for root, name in (("SPY", "oi_skew_spy"), ("IBIT", "oi_skew_ibit_adaptive")):
+ADAPTIVE = ("IBIT", "SLV", "DRAM")
+for root, name in (("SPY", "oi_skew_spy"), ("IBIT", "oi_skew_ibit_adaptive"),
+                   ("SLV", "oi_skew_slv_adaptive"), ("DRAM", "oi_skew_dram_adaptive")):
     decide = get(name)
     reset_strategy_state(name)
-    anchor = decide(context(root, FLAT_ROWS, "2024-01-01T15:00:00Z", root == "IBIT"))
+    anchor = decide(context(root, FLAT_ROWS, "2024-01-01T15:00:00Z", root in ADAPTIVE))
     assert anchor.action == "no_trade" and anchor.metadata["imbalance_ratio"] == 0
-    changed = context(root, SKEWED_BULLISH_ROWS, "2024-01-01T15:01:00Z", root == "IBIT")
+    changed = context(root, SKEWED_BULLISH_ROWS, "2024-01-01T15:01:00Z", root in ADAPTIVE)
     entry = decide(changed)
     assert entry.action == "buy" and entry.symbol.startswith(root) and entry.quantity == 1
     assert entry.strategy_id == name and entry.metadata["band_strikes"] == 5

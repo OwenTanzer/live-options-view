@@ -79,6 +79,34 @@ class MultiUnderlying(unittest.TestCase):
   with patch.object(quotes,'COLLECT_IBIT',False): registry.quote_payload(['IBIT291221C00001000'])
   self.assertEqual(len(feed.added),100)
 
+ def test_slv_dram_are_opt_in_per_symbol(self):
+  # SLV and DRAM follow IBIT: off by default, each gated by its own flag, and
+  # one flag never opens another underlying.
+  from market_data.live_market import config
+  self.assertIn('SLV', config.CHAIN_UNDERLYINGS); self.assertIn('DRAM', config.CHAIN_UNDERLYINGS)
+  self.assertEqual(set(config.OPT_IN_UNDERLYINGS), {'IBIT', 'SLV', 'DRAM'})
+  class Feed:
+   def __init__(self): self.added=[]
+   def add_option_subscriptions(self,symbols): self.added+=symbols
+   def get_state(self): return {}
+   def get_health(self): return {'last_feed_event_time':None,'connected':True,'authorized':True,'channel_open':True}
+  for root, flag in (('SLV','COLLECT_SLV'), ('DRAM','COLLECT_DRAM')):
+   feed=Feed(); registry=quotes.LiveQuoteRegistry(); registry.set_session(feed,{})
+   contract=f'{root}291221C00030000'
+   with patch.object(quotes,'COLLECT_SLV',False), patch.object(quotes,'COLLECT_DRAM',False), patch.object(quotes,'COLLECT_IBIT',True):
+    payload=registry.quote_payload([contract])
+   self.assertEqual(payload['unavailable'][contract],'not_collected'); self.assertEqual(feed.added,[])
+   other='DRAM' if root=='SLV' else 'SLV'
+   with patch.object(quotes,flag,True), patch.object(quotes,f'COLLECT_{other}',False):
+    registry.quote_payload([contract, f'{other}291221C00030000'])
+   self.assertEqual(len(feed.added),1, f'only {root} subscribes when only its flag is on')
+
+ def test_one_clock_skips_unregistered_instruments(self):
+  from market_data.live_market import one_clock
+  self.assertNotIn('SLV', one_clock.INSTRUMENTS); self.assertNotIn('DRAM', one_clock.INSTRUMENTS)
+  with self.assertRaises(Exception):
+   one_clock.project_snapshot({'symbol':'SLV','snapshot_key':'intraday/slv/20261123/snapshot_1000.csv','timestamp':'2026-11-23T15:00:00+00:00'})
+
  @patch.object(quotes, 'datetime', FixedDatetime)
  def test_quote_payload_explains_every_absent_contract(self):
   # The 503 that made the option lane look broken was the service correctly

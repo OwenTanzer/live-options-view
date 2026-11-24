@@ -5,6 +5,7 @@ These specifications are repository documentation, not served assets. Return to 
 | Specification | Use it to understand | Boundary |
 |---|---|---|
 | [SPY collection](SPY_COLLECTION.md) | Parallel snapshot keys, symbol isolation, health and browser selection | No substitution of QQQ for missing SPY; current publication needs a live observation |
+| [Crypto snapshot](CRYPTO_SNAPSHOT.md) | Hourly 39-coin artifact, per-coin source/as-of/freshness, no-substitution isolation, continuous 24/7 session model | No trading, alerts, favourites, news joins or One Clock crypto fields |
 | [Qualified ask-to-later-bid](OA203_QUALIFIED_ASK_BID_V1.md) | Endpoint eligibility and retrospective rankings | Qualified quotes do not establish fills or capacity |
 | [Active Big Banana lookup](OA203_ACTIVE_LOOKUP.md) | Cutoff-pinned daily-session products, bounds and November 8 activation policy | Earlier candidate proposals in its history are superseded where the policy says so |
 | [Multi-session windows](OA203_MULTI_SESSION_WINDOWS.md) | Contract continuity and weekly/overnight definitions | Daily active lookup is not evidence of deployed multi-session windows |

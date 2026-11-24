@@ -131,7 +131,12 @@ def test_session_keys_keep_qqq_layout():
     assert_equal(spy.rvol_baseline_key, "baselines/spy_rvol_buckets.json", "SPY RVOL key")
     assert_true(not spy.day_prefix("20261006").startswith(qqq.day_prefix("20261006")),
                 "SPY archive never falls under a QQQ date prefix")
-    assert_equal(set(collector.UNDERLYING_SESSIONS), {"QQQ", "SPY", "IBIT"}, "configured underlyings")
+    assert_equal(set(collector.UNDERLYING_SESSIONS), {"QQQ", "SPY", "IBIT", "SLV", "DRAM"}, "configured underlyings")
+    for opt_in in ("SLV", "DRAM"):
+        session = collector.UNDERLYING_SESSIONS[opt_in]
+        assert_equal(session.latest_key, f"intraday/{opt_in.lower()}/latest.json", f"{opt_in} latest key")
+        assert_true(not session.day_prefix("20261006").startswith(qqq.day_prefix("20261006")),
+                    f"{opt_in} archive never falls under a QQQ date prefix")
     assert_true(collector.UNDERLYING_SESSIONS["QQQ"] is collector.QQQ_SESSION, "QQQ keeps the module session")
 
 

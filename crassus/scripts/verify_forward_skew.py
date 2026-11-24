@@ -18,6 +18,12 @@ from crassus.strategy import Decision
 
 SYM = "QQQ261116C00680000"
 IBIT_SYM = "IBIT261120C00060000"
+ROOT_SYMS = {
+    "QQQ": SYM,
+    "IBIT": IBIT_SYM,
+    "SLV": "SLV261120C00030000",
+    "DRAM": "DRAM261120C00040000",
+}
 START = datetime(2026, 11, 16, 10, 30, tzinfo=ET)
 
 
@@ -58,8 +64,8 @@ class Comparison(unittest.TestCase):
     def scenario(self, arm, root="QQQ"):
         arms = f.FAMILIES[root]["arms"]
         strategy_id = f.FAMILIES[root]["strategy_id"]
-        sym = SYM if root == "QQQ" else IBIT_SYM
-        signal_name = "oi_skew_qqq" if root == "QQQ" else "ibit_signal"
+        sym = ROOT_SYMS[root]
+        signal_name = "oi_skew_qqq" if root == "QQQ" else "reference_signal"
         account = SimpleNamespace(username=next(k for k, v in arms.items() if v == arm))
         trades = []
         bars = SimpleNamespace(rows=[], error=None)
@@ -156,6 +162,44 @@ class Comparison(unittest.TestCase):
     def test_ibit_stop_still_applies(self):
         # No stop-only IBIT arm, but the protection arms keep the 35% stop.
         self.assertNotIn("stop", f.IBIT_ARMS.values())
+
+    def test_slv_dram_arms(self):
+        for root in ("SLV", "DRAM"):
+            family = f.FAMILIES[root]
+            self.assertEqual(
+                sorted(family["arms"].values()),
+                ["baseline", "protect_only", "protect_reentry"],
+            )
+            self.assertEqual(
+                family["strategy_id"], f"oi_skew_{root.lower()}_adaptive"
+            )
+            for arm in ("protect_only", "protect_reentry"):
+                with self.subTest(root=root, arm=arm):
+                    self.scenario(arm, root)
+
+    def test_signal_routing_per_family(self):
+        ctx = SimpleNamespace()
+        with patch.object(f, "reference_signal", return_value="ref") as ref:
+            for root in ("IBIT", "SLV", "DRAM"):
+                self.assertEqual(f.signal_for(root, ctx), "ref")
+                ref.assert_called_with(ctx, f.FAMILIES[root]["strategy_id"])
+
+    def test_no_cross_family_signal(self):
+        # A silver arm cannot run the memory signal (or IBIT's), and vice versa.
+        for user, sid in (
+            ("crassus_oif_slv_protect", "oi_skew_dram_adaptive"),
+            ("crassus_oif_dram_protect", "oi_skew_slv_adaptive"),
+            ("crassus_oif_slv_baseline", "oi_skew_ibit_adaptive"),
+            ("crassus_oif_dram_recover", "oi_skew_qqq"),
+        ):
+            with self.assertRaises(ValueError):
+                f.arm_for(
+                    SimpleNamespace(
+                        username=user,
+                        strategy_id=sid,
+                        params={"forward_skew_arm": f.FAMILIES[f.root_for(SimpleNamespace(username=user))]["arms"][user]},
+                    )
+                )
 
     def test_chart_identity_per_symbol(self):
         t = int(START.timestamp())

@@ -38,9 +38,14 @@ TICKER          = "QQQ"
 # Underlyings with their own 0DTE chain, snapshot, indicators and archive
 # (#121). Only TICKER (QQQ) gets the nearest-weekly archive; SPY is 0DTE only,
 # to bound subscriptions and writes.
-CHAIN_UNDERLYINGS = ("QQQ", "SPY", "IBIT")
+CHAIN_UNDERLYINGS = ("QQQ", "SPY", "IBIT", "SLV", "DRAM")
 # Opt-in only after provider and release acceptance; no new connection.
+# IBIT, SLV and DRAM collect their nearest listed expiration (not 0DTE) and
+# stay off until their COLLECT_<SYMBOL> flag is "1" on the collector.
 COLLECT_IBIT = os.environ.get("COLLECT_IBIT", "0") == "1"
+COLLECT_SLV = os.environ.get("COLLECT_SLV", "0") == "1"
+COLLECT_DRAM = os.environ.get("COLLECT_DRAM", "0") == "1"
+OPT_IN_UNDERLYINGS = ("IBIT", "SLV", "DRAM")
 COLLECT_SPY     = os.environ.get("COLLECT_SPY", "1") != "0"
 STRIKE_WINDOW   = 33
 SPY_MAX_STRIKES = 67
@@ -223,6 +228,9 @@ __all__ = [
     "TICKER",
     "CHAIN_UNDERLYINGS",
     "COLLECT_IBIT",
+    "COLLECT_SLV",
+    "COLLECT_DRAM",
+    "OPT_IN_UNDERLYINGS",
     "COLLECT_SPY",
     "STRIKE_WINDOW",
     "SPY_MAX_STRIKES",

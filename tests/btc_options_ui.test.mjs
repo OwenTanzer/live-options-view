@@ -67,11 +67,11 @@ btc.select(false); resolveRequest(Response.json({ session: 'open', quotes: [q], 
 await pending;
 assert.equal(btc.quotes.size, 0, 'in-flight selection response cannot repopulate old quotes');
 assert.ok(ticketClosed > 0);
-book = { [sym]: { instrument_type: 'futures_option', pos: 1 } };
+book = { [linear]: { instrument_type: 'futures_option', pos: 1 } };
 const heldRefresh = btc.refresh();
-resolveRequest(Response.json({ session: 'open', quotes: [q], contracts: [c] }));
+resolveRequest(Response.json({ session: 'open', quotes: [{ ...q, symbol: linear }], contracts: [c] }));
 await heldRefresh;
-assert.equal(btc.mark(sym), 120, 'held contracts refresh away from BTC view');
+assert.equal(btc.mark(linear), 120, 'held contracts refresh away from BTC view');
 
 // Exercise the exact browser book code against the server implementation.
 const paper = readFileSync(new URL('../site/js/paper-trading.js', import.meta.url), 'utf8');

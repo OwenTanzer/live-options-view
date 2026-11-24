@@ -305,7 +305,7 @@ test('window discovery advertises the fixed contract without an index', async ()
   const f = setup();
   const out = await f.consumer.call('discover_sources', { session: '2026-10-02' });
   assert.deepEqual(out.capabilities.map(c => c.dataset),
-    ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'nasdaq_snapshot', 'options_windows', 'options_active']);
+    ['qqq_snapshot', 'scheduled_squeeze', 'options_returns', 'spy_snapshot', 'cross_market_overview', 'crypto_snapshot', 'nasdaq_snapshot', 'options_windows', 'options_active']);
   const win = out.capabilities.find(c => c.dataset === 'options_windows');
   assert.equal(win.availability, 'explicit_window_required');
   assert.equal(win.producer_schema, 'oa203-windows-v1');
@@ -319,7 +319,7 @@ test('window discovery advertises the fixed contract without an index', async ()
 
 test('MCP window_rankings and pinned detail use read-only bounded schemas', async () => {
   const f = setup(), p = new Protocol(f.consumer);
-  assert.equal(tools.length, 9);
+  assert.equal(tools.length, 10);
   const tool = tools.find(t => t.name === 'window_rankings');
   assert.ok(tool.annotations.readOnlyHint);
   assert.equal(tool.inputSchema.additionalProperties, false);
