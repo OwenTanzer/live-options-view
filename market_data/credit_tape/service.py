@@ -31,7 +31,7 @@ from http.server import ThreadingHTTPServer
 
 from market_data.credit_tape import capture
 from market_data.credit_tape import serve_private as sp
-from market_data.credit_tape import treu, volume
+from market_data.credit_tape import treu, volume, storage
 
 
 def config(env=os.environ, is_mount=os.path.ismount):
@@ -56,23 +56,28 @@ def main(env=os.environ, is_mount=os.path.ismount) -> int:
         print(f"credit-tape service not started: configuration incomplete or invalid ({name})", flush=True)
         return 2
     archive = str(settings.archive)
-    os.makedirs(archive, exist_ok=True)
-    probe = os.path.join(archive, ".write-probe")
-    with open(probe, "w") as fh:  # fail now, not mid-commit, if the volume is read-only
-        fh.write("ok")
-    os.remove(probe)
-    try:
-        ident = volume.ensure_identity(archive)
-    except ValueError as exc:
-        print(f"credit-tape service not started: {exc}", flush=True)
-        return 2
-
     stop = threading.Event()
+    capture_stop = threading.Event()
     failed = {}
+    root = volume.volume_root(env)
+    paused = storage.status(root)["pause_writers"]
+    # At capacity, even creating a probe can fail. Existing evidence is readable.
+    if paused:
+        ident = volume.read_identity(archive)
+        if not ident:
+            print("Low space and no readable archive identity", flush=True)
+            return 2
+    else:
+        os.makedirs(archive, exist_ok=True)
+        try:
+            ident = volume.ensure_identity(archive)
+        except ValueError as exc:
+            print(f"credit-tape service not started: {exc}", flush=True)
+            return 2
 
     def collect():
         try:
-            capture.run(archive, interval, ticker=False, slices=True, stop=stop)
+            capture.run(archive, interval, ticker=False, slices=True, stop=capture_stop)
         except BaseException:  # noqa: BLE001 - any collector death must take the process down
             failed["error"] = traceback.format_exc()
 
@@ -86,19 +91,40 @@ def main(env=os.environ, is_mount=os.path.ismount) -> int:
     signal.signal(signal.SIGINT, on_term)
     web = threading.Thread(target=srv.serve_forever, name="credit-tape-panel", daemon=True)
     web.start()
-    worker.start()
-    uk_worker = threading.Thread(target=treu.run, args=(settings.archive, stop), name="tradeweb-treu", daemon=True)
-    uk_worker.start()
-    print(f"credit-tape service: slice-only collector every {interval:g}s, archive={archive} "
-          f"(archive_id {ident['archive_id']}, volume {volume.volume_root(env)}), "
-          f"panel on :{srv.server_port} for {settings.origin} ({len(settings.allowed_ids)} allowed ids)", flush=True)
+    archiver = None
+    bucket = env.get("CREDIT_TAPE_INDEX_BUCKET")
+    if bucket:
+        archiver = threading.Thread(target=storage.archive_days, args=(archive, ident["archive_id"], stop, bucket),
+                                    name="credit-index-archiver", daemon=True)
+        archiver.start()
+    uk_worker = threading.Thread(target=treu.run, args=(settings.archive, capture_stop),
+                                 name="tradeweb-treu", daemon=True)
+    writers_started = not paused
+    if writers_started:
+        worker.start()
+        uk_worker.start()
+    print(f"credit-tape service: archive_id={ident['archive_id']}, volume={root}, paused={paused}", flush=True)
     while not stop.wait(1.0):
-        if not worker.is_alive() or not uk_worker.is_alive():
+        space = storage.status(root)
+        if paused:
+            if space["available_bytes"] >= storage.RESUME:
+                # Restart cleanly so all worker state is rebuilt through the normal recovery path.
+                failed["error"] = "disk reserve restored; restarting capture"
+                break
+        elif space["pause_writers"]:
+            paused = True
+            capture_stop.set()
+            print("Credit Tape capture paused at disk reserve; serving the retained tape", flush=True)
+        elif not worker.is_alive() or not uk_worker.is_alive():
             failed.setdefault("error", "collector worker exited")
-            stop.set()
             break
-    worker.join(timeout=interval + 90)  # finish the current pass; commits are crash-safe regardless
-    uk_worker.join(timeout=20)
+    capture_stop.set()
+    stop.set()
+    if writers_started:
+        worker.join(timeout=interval + 90)
+        uk_worker.join(timeout=20)
+    if archiver:
+        archiver.join(timeout=10)
     srv.shutdown()
     srv.server_close()
     if failed or (not stop.is_set()):

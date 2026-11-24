@@ -451,7 +451,16 @@ def make_handler(settings: Settings | None, store: Store | None = None, identity
             if url.path == "/healthz/collector":
                 if not settings:
                     return self.reply(503, b'{"ok":false,"reason":"unconfigured"}', "application/json")
+                from market_data.credit_tape import storage
                 ok, body = collector_health(settings.archive)
+                try:
+                    space = storage.status(settings.archive)
+                except OSError:
+                    return self.reply(503, b'{"ok":false,"reason":"archive disk unavailable"}', "application/json")
+                body["disk"] = space
+                if space["pause_writers"]:
+                    ok = body["ok"] = False
+                    body["reason"] = "disk reserve"
                 if (settings.archive / treu.DATABASE).exists():
                     try:
                         body["treu"] = treu.health(settings.archive)

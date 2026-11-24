@@ -11,7 +11,7 @@ Captured data never enters this repository (it is public); tests use synthetic f
 | `capture.py` | Runs both routes in one process (`--no-ticker` / `--no-slices`). Polls each ticker, persists every distinct original response (gzip, byte-identical) **before** decoding, appends one event per newly seen publication with first-seen time, raw reference, publisher and jurisdiction. Decode failures still produce an event pointing at the raw payload. Per-source checkpoint, poll log and `health.json`. |
 | `serve_private.py` + `web/` | Recent-trades panel. GitHub identity-only sign-in (PKCE, `scope=""`), numeric-ID allowlist, opaque 8-hour sessions, server-side checks on `/api/trades`, `/api/raw`, `/api/export` and the panel assets. Design copied from directional-move-lab `scripts/serve_private.py@2bdebbe`; no shared session, cookie or OAuth app. `CREDIT_TAPE_DEV_LOCAL=1` serves without sign-in on 127.0.0.1 only. |
 | `slices.py` | Slice-index route (selected U.S. route). `poll_index` fetches the public `Slice.json` with `If-None-Match` and only **enqueues** unseen `CFTC_CR`/`SEC_CR` slices into `dtcc-slices/pending.json`, which is kept separately from the index ETag (the ETag advances only after pending entries are durable). `drain_live` runs on the live loop every pass, whether the index answered 200 or 304; replay slices (disseminated before the route started) drain on a separate backfill thread. Each slice is published as a durable, idempotent commit keyed by `source/channel/sliceId`: the complete zip is written to `.part`, fsynced, hash-checked and renamed; a commit record (`commits/`) holds every event and alert line plus both logs' pre-append offsets; lines are appended tagged `commit_key`/`commit_line`; then a `done/` marker is written. On restart, any commit without a marker is re-applied from its offsets (torn tail trimmed, present lines skipped, missing lines appended), so a stop at any point gives no loss and no duplicate. A commit whose original ZIP is missing or hash-invalid is never marked complete: the slice stays pending and completes only when re-downloaded bytes match the committed sha256. If the replay worker fails, its error is recorded in health and the collector stops (the service exits 1). `rowCount` is compared (`rowcount_mismatch` alerts). Failed downloads stay pending with per-slice backoff (5 s doubling to 5 min) and do not block other slices. Slice IDs are only unique within a channel (CFTC and SEC can carry the same number), so pending and seen entries are keyed `CHANNEL:sliceId`; legacy bare-ID entries are migrated or dropped safely because done markers are already channel-scoped. Only `https://kgc0418-tdw-data-0.s3.amazonaws.com/{cftc,sec}/slices/...` is fetched. |
-| `service.py` | Isolated service entrypoint (release handoff: [RELEASE.md](RELEASE.md)). One process: slice-only collector thread (ticker output off) plus the GitHub-gated panel on `PORT`, archive on `CREDIT_TAPE_ARCHIVE`. Fails closed on incomplete gate config, `CREDIT_TAPE_DEV_LOCAL`, or an absent persistent volume (`volume.py`: the archive must sit inside a mount named by `CREDIT_TAPE_VOLUME`/`RAILWAY_VOLUME_MOUNT_PATH`); exits non-zero if the collector or replay worker dies. Sign-in flow follows directional-move-lab `serve_private.py@2bdebbe` (pending-claim failure cleanup, one-time replay records) and accepts GitHub's documented `code`+`state` callback (`iss` optional, exact if present). `/healthz/collector` reports per-channel (`CFTC_CR`, `SEC_CR`) state without trade content. Image: `deployment/credit_tape/Dockerfile` (stdlib only). |
+| `service.py` | Isolated service entrypoint (release handoff: [RELEASE.md](RELEASE.md)). One process: slice-only collector thread (ticker output off) plus the GitHub-gated panel on `PORT`, archive on `CREDIT_TAPE_ARCHIVE`. Fails closed on incomplete gate config, `CREDIT_TAPE_DEV_LOCAL`, or an absent persistent volume (`volume.py`: the archive must sit inside a mount named by `CREDIT_TAPE_VOLUME`/`RAILWAY_VOLUME_MOUNT_PATH`); exits non-zero if the collector or replay worker dies. Sign-in flow follows directional-move-lab `serve_private.py@2bdebbe` (pending-claim failure cleanup, one-time replay records) and accepts GitHub's documented `code`+`state` callback (`iss` optional, exact if present). `/healthz/collector` reports per-channel (`CFTC_CR`, `SEC_CR`) state without trade content. Image: `deployment/credit_tape/Dockerfile`. |
 | `check_archive.py` | Read-only integrity check for restart verification: duplicates, torn lines, open commits, raw ZIP hashes, `.part` leftovers, per-channel publication counts, ticker publications; `--compare` against an earlier run. Fails on a missing/unmounted archive and on any ticker output. Validates every completed commit against its original ZIP (sha256, re-decoded rows, decode failures) and its committed event/alert lines; `--compare` requires the same `archive_id`. |
 | `synthetic_demo.py` | Runnable local slice-only panel demo (no network, no ticker): a CFTC and an SEC fixture slice share one numeric `sliceId`; the process is stopped inside the SEC commit, restarted twice on an unchanged (304) index, then the real panel server (dev-local) is queried over HTTP. Passes only with two publication rows, one per channel, each `/api/raw` link byte-identical to its published ZIP, no duplicates. `python -m market_data.credit_tape.synthetic_demo --out <new empty dir> --serve` then open http://127.0.0.1:8790. |
 | `synthetic_crash.py` | Crash-safety run (no network): stops publishing after the raw zip, after the commit record, mid-append (torn line) and after output before the done marker; each restart must leave one intact original, one publication event, one slice event and one alert. `python -m market_data.credit_tape.synthetic_crash` exits 0 only if every stop point passes. |
@@ -45,8 +45,7 @@ Observed: the ticker window is not strictly newest-first (older records rotate i
 records disseminated before capture start are labelled `backfill`. Caps are published as
 text (`5,000,000+` SEC; `50,000,000+`/`250,000,000+`/`400,000,000+` CFTC; one `4,557,000+`
 seen) and kept verbatim. The `/ppd/api/slice/...` listing route used by the dashboard
-returned 400 for every parameter form tried; the S3 index above replaces it. The per-change
-credit entries of the index are kept verbatim (`dtcc-slices/index/`), not the full 3.6 MB file.
+returned 400 for every parameter form tried; the S3 index above replaces it. Credit-channel index receipts use the compact history described below.
 
 **Terms.** No terms or disclaimer were found on the PPD dashboard or in its app bundle.
 dtcc.com/terms (updated 2026-03-11) says some material is governed by separate agreements.
@@ -115,3 +114,45 @@ the publisher filter. Select an instrument to expand its report, or use Optional
 columns to compare execution time, publication time, price, action and report
 ID across rows. Show more reports reveals additional matches in increments of
 100 within the window (up to 500 DTCC events and 500 TREU reports).
+
+
+### DTCC index retention and recovery
+
+Each HTTP 200 commits a receipt and its complete ordered channel membership in one
+transaction in `dtcc-slices/index-history/YYYY-MM-DD.sqlite`. Distinct metadata
+versions and identical ordered listings are shared within the day. The receipt
+keeps the fetch time, ETag, Last-Modified and full provider-body SHA-256. A 304
+continues to use the poll log. Original slice ZIPs, TREU originals and published
+events retain their existing paths. Restore reads legacy JSON and compact history.
+
+Set `CREDIT_TAPE_INDEX_BUCKET` to a **private** bucket and configure the standard
+AWS credential chain and region. For an S3-compatible host, also set
+`CREDIT_TAPE_S3_ENDPOINT` to its HTTPS endpoint. Give the service GetObject and
+PutObject on its credit-tape prefix. Retain these objects without expiry. Every
+five minutes the service checks for closed UTC days, uploads each SQLite partition
+under its archive identity and SHA-256, downloads it to container scratch, verifies
+the complete digest, then durably records a local pointer before unlinking the local
+copy. Failure leaves the local evidence in place and retries. Restore verifies
+the digest on cold reads too. Without a configured bucket, compact partitions
+remain local. The private object-store path must pass a real round trip at cutover.
+
+The external headroom monitor warns at 1,500 decimal MB or under 12 hours of
+projected runway. The service exposes filesystem headroom at /healthz/collector.
+At 500 MB available it pauses both capture writers while the gated panel remains up.
+At 750 MB it requests a clean platform restart to recover through the existing
+commit journal. Keep Railway's on-failure restart policy enabled. The reserve gives
+in-flight writes room to finish; a pause constitutes a capture gap.
+
+**Migrating the full legacy volume.** Stop its writers and obtain a complete
+quiescent tar.gz of /data on a separate disk. Compare SHA-256 with the source.
+On the separate disk run
+`python -m market_data.credit_tape.import_index BACKUP NEW_DIRECTORY --sha256 EXPECTED`.
+The importer reads the backup without extracting it, rejects unexpected index
+paths and duplicate receipts, reconstructs every snapshot and checks it against
+its original JSON before printing partition hashes. Keep the full backup. With
+writers still stopped, ensure the live legacy files match the backed-up files
+before evicting that verified index directory to make room. Install the verified
+partitions as dtcc-slices/index-history; compare every installed hash before
+launch. Never evict original ZIPs, TREU data, events, commits, or archive identity
+as part of this migration. At cutover check an older original through replay,
+complete GitHub sign-in, and observe a fresh provider report on the live tape.

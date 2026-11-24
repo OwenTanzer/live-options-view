@@ -53,7 +53,7 @@ import sys
 import urllib.error
 from urllib.parse import urlsplit
 
-from market_data.credit_tape import capture, slices, volume
+from market_data.credit_tape import capture, index_history, slices, volume
 
 NAME = re.compile(r"^(CFTC|SEC)_SLICE_CREDITS_(\d{4})_(\d{2})_(\d{2})_(\d+)\.zip$")
 
@@ -94,6 +94,10 @@ def index_entries(archive: str, channel: str, file_name: str) -> list[dict]:
         for meta in (snap.get("entries") or {}).get(channel) or []:
             if isinstance(meta, dict) and meta.get("fileName") == file_name:
                 found.append({**meta, "_snapshot": os.path.relpath(path, archive), "_fetched_at": snap.get("fetched_at")})
+    for name, snap in index_history.partitions(os.path.join(archive, "dtcc-slices")):
+        for meta in (snap.get("entries") or {}).get(channel) or []:
+            if isinstance(meta, dict) and meta.get("fileName") == file_name:
+                found.append({**meta, "_snapshot": "index-history/" + name, "_fetched_at": snap["fetched_at"]})
     return found
 
 
