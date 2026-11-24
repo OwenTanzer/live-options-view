@@ -8,7 +8,7 @@ for(let k=647;k<=654;k++) for(const type of ['C','P']) symbols.push('QQQ261123'+
 function chain(t) {
   return {symbol:'QQQ',date:day,expiration:day,timestamp:new Date(t).toISOString(),underlying_price:650.5,
     underlying_market:{symbol:'QQQ',source:'dxlink',freshness:'live',spot:650.5,spot_ts:new Date(t).toISOString(),
-      provenance:{freshness:'live',price_basis:'bid_ask_midpoint',price:650.5,collector_received_at:new Date(t).toISOString()}},
+      provenance:{contributing:{bid_ts:new Date(t).toISOString(),ask_ts:new Date(t).toISOString()},freshness:'live',price_basis:'bid_ask_midpoint',price:650.5,collector_received_at:new Date(t).toISOString()}},
     rows:symbols.map(OptionSymbol=>({OptionSymbol,Gamma:.01,OpenInterest:1234}))};
 }
 function event(t,seq,side='buy') {return {symbol:symbols[0],t,seq,size:2,side,price:1.25};}
@@ -88,4 +88,50 @@ test('a changed cumulative projection with identical count cannot be a continuou
   events.push(event(open+60000,2));
   const [d]=poll(f,open+60000,events).frames;
   assert.deepEqual(d.eligibleSlots,[]);
+});
+
+test('midpoint becomes usable only once both side receipts preceded the boundary',()=>{
+  const boundary=open+60000;
+  function closeMinute(bid,ask) {
+    const f=new ForwardFeed(),events=[event(open,1)];
+    poll(f,open,events);events.push(event(boundary,2));
+    const receivedAt=boundary+2000;
+    const candidate=chain(receivedAt-10),m=candidate.underlying_market;
+    candidate.underlying_price=m.spot=m.provenance.price=650.75;
+    m.spot_ts=m.provenance.collector_received_at=new Date(boundary-1000).toISOString();
+    m.provenance.contributing={bid_ts:bid,ask_ts:ask};
+    return f.observe({open,close,flow:projection(events),chain:candidate,chainReceivedAt:receivedAt,receivedAt});
+  }
+  const before=new Date(boundary-1000).toISOString();
+  const straddle=closeMinute(before,new Date(boundary+1000).toISOString());
+  assert.equal(straddle.frames[0].frame.spot,650.5);
+  assert.equal(straddle.quote.t,boundary+1000);
+  assert.equal(straddle.quote.oldest,boundary-1000);
+  const fractional=closeMinute(before,new Date(boundary).toISOString().replace('.000Z','.000500Z'));
+  assert.equal(fractional.frames[0].frame.spot,650.5);
+  assert.equal(fractional.quote.t,boundary+1);
+  for(const [bid,ask] of [[before,null],[null,before],[before,'n/a']]) {
+    const unproven=closeMinute(bid,ask);
+    assert.equal(unproven.quote,null);assert.equal(unproven.frames[0].frame.spot,650.5);
+  }
+  const positive=closeMinute(before,new Date(boundary-100).toISOString());
+  assert.equal(positive.frames[0].frame.spot,650.75);
+  assert.equal(positive.frames[0].frame.snapshotTime,boundary-100);
+  assert.equal(positive.quote.oldest,boundary-1000);
+});
+
+test('earlier provider timestamp cannot backdate receipt of last trade',()=>{
+  const f=new ForwardFeed(),events=[event(open,1)],boundary=open+60000;
+  poll(f,open,events);events.push(event(boundary,2));
+  const later=boundary+850, sampled=later+500;
+  const candidate=chain(sampled),market=candidate.underlying_market;
+  const arrival=new Date(later).toISOString(), atExchange=new Date(boundary-700).toISOString();
+  candidate.underlying_price=market.spot=market.provenance.price=650.75;
+  market.spot_ts=market.provenance.collector_received_at=arrival;
+  market.provenance.price_basis='last_trade';
+  market.provenance.provider_observed_at=atExchange;
+  market.provenance.contributing={last_ts:arrival,last_observed_at:atExchange};
+  const result=f.observe({open,close,receivedAt:sampled,chainReceivedAt:sampled,flow:projection(events),chain:candidate});
+  assert.equal(result.quote.t,later);assert.equal(result.quote.oldest,boundary-700);
+  assert.equal(result.frames[0].frame.spot,650.5);
 });

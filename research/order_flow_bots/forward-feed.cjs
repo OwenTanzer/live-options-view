@@ -65,17 +65,42 @@ function sameTotals(previous,current,added) {
   return true;
 }
 
+// Preserve sub-millisecond boundaries from the collector's ISO timestamps.
+// Date.parse alone truncates a side at 09:30:00.000500 back to the open.
+function stamp(value) {
+  if(typeof value!=='string') return NaN;
+  const ms=Date.parse(value);
+  const fraction=value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i)?.[1]??'';
+  return ms + Number('0.'+(fraction.slice(3)||'0'));
+}
+
 function spotObservation(chain,ct,receivedAt) {
   const m=chain.underlying_market, p=m?.provenance;
   if(m?.symbol!=='QQQ' || m.source!=='dxlink' || m.freshness!=='live' ||
      p?.freshness!=='live' || p.price!==m.spot || !positive(m.spot) ||
      !['bid_ask_midpoint','last_trade'].includes(p.price_basis)) return null;
-  const observed=Date.parse(m.spot_ts), collector=Date.parse(p.collector_received_at);
-  if(!Number.isFinite(observed) || observed!==collector || observed>ct || ct>receivedAt) return null;
-  const provider=Date.parse(p.provider_observed_at);
-  if(p.provider_observed_at!=null && (!Number.isFinite(provider) || provider>collector)) return null;
-  const t=Number.isFinite(provider)?provider:observed;
-  return {symbol:'QQQ',spot:m.spot,t,receivedAt};
+  const collector=stamp(p.collector_received_at);
+  if(!Number.isFinite(collector) || stamp(m.spot_ts)!==collector || collector>ct || ct>receivedAt) return null;
+  const legs=p.contributing;
+  const midpoint=p.price_basis==='bid_ask_midpoint';
+  const sides=midpoint?['bid','ask']:['last'];
+  const receipts=[], ages=[];
+  for(const side of sides) {
+    const arrival=stamp(legs?.[side+'_ts']);
+    if(!Number.isFinite(arrival) || arrival>ct) return null;
+    receipts.push(arrival);
+    const raw=legs[side+'_observed_at'];
+    const source=raw==null?arrival:stamp(raw);
+    if(!Number.isFinite(source) || source>arrival) return null;
+    ages.push(source);
+  }
+  if(Math.min(...receipts)!==collector) return null;
+  const provider=p.provider_observed_at==null?null:stamp(p.provider_observed_at);
+  if(provider!==null && (!Number.isFinite(provider) || provider>Math.max(...receipts))) return null;
+  // The later receipt establishes when the whole value existed. The older
+  // observation establishes freshness. Each governs a different decision.
+  return {symbol:'QQQ',spot:m.spot,t:Math.ceil(Math.max(...receipts)),
+    oldest:Math.floor(Math.min(...ages,provider??Infinity)),receivedAt};
 }
 
 function usableBbo(q,now) {
@@ -101,7 +126,7 @@ class ForwardFeed {
     if(this.open!==open || this.close!==close) this.reset(open,close);
     if(receivedAt<this.lastReceipt) return {quote:null,frames:[]};
     this.lastReceipt=receivedAt;
-    const ct=Date.parse(chain?.timestamp);
+    const ct=stamp(chain?.timestamp);
     let quote=null;
     if(chain?.symbol==='QQQ' && chain.date===this.day && chain.expiration===this.day && Array.isArray(chain.rows) &&
        positive(chain.underlying_price) && Number.isSafeInteger(chainReceivedAt) && ct<=chainReceivedAt &&

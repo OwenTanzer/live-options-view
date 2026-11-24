@@ -55,7 +55,7 @@ function makeFixture() {
     const flow = {cap:2048,lastReceived:t,rows:rows.slice(),session:{...session,
       contracts:Object.fromEntries(Object.entries(totals).map(([symbol,x])=>[symbol,{...x}]))}};
     const chain = {symbol:'QQQ',date:day,expiration:day,timestamp:new Date(t).toISOString(),
-      underlying_price:spot,underlying_market:{symbol:'QQQ',spot,spot_ts:new Date(t).toISOString(),source:'dxlink',freshness:'live',provenance:{collector_received_at:new Date(t).toISOString(),price:spot,price_basis:'bid_ask_midpoint',freshness:'live'}},rows:contracts.map(c=>({OptionSymbol:c.symbol,UnderlyingPrice:spot,
+      underlying_price:spot,underlying_market:{symbol:'QQQ',spot,spot_ts:new Date(t).toISOString(),source:'dxlink',freshness:'live',provenance:{contributing:{bid_ts:new Date(t).toISOString(),ask_ts:new Date(t).toISOString()},collector_received_at:new Date(t).toISOString(),price:spot,price_basis:'bid_ask_midpoint',freshness:'live'}},rows:contracts.map(c=>({OptionSymbol:c.symbol,UnderlyingPrice:spot,
         OpenInterest:c.strike===650?1000:5,Gamma:0.12}))};
     return {flow,chain,receivedAt:t,chainReceivedAt:t,open,close};
   };
@@ -100,6 +100,7 @@ test('ten strategies can enter and exit from forward observations through the pa
         const market = chain.underlying_market;
         market.spot_ts = new Date(captured-500).toISOString();
         market.provenance.collector_received_at = market.spot_ts;
+        market.provenance.contributing = {bid_ts:market.spot_ts,ask_ts:new Date(captured-200).toISOString()};
       }
       const cycle = await service.cycle();
       assert.equal(cycle.status,'polling',JSON.stringify(cycle.errors));
