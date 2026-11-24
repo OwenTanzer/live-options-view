@@ -1,3 +1,4 @@
+import { authorizeJournalViewer } from './journal-passkeys.js';
 import { ownerIdentity, privateJSON, SITE } from './kalshi-access.js';
 
 export async function archiveHistory(request, env) {
@@ -9,7 +10,8 @@ export async function archiveHistory(request, env) {
   if (!/^[a-f0-9]{64}$/.test(digest ?? '') || !/^[A-Z0-9_]{1,32}$/.test(symbol ?? '') ||
       !['1m','1h','1d'].includes(interval) || !['coinbase','tiingo','coingecko'].includes(provider))
     return privateJSON({error:'Unknown historical series'}, 400);
-  if (!await ownerIdentity(request)) return privateJSON({error:'Owner sign-in required'}, 401);
+  const journal = await authorizeJournalViewer(request, env);
+  if (journal.session?.member !== 'Owen' && !await ownerIdentity(request)) return privateJSON({error:'Owner sign-in required'}, 401);
   const object = await env.ARCHIVE_HISTORY.get(`crypto/${digest}/${symbol}/${interval}/${provider}.json.gz`);
   if (!object) return privateJSON({error:'Archive series unavailable'}, 404);
   return new Response(object.body, {encodeBody:'manual', headers:{

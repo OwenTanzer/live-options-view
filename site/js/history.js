@@ -108,6 +108,18 @@ async function load(level) {
     el('status').textContent=error.status===401?'Sign in to read this private series.':'Archive unavailable. '+error.message;
   }
 }
+el('passkey').onclick=async()=>{
+  const button=el('passkey');
+  button.disabled=true;
+  try {
+    await journalPasskey();
+    await load('series');
+  } catch(error) {
+    el('status').textContent='Passkey sign-in did not finish. '+error.message;
+  } finally {
+    button.disabled=false;
+  }
+};
 market.onchange=()=>load('market');symbol.onchange=()=>load('symbol');series.onchange=()=>load('series');
 date.oninput=()=>{offset=0;render();};
 el('newer').onclick=()=>{offset=Math.max(0,offset-pageSize);render();};

@@ -17,6 +17,12 @@ test('history requires the owner and streams the immutable compressed series', a
   let github_id=1;
   t.mock.method(globalThis,'fetch',async()=>Response.json({github_id}));
   assert.equal((await archiveHistory(new Request(url,{headers:cookie}),env)).status,401);
+  let member='Another member';
+  const journalEnv={...env,DB:{prepare:()=>({bind:()=>({first:async()=>({member})})})}};
+  const journalRequest=new Request(url,{headers:{Cookie:'__Host-journal=test-session'}});
+  assert.equal((await archiveHistory(journalRequest,journalEnv)).status,401);
+  member='Owen';
+  assert.equal((await archiveHistory(journalRequest,journalEnv)).status,200);
   github_id=OWNER_ID;
   const result=await archiveHistory(new Request(url,{headers:cookie}),env);
   assert.equal(result.status,200);

@@ -114,7 +114,7 @@ The generated site asset contains coverage and up to 24 recorded Coinbase BTC
 hourly candles. Other raw price history stays on the host. Refresh the asset
 from the intended snapshot and publish through the normal staged asset release.
 
-The full history reader at `/history.html` opens each published stock interval and each retained crypto series, including alternate providers. The Crypto tab uses the existing owner GitHub session. The private R2 bucket has no public URL. After importing a crypto snapshot, run the following from the repo with the archive publisher's R2 environment. It writes digest-scoped compressed objects and reads back every object before the panel catalog is advanced.
+The full history reader at `/history.html` opens each published stock interval and each retained crypto series, including alternate providers. The Crypto tab accepts either the owner journal passkey session or the owner GitHub session. The private R2 bucket has no public URL. After importing a crypto snapshot, run the following from the repo with the archive publisher's R2 environment. It writes digest-scoped compressed objects and reads back every object before the panel catalog is advanced.
 
     python ops/archive-history/publish_crypto.py DATABASE
 

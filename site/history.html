@@ -7,7 +7,8 @@
 <form id="filters"><label>Market<select id="market"><option value="stocks">Stocks</option><option value="crypto">Crypto</option></select></label>
 <label>Symbol<select id="symbol"></select></label><label>Series<select id="series"></select></label>
 <label>Through date (UTC)<input id="date" type="date"></label></form>
-<p id="status" role="status">Loading archive…</p><p id="auth" hidden><a href="/credit-tape/auth/login?return=history">Sign in for private crypto history</a></p>
+<p id="status" role="status">Loading archive…</p><p id="auth" hidden><button id="passkey" type="button">Use owner passkey</button> or <a href="/credit-tape/auth/login?return=history">sign in with GitHub</a></p>
 <nav><button type="button" id="newer" disabled>Newer</button><button type="button" id="older" disabled>Older</button><a hidden id="download">Download full series (JSON)</a></nav>
 <section><table><thead id="head"></thead><tbody id="rows"></tbody></table></section>
+<script src="/js/journal-passkeys.js"></script>
 <script type="module" src="/js/history.js"></script></body></html>
