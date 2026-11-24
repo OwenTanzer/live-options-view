@@ -7,12 +7,13 @@ try {
   const page=await browser.newPage({viewport:{width:900,height:800}});
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));
   let polls=0;
+  const received=sample-172000;
   await page.route('**/*',async route=>{
     const url=new URL(route.request().url());assert.equal(url.origin,origin);
     if(url.pathname==='/api/one-clock/intraminute'){
       if(url.searchParams.has('minute'))return route.fulfill({status:404,json:{}});
-      polls++;const now=Date.now();
-      return route.fulfill({json:{epoch:'a'.repeat(32),cursor:polls,reset:polls===1,rows:[{kind:'quote',at:now,bid:700,ask:701,bidAt:now,askAt:now}]}});
+      polls++;
+      return route.fulfill({json:{epoch:'a'.repeat(32),cursor:polls,reset:polls===1,rows:polls===1?[{kind:'quote',at:received,bid:700,ask:701,bidAt:received,askAt:received},{kind:'gap',reason:'stream_disconnect',at:received+1,start:received+1}]:[]}});
     }
     const contentType=url.pathname.endsWith('.js')?'text/javascript':url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.json')?'application/json':'text/html';
     await route.fulfill({body:await readFile(new URL('../site'+url.pathname,import.meta.url)),contentType});
@@ -28,8 +29,12 @@ try {
   await page.waitForFunction(()=>document.querySelector('#state').textContent.includes('14:37'));
   await page.locator('#next').click();
   await page.getByText('No published archive for this minute.').waitFor();
+  await page.clock.setFixedTime(new Date(sample));
   await page.locator('#live').click();
-  await page.waitForFunction(()=>document.querySelector('#state').textContent.startsWith('Live ·'));
+  await page.waitForFunction(()=>document.querySelector('#state').textContent.startsWith('Disconnected since'));
+  await page.waitForTimeout(600);
+  assert.ok(polls>=2);
+  assert.match(await page.locator('#state').textContent(),/last receipt 14:33:08.000 UTC · age 172.0 s/);
   await page.locator('#sample').click();
   await page.waitForFunction(()=>document.querySelector('#state').textContent.includes('14:36'));
   await page.setViewportSize({width:390,height:844});

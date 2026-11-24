@@ -121,7 +121,7 @@ async function replay(at,offset=59999) {
 }
 function follow(){
   reset();live=true;$('live').disabled=true;
-  const id=generation;let cursor=0,epoch='',delay=250,partial=false,started=null,disconnectedAt=null;
+  const id=generation;let cursor=0,epoch='',delay=250,partial=false,started=null,disconnectedAt=null,lastReceipt=null;
   minute=receiptMinute(Date.now());$('minute').value=isoMinute(minute);paint();
   async function poll(){
     if(generation!==id)return;
@@ -131,19 +131,21 @@ function follow(){
         if(!res.ok)throw Error('Live tape unavailable ('+res.status+').');
         const body=await res.json();
         if(id!==generation)return;
-        if(body.reset){rows=[];partial=body.truncated;disconnectedAt=null;}
+        if(body.reset){rows=[];partial=body.truncated;disconnectedAt=null;lastReceipt=null;}
         epoch=body.epoch;cursor=body.cursor;started=body.started??started;
         for(const r of body.rows) {
           if(r.kind==='gap')disconnectedAt=r.reason==='stream_disconnect'?r.at:null;
+          else lastReceipt=r.at;
         }
         rows=rows.concat(body.rows);
-        const last=rows.at(-1)?.at??0;
         minute=receiptMinute(Date.now()); rows=rows.filter(r=>r.at>=minute-60000).slice(-100000);
         if(disconnectedAt!==null && disconnectedAt<minute && !rows.some(r=>r.kind==='gap' && r.reason==='stream_disconnect' && r.at>=disconnectedAt)){
           rows.unshift({kind:'gap',at:minute,start:minute,reason:'stream_disconnect'});
         }
         $('minute').value=isoMinute(minute);$('cursor').value=Math.min(59999,Date.now()-minute);
-        $('state').textContent=last?'Live · last receipt '+time(last)+' UTC · age '+Math.max(0,(Date.now()-last)/1000).toFixed(1)+' s'+(partial || (started && started>minute)?' · partial minute coverage':''):'Waiting for QQQ tape';
+        const connection=disconnectedAt===null?'Live':'Disconnected since '+time(disconnectedAt)+' UTC';
+        const freshness=lastReceipt===null?'awaiting QQQ receipt':'last receipt '+time(lastReceipt)+' UTC · age '+Math.max(0,(Date.now()-lastReceipt)/1000).toFixed(1)+' s';
+        $('state').textContent=connection+' · '+freshness+(partial || (started && started>minute)?' · partial minute coverage':'');
         strikes();paint();delay=body.more?0:250;
       } catch(e){if(id!==generation)return;$('state').textContent=e.message;delay=Math.min(8000,Math.max(1000,delay*2));}
     }
