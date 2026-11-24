@@ -1,5 +1,7 @@
 # Eleven QQQ order flow bots
 
+For prospective paper trading see [running the forward service](forward-service.md). Each rule has its own one-share QQQ ledger. The service reads live flow and chain projections, records decisions as received, and uses subsequent, fresh underlying bid/ask observations for paper fills. Turnover against verified opening OI (slot 3) remains deferred until clearing provenance is available. The commands below exercise the historical research implementation and its distinct execution assumptions.
+
 Run the audited QQQ replay and the regression tests from the repository root with Node 22 or later.
 
 ```sh
