@@ -6,7 +6,7 @@ import uuid
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from market_data.live_market.publications import PublicationLog, PublicationError, PublicationBudget, BudgetedS3, digest
 
@@ -258,6 +258,232 @@ class PublisherTests(unittest.TestCase):
             make_s3()
             self.assertNotIn("config", client.call_args.kwargs)
 
+
+
+class PendingQueueTests(unittest.TestCase):
+    def test_unregistered_roots_keep_archive_and_latest_without_a_publication_worker(self):
+        from datetime import datetime, timezone
+        from market_data.live_market import market, runner, state
+        from test_snapshot_provenance import FakeFeed, strike
+
+        captured = datetime(2026, 11, 23, 19, 33, tzinfo=timezone.utc)
+        for symbol in ("SLV", "DRAM"):
+            lane = state.UnderlyingSession(symbol)
+            with self.subTest(symbol=symbol), patch.object(runner, "ONE_CLOCK_PUBLICATIONS", True), patch.object(runner, "make_s3") as client:
+                self.assertIsNone(runner._publication_queue(lane, captured.date(), state.Counters()))
+                client.assert_not_called()
+            option = strike(symbol, 40)
+            book = {symbol: {"bid": 40, "ask": 40.2, "bid_ts": captured.isoformat(), "ask_ts": captured.isoformat()},
+                    option["call_sym"]: {"bid": 1, "ask": 1.2}, option["put_sym"]: {"bid": 1, "ask": 1.2}}
+            for queue in (None, Mock()):
+                with self.subTest(symbol=symbol, queued=queue is not None), patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
+                    store = Store()
+                    market.take_snapshot(store, FakeFeed(book), [option], captured.date().isoformat(),
+                                         "Regular", captured.date(), state.Counters(), state.SnapshotTracker(),
+                                         lane, publication_queue=queue, capture=(captured, book))
+                    if queue is not None:
+                        queue.enqueue.assert_not_called()
+                    payload = json.loads(store.data[lane.latest_key])
+                    self.assertEqual(payload["symbol"], symbol)
+                    self.assertIn(payload["snapshot_key"], store.data)
+                    provenance = json.loads(store.data[payload["snapshot_key"].replace(".csv", ".provenance.json")])
+                    self.assertEqual(provenance["publication"]["status"], "published")
+                    self.assertFalse(any(key.startswith("publications/") for key in store.data))
+
+    def test_admission_retry_survives_restart_and_keeps_capture_and_commit_clocks(self):
+        from datetime import datetime, timedelta, timezone
+        from tempfile import TemporaryDirectory
+        from market_data.live_market import market, state
+        from market_data.live_market.publication_queue import PublicationQueue
+        from test_snapshot_provenance import FakeFeed, strike
+
+        for symbol, minute in (("QQQ", 33), ("SPY", 34)):
+            with self.subTest(symbol=symbol), TemporaryDirectory() as directory:
+                captured = datetime(2026, 11, 23, 19, minute, 0, 2291, timezone.utc)
+                published = captured + timedelta(minutes=4)
+                class Storage(Store):
+                    def list_objects_v2(self, *, Bucket, Prefix, MaxKeys):
+                        keys = sorted(key for key in self.data if key.startswith(Prefix))
+                        return {"Contents": [{"Key": key} for key in keys[:MaxKeys]]}
+                    def delete_object(self, *, Bucket, Key):
+                        del self.data[Key]
+                    def get_object(self, **kwargs):
+                        return {**super().get_object(**kwargs), "LastModified": published}
+
+                s = Storage()
+                def queue():
+                    return PublicationQueue(s, market.R2_BUCKET, symbol, spool_dir=directory)
+                q = queue()
+                def reject_admission(key):
+                    if key.startswith(q.prefix):
+                        raise StoreError("ServiceUnavailable")
+                s.before = reject_admission
+                option = strike(symbol, 600)
+                spot = {"bid": 600, "ask": 600.2, "bid_ts": captured.isoformat(),
+                        "ask_ts": captured.isoformat()}
+                book = {symbol: spot, option["call_sym"]: {"bid": 1, "ask": 1.2},
+                        option["put_sym"]: {"bid": 1, "ask": 1.2}}
+                lane = state.UnderlyingSession(symbol)
+                with patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
+                    market.take_snapshot(s, FakeFeed(book), [option], captured.date().isoformat(),
+                                         "0DTE_Regular", captured.date(), state.Counters(),
+                                         state.SnapshotTracker(), lane, publication_queue=q,
+                                         capture=(captured, book))
+                sidekey = next(k for k in s.data if k.endswith(".provenance.json"))
+                waiting = json.loads(s.data[sidekey])
+                self.assertEqual(waiting["publication"]["reason"], "awaiting_queue_admission")
+                self.assertFalse(any(k.startswith(q.prefix) for k in s.data))
+                with self.assertRaises(StoreError):
+                    queue().publish_oldest()
+                q = queue()
+                s.before = None
+                def lost_ack(key):
+                    if key.startswith(q.prefix) or "/entries/" in key:
+                        raise StoreError("LostAck")
+                s.after = lost_ack
+                self.assertTrue(q.publish_oldest())  # durable admission, even on lost ack
+                class Clock(datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return published.astimezone(tz)
+                s.after = None
+                with patch("market_data.live_market.publication_queue.datetime", Clock):
+                    self.assertTrue(queue().publish_oldest())
+                    self.assertFalse(queue().publish_oldest())
+                final = json.loads(s.data[sidekey])
+                market._put_snapshot_provenance(s, waiting, create_only=True)
+                self.assertEqual(json.loads(s.data[sidekey]), final)
+                entries = [key for key in s.data if "/entries/" in key]
+                self.assertEqual(entries, [final["one_clock_publication"]["key"]])
+                entry = json.loads(s.data[entries[0]])
+                for record in entry["records"]:
+                    self.assertEqual(record["eventAt"], captured.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+                self.assertEqual(final["constructed_at"], captured.isoformat())
+                self.assertEqual(final["latest_published_at"], published.isoformat())
+                self.assertEqual(final["snapshot_key"], waiting["snapshot_key"])
+
+    def test_exchange_minute_schedule_and_real_overrun(self):
+        from market_data.live_market.runner import next_capture_delay
+        from market_data.live_market.state import SnapshotTracker
+        from datetime import datetime, timezone
+        start = 0
+        tracker = SnapshotTracker()
+        occupied = []
+        for i in range(390):
+            occupied.append(int(start // 60))
+            tracker.record(datetime.fromtimestamp(start, timezone.utc))
+            completed = start + (3, 22, 50)[i % 3]
+            start = completed + next_capture_delay(start, completed)
+        self.assertEqual(occupied, list(range(390)))
+        self.assertEqual(tracker.get()["missed_snapshot_count"], 0)
+        completed = start + 145
+        self.assertEqual(next_capture_delay(start, completed), 0)
+        tracker.record(datetime.fromtimestamp(completed, timezone.utc))
+        self.assertEqual(tracker.get()["missed_snapshot_count"], 2)
+        self.assertEqual(next_capture_delay(completed, completed + 10), 25)
+
+    def test_capture_through_stall_restart_and_ambiguous_latest(self):
+        from datetime import datetime, timedelta, timezone
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from test_snapshot_provenance import QQQ_STRIKES, FakeFeed, state_for
+        from market_data.live_market import market, state
+        from market_data.live_market.publication_queue import PublicationQueue
+
+        from research.market_readings_series import collect
+        from market_data.overview.readings import readings_digest
+        now = datetime(2026, 11, 20, 16, 0, tzinfo=timezone.utc)
+        worker_time = now + timedelta(minutes=3)
+        class WorkerClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return worker_time.astimezone(tz)
+        self.enterContext(patch("market_data.live_market.publication_queue.datetime", WorkerClock))
+
+        class QueueStore(Store):
+            def list_objects_v2(self, *, Bucket, Prefix, MaxKeys):
+                keys = sorted(k for k in self.data if k.startswith(Prefix))
+                return {"Contents": [{"Key": k} for k in keys[:MaxKeys]]}
+
+            def delete_object(self, *, Bucket, Key):
+                del self.data[Key]
+
+            def get_object(self, **kwargs):
+                return {**super().get_object(**kwargs), "LastModified": worker_time}
+
+        s = QueueStore()
+        queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
+        counters, tracker = state.Counters(), state.SnapshotTracker()
+        us = state.UnderlyingSession("QQQ")
+        def capture(instant):
+            feed = FakeFeed(state_for({"bid": 600, "ask": 600.2, "bid_ts": instant.isoformat(),
+                                       "ask_ts": instant.isoformat()}))
+            with patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
+                market.take_snapshot(s, feed, QQQ_STRIKES, now.date().isoformat(), "0DTE_Regular", now.date(),
+                                     counters, tracker, us, publication_queue=queue,
+                                     capture=(instant, feed.get_state()))
+        capture(now)
+        first_sidecar = next(key for key in s.data if key.endswith(".provenance.json"))
+        pending = json.loads(s.data[first_sidecar])
+        self.assertTrue(all(r["publication"]["status"] == "pending" and r["published_at"] is None
+                            for r in pending["market_readings"]))
+        self.assertTrue(all(r["reading_published_at"] is None for r in collect([(first_sidecar, pending)])))
+        stalled, release = Event(), Event()
+        def block_entry(key):
+            if "/entries/" in key:
+                stalled.set()
+                self.assertTrue(release.wait(timeout=5))
+                raise StoreError("Unavailable")
+        s.before = block_entry
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            inflight = executor.submit(queue.publish_oldest)
+            try:
+                self.assertTrue(stalled.wait(timeout=5))
+                capture(now + timedelta(minutes=1))
+            finally:
+                release.set()
+            with self.assertRaises(PublicationError):
+                inflight.result(timeout=5)
+        self.assertEqual(tracker.get()["snapshot_sequence"], 2)
+        self.assertNotIn(us.latest_key, s.data)
+        self.assertEqual(len([k for k in s.data if k.startswith(queue.prefix)]), 2)
+
+        self.assertEqual(json.loads(s.data[first_sidecar]), pending)
+        worker_time += timedelta(minutes=7)
+        queue = PublicationQueue(s, market.R2_BUCKET, "QQQ")
+        s.before = None
+        def lose_ack(key):
+            if key == us.latest_key:
+                raise StoreError("LostAck")
+        s.after = lose_ack
+        with self.assertRaises(StoreError):
+            queue.publish_oldest()
+        first = json.loads(s.data[us.latest_key])
+        s.after = None
+        self.assertTrue(queue.publish_oldest())
+        self.assertTrue(queue.publish_oldest())
+        self.assertFalse(queue.publish_oldest())
+        latest = json.loads(s.data[us.latest_key])
+        self.assertEqual([first["one_clock_publication"]["sequence"],
+                          latest["one_clock_publication"]["sequence"]], [1, 2])
+        self.assertEqual(latest["timestamp"], (now + timedelta(minutes=1)).isoformat())
+        self.assertEqual(len([k for k in s.data if "/entries/" in k]), 2)
+        self.assertIsNone(queue.advance_latest(us.latest_key, first))
+        self.assertEqual(json.loads(s.data[us.latest_key]), latest)
+        for row in (first, latest):
+            key = row["snapshot_key"]
+            sidecar = json.loads(s.data[key[:-4] + ".provenance.json"])
+            self.assertEqual(sidecar["market_readings_digest"], row["market_readings_digest"])
+            self.assertEqual(sidecar["publication"]["status"], "published")
+            self.assertEqual(sidecar["constructed_at"], row["timestamp"])
+            self.assertEqual(sidecar["latest_published_at"], worker_time.isoformat())
+            expected_attempt = now + timedelta(minutes=3) if row is first else worker_time
+            self.assertTrue(all(r["published_at"] == expected_attempt.isoformat() for r in row["market_readings"]))
+            entry = json.loads(s.data[row["one_clock_publication"]["key"]])
+            immutable = json.loads(s.data[entry["evidence"][1]["key"]])
+            self.assertEqual(immutable["market_readings"], row["market_readings"])
+            self.assertEqual(readings_digest(immutable["market_readings"]), sidecar["market_readings_digest"])
+            self.assertTrue(all(r["reading_published_at"] == worker_time.isoformat() for r in collect([(key, sidecar)])))
 
 if __name__ == "__main__":
     unittest.main()

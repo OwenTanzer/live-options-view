@@ -198,6 +198,7 @@ def account_gaps(
 def load_accounts(
     path: Path | None = None,
     *,
+    me_paper_only: bool = False,
     catalog_path: Path = DEFAULT_ACCOUNTS_CATALOG,
     override_path: Path = DEFAULT_ACCOUNTS_OVERRIDE,
 ) -> list[Account]:
@@ -226,7 +227,24 @@ def load_accounts(
     alongside its password). An entry with no `"active"` key is active by
     default, matching every catalog entry from before this field existed.
     """
-    entries = _entries_for(path, catalog_path, override_path)
+    if me_paper_only:
+        if path is None:
+            raise ValueError("Isolated Me Bot roster requires an explicit path")
+        from .strategies.me_bots import IDS
+        identities = {"crassus_me_" + kind: strategy_id for strategy_id, kind in IDS.items()}
+        entries = _read_entries(path)
+        seen = set()
+        aliases = set()
+        for row in entries:
+            name = row.get("username")
+            alias = row.get("alias")
+            if (name not in identities or row.get("strategy_id") != identities[name]
+                    or name in seen or not alias or alias in aliases or row.get("params")):
+                raise ValueError("Foreign, ambiguous or overridden provisional Me Bot identity")
+            seen.add(name)
+            aliases.add(alias)
+    else:
+        entries = _entries_for(path, catalog_path, override_path)
 
     if not entries:
         raise FileNotFoundError(

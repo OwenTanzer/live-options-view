@@ -11,6 +11,7 @@ export const botAuditPublication = Object.freeze({
   instrumentsByOutput: {'bot-anchored-skew':['QQQ']},
   instruments: ['QQQ', 'SPY', 'IBIT'],
   outputs: {
+    'bot-evaluation': {bot:'string', action:'string', decisionKey:'string'},
     'bot-decision': {bot:'string', outcome:'string', action:'string', inputAgeMs:'number'},
     'bot-anchored-skew': {anchor:'number', imbalance:'number', delta:'number', strikes:'number',
       anchorAt:'string', run:'string', threshold:'number', minChange:'number'},

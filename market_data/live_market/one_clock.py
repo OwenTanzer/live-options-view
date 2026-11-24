@@ -2,6 +2,7 @@
 import math
 import json
 import time
+import threading
 from botocore.client import BaseClient
 
 from .publications import PublicationLog, PublicationError, BudgetedS3, snapshot_publication_id
@@ -13,16 +14,18 @@ OUTPUTS = {"price": {"spot": "number"}, "skew": {"imbalance": "number", "strikes
 # until their One Clock source registration lands.
 INSTRUMENTS = frozenset({"QQQ", "SPY", "IBIT"})
 _publication_client = None
+_client_lock = threading.Lock()
 
 
 def publication_transport(client):
     global _publication_client
     if isinstance(client, BaseClient):
-        if _publication_client is None:
-            from .prices import make_s3
-            _publication_client = make_s3(publication=True)
+        with _client_lock:
+            if _publication_client is None:
+                from .prices import make_s3
+                _publication_client = make_s3(publication=True)
         client = _publication_client
-    return BudgetedS3(client)
+    return BudgetedS3(client, seconds=20, requests=40)
 
 
 def project_snapshot(payload):
