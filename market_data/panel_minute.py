@@ -10,6 +10,7 @@ import subprocess
 
 from .panel_prices import Capture, collect, crypto_time, utcnow, ET
 from .crypto_collector.publish import _error_code
+from .crypto_collector import spot_receipts
 
 MAX_BYTES = 128 * 1024
 FEEDS = ("crypto", "nasdaq")
@@ -123,12 +124,39 @@ def protect_observations(candidate, prior, feed, now):
             row["watermark_at"] = observed.isoformat()
 
 
-def publish(client, bucket, feed, candidate, now):
+def crypto_freshness(prices, assessed_at):
+    providers = {}
+    for symbol, row in prices.items():
+        stats = providers.setdefault(row["source"], {
+            "counts": Counter(), "oldest_symbol": None, "oldest_age_seconds": None,
+        })
+        observed = crypto_time(row.get("provider_observed_at"))
+        if row["price_usd"] is None:
+            bucket = row["freshness"] = "missing"
+        elif observed is None:
+            bucket = row["freshness"] = "unknown_time"
+        else:
+            age = (assessed_at - observed).total_seconds()
+            row["freshness"] = "fresh" if age <= 60 else "stale"
+            bucket = "fresh" if age <= 60 else "stale_to_5m" if age <= 300 else "stale_over_5m"
+            if stats["oldest_age_seconds"] is None or age > stats["oldest_age_seconds"]:
+                stats.update(oldest_symbol=symbol, oldest_age_seconds=age)
+        stats["counts"][bucket] += 1
+    return {"assessed_at": assessed_at.isoformat(), "providers": providers}
+
+
+def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     if candidate.get("schema_version") != "panel_minute.v1" or candidate.get("feed") != feed:
         raise ValueError("Invalid capture identity")
     stamp = crypto_time(candidate.get("started_at"))
     completed = crypto_time(candidate.get("completed_at"))
     if not stamp or not completed or not stamp <= completed <= now or (now - stamp).total_seconds() > 55:
+        print(json.dumps({
+            "feed": feed, "outcome": "rejected_capture_time",
+            "started_at": candidate.get("started_at"), "completed_at": candidate.get("completed_at"),
+            "linux_checked_at": now.isoformat(), "calls": candidate.get("calls", {}),
+            "failures": candidate.get("failures", {}), "retry_after": candidate.get("retry_after", {}),
+        }), flush=True)
         raise ValueError("Expired or future minute capture")
     if not 0 < len(candidate["prices"]) <= (50 if feed == "crypto" else 150):
         raise ValueError("Bad coverage")
@@ -150,6 +178,8 @@ def publish(client, bucket, feed, candidate, now):
     condition = {"IfNoneMatch": "*"}
     if previous:
         raw, etag = previous
+        if feed == "crypto" and crypto_receipts is not None:
+            spot_receipts.reconcile(crypto_receipts, "minute", raw, utcnow())
         prior = json.loads(raw)
         if crypto_time(prior["started_at"]) >= stamp:
             return "superseded"
@@ -157,10 +187,17 @@ def publish(client, bucket, feed, candidate, now):
             return "older_baseline"
         condition = {"IfMatch": etag}
         protect_observations(candidate, prior, feed, now)
+    if feed == "crypto":
+        candidate["freshness_summary"] = crypto_freshness(candidate["prices"], utcnow())
     candidate["coverage"] = dict(Counter(v["freshness"] for v in candidate["prices"].values()))
     body = encode(candidate)
+    attempt = None
+    if feed == "crypto" and crypto_receipts is not None:
+        attempt = spot_receipts.prepare(crypto_receipts, "minute", body, utcnow())
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
                       CacheControl="no-store", **condition)
+    if attempt is not None:
+        spot_receipts.confirm(crypto_receipts, attempt, utcnow())
     return "published"
 
 
@@ -205,9 +242,14 @@ def main():
                           aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
                           aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
                           config=Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1}))
-    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow())
-    print(json.dumps(dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
-                          coverage=candidate["coverage"], calls=candidate["calls"])), flush=True)
+    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow(),
+                      crypto_receipts=root / "private" / "crypto-spot.sqlite3")
+    report = dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
+                  coverage=candidate["coverage"], calls=candidate["calls"],
+                  failures=candidate["failures"], retry_after=candidate["retry_after"])
+    if outcome == "published" and feed == "crypto":
+        report["freshness_summary"] = candidate["freshness_summary"]
+    print(json.dumps(report), flush=True)
 
 
 if __name__ == "__main__":

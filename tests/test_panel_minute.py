@@ -67,6 +67,22 @@ def test_conditional_publish_and_expired_capture():
     assert client.put_object.call_count == 1
 
 
+def test_future_msi_completion_logs_source_cost_without_publishing(capsys):
+    client = Mock()
+    candidate = doc("coinbase")
+    candidate.update(feed="crypto", completed_at=(NOW + timedelta(seconds=1)).isoformat(),
+                     calls={"coinbase": 29, "coingecko": 1}, failures={"coingecko.http_429": 1},
+                     retry_after={"coingecko": "60"})
+    with pytest.raises(ValueError, match="Expired or future"):
+        publish(client, "bucket", "crypto", candidate, NOW)
+    report = json.loads(capsys.readouterr().out)
+    assert report["outcome"] == "rejected_capture_time"
+    assert report["linux_checked_at"] == NOW.isoformat()
+    for key in ("started_at", "completed_at", "calls", "failures", "retry_after"):
+        assert report[key] == candidate[key]
+    assert not client.mock_calls
+
+
 def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quote():
     for label in (None, "Dec 04, 2026"):
         poisoned = doc(ts=NOW+timedelta(days=7))
@@ -81,3 +97,115 @@ def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quot
         protect_observations(good, poisoned, "nasdaq", NOW)
         assert good["prices"]["X"]["watermark_at"] == NOW.isoformat()
         assert good["prices"]["X"]["price_usd"] == 123
+
+
+def test_crypto_replay_uses_confirmed_baseline_and_actual_panel_rules(tmp_path, monkeypatch):
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector.spot_receipts import read_as_of
+
+    path = tmp_path / "private" / "spot.sqlite3"
+    store = FakeObjectStore()
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(path))
+    candidate = doc("coinbase")
+    candidate["feed"] = "crypto"
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW-timedelta(minutes=1)):
+        _publish_snapshot(baseline, store, "test")
+    confirmed = NOW+timedelta(seconds=1)
+    with patch("market_data.panel_minute.utcnow", return_value=confirmed):
+        publish(store, "test", "crypto", candidate, NOW, crypto_receipts=path)
+    assert read_as_of(path, NOW)["state"] == "unmeasurable"
+    assert read_as_of(path, NOW+timedelta(seconds=119, milliseconds=999))["rows"][0]["price"] == 123
+    assert read_as_of(path, NOW+timedelta(seconds=120))["rows"] == baseline["coins"]
+    later = NOW+timedelta(seconds=40)
+    newer = {"constructed_at": later.isoformat(),
+             "coins": [{"symbol": "X", "source": "coinbase", "price": 101}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=later):
+        _publish_snapshot(newer, store, "test")
+    assert read_as_of(path, later)["rows"] == newer["coins"]
+    assert read_as_of(path, later-timedelta(microseconds=1))["rows"][0]["price"] == 123
+
+
+def test_ack_failure_leaves_gap_and_identical_retry_recovers(tmp_path, monkeypatch):
+    import sqlite3
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector import spot_receipts
+
+    db = tmp_path / "private" / "spot.sqlite3"
+    store = FakeObjectStore()
+    candidate = doc("coinbase")
+    candidate["feed"] = "crypto"
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(db))
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
+        _publish_snapshot(baseline, store, "bucket")
+    with patch("market_data.panel_minute.utcnow", return_value=NOW):
+        publish(store, "bucket", "crypto", candidate, NOW, crypto_receipts=db)
+    second = NOW+timedelta(seconds=30)
+    update = doc("coinbase", second)
+    update.update(feed="crypto", started_at=(second-timedelta(seconds=1)).isoformat(),
+                  completed_at=second.isoformat())
+    update["prices"]["X"] = mark("coinbase", 110, second, second)
+    with patch("market_data.panel_minute.utcnow", return_value=second), \
+            patch.object(spot_receipts, "confirm", side_effect=sqlite3.OperationalError("disk error")), \
+            pytest.raises(sqlite3.OperationalError):
+        publish(store, "bucket", "crypto", update, second, crypto_receipts=db)
+    assert json.loads(store.objects["crypto/prices.json"][0])["prices"]["X"]["price_usd"] == 110
+    assert spot_receipts.read_as_of(db, second)["unverified_stream"] == "minute"
+    count = len(store.writes)
+    retry = second+timedelta(seconds=1)
+    with patch("market_data.panel_minute.utcnow", return_value=retry):
+        assert publish(store, "bucket", "crypto", update, retry, crypto_receipts=db) == "superseded"
+    assert len(store.writes) == count
+    assert spot_receipts.read_as_of(db, retry)["rows"][0]["price"] == 110
+    assert spot_receipts.read_as_of(db, second)["state"] == "unmeasurable"
+    assert spot_receipts.read_as_of(db, second-timedelta(seconds=1))["rows"][0]["price"] == 123
+
+
+def test_crypto_publication_age_buckets():
+    from market_data.panel_minute import crypto_freshness
+
+    receipt = NOW - timedelta(seconds=6)
+    prices = {str(age): mark("coinbase", 1, NOW - timedelta(seconds=age), receipt)
+              for age in (60, 65, 300, 301)}
+    prices["absent"] = mark("coingecko")
+    assert prices["65"]["freshness"] == "fresh"
+    providers = crypto_freshness(prices, NOW)["providers"]
+    assert prices["65"]["freshness"] == "stale"
+    assert providers["coinbase"] == {
+        "counts": {"fresh": 1, "stale_to_5m": 2, "stale_over_5m": 1},
+        "oldest_symbol": "301", "oldest_age_seconds": 301,
+    }
+    assert providers["coingecko"]["counts"] == {"missing": 1}
+
+
+def test_two_confirmed_minutes_replay_same_old_trade(tmp_path):
+    from market_data.crypto_collector.spot_receipts import prepare, confirm, read_as_of
+
+    db = tmp_path / "spot.sqlite3"
+    trade = NOW - timedelta(minutes=52)
+    baseline = {"constructed_at": (NOW-timedelta(hours=1)).isoformat(),
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100,
+                          "provider_observed_at": (NOW-timedelta(hours=1)).isoformat(),
+                          "as_of": (NOW-timedelta(hours=1)).isoformat(), "freshness": "fresh"}]}
+    def record(stream, payload, at):
+        attempt = prepare(db, stream, json.dumps(payload).encode(), at)
+        confirm(db, attempt, at)
+    record("hourly", baseline, NOW-timedelta(minutes=5))
+    observations = set()
+    for minute in (0, 1):
+        at = NOW + timedelta(minutes=minute)
+        overlay = doc("coinbase", trade)
+        overlay.update(feed="crypto", baseline_at=baseline["constructed_at"], completed_at=at.isoformat())
+        overlay["prices"]["X"]["received_at"] = at.isoformat()
+        record("minute", overlay, at)
+        row, = read_as_of(db, at)["rows"]
+        assert f"{3120 + 60*minute}s old" in row["minuteLabel"]
+        assert row["freshness"] == "stale"
+        assert row["as_of"] == row["provider_observed_at"] == trade.isoformat()
+        observations.add((row["symbol"], row["source"], row["provider_observed_at"], row["price"]))
+    assert observations == {("X", "coinbase", trade.isoformat(), 123)}

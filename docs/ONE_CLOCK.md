@@ -559,3 +559,50 @@ In Event Builder choose **Mapped company headline**, choose a ticker, save the a
 The other input is the selected symbol's row in the existing price strip. Only rows with the correct provider instrument and symbol, a finite positive price, provider observation time, collector receipt and R2 upload time qualify. Dated daily fallbacks have no intraday observation time. Thirteen allowlisted companies and ETFs have a configured strip route. TSM, BP and SHEL support headline tracking only. A configured route can also lack timely samples. The latest eligible quote available by the story supplies the baseline; a baseline older than two minutes is labelled stale. Each return uses the earliest retained observation at or after its target, available by the cursor, including a following session for the one-day outcome. An endpoint observation at exactly 24 hours past the target qualifies; an observation even one millisecond later is outside the window. If the cutoff passes this deadline with no eligible retained quote, the outcome reads as missing, including for paused or expired study sessions. A later receipt may resolve the outcome only when its observation occurred inside the window. The observer samples its existing feed periodically, so intermediate quotes can be absent. Both legs retain their identities and timestamps.
 
 Observed Results uses the observer's commit time. Replay uses original source availability within the evidence ultimately retained. Replaying a quote one millisecond before its R2 receipt withholds the return. On-target and delayed measurements have separate statistics. The delayed group shows actual elapsed time beside each return. Saved-study replay accepts a session and cutoff, and a single occurrence can be replayed from Results. No new cron, migration, price subscription or bucket writer is required.
+
+### Inside the QQQ minute
+
+Open the intraminute order-flow view from One Clock or the QQQ Order Flow page.
+Inspecting a recorded QQQ occurrence links to its exact receipt cutoff and, for
+a strike encounter, preselects that strike. The chart aligns call and put flow
+with the underlying midpoint, bid/ask and optional trade range. Select a
+100-millisecond interval or a one-second bin for the signed-contract imbalance,
+subsequent one-second price response and tape. Use the receipt cutoff to replay
+what had arrived by that instant. The bundled Nov 13 sample opens offline.
+See [Tradier operations](../market_data/tradier/OPERATIONS.md#qqq-intraminute-order-flow)
+for source coverage and live activation.
+
+#### Alkalus flow classification (preliminary)
+
+Each selected interval also carries a preliminary Alkalus classification —
+golden time, working copper, or lead time — from the
+[Preliminary Guideline — Alkalus](https://app.notion.com/p/3bb3c519147b8186863ecf7abc7635f1)
+taxonomy, as applied in the
+[QQQ Aug 13 2026 $732 Call — PPI Band-Walk Scalp](https://app.notion.com/p/3bb3c519147b81cfa485cb7b026771e7)
+retrospective (13-minute hold, +18.39%, classified working copper; holding
+toward $733 would have been a new wager). The taxonomy classifies time inside
+a convex position by what the held interval actually converted risk into, not
+by duration and not by the move after exit. This drilldown applies it to
+option *flow*, descriptively only: it carries no option premium repricing, so
+there is no theta, convexity payoff, or entry friction to measure, and the
+label is not a trading signal.
+
+Inputs, all from the owned interval only: the first-to-last observed quote
+midpoint displacement inside the bin, the bin's last observed quote spread
+(ask − bid) as the friction unit, and the bin's signed contract pressure.
+Threshold comparisons allow only floating-point roundoff at the quote price
+scale so exact decimal boundaries retain their intended class. Non-finite
+midpoints are unclassified. Lead includes a visible reason distinguishing
+balanced signed flow, adverse movement and movement below one spread.
+Thresholds, in spread units, with signed pressure agreeing in sign with the
+displacement: golden time at 5 spreads or more, working copper at 1 to under
+5 spreads, lead time below 1 spread — or whenever the signed flow did not
+agree with the displacement, since displacement against the flow is
+non-conversion, not a separate adverse class in this preliminary scheme. The
+interval is unclassified when no midpoint was observed, when it holds no
+option prints, when the spread is not finite and positive, or when a recorded
+gap overlaps it. The midpoint change one second later is shown separately as
+a next-interval observation and is never an input to the classification:
+later acceleration belongs to a different interval and cannot retroactively
+reclassify the owned one, so gold appearing after the exit does not turn a
+correct copper exit into a mistake.

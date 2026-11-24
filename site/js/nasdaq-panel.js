@@ -270,7 +270,7 @@
       '<span class="nq-hero-change ' + pctClass(idx.percent_change) + '">' + fmtPct(idx.percent_change) + '</span>' +
       '<span class="nq-hero-basis">Index %: ' + escapeHtml(INDEX_PCT_LABEL) + '</span></div>' +
       '<div class="nq-hero-meta">' +
-      '<span>Market: ' + escapeHtml(marketStatusText(idx)) + '</span>' +
+      '<span>Market at hourly snapshot: ' + escapeHtml(marketStatusText(idx)) + '</span>' +
       '<span>Prev close: ' + fmtPrice(isFiniteNumber(idx.previous_close) ? idx.previous_close : idx.prev_close) + '</span>' +
       '<span>Day range: ' + fmtPrice(idx.day_low) + ' – ' + fmtPrice(idx.day_high) + '</span>' +
       '<span>As of ' + escapeHtml(fmtTime(data.as_of)) + '</span>' +

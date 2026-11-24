@@ -31,7 +31,7 @@ for feed in ("crypto", "nasdaq"):
             raise SystemExit("Disable the minute timers before staging")
 
 paths = ["market_data/__init__.py", "market_data/panel_minute.py", "market_data/panel_prices.py",
-         "market_data/crypto_collector", "market_data/nasdaq_collector", "ops/panel-minute"]
+         "market_data/crypto_collector", "market_data/nasdaq_collector", "ops/panel-minute", "site/js/panel-minute.js"]
 archive = subprocess.check_output(["git", "archive", "--format=zip", revision, "--", *paths])
 digest = sha256(archive).hexdigest()
 root.mkdir(parents=True, exist_ok=True, mode=0o700)

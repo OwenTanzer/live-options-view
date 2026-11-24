@@ -61,3 +61,55 @@ established protected release lanes. The hourly service names are separate.
 systemctl --user disable --now optionsview-minute@crypto.timer optionsview-minute@nasdaq.timer
 systemctl --user stop optionsview-minute@crypto.service optionsview-minute@nasdaq.service
 ```
+
+Crypto spot replay uses both confirmed Linux publications. After staging the
+reviewed revision, install the hourly unit override on Linux before its next
+scheduled run. Both publishers need the same private database and effective
+user. A daemon reload picks up the command for the next invocation.
+
+    mkdir -p ~/.config/systemd/user/optionsview-crypto-hourly.service.d
+    install -m 0644 "$HOME/.local/share/optionsview-panel-minute/app/ops/panel-minute/crypto-hourly-receipts.conf" ~/.config/systemd/user/optionsview-crypto-hourly.service.d/crypto-hourly-receipts.conf
+    systemctl --user daemon-reload
+    systemctl --user cat optionsview-crypto-hourly.service
+
+The hourly wrapper runs the installed capture command and retains the exact
+hourly price payload. The minute publisher retains its final overlay. Both
+journal their intent locally before the conditional R2 write, then confirm it
+after acknowledgement. A journal failure before upload fails the job. An
+ambiguous write or failed local confirmation leaves a visible replay gap and
+fails the job. The next read of matching remote bytes confirms the pending
+attempt at readback time. The gap up to that confirmation stays unmeasurable.
+
+From the staged Linux checkout (Python and Node required):
+
+    python -m market_data.crypto_collector.spot_receipts "$HOME/.local/share/optionsview-panel-minute/private/crypto-spot.sqlite3" --as-of 2026-11-24T07:00:00+00:00
+
+Replay returns rows using the production panel selector, including the hourly
+fallback at two minutes and during baseline rollover. Before both streams have
+verified evidence, or during an uncertain write, it returns unmeasurable.
+Legacy minute-only receipts do not establish an hourly baseline. Replay models
+the prices available on refresh at the cutoff. It does not track individual
+browser refreshes. To roll back the hourly change, remove only the
+crypto-hourly-receipts.conf override and reload the user manager.
+
+### Historical crypto archive
+
+The Linux host keeps Cian's original Crypto Backend ZIP and a private SQLite
+snapshot per ZIP SHA-256 under ~/.local/share/optionsview-crypto-history.
+Each snapshot retains the manifest-selected series and the separate alternate
+CoinGecko daily price histories supplied in the same ZIP. The reader defaults
+to the manifest selection. Pass --provider coingecko to read the alternate
+price series without substituting a sample for a candle. Coinbase and
+Tiingo rows retain their OHLCV values. CoinGecko market-chart samples have
+a price at a timestamp and do not imply OHLC. The importer verifies member
+counts and date ranges and withholds candles that had not closed when Cian's batch began. A query before the local archive receipt returns no rows. Repeating
+the import retains the original availability time. Choose the corresponding
+immutable database explicitly when replaying different deliveries.
+
+    python -m market_data.crypto_candle_cache.archive import crypto-backend.zip ~/.local/share/optionsview-crypto-history/snapshots
+    python -m market_data.crypto_candle_cache.archive read DATABASE ETH 1h --as-of 2026-11-24T08:01:00Z --limit 24
+    python -m market_data.crypto_candle_cache.archive panel DATABASE > site/data/crypto-history.json
+
+The generated site asset contains coverage and up to 24 recorded Coinbase BTC
+hourly candles. Other raw price history stays on the host. Refresh the asset
+from the intended snapshot and publish through the normal staged asset release.

@@ -1125,6 +1125,11 @@
   /* ── crypto panel ──────────────────────────────────────────────────── */
   /* Read-only display of the hourly crypto/latest.json snapshot; styles
      mirror the squeeze panel (header + status + table + patterns). */
+  #crypto-history { margin: 1rem 0; }
+  #crypto-history details { margin: .6rem 0; overflow-x: auto; }
+  #crypto-history summary { cursor: pointer; padding: .4rem 0; }
+  #crypto-history table { border-collapse: collapse; font-size: .85rem; }
+  #crypto-history th, #crypto-history td { text-align: left; white-space: nowrap; padding: .3rem .5rem; border-bottom: 1px solid var(--border); }
   #crypto-panel { max-width: 1100px; }
   #crypto-header {
     display: flex;
@@ -2081,6 +2086,19 @@
     </thead>
     <tbody id="crypto-tbody"></tbody>
   </table>
+  <details id="crypto-history">
+    <summary>Historical crypto coverage and BTC candles</summary>
+    <label>One Clock cutoff (UTC) <input id="crypto-history-cutoff" type="datetime-local" step="0.001"></label>
+    <p id="crypto-history-status" role="status"></p>
+    <details><summary>BTC hourly closes · Coinbase</summary>
+      <table><thead><tr><th>Hour ending (UTC)</th><th>Close (USD)</th></tr></thead>
+        <tbody id="crypto-history-candles"></tbody></table>
+    </details>
+    <details><summary>Coverage by coin and interval</summary>
+      <table><thead><tr><th>Coin</th><th>Interval</th><th>Source</th><th>Series</th><th>Records</th><th>Source batch</th><th>First (UTC)</th><th>Last (UTC)</th></tr></thead>
+        <tbody id="crypto-history-coverage"></tbody></table>
+    </details>
+  </details>
   <h3>Trend patterns</h3>
   <ul id="crypto-patterns"></ul>
   <h3>Next hour estimate</h3>
@@ -2304,6 +2322,7 @@ let timerHandle = null;
 </script>
 <script src="js/panel-minute.js?v=20c2badfd101fc46"></script>
 <script src="js/crypto-panel.js?v=c50b99472ae4845f"></script>
+<script type="module" src="js/crypto-history.js?v=af0bb37f7eecd4ca"></script>
 <script type="module" src="js/crypto-predictions.js?v=8dad1c3df5a1bea9"></script>
 <script>
 
@@ -2319,7 +2338,7 @@ let timerHandle = null;
 // Lives in js/nasdaq-panel.js, loaded below; the Stocks tab mounts it on first
 // open. The banner stays here as the section's marker.
 </script>
-<script src="js/nasdaq-panel.js?v=e2a35aa1ee3aade3"></script>
+<script src="js/nasdaq-panel.js?v=63686a58886c0221"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────

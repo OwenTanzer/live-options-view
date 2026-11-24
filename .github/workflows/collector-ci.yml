@@ -36,6 +36,7 @@ on:
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
       - "tests/test_qqq_recent.py"
+      - "tests/test_qqq_intraminute.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -89,6 +90,7 @@ on:
       - "tests/test_moo144_tradier_probe.py"
       - "tests/test_moo144_tradier_collector.py"
       - "tests/test_qqq_recent.py"
+      - "tests/test_qqq_intraminute.py"
       - "tests/test_oa203_return_scanner.py"
       - "tests/test_oa203_active.py"
       - "tests/test_oa203_active_budget.py"
@@ -137,7 +139,9 @@ jobs:
       - name: Run MOO-169 Tradier collector suite
         run: python -m unittest discover -s tests -p test_moo144_tradier_collector.py -v
       - name: Run QQQ order-flow display and session accumulation suite
-        run: python -m unittest discover -s tests -p test_qqq_recent.py -v
+        run: |
+          python -m unittest discover -s tests -p test_qqq_recent.py -v
+          python -m unittest discover -s tests -p test_qqq_intraminute.py -v
       - name: Run OA-203 options return scanner suite
         run: python -m unittest discover -s tests -p test_oa203_return_scanner.py -v
       - name: Run OA-203 active snapshot suite

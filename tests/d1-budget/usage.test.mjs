@@ -129,3 +129,56 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
   for (const [key, limit] of Object.entries(limits))
     assert.ok(daily[key] < warningFraction * limit, key + ' modeled daily use: ' + daily[key]);
 });
+
+test('QQQ November 23 replay preserves frozen sequence targets with fewer indexed writes', async t => {
+  const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+  const folder = '../../research/one_clock_write_budget/';
+  const sweeps = JSON.parse(read(folder + 'qqq_2026_11_23_sweeps.json'));
+  const {snapshotVersion} = await import('../../backend/one-clock-reevaluation.js');
+  async function replay(lean) {
+    const runtime = new Miniflare({modules:true, script:worker, cf:false,
+      compatibilityDate:'2026-06-23', d1Databases:['DB']});
+    t.after(() => runtime.dispose());
+    const db = meteredDatabase(runtime);
+    const schema = new DatabaseSync(':memory:');
+    try {
+      for (const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql','0011_one_clock_publications.sql','0012_one_clock_handoff.sql','0013_one_clock_reevaluation.sql']) {
+        schema.exec(read('../../backend/migrations/' + file));
+      }
+      if (lean) schema.exec(read(folder + 'lean_change_indexes.sql'));
+      for (const {sql} of schema.prepare('SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid').all()) {
+        await db.prepare(sql).run();
+      }
+    } finally { schema.close(); }
+    const session='2026-11-23', instrument='QQQ', stream='collector-chain/QQQ';
+    let written=0, snapshotReads=0;
+    const seen=[];
+    for (const sweep of sweeps) {
+      const statements=[];
+      for (let sequence=sweep.lo; sequence<=sweep.hi; sequence++) {
+        statements.push(db.prepare('INSERT INTO one_clock_publication_entries VALUES(?,?,?,?,?,?,?)')
+          .bind(stream,sequence,String(sequence),'replay',sweep.at,sweep.at,JSON.stringify({records:[{session}]})));
+      }
+      const before=db.usage.rowsWritten;
+      await db.batch(statements);
+      written += db.usage.rowsWritten-before;
+      const beforeSnapshots=db.usage.rowsRead;
+      // Check every frozen-generation target, including intermediate targets sharing a receipt timestamp.
+      for(let sequence=sweep.lo; sequence<=sweep.hi; sequence++){
+        const target=sequence-sweeps[0].lo+1;
+        const snapshot=await snapshotVersion(db,session,instrument,sweep.at,target);
+        assert.equal(snapshot.sequences[stream],sequence);
+        seen.push(snapshot);
+      }
+      seen.push(await snapshotVersion(db,session,instrument,sweep.at-1));
+      snapshotReads+=db.usage.rowsRead-beforeSnapshots;
+    }
+    return {written,seen,snapshotReads};
+  }
+  const original=await replay(false), lean=await replay(true);
+  assert.deepEqual(lean.seen,original.seen);
+  assert.equal(lean.snapshotReads,original.snapshotReads);
+  const entries=sweeps.reduce((total,sweep)=>total+sweep.count,0);
+  assert.equal(original.written-lean.written,2*entries);
+  console.log('QQQ entry-path replay', {entries, sweeps:sweeps.length, original:original.written, lean:lean.written, snapshotReads:lean.snapshotReads});
+});
