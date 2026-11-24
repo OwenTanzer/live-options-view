@@ -9,6 +9,7 @@ complete loop is demonstrably alive.
 """
 
 from . import gated_strangle  # noqa: F401
+from . import flow_skew  # noqa: F401
 from . import canopus_down_day  # noqa: F401
 from . import looking_glass_straddle  # noqa: F401
 from . import me_bots  # noqa: F401
@@ -34,6 +35,7 @@ __all__ = [
     "momentum_qqq",
     "momentum_puts_only",
     "oi_skew",
+    "flow_skew",
     "oi_associator",
     "max_pain",
     "put_call_ratio",

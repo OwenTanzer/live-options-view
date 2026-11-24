@@ -532,6 +532,13 @@
       "password_env": "CRASSUS_PW_OI_PLS",
       "strategy_id": "oi_associator_pls",
       "active": false
+    },
+    {
+      "alias": "Flow Skew",
+      "username": "crassus_flowskew",
+      "password_env": "CRASSUS_PW_FLOW_SKEW",
+      "strategy_id": "flow_skew_qqq",
+      "active": false
     }
   ]
 }

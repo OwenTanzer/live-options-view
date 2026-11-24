@@ -113,6 +113,7 @@ Kill switch: `Ctrl-C`, `SIGTERM`, or `touch state/STOP`.
 | `scripts/verify_trump_ingestion.py` | Hermetic checks for `trump_whisperer_qqq`'s feed ingestion layer -- no network access required |
 | `scripts/verify_phelps.py` | Hermetic checks for `phelps_wrap()`'s defer/release/invalidation-clearing logic and `phelps_pure_qqq`'s entry/exit decision logic -- no network access required |
 | `scripts/verify_momentum_puts_only.py` | Hermetic checks for `momentum_puts_only_qqq`'s decision logic -- registration (including its Phelps twin), the never-a-call guarantee, and the puts-only position-management edge cases -- no network access required |
+| `scripts/verify_flow_skew.py` | Hermetic checks for `flow_skew_qqq` (near-money order-flow skew from the collector's tiered-signed `recent.json`): projection parsing, the 15-minute window and its coverage gates, entry/exit, retention on missing observations (feed error, stale feed, gaps, uncaptured band, warm-up) and per-account isolation -- synthetic projections, no network |
 
 ## Integrity invariants
 
