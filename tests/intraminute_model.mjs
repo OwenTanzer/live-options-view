@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {model,flowResponse} from '../site/shared/intraminute.js';
+import {model,flowResponse,alkalusFlow,ALKALUS} from '../site/shared/intraminute.js';
 const minute=1794580560000;
 const row=(kind,offset,rest)=>({kind,at:minute+offset,...rest});
 const quote=(at,mid)=>row('quote',at,{bid:mid-.01,ask:mid+.01});
@@ -30,3 +30,44 @@ const amendments=model([original,{...original,at:minute+10,cancel:true},
 assert.equal(amendments.inspected.length,4);
 assert.equal(amendments.bins[0].shares,2);
 assert.equal(amendments.bins[0].high,700);
+
+// Preliminary Alkalus flow classification: owned 1 s bin only, spread $0.02
+// (quote helper), thresholds 1 spread copper / 5 spreads golden, signed
+// pressure must agree with the displacement direction.
+assert.equal(ALKALUS.COPPER_SPREADS,1);
+assert.equal(ALKALUS.GOLDEN_SPREADS,5);
+const alkOpts={minute,cutoff:minute+1999,width:1000};
+const alkBin=(first,last,prints,extra=[])=>model(
+  [quote(10,first),...prints,quote(900,last),...extra],alkOpts);
+const buyCall=print(1,'C',10,'buy','q1',670);
+// Existing fixture bin: one midpoint, no displacement -> lead.
+assert.equal(alkalusFlow(tape,0,100,minute).kind,'lead');
+// Golden: +$0.12 is 6 spreads, agreeing call-buy pressure.
+const golden=alkalusFlow(alkBin(670,670.12,[buyCall]),0,1000,minute);
+assert.equal(golden.kind,'golden');
+assert.ok(Math.abs(golden.displacementSpreads-6)<1e-9);
+assert.equal(golden.pressure,10);
+assert.equal(golden.imbalance,1);
+// Copper: +$0.04 is 2 spreads, agreeing call-buy pressure.
+assert.equal(alkalusFlow(alkBin(670,670.04,[buyCall]),0,1000,minute).kind,'copper');
+// Lead: +$0.01 is 0.5 spreads, and no displacement at all, with flow present.
+assert.equal(alkalusFlow(alkBin(670,670.01,[buyCall]),0,1000,minute).kind,'lead');
+assert.equal(alkalusFlow(alkBin(670,670,[buyCall]),0,1000,minute).kind,'lead');
+// Lead: displacement against the signed flow is non-conversion, not gold/copper.
+const buyPut=print(1,'P',10,'buy','q1',670);
+assert.equal(alkalusFlow(alkBin(670,670.06,[buyPut]),0,1000,minute).kind,'lead');
+// Unclassified: flow with no midpoint, and midpoint move with no flow.
+assert.equal(alkalusFlow(model([buyCall],alkOpts),0,1000,minute),null);
+assert.equal(alkalusFlow(alkBin(670,670.04,[]),0,1000,minute),null);
+// Unclassified: a recorded gap overlaps the bin, so the move is not observed.
+const gapInBin=row('gap',500,{start:minute+400,reason:'stream_reconnect_resumed'});
+assert.equal(alkalusFlow(alkBin(670,670.04,[buyCall],[gapInBin]),0,1000,minute),null);
+// Regression: gold appearing one second after the exit must not reclassify
+// the owned bin. Only the later midpoint changes; the classification is identical.
+const laterGold=alkBin(670,670.04,[buyCall],[quote(1100,671)]);
+const laterDown=alkBin(670,670.04,[buyCall],[quote(1100,669)]);
+assert.ok(Math.abs(flowResponse(laterGold,0,1000,minute,alkOpts.cutoff).response-.96)<1e-9);
+assert.ok(Math.abs(flowResponse(laterDown,0,1000,minute,alkOpts.cutoff).response+1.04)<1e-9);
+assert.deepEqual(alkalusFlow(laterGold,0,1000,minute),alkalusFlow(laterDown,0,1000,minute));
+assert.equal(alkalusFlow(laterGold,0,1000,minute).kind,'copper');
+console.log('Alkalus flow classification (golden/copper/lead, unclassified, owned-interval-only) passed');

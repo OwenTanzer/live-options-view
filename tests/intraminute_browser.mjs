@@ -22,6 +22,8 @@ try {
   await page.waitForFunction(()=>document.querySelector('#state').textContent.startsWith('Archived'));
   assert.equal(await page.locator('#cursor').inputValue(),'22699');
   assert.match(await page.locator('#response').textContent(),/At 22\.6 s · net -350 directional contracts/);
+  assert.match(await page.locator('#response').textContent(),/Alkalus \(preliminary, flow only\) · /);
+  assert.match(await page.locator('#next-second').textContent(),/Next-second observation — not part of this interval’s classification: midpoint change one second later /);
   assert.ok(await page.locator('#rows tr').count()>0);
   await page.locator('#width').selectOption('1000');
   await page.locator('#strike').selectOption({index:1});

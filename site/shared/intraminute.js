@@ -22,7 +22,9 @@ export function model(rows,{minute,cutoff,width,strike=null}) {
     inspected.push(row);
     if(row.kind==='quote') {
       bin.bid=row.bid; bin.ask=row.ask;
-      bin.mid=(row.bid+row.ask)/2;
+      const mid=(row.bid+row.ask)/2;
+      if(bin.firstMid===undefined) bin.firstMid=mid;
+      bin.mid=mid;
       bin.quoteAt=row.at;
     } else if(row.kind==='stock') {
       if(row.cancel || row.correction || row.flag!=='@') continue;
@@ -56,4 +58,55 @@ export function flowResponse(data, index, width, minute, cutoff) {
   const measured=available && bin.mid!==undefined && later?.mid!==undefined
     && !data.gaps.some(([a,b])=>a<=later.quoteAt && b>=bin.quoteAt);
   return {pressure,imbalance:total?pressure/total:null,response:measured?later.mid-bin.mid:null};
+}
+
+// Preliminary Alkalus flow classification of one owned bin.
+//
+// This is a FLOW classification, descriptive only — not a full option-payoff
+// classification and not a trading signal. The drilldown carries no option
+// premium repricing, so there is no theta, no convexity payoff and no entry
+// friction to measure; it classifies only whether the bin's signed flow
+// converted into midpoint displacement in its own direction, following the
+// Preliminary Guideline — Alkalus taxonomy (golden time / working copper /
+// lead time). Thresholds below are preliminary.
+//
+// Inputs, all from the owned bin only:
+//   - displacement: last observed quote midpoint minus first observed quote
+//     midpoint inside the bin (model() retains bin.firstMid for this);
+//   - spread: the bin's last observed quote spread (ask - bid), the friction
+//     unit displacement is measured in;
+//   - pressure: the bin's signed contract pressure, as in flowResponse.
+// The one-second-later response is deliberately NOT an input: later
+// acceleration belongs to a different interval and cannot retroactively
+// reclassify the owned bin. A golden second after the exit does not turn a
+// correct copper exit into a mistake.
+//
+// Thresholds, in spread units, with signed pressure agreeing in sign with
+// the displacement:
+//   - golden: displacement >= 5 spreads;
+//   - copper: displacement >= 1 spread and < 5 spreads;
+//   - lead:   displacement < 1 spread, or the signed flow did not agree with
+//     the displacement (zero or opposing pressure). Lead here means the flow
+//     did not convert in its own direction; displacement against the flow is
+//     non-conversion, not a separate adverse class in this preliminary scheme.
+// Returns null (unclassified) when no midpoint was observed in the bin, when
+// the bin holds no option prints (no flow to classify), when the spread is
+// not finite and positive, or when a recorded gap overlaps the bin.
+export const ALKALUS={COPPER_SPREADS:1,GOLDEN_SPREADS:5};
+export function alkalusFlow(data, index, width, minute) {
+  const bin=data.bins[index];
+  if(!bin || bin.firstMid===undefined || bin.mid===undefined) return null;
+  const [cb,cs]=bin.C, [pb,ps]=bin.P, total=cb+cs+pb+ps;
+  if(!total) return null;
+  const spread=bin.ask-bin.bid;
+  if(!Number.isFinite(spread) || spread<=0) return null;
+  const binStart=minute+index*width, binEnd=binStart+width;
+  if(data.gaps.some(([a,b])=>a<binEnd && b>binStart)) return null;
+  const pressure=cb-cs-pb+ps;
+  const displacement=bin.mid-bin.firstMid;
+  const displacementSpreads=Math.abs(displacement)/spread;
+  const agrees=pressure!==0 && Math.sign(pressure)===Math.sign(displacement);
+  const kind=displacementSpreads>=ALKALUS.GOLDEN_SPREADS && agrees ? 'golden'
+    : displacementSpreads>=ALKALUS.COPPER_SPREADS && agrees ? 'copper' : 'lead';
+  return {kind,displacement,spread,displacementSpreads,pressure,imbalance:total?pressure/total:null};
 }
