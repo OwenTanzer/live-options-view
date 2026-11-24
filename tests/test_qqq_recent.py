@@ -162,6 +162,29 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(row["side"], "unknown")  # original rule rejects the newest quote
         self.assertEqual((row["label"], row["basis"]), ("buy", "q1"))
 
+    def test_quote_freshness_requires_both_sides(self):
+        t = self.T0 + 60000
+        for age, basis in ((3000, "q5"), (20000, "q30"), (60000, "none"), (-1, "none")):
+            for bid_age, ask_age in ((age, 10), (10, age)):
+                with self.subTest(bid_age=bid_age, ask_age=ask_age):
+                    feed = recent.RecentPrints()
+                    feed.observe(dict(type="quote", symbol=self.SYMBOL, bid=1.0, ask=1.2,
+                                      biddate=t - bid_age, askdate=t - ask_age,
+                                      collector_receipt_timestamp=self.stamp(t - 5)))
+                    row = self.trade(feed, 1, 1.18, t)
+                    self.assertEqual(row["basis"], basis)
+                    self.assertEqual(row["label"], "unknown" if basis == "none" else "buy")
+
+    def test_regressing_time_does_not_sign_or_replace_the_tick_reference(self):
+        feed = recent.RecentPrints()
+        t = self.T0 + 5000
+        self.trade(feed, 1, 1.00, t)
+        self.trade(feed, 2, 1.10, t + 50)
+        late = self.trade(feed, 3, 1.30, t, received=t + 150)
+        following = self.trade(feed, 4, 1.10, t + 50, received=t + 151)
+        self.assertEqual((late["label"], late["basis"]), ("unknown", "none"))
+        self.assertEqual((following["label"], following["basis"]), ("buy", "zero_tick"))
+
     def test_quote_age_tiers(self):
         for age, basis in ((800, "q1"), (3000, "q5"), (20000, "q30")):
             feed = recent.RecentPrints()

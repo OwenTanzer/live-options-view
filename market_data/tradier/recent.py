@@ -12,7 +12,7 @@ Each print also carries a second, tiered signing (``label`` + ``basis``) that le
 ``side`` and the B/S/U totals untouched. It uses only what was known before the print:
 * ``q1``/``q5``/``q30``: quote rule against the *prevailing* quote, i.e. the latest quote
   in a short per-contract history whose receipt and bid/ask dates both precede the
-  print's provider time, by that quote's age (<=1 s, <=5 s, <=30 s);
+  print's provider time, by the older side's age (<=1 s, <=5 s, <=30 s);
 * ``tick``/``zero_tick``: tick test against the previous print in sequence order, so
   same-millisecond sweep legs are compared rather than reset to unknown;
 * ``mid``/``locked``/``none``: still unsigned (midpoint, locked/crossed quote, nothing).
@@ -101,8 +101,8 @@ class RecentPrints:
     def __init__(self):
         self.quotes = {}
         self.previous = {}
-        self.history = {}   # symbol -> deque of (receipt_ms, newest_date, bid, ask), ten-thousandths
-        self.sequence = {}  # symbol -> (seq, price, last nonzero tick side)
+        self.history = {}   # symbol -> deque of (receipt_ms, oldest_date, newest_date, bid, ask), ten-thousandths
+        self.sequence = {}  # symbol -> (seq, provider_ms, price, last nonzero tick side)
         self.rows = deque(maxlen=2048)
         self.session = None
         self.open_gap = None
@@ -191,7 +191,8 @@ class RecentPrints:
 
     def _remember(self, symbol, quote):
         try:
-            entry = (_ms(quote["collector_receipt_timestamp"]), max(int(quote["biddate"]), int(quote["askdate"])),
+            dates = int(quote["biddate"]), int(quote["askdate"])
+            entry = (_ms(quote["collector_receipt_timestamp"]), min(dates), max(dates),
                      round(float(quote["bid"]) * 10000), round(float(quote["ask"]) * 10000))
         except (KeyError, TypeError, ValueError, OverflowError, OSError):
             return
@@ -200,9 +201,9 @@ class RecentPrints:
     def _label(self, symbol, ts, price, seq):
         """Tiered side for one print from information that preceded it (see module doc)."""
         label = basis = None
-        for receipt, newest, bid, ask in reversed(self.history.get(symbol, ())):
+        for receipt, oldest, newest, bid, ask in reversed(self.history.get(symbol, ())):
             if receipt < ts and newest < ts:
-                tier = next((name for limit, name in QUOTE_TIERS if ts - newest <= limit), None)
+                tier = next((name for limit, name in QUOTE_TIERS if ts - oldest <= limit), None)
                 if tier:
                     delta = 2 * price - bid - ask
                     if not 0 < bid < ask:
@@ -213,13 +214,16 @@ class RecentPrints:
                         basis = "mid"
                 break
         previous = self.sequence.get(symbol)
-        if previous is None or seq > previous[0]:
-            tick = None
-            if previous is not None:
-                tick = "buy" if price > previous[1] else "sell" if price < previous[1] else previous[2]
+        if previous is None:
+            self.sequence[symbol] = (seq, ts, price, None)
+        else:
+            previous_seq, previous_ts, previous_price, tick = previous
+            if seq > previous_seq and ts >= previous_ts:
+                if price != previous_price:
+                    tick = "buy" if price > previous_price else "sell"
                 if label is None and tick:
-                    label, basis = tick, "tick" if price != previous[1] else "zero_tick"
-            self.sequence[symbol] = (seq, price, tick or (previous[2] if previous else None))
+                    label, basis = tick, "tick" if price != previous_price else "zero_tick"
+                self.sequence[symbol] = (seq, ts, price, tick)
         return label or "unknown", basis if label else (basis or "none")
 
     def rebuild(self, client, bucket, prefix, local_segments=(), now=None, session_open=None):
