@@ -35,6 +35,12 @@ try {
         keys.push(key);
         const view = structuredClone(fixture.byKey(key));
         if (!view) return route.fulfill({status:404,json:{}});
+        for (const row of view.rows || []) {
+          if (row.title.includes('Tanker')) {
+            row.title = 'Federal Reserve discusses ' + row.title;
+            row.outlet = 'Fixture outlet display name';
+          }
+        }
         if (view.rows && view.mode === 'archive') {
           view.data_label = 'PILOT news: prices unavailable (no price input connected)';
           for (const row of view.rows) if (row.title.includes('Tanker') && row.revision_number === 1)
@@ -69,6 +75,7 @@ try {
         await page.waitForFunction(() => document.querySelector('#news-panel').textContent.includes('retained headlines'));
         const result = await page.locator('#news-panel').innerText();
         assert.equal(result.includes('Tanker'), expected, fraction);
+        assert.equal(result.includes('Headline topic: QQQ, SPY, TLT'), expected, fraction);
         assert.ok(await page.locator('#news-research').isHidden());
         await page.locator('#tab-history').click();
       }
@@ -82,6 +89,8 @@ try {
     await page.locator('#tab-news').click();
     await page.waitForFunction(() => document.querySelector('#news-panel [data-state="ready"]'));
     assert.ok(keys.some(key => key.includes('/collector/')));
+    const liveTitle = page.locator('#news-panel .np-title').filter({hasText: 'Tanker'}).first();
+    assert.ok((await liveTitle.innerText()).includes('Headline topic: QQQ, SPY, TLT'));
     console.log(width+'px hidden live index aborted, late result inert, visible live reader restored'+
       (paired ? ', archived receipt visible at .007 and absent at .006 after rewind' : ''));
     await page.close();
