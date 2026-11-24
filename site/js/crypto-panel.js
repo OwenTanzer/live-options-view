@@ -14,6 +14,7 @@
 const CRYPTO_POLL_MS = 300_000; // Collector publishes hourly; poll every 5 minutes.
 const CRYPTO_STALE_AFTER_MS = 2 * 60 * 60 * 1000; // Hourly cadence: older than 2h is stale.
 let cryptoSnapshot = null;
+let cryptoMinute = null;
 let cryptoError = null;
 let cryptoFetchVersion = 0;
 let cryptoPollHandle = null;
@@ -181,7 +182,7 @@ function cryptoRowHtml(row) {
   const change = row.change_24h_pct == null ? '—' : formatPct(row.change_24h_pct);
   const changeClass = row.change_24h_pct == null ? ''
     : row.change_24h_pct > 0 ? 'crypto-up' : row.change_24h_pct < 0 ? 'crypto-down' : '';
-  const asOf = formatAsOf(row.as_of);
+  const asOf = row.minuteLabel ? escapeHtml(row.minuteLabel) : formatAsOf(row.as_of);
   const source = row.source === 'coinbase' ? 'Coinbase' : row.source === 'coingecko' ? 'CoinGecko' : '—';
   return `<tr${unavailable ? ' class="crypto-unavailable"' : ''}>
       <td>${row.rank ?? '—'}</td>
@@ -224,7 +225,8 @@ function renderCryptoPanel() {
   const nowMs = cryptoNow();
   const constructed = cryptoSnapshot.constructed_at;
   const ageState = cryptoAgeState(constructed, nowMs);
-  const rows = cryptoSnapshot.coins || [];
+  const rows = typeof PanelMinute === 'undefined' ? cryptoSnapshot.coins || [] :
+    PanelMinute.rows('crypto', cryptoSnapshot, cryptoMinute, nowMs);
   const unavailable = rows.filter(r => r.status === 'source_unavailable' || r.price == null);
   const state = ageState === 'fresh' && !unavailable.length ? 'live'
     : ageState === 'fresh' ? 'stale' : ageState;
@@ -245,7 +247,7 @@ function renderCryptoPanel() {
       <span class="crypto-hero-change ${btc.change_24h_pct > 0 ? 'crypto-up' : btc.change_24h_pct < 0 ? 'crypto-down' : ''}">${formatPct(btc.change_24h_pct)} (24h)</span>
       <span>24h high ${formatUsd(btc.high_24h)} · 24h low ${formatUsd(btc.low_24h)}</span>
       <span>24h volume ${btc.volume_24h == null ? '—' : '$' + Number(btc.volume_24h).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-      <span>as of ${formatAsOf(btc.as_of)} · ${btc.source === 'coinbase' ? 'Coinbase' : 'CoinGecko'}</span>`;
+      <span>${btc.minuteLabel ? escapeHtml(btc.minuteLabel) : "Hourly price as of " + formatAsOf(btc.as_of)} · ${btc.source === 'coinbase' ? 'Coinbase' : 'CoinGecko'}</span>`;
   } else {
     heroEl.textContent = 'Bitcoin row missing from snapshot.';
   }
@@ -284,6 +286,11 @@ function renderCryptoPanel() {
 
 // Mounted once, on first open, like the News panel.
 function loadCryptoPanel() {
+  if (typeof PanelMinute !== 'undefined') PanelMinute.watch('crypto', BROWSER_DATA, value => {
+    cryptoMinute = value;
+    if (cryptoSnapshot && Date.parse(value?.baseline_at) > Date.parse(cryptoSnapshot.constructed_at)) fetchCryptoLatest();
+    else if (cryptoSnapshot) renderCryptoPanel();
+  });
   fetchCryptoLatest();
   fetchCryptoPredictions();
   if (!cryptoPollHandle) cryptoPollHandle = setInterval(() => {

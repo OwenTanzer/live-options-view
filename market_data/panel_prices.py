@@ -165,6 +165,15 @@ def nasdaq_marks(baseline, network, pool):
                      if marks[row["symbol"]]["freshness"] != "fresh"
                      and (marks[row["symbol"]]["price_usd"] is None
                           or marks[row["symbol"]]["price_usd"] != row.get("price"))]
+    if getattr(network, "verify_session_quotes", False):
+        # In a regular-session run, a date-only unchanged close still needs a
+        # current primary quote. Rotate the supplemental group if the provider
+        # is slow enough to exhaust the per-run admission window.
+        requested = set(needs_primary)
+        remaining = [s for s in symbols if s not in requested and marks[s]["freshness"] != "fresh"]
+        if remaining:
+            start = int(time.time() // 60) % len(remaining)
+            needs_primary.extend(remaining[start:] + remaining[:start])
     marks.update(pool.map(primary, needs_primary))
     return marks
 

@@ -303,7 +303,7 @@
         '<td class="nq-num">' + (isFiniteNumber(s.rank) ? s.rank : '—') + '</td>' +
         '<td class="nq-sym"><strong>' + escapeHtml(s.symbol) + '</strong>' +
         '<span class="nq-name">' + escapeHtml(s.name || '') + '</span></td>' +
-        '<td class="nq-num">' + fmtPrice(s.price) + '</td>' +
+        '<td class="nq-num">' + fmtPrice(s.price) + (s.minuteLabel ? '<small> ' + escapeHtml(s.minuteLabel) + '</small>' : '') + '</td>' +
         '<td class="nq-num ' + pctClass(s.percent_change) + '">' + fmtPct(s.percent_change) + '</td>' +
         '<td class="nq-num">' + fmtMarketCap(s.market_cap) + '</td>' +
         '<td class="nq-num">' + newsCount + '</td></tr>';
@@ -445,7 +445,7 @@
         '%;width:' + (r.w / HEATMAP_W * 100).toFixed(2) + '%;height:' + (r.h / HEATMAP_H * 100).toFixed(2) +
         '%;background:' + heatmapColor(s.percent_change) + '"' +
         ' title="' + escapeHtml(s.symbol) + ' ' + fmtPct(s.percent_change) +
-        ' · ' + fmtMarketCap(s.market_cap) + '">' +
+        ' · ' + fmtMarketCap(s.market_cap) + ' · ' + fmtPrice(s.price) + ' ' + escapeHtml(s.minuteLabel || 'hourly') + '">' +
         '<span class="nq-tile-sym">' + escapeHtml(s.symbol) + '</span>' +
         '<span class="nq-tile-pct">' + fmtPct(s.percent_change) + '</span></button>';
     }).join('');
@@ -661,7 +661,7 @@
         '" data-interval="' + iv + '"' + (iv === interval ? ' aria-pressed="true"' : '') + '>' + iv + '</button>';
     }).join('');
     return '<div class="nq-detail-head"><h3>' + escapeHtml(stock.symbol) + ' — ' + escapeHtml(stock.name || '') + '</h3>' +
-      '<span class="nq-detail-price">' + fmtPrice(stock.price) + '</span>' +
+      '<span class="nq-detail-price">' + fmtPrice(stock.price) + (stock.minuteLabel ? ' · ' + escapeHtml(stock.minuteLabel) : ' · hourly') + '</span>' +
       '<span class="nq-detail-change ' + pctClass(stock.percent_change) + '">' + fmtPct(stock.percent_change) + '</span>' +
       '<span class="nq-dim">Stock %: ' + escapeHtml(STOCK_PCT_LABEL) + '</span>' +
       '<button type="button" class="nq-close" data-close="1">Close ✕</button></div>' +
@@ -825,6 +825,21 @@
         return null;
       }
       data = snapshot;
+      if (opts.watchMinute) {
+        let hourly = snapshot;
+        let nextHourlyCheck = Date.now() + 3600000;
+        opts.watchMinute(async overlay => {
+          if (Date.now() >= nextHourlyCheck || Date.parse(overlay?.baseline_at) > Date.parse(hourly.as_of)) {
+            try {
+              const newer = await fetchJson(ARTIFACT_PATH);
+              if (!validateSnapshot(newer).length && Date.parse(newer.as_of) >= Date.parse(hourly.as_of)) hourly = newer;
+            } catch (_) { /* keep the last verified hourly snapshot */ }
+            nextHourlyCheck = Date.now() + 3600000;
+          }
+          data = {...hourly, stocks: PanelMinute.rows('nasdaq', hourly, overlay, Date.now())};
+          rerender();
+        });
+      }
       renderSnapshot(doc, data, state, nowMs);
       container.setAttribute('data-state', isStale(data.as_of, nowMs) ? 'stale' : 'ready');
       return data;
@@ -879,5 +894,7 @@ function loadNasdaqPanel() {
       return r.json();
     });
   }
-  return NasdaqPanel.mount(document, container, fetchJson);
+  return NasdaqPanel.mount(document, container, fetchJson, {
+    watchMinute: typeof PanelMinute === 'undefined' ? null : cb => PanelMinute.watch('nasdaq', root, cb)
+  });
 }
