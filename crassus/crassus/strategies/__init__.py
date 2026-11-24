@@ -11,6 +11,7 @@ complete loop is demonstrably alive.
 from . import gated_strangle  # noqa: F401
 from . import canopus_down_day  # noqa: F401
 from . import looking_glass_straddle  # noqa: F401
+from . import me_bots  # noqa: F401
 from . import max_pain  # noqa: F401
 from . import momentum_puts_only  # noqa: F401
 from . import momentum_qqq  # noqa: F401

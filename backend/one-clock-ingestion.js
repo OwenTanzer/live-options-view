@@ -2,7 +2,7 @@
 // evidence qualification; the runner owns retry, atomic progress and budgets.
 import { instant,observation } from '../site/shared/one-clock.js';
 import { validSession } from '../site/shared/one-clock-session.js';
-export const INGESTION_LIMITS=Object.freeze({artifacts:20,bytes:4*1024*1024,objectBytes:1024*1024,versions:2000,observations:10000});
+export const INGESTION_LIMITS=Object.freeze({artifacts:20,bytes:4*1024*1024,orderedBytes:8*1024*1024,objectBytes:1024*1024,versions:2000,observations:10000});
 const stmt=(db,sql,...args)=>db.prepare(sql).bind(...args);
 const scopeArgs=s=>[s.source,s.session,s.instrument];
 const canonical=value=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}':JSON.stringify(value);
@@ -21,9 +21,21 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const candidates=index.artifacts.filter(v=>!known.has(JSON.stringify([v.key,v.version])));
   // Half oldest and half newest pending work: catch-up cannot starve live
   // records, and a busy live tail cannot starve retained older evidence.
-  candidates.sort((a,b)=>a.eventAt-b.eventAt||a.key.localeCompare(b.key));
-  const half=INGESTION_LIMITS.artifacts/2;
-  const work=[...candidates.slice(0,half),...candidates.slice(Math.max(half,candidates.length-half))];
+  let work;
+  if(adapter.orderedAvailability) {
+    // A level encounter needs both bracketing prices and the map available
+    // at their cutoffs. Certify a prefix of publication time, including all
+    // ties, before allowing the observer to evaluate it.
+    if(candidates.some(a=>!Number.isSafeInteger(a.availableAt)||a.availableAt>now))
+      throw new Error('invalid artifact availability');
+    candidates.sort((a,b)=>a.availableAt-b.availableAt||a.key.localeCompare(b.key));
+    work=candidates.slice(0,INGESTION_LIMITS.artifacts);
+  } else {
+    candidates.sort((a,b)=>a.eventAt-b.eventAt||a.key.localeCompare(b.key));
+    const half=INGESTION_LIMITS.artifacts/2;
+    work=[...candidates.slice(0,half),...candidates.slice(Math.max(half,candidates.length-half))];
+  }
+  const byteLimit=adapter.orderedAvailability?INGESTION_LIMITS.orderedBytes:INGESTION_LIMITS.bytes;
   let bytes=0,gets=0;
   const sharedObjects=new Map();
   const readBucket={async get(key) {
@@ -31,11 +43,13 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     const object=await bucket.get(key);gets++;
     if(!object)return null;
     if(!Number.isSafeInteger(object.size)||object.size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
-    if(bytes+object.size>INGESTION_LIMITS.bytes)throw new IngestionBudget('source byte budget');
+    if(bytes+object.size>byteLimit)throw new IngestionBudget('source byte budget');
+    // Reserve before awaiting the body: calibrated evidence reads the CSV
+    // and JSON concurrently, and both share this invocation's byte budget.
+    bytes+=object.size;
     const text=await object.text(),size=new TextEncoder().encode(text).byteLength;
     if(size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
-    if(bytes+size>INGESTION_LIMITS.bytes)throw new IngestionBudget('source byte budget');
-    bytes+=size;
+    if(size!==object.size)throw new Error('source object size mismatch');
     const retained={size,etag:object.etag,uploaded:object.uploaded,text:async()=>text};
     if(adapter.reuseObjects)sharedObjects.set(key,retained);
     return retained;
@@ -45,6 +59,7 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     let result;
     try { result=await adapter.read(readBucket,{session,instrument,cutoff:now},artifact); }
     catch(error) { if(error instanceof IngestionBudget)break;throw error; }
+    if(result.retry && adapter.orderedAvailability)break;
     if(result.retry)continue; // object changed after listing; rediscover its revision
     if(!Array.isArray(result.rows)||result.rows.length>10)throw new Error('invalid source projection');
     for(const input of result.rows) {
@@ -66,6 +81,18 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     final:false,...(index.through==null?{}:{through:index.through}),reason:!index.complete?(index.reason??'metadata-index-bound'):candidates.length>completed.length?'catching-up':'periodic-archive-observation',
     limitations:['No producer finality guarantee. Older sessions may receive late evidence.',
       'Versions overwritten between polls cannot be reconstructed. Retained versions remain available.']};
+  if(adapter.orderedAvailability) {
+    const previous=prior?.coverage?JSON.parse(prior.coverage):null;
+    coverage.priorVerifiedThrough=Math.max(previous?.priorVerifiedThrough??0,
+      previous?.verifiedAvailabilityPrefix?previous.through:0);
+  }
+  if(adapter.orderedAvailability && index.complete) {
+    const firstPending=candidates[completed.length];
+    coverage.through=firstPending?firstPending.availableAt-1:now;
+    // A newly discovered late artifact may fall behind an already evaluated
+    // prefix. Keep existing observations/outcomes intact until it is covered.
+    coverage.verifiedAvailabilityPrefix=coverage.through>=coverage.priorVerifiedThrough;
+  }
   if(adapter.reportGapReasons) {
     const reasons=[...versions.filter(v=>v.status==='gap').map(v=>v.detail),...completed.filter(v=>v.result.gap||!v.result.rows.length).map(v=>v.result.reason)];
     coverage.gapReasons=Object.fromEntries([...new Set(reasons)].map(r=>[r,reasons.filter(v=>v===r).length]));

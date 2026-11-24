@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
+from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
+from .strategies.me_bots_inputs import Inputs as MeBotInputs
 from .strategies.oi_skew import REFERENCE_ROOTS as _OI_REFERENCE_ROOTS
 from .strategies.trump_oi_skew import ROOTS as _TRUMP_OI_SKEW_ROOTS
 from typing import Any
@@ -183,6 +185,7 @@ class Runner:
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)
+        self.me_inputs = MeBotInputs(self.state_dir / "me-bots")
         self.forward_directory = self.state_dir / forward_skew.VERSION
         self.forward_bars = ForwardBars(self.forward_directory)
         self.forward_bar_sources = {root: (self.forward_bars if root == "QQQ"
@@ -357,6 +360,7 @@ class Runner:
             account_strategy_id=intent.get("account_strategy_id") or account.strategy_id,
             outcome_class=recovered.outcome_class,
             decision=intent.get("decision"),
+            strategy_decided_at=intent.get("strategy_decided_at"),
             reason=recovered.note,
             market_snapshot_timestamp=intent.get("market_snapshot_timestamp"),
             market_snapshot_url_or_hash=intent.get("market_snapshot_url_or_hash"),
@@ -582,6 +586,11 @@ class Runner:
             account_alias=alias,
         )
 
+        if account.strategy_id in ME_BOTS:
+            inputs = self.me_inputs.read(self.cycle_count, ctx.now_et, phase)
+            ctx.now_et = clock.now_et()
+            ctx.params = {**ctx.params, "_me_inputs": inputs, "_me_directory": self.me_inputs.directory}
+
         if account.strategy_id == "qqq_gated_strangle" and phase == "open":
             ctx.params = {**ctx.params, "_completed_bars": self.forward_bars.read(self.cycle_count, ctx.now_et)}
 
@@ -590,6 +599,13 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
+                if account.strategy_id in ME_BOTS and decision.is_trade:
+                    limit = me_limit_price(ctx, decision.symbol, decision.action)
+                    if limit is None:
+                        decision = Decision.no_trade("Flatten awaiting executable limit quote",
+                                                     decision.strategy_id, decision.strategy_version)
+                    else:
+                        decision.limit_price = limit
             elif arm and arm != "baseline":
                 decision = forward_skew.decide(ctx, account, arm, forward_bars,
                                                self.forward_directory, decision_id)
@@ -674,6 +690,9 @@ class Runner:
                 if not observed or not 0 <= (ctx.now_et-observed).total_seconds() <= 360:
                     decision = Decision.no_trade("OI reading outside causal freshness window",
                                                  account.strategy_id, forward_skew.VERSION)
+        # Freeze the final action before further quotes, metadata sync or submission.
+        decided_at = clock.iso_utc()
+        if arm:
             # Retain a liquidation mark for every held symbol, including no-trades.
             try:
                 quotes_for_decision(list(book.positions))
@@ -694,6 +713,7 @@ class Runner:
         # record can still be grouped by account/strategy.
         decision_fields = {
             **base,
+            "strategy_decided_at": decided_at,
             "strategy_id": decision.strategy_id,
             "strategy_version": decision.strategy_version,
             "account_strategy_id": account.strategy_id,
@@ -769,6 +789,7 @@ class Runner:
                 instrument_type=decision.instrument_type,
                 **({"limit_price": decision.limit_price} if decision.limit_price is not None else {}),
                 decision_id=decision_id,
+                strategy_decided_at=decided_at,
                 strategy_id=decision.strategy_id,
                 strategy_version=decision.strategy_version,
                 account_strategy_id=account.strategy_id,
@@ -861,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=300.0, help="Seconds between cycles (default 300)")
     parser.add_argument("--once", action="store_true", help="Run a single cycle and exit")
     parser.add_argument("--dry-run", action="store_true", help="Decide and log, but never submit an order")
+    parser.add_argument("--me-paper-roster", action="store_true", help="Require an explicit isolated Me Bot roster")
     parser.add_argument("--only", action="append", help="Limit to these account aliases")
     parser.add_argument("--base-url", default=BASE_URL)
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -874,7 +896,9 @@ def main(argv: list[str] | None = None) -> int:
         return supervise([sys.executable, "-m", "crassus.runner",
                           *(sys.argv[1:] if argv is None else argv)], args.interval)
 
-    accounts = load_accounts(args.accounts)
+    if args.me_paper_roster and (not args.accounts or args.base_url.rstrip("/") != forward_skew.PAPER_ORIGIN):
+        parser.error("Me Bot provisional mode requires --accounts and the paper execution origin")
+    accounts = load_accounts(args.accounts, me_paper_only=True) if args.me_paper_roster else load_accounts(args.accounts)
     if args.only:
         accounts = [a for a in accounts if a.alias in set(args.only)]
         if not accounts:
