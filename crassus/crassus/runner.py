@@ -184,8 +184,9 @@ class Runner:
         self.me_inputs = MeBotInputs(self.state_dir / "me-bots")
         self.forward_directory = self.state_dir / forward_skew.VERSION
         self.forward_bars = ForwardBars(self.forward_directory)
-        self.forward_bar_sources = {"QQQ": self.forward_bars,
-                                    "IBIT": ForwardBars(self.forward_directory, "IBIT")}
+        self.forward_bar_sources = {root: (self.forward_bars if root == "QQQ"
+                                           else ForwardBars(self.forward_directory, root))
+                                    for root in forward_skew.FAMILIES}
         self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
         if self.forward_accounts:
             for root, family in forward_skew.FAMILIES.items():

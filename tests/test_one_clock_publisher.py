@@ -6,7 +6,7 @@ import uuid
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from market_data.live_market.publications import PublicationLog, PublicationError, PublicationBudget, BudgetedS3, digest
 
@@ -261,6 +261,35 @@ class PublisherTests(unittest.TestCase):
 
 
 class PendingQueueTests(unittest.TestCase):
+    def test_unregistered_roots_keep_archive_and_latest_without_a_publication_worker(self):
+        from datetime import datetime, timezone
+        from market_data.live_market import market, runner, state
+        from test_snapshot_provenance import FakeFeed, strike
+
+        captured = datetime(2026, 11, 23, 19, 33, tzinfo=timezone.utc)
+        for symbol in ("SLV", "DRAM"):
+            lane = state.UnderlyingSession(symbol)
+            with self.subTest(symbol=symbol), patch.object(runner, "ONE_CLOCK_PUBLICATIONS", True), patch.object(runner, "make_s3") as client:
+                self.assertIsNone(runner._publication_queue(lane, captured.date(), state.Counters()))
+                client.assert_not_called()
+            option = strike(symbol, 40)
+            book = {symbol: {"bid": 40, "ask": 40.2, "bid_ts": captured.isoformat(), "ask_ts": captured.isoformat()},
+                    option["call_sym"]: {"bid": 1, "ask": 1.2}, option["put_sym"]: {"bid": 1, "ask": 1.2}}
+            for queue in (None, Mock()):
+                with self.subTest(symbol=symbol, queued=queue is not None), patch.object(market, "ONE_CLOCK_PUBLICATIONS", True):
+                    store = Store()
+                    market.take_snapshot(store, FakeFeed(book), [option], captured.date().isoformat(),
+                                         "Regular", captured.date(), state.Counters(), state.SnapshotTracker(),
+                                         lane, publication_queue=queue, capture=(captured, book))
+                    if queue is not None:
+                        queue.enqueue.assert_not_called()
+                    payload = json.loads(store.data[lane.latest_key])
+                    self.assertEqual(payload["symbol"], symbol)
+                    self.assertIn(payload["snapshot_key"], store.data)
+                    provenance = json.loads(store.data[payload["snapshot_key"].replace(".csv", ".provenance.json")])
+                    self.assertEqual(provenance["publication"]["status"], "published")
+                    self.assertFalse(any(key.startswith("publications/") for key in store.data))
+
     def test_admission_retry_survives_restart_and_keeps_capture_and_commit_clocks(self):
         from datetime import datetime, timedelta, timezone
         from tempfile import TemporaryDirectory

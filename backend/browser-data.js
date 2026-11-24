@@ -22,6 +22,8 @@ export const BROWSER_DATA_KEYS = new Set([
   'intraday/latest.json',
   'intraday/spy/latest.json',
   'intraday/ibit/latest.json',
+  'intraday/slv/latest.json',
+  'intraday/dram/latest.json',
   'intraday/prices.json',
   'intraday/health.json',
   'derived/OIranges.csv',

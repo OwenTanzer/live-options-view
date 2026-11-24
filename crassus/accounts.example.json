@@ -408,6 +408,80 @@
       "password_env": "CRASSUS_PW_ME_RATCHET",
       "strategy_id": "me_ratchet_qqq",
       "active": false
+    },
+    {
+      "alias": "SLV OI Skew Paper",
+      "username": "crassus_skew_slv",
+      "password_env": "CRASSUS_PW_SKEW_SLV",
+      "strategy_id": "oi_skew_slv_adaptive",
+      "active": false
+    },
+    {
+      "alias": "SLV OI Forward Baseline",
+      "username": "crassus_oif_slv_baseline",
+      "password_env": "CRASSUS_PW_OIF_SLV_BASELINE",
+      "strategy_id": "oi_skew_slv_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "baseline"
+      }
+    },
+    {
+      "alias": "SLV OI Forward Protection",
+      "username": "crassus_oif_slv_protect",
+      "password_env": "CRASSUS_PW_OIF_SLV_PROTECT",
+      "strategy_id": "oi_skew_slv_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "protect_only"
+      }
+    },
+    {
+      "alias": "SLV OI Forward Protection + Re-entry",
+      "username": "crassus_oif_slv_recover",
+      "password_env": "CRASSUS_PW_OIF_SLV_RECOVER",
+      "strategy_id": "oi_skew_slv_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "protect_reentry"
+      }
+    },
+    {
+      "alias": "DRAM OI Skew Paper",
+      "username": "crassus_skew_dram",
+      "password_env": "CRASSUS_PW_SKEW_DRAM",
+      "strategy_id": "oi_skew_dram_adaptive",
+      "active": false
+    },
+    {
+      "alias": "DRAM OI Forward Baseline",
+      "username": "crassus_oif_dram_baseline",
+      "password_env": "CRASSUS_PW_OIF_DRAM_BASELINE",
+      "strategy_id": "oi_skew_dram_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "baseline"
+      }
+    },
+    {
+      "alias": "DRAM OI Forward Protection",
+      "username": "crassus_oif_dram_protect",
+      "password_env": "CRASSUS_PW_OIF_DRAM_PROTECT",
+      "strategy_id": "oi_skew_dram_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "protect_only"
+      }
+    },
+    {
+      "alias": "DRAM OI Forward Protection + Re-entry",
+      "username": "crassus_oif_dram_recover",
+      "password_env": "CRASSUS_PW_OIF_DRAM_RECOVER",
+      "strategy_id": "oi_skew_dram_adaptive",
+      "active": false,
+      "params": {
+        "forward_skew_arm": "protect_reentry"
+      }
     }
   ]
 }
