@@ -534,6 +534,13 @@
       "active": false
     },
     {
+      "alias": "Bowman Max Pain",
+      "username": "crassus_bowman_max_pain",
+      "password_env": "CRASSUS_PW_BOWMAN_MAX_PAIN",
+      "strategy_id": "bowman_max_pain_qqq",
+      "active": false
+    },
+    {
       "alias": "Flow Skew",
       "username": "crassus_flowskew",
       "password_env": "CRASSUS_PW_FLOW_SKEW",

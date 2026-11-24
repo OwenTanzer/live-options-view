@@ -92,10 +92,11 @@ from __future__ import annotations
 
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
+from . import max_pain
 from ..client import Position
 from ..market import EXECUTION_QUOTE_MAX_AGE_S
 from ..momentum import (
@@ -188,6 +189,8 @@ def _decide_core(
     ctx: StrategyContext,
     signal: MomentumSignal | None,
     stale_source_reason: str | None = None,
+    *,
+    require_pin: bool = False,
 ) -> Decision:
     def no(reason: str, **meta: Any) -> Decision:
         return Decision.no_trade(
@@ -338,6 +341,22 @@ def _decide_core(
     direction = "up" if ret > 0 else "down"
     option_type = "call" if direction == "up" else "put"
 
+    pin_metadata = {}
+    if require_pin:
+        pin, count = max_pain._compute_max_pain(ctx.snapshot.rows)
+        spot = ctx.snapshot.underlying_price
+        threshold_pct = params.get("pin_threshold_pct", max_pain.DEFAULT_PIN_THRESHOLD_PCT)
+        min_oi = params.get("min_strikes_with_oi", max_pain.DEFAULT_MIN_STRIKES_WITH_OI)
+        deviation = (spot - pin) / spot * 100 if pin is not None and spot > 0 else None
+        pin_metadata = {"max_pain_strike": pin, "deviation_pct": deviation,
+                        "strikes_with_oi_both_sides": count, "pin_threshold_pct": threshold_pct,
+                        "min_strikes_with_oi": min_oi, "return_pct": ret}
+        if count < min_oi or deviation is None:
+            return no("Insufficient OI coverage or spot for Max Pain confirmation.", **pin_metadata)
+        agrees = deviation < -threshold_pct if direction == "up" else deviation > threshold_pct
+        if not agrees:
+            return no("Max Pain does not confirm displacement toward the pin.", **pin_metadata)
+
     row = ctx.snapshot.atm(option_type)
     if not row:
         return no(f"No quoted {option_type} in the snapshot to trade.")
@@ -376,6 +395,7 @@ def _decide_core(
         strategy_id=STRATEGY_ID,
         strategy_version=STRATEGY_VERSION,
         metadata={
+            **pin_metadata,
             "strike": row["Strike"],
             "underlying_price": ctx.snapshot.underlying_price,
             "anchor_price": signal.anchor_price,
@@ -387,7 +407,7 @@ def _decide_core(
     )
 
 
-def _decide(ctx: StrategyContext) -> Decision:
+def _decide(ctx: StrategyContext, *, require_pin: bool = False) -> Decision:
     global _last_recorded_snapshot
 
     if ctx.session_phase != "open":
@@ -423,9 +443,20 @@ def _decide(ctx: StrategyContext) -> Decision:
         lookback_minutes=window,
         max_anchor_overshoot_minutes=max_overshoot,
     )
-    return _decide_core(ctx, signal)
+    return _decide_core(ctx, signal, require_pin=require_pin)
 
 
 _decide.strategy_id = STRATEGY_ID
 _decide.strategy_version = STRATEGY_VERSION
 phelps_pure_qqq = register(_decide)
+
+
+def _bowman_max_pain(ctx: StrategyContext) -> Decision:
+    decision = _decide(ctx, require_pin=True)
+    return replace(decision, strategy_id=_bowman_max_pain.strategy_id,
+                   strategy_version=_bowman_max_pain.strategy_version)
+
+
+_bowman_max_pain.strategy_id = "bowman_max_pain_qqq"
+_bowman_max_pain.strategy_version = "1.0.0"
+bowman_max_pain_qqq = register(_bowman_max_pain)

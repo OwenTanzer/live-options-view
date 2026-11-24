@@ -112,6 +112,7 @@ DEFAULT_COVERED = frozenset({
     "oi_skew_qqq",
     "put_call_ratio_qqq",
     "phelps_pure_qqq",
+    "bowman_max_pain_qqq",
 })
 
 PHELPS_SUFFIX = "_phelps"
@@ -280,7 +281,7 @@ def resolve_policy(
 
 
 def is_phelps(strategy_id: str) -> bool:
-    return strategy_id.endswith(PHELPS_SUFFIX) or strategy_id == "phelps_pure_qqq"
+    return strategy_id.endswith(PHELPS_SUFFIX) or strategy_id in {"phelps_pure_qqq", "bowman_max_pain_qqq"}
 
 
 def _elapsed_minutes(ctx: StrategyContext, symbol: str) -> float | None:

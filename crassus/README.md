@@ -248,6 +248,15 @@ elapses and then release unconditionally) are derived from the guideline
 directly. It exists to isolate what Phelps alone contributes as a signal,
 not just as an exit-timing floor.
 
+**Bowman Max Pain** (`bowman_max_pain_qqq`) is a separate, initially inactive
+QQQ paper account. Its Bowman displacement must point toward the Max Pain
+strike for entry. It uses the base pin distance (strictly over 0.15% of spot)
+and minimum two-sided OI coverage (five distinct strikes). Agreement opens
+one ATM option. Once filled, ordinary exits follow Bowman's retracement and
+27.5-minute terminal window, independent of subsequent pin changes. The same
+runner-level protective exit and end-of-session flatten policies apply as
+for Bowman. This combination has no measured performance advantage yet.
+
 See `scripts/verify_phelps.py` for hermetic coverage of both the wrapper
 and the standalone strategy.
 
