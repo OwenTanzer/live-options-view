@@ -65,3 +65,19 @@ def test_conditional_publish_and_expired_capture():
     with pytest.raises(ValueError):
         publish(client,"bucket","nasdaq",doc(),NOW+timedelta(minutes=2))
     assert client.put_object.call_count == 1
+
+
+def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quote():
+    for label in (None, "Dec 04, 2026"):
+        poisoned = doc(ts=NOW+timedelta(days=7))
+        if label:
+            poisoned["prices"]["X"].update(provider_time_label=label, provider_observed_at=None)
+        bad = json.loads(json.dumps(poisoned))
+        protect_observations(bad, {"prices":{}}, "nasdaq", NOW)
+        assert bad["prices"]["X"]["price_usd"] is None
+        assert "watermark_at" not in bad["prices"]["X"]
+        poisoned["prices"]["X"]["watermark_at"] = (NOW+timedelta(days=7)).isoformat()
+        good = doc()
+        protect_observations(good, poisoned, "nasdaq", NOW)
+        assert good["prices"]["X"]["watermark_at"] == NOW.isoformat()
+        assert good["prices"]["X"]["price_usd"] == 123

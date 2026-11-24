@@ -92,12 +92,23 @@ def observation_floor(row):
         return None
 
 
+def valid_at(stamp, row, now):
+    receipt = crypto_time(row.get("received_at"))
+    return stamp if stamp and stamp <= min(receipt or now, now) else None
+
+
 def protect_observations(candidate, prior, feed, now):
     for symbol, row in candidate["prices"].items():
         old = prior["prices"].get(symbol, {})
         same_instrument = feed == "nasdaq" or row.get("source") == old.get("source")
         previous = crypto_time(old.get("watermark_at")) or observation_floor(old)
+        previous = valid_at(previous, old, now)
         observed = observation_floor(row)
+        if observed and not valid_at(observed, row, now):
+            row.update(price_usd=None, freshness="missing", provider_observed_at=None,
+                       provider_time_label=None)
+            row.pop("watermark_at", None)
+            observed = None
         if previous and same_instrument and (observed is None or observed < previous):
             # Preserve the watermark even through a gap. Only reuse a prior price
             # if its original time and receipt are available in the prior object.
@@ -121,6 +132,7 @@ def publish(client, bucket, feed, candidate, now):
         raise ValueError("Expired or future minute capture")
     if not 0 < len(candidate["prices"]) <= (50 if feed == "crypto" else 150):
         raise ValueError("Bad coverage")
+    protect_observations(candidate, {"prices": {}}, feed, now)
     if not any(v["price_usd"] is not None for v in candidate["prices"].values()):
         raise ValueError("No priced rows")
     key = feed + "/prices.json"
