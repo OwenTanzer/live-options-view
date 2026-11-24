@@ -266,7 +266,7 @@ def _decide(ctx, strategy_id):
             )
     if reading is None:
         return finish(no("No fresh current-session Max Pain board."))
-    if not positions and state.get("blocked") and bias == state["blocked"]:
+    if not positions and state.get("blocked"):
         return finish(no("Awaiting a new directional Max Pain episode."))
     decision = max_pain._decide_core(
         replace(ctx, quotes=executable), pin_reading=reading

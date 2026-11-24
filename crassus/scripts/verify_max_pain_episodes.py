@@ -189,6 +189,12 @@ class Episodes(unittest.TestCase):
             self.act(16, 399).action, "buy"
         )  # inclusive exact timer boundary
 
+    def test_an_opposite_board_predating_the_fill_cannot_start_an_episode(self):
+        self.assertEqual(self.act(0, 401).action, "buy")
+        self.assertEqual(self.act(5, None, bid=0.85).action, "sell")
+        self.assertEqual(self.act(7, 399, age=180).action, "no_trade")
+        self.assertEqual(self.act(8, 399).action, "buy")
+
     def test_qualified_exit_observation_already_opposite(self):
         self.assertEqual(self.act(0).action, "buy")
         self.assertEqual(self.act(1, 401, bid=0.85).action, "sell")
