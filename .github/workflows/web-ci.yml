@@ -227,7 +227,22 @@ jobs:
       - name: Install browser test dependencies
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+          # Hosted runners often already have the system libraries for both browser modes.
+          probe_chromium() {
+            node --input-type=module <<'JS'
+          import { chromium } from 'playwright';
+          for (const options of [{}, { channel: 'chromium' }]) {
+            const browser = await chromium.launch(options);
+            await browser.close();
+          }
+          JS
+          }
+          if ! probe_chromium; then
+            echo "Chromium launch failed. Installing system dependencies and retrying."
+            npx playwright install-deps chromium
+            probe_chromium
+          fi
       - name: One Clock dashboard and Order Flow desktop/mobile fixture workflows
         run: |
           node tests/one_clock_dashboard_browser.test.cjs
@@ -235,6 +250,9 @@ jobs:
           node tests/one_clock_candle_browser.mjs
           node tests/one_clock_headlines_browser.mjs
           node tests/order_flow_clock_browser.mjs
+          node tests/intraminute_model.mjs
+          node tests/intraminute_api.mjs
+          node tests/intraminute_browser.mjs
       - name: BTC monthly mobile fixture workflow
         run: |
           node --test tests/btc_owner_link.test.mjs

@@ -111,7 +111,7 @@ class RecentPrints:
 
     def observe(self, event):
         try:
-            self._observe(event)
+            return self._observe(event)
         except (KeyError, ValueError, TypeError, OverflowError, OSError):
             return
 
@@ -188,6 +188,8 @@ class RecentPrints:
             self.rows.append(row)
             session.add(row)
             self.version += 1
+
+        return row
 
     def _remember(self, symbol, quote):
         try:

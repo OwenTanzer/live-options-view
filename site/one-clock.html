@@ -10,6 +10,7 @@
 <main>
   <div class="intro"><div><p class="eyebrow">ONE CLOCK</p><h1>Define a moment.<br>Follow what happens.</h1></div>
   <p class="lede">Register a market event, inspect each occurrence, and measure its outcome on the same clock.</p></div>
+  <a href="/intraminute.html">Explore QQQ intraminute order flow</a>
   <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option><option value="2026-10-29">QQQ candle breaches · 2026-10-29</option><option value="2026-10-30">QQQ candle breaches · 2026-10-30</option><option value="2026-11-02">QQQ candle breaches · 2026-11-02</option></select></label>
   <aside class="notice"><strong>Offline engineering session · SYN-1</strong><span>Hand-authored synthetic data. Fixture results are not market evidence. Account observation has its own recorded evidence and coverage.</span></aside>
   <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Replay Results</button><button id="show-observed" aria-pressed="false">Observed Results</button></nav>
@@ -63,6 +64,7 @@
     <p id="empty-state"></p><a id="order-flow-evidence" hidden>Open Order Flow at selected trigger</a>
   </section>
   <section class="replay" aria-labelledby="replay-title"><div class="section-head"><h2 id="replay-title">Session replay</h2><strong id="cursor-time"></strong></div>
+    <a id="intraminute-cursor" hidden>Open QQQ flow at cursor</a>
     <p id="replay-description" class="muted">SYN-1 · QQQ · synthetic clock in UTC. Counts and outcomes follow this cursor.</p>
     <div class="replay-controls"><button id="play" aria-pressed="false">Play</button><label class="slider-label">Replay cursor<input type="range" id="cursor" min="0" max="3601" step="1" value="301"></label></div>
     <svg id="session-strip" viewBox="0 0 900 100" role="img" aria-label="Observed skew through the cursor"></svg>
