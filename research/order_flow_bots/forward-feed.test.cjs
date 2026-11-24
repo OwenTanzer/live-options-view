@@ -199,3 +199,18 @@ test('a late receipt beyond settling remains visible, and real source gaps never
   assert.deepEqual(bad.frame.coverageDiagnostics.reasons,['ladder print arrived after its decision','collector gap overlaps minute']);
   assert.equal(bad.frame.coverageDiagnostics.overlappingGaps[0].start,t+1000);
 });
+
+test('regressed or future flow clocks cannot release a pending minute',()=>{
+  const f=new ForwardFeed(),events=[event(open,1)],t=open+60000;
+  poll(f,open,events);events.push(event(t+100,2));
+  const flow=projection(events);
+  const read=(decision,body,sampled,requested)=>f.observe({open,close,flow,receivedAt:decision,
+    flowReceivedAt:body,flowSampledAt:sampled,flowRequestedAt:requested});
+  assert.equal(read(t+1000,t+800,t+900,t+700).frames.length,0);
+  assert.equal(read(t+9000,t+700,t+9000,t+9000).frames.length,0);
+  assert.equal(read(t+9500,t+800,t+850,t+750).frames.length,0);
+  assert.equal(read(t+9700,t+800,t+9900,t+9600).frames.length,0);
+  const [d]=read(t+10000,t+800,t+10000,t+9700).frames;
+  assert.equal(d.frame.coverageDiagnostics.flowReceivedAt,t+800);
+  assert.equal(d.frame.coverageDiagnostics.publicationSettlement.ladderPrintsAdded,0);
+});

@@ -126,7 +126,7 @@ class ForwardFeed {
     this.day=new Date(open).toISOString().slice(0,10);
     this.spots=[];this.chains=[]; this.prior=null; this.pending=[]; this.lastPrices=new Map();
     this.next=null; this.lastClosed=null; this.ladder=null; this.openOi=new Map();
-    this.settling=null; this.evidence=new Map(); this.badThrough=0; this.lastReceipt=0; this.parityAt=null; this.verified=null;
+    this.settling=null; this.evidence=new Map(); this.badThrough=0; this.lastReceipt=0; this.lastFlowReceipt=0; this.lastFlowSample=0; this.lastFlowRequest=0; this.parityAt=null; this.verified=null;
   }
 
   // Keep a bounded sample per cause and minute; preserve the exact source
@@ -139,7 +139,7 @@ class ForwardFeed {
     else this.evidence.set(key,{code,firstAt:at,lastAt:at,occurrences:1,example:detail});
   }
 
-  observe({flow,chain,receivedAt,chainReceivedAt,spotQuote,frozenLadderSpot,openingFrame,openingOi,open,close}) {
+  observe({flow,chain,receivedAt,flowReceivedAt=receivedAt,flowSampledAt=flowReceivedAt,flowRequestedAt=flowSampledAt,chainReceivedAt,spotQuote,frozenLadderSpot,openingFrame,openingOi,open,close}) {
     if(![open,close,receivedAt].every(Number.isSafeInteger) || close<=open) throw Error('Invalid session clock');
     if(this.open!==open || this.close!==close) this.reset(open,close);
     if(receivedAt<this.lastReceipt) return {quote:null,frames:[]};
@@ -179,6 +179,14 @@ class ForwardFeed {
       }
     }
     if(flow?.session?.day!==this.day) return {quote,frames};
+    // Slow chain or quote requests may finish long after the flow request.
+    // A cadence-cache hit is still the old validation, and a real HTTP 304
+    // validates the same original body on a new request.
+    if(![flowReceivedAt,flowSampledAt,flowRequestedAt].every(Number.isSafeInteger) ||
+       flowReceivedAt>flowSampledAt || flowRequestedAt>flowSampledAt || flowSampledAt>receivedAt ||
+       flowReceivedAt<this.lastFlowReceipt || flowSampledAt<this.lastFlowSample || flowRequestedAt<this.lastFlowRequest ||
+       (Number.isSafeInteger(flow.session.last) && flow.session.last>flowReceivedAt)) return {quote,frames};
+    this.lastFlowReceipt=flowReceivedAt;this.lastFlowSample=flowSampledAt;this.lastFlowRequest=flowRequestedAt;
     const session=flow.session, changes=suffix(this.prior,flow);
     if(!changes) {
       this.record('invalid projection shape or print identity',receivedAt);
@@ -205,7 +213,8 @@ class ForwardFeed {
       if(row.t<open) continue;
       if(this.lastClosed!==null && row.t<=this.lastClosed) {
         if(!reason && (!this.ladder || this.ladder.some(c=>c.symbol===row.symbol))) {
-          this.record('ladder print arrived after its decision',receivedAt,{symbol:row.symbol,seq:row.seq,providerAt:row.t,closedAt:this.lastClosed});
+          this.record('ladder print arrived after its decision',receivedAt,{symbol:row.symbol,seq:row.seq,providerAt:row.t,
+            bodyReceivedAt:flowReceivedAt,sampledAt:flowSampledAt,observedAt:receivedAt,closedAt:this.lastClosed});
         }
         continue;
       }
@@ -228,8 +237,8 @@ class ForwardFeed {
     const t=this.next;
     if(this.settling?.t!==t) this.settling=null;
     if(t>open && t<close && this.settleMs) {
-      this.settling??={t,firstReceipt:receivedAt,firstWatermark:watermark,ladderPrintsAdded:0};
-      if(watermark<t+this.settleMs && receivedAt<t+9000) return {quote,frames};
+      this.settling??={t,firstReceipt:flowReceivedAt,firstSampledAt:flowSampledAt,firstWatermark:watermark,ladderPrintsAdded:0};
+      if(watermark<t+this.settleMs && flowRequestedAt<t+9000) return {quote,frames};
     }
     const settlement=this.settling;
     this.settling=null;
@@ -300,7 +309,7 @@ class ForwardFeed {
     if(this.badThrough>start) reasons.push(...new Set(events.map(e=>e.code)));
     if(overlaps(start,t)) reasons.push(gaps?'collector gap overlaps minute':'collector gap ledger unavailable');
     const minuteComplete=!!observation && identity && validCounts && this.badThrough<=start && !overlaps(start,t);
-    const coverageDiagnostics={reasons,events,watermark,receivedAt,firstPrint:session.first??null};
+    const coverageDiagnostics={reasons,events,watermark,receivedAt,flowReceivedAt,flowSampledAt,flowRequestedAt,firstPrint:session.first??null};
     if(!validCounts) coverageDiagnostics.invalidTotalSymbols=contracts.filter(c=>!c.flow ||
       Object.values(c.flow).some(n=>!nonnegative(n))).map(c=>c.symbol);
     if(gaps && overlaps(start,t)) coverageDiagnostics.overlappingGaps=gaps.filter(g=>!g ||
