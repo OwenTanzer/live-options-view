@@ -268,8 +268,20 @@ def _decide(ctx, strategy_id):
         return finish(no("No fresh current-session Max Pain board."))
     if not positions and state.get("blocked"):
         return finish(no("Awaiting a new directional Max Pain episode."))
+    snapshot = ctx.snapshot
+    if not positions:
+        # The frozen replay ranks ATM candidates among uncrossed, two-sided
+        # board quotes. Their OI still belongs to the full pin calculation.
+        eligible = [
+            row
+            for row in snapshot.rows
+            if _number(row.get("Bid"))
+            and _number(row.get("Ask"))
+            and 0 < row["Bid"] <= row["Ask"]
+        ]
+        snapshot = replace(snapshot, rows=eligible)
     decision = max_pain._decide_core(
-        replace(ctx, quotes=executable), pin_reading=reading
+        replace(ctx, snapshot=snapshot, quotes=executable), pin_reading=reading
     )
     if decision.action == "buy" and now < state.get("cooldowns", {}).get(
         decision.symbol, 0

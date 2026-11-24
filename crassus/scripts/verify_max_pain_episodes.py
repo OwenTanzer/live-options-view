@@ -232,6 +232,17 @@ class Episodes(unittest.TestCase):
             )
         self.assertEqual(self.act(6, 398).action, "no_trade")
 
+    def test_crossed_atm_board_uses_next_eligible_strike_and_all_open_interest(self):
+        snapshot = board(START, 401.4)
+        for row in snapshot.rows:
+            if row["Type"] == "put" and row["Strike"] in (401, 402):
+                row.update(Bid=2.49, Ask=2.47)
+        with patch(__name__ + ".board", return_value=snapshot):
+            d = self.act(0)
+        self.assertEqual(d.action, "buy")
+        self.assertTrue(d.symbol.endswith("P00400000"))
+        self.assertEqual(d.metadata["strikes_with_oi_both_sides"], 5)
+
     def test_mismatched_contract_identity_cannot_contribute_or_open(self):
         good = board(START, 399).rows[0]
         for overrides in (
