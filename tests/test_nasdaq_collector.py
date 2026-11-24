@@ -550,6 +550,15 @@ def test_incomplete_declared_membership_retains_baseline(issue):
     assert result["added"] == result["removed"] == []
 
 
+def test_official_nasdaq_envelope_declares_count_above_rows():
+    session = _ListSession(_live_members())
+    envelope = session.payload["data"]
+    envelope["totalrecords"] = envelope["data"].pop("totalrecords")
+    assert resolve_universe(session, now=NOW)["source"] == "live"
+    envelope["data"]["rows"].pop()
+    assert resolve_universe(session, now=NOW)["source"] == "embedded_fallback"
+
+
 def test_complete_one_hundred_listings_accepted():
     session = _ListSession(_live_members()[:100])
     session.payload["data"]["data"]["totalrecords"] = "100"

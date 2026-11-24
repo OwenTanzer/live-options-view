@@ -230,7 +230,8 @@ def fetch_list_members(session):
     payload = resp.json()
     members = parse_list_response(payload)
     table = payload["data"]["data"]
-    declared = str(table.get("totalrecords", "")).strip()
+    envelope = payload["data"]
+    declared = str(envelope.get("totalrecords", table.get("totalrecords", ""))).strip()
     if not declared.isascii() or not declared.isdecimal():
         raise ValueError("Missing or invalid Nasdaq constituent total")
     if len(members) != int(declared):
