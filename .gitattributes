@@ -1,2 +1,3 @@
 /site/order-flow-replay.json text eol=lf
-/site/** text eol=lf
+/site/**/*.js text eol=lf
+/site/index.html text eol=lf
