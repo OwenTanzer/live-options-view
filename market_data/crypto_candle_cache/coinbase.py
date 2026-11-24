@@ -110,6 +110,22 @@ class CoinbaseClient:
                 raise CoinbaseRateLimited("Coinbase HTTP 429") from exc
             raise CoinbaseError(f"Coinbase HTTP {exc.code}: {url}") from exc
 
+    def has_product(self, product):
+        """Does Coinbase Exchange list ``product`` (e.g. ``"USDD-USD"``)?
+
+        One ticker read: HTTP 200 means the pair answers. Any
+        failure (404/400 for a missing product, or a transport
+        error) returns False — the caller then prices the coin from
+        CoinGecko instead, which still publishes bars rather than
+        dropping the coin. Only entrants are probed (see
+        :func:`collector.resolve_universe`).
+        """
+        try:
+            self._get(f"{BASE_URL}/products/{product}/ticker")
+        except CoinbaseError:
+            return False
+        return True
+
     def fetch_window(self, product, interval, start, end):
         """Fetch one window (at most 300 bars), oldest-first.
 

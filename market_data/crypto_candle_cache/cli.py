@@ -35,20 +35,50 @@ from .publish import publish_symbol, read_config
 UTC = timezone.utc
 
 
-def _coins(symbols):
+def _coins(symbols, by_symbol=None):
+    """Resolve ``--symbols`` against a universe (live, or embedded).
+
+    ``by_symbol`` maps symbol -> Coin; when None the embedded
+    ``BY_SYMBOL`` is used. An explicit subset never triggers a
+    universe resolution on its own — the CLI resolves first and
+    passes the live map here.
+    """
+    lookup = by_symbol or coins_mod.BY_SYMBOL
     if not symbols:
-        return list(coins_mod.COINS)
-    unknown = [s for s in symbols if s not in coins_mod.BY_SYMBOL]
+        return list(lookup.values())
+    unknown = [s for s in symbols if s not in lookup]
     if unknown:
         raise SystemExit(f"unknown coin(s): {', '.join(unknown)}")
-    return [coins_mod.BY_SYMBOL[s] for s in symbols]
+    return [lookup[s] for s in symbols]
+
+
+def _resolve_universe(clients, now=None):
+    """Resolve the live top 50 and report the membership summary.
+
+    The summary goes to stderr: stdout stays the command's own
+    output (the coin list, or the run summary JSON that already
+    carries the ``universe`` block).
+    """
+    resolution = collector_mod.resolve_universe(clients, now=now)
+    block = collector_mod.universe_block(resolution)
+    added = [c["symbol"] for c in resolution["added"]]
+    removed = [c["symbol"] for c in resolution["removed"]]
+    if resolution["source"] == "embedded_fallback":
+        print(f"universe fallback: embedded 50 ({resolution['error']})",
+              file=sys.stderr)
+    elif added or removed:
+        print(f"universe live: +{', '.join(added) or 'none'} "
+              f"-{', '.join(removed) or 'none'}", file=sys.stderr)
+    else:
+        print("universe live: no membership changes", file=sys.stderr)
+    return resolution, block
 
 
 def _parse_args(argv):
     parser = argparse.ArgumentParser(prog="crypto-candle-cache")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("universe", help="print the 50-coin universe")
+    sub.add_parser("universe", help="print the live top-50 universe with membership changes (falls back to the embedded 50)")
 
     backfill = sub.add_parser("backfill", help="fetch bases and derive intervals")
     backfill.add_argument("--out", required=True)
@@ -93,32 +123,48 @@ def _windows(args):
 
 
 def cmd_universe(_args):
-    coins_mod.validate()
-    for coin in coins_mod.COINS:
+    """Print the live top-50 universe (resolved, with changes).
+
+    On a bad CoinGecko list fetch this prints the embedded 50 and
+    says so, instead of printing a shrunk universe.
+    """
+    clients = collector_mod.default_clients()
+    resolution, _block = _resolve_universe(clients)
+    for coin in resolution["coins"]:
         print(f"{coin.rank:>3} {coin.symbol:<6} {coin.name} "
               f"({coin.source}; {coin.coingecko_id})")
     return 0
 
 
 def cmd_backfill(args):
-    selected = _coins(args.symbols)
+    clients = collector_mod.default_clients()
     now = datetime.now(UTC)
+    resolution, block = _resolve_universe(clients, now=now)
+    by_symbol = {c.symbol: c for c in resolution["coins"]}
+    selected = _coins(args.symbols, by_symbol=by_symbol)
     summaries = collector_mod.run(
-        selected, args.out, now=now, windows=_windows(args),
-        max_requests=args.max_requests, publish=_publisher(args))
-    print(json.dumps({"command": "backfill", "coins": summaries}, indent=2))
+        selected, args.out, clients=clients, now=now,
+        windows=_windows(args), max_requests=args.max_requests,
+        publish=_publisher(args), universe=block)
+    print(json.dumps({"command": "backfill", "universe": block,
+                      "coins": summaries}, indent=2))
     failed = [s for s in summaries if s["status"] != "ok"]
     return 1 if failed else 0
 
 
 def cmd_update(args):
-    selected = _coins(args.symbols)
+    clients = collector_mod.default_clients()
     now = datetime.now(UTC)
+    resolution, block = _resolve_universe(clients, now=now)
+    by_symbol = {c.symbol: c for c in resolution["coins"]}
+    selected = _coins(args.symbols, by_symbol=by_symbol)
     summaries = [collector_mod.update_coin(
-        coin, collector_mod.default_clients(), args.out, now,
-        max_requests=args.max_requests, publish=_publisher(args))
+        coin, clients, args.out, now,
+        max_requests=args.max_requests, publish=_publisher(args),
+        universe=block)
         for coin in selected]
-    print(json.dumps({"command": "update", "coins": summaries}, indent=2))
+    print(json.dumps({"command": "update", "universe": block,
+                      "coins": summaries}, indent=2))
     failed = [s for s in summaries if s["status"] != "ok"]
     return 1 if failed else 0
 

@@ -176,6 +176,147 @@ class UniverseTest(unittest.TestCase):
         self.assertEqual(ranks, sorted(ranks))
 
 
+class DynamicUniverseTest(unittest.TestCase):
+    """The live top-50 resolver: tokenized exclusion, probing, fallback."""
+
+    def _top_rows(self):
+        # Live top 50 after tokenized exclusion, as verified live
+        # 2026-11-24: the embedded 50 minus ASTER/DOT/ATOM, plus
+        # USDD/BFUSD/HTX; two tokenized rows sit inside the raw top
+        # 100 and must be excluded.
+        rows = []
+        for coin in coins_mod.COINS:
+            if coin.symbol in ("ASTER", "DOT", "ATOM"):
+                continue
+            rows.append({"id": coin.coingecko_id,
+                         "symbol": coin.symbol.lower(),
+                         "name": coin.name,
+                         "market_cap_rank": coin.rank})
+        for coin_id, symbol, name, rank in (
+                ("usdd", "USDD", "USDD", 51),
+                ("bfusd", "BFUSD", "BFUSD", 55),
+                ("htx-dao", "HTX", "HTX DAO", 57)):
+            rows.append({"id": coin_id, "symbol": symbol.lower(),
+                         "name": name, "market_cap_rank": rank})
+        rows.append({"id": "figure-heloc", "symbol": "figr_heloc",
+                     "name": "Figure Heloc", "market_cap_rank": 9})
+        rows.append({"id": "tether-gold", "symbol": "xaut",
+                     "name": "Tether Gold", "market_cap_rank": 28})
+        rows.sort(key=lambda r: r["market_cap_rank"])
+        return rows
+
+    def _clients(self, rows=None, error=None):
+        class FakeCoinGecko:
+            def fetch_top_markets(self):
+                if error is not None:
+                    raise error
+                return rows
+
+        class FakeCoinbase:
+            def has_product(self, product):
+                return False
+
+        return {"coingecko": FakeCoinGecko(),
+                "coinbase": FakeCoinbase()}
+
+    def test_parse_top_markets_excludes_tokenized(self):
+        entries = coins_mod.parse_top_markets(self._top_rows())
+        self.assertEqual(len(entries), 50)
+        ids = [e["coingecko_id"] for e in entries]
+        self.assertNotIn("figure-heloc", ids)
+        self.assertNotIn("tether-gold", ids)
+        self.assertIn("usdd", ids)
+        self.assertEqual([e["rank"] for e in entries],
+                         sorted(e["rank"] for e in entries))
+
+    def test_parse_top_markets_rejects_partial_and_garbled(self):
+        with self.assertRaises(ValueError):
+            coins_mod.parse_top_markets(self._top_rows()[:10])
+        with self.assertRaises(ValueError):
+            coins_mod.parse_top_markets({"not": "a list"})
+
+    def test_resolve_live_top_50(self):
+        resolution = collector_mod.resolve_universe(
+            self._clients(rows=self._top_rows()), now=NOW)
+        self.assertEqual(resolution["source"], "live")
+        self.assertEqual(len(resolution["coins"]), 50)
+        by_symbol = {c.symbol: c for c in resolution["coins"]}
+        for symbol in ("USDD", "BFUSD", "HTX"):
+            self.assertEqual(by_symbol[symbol].source, "coingecko", symbol)
+        self.assertEqual(by_symbol["USDT"].source, "coingecko")
+        self.assertEqual(by_symbol["USDS"].source, "coinbase")
+        self.assertEqual(
+            [r["symbol"] for r in resolution["added"]],
+            ["USDD", "BFUSD", "HTX"])
+        self.assertEqual(
+            sorted(r["symbol"] for r in resolution["removed"]),
+            ["ASTER", "ATOM", "DOT"])
+        self.assertEqual(resolution["as_of"], "2026-11-24")
+
+    def test_resolve_falls_back_on_failed_and_partial_list(self):
+        from market_data.crypto_candle_cache.coingecko import CoinGeckoError
+        for clients in (self._clients(error=CoinGeckoError("boom")),
+                        self._clients(rows=self._top_rows()[:10])):
+            resolution = collector_mod.resolve_universe(clients, now=NOW)
+            self.assertEqual(resolution["source"], "embedded_fallback")
+            self.assertEqual(resolution["coins"], coins_mod.COINS)
+            self.assertEqual(resolution["added"], [])
+            self.assertEqual(resolution["removed"], [])
+            self.assertIsNotNone(resolution["error"])
+
+    def test_fetch_top_markets_uses_markets_endpoint(self):
+        client = CoinGeckoClient(
+            session=FakeCoinGeckoSession({"markets": self._top_rows()}),
+            delay_seconds=0)
+        rows = client.fetch_top_markets()
+        self.assertEqual(len(rows), 52)
+        self.assertEqual(rows[0]["id"], "bitcoin")
+
+    def test_has_product_true_and_false(self):
+        class TickerSession:
+            def get(self, url):
+                if "USDD-USD" in url:
+                    return FakeResponse(404, None)
+                return FakeResponse(200, {"price": "1.00"})
+
+        client = CoinbaseClient(session=TickerSession(), delay_seconds=0)
+        self.assertFalse(client.has_product("USDD-USD"))
+        self.assertTrue(client.has_product("BTC-USD"))
+
+    def test_collect_coin_records_universe_in_sidecar(self):
+        import tempfile
+        rows = []
+        for i in range(10):
+            moment = datetime(2026, 11, 14, tzinfo=UTC) + timedelta(days=i)
+            rows.append([int(moment.timestamp() * 1000), 1.0, 1.1, 0.9, 1.05])
+        clients = {"coinbase": CoinbaseClient(session=FakeCoinbaseSession({}),
+                                              delay_seconds=0),
+                   "tiingo": TiingoCryptoClient(token="t", session=FakeTiingoSession({}),
+                                                delay_seconds=0),
+                   "coingecko": CoinGeckoClient(
+                       session=FakeCoinGeckoSession({"tron": rows}), delay_seconds=0)}
+        resolution = collector_mod.resolve_universe(
+            self._clients(rows=self._top_rows()), now=NOW)
+        block = collector_mod.universe_block(resolution)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = collector_mod.collect_coin(
+                coins_mod.BY_SYMBOL["TRX"], clients, tmp, NOW,
+                universe=block)
+            self.assertEqual(summary["status"], "ok")
+            sidecar = json.loads(
+                (Path(tmp) / "crypto" / "candles" / "TRX" / "provenance.json"
+                 ).read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["universe"]["source"], "live")
+            self.assertEqual(
+                [r["symbol"] for r in sidecar["universe"]["added"]],
+                ["USDD", "BFUSD", "HTX"])
+            self.assertEqual(
+                sorted(r["symbol"] for r in sidecar["universe"]["removed"]),
+                ["ASTER", "ATOM", "DOT"])
+            # A CoinGecko-labelled entrant still has no intraday base.
+            self.assertEqual(sidecar["files"]["1m"]["coverage"], "absent")
+
+
 class CoinbaseTest(unittest.TestCase):
     def test_row_order_is_low_high_open_close(self):
         # [epoch, low, high, open, close, volume]

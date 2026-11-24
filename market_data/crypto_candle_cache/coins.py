@@ -1,6 +1,14 @@
 """The 50-coin universe for the crypto candle cache.
 
-Fixed list, in market-cap rank order, matching the live Coinbase
+Dynamic top 50, resolved live on every run (see
+:mod:`market_data.crypto_candle_cache.collector.resolve_universe`):
+the CoinGecko markets list (top 100, ordered by market cap) is
+re-fetched, tokenized assets are excluded under the tracker's
+standing rule (see ``TOKENIZED_EXCLUDED_IDS``), and the first 50
+are collected, with each entrant's source probed live (a Coinbase
+Exchange USD pair that answers means ``coinbase``, otherwise
+``coingecko``). ``COINS`` below is the embedded fallback universe,
+in market-cap rank order, matching the live Coinbase
 Price Tracker as expanded to the top 50 on 2026-11-23: the tracker's
 39 coins (30 priced from Coinbase plus 9 from CoinGecko, see
 ``market_data/crypto_collector/coins.py``, PR #389) plus the 11 the
@@ -16,11 +24,14 @@ parallel Crypto Backend job's top-50 read
 (``~/workspace/crypto-backend/top50-2026-11-23.json``,
 ``last_updated`` 2026-11-24T00:13:48Z — e.g. LINK 15 and WBT 16
 there, 16 and 15 in the snapshot collector's read). Ranks drift;
-the fixed order here is the fallback order and the order the tests
-assert the universe in. Live ranks are not re-read by this package:
-a cache file is keyed by coin symbol, not by rank.
+the embedded order here is the fallback order and the order the tests
+assert the fallback universe in. Live ranks are re-read by the
+resolver on every run; a cache file is keyed by coin symbol, not
+by rank, so a coin that leaves the top 50 keeps its stored files
+and a coin that enters it is backfilled from scratch.
 
-Source labels are fixed, not derived at run time, and mirror the
+Source labels are fixed for the embedded coins, not derived at run
+time, and mirror the
 snapshot collector's labels for the 39:
 
 - ``coinbase`` — candles from the public Coinbase Exchange API
@@ -54,7 +65,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Coin:
-    """One coin in the fixed universe."""
+    """One coin in the universe (live or embedded fallback)."""
 
     symbol: str
     name: str
@@ -155,3 +166,135 @@ def validate():
     assert [c.rank for c in COINS] == sorted(c.rank for c in COINS)
     for coin in COINS:
         assert (coin.coinbase_product is None) == (coin.source == "coingecko"), coin.symbol
+
+
+TARGET_COINS = 50
+
+# CoinGecko ids excluded from the live top 50 under the tracker's
+# standing rule (tokenized assets: Figure Heloc, Tether Gold,
+# tokenized funds / yield coins). Verified against the raw
+# CoinGecko top 100 on 2026-11-24: figure-heloc (rank 9),
+# tether-gold (28), ondo-us-dollar-yield (34),
+# spiko-amundi-overnight-swap-fund-eur (42), hashnote-usyc (43),
+# pax-gold (47), blackrock-usd-institutional-digital-liquidity-fund
+# (49). New tokenized assets that appear in the top 100 later are
+# NOT excluded automatically — this list is the documented rule as
+# verified, and it must be extended deliberately when a new one
+# appears, so an exclusion is never silent.
+TOKENIZED_EXCLUDED_IDS: tuple[str, ...] = (
+    "figure-heloc",
+    "tether-gold",
+    "ondo-us-dollar-yield",
+    "spiko-amundi-overnight-swap-fund-eur",
+    "hashnote-usyc",
+    "pax-gold",
+    "blackrock-usd-institutional-digital-liquidity-fund",
+)
+
+
+def parse_top_markets(rows):
+    """Parse a CoinGecko ``/coins/markets`` top-100 response.
+
+    Returns the first ``TARGET_COINS`` usable coins after tokenized
+    exclusion, as ``[{"symbol", "name", "coingecko_id", "rank"}]``
+    in live market-cap rank order. A row is usable only with a
+    CoinGecko id, a symbol and a market-cap rank; a duplicate symbol
+    keeps its first (highest-ranked) row. Raises ValueError when the
+    payload is not a list, or when fewer than ``TARGET_COINS`` usable
+    coins survive — a partial list must never shrink the universe,
+    so the caller falls back to the embedded list instead.
+    """
+    if not isinstance(rows, list):
+        raise ValueError("CoinGecko top-markets payload is not a list")
+    parsed = []
+    seen_symbols = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        coin_id = row.get("id")
+        symbol = row.get("symbol")
+        rank = row.get("market_cap_rank")
+        if not isinstance(coin_id, str) or not coin_id.strip():
+            continue
+        if coin_id in TOKENIZED_EXCLUDED_IDS:
+            continue
+        if not isinstance(symbol, str) or not symbol.strip():
+            continue
+        try:
+            rank = int(rank)
+        except (TypeError, ValueError):
+            continue
+        symbol = symbol.strip().upper()
+        if symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        name = row.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = symbol
+        parsed.append({"symbol": symbol, "name": name.strip(),
+                       "coingecko_id": coin_id, "rank": rank})
+    parsed.sort(key=lambda entry: entry["rank"])
+    if len(parsed) < TARGET_COINS:
+        raise ValueError(
+            f"CoinGecko top-markets list carries only {len(parsed)} "
+            f"usable coins after tokenized exclusion, expected "
+            f"{TARGET_COINS}")
+    return parsed[:TARGET_COINS]
+
+
+def coin_from_market_row(entry, source):
+    """Build a :class:`Coin` for a live top-50 entry.
+
+    ``entry`` is one :func:`parse_top_markets` dict; ``source`` is
+    the probed source (``"coinbase"`` or ``"coingecko"``). The
+    tracker symbol for ``the-open-network`` is ``GRAM`` (CoinGecko
+    reports the symbol ``gram``; Coinbase lists TON-USD for the same
+    network token, which this package never prices from).
+    """
+    symbol = entry["symbol"]
+    name = entry["name"]
+    if entry["coingecko_id"] == "the-open-network":
+        symbol = "GRAM"
+        name = "Gram / Toncoin"
+    return Coin(symbol, name, entry["coingecko_id"], source,
+                f"{symbol}-USD" if source == "coinbase" else None,
+                entry["rank"])
+
+
+def _change_record(coin):
+    return {"symbol": coin.symbol, "name": coin.name,
+            "coingecko_id": coin.coingecko_id, "rank": coin.rank,
+            "source": coin.source}
+
+
+def diff_universe(old, new):
+    """Diff two universes (iterables of :class:`Coin`).
+
+    Returns ``{"added": [...], "removed": [...]}`` of change records
+    (symbol, name, CoinGecko id, live rank, source) — ``added`` from
+    ``new``, ``removed`` from ``old`` — each sorted by rank. The
+    caller diffs the live list against the embedded list, so
+    ``added`` is what entered the top 50 and ``removed`` is what
+    left it since the embedded list was last verified.
+    """
+    old_by_symbol = {coin.symbol: coin for coin in old}
+    new_by_symbol = {coin.symbol: coin for coin in new}
+    added = sorted((_change_record(new_by_symbol[s]) for s in new_by_symbol
+                    if s not in old_by_symbol),
+                   key=lambda record: record["rank"])
+    removed = sorted((_change_record(old_by_symbol[s]) for s in old_by_symbol
+                      if s not in new_by_symbol),
+                     key=lambda record: record["rank"])
+    return {"added": added, "removed": removed}
+
+
+def universe_change_records(old, new, as_of):
+    """The membership-change block recorded in a snapshot/provenance.
+
+    ``as_of`` is the resolution date (``YYYY-MM-DD``). Empty
+    ``added``/``removed`` means the live list matched the embedded
+    list exactly.
+    """
+    changes = diff_universe(old, new)
+    return {"as_of": as_of, "added": changes["added"],
+            "removed": changes["removed"]}

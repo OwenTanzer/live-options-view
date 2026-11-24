@@ -16,6 +16,24 @@ Eleven intervals per coin (1m, 3m, 5m, 9m, 15m, 30m, 1h, 2h, 4h,
 rest are derived locally. Crypto trades 24/7, so buckets align to
 00:00 UTC — there is no equity session open and no session filter.
 
+## Universe (dynamic top 50)
+
+Every run resolves the live top 50 by market cap before
+collecting (`collector.resolve_universe`): the CoinGecko markets
+list (top 100) is re-fetched, tokenized assets are excluded under
+the tracker's standing rule, and the first 50 are collected, with
+each entrant's source probed live (a Coinbase Exchange USD pair
+that answers means `coinbase`, otherwise `coingecko`). The
+embedded 50 in `coins.py` is the fallback and the diff baseline,
+used only when the live list is missing or partial. Membership
+changes (added/removed with symbol, rank, source and date) are
+recorded in every sidecar's `universe` block; a coin that leaves
+the top 50 keeps its stored files, and a coin that enters it is
+backfilled from scratch. CoinGecko-labelled entrants get the 1d
+base only, like every other CoinGecko-labelled coin. `universe`
+prints the resolved list with its changes; `backfill`/`update`
+without `--symbols` collect the resolved universe.
+
 ## Sources
 
 - **Coinbase** (public candles, no key): the three bases for the 32
@@ -27,10 +45,12 @@ rest are derived locally. Crypto trades 24/7, so buckets align to
   The route exists (an unauthenticated request is refused with
   "Please supply a token", not a 404) but no authenticated Tiingo
   crypto call has been made from this repository yet.
-- **CoinGecko** (public OHLC, no key): the 1d base only, for the 18
+- **CoinGecko** (public OHLC, no key): the 1d base only, for the
   CoinGecko-labelled coins. CoinGecko free OHLC has no 1m/1h series,
   so those coins' intraday intervals are absent by design and
   labelled as such — never interpolated.
+- **CoinGecko markets** (public, no key): the top-100 list that
+  resolves the live top-50 universe on every run (see above).
 
 The full backfill data lives in the parallel Crypto Backend job
 (`~/workspace/crypto-backend/`) and its Notion page "Crypto

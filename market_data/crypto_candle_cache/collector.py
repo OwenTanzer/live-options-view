@@ -23,6 +23,19 @@ here: this collector is the contract, the seed, and the steady-state
 ``update`` path. ``update`` fetches only bars newer than the newest
 stored bar per base.
 
+Membership is dynamic, mirroring the Coinbase Price Tracker: the
+universe is the live top 50 by market cap (see
+:func:`resolve_universe`), not the embedded 50-coin list — the
+embedded list is the fallback and the diff baseline. A failed,
+empty or partial CoinGecko top-markets fetch falls back to the
+embedded 50 and records that fallback in every sidecar's
+``universe`` block; a bad fetch never shrinks or empties the
+cache. A coin that leaves the top 50 keeps its stored files (they
+are never deleted); a coin that enters it is backfilled from
+scratch. The 1d-base-only rule for CoinGecko-labelled coins is
+unchanged: an entrant probed CoinGecko-sourced gets daily bars
+only, never intraday.
+
 Every bar written carries the One Clock envelope (see
 :mod:`cache`): ``t`` is the source time, ``observed_at`` the fetch
 time, ``origin`` the state chip. The still-forming latest bar of a
@@ -42,9 +55,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import cache as cache_mod
+from . import coins as coins_mod
 from . import resample as resample_mod
 from .coingecko import CoinGeckoClient
 from .coinbase import CoinbaseClient
+from .coins import (COINS, coin_from_market_row, diff_universe,
+                    parse_top_markets)
 from .one_clock import detect_gaps
 from .provenance import build_provenance
 from .resample import _parse_time
@@ -73,6 +89,67 @@ def _mark_forming(bars, interval, now):
             marked["forming"] = True
         out.append(marked)
     return out
+
+
+def universe_block(resolution):
+    """The universe claim recorded in every provenance sidecar.
+
+    ``resolution`` is a :func:`resolve_universe` result, or None
+    (an explicit ``--symbols`` run, or a caller that did not
+    resolve) — then the block is None and the sidecar carries no
+    membership claim rather than a guessed one.
+    """
+    if resolution is None:
+        return None
+    return {"source": resolution["source"],
+            "membership_source": resolution["source"],
+            "as_of": resolution["as_of"],
+            "coins": len(resolution["coins"]),
+            "added": resolution["added"],
+            "removed": resolution["removed"],
+            "error": resolution["error"]}
+
+
+def resolve_universe(clients, now=None):
+    """Resolve the universe for this run: live top 50 vs embedded fallback.
+
+    ``clients`` is the ``default_clients`` dict (only its
+    ``"coingecko"`` and ``"coinbase"`` clients are used). Returns a
+    dict with ``coins`` (the :class:`coins.Coin` tuple to collect,
+    in live rank order), ``added`` / ``removed`` (the diff against
+    the embedded list, each a list of change records with symbol,
+    name, CoinGecko id, rank and source), ``source`` (``"live"`` or
+    ``"embedded_fallback"``) and ``error`` (the fetch failure, or
+    None). A failed, empty or partial top-markets fetch returns the
+    embedded 50 with no recorded changes — a bad fetch never
+    shrinks or empties the cache, and the fallback is visible in
+    every sidecar's ``universe`` block.
+    """
+    now = now or datetime.now(UTC)
+    as_of = now.date().isoformat()
+    try:
+        entries = parse_top_markets(clients["coingecko"].fetch_top_markets())
+    except Exception as exc:  # noqa: BLE001 - any list failure falls back
+        return {"coins": COINS, "added": [], "removed": [],
+                "source": "embedded_fallback", "error": str(exc),
+                "as_of": as_of}
+    by_id = {coin.coingecko_id: coin for coin in COINS}
+    live = []
+    for entry in entries:
+        embedded = by_id.get(entry["coingecko_id"])
+        if embedded is not None:
+            live.append(type(embedded)(
+                embedded.symbol, embedded.name, embedded.coingecko_id,
+                embedded.source, embedded.coinbase_product, entry["rank"]))
+        else:
+            source = ("coinbase" if clients["coinbase"].has_product(
+                f"{entry['symbol']}-USD") else "coingecko")
+            live.append(coin_from_market_row(entry, source))
+    live = tuple(live)
+    changes = diff_universe(COINS, live)
+    return {"coins": live, "added": changes["added"],
+            "removed": changes["removed"], "source": "live",
+            "error": None, "as_of": as_of}
 
 
 def fetch_coin_bases(coin, clients, now, windows=None, max_requests=None):
@@ -211,14 +288,15 @@ def build_coin_files(coin, bases, meta, absent, generated_at):
 
 
 def collect_coin(coin, clients, out_dir, now, windows=None, max_requests=None,
-                 publish=None):
+                 publish=None, universe=None):
     """Collect one coin end to end; return a run-summary dict.
 
     Writes interval files + ``provenance.json`` under ``out_dir``.
     ``publish`` is an optional callable ``(symbol, files, provenance)``
     invoked after local writes (the CLI passes the R2 publisher).
-    A failed coin returns ``{"symbol", "status": "source_unavailable",
-    "reason"}`` with no files written.
+    ``universe`` is a :func:`universe_block` dict recorded in the
+    sidecar, or None. A failed coin returns ``{"symbol", "status":
+    "source_unavailable", "reason"}`` with no files written.
     """
     generated_at = _now_iso(now)
     try:
@@ -231,7 +309,7 @@ def collect_coin(coin, clients, out_dir, now, windows=None, max_requests=None,
     for interval, content in files.items():
         cache_mod.write_interval_file(out_dir, coin.symbol, interval, content)
     provenance = build_provenance(
-        coin.symbol, prov_meta, generated_at=generated_at,
+        coin.symbol, prov_meta, universe=universe, generated_at=generated_at,
         publication_status="not_published",
         publication_reason="local run: --publish not given")
     sidecar_path = Path(out_dir) / "crypto" / "candles" / coin.symbol / "provenance.json"
@@ -248,7 +326,8 @@ def collect_coin(coin, clients, out_dir, now, windows=None, max_requests=None,
             "absent": sorted(prov_meta["_absent"])}
 
 
-def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None):
+def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None,
+                universe=None):
     """Fetch only bars newer than the newest stored bar, per base.
 
     A coin with no stored files is backfilled instead (see
@@ -257,6 +336,8 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None):
     re-fetched rather than merged against. The Tiingo backstop is
     a backfill concern: a failed update leaves stored files
     untouched and returns ``source_unavailable`` for the run.
+    ``universe`` is a :func:`universe_block` dict recorded in the
+    sidecar, or None.
     """
     from .one_clock import bar_end_ms
 
@@ -264,7 +345,8 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None):
     stored = cache_mod.read_symbol_files(out_dir, coin.symbol)
     if not stored:
         return collect_coin(coin, clients, out_dir, now,
-                            max_requests=max_requests, publish=publish)
+                            max_requests=max_requests, publish=publish,
+                            universe=universe)
     now_ms = int(now.timestamp() * 1000)
     bases, meta, absent = {}, {}, {}
     requests = [0]
@@ -307,7 +389,7 @@ def update_coin(coin, clients, out_dir, now, max_requests=None, publish=None):
     for interval, content in files.items():
         cache_mod.write_interval_file(out_dir, coin.symbol, interval, content)
     provenance = build_provenance(
-        coin.symbol, prov_meta, generated_at=generated_at,
+        coin.symbol, prov_meta, universe=universe, generated_at=generated_at,
         publication_status="not_published",
         publication_reason="local run: --publish not given")
     sidecar_path = Path(out_dir) / "crypto" / "candles" / coin.symbol / "provenance.json"
@@ -333,10 +415,16 @@ def default_clients():
 
 
 def run(coins, out_dir, clients=None, now=None, windows=None,
-        max_requests=None, publish=None):
-    """Collect every coin in ``coins``; return per-coin summaries."""
+        max_requests=None, publish=None, universe=None):
+    """Collect every coin in ``coins``; return per-coin summaries.
+
+    ``universe`` is a :func:`universe_block` dict recorded in every
+    sidecar, or None. The CLI resolves the live universe and passes
+    it here; an explicit ``--symbols`` run passes None.
+    """
     clients = clients or default_clients()
     now = now or datetime.now(UTC)
     return [collect_coin(coin, clients, out_dir, now, windows=windows,
-                         max_requests=max_requests, publish=publish)
+                         max_requests=max_requests, publish=publish,
+                         universe=universe)
             for coin in coins]

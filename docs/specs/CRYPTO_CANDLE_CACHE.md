@@ -105,7 +105,23 @@ open question (see below).
 
 ## Universe
 
-The 50 coins are embedded in
+The universe is the live top 50 by market cap, resolved on every
+run by `collector.resolve_universe` and mirroring the Coinbase
+Price Tracker (which is itself dynamic top 50 since 2026-11-23)
+and the snapshot collector (PR #389, same rule, same tokenized
+exclusion):
+
+- Re-fetch the CoinGecko markets list (top 100, ordered by market
+  cap) on every run; exclude tokenized assets under the tracker's
+  standing rule — Figure Heloc, Tether Gold, tokenized funds/yield
+  coins (the seven CoinGecko ids in
+  `coins.TOKENIZED_EXCLUDED_IDS`); take the first 50.
+- Probe each entrant's source live: a Coinbase Exchange USD pair
+  that answers means `coinbase`, otherwise `coingecko`. Coins
+  already in the embedded list keep their verified source label
+  (USDT stays `coingecko` even though a USDT-USD pair exists — see
+  the correction below).
+- The embedded 50 in
 `market_data/crypto_candle_cache/coins.py` — the tracker's 39
 (PR #389, same source labels) plus the 11 the tracker added when
 it expanded to the top 50 (USDS and USD1 from Coinbase; USDE,
@@ -122,6 +138,23 @@ carries those assets and uses the symbol `TON` for
 the-open-network, while this package keeps the tracker's `GRAM`
 symbol, as the snapshot collector does. `coins.validate()` fails
 closed on a wrong count or a duplicate symbol.
+- The embedded 50 is the fallback and the diff baseline: when the
+  CoinGecko list is missing or partial (fewer than 50 usable coins
+  after exclusion), the run collects the embedded 50 and records
+  `source: "embedded_fallback"` with the error in every sidecar's
+  `universe` block — a bad fetch never shrinks or empties the
+  cache. Membership changes (added/removed with symbol, rank,
+  source and the resolution date) are recorded in the same block.
+  A coin that leaves the top 50 keeps its stored files (they are
+  never deleted); a coin that enters it is backfilled from
+  scratch. Ground truth from the tracker's first live
+  reconciliation (2026-11-24): USDD (rank 51), BFUSD (55) and HTX
+  (57) entered and ASTER, DOT, ATOM left; the live resolver
+  reproduced exactly that diff on a live read the same day.
+- A CoinGecko-labelled entrant gets the 1d base only, exactly like
+  any other CoinGecko-labelled coin (free OHLC has no 1m/1h
+  series); its intraday intervals are absent by design, labelled
+  as such, never interpolated.
 
 One correction to record: the backend job found a live Coinbase
 pair for USDT (`USDT-USD`, 2,030 daily bars from 2021-05-04), but
