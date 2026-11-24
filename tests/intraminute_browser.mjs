@@ -70,7 +70,10 @@ try {
     await probe.goto(origin+'/intraminute.html?at='+(owned+999));
     await probe.waitForFunction(()=>document.querySelector('#state').textContent.startsWith('Archived'));
     await probe.locator('#width').selectOption('1000');
+    const atClose=await probe.locator('#response').textContent();
+    assert.match(await probe.locator('#next-second').textContent(),/unavailable/);
     await probe.locator('#cursor').fill('1999');
+    assert.equal(await probe.locator('#response').textContent(),atClose);
     return probe.locator('#response').textContent();
   }
   const first=await open();assert.match(first,/golden time/);
@@ -86,6 +89,7 @@ try {
   gaps=[{kind:'gap',at:owned+950,start:owned+400,reason:'stream_reconnect_resumed'}];
   assert.match(await open(),/unclassified - missing or invalid/);gaps=[];
   move=.1;await open();
+  if(process.env.REVIEW_SCREENSHOT) await probe.screenshot({path:process.env.REVIEW_SCREENSHOT.replace('.png','-desktop.png'),fullPage:true});
   await probe.setViewportSize({width:390,height:844});
   await probe.locator('#response').scrollIntoViewIfNeeded();
   assert.equal(await probe.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
