@@ -43,7 +43,7 @@ try {
   await page.locator('#auth-submit').click();
   await page.waitForFunction(() => document.querySelector('#user-name').textContent === 'btc_reader');
   await page.locator('#underlying-select').selectOption('BTC');
-  await page.getByLabel('Bitcoin option product').selectOption('usdc');
+  assert.equal(await page.getByLabel('Bitcoin option product').count(), 0);
   await page.waitForFunction(() => btcOptions.data?.contracts?.some(c=>c.product==='BTC_USDC'));
   if (interactive) {
     console.log('USDC live-data preview open. Paper balances are disposable. Close this browser to stop.');

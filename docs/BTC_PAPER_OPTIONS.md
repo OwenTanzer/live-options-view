@@ -1,4 +1,9 @@
-# Bitcoin monthly futures options — implementation and release record
+# Bitcoin paper options
+
+The private Bitcoin chain uses Deribit USDC-settled options. The price collector runs with `BTC_OPTIONS_ENABLED=0`. Keep that switch off. CME standard and the proposed IBKR Micro source are retired. Historical CME positions retain their original identifiers and official-final settlement rules.
+
+## Historical CME implementation and release record
+
 
 November 21, 2026. PR295 shipped as `9f2ea06`. The observed-side-clock candidate
 is prepared separately on merged master `68bc428`, including the subscriber
