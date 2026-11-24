@@ -7,6 +7,8 @@ const GEN = '20261109T100500Z-0123456789abcdef';
 const KEYS = [
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json', 'intraday/prices.json',
   'intraday/health.json', 'derived/OIranges.csv',
+  'crypto/latest.json',
+  'crypto/predictions/BTC.json',
   'macro/eia_steo.json',
   'manifest.json', 'raw/qqq_chain_20261027.csv',
   'raw/opex/qqq_chain_20240229.csv', 'prices/qqq_intraday_20261027.csv',
@@ -72,6 +74,9 @@ const NEWS_ORIGIN = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
 (async () => {
   const { default: worker } = await import('../backend/index.js');
   const { handleBrowserData, NEWS_R2_ORIGIN, isUsableNewsOrigin } = await import('../backend/browser-data.js');
+  const { default: gateway } = await import('../frontend/worker.mjs');
+  const { publicReadAllowed } = await import('../frontend/preview-policy.mjs');
+  const panelKeys = KEYS.filter(key => /^(crypto|nasdaq)\//.test(key));
   const originalFetch = global.fetch;
   const env = new Proxy({}, { get() { throw new Error('No bindings may be accessed'); } });
   let calls = [];
@@ -97,6 +102,25 @@ const NEWS_ORIGIN = 'https://pub-0123456789abcdef0123456789abcdef.r2.dev';
     ? handleBrowserData(new Request(APP + suffix, options), new URL(APP + suffix), routes)
     : worker.fetch(new Request(APP + suffix, options), env);
   try {
+    // Exercise the complete production gateway -> API route with fixture storage.
+    const production = { ENVIRONMENT: 'production', API: { fetch: request => worker.fetch(request, env) } };
+    for (const key of panelKeys) {
+      const url = new URL(APP + '/browser-data/' + key + '?_=123');
+      assert.equal(publicReadAllowed(url), true);
+      const response = await gateway.fetch(new Request(url, { headers: { Origin: APP, Cookie: 'private=fixture' } }), production);
+      assert.equal(response.status, 200);
+      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), body);
+      assert.equal(calls.at(-1).url, ORIGIN + '/' + key + '?_=123');
+      assert.deepEqual(calls.at(-1).options.headers, {});
+      assert.equal(calls.at(-1).options.credentials, 'omit');
+      assert.equal((await gateway.fetch(new Request(url, { headers: { Origin: 'https://elsewhere.example' } }), production)).status, 403);
+    }
+    for (const key of ['crypto/predictions/ETH.json', 'crypto/latest.provenance.json', 'nasdaq/latest.provenance.json']) {
+      const url = new URL(APP + '/browser-data/' + key);
+      assert.equal(publicReadAllowed(url), false);
+      assert.equal((await gateway.fetch(new Request(url), production)).status, 404);
+    }
+    calls = [];
     // Shipped default: no News origin, so every News key is 404 with no upstream request at all
     // (never a fallback to the shared market origin).
     assert.ok(isUsableNewsOrigin(NEWS_R2_ORIGIN, ORIGIN));
