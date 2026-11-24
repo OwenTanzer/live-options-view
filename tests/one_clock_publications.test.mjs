@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import {makeStorage} from './helpers/d1_shim.mjs';
 import {publicationDigest,publicationKey,decodePublication,publicationStream} from '../backend/one-clock-publication-contract.js';
 import {ingestPublicationStream,ingestRegisteredPublications,publicationRowsPage} from '../backend/one-clock-publications.js';
+import {advanceNativePublications} from '../backend/one-clock-publication-sources.js';
 import {selectAsOf} from '../site/shared/one-clock.js';
 const T=Date.parse('2026-11-20T15:00:00Z'),day='2026-11-20';
 const descriptor={id:'fixture',owner:'fixture-owner',audience:'public',sessionBasis:'new-york',instruments:['QQQ'],outputs:{price:{price:'number',label:'string',qualified:'boolean'}}};
@@ -128,4 +129,20 @@ test('large session pages use an index tuple seek without sorting; identity chec
   assert.match(trigger,/ORDER BY revision DESC LIMIT 1/);
   assert.throws(()=>db.raw('UPDATE one_clock_publication_records SET received_at=available_at-1'),/immutable/);
   assert.throws(()=>db.raw('UPDATE one_clock_publication_entries SET payload=?','{}'),/immutable/);
+});
+
+test('production conservation mode admits one sequential commit per stream and can resume full speed',async t=>{
+  const db=await setup(t),b=bucket(),d={...descriptor,instruments:['QQQ','SPY']};
+  for(const instrument of d.instruments){
+    for(let i=0;i<5;i++)await b.add([input('tick'+i)],{instrument});
+  }
+  const env={DB:db,PAPER_TRADES:b,ONE_CLOCK_PUBLICATIONS:'enabled',ONE_CLOCK_PUBLICATION_PACE:'conserve'};
+  const advance=now=>advanceNativePublications(env,{now,descriptors:[d]});
+  for(let i=0;i<2;i++){
+    const results=await advance(T+100000+i);
+    assert.deepEqual(results.map(r=>[r.processed,r.nextSequence,r.reason]),[[1,2+i,'budget'],[1,2+i,'budget']]);
+  }
+  delete env.ONE_CLOCK_PUBLICATION_PACE;
+  assert.deepEqual((await advance(T+100002)).map(r=>[r.processed,r.nextSequence]),[[3,6],[3,6]]);
+  assert.equal(db.raw('SELECT COUNT(*) n FROM one_clock_publication_entries')[0].n,10);
 });

@@ -20,7 +20,9 @@ export const botAuditPublication = Object.freeze({
 export const nativePublicationSources=Object.freeze([collectorPublication,botAuditPublication]);
 export async function advanceNativePublications(env,{now=Date.now(),descriptors=nativePublicationSources}={}) {
   if(env.ONE_CLOCK_PUBLICATIONS!=='enabled')return [];
-  return ingestRegisteredPublications(env.DB,env.PAPER_TRADES,descriptors,{now});
+  // Each GET can admit one immutable commit and its indexed records to D1.
+  const perStreamGets = env.ONE_CLOCK_PUBLICATION_PACE === 'conserve' ? 1 : undefined;
+  return ingestRegisteredPublications(env.DB,env.PAPER_TRADES,descriptors,{now,perStreamGets});
 }
 
 export async function nativeScopeRecords(db,descriptor,{session,instrument,cutoff,currentProgress=null,maxSequence=null}) {

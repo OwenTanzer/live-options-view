@@ -54,14 +54,16 @@ export async function ingestPublicationStream(db,bucket,descriptor,{instrument,n
   return coverage;
 }
 
-export async function ingestRegisteredPublications(db,bucket,descriptors,{now=Date.now()}={}) {
+export async function ingestRegisteredPublications(db,bucket,descriptors,{now=Date.now(),perStreamGets=PUBLICATION_LIMITS.gets}={}) {
   if(!Array.isArray(descriptors))throw new Error('publication descriptors');
   const streams=descriptors.flatMap(descriptor=>descriptor.instruments.map(instrument=>({descriptor,instrument,stream:publicationStream(descriptor,instrument)})));
   if(streams.length>PUBLICATION_LIMITS.streams||new Set(streams.map(s=>s.stream)).size!==streams.length)throw new Error('publication registry bound or duplicate');
   if(!streams.length)return [];
   // Every registered stream receives a fair share on each invocation. Neither
   // tenant count nor an indefinitely busy first stream can starve another.
-  const maxGets=Math.floor(PUBLICATION_LIMITS.gets/streams.length),maxBytes=Math.floor(PUBLICATION_LIMITS.bytes/streams.length),results=[];
+  bounded(perStreamGets,PUBLICATION_LIMITS.gets);
+  const maxGets=Math.min(perStreamGets,Math.floor(PUBLICATION_LIMITS.gets/streams.length));
+  const maxBytes=Math.floor(PUBLICATION_LIMITS.bytes/streams.length),results=[];
   for(const {descriptor,instrument,stream} of streams) {
     try {results.push(await ingestPublicationStream(db,bucket,descriptor,{instrument,now,maxGets,maxBytes}));}
     catch {results.push({stream,reason:'transaction-failed',final:false});}
