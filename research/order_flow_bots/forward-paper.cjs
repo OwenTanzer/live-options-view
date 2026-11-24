@@ -60,8 +60,8 @@ function registerSession(db, {session,open,close}) {
 
 function frozenRange(db, t, open, now) {
   if (t - 5 * minute < open) return null;
-  const rows = db.prepare('SELECT t,spot FROM quotes WHERE t BETWEEN ? AND ? AND received_at <= ? ORDER BY t')
-    .all(t - 5 * minute, t, now);
+  const rows = db.prepare(`SELECT t,spot FROM quotes WHERE t BETWEEN ? AND ?
+    AND bid_at<=? AND ask_at<=? AND received_at<=? ORDER BY t`).all(t - 5 * minute,t,t,t,now);
   if (rows.length < 2 || rows[0].t - (t - 5 * minute) > maxAge ||
       t - rows.at(-1).t > maxAge || rows.some((r, i) => i && r.t - rows[i-1].t > maxAge)) return null;
   return {low: Math.min(...rows.map(r => r.spot)), high: Math.max(...rows.map(r => r.spot))};
@@ -133,7 +133,8 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
     return {accepted:false,reason:'required fresh two-sided QQQ quote unavailable'};
   const fillPrice = side => side>0 ? ask : bid;
   return transaction(db, () => {
-    const inSession = db.prepare('SELECT session FROM sessions WHERE open<=? AND close>=?').get(t,t);
+    const inSession = db.prepare('SELECT session FROM sessions WHERE open<=? AND close>=?')
+      .get(t,Math.max(bidAt,askAt));
     if (!inSession) return {accepted:false,reason:'outside registered paper session'};
     const last = db.prepare('SELECT t FROM quotes ORDER BY t DESC LIMIT 1').get();
     if (last && t <= last.t) return {accepted:false,reason:'repeated or late quote'};

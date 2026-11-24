@@ -66,3 +66,13 @@ test('missed horizon recovers on an observed quote and stale ticks cannot fill',
   assert.ok(tr.pnl < -20);
   db.close();
 });
+test('two-sided quotes cannot straddle market close or carry a stale side', () => {
+  const db=openPaper(':memory:');
+  registerSession(db,{session,open,close});
+  const envelope={symbol:'QQQ',spot:100,bid:99.99,ask:100.01,t:close-1,bidAt:close-1,
+    askAt:close+1,receivedAt:close+1};
+  assert.equal(applyQuote(db,envelope,close+1).accepted,false);
+  assert.equal(applyQuote(db,{...envelope,bidAt:close-20000,t:close-20000,askAt:close},close+1).accepted,false);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM quotes').get().n,0);
+  db.close();
+});
