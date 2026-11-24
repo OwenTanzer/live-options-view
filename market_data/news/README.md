@@ -33,6 +33,9 @@ tests or by the default commands.
 | `prices.py` | Validated, read-only price records (underlying quotes, option quotes, bars), each with a price time and an availability time |
 | `adapters/sidecar_prices.py` | Read-only: collector provenance sidecars (`intraday/YYYYMMDD/*.provenance.json`) → `underlying_quote` records. Last-trade selections only (provider time, collector receipt and archive upload are kept separately); midpoints and other bases are excluded and counted; session comes from the exchange calendar. CLI: `prices-from-sidecars` |
 | `join.py` | As-of join of news revisions to one price series, with price and news coverage |
+| `companies.py` | Deterministic company/ticker mapping (`companies-v1`): explicit allowlist only (QQQ/SPY, NVDA/MSFT/AAPL/GOOGL/AMZN/META/AMD/TSM/ORCL, XOM/CVX/COP/BP/SHEL). Whole-word ticker or distinctive company-name match; ambiguous / absent / conflicting -> `unknown`, never guessed. |
+| `performance.py` | Forward performance (`news-performance/v1`): for each join event, earliest forward price at 5m / 30m / 1h / 1d with `price_time >= target` and `available_at <= cutoff`. Publication mode is hindsight with no return. Missing horizons report a reason, never a zero. |
+| `performance_views.py` | Display hook: attach a per-event performance summary (with honesty labels) inside a sanitized view page. No change to `views.py` validation or to `news-panel.js` key checks. |
 
 ## Sources and streams
 
@@ -272,6 +275,28 @@ optional rendered checks `NODE_PATH=<playwright> node tests/news_panel_browser.t
 (the full site page on both bases at 1280 and 390 px;
 `NEWS_SITE_EVIDENCE=<dir>` saves screenshots). Of these, web-ci runs only
 `browser_data.test.js` and the `node --check site/js/*.js` parse gate.
+
+## Media performance (news -> stock performance)
+
+`MEDIA_PERFORMANCE.md` is the design doc: news -> mapping -> event ->
+base price -> forward prices -> view, with event-known / no-lookahead
+rules, horizons, coverage and missing states. The pipeline is
+fixture-only and inert by default. The interface follows Critical
+Design Theory (Gate 0 mission through Gate 5 fidelity; see sections
+7-12 of the design doc): lead with the move, short honesty labels in
+sight (`fresh`, `stale base`, `pending`, `not yet available`,
+`no coverage`, `unknown mapping`, `hindsight`), methodology one
+interaction away, red/green for gain/loss only, blue/orange for
+story/horizon identity, 12px type floor. The panel is
+`site/js/media-performance-panel.js` (render-only; it never fetches
+and never changes `news-panel.js` key validation, lease, or deadline
+logic). Mockup: `site/media-performance-mockup.html` (fixture data).
+
+Tests: `python -m unittest discover -s tests -p "test_news_media_performance.py" -v`,
+`node tests/news_panel/media_performance.test.js`.
+Fixtures: `tests/fixtures/news/prices/media_performance.synthetic.jsonl`
+(NVDA + XOM, invented prices, deliberate NVDA gap 10:10-10:19) and
+`tests/fixtures/news/media_performance_events.json`.
 
 ## Changes from the prototypes
 

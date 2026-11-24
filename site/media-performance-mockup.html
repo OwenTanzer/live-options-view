@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Media performance — mockup B (inspection, fixture data)</title>
+<link rel="stylesheet" href="js/media-performance-panel.css">
+<style>body{font-family:system-ui,sans-serif;margin:24px;background:#fff;color:#212121}h1{font-size:20px}h2{font-size:14px;color:#424242}.mp-note{font-size:12px;color:#424242;max-width:640px}</style>
+</head>
+<body>
+<h1>Media performance — inspection view (mockup B, chosen)</h1>
+<p class="mp-note">Fixture data only — invented prices and headlines, not market
+data. Gate 2, alternative B: lead with the move. The 5m NVDA forward
+price is 10:20 (gap 10:10–10:19), not 10:10. A missing horizon is an
+empty chip, never 0.0%.</p>
+<h2>Inspection — one story</h2>
+<div id="mp-mockup"></div>
+<script src="js/media-performance-panel.js"></script>
+<script>
+(function () {
+  // Fixture view page, matching news-performance/v1 + performance_views.
+  var viewPage = { rows: [
+    { item_id: 'tc-nvda-001', revision_id: 'rev-nvda-001',
+      title: 'NVIDIA beats on data-center revenue as NVDA guides higher',
+      outlet: 'TechCrunch', event_at: '2026-11-09T10:05:00Z',
+      event_basis: 'observed_at', instrument_id: 'eq.nvda',
+      instrument_mapping: 'mapped', matched_text: 'NVDA',
+      performance: { horizons: {
+        '5m': { horizon: '5m', status: 'matched', honesty_label: 'fresh',
+          return_pct: 0.831024, return_bps: 83.10, forward_price: 182.0,
+          forward_price_time: '2026-11-09T10:20:00Z', base_price: 180.5 },
+        '30m': { horizon: '30m', status: 'matched', honesty_label: 'fresh',
+          return_pct: 1.66205, return_bps: 166.21, forward_price: 183.5,
+          forward_price_time: '2026-11-09T10:35:00Z', base_price: 180.5 },
+        '1h': { horizon: '1h', status: 'matched', honesty_label: 'fresh',
+          return_pct: 3.3241, return_bps: 332.41, forward_price: 186.5,
+          forward_price_time: '2026-11-09T11:05:00Z', base_price: 180.5 },
+        '1d': { horizon: '1d', status: 'missing', honesty_label: 'pending',
+          return_pct: null, return_bps: null, forward_price: null,
+          forward_price_time: null, base_price: 180.5 } } } },
+    { item_id: 'op-xom-001', revision_id: 'rev-xom-001',
+      title: 'OPEC+ delegates signal an extra output cut; Exxon Mobil shares in focus',
+      outlet: 'OilPrice.com', event_at: '2026-11-09T10:10:00Z',
+      event_basis: 'observed_at', instrument_id: 'eq.xom',
+      instrument_mapping: 'mapped', matched_text: 'Exxon Mobil',
+      performance: { horizons: {
+        '5m': { horizon: '5m', status: 'matched', honesty_label: 'fresh',
+          return_pct: 0.45249, return_bps: 45.25, forward_price: 111.0,
+          forward_price_time: '2026-11-09T10:30:00Z', base_price: 110.5 },
+        '30m': { horizon: '30m', status: 'matched', honesty_label: 'fresh',
+          return_pct: 0.90498, return_bps: 90.50, forward_price: 111.5,
+          forward_price_time: '2026-11-09T10:30:00Z', base_price: 110.5 },
+        '1h': { horizon: '1h', status: 'matched', honesty_label: 'fresh',
+          return_pct: 1.35747, return_bps: 135.75, forward_price: 112.0,
+          forward_price_time: '2026-11-09T11:00:00Z', base_price: 110.5 },
+        '1d': { horizon: '1d', status: 'missing', honesty_label: 'pending',
+          return_pct: null, return_bps: null, forward_price: null,
+          forward_price_time: null, base_price: 110.5 } } } },
+    { item_id: 'tc-unmapped-001', revision_id: 'rev-unmapped-001',
+      title: 'A startup raises a round to build a new chip',
+      outlet: 'TechCrunch', event_at: '2026-11-09T10:05:00Z',
+      event_basis: 'observed_at', instrument_id: null,
+      instrument_mapping: 'unknown', matched_text: '',
+      performance: null }
+  ] };
+  var container = document.getElementById('mp-mockup');
+  window.MediaPerformance.renderMediaPerformance(document, container, viewPage);
+})();
+</script>
+</body>
+</html>
