@@ -158,9 +158,8 @@ def probe_coinbase(session, symbol):
     """Does Coinbase Exchange list a USD pair for ``symbol``?
 
     One ticker read: HTTP 200 means the pair answers. A 404/400
-    means no such product; any other transport failure is treated
-    the same way — the coin is priced from CoinGecko instead, which
-    still publishes a price rather than dropping the coin. Only
+    means no such product. Other failures propagate so an outage is
+    not mistaken for a verified provider assignment. Only
     entrants are probed (see :func:`resolve_universe`): embedded
     coins keep their verified source label even if a probe would
     now answer differently (USDT keeps its CoinGecko label, as the
@@ -168,8 +167,10 @@ def probe_coinbase(session, symbol):
     """
     try:
         _get(session, COINBASE_BASE + f"/products/{symbol}-USD/ticker")
-    except requests.RequestException:
-        return False
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (400, 404):
+            return False
+        raise
     return True
 
 
@@ -205,8 +206,14 @@ def resolve_universe(session, now=None):
                 embedded.symbol, embedded.name, embedded.coingecko_id,
                 embedded.source, embedded.coinbase_product, entry["rank"]))
         else:
-            source = ("coinbase" if probe_coinbase(session, entry["symbol"])
-                      else "coingecko")
+            try:
+                listed = probe_coinbase(session, entry["symbol"])
+            except requests.RequestException as exc:
+                return {"coins": COINS, "added": [], "removed": [],
+                        "source": "embedded_fallback",
+                        "error": f"Coinbase probe for {entry['symbol']} unavailable: {exc}",
+                        "as_of": as_of}
+            source = "coinbase" if listed else "coingecko"
             live.append(coin_from_market_row(entry, source))
     live = tuple(live)
     changes = diff_universe(COINS, live)

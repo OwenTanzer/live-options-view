@@ -83,7 +83,10 @@ are never substituted for each other.
   per-coin `price_basis` / `provider_observed_at` / `freshness`,
   and the `universe` block (membership source, added/removed with
   symbol, rank, source and date).
-  A missing sidecar means unknown provenance.
+  R2 latest snapshots carry their matching provenance inline. The sidecar
+  is a publication receipt: use its acknowledgement timestamp only when
+  its `snapshot_sha256` matches the exact bytes of the latest object.
+  A missing or stale receipt leaves publication time unknown.
 - `market`: total market cap, BTC dominance, Fear & Greed with its
   own as-of time. Fear & Greed is best-effort: when the feed cannot
   be read it is `{status: "unavailable", value: null}` — no value is

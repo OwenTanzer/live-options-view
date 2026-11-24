@@ -15,20 +15,19 @@ runs under -- and are never read from the repository:
   (``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` also accepted)
 - ``CRYPTO_R2_BUCKET`` (default ``qqq-options-chain-data``)
 
-The sidecar is uploaded after ``latest.json``; ``latest_published_at``
-is stamped from the successful ``latest.json`` write, matching the
-main collector's "latest-view uploads retain their own success
-counter" rule. A failed publish raises and leaves the previous
-published artifact in place: this module never deletes or rewrites
-an artifact it did not just build.
+The latest snapshot carries the producer provenance in the same object.
+The separate receipt records acknowledgement time and the digest of the
+exact object acknowledged. A failed receipt write leaves the new snapshot
+self-contained. Only a matching receipt can establish its publication time.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
-from .collector import ARTIFACT_KEY, snapshot_to_json
+from .collector import ARTIFACT_KEY, iso, snapshot_to_json, utcnow
 from .provenance import build_provenance
 
 LATEST_KEY = ARTIFACT_KEY  # crypto/latest.json
@@ -45,7 +44,7 @@ def write_local(out_dir, snapshot, *, publication_status="published"):
     latest_path.write_text(snapshot_to_json(snapshot), encoding="utf-8")
     provenance = build_provenance(
         snapshot, publication_status=publication_status,
-        latest_published_at=snapshot.get("constructed_at"))
+        latest_published_at=iso(utcnow()))
     sidecar_path.write_text(
         snapshot_to_json(provenance), encoding="utf-8")
     return {"latest": latest_path, "sidecar": sidecar_path,
@@ -72,13 +71,20 @@ def publish_r2(snapshot, *, bucket=None, endpoint_url=None):
         aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY")
         or os.environ.get("AWS_SECRET_ACCESS_KEY"),
     )
-    body = snapshot_to_json(snapshot).encode("utf-8")
+    return _publish_snapshot(snapshot, client, bucket)
+
+
+def _publish_snapshot(snapshot, client, bucket):
+    provenance = build_provenance(snapshot, publication_status="published")
+    # A reader receives prices and their provenance in one atomic object read.
+    # Publication acknowledgement time becomes knowable only after the PUT.
+    payload = {**snapshot, "provenance": provenance}
+    body = snapshot_to_json(payload).encode("utf-8")
     client.put_object(Bucket=bucket, Key=LATEST_KEY, Body=body,
                       ContentType="application/json")
-    provenance = build_provenance(
-        snapshot, publication_status="published",
-        latest_published_at=snapshot.get("constructed_at"))
+    receipt = {**provenance, "latest_published_at": iso(utcnow()),
+               "snapshot_sha256": hashlib.sha256(body).hexdigest()}
     client.put_object(Bucket=bucket, Key=SIDECAR_KEY,
-                      Body=snapshot_to_json(provenance).encode("utf-8"),
+                      Body=snapshot_to_json(receipt).encode("utf-8"),
                       ContentType="application/json")
-    return provenance
+    return receipt
