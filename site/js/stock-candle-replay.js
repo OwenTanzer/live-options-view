@@ -10,27 +10,17 @@ async function get(path, fetchImpl) {
   return response;
 }
 
-// A successful manifest GET is independent evidence that this reader can
-// discover a pending revision now. Never project it into an earlier cutoff.
-async function getManifest(prefix, fetchImpl) {
-  const manifest = await (await get(prefix + '/provenance.json',fetchImpl)).json();
-  const seenAt = new Date().toISOString();
-  for (const interval of manifest.pending_intervals ?? []) {
-    const entry = manifest.files[interval];
-    entry.available_at = seenAt;
-    manifest.history[interval].at(-1).available_at = seenAt;
-  }
-  return manifest;
-}
-
 export async function latestStockCandles(symbol, interval, fetchImpl = fetch) {
   if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) || symbol.includes('..') || !intervals.has(interval)) return [];
   const prefix = 'nasdaq/candles/' + symbol;
-  const manifest = await getManifest(prefix,fetchImpl);
+  const manifest = await (await get(prefix + '/provenance.json', fetchImpl)).json();
   const entry = manifest.files?.[interval];
   if (manifest.symbol !== symbol || !entry || !/^[0-9a-f]{64}$/.test(entry.sha256)) return [];
   const path = entry.version_key ?? prefix + '/' + interval + '.json';
   if (path !== prefix + '/versions/' + entry.sha256 + '.json' && path !== prefix + '/' + interval + '.json') return [];
+  // The live chart may show bytes discovered by this GET. The local receipt
+  // stays confined to the live path and is never used by recorded replay.
+  if (manifest.pending_intervals?.includes(interval)) entry.available_at = new Date().toISOString();
   const bytes = await (await get(path,fetchImpl)).arrayBuffer();
   const rows = await readPublishedCandles(bytes,manifest);
   return rows.slice(-390).map(row=>({...row.value,time:new Date(row.eventAt).toISOString(),source:'Tiingo archive'}));
@@ -43,13 +33,14 @@ export async function loadStockStudy(params, fetchImpl = fetch) {
   if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) || symbol.includes('..') ||
       !intervals.has(interval) || !validSession(session)) throw new Error('Choose a valid ticker, interval and session.');
   const prefix = 'nasdaq/candles/' + symbol;
-  const manifest = await getManifest(prefix,fetchImpl);
+  const manifest = await (await get(prefix + '/provenance.json', fetchImpl)).json();
   if (manifest.symbol !== symbol || manifest.publication?.status !== 'published') throw new Error('Published receipt unavailable.');
   const history = manifest.history?.[interval] ?? [manifest.files?.[interval]];
   const rows = [];
   let previous = new Map();
   for (const [index,entry] of history.entries()) {
-    if (!entry || !/^[0-9a-f]{64}$/.test(entry.sha256)) throw new Error('Invalid interval receipt.');
+    if (manifest.pending_intervals?.includes(interval) && index === history.length - 1) continue;
+    if (!entry?.available_at || !/^[0-9a-f]{64}$/.test(entry.sha256)) throw new Error('Invalid interval receipt.');
     // Omitted historical sessions in a later snapshot can retract prior bars.
     const overlaps = !(entry.first_bar?.slice(0,10) > session || entry.last_bar?.slice(0,10) < session);
     const current = new Map();

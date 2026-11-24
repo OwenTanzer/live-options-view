@@ -159,3 +159,33 @@ test('complete early close has no partial label; missing closing minute does', (
   assert.deepEqual(gapReport(rows,'2026-11-27',hours),[]);
   assert.equal(gapReport(rows.slice(0,-1),'2026-11-27',hours)[0].label,'coverage partial');
 });
+
+test('pending manifest has identical recorded replay for two readers at different times', async () => {
+  const {loadStockStudy} = await import('../site/js/stock-candle-replay.js');
+  const {createHash} = await import('node:crypto');
+  const bytes = JSON.stringify(file(minuteBars(1)));
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const key='nasdaq/candles/AAPL/1m.json';
+  const sealed={key,sha256,version_key:'nasdaq/candles/AAPL/versions/'+sha256+'.json',available_at:'2026-11-24T17:00:00Z'};
+  const pending={...sealed,sha256:'0'.repeat(64),available_at:null};
+  const manifest={schema:'snapshot_provenance.v1',dataset:'single_stock_candles',symbol:'AAPL',publication:{status:'published'},
+    files:{'1m':pending},history:{'1m':[sealed,pending]},pending_intervals:['1m']};
+  const params=new URLSearchParams({symbol:'AAPL',session:'2026-11-23',interval:'1m'});
+  const get=async url=>{
+    if(url.endsWith('/provenance.json'))return Response.json(manifest);
+    assert.ok(url.endsWith(sealed.version_key));
+    return new Response(bytes);
+  };
+  const RealDate=Date;
+  const results=[];
+  try {
+    for(const at of ['2026-11-24T17:00:02Z','2026-11-24T17:00:04Z']){
+      globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:[at]));}};
+      const study=await loadStockStudy(params,get);
+      results.push(selectAsOf(study.rows,{...study.selection,cutoff:RealDate.parse('2026-11-24T17:00:03Z')}));
+    }
+  } finally {globalThis.Date=RealDate;}
+  assert.equal(results[0].length,1);
+  assert.equal(results[0][0].availableAt,RealDate.parse(sealed.available_at));
+  assert.deepEqual(results[0],results[1]);
+});
