@@ -17,7 +17,9 @@ assert.equal((await call('?minute=1794580560000',{PAPER_TRADES:{get:()=>null}}))
 globalThis.fetch=async(url,opts)=>{
   assert.equal(url.origin,'https://configured.test');assert.equal(url.pathname,'/tape');
   assert.equal(opts.headers.Authorization,'Bearer fixture');
-  assert.equal(opts.redirect,'error');return Response.json({rows:[]});
+  assert.equal(opts.redirect,'manual');return Response.json({rows:[]});
 };
 assert.deepEqual(await (await call('?cursor=18',{QQQ_TAPE_ORIGIN:'https://configured.test',QQQ_TAPE_KEY:'fixture'})).json(),{rows:[]});
+globalThis.fetch=async()=>Response.redirect('https://elsewhere.test/tape',302);
+assert.equal((await call('?cursor=18',{QQQ_TAPE_ORIGIN:'https://configured.test',QQQ_TAPE_KEY:'fixture'})).status,503);
 console.log('Read-only archive scope, live configuration and proxy passed');
