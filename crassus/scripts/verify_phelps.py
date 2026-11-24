@@ -834,6 +834,67 @@ def test_phelps_pure_entry_rejected_without_live_quote() -> None:
     check("no watch recorded for a rejected entry", "noquote" not in phelps_pure._watches)
 
 
+def test_bowman_max_pain() -> None:
+    strategy = REGISTRY["bowman_max_pain_qqq"]
+    start = datetime(2024, 1, 1, 15, 0, tzinfo=timezone.utc)
+    chain = [
+        {**template, "OpenInterest": 100 if strike == 400 else 1,
+         "Strike": strike, "OptionSymbol": f"QQQ240101{kind}{strike * 1000:08d}"}
+        for strike in range(398, 403)
+        for template, kind in ((CALL_ROW, "C"), (PUT_ROW, "P"))
+    ]
+    quotes = {row["OptionSymbol"]: executable_quote(row["OptionSymbol"]) for row in chain}
+
+    def context(minutes, spot, *, rows=chain, trades=None, available=quotes):
+        now = start + timedelta(minutes=minutes)
+        return make_ctx(username="bowman_pin", underlying_price=spot, now_et=now,
+                        snapshot_timestamp=now.isoformat(), rows=rows, trades=trades,
+                        quote_map=available)
+
+    def enter(anchor, spot, *, rows=chain, available=quotes):
+        phelps_pure._tracker._points.clear()
+        phelps_pure._last_recorded_snapshot = None
+        phelps_pure._watches.clear()
+        strategy(context(0, anchor))
+        decision = strategy(context(5, spot, rows=rows, available=available))
+        check("Bowman Max Pain decision carries its own identity",
+              decision.strategy_id == strategy.strategy_id)
+        return decision
+
+    for reason, anchor, spot, rows, available in (
+        ("opposing direction", 397, 396, chain, quotes),
+        ("neutral pin", 398, 400, chain, quotes),
+        ("sparse OI", 397, 398, chain[:8], quotes),
+        ("small displacement", 397.9, 398, chain, quotes),
+        ("no executable quote", 397, 398, chain, {}),
+    ):
+        d = enter(anchor, spot, rows=rows, available=available)
+        check(f"{reason} vetoes entry before recording a watch",
+              d.action == "no_trade" and "bowman_pin" not in phelps_pure._watches, d.reason)
+    for anchor, spot, kind in ((397, 398, "C"), (403, 402, "P")):
+        d = enter(anchor, spot)
+        check("concordant pin and displacement buy the intended ATM side",
+              d.action == "buy" and d.symbol == f"QQQ240101{kind}{spot * 1000:08d}" and
+              d.quantity == 1 and d.metadata["max_pain_strike"] == 400)
+        if d.action != "buy":
+            continue
+        fills = [{"sym": d.symbol, "side": "buy", "qty": 1, "price": 1.0,
+                  "ts": (start + timedelta(minutes=5)).isoformat()}]
+        # Once held, removing the pin signal cannot interfere with Bowman exits.
+        check("hold before the window even without two-sided OI",
+              strategy(context(10, spot, rows=[], trades=fills)).action == "no_trade")
+        invalidated = anchor - 0.1 if kind == "C" else anchor + 0.1
+        check("crossing the displacement anchor triggers early exit",
+              strategy(context(11, invalidated, rows=[], trades=fills)).action == "sell")
+        phelps_pure._watches.clear()
+        check("missing terminal quote defers the sell across a restart",
+              strategy(context(32.5, spot, rows=[], trades=fills, available={})).action == "no_trade")
+        check("terminal exit retries with an executable quote after restart",
+              strategy(context(33, spot, rows=[], trades=fills)).action == "sell")
+
+
+test_bowman_max_pain()
+
 test_phelps_variant_versions_include_wrapper_revision()
 test_fixed_window_variant_versions_include_wrapper_revision()
 test_phelps_wrap_defers_early_close()
