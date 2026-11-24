@@ -81,3 +81,35 @@ def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quot
         protect_observations(good, poisoned, "nasdaq", NOW)
         assert good["prices"]["X"]["watermark_at"] == NOW.isoformat()
         assert good["prices"]["X"]["price_usd"] == 123
+
+
+def test_crypto_as_of_tracks_confirmed_publications(tmp_path):
+    from market_data.crypto_collector.spot_receipts import read_as_of, retain
+    path = tmp_path / "private" / "spot.sqlite3"
+    client = Mock()
+    old = doc("coinbase")
+    old.update(feed="crypto", started_at=(NOW-timedelta(minutes=1)).isoformat())
+    def prior():
+        return {"Body": BytesIO(json.dumps(old).encode()), "ETag": "prior"}
+    client.get_object.side_effect = lambda **kwargs: prior()
+    candidate = doc("coinbase", NOW-timedelta(minutes=2))
+    candidate["feed"] = "crypto"
+    confirmed = NOW+timedelta(seconds=2)
+    with patch("market_data.panel_minute.utcnow", return_value=confirmed):
+        assert publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=path) == "published"
+    body = client.put_object.call_args.kwargs["Body"]
+    retain(path, body, confirmed+timedelta(minutes=2))
+    assert read_as_of(path, NOW) is None
+    result = read_as_of(path, confirmed)
+    assert result["snapshot"] == json.loads(body)
+    assert result["snapshot"]["prices"]["X"]["provider_observed_at"] == NOW.isoformat()
+    later = confirmed+timedelta(minutes=1)
+    candidate["prices"]["X"]["price_usd"] = 234
+    with patch("market_data.panel_minute.utcnow", return_value=later):
+        assert publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=path) == "published"
+    assert read_as_of(path, later)["snapshot"]["prices"]["X"]["price_usd"] == 234
+    assert read_as_of(path, confirmed) == result
+    client.put_object.side_effect = RuntimeError("conditional write failed")
+    with pytest.raises(RuntimeError):
+        publish(client, "bucket", "crypto", candidate, NOW, crypto_receipts=tmp_path / "failed.db")
+    assert not (tmp_path / "failed.db").exists()

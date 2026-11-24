@@ -4,12 +4,15 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import json
+import logging
+import sqlite3
 import os
 from pathlib import Path
 import subprocess
 
 from .panel_prices import Capture, collect, crypto_time, utcnow, ET
 from .crypto_collector.publish import _error_code
+from .crypto_collector.spot_receipts import retain
 
 MAX_BYTES = 128 * 1024
 FEEDS = ("crypto", "nasdaq")
@@ -123,7 +126,7 @@ def protect_observations(candidate, prior, feed, now):
             row["watermark_at"] = observed.isoformat()
 
 
-def publish(client, bucket, feed, candidate, now):
+def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     if candidate.get("schema_version") != "panel_minute.v1" or candidate.get("feed") != feed:
         raise ValueError("Invalid capture identity")
     stamp = crypto_time(candidate.get("started_at"))
@@ -161,6 +164,12 @@ def publish(client, bucket, feed, candidate, now):
     body = encode(candidate)
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
                       CacheControl="no-store", **condition)
+    if feed == "crypto" and crypto_receipts is not None:
+        try:
+            retain(crypto_receipts, body, utcnow())
+        except (OSError, sqlite3.Error):
+            logging.exception("Crypto price publication succeeded but its private receipt failed")
+            return "published_without_receipt"
     return "published"
 
 
@@ -205,7 +214,8 @@ def main():
                           aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
                           aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
                           config=Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1}))
-    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow())
+    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow(),
+                      crypto_receipts=root / "private" / "crypto-spot.sqlite3")
     print(json.dumps(dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
                           coverage=candidate["coverage"], calls=candidate["calls"])), flush=True)
 

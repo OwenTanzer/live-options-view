@@ -61,3 +61,18 @@ established protected release lanes. The hourly service names are separate.
 systemctl --user disable --now optionsview-minute@crypto.timer optionsview-minute@nasdaq.timer
 systemctl --user stop optionsview-minute@crypto.service optionsview-minute@nasdaq.service
 ```
+
+After a successful crypto minute write, Linux retains the published JSON in
+`$root/private/crypto-spot.sqlite3` under the service's private umask. Replay
+becomes available at Linux's UTC confirmation time. Each row keeps its original
+provider and receipt times, even when the watermark carries an older price
+forward. Unsuccessful or skipped ticks do not create observations. A local
+archive error after R2 success logs `published_without_receipt` and leaves a
+gap. Identical payloads keep their first confirmation. To inspect the last
+confirmed publication at or before a cutoff, run from the staged checkout:
+
+    python -m market_data.crypto_collector.spot_receipts "$root/private/crypto-spot.sqlite3" --as-of 2026-11-24T07:00:00+00:00
+
+The result includes the confirmation time so callers can identify stale results
+across missed minutes. A cutoff before the first receipt returns null. The
+archive starts when this revision runs on Linux and contains spot quotes.
