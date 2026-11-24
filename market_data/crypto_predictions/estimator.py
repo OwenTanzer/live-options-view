@@ -91,19 +91,19 @@ def _returns(closes):
 def _stdev(values):
     if len(values) < 2:
         return 0.0
-    mean = sum(values) / len(values)
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+    mean = math.fsum(values) / len(values)
+    return math.sqrt(math.fsum((v - mean) ** 2 for v in values) / (len(values) - 1))
 
 
 def _pearson(xs, ys):
     """Pearson correlation, or None when it is undefined."""
     if len(xs) < MIN_CORR_PAIRS or len(xs) != len(ys):
         return None
-    mx = sum(xs) / len(xs)
-    my = sum(ys) / len(ys)
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    den = math.sqrt(sum((x - mx) ** 2 for x in xs)
-                    * sum((y - my) ** 2 for y in ys))
+    mx = math.fsum(xs) / len(xs)
+    my = math.fsum(ys) / len(ys)
+    num = math.fsum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    den = math.sqrt(math.fsum((x - mx) ** 2 for x in xs)
+                    * math.fsum((y - my) ** 2 for y in ys))
     if den == 0:
         return None
     return num / den
