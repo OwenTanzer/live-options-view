@@ -15,7 +15,10 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const prior=await stmt(db,'SELECT * FROM one_clock_ingestion_work WHERE source=? AND session=? AND instrument=?',...args).first();
   const versions=(await stmt(db,'SELECT artifact,version,status,detail FROM one_clock_ingestion_versions WHERE source=? AND session=? AND instrument=? LIMIT 2001',...args).all()).results;
   if(versions.length>INGESTION_LIMITS.versions)throw new Error('source revision bound');
-  const index=await adapter.discover(bucket,{session,instrument,cutoff:now},db);
+  const index=await adapter.discover(bucket,{session,instrument,cutoff:now},db,versions);
+  // Network-fetched bars become visible only after the response was received.
+  // The observer still evaluates its original cutoff and sees these on a later tick.
+  if(adapter.receiptAfterDiscovery) now=Math.max(now,Date.now());
   if(!Array.isArray(index.artifacts)||index.artifacts.length>1000)throw new Error('source index bound');
   const known=new Set(versions.map(v=>JSON.stringify([v.artifact,v.version])));
   const candidates=index.artifacts.filter(v=>!known.has(JSON.stringify([v.key,v.version])));
@@ -77,7 +80,7 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   const coverage={source:adapter.id,adapterVersion:adapter.version,session,instrument,updatedAt:now,
     indexComplete:index.complete,pending:candidates.length-completed.length,processed:completed.length,
     gets,bytes,retainedVersions:versions.length+completed.length,
-    gaps:versions.filter(v=>v.status==='gap').length+completed.filter(v=>v.result.gap||!v.result.rows.length).length,
+    gaps:(index.missingMinutes??0)+versions.filter(v=>v.status==='gap').length+completed.filter(v=>v.result.gap||!v.result.rows.length).length,
     final:false,...(index.through==null?{}:{through:index.through}),reason:!index.complete?(index.reason??'metadata-index-bound'):candidates.length>completed.length?'catching-up':'periodic-archive-observation',
     limitations:['No producer finality guarantee. Older sessions may receive late evidence.',
       'Versions overwritten between polls cannot be reconstructed. Retained versions remain available.']};

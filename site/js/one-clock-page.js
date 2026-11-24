@@ -1,3 +1,5 @@
+import {candleTrials} from '../shared/one-clock-candle-breach.js';
+import {candleSessions,loadCandleStudy} from '../shared/one-clock-candle-replay.js';
 import {oiSkewAuditRule} from '../shared/one-clock-decision-events.js';
 import {renderReceipt} from './one-clock-encounter-summary.js';
 import {encounterForm} from './one-clock-encounter-form.js';
@@ -10,18 +12,20 @@ import {loadFlowStudy} from '../shared/one-clock-flow-study.js';
 
 const $ = id => document.getElementById(id);
 const levelForm=encounterForm(document);
-const archiveMode = new URLSearchParams(location.search).get('dataset') === 'order-flow';
+const datasetId=new URLSearchParams(location.search).get('dataset');
+const candleMode=candleSessions.includes(datasetId);
+const archiveMode=datasetId==='order-flow' || candleMode;
 const dataset = $('offline-dataset');
-dataset.value=archiveMode?'order-flow':'synthetic';
-dataset.onchange=()=>{const url=new URL(location.href);if(dataset.value==='order-flow')url.searchParams.set('dataset','order-flow');else url.searchParams.delete('dataset');location.assign(url);};
+dataset.value=archiveMode?datasetId:'synthetic';
+dataset.onchange=()=>{const url=new URL(location.href);if(dataset.value!=='synthetic')url.searchParams.set('dataset',dataset.value);else url.searchParams.delete('dataset');location.assign(url);};
 let study={rules:demoRules,sources:demoSources,rows:demoRows,selection:demoSelection,start:demoStart,close:demoClose};
 if(archiveMode){
   const notice=document.querySelector('.notice');
-  notice.querySelector('strong').textContent='Reconstructed QQQ order flow · September 25, 2026';
+  notice.querySelector('strong').textContent=candleMode?'Reconstructed QQQ candles · '+datasetId:'Reconstructed QQQ order flow · September 25, 2026';
   notice.querySelector('span').textContent='Loading the audited archive…';
   const loadingSections = [document.querySelector('nav'), $('builder'), document.querySelector('.replay')];
   for (const section of loadingSections) section.inert=true;
-  try{study=await loadFlowStudy();}
+  try{study=candleMode?await loadCandleStudy(datasetId):await loadFlowStudy();}
   catch(error){
     notice.querySelector('span').textContent=error.message;
     $('builder').hidden=true;
@@ -29,14 +33,14 @@ if(archiveMode){
     document.querySelector('nav').hidden=true;
     throw error;
   }
-  notice.querySelector('span').textContent='Minute samples of 16 contracts at strikes $740–747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
-  $('account-controls').hidden=true;$('account-help').hidden=true;
+  notice.querySelector('span').textContent=candleMode?'Unadjusted one-minute bars. Replay advances at bar close. Historical receipt times are unknown.':'Minute samples of 16 contracts at strikes $740–747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
+  $('account-controls').hidden=!candleMode;$('account-help').hidden=!candleMode;
   $('instrument').replaceChildren(option('QQQ'));
   $('session-strip').hidden=true;
   for (const section of loadingSections) section.inert=false;
 }
 const {rules:initialRules,sources:studySources,rows:studyRows,selection:studySelection,start:studyStart,close:studyClose}=study;
-const storageKey = archiveMode?'one-clock.order-flow.rules.v1':'one-clock.rules.v1';
+const storageKey = archiveMode?'one-clock.'+datasetId+'.rules.v1':'one-clock.rules.v1';
 $('cursor').max=String((studyClose-studyStart+1000)/1000);
 let versions = structuredClone(initialRules);
 let storageError = '';
@@ -52,7 +56,7 @@ let previewing = false;
 let observedMode=false,accountState=null,observedBody=null;
 let observedGeneration=0,observedSelection=null;
 const registry = createSourceRegistry();
-for (const source of studySources) registry.register({ ...source, version: '1', owner: archiveMode?'audited order-flow replay':'offline fixture',
+for (const source of studySources) registry.register({ ...source, version: '1', owner: archiveMode?'archived replay':'offline fixture',
   maxAgeMs: 150000, read: async () => studyRows.filter(r => r.source === source.id) });
 const clock = createClock({ registry, initial: { ...studySelection, mode: 'replay', cutoff: studyStart + 301000 } });
 const fixtureResults=createResultsView({container:$('stats'),stats:$('stats'),ledger:$('ledger'),fixture:true,
@@ -142,7 +146,7 @@ function versionOptions() {
 function openRule(rule) {
   editing = rule;
   levelForm.open(rule);
-  $('archive-encounter-controls').hidden=!rule.levelEncounter || archiveMode;
+  $('archive-encounter-controls').hidden=(!rule.levelEncounter && rule.transition!=='per-candle-pair') || archiveMode;
   $('rule-origin').hidden=!rule.archiveHandoff;
   $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
@@ -180,19 +184,23 @@ function render() {
   const events = evaluateEvents({ rule: currentRule, observations: studyRows, selection, sessionClose: studyClose });
   const outcomeId = $('outcome-choice').value;
   $('rule-description').textContent = `${currentRule.name} · ${selection.instrument} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · ${studySelection.origin} data`;
-  $('replay-description').textContent = archiveMode?'QQQ · minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
+  $('replay-description').textContent = candleMode?'QQQ · reconstructed one-minute candles, UTC.':archiveMode?'QQQ · minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
   const sameSkew = currentRule.conditions.some(c => c.source === 'skew' && c.field === 'imbalance' && !c.relativeToAnchor && c.op === '>=' && c.value > 0);
   $('comparison-note').textContent = sameSkew && currentRule.combine === 'all' ? 'A positive same-input skew trigger necessarily agrees with a meter that labels every positive imbalance call-heavy. Disagreement is impossible for that pairing; these results do not compare independent signals.' : 'Descriptive observations only. No predictive conclusion is implied.';
   fixtureResults.update({events,rules:[currentRule],cutoff:selection.cutoff,origin:studySelection.origin,outcome:outcomeId?{ruleKey:ruleKey(currentRule),id:outcomeId}:null});
   $('empty-state').textContent = events.length ? '' : 'No occurrences at this cutoff for the selected class and instrument.';
+  if(currentRule.transition==='per-candle-pair' && candleMode){
+    const trials=candleTrials(selectAsOf(studyRows,selection),selection,studyClose);
+    $('comparison-note').textContent=trials.length+' eligible candle pairs · '+events.length+' breaches. Signed change is positive in the breach direction.';
+  }
   const selected = events.find(e => e.id === selectedId);
   $('event-evidence').hidden = !selected;
   $('event-evidence').textContent = selected ? selected.inputEvidence.map(input =>
-    `${input.source} / ${input.id}\nObserved ${time(input.eventAt)} · available ${time(input.availableAt)} UTC\nValue: ${input.value}${input.anchor == null ? '' : ' · anchor: ' + input.anchor}\nSource: ${input.evidence}`).join('\n\n') : '';
-  $('selected-event').textContent = selected ? `Trigger ${time(selected.triggeredAt)} · ${selected.origin} · v${selected.ruleVersion}. Evidence below follows the selected results view.` : 'Choose an occurrence to inspect its trigger evidence.';
+    `${input.source} / ${input.id}\nObserved ${time(input.eventAt)} · available ${time(input.availableAt)} UTC\nValue: ${typeof input.value==='object'?JSON.stringify(input.value):input.value}${input.anchor == null ? '' : ' · anchor: ' + input.anchor}\nSource: ${input.evidence}`).join('\n\n') : '';
+  $('selected-event').textContent = selected?.breach ? `${selected.breach.direction} breach of $${selected.breach.level} · close ${selected.breach.closeClass.replaceAll('_',' ')} · ${time(selected.decisionAt)} UTC` : selected ? `Trigger ${time(selected.triggeredAt)} · ${selected.origin} · v${selected.ruleVersion}. Evidence below follows the selected results view.` : 'Choose an occurrence to inspect its trigger evidence.';
   const flowLink=$('order-flow-evidence');
-  flowLink.hidden=!archiveMode || !selected;
-  if(archiveMode && selected) flowLink.href='/order-flow.html?'+new URLSearchParams({
+  flowLink.hidden=datasetId!=='order-flow' || !selected;
+  if(datasetId==='order-flow' && selected) flowLink.href='/order-flow.html?'+new URLSearchParams({
     one_clock_session:selected.session,one_clock_instrument:selected.instrument,one_clock_at:String(selected.triggeredAt)});
   if(archiveMode)return;
   const visible = selectAsOf(studyRows.filter(r => r.source === 'skew'), { ...at, instrument: selection.instrument });
@@ -331,17 +339,17 @@ $('encounter-run').onclick=async()=>{
   try {
     if(!session)throw new Error('Choose an archived session.');
     const draft=formRule();
-    const fields=['name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
+    const fields=['transition','conditions','name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
     if(JSON.stringify(draft,fields)!==JSON.stringify(rule,fields))throw new Error('Save your edited study to your account before replaying it.');
     progress.textContent='Opening the archived session…';
     for(let batch=0;batch<100;batch++) {
-      const body=await accountRequest({action:'replay-encounters',session,ruleId:rule.id,version:rule.version});
+      const body=await accountRequest({action:rule.transition==='per-candle-pair'?'replay-candles':'replay-encounters',session,ruleId:rule.id,version:rule.version});
       if(generation!==observedGeneration || editing!==rule)return;
       const c=body.coverage;
       progress.textContent=c.retainedVersions+' archived snapshots indexed · '+c.pending+' pending · '+c.gaps+' with gaps.';
       if(c.gapReasons)progress.textContent+=' '+Object.entries(c.gapReasons).map(([reason,count])=>count+' '+reason.replaceAll('-',' ')).join(', ');
       if(body.complete) {
-        showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent='Archived replay · '+session+' · '+body.events.length+' encounters';
+        showObservedPanel();retainedResults.clear({forget:true});$('observed-status').textContent='Archived replay · '+session+' · '+body.events.length+(body.trials?' breaches among '+body.trials.length+' eligible pairs':' encounters');
         $('observed-coverage').textContent=progress.textContent+' Source availability gates every encounter. Replay may include evidence the observer retained later.';
         retainedResults.update({events:body.events,rules:[body.rule],origin:'recorded',cutoff:body.cutoff});
         return;
@@ -407,4 +415,4 @@ const archiveId=new URLSearchParams(location.search).get('strategy_handoff');
 if (!archiveMode && archiveId) loadArchiveDesign(archiveId).catch(error=>status(error.message,true));
 // Logged-out and offline visitors keep the local engineering fixture. Explicit
 // account actions retry and present the server's authentication or availability message.
-if (!archiveMode) loadAccount().catch(() => {});
+if (!archiveMode || candleMode) loadAccount().catch(() => {});

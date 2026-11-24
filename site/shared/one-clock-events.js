@@ -1,3 +1,4 @@
+import {candleEvents,validateCandleRule} from './one-clock-candle-breach.js';
 import { validateDecisionRule, decisionEvents } from './one-clock-decision-events.js';
 import { validateEncounter, encounterEvents, signedOutcome } from './one-clock-level-encounters.js';
 import { instant, observation, observationKey, selectAsOf } from './one-clock.js';
@@ -26,7 +27,7 @@ export function eventRule(input) {
   if (!Array.isArray(rule.instruments) || !rule.instruments.length) throw new Error('choose instruments');
   rule.instruments.forEach(v => text(v, 'instrument'));
   if (!['all', 'any'].includes(rule.combine)) throw new Error('choose all or any conditions');
-  if (!['rising', 'once-per-session', 'per-decision'].includes(rule.transition)) throw new Error('invalid transition');
+  if (!['rising', 'once-per-session', 'per-decision','per-candle-pair'].includes(rule.transition)) throw new Error('invalid transition');
   if (!['hold', 'reset'].includes(rule.missingInput)) throw new Error('choose missing-input policy');
   if (!Array.isArray(rule.conditions) || !rule.conditions.length || rule.conditions.length > 20) throw new Error('one to twenty conditions required');
   rule.conditions.forEach(c => {
@@ -46,6 +47,7 @@ export function eventRule(input) {
     if (!['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
+  if (rule.transition === 'per-candle-pair') validateCandleRule(rule);
   if (rule.transition === 'per-decision') validateDecisionRule(rule);
   if (rule.levelEncounter !== undefined) {
     validateEncounter(rule.levelEncounter);
@@ -82,6 +84,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   // Validate duplicate revision contents once, then advance a source index by
   // availability. Do not rescan/clone the full archive per condition per tick.
   const finalRows = selectAsOf(rows, selection);
+  if (rule.transition === 'per-candle-pair') return immutable(candleEvents(rule,finalRows,{...selection,cutoff},close,activationWindows,evidence));
   if (rule.transition === 'per-decision') {
     return immutable(decisionEvents(rule, finalRows, {...selection, cutoff}, close, activationWindows, evidence));
   }
