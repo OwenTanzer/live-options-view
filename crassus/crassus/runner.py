@@ -164,6 +164,32 @@ def decision_base(*, decision_id: str, alias: str, strategy_id: str,
     }
 
 
+def _pair_recovery_accounts(accounts):
+    """Schedule each recovery account immediately after its ordinary signal account."""
+    source_for = {
+        "crassus_oif_recover": "crassus_oiskew",
+        "crassus_oif_ibit_recover": "crassus_skew_ibit",
+        "crassus_oif_slv_recover": "crassus_skew_slv",
+        "crassus_oif_dram_recover": "crassus_skew_dram",
+        "crassus_flow_recover": "crassus_flowskew",
+    }
+    by_name = {a.username: a for a in accounts}
+    paired = {}
+    for recovery, source in source_for.items():
+        if recovery in by_name and source in by_name:
+            if by_name[source].strategy_id == by_name[recovery].strategy_id:
+                paired[source] = by_name[recovery]
+    moved = {a.username for a in paired.values()}
+    ordered = []
+    for account in accounts:
+        if account.username in moved:
+            continue
+        ordered.append(account)
+        if account.username in paired:
+            ordered.append(paired[account.username])
+    return ordered
+
+
 class Runner:
     def __init__(
         self,
@@ -182,7 +208,7 @@ class Runner:
         key = bot_registration_key if bot_registration_key is not None else BOT_REGISTRATION_KEY
         _validate_bot_registration_key(key)
 
-        self.accounts = accounts
+        self.accounts = _pair_recovery_accounts(accounts)
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)

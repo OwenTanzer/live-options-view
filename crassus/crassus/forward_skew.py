@@ -281,10 +281,9 @@ def decide(ctx, account, arm, bars, directory, decision_id):
             {"chain": freeze(ended)},
         )
     if chain._last_bar == bar:
-        return stage(
-            result("no_trade", "Overlay already evaluated this five-minute interval"),
-            {},
-        )
+        # Only the direction/recovery overlay consumes completed bars once.
+        # A new ordinary skew decision still follows its normal entry guards.
+        return propose_base()
     row = None
     if arm != "stop":
         position = Position(
