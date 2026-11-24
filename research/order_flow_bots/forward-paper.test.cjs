@@ -76,3 +76,27 @@ test('two-sided quotes cannot straddle market close or carry a stale side', () =
   assert.equal(db.prepare('SELECT count(*) AS n FROM quotes').get().n,0);
   db.close();
 });
+test('restart on a different strike ladder warms up a fresh segment', () => {
+  const db=openPaper(':memory:');
+  for(let i=0;i<11;i++) accept(db,i);
+  const frame=frameAt(11);
+  frame.contracts[0].symbol='shifted';
+  const {decisions}=applyFrame(db,{frame,open,close,receivedAt:frame.t,eligibleSlots:[7,9]},frame.t);
+  assert.equal(decisions.find(d=>d.id===7).episode,false);
+  assert.equal(decisions.find(d=>d.id===9).reason,'opening put-OI reference unavailable');
+  db.close();
+});
+test('unmarked position survives close and recovers at the next regular session quote', () => {
+  const db=openPaper(':memory:');
+  for(let i=0;i<=11;i++) accept(db,i);
+  quote(db,open+11*minute+1,100);
+  assert.equal(quote(db,close+minute,120).accepted,false);
+  assert.equal(db.prepare('SELECT status FROM trades').get().status,'open');
+  const day=24*60*minute, next=open+day;
+  registerSession(db,{session:'2026-11-25',open:next,close:close+day});
+  quote(db,next,120);
+  const tr=db.prepare('SELECT * FROM trades').get();
+  assert.equal(tr.exit_t,next);
+  assert.equal(tr.reason,'late recovery exit at observed price');
+  db.close();
+});

@@ -58,6 +58,21 @@ function registerSession(db, {session,open,close}) {
   if (existing.open !== open || existing.close !== close) throw Error('Conflicting paper session bounds');
 }
 
+function restoreFeedState(db, session) {
+  const bounds=db.prepare('SELECT open FROM sessions WHERE session=?').get(session);
+  if (!bounds) return {};
+  let frozenLadderSpot, openingFrame;
+  for (const row of db.prepare('SELECT body FROM frames WHERE session=? ORDER BY t').iterate(session)) {
+    const f=JSON.parse(row.body);
+    if (f.contracts.length!==16) continue;
+    frozenLadderSpot=Math.min(...f.contracts.map(c=>c.strike))+3;
+    if (f.t===bounds.open && Number.isFinite(f.spot) && f.spot>0 &&
+        f.contracts.every(c=>Number.isFinite(c.openOi) && c.openOi>=0)) openingFrame=f;
+    break;
+  }
+  return {frozenLadderSpot,openingFrame};
+}
+
 function frozenRange(db, t, open, now) {
   if (t - 5 * minute < open) return null;
   const rows = db.prepare(`SELECT t,spot FROM quotes WHERE t BETWEEN ? AND ?
@@ -85,16 +100,26 @@ function applyFrame(db, {frame, open, close, receivedAt, eligibleSlots}, now = D
     if (prior && prior.t >= frame.t) return {accepted:false,reason:'repeated or late minute'};
     expireOrders(db,now);
     db.prepare('INSERT INTO frames VALUES (?,?,?)').run(frame.session,frame.t,JSON.stringify(frame));
-    const history = db.prepare('SELECT body FROM frames WHERE session=? ORDER BY t').all(frame.session)
+    const saved = db.prepare('SELECT body FROM frames WHERE session=? ORDER BY t').all(frame.session)
       .map(row => JSON.parse(row.body));
+    // A restart may select a new ladder around a different spot. Never join
+    // adjacent windows across that change or use a later opening OI reference.
+    const symbols = f => f.contracts.map(c => c.symbol).sort().join('|');
+    const universe = symbols(frame);
+    const history = saved.slice(1+saved.findLastIndex(f=>symbols(f)!==universe));
     const last = prior ? db.prepare('SELECT * FROM decisions WHERE session=? AND t=?').all(frame.session,prior.t) : [];
     const decisions = [];
     for (const rule of [...evaluateA(history),...evaluateB(history)]) {
       const prev = last.find(r => r.id === rule.id);
       let reason = rule.reason;
       let signal = rule.signal;
-      if (!eligibleSlots.includes(rule.id) || (rule.id === 9 && history[0].t !== open)) {
+      if (!eligibleSlots.includes(rule.id) || (rule.id === 9 && history[0].t !== open) ||
+          (rule.id === 11 && history.at(-2)?.parityQualified === false)) {
         reason = 'required forward input unavailable';
+        if (rule.id===3 && !frame.oiVerified) reason='opening OI clearing date unverified';
+        if (rule.id===9 && (history[0].t!==open || !history[0].contracts.length ||
+            history[0].contracts.some(c=>!Number.isFinite(c.openOi)))) reason='opening put-OI reference unavailable';
+        if (rule.id===11 && history.at(-2)?.parityQualified===false) reason='prior synchronized underlying unavailable';
         signal = null;
       } else if (!fresh(frame.t,receivedAt,now) || now-frame.t >= minute) {
         reason = 'late decision minute';
@@ -173,4 +198,4 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
   });
 }
 
-module.exports = {openPaper,registerSession,applyFrame,applyQuote,hasQuoteWork};
+module.exports = {openPaper,registerSession,restoreFeedState,applyFrame,applyQuote,hasQuoteWork};
