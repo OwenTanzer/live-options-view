@@ -1,0 +1,52 @@
+[
+  {
+    "title": "U.S. Treasury issues １０-year notes",
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "title": "préFOMC outlook",
+    "expected_instruments": []
+  },
+  {
+    "title": "FOMCé",
+    "expected_instruments": []
+  },
+  {
+    "title": "FOMCⅧ",
+    "expected_instruments": []
+  },
+  {
+    "title": "FOMC—minutes",
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "title": "U.S. Treasury ٢-year notes",
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "title": "Federal Reſerve",
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "title": "U.S. Treasury ıssues 2-year notes",
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "title": "Treasury issues notes",
+    "expected_instruments": []
+  }
+]
