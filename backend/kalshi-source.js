@@ -102,7 +102,7 @@ export async function discover(env, read = publicRead, seriesList = Object.keys(
         if (m.market_type !== 'binary' || !ticker(m.ticker) || m.status !== 'active') continue;
         // Discovery never promotes last_price or list bid/ask into an executable quote.
         result.push({ ticker: m.ticker, event: e.event_ticker, series, title: m.title,
-          outcome: m.yes_sub_title, category: e.category, cutoff: m.close_time,
+          outcome: m.yes_sub_title, category: e.category, opens_at: m.open_time, cutoff: m.close_time,
           volume_24h: m.volume_24h_fp, open_interest: m.open_interest_fp, observed_at: r.receive_ts });
       }
     }

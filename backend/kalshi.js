@@ -1,6 +1,6 @@
 import { SERIES_SUBJECT, WEATHER_SERIES } from './kalshi-model.js';
 import { ACCOUNT, OWNER_ID, SITE, configured, ownerIdentity, privateJSON } from './kalshi-access.js';
-import { archive, archiveIndex, archiveAt, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
+import { claimMinute, writeMinuteCatalog, archive, archiveIndex, archiveAt, getArchive, budget, readState, writeState, pruneArchive } from './kalshi-store.js';
 import { discover, fetchMarket, displayMarket, chainQuotes, reserveMinuteReads, publicRead, KALSHI_API } from './kalshi-source.js';
 import { computeBookFromTrades, readJsonBody, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
@@ -198,6 +198,11 @@ export async function kalshiTick(env) {
     coverage: 'Periodic REST samples only; no continuous book history between observations.' });
 }
 
+function openForSampling(market) {
+  const now = Date.now();
+  return Date.parse(market.cutoff) > now && (!market.opens_at || Date.parse(market.opens_at) <= now);
+}
+
 // Capture independently of browser activity. A scheduled slot identifies the
 // attempt; archiveAt exposes it only at the actual receipt time.
 export async function captureKalshiMinute(env, scheduledTime) {
@@ -205,25 +210,35 @@ export async function captureKalshiMinute(env, scheduledTime) {
   const minute = Math.floor(scheduledTime / 60000);
   if (minute !== Math.floor(Date.now() / 60000)) return; // Never backfill with a later book.
   const id = '00000000-0000-4000-8000-' + minute.toString(16).padStart(12, '0');
-  if (await env.DB.prepare('SELECT 1 FROM kalshi_evidence WHERE account_id=? AND id=?').bind(ACCOUNT, id).first()) return;
+  const lease = await claimMinute(env, minute, id);
+  if (!lease) return;
   let cached = await readState(env, 'minute-catalog');
   const quarter = Math.floor(minute / 15);
   const allSeries = Object.keys(SERIES_SUBJECT);
-  const refresh = cached?.quarter !== quarter ? allSeries : cached.retry;
+  const refresh = cached?.quarter !== quarter ? allSeries : allSeries.filter(series =>
+    cached.retry.includes(series) || (series.endsWith('15M') &&
+      !cached.markets.some(m => m.series === series && openForSampling(m))));
   const sample = { kind: 'minute_chain', scheduled_at: new Date(minute * 60000).toISOString(),
     catalog_receipt: cached?.receipt ?? null, books: [], missing_tickers: [], gaps: [] };
   try {
     const retained = (cached?.markets || []).filter(m => !refresh.includes(m.series));
     const maxRows = retained.length + refresh.reduce((n, s) => n + (WEATHER_SERIES.includes(s) ? 6 : 12), 0);
     const count = refresh.length + Math.ceil(maxRows / 16);
-    const read = count ? await reserveMinuteReads(env, count) : null;
+    const reserved = count ? await reserveMinuteReads(env, count) : null;
+    const read = async (env, path) => {
+      await lease.renew();
+      return reserved(env, path);
+    };
     if (refresh.length) {
       const markets = [...retained], retry = [];
       for (const series of refresh) {
         try {
           const catalog = await discover(env, read, [series]);
           markets.push(...catalog.markets);
-          if (!catalog.markets.length && series.endsWith('15M')) retry.push(series);
+          if (series.endsWith('15M') && !catalog.markets.some(openForSampling)) {
+            retry.push(series);
+            sample.gaps.push('No open window: ' + series);
+          }
         } catch {
           markets.push(...(cached?.markets || []).filter(m => m.series === series));
           retry.push(series);
@@ -231,12 +246,12 @@ export async function captureKalshiMinute(env, scheduledTime) {
         }
       }
       if (Math.floor(Date.now() / 60000) !== minute) throw Error('Capture window ended');
-      const receipt = await archive(env, 'Market catalog', { kind: 'discovery', markets, retry }, 'minute');
+      const receipt = await archive(env, 'Market catalog', { kind: 'discovery', markets, retry }, 'minute', crypto.randomUUID(), lease);
       cached = { quarter, receipt: receipt.id, markets, retry };
-      await writeState(env, 'minute-catalog', cached);
+      await writeMinuteCatalog(env, cached, lease, minute);
       sample.catalog_receipt = receipt.id;
     }
-    const active = (cached?.markets || []).filter(m => Date.parse(m.cutoff) > Date.now()).map(m => m.ticker);
+    const active = (cached?.markets || []).filter(openForSampling).map(m => m.ticker);
     for (let i = 0; i < active.length; i += 16) {
       const page = active.slice(i, i + 16);
       try {
@@ -251,5 +266,5 @@ export async function captureKalshiMinute(env, scheduledTime) {
   } catch {
     sample.gaps.push('Minute capture incomplete');
   }
-  await archive(env, 'Minute chain', sample, 'minute', id);
+  await archive(env, 'Minute chain', sample, 'minute', id, lease);
 }

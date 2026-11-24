@@ -6,7 +6,7 @@ import { Miniflare } from 'miniflare';
 import { createStorage } from '../../backend/storage.js';
 import { advanceSourceCatalog, publicationCatalogPage, CATALOG_PAGE_SIZE } from '../../backend/one-clock-source-catalog.js';
 import { squeezeCatalog, catalogSources } from '../../backend/one-clock-catalog-sources.js';
-import { archive, budget, writeState, pruneArchive } from '../../backend/kalshi-store.js';
+import { claimMinute, archive, budget, writeState, pruneArchive } from '../../backend/kalshi-store.js';
 import { limits, warningFraction, checkUsage } from '../../scripts/d1-usage.mjs';
 
 test('account monitor checks both row limits and refuses missing counters', () => {
@@ -57,7 +57,7 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
   // Let SQLite parse whole migrations (including trigger bodies), then install their schema in D1.
   const schema = new DatabaseSync(':memory:');
   try {
-    for (const migration of ['0001_accounts_sessions.sql', '0005_one_clock_catalog.sql', '0006_kalshi_private.sql'])
+    for (const migration of ['0001_accounts_sessions.sql', '0005_one_clock_catalog.sql', '0006_kalshi_private.sql', '0015_kalshi_minute_capture.sql'])
       schema.exec(readFileSync(new URL('../../backend/migrations/' + migration, import.meta.url), 'utf8'));
     for (const {sql} of schema.prepare('SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid').all())
       await db.prepare(sql).run();
@@ -112,6 +112,7 @@ test('modeled daily catalog and authenticated reads fit the shared D1 budget', a
   });
   const env = {DB:db};
   await measure('minute sample and reserved provider reads', 1440, async () => {
+    await claimMinute(env, Math.floor(now/60000), crypto.randomUUID());
     await budget(env, 'minute-provider-day', 18000, 86400000, now, 11);
     await budget(env, 'provider-minute', 60, 60000, now, 11);
     await archive(env, 'Minute chain', {books:[]}, 'minute');

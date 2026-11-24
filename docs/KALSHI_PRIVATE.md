@@ -286,7 +286,12 @@ Ordinary observations expire after seven days; ledger-linked fill evidence is pi
 
 The scheduled client reserves provider reads once per invocation. Its separate
 18,000/day cap covers discovery and books across the 16 selected series while
-the 60/minute limit remains shared. It adds no venue credentials, migrations,
+the 60/minute limit remains shared. Apply additive migration
+`0015_kalshi_minute_capture.sql` before enabling this API revision. It creates
+two reusable capture lease slots and an index linking retained minutes to their
+catalog. A 15-second lease permits an abandoned capture to be reclaimed in the
+same minute. Ownership is checked when publishing. A catalog stays available
+until its last dependent minute ages out. This adds no venue credentials,
 public catalog publications, KV, or producer processes. Validate the minute
 and quarter-hour triggers separately during protected API release, then use the
 private One Clock replay on both sides of a crypto rollover.
