@@ -1,10 +1,10 @@
 name: Crypto offline acceptance
 on:
   pull_request:
-    paths: ["site/**", "market_mcp/**", "market_data/crypto_collector/**", "tests/**", ".github/workflows/crypto-ci.yml"]
+    paths: ["site/**", "market_mcp/**", "market_data/crypto_collector/**", "market_data/crypto_candle_cache/**", "market_data/crypto_predictions/**", "tests/**", ".github/workflows/crypto-ci.yml"]
   push:
     branches: [master]
-    paths: ["site/**", "market_mcp/**", "market_data/crypto_collector/**", "tests/**", ".github/workflows/crypto-ci.yml"]
+    paths: ["site/**", "market_mcp/**", "market_data/crypto_collector/**", "market_data/crypto_candle_cache/**", "market_data/crypto_predictions/**", "tests/**", ".github/workflows/crypto-ci.yml"]
 jobs:
   fixtures:
     runs-on: ubuntu-latest
@@ -18,6 +18,9 @@ jobs:
           python-version: "3.11"
       - run: pip install requests
       - run: python -m unittest discover -s tests -p test_crypto_collector.py -v
-      - run: node --test tests/crypto_panel.test.js tests/crypto_predictions_panel.test.mjs tests/boot.test.js tests/tab_switching.test.js
+      - run: python -m unittest discover -s tests -p test_crypto_candle_cache.py -v
+      - run: python -m unittest discover -s tests -p test_crypto_predictions.py -v
+      - run: python -m unittest discover -s tests -p test_crypto_archive.py -v
+      - run: node --test tests/crypto_history_panel.test.mjs tests/crypto_panel.test.js tests/crypto_predictions_panel.test.mjs tests/boot.test.js tests/tab_switching.test.js
       - run: node --test market_mcp/crypto_snapshot.test.js market_mcp/consumer.test.js
       - run: node tests/news_panel_view.test.js
