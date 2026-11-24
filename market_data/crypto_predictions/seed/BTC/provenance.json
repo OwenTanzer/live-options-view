@@ -1,0 +1,50 @@
+{
+  "schema": "snapshot_provenance.v1",
+  "dataset": "crypto_predictions",
+  "artifact": "crypto/predictions/BTC/",
+  "symbol": "BTC",
+  "constructed_at": "2026-11-24T00:32:44Z",
+  "archive_uploaded_at": null,
+  "latest_published_at": null,
+  "publication": {
+    "status": "not_published",
+    "reason": "local run: --publish not given"
+  },
+  "session_model": "continuous_24_7",
+  "as_of": "2026-11-24T00:32:44Z",
+  "universe": "crypto_predictions: 50 coins (32 coinbase / 18 coingecko)",
+  "files": {
+    "predictions": {
+      "key": "crypto/predictions/BTC.json",
+      "source": "crypto_predictions",
+      "observations": 13,
+      "live": 1,
+      "retracted": 6,
+      "coverage": "current",
+      "reason": null
+    }
+  },
+  "coverage": {
+    "live_predictions": 1,
+    "retracted": 6,
+    "target_start": "2026-11-24T00:00:00Z",
+    "target_end": "2026-11-24T01:00:00Z"
+  },
+  "estimator": {
+    "module": "market_data.crypto_predictions.estimator",
+    "signals": [
+      "last-hour momentum",
+      "24h move",
+      "7d move",
+      "hourly volatility",
+      "last-hour range",
+      "BTC correlation"
+    ],
+    "note": "Estimates only. Origin synthetic; a prediction is never a recorded price and is retracted when its target hour passes."
+  },
+  "notes": [
+    "Crypto trades 24/7: buckets align to 00:00 UTC, not an equity session open. There is no session filter.",
+    "Every prediction is a One Clock observation with origin \"synthetic\", session \"continuous\", eventAt at the target hour's start. Live prices and future estimates stay in separate cohorts.",
+    "CoinGecko-labelled coins have no 1h base: CoinGecko free OHLC has no 1m/1h series, so they have no prediction by design and are labelled absent, never interpolated from daily bars."
+  ]
+}

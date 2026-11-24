@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "dataset": "crypto_predictions",
+  "symbol": "BTC",
+  "horizon": "1h",
+  "generated_at": "2026-11-24T00:32:44Z",
+  "coverage": "current",
+  "reason": null,
+  "observations_count": 13,
+  "observations": [
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T18:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795456800000,
+      "valueAt": 1795456800000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61320.41193477099,
+        "direction": "down",
+        "pct_move": -0.4575126155765469,
+        "range_low": 60689.09232831665,
+        "range_high": 61951.73154122534,
+        "confidence": 0.7437919854979551,
+        "last_close": 61602.25,
+        "data_window": {
+          "bars_1h": 162,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T17:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 161
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": -0.9303203741738097,
+          "move_24h_pct": 1.4190576241708497,
+          "move_7d_pct": -4.594475509475537,
+          "hourly_volatility_pct": 1.0248320580081798,
+          "last_hour_range_pct": 1.6457353424590784,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T18:00:00Z",
+        "target_end": "2026-11-23T19:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T18:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795456800000,
+      "valueAt": 1795456800000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T19:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795460400000,
+      "valueAt": 1795460400000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61168.59087105506,
+        "direction": "down",
+        "pct_move": -0.23284290583218437,
+        "range_low": 60537.030786403426,
+        "range_high": 61800.15095570669,
+        "confidence": 0.742478315739407,
+        "last_close": 61311.35,
+        "data_window": {
+          "bars_1h": 163,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T18:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 162
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": -0.4722230113348158,
+          "move_24h_pct": 1.061193339767308,
+          "move_7d_pct": -5.045002350204475,
+          "hourly_volatility_pct": 1.0300867370423716,
+          "last_hour_range_pct": 0.7353613971964418,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T19:00:00Z",
+        "target_end": "2026-11-23T20:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T19:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795460400000,
+      "valueAt": 1795460400000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T20:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795464000000,
+      "valueAt": 1795464000000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61131.674227139956,
+        "direction": "down",
+        "pct_move": -0.09673955094942262,
+        "range_low": 60500.72130872744,
+        "range_high": 61762.62714555247,
+        "confidence": 0.7422193382719866,
+        "last_close": 61190.87,
+        "data_window": {
+          "bars_1h": 164,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T19:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 163
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": -0.1965052147766988,
+          "move_24h_pct": 0.9155494484109461,
+          "move_7d_pct": -5.2315938722774185,
+          "hourly_volatility_pct": 1.0311226469120538,
+          "last_hour_range_pct": 1.692180549157087,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T20:00:00Z",
+        "target_end": "2026-11-23T21:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T20:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795464000000,
+      "valueAt": 1795464000000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T21:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795467600000,
+      "valueAt": 1795467600000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61153.94947846868,
+        "direction": "flat",
+        "pct_move": -0.021532028206193723,
+        "range_low": 60524.123976548195,
+        "range_high": 61783.77498038917,
+        "confidence": 0.7425800405836958,
+        "last_close": 61167.12,
+        "data_window": {
+          "bars_1h": 165,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T20:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 164
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": -0.038812979779501156,
+          "move_24h_pct": 0.5669302213168415,
+          "move_7d_pct": -5.2683763145851215,
+          "hourly_volatility_pct": 1.0296798376652168,
+          "last_hour_range_pct": 0.6826543410904382,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T21:00:00Z",
+        "target_end": "2026-11-23T22:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T21:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795467600000,
+      "valueAt": 1795467600000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T22:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795471200000,
+      "valueAt": 1795471200000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61308.97174130241,
+        "direction": "up",
+        "pct_move": 0.07683689422366935,
+        "range_low": 60677.97233480304,
+        "range_high": 61939.971147801785,
+        "confidence": 0.7424992505540247,
+        "last_close": 61261.9,
+        "data_window": {
+          "bars_1h": 166,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T21:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 165
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": 0.1549525300520882,
+          "move_24h_pct": 0.6835785508884085,
+          "move_7d_pct": -5.121587266925143,
+          "hourly_volatility_pct": 1.0300029977839011,
+          "last_hour_range_pct": 0.636072338598702,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T22:00:00Z",
+        "target_end": "2026-11-23T23:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T22:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795471200000,
+      "valueAt": 1795471200000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T23:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795474800000,
+      "valueAt": 1795474800000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61131.433262503866,
+        "direction": "down",
+        "pct_move": -0.07430377303607508,
+        "range_low": 60501.65106970698,
+        "range_high": 61761.21545530075,
+        "confidence": 0.7426388490830087,
+        "last_close": 61176.89,
+        "data_window": {
+          "bars_1h": 167,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T22:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 166
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": -0.13876487670151372,
+          "move_24h_pct": 0.28705719734736235,
+          "move_7d_pct": -5.253245179370547,
+          "hourly_volatility_pct": 1.029444603667965,
+          "last_hour_range_pct": 0.5155051196620204,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-23T23:00:00Z",
+        "target_end": "2026-11-24T00:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-23T23:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 2,
+      "eventAt": 1795474800000,
+      "valueAt": 1795474800000,
+      "availableAt": 1795480364000,
+      "value": null,
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    },
+    {
+      "source": "crypto_predictions",
+      "id": "BTC|1h|2026-11-24T00:00:00Z",
+      "instrument": "BTC",
+      "session": "continuous",
+      "evidence": "crypto/predictions/BTC.json",
+      "origin": "synthetic",
+      "revision": 1,
+      "eventAt": 1795478400000,
+      "valueAt": 1795478400000,
+      "availableAt": 1795480364000,
+      "value": {
+        "estimated_price": 61191.99884699511,
+        "direction": "flat",
+        "pct_move": 0.003315652867786767,
+        "range_low": 60562.904759049445,
+        "range_high": 61821.09293494078,
+        "confidence": 0.7429749973951323,
+        "last_close": 61189.97,
+        "data_window": {
+          "bars_1h": 168,
+          "returns": 24,
+          "first_bar": "2026-11-17T00:00:00Z",
+          "last_bar": "2026-11-23T23:00:00Z",
+          "hours_24h": 24,
+          "hours_7d": 167
+        },
+        "basis": [
+          "last-hour momentum",
+          "24h move",
+          "7d move",
+          "hourly volatility",
+          "last-hour range"
+        ],
+        "signals": {
+          "momentum_1h_pct": 0.021380622650157832,
+          "move_24h_pct": 0.0440789294052113,
+          "move_7d_pct": -5.232987733249084,
+          "hourly_volatility_pct": 1.0281000104194713,
+          "last_hour_range_pct": 0.7383399599640281,
+          "btc_correlation": null
+        },
+        "target_start": "2026-11-24T00:00:00Z",
+        "target_end": "2026-11-24T01:00:00Z"
+      },
+      "provider": "crypto_predictions",
+      "horizon": "1h"
+    }
+  ]
+}

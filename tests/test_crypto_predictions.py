@@ -1,0 +1,467 @@
+"""Offline tests for hourly crypto predictions.
+
+No provider calls, no R2, no clock dependence beyond fixed fixtures::
+
+    python -m pytest tests/test_crypto_predictions.py -q
+    python -m unittest tests.test_crypto_predictions -v
+
+Covers the estimator (pure function: range contains the estimate,
+direction consistent with momentum sign, confidence bounds, too
+few bars, BTC correlation), the One Clock envelope (origin
+synthetic, retraction after the target hour, as-of selection,
+live vs estimate cohorts never mixing), the prediction file
+round-trip, the producer (from cached 1h bars, CoinGecko-style
+absence, retraction carry-forward), the provenance sidecar and
+publish keys, the CLI seed command (byte-identical to the
+checked-in seed) — plus the checked-in BTC seed (real Coinbase
+bars, real computed estimates).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from market_data.crypto_candle_cache import one_clock as oc  # noqa: E402
+from market_data.crypto_predictions import estimator as est_mod  # noqa: E402
+from market_data.crypto_predictions import predictions as pred_mod  # noqa: E402
+from market_data.crypto_predictions import producer as producer_mod  # noqa: E402
+from market_data.crypto_predictions import provenance as prov_mod  # noqa: E402
+from market_data.crypto_predictions import publish as publish_mod  # noqa: E402
+from market_data.crypto_predictions import cli as cli_mod  # noqa: E402
+
+UTC = timezone.utc
+
+
+def _iso(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _bars(start, closes, symbol="BTC"):
+    """Fixture 1h bars from a list of closes (oldest first).
+
+    Each bar's open is the previous close, high/low straddle the
+    open/close by a fixed 0.1% — deterministic fixtures, not real
+    prices.
+    """
+    bars = []
+    previous = closes[0]
+    # Observed just after the last bar's close: every fixture bar is
+    # completed at any now at or after that instant.
+    observed = _iso(start + timedelta(hours=len(closes), minutes=5))
+    for i, close in enumerate(closes):
+        moment = start + timedelta(hours=i)
+        high = max(previous, close) * 1.001
+        low = min(previous, close) * 0.999
+        bars.append({"t": _iso(moment), "open": previous, "high": high,
+                     "low": low, "close": close, "volume": 10.0,
+                     "observed_at": observed,
+                     "origin": "recorded"})
+        previous = close
+    return bars
+
+
+def _up_bars(n=30, start=None):
+    # Steady +0.4%/hour climb.
+    start = start or datetime(2026, 11, 23, 0, 0, tzinfo=UTC)
+    closes = [100.0 * (1.004 ** i) for i in range(n)]
+    return _bars(start, closes)
+
+
+def _down_bars(n=30, start=None):
+    start = start or datetime(2026, 11, 23, 0, 0, tzinfo=UTC)
+    closes = [100.0 * (0.996 ** i) for i in range(n)]
+    return _bars(start, closes)
+
+
+def _flat_bars(n=30, start=None):
+    start = start or datetime(2026, 11, 23, 0, 0, tzinfo=UTC)
+    return _bars(start, [100.0] * n)
+
+
+def _ms(iso):
+    return oc.instant_ms(iso, "t")
+
+
+class EstimatorTests(unittest.TestCase):
+    def test_range_contains_estimate_and_direction_follows_momentum(self):
+        for bars, direction in ((_up_bars(), "up"), (_down_bars(), "down")):
+            est = est_mod.estimate(bars, symbol="BTC")
+            self.assertIsNotNone(est)
+            self.assertLess(est["range_low"], est["estimated_price"])
+            self.assertLess(est["estimated_price"], est["range_high"])
+            self.assertEqual(est["direction"], direction)
+            self.assertEqual(est["basis"][0], "last-hour momentum")
+            self.assertIn("hourly volatility", est["basis"])
+            self.assertIn("last-hour range", est["basis"])
+
+    def test_flat_bars_estimate_flat(self):
+        est = est_mod.estimate(_flat_bars(), symbol="BTC")
+        self.assertEqual(est["direction"], "flat")
+        self.assertAlmostEqual(est["pct_move"], 0.0)
+        self.assertAlmostEqual(est["estimated_price"], 100.0)
+        self.assertGreaterEqual(est["confidence"], 0.05)
+        self.assertLessEqual(est["confidence"], 0.95)
+
+    def test_confidence_bounds_and_completeness(self):
+        few = est_mod.estimate(_up_bars(n=5), symbol="BTC")
+        many = est_mod.estimate(_up_bars(n=30), symbol="BTC")
+        self.assertGreaterEqual(few["confidence"], 0.05)
+        self.assertLessEqual(few["confidence"], 0.95)
+        # Fewer bars in the window means lower completeness, hence
+        # no higher confidence than the full-window estimate.
+        self.assertLessEqual(few["confidence"], many["confidence"])
+        self.assertEqual(few["data_window"]["returns"], 4)
+        self.assertEqual(many["data_window"]["returns"], 24)
+
+    def test_too_few_bars_returns_none(self):
+        self.assertIsNone(est_mod.estimate([], symbol="BTC"))
+        self.assertIsNone(est_mod.estimate(
+            _flat_bars(n=1), symbol="BTC"))
+
+    def test_btc_correlation_present_for_other_coins(self):
+        btc = _up_bars()
+        eth = _up_bars()
+        est = est_mod.estimate(eth, btc_bars=btc, symbol="ETH")
+        self.assertIsNotNone(est["signals"]["btc_correlation"])
+        self.assertAlmostEqual(est["signals"]["btc_correlation"], 1.0, places=6)
+        self.assertIn("BTC correlation", est["basis"])
+
+    def test_btc_correlation_absent_for_btc_itself(self):
+        est = est_mod.estimate(_up_bars(), symbol="BTC")
+        self.assertIsNone(est["signals"]["btc_correlation"])
+        self.assertNotIn("BTC correlation", est["basis"])
+
+    def test_estimate_uses_only_completed_bars(self):
+        # The caller passes completed bars; a bar appended after
+        # the last close changes the estimate, so the window is
+        # exactly the bars handed in.
+        short = _up_bars(n=25)
+        longer = _up_bars(n=26)
+        self.assertNotEqual(est_mod.estimate(short, symbol="BTC")["estimated_price"],
+                            est_mod.estimate(longer, symbol="BTC")["estimated_price"])
+
+
+class EnvelopeTests(unittest.TestCase):
+    def setUp(self):
+        self.est = est_mod.estimate(_up_bars(), symbol="BTC")
+        self.target_ms = _ms("2026-11-24T06:00:00Z")
+        self.generated_at = "2026-11-24T06:05:00Z"
+
+    def test_origin_is_synthetic_and_envelope_is_real_one_clock(self):
+        row = pred_mod.prediction_to_observation(
+            "BTC", self.est, self.target_ms, self.generated_at)
+        self.assertEqual(row["source"], "crypto_predictions")
+        self.assertEqual(row["session"], "continuous")
+        self.assertEqual(row["instrument"], "BTC")
+        self.assertEqual(row["origin"], "synthetic")
+        self.assertEqual(row["revision"], 1)
+        self.assertEqual(row["id"], "BTC|1h|2026-11-24T06:00:00Z")
+        self.assertEqual(row["eventAt"], self.target_ms)
+        self.assertEqual(row["valueAt"], self.target_ms)
+        self.assertEqual(row["availableAt"], _ms(self.generated_at))
+        self.assertEqual(row["value"]["direction"], "up")
+        self.assertEqual(row["evidence"], "crypto/predictions/BTC.json")
+
+    def test_availability_before_event_is_rejected(self):
+        with self.assertRaises(TypeError):
+            pred_mod.prediction_to_observation(
+                "BTC", self.est, self.target_ms, "2026-11-24T05:59:00Z")
+
+    def test_retraction_is_revision_two_with_null_value(self):
+        row = pred_mod.retraction_observation(
+            "BTC", self.target_ms, self.generated_at)
+        self.assertEqual(row["revision"], 2)
+        self.assertIsNone(row["value"])
+        self.assertEqual(row["id"], "BTC|1h|2026-11-24T06:00:00Z")
+        self.assertEqual(row["origin"], "synthetic")
+
+    def test_retraction_after_target_hour_wins_selection(self):
+        value_row = pred_mod.prediction_to_observation(
+            "BTC", self.est, self.target_ms, self.generated_at)
+        retract_row = pred_mod.retraction_observation(
+            "BTC", self.target_ms, "2026-11-24T07:05:00Z")
+        rows = [value_row, retract_row]
+        selected = oc.select_as_of(rows, {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": _ms("2026-11-24T07:30:00Z"), "origin": "synthetic"})
+        self.assertEqual(len(selected), 1)
+        self.assertIsNone(selected[0]["value"])
+        reading = pred_mod.current_prediction(
+            rows, "BTC", _ms("2026-11-24T07:30:00Z"), 2 * 60 * 60 * 1000)
+        self.assertEqual(reading["state"], "unavailable")
+        self.assertIsNone(reading["row"]["value"])
+
+    def test_select_as_of_returns_prediction_available_at_cutoff_only(self):
+        first = pred_mod.prediction_to_observation(
+            "BTC", self.est, self.target_ms, self.generated_at)
+        later_est = est_mod.estimate(_up_bars(), symbol="BTC")
+        second = pred_mod.prediction_to_observation(
+            "BTC", later_est, self.target_ms + 3600_000, "2026-11-24T07:05:00Z")
+        rows = [first, second]
+        early = oc.select_as_of(rows, {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": _ms("2026-11-24T06:30:00Z"), "origin": "synthetic"})
+        self.assertEqual([r["id"] for r in early], [first["id"]])
+        late = oc.select_as_of(rows, {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": _ms("2026-11-24T07:30:00Z"), "origin": "synthetic"})
+        self.assertEqual(len(late), 2)
+
+    def test_live_and_estimate_cohorts_never_mix(self):
+        pred_row = pred_mod.prediction_to_observation(
+            "BTC", self.est, self.target_ms, self.generated_at)
+        live_bar = {"t": "2026-11-24T05:00:00Z", "open": 100, "high": 101,
+                    "low": 99, "close": 100.5, "volume": 5,
+                    "observed_at": "2026-11-24T06:05:00Z", "origin": "recorded"}
+        live_row = oc.bar_to_observation(
+            live_bar, "BTC", "1h", "crypto/candles/BTC/1h.json")
+        rows = [pred_row, live_row]
+        recorded = oc.select_as_of(rows, {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": _ms("2026-11-24T06:30:00Z"), "origin": "recorded"})
+        self.assertEqual([r["origin"] for r in recorded], ["recorded"])
+        synthetic = oc.select_as_of(rows, {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": _ms("2026-11-24T06:30:00Z"), "origin": "synthetic"})
+        self.assertEqual([r["origin"] for r in synthetic], ["synthetic"])
+        self.assertNotEqual(recorded[0]["id"], synthetic[0]["id"])
+
+    def test_expired_target_hour_detection(self):
+        self.assertFalse(pred_mod.is_expired(
+            self.target_ms, self.target_ms + 3600_000))
+        self.assertTrue(pred_mod.is_expired(
+            self.target_ms, self.target_ms + 3600_001))
+
+
+class FileTests(unittest.TestCase):
+    def test_build_and_read_round_trip(self):
+        import tempfile
+        est = est_mod.estimate(_up_bars(), symbol="BTC")
+        target_ms = _ms("2026-11-24T06:00:00Z")
+        rows = [pred_mod.prediction_to_observation(
+            "BTC", est, target_ms, "2026-11-24T06:05:00Z")]
+        content = pred_mod.build_prediction_file(
+            "BTC", rows, "2026-11-24T06:05:00Z")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pred_mod.write_prediction_file(tmp, "BTC", content)
+            read = pred_mod.read_prediction_file(path)
+        self.assertEqual(read["dataset"], "crypto_predictions")
+        self.assertEqual(read["observations_count"], 1)
+        self.assertEqual(read["observations"][0]["id"], rows[0]["id"])
+
+    def test_non_synthetic_row_rejected_on_read(self):
+        import tempfile
+        est = est_mod.estimate(_up_bars(), symbol="BTC")
+        target_ms = _ms("2026-11-24T06:00:00Z")
+        row = pred_mod.prediction_to_observation(
+            "BTC", est, target_ms, "2026-11-24T06:05:00Z")
+        row = dict(row, origin="recorded")
+        content = {"schema_version": 1, "dataset": "crypto_predictions",
+                   "symbol": "BTC", "horizon": "1h",
+                   "generated_at": "2026-11-24T06:05:00Z",
+                   "coverage": "current", "reason": None,
+                   "observations_count": 1, "observations": [row]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "BTC.json"
+            path.write_text(json.dumps(content), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                pred_mod.read_prediction_file(path)
+
+    def test_seed_file_loads_and_live_prediction_is_the_latest(self):
+        seed = ROOT / "market_data" / "crypto_predictions" / "seed" / "BTC" / "predictions.json"
+        content = pred_mod.read_prediction_file(seed)
+        self.assertEqual(content["symbol"], "BTC")
+        self.assertEqual(content["coverage"], "current")
+        # Seven value rows (one per target hour) + six retractions.
+        self.assertEqual(content["observations_count"], 13)
+        live = [r for r in content["observations"] if r["value"] is not None]
+        self.assertEqual(len(live), 7)
+        latest = live[-1]
+        self.assertEqual(latest["value"]["target_start"], "2026-11-24T00:00:00Z")
+        # Every expired target hour is retracted, and the
+        # retraction is the row the selector returns for it.
+        reading = pred_mod.current_prediction(
+            content["observations"], "BTC",
+            _ms("2026-11-24T00:45:00Z"), 2 * 60 * 60 * 1000)
+        self.assertEqual(reading["state"], "fresh")
+        self.assertEqual(reading["row"]["id"], latest["id"])
+        self.assertAlmostEqual(reading["row"]["value"]["estimated_price"],
+                               61192.0, delta=1.0)
+        self.assertEqual(reading["row"]["value"]["last_close"], 61189.97)
+        # At 02:00 the 00:00 hour has passed and its retraction is
+        # not in the seed (the seed was generated at 00:32), so the
+        # reading is stale by age, not retracted — the seed is a
+        # snapshot, and the producer would retract on its next run.
+        stale = pred_mod.current_prediction(
+            content["observations"], "BTC",
+            _ms("2026-11-24T02:30:00Z"), 2 * 60 * 60 * 1000)
+        self.assertEqual(stale["state"], "stale")
+
+
+class ProducerTests(unittest.TestCase):
+    def _cache_dir(self, tmp, bars_by_symbol):
+        for symbol, bars in bars_by_symbol.items():
+            path = Path(tmp) / "crypto" / "candles" / symbol
+            path.mkdir(parents=True, exist_ok=True)
+            content = {"schema_version": 1, "dataset": "crypto_candles",
+                       "symbol": symbol, "interval": "1h", "base": True,
+                       "derived_from": None, "source": "coinbase",
+                       "source_label": "test", "bars_count": len(bars),
+                       "first_bar": bars[0]["t"], "last_bar": bars[-1]["t"],
+                       "generated_at": "2026-11-24T06:00:00Z", "bars": bars}
+            (path / "1h.json").write_text(json.dumps(content), encoding="utf-8")
+        return tmp
+
+    def test_build_from_cached_1h_bars(self):
+        import tempfile
+        bars = _up_bars()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": bars})
+            now_ms = _ms("2026-11-24T06:05:00Z")
+            content, status = producer_mod.build_symbol(
+                "BTC", str(cache_dir), "2026-11-24T06:05:00Z", now_ms)
+        self.assertEqual(status, "current")
+        self.assertEqual(len(content["observations"]), 1)
+        row = content["observations"][0]
+        # Last fixture bar starts 2026-11-24T05:00, closes 06:00.
+        self.assertEqual(row["id"], "BTC|1h|2026-11-24T06:00:00Z")
+        self.assertEqual(row["value"]["direction"], "up")
+
+    def test_forming_bar_never_enters_the_window(self):
+        import tempfile
+        bars = _up_bars()
+        forming = dict(bars[-1])
+        forming["t"] = "2026-11-24T06:00:00Z"
+        forming["observed_at"] = "2026-11-24T06:05:00Z"
+        bars = bars + [forming]
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": bars})
+            now_ms = _ms("2026-11-24T06:05:00Z")
+            content, status = producer_mod.build_symbol(
+                "BTC", str(cache_dir), "2026-11-24T06:05:00Z", now_ms)
+        # The forming 06:00 bar closes at 07:00, after now: the
+        # estimate still targets 06:00 from the completed bars.
+        self.assertEqual(content["observations"][0]["id"],
+                         "BTC|1h|2026-11-24T06:00:00Z")
+
+    def test_coingecko_style_absence_no_1h_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": _up_bars()})
+            now_ms = _ms("2026-11-24T06:05:00Z")
+            content, status = producer_mod.build_symbol(
+                "USDT", str(cache_dir), "2026-11-24T06:05:00Z", now_ms)
+        self.assertEqual(status, "absent")
+        self.assertEqual(content["coverage"], "absent")
+        self.assertEqual(content["observations"], [])
+        self.assertIn("1d base only", content["reason"])
+
+    def test_retraction_carried_forward_from_previous_file(self):
+        import tempfile
+        bars = _up_bars()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": bars})
+            now_ms = _ms("2026-11-24T06:05:00Z")
+            first, _ = producer_mod.build_symbol(
+                "BTC", str(cache_dir), "2026-11-24T06:05:00Z", now_ms)
+            # One hour later the cache has one more bar; the old
+            # target hour has passed and must be retracted.
+            more = _up_bars(n=31)
+            cache_dir = self._cache_dir(tmp, {"BTC": more})
+            later_ms = _ms("2026-11-24T07:05:00Z")
+            second, status = producer_mod.build_symbol(
+                "BTC", str(cache_dir), "2026-11-24T07:05:00Z", later_ms,
+                previous=first)
+        self.assertEqual(status, "current")
+        ids = [(r["id"], r["revision"], r["value"] is None)
+               for r in second["observations"]]
+        self.assertIn(("BTC|1h|2026-11-24T06:00:00Z", 1, False), ids)
+        self.assertIn(("BTC|1h|2026-11-24T06:00:00Z", 2, True), ids)
+        self.assertIn(("BTC|1h|2026-11-24T07:00:00Z", 1, False), ids)
+        reading = pred_mod.current_prediction(
+            second["observations"], "BTC", later_ms, 2 * 60 * 60 * 1000)
+        self.assertEqual(reading["row"]["id"], "BTC|1h|2026-11-24T07:00:00Z")
+
+    def test_unknown_symbol_rejected(self):
+        with self.assertRaises(ValueError):
+            producer_mod.build_all("/nonexistent", "2026-11-24T06:05:00Z",
+                                   _ms("2026-11-24T06:05:00Z"),
+                                   symbols=["NOPE"])
+
+
+class ProvenanceAndPublishTests(unittest.TestCase):
+    def test_provenance_sidecar(self):
+        est = est_mod.estimate(_up_bars(), symbol="BTC")
+        row = pred_mod.prediction_to_observation(
+            "BTC", est, _ms("2026-11-24T06:00:00Z"), "2026-11-24T06:05:00Z")
+        content = pred_mod.build_prediction_file(
+            "BTC", [row], "2026-11-24T06:05:00Z")
+        sidecar = prov_mod.build_provenance(
+            "BTC", content, generated_at="2026-11-24T06:05:00Z",
+            publication_status="not_published",
+            publication_reason="local run: --publish not given")
+        self.assertEqual(sidecar["schema"], "snapshot_provenance.v1")
+        self.assertEqual(sidecar["dataset"], "crypto_predictions")
+        self.assertEqual(sidecar["coverage"]["live_predictions"], 1)
+        self.assertEqual(sidecar["publication"]["status"], "not_published")
+        self.assertEqual(prov_mod.sidecar_key("BTC"),
+                         "crypto/predictions/BTC/provenance.json")
+
+    def test_publish_keys_and_config(self):
+        class FakeClient:
+            def __init__(self):
+                self.puts = []
+
+            def put_object(self, Bucket, Key, Body, ContentType):
+                self.puts.append((Bucket, Key))
+
+        config = {"R2_ENDPOINT_URL": "https://example.invalid",
+                  "R2_ACCESS_KEY_ID": "id", "R2_SECRET_ACCESS_KEY": "secret",
+                  "CRYPTO_R2_BUCKET": "bucket"}
+        client = FakeClient()
+        est = est_mod.estimate(_up_bars(), symbol="BTC")
+        row = pred_mod.prediction_to_observation(
+            "BTC", est, _ms("2026-11-24T06:00:00Z"), "2026-11-24T06:05:00Z")
+        content = pred_mod.build_prediction_file(
+            "BTC", [row], "2026-11-24T06:05:00Z")
+        sidecar = prov_mod.build_provenance("BTC", content)
+        result = publish_mod.publish_symbol(
+            "BTC", content, sidecar, config=config, client=client)
+        self.assertEqual(result["keys"],
+                         ["crypto/predictions/BTC.json",
+                          "crypto/predictions/BTC/provenance.json"])
+        with self.assertRaises(RuntimeError):
+            publish_mod.read_config(env={})
+
+
+class CliTests(unittest.TestCase):
+    def test_seed_command_reproduces_checked_in_seed(self):
+        import tempfile
+        seed = ROOT / "market_data" / "crypto_predictions" / "seed" / "BTC" / "predictions.json"
+        expected = seed.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(cli_mod.main(["seed", "--out", tmp]), 0)
+            produced = (Path(tmp) / "crypto" / "predictions" / "BTC.json"
+                        ).read_text(encoding="utf-8")
+        self.assertEqual(produced, expected)
+
+    def test_universe_lists_fifty(self):
+        import io
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            cli_mod.main(["universe"])
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 51)
+        self.assertTrue(lines[0].startswith("  1 BTC"))
+
+
+if __name__ == "__main__":
+    unittest.main()
