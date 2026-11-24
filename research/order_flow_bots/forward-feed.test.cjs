@@ -22,7 +22,7 @@ function poll(f,t,events,snapshot=t) {
   return f.observe({open,close,receivedAt:t,chainReceivedAt:t,chain:chain(snapshot),flow:projection(events)});
 }
 test('fills one minute across overlapping capped projections, deducts post-boundary flow and keeps actual publication time',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)];
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];
   assert.equal(poll(f,open,events).frames.length,1);
   events.push(event(open+5000,2),event(open+4000,3,'sell'));poll(f,open+6000,events);
   events.push(event(open+14000,4));poll(f,open+16000,events);
@@ -35,27 +35,32 @@ test('fills one minute across overlapping capped projections, deducts post-bound
   assert.equal(c.buyPremium,750);assert.equal(c.cumBuy,8);assert.equal(c.cumSell,2);
 });
 test('cap loss fails closed, then continuous fresh windows recover; wrong-session quotes are ignored',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)];
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];
   poll(f,open,events);
   for(let i=2;i<=6;i++)events.push(event(open+i*1000,i));
   poll(f,open+8000,events);
   events.push(event(open+60000,7));
-  assert.deepEqual(poll(f,open+60000,events).frames[0].eligibleSlots,[]);
+  const bad=poll(f,open+60000,events).frames[0];
+  assert.deepEqual(bad.eligibleSlots,[]);
+  assert.equal(bad.frame.coverageReason,'incomplete minute: projection suffix lost');
+  assert.equal(bad.frame.coverageDiagnostics.events[0].example.currentPrints,6);
   events.push(event(open+120000,8));
   assert.ok(poll(f,open+120000,events).frames[0].eligibleSlots.includes(10));
   const other={...chain(open+120000),expiration:'2026-11-24'};
   assert.equal(f.observe({open,close,receivedAt:open+120000,chainReceivedAt:open+120000,chain:other}).quote,null);
 });
 test('late provider print cannot revise prior frame or count in following minute',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)];
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];
   poll(f,open,events);events.push(event(open+60001,2));poll(f,open+60005,events,open+60000);
   events.push(event(open+59000,3),event(open+120000,4));
   const [d]=poll(f,open+120000,events).frames;
   assert.deepEqual(d.eligibleSlots,[]);assert.equal(d.frame.contracts[0].buy,4);
+  assert.deepEqual(d.frame.coverageDiagnostics.reasons,['ladder print arrived after its decision']);
+  assert.equal(d.frame.coverageDiagnostics.events[0].example.seq,3);
 });
 
 test('opening chain and underlying freeze before flow is published',()=>{
-  const f=new ForwardFeed();
+  const f=new ForwardFeed({settleMs:0});
   const before=open-44000;
   const r=f.observe({open,close,flow:null,chain:chain(before),chainReceivedAt:before+100,receivedAt:open+200});
   const opening=r.frames[0].frame;
@@ -64,7 +69,7 @@ test('opening chain and underlying freeze before flow is published',()=>{
   assert.equal(f.observe({open,close,receivedAt:open+400}).frames.length,0);
 });
 test('confirmed volume and BBO continue flow-only slots with missing chain; an opening packet alone never enables clearing-OI slot',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)];
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];
   poll(f,open,events);
   const evidence={session:day,settledSession:'2026-11-20',key:'intraday/20261123/opening-oi/v1/0001.json',
     sha256:'a'.repeat(64),version:1,open,openingSpot:650.5,receivedAt:open+1000,
@@ -81,7 +86,7 @@ test('confirmed volume and BBO continue flow-only slots with missing chain; an o
   for(const id of [1,4,5])assert.ok(!final.eligibleSlots.includes(id));
 });
 test('a changed cumulative projection with identical count cannot be a continuous observation',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)];poll(f,open,events);
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];poll(f,open,events);
   const flow=projection(events);
   flow.session.contracts[symbols[0]].B=200;
   f.observe({open,close,receivedAt:open+2000,chain:chain(open),chainReceivedAt:open,flow});
@@ -93,7 +98,7 @@ test('a changed cumulative projection with identical count cannot be a continuou
 test('midpoint becomes usable only once both side receipts preceded the boundary',()=>{
   const boundary=open+60000;
   function closeMinute(bid,ask) {
-    const f=new ForwardFeed(),events=[event(open,1)];
+    const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];
     poll(f,open,events);events.push(event(boundary,2));
     const receivedAt=boundary+2000;
     const candidate=chain(receivedAt-10),m=candidate.underlying_market;
@@ -121,7 +126,7 @@ test('midpoint becomes usable only once both side receipts preceded the boundary
 });
 
 test('earlier provider timestamp cannot backdate receipt of last trade',()=>{
-  const f=new ForwardFeed(),events=[event(open,1)],boundary=open+60000;
+  const f=new ForwardFeed({settleMs:0}),events=[event(open,1)],boundary=open+60000;
   poll(f,open,events);events.push(event(boundary,2));
   const later=boundary+850, sampled=later+500;
   const candidate=chain(sampled),market=candidate.underlying_market;
@@ -140,7 +145,7 @@ test('direct published BBO cannot qualify parity when its ask arrived 900 micros
   const {parseQqqQuote}=require('./forward-quote.cjs');
   const t=open+60000,receivedAt=t+1000;
   function apply(askIso) {
-    const f=new ForwardFeed(),events=[event(open,1)];poll(f,open,events);events.push(event(t,2));
+    const f=new ForwardFeed({settleMs:0}),events=[event(open,1)];poll(f,open,events);events.push(event(t,2));
     const row={symbol:'QQQ',instrument_class:'equity',kind:'ticker',source:'dxlink',bid:650.8,ask:651,
       bid_ts:new Date(t-2).toISOString(),ask_ts:askIso};
     const spotQuote=parseQqqQuote({health:{state:'live'},quotes:[row]},receivedAt);
@@ -153,4 +158,44 @@ test('direct published BBO cannot qualify parity when its ask arrived 900 micros
   const good=apply(new Date(t-1).toISOString().replace('.999Z','.999900Z'));
   assert.equal(good.spotQuote.askThrough,t);assert.equal(good.decision.frame.snapshotTime,t);
   assert.equal(good.decision.frame.spot,650.9);assert.ok(good.decision.eligibleSlots.includes(11));
+});
+
+test('a later publication can recover a pre-boundary burst without including post-boundary prints',()=>{
+  const f=new ForwardFeed(),events=[event(open,1)],t=open+60000;
+  poll(f,open,events);
+  events.push(event(t+100,2));
+  assert.equal(poll(f,t+1000,events,t).frames.length,0);
+  events.push(event(t-200,3,'sell'),event(t+6000,4));
+  const [settled]=poll(f,t+7000,events,t).frames;
+  assert.equal(settled.frame.minuteComplete,true);assert.equal(settled.receivedAt,t+7000);
+  assert.equal(settled.frame.contracts[0].sell,2);assert.equal(settled.frame.contracts[0].buy,0);
+  assert.equal(settled.frame.contracts[0].cumBuy,2);
+  const evidence=settled.frame.coverageDiagnostics.publicationSettlement;
+  assert.equal(evidence.firstReceipt,t+1000);assert.equal(evidence.ladderPrintsAdded,1);
+  assert.equal(evidence.mode,'advanced watermark');
+  // Both post-boundary prints are retained for the following decision.
+  events.push(event(t+66000,5));
+  const [next]=poll(f,t+67000,events,t+60000).frames;
+  assert.equal(next.frame.minuteComplete,true);
+  assert.equal(next.frame.contracts[0].buy,4);
+});
+test('a quiet projection retains the normal decision deadline with bounded, recorded fallback',()=>{
+  const f=new ForwardFeed(),events=[event(open,1)],t=open+60000;
+  poll(f,open,events);events.push(event(t+100,2));
+  assert.equal(poll(f,t+200,events,t).frames.length,0);
+  const [result]=poll(f,t+9000,events,t).frames;
+  assert.equal(result.frame.coverageDiagnostics.publicationSettlement.mode,'bounded fallback');
+  assert.equal(result.receivedAt,t+9000);assert.equal(result.frame.minuteComplete,true);
+  assert.equal(poll(f,t+10000,events,t).frames.length,0);
+});
+test('a late receipt beyond settling remains visible, and real source gaps never become eligible',()=>{
+  const f=new ForwardFeed(),events=[event(open,1)],t=open+60000;
+  poll(f,open,events);events.push(event(t+5200,2));
+  poll(f,t+7000,events,t);
+  events.push(event(t-250,3,'sell'),event(t+65050,4));
+  const flow=projection(events);flow.session.gaps=[{start:t+1000,end:t+2000}];
+  const [bad]=f.observe({open,close,receivedAt:t+66000,chain:chain(t+60000),chainReceivedAt:t+66000,flow}).frames;
+  assert.deepEqual(bad.eligibleSlots,[]);
+  assert.deepEqual(bad.frame.coverageDiagnostics.reasons,['ladder print arrived after its decision','collector gap overlaps minute']);
+  assert.equal(bad.frame.coverageDiagnostics.overlappingGaps[0].start,t+1000);
 });
