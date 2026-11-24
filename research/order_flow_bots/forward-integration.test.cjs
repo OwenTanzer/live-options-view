@@ -78,6 +78,7 @@ test('ten strategies can enter and exit from forward observations through the pa
         legs:Array.from({length:8},(_,i)=>({strike:647+i,call:2,put:647+i===650?1000:5}))};
       return {ok:true,status:200,text:async()=>JSON.stringify(packet),headers:{get:k=>k==='last-modified'?new Date(open+21000).toUTCString():null}};
     }
+    if (url==='https://squawkflow.com/oi-changes/QQQ.md') return new Response('Open interest settled 2026-11-18 vs 2026-11-17.');
     if (url===feeds.FLOW_URL) return response(flow);
     if (url===feeds.CHAIN_URL) return response(chain);
     assert.equal(url,'https://options.moopertonic.net/api/live-quotes?symbols=QQQ');
@@ -85,7 +86,7 @@ test('ten strategies can enter and exit from forward observations through the pa
     return response({health:{state:'live'},quotes:[{symbol:'QQQ',instrument_class:'equity',kind:'ticker',
       source:'dxlink',bid:spot-0.01,ask:spot+0.01,bid_ts:sourceTs,ask_ts:sourceTs}]});
   }
-  const service = createService({db,paper,feeds,fetchQuote:fetchQqqQuote,createOpeningOiReader,fetchImpl,clock});
+  const service = createService({db,paper,feeds,fetchQuote:fetchQqqQuote,createOpeningOiReader:(b,f,c)=>createOpeningOiReader(b,f,c,{}),fetchImpl,clock});
   try {
     for (; t<=open+70*minute; t+=3000) {
       const data = snapshot(t);

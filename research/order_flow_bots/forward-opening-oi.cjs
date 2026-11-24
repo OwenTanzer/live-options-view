@@ -1,5 +1,6 @@
 'use strict';
 const {createHash} = require('node:crypto');
+const {readAlpaca,readPublic} = require('./forward-opening-oi-dated.cjs');
 const {observerSessions} = require('../../backend/one-clock-calendar.js');
 
 const origin = 'https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev';
@@ -52,10 +53,12 @@ function parseReference({raw,key,version,lastModified,receivedAt,bounds,previous
     clearingVerified:false,bySymbol,strikes,complete:Object.keys(bySymbol).length===strikes.length*2};
 }
 
-function createOpeningOiReader(bounds,fetchImpl=fetch,clock=Date.now) {
+function createOpeningOiReader(bounds,fetchImpl=fetch,clock=Date.now,credentials={
+  id:process.env.APCA_API_KEY_ID, secret:process.env.APCA_API_SECRET_KEY}) {
   let previous=null;
   let retryAt=bounds.open;
-  return async function read() {
+  let dated=null, firstPacket=true, nextVerification=bounds.open;
+  async function readPacket() {
     const now=clock();
     if (now<retryAt || now>bounds.close || previous?.complete) return previous;
     retryAt=now+30000;
@@ -69,6 +72,38 @@ function createOpeningOiReader(bounds,fetchImpl=fetch,clock=Date.now) {
     previous=parseReference({raw,key,version,lastModified:response.headers.get('last-modified'),receivedAt:clock(),bounds,previous});
     retryAt=clock();
     return previous;
+  }
+  return async function read() {
+    const reference=await readPacket();
+    if (!reference || clock()>bounds.close) return reference;
+    const fullyMatched=dated && Object.keys(reference.bySymbol).every(symbol=>Object.hasOwn(dated.bySymbol,symbol));
+    if (!fullyMatched && clock()>=nextVerification) {
+      nextVerification=clock()+15*60_000;
+      // Return the independent opening packet immediately on its first receipt;
+      // the separate reference verification must never delay slot nine.
+      if (firstPacket) {
+        firstPacket=false;
+        nextVerification=clock();
+        return reference;
+      }
+      let next=null, alpacaError=null;
+      if(credentials.id && credentials.secret) {
+        try { next=await readAlpaca(reference,fetchImpl,clock,credentials); }
+        catch(error) { alpacaError=error; }
+      }
+      if(!next || !Object.keys(next.bySymbol).length) {
+        const fallback=await readPublic(reference,fetchImpl,clock);
+        if(fallback) next=fallback;
+        else if(alpacaError) throw alpacaError;
+      }
+      if(!next) return dated?.sha256 ? {...reference,dated}:reference;
+      // Keep the earliest corroborated receipt while the covered subset is identical.
+      // A new subset (including a retraction) needs two new observations.
+      const before=Object.keys(dated?.bySymbol ?? {}).sort().join(',');
+      const after=Object.keys(next.bySymbol).sort().join(',');
+      if (!dated || before!==after) dated=next;
+    }
+    return dated?.sha256 && Object.keys(dated.bySymbol).length ? {...reference,dated}:reference;
   };
 }
 

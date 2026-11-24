@@ -326,20 +326,35 @@ class ForwardFeed {
     if(parityQualified && this.parityAt===t-MINUTE) eligibleSlots.push(11);
     this.parityAt=parityQualified?t:null;
     if(sessionGood && chainComplete) eligibleSlots.push(1,4,5);
-    const verified=openingOi?.session===this.day && openingOi.open===open &&
+    const referenceValid=openingOi?.session===this.day && openingOi.open===open &&
       typeof openingOi.key==='string' && openingOi.key.length>0 && Number.isSafeInteger(openingOi.version) && openingOi.version>0 &&
       /^[a-f0-9]{64}$/.test(openingOi.sha256) && /^\d{4}-\d{2}-\d{2}$/.test(openingOi.settledSession) &&
-      openingOi.settledSession<this.day && Number.isSafeInteger(openingOi.receivedAt) && openingOi.receivedAt<=receivedAt &&
-      contracts.length===16 && contracts.every(c=>Number.isSafeInteger(openingOi.bySymbol?.[c.symbol]) && openingOi.bySymbol[c.symbol]>=0);
-    if(verified) for(const c of contracts) c.verifiedOpenOi=openingOi.bySymbol[c.symbol];
-    const clearingVerified=!!verified && openingOi.clearingVerified===true;
-    if(clearingVerified && sessionGood && this.verified?.sha256===openingOi.sha256 && this.verified.t===t-MINUTE && this.verified.t>=openingOi.receivedAt) eligibleSlots.push(3);
-    this.verified=clearingVerified && sessionGood?{sha256:openingOi.sha256,t}:null;
-    const oiReference=verified?{session:this.day,settledSession:openingOi.settledSession,key:openingOi.key,
+      openingOi.settledSession<this.day && Number.isSafeInteger(openingOi.receivedAt) && openingOi.receivedAt<=receivedAt;
+    const verified=referenceValid && contracts.length===16 &&
+      contracts.every(c=>Number.isSafeInteger(openingOi.bySymbol?.[c.symbol]) && openingOi.bySymbol[c.symbol]>=0);
+    const dated=referenceValid && openingOi.dated;
+    const datedValid=!!dated && dated.session===this.day && dated.settledSession===openingOi.settledSession &&
+      typeof dated.source==='string' && dated.source.length>0 && typeof dated.request==='string' &&
+      /^[a-f0-9]{64}$/.test(dated.sha256) && Number.isSafeInteger(dated.receivedAt) &&
+      openingOi.receivedAt<=t && dated.receivedAt<=t && dated.receivedAt<=receivedAt;
+    if(datedValid) {
+      for(const c of contracts) {
+        const value=dated.bySymbol?.[c.symbol];
+        if(Number.isSafeInteger(value) && value>=0 && value===openingOi.bySymbol[c.symbol]) c.verifiedOpenOi=value;
+      }
+    }
+    const clearingVerified=datedValid && contracts.some(c=>Number.isSafeInteger(c.verifiedOpenOi));
+    if(clearingVerified && sessionGood && this.verified?.sha256===dated.sha256 && this.verified.t===t-MINUTE)
+      eligibleSlots.push(3);
+    this.verified=clearingVerified && sessionGood?{sha256:dated.sha256,t}:null;
+    const oiReference=referenceValid?{session:this.day,settledSession:openingOi.settledSession,key:openingOi.key,
       version:openingOi.version,sha256:openingOi.sha256,receivedAt:openingOi.receivedAt,clearingVerified}:null;
+    if(clearingVerified) oiReference.dated={source:dated.source,request:dated.request,
+      sha256:dated.sha256,receivedAt:dated.receivedAt,settledSession:dated.settledSession,
+      ...(dated.occSha256?{archiveSha256:dated.archiveSha256,occSha256:dated.occSha256,occRequest:dated.occRequest}:{})};
     const officialOpeningReference=verified && positive(openingOi.openingSpot) &&
       Math.floor(openingOi.openingSpot)-3===contracts[0].strike ? {spot:openingOi.openingSpot,
-        bySymbol:Object.fromEntries(contracts.map(c=>[c.symbol,c.verifiedOpenOi]))}:null;
+        bySymbol:Object.fromEntries(contracts.map(c=>[c.symbol,openingOi.bySymbol[c.symbol]]))}:null;
     if(sessionGood && (officialOpeningReference || this.openOi.size===16 && contracts.every(c=>c.openOi!==null))) eligibleSlots.push(9);
     const frame={t,session:this.day,spot,snapshotTime:observation?.t??null,chainTime:snap?.ct??null,openingReferenceComplete,parityQualified,contracts,strikes,
       complete:minuteComplete,minuteComplete,oiVerified:clearingVerified,oiReference,officialOpeningReference};
