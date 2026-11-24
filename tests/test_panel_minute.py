@@ -173,7 +173,9 @@ def test_two_confirmed_minutes_replay_same_old_trade(tmp_path):
     db = tmp_path / "spot.sqlite3"
     trade = NOW - timedelta(minutes=52)
     baseline = {"constructed_at": (NOW-timedelta(hours=1)).isoformat(),
-                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100,
+                          "provider_observed_at": (NOW-timedelta(hours=1)).isoformat(),
+                          "as_of": (NOW-timedelta(hours=1)).isoformat(), "freshness": "fresh"}]}
     def record(stream, payload, at):
         attempt = prepare(db, stream, json.dumps(payload).encode(), at)
         confirm(db, attempt, at)
@@ -187,5 +189,7 @@ def test_two_confirmed_minutes_replay_same_old_trade(tmp_path):
         record("minute", overlay, at)
         row, = read_as_of(db, at)["rows"]
         assert f"{3120 + 60*minute}s old" in row["minuteLabel"]
+        assert row["freshness"] == "stale"
+        assert row["as_of"] == row["provider_observed_at"] == trade.isoformat()
         observations.add((row["symbol"], row["source"], row["provider_observed_at"], row["price"]))
     assert observations == {("X", "coinbase", trade.isoformat(), 123)}
