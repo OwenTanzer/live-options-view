@@ -1,4 +1,4 @@
-"""Versioned paper-only overlays for specific fresh OI accounts (QQQ, IBIT, SLV and DRAM families)."""
+"""Versioned paper-only overlays for dedicated skew accounts (QQQ, IBIT, SLV and DRAM families)."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -11,6 +11,7 @@ from .exchange_calendar import session_close
 from .profit_protection import Observation, ProtectConfig, ProtectionChain
 from .skew_bars import direction
 from .skew_direction import Position
+from .strategies.flow_skew import flow_skew_qqq
 from .strategies.oi_skew import _option_type_from_symbol, _reference_decision, oi_skew_qqq
 from .strategy import Decision
 
@@ -49,14 +50,23 @@ FAMILIES = {
 }
 
 
+FLOW_RECOVERY_USER = "crassus_flowskew_recover"
+
+
 def root_for(account):
     username = getattr(account, "username", None)
+    if username == FLOW_RECOVERY_USER:
+        return "QQQ"
     return next((r for r, f in FAMILIES.items() if username in f["arms"]), None)
 
 
 def arm_for(account):
     arm = (getattr(account, "params", None) or {}).get("forward_skew_arm")
     root = root_for(account)
+    if getattr(account, "username", None) == FLOW_RECOVERY_USER:
+        if arm != "protect_reentry" or account.strategy_id != "flow_skew_qqq":
+            raise ValueError("flow protection identity/config mismatch")
+        return arm
     family = FAMILIES.get(root)
     expected = family["arms"].get(account.username) if family else None
     if arm != expected or (arm and account.strategy_id != family["strategy_id"]):
@@ -184,7 +194,8 @@ def decide(ctx, account, arm, bars, directory, decision_id):
     chain = reconcile(state, ctx, arm)
     bar = int(now.timestamp() // 300)
     root = root_for(account) or "QQQ"
-    strategy_id = FAMILIES[root]["strategy_id"]
+    use_flow = account.username == FLOW_RECOVERY_USER
+    strategy_id = "flow_skew_qqq" if use_flow else FAMILIES[root]["strategy_id"]
     metadata = {"comparison": VERSION, "arm": arm, "decision_id": decision_id}
     if root != "QQQ":
         metadata["root"] = root
@@ -194,19 +205,32 @@ def decide(ctx, account, arm, bars, directory, decision_id):
             action, reason, strategy_id, VERSION, symbol, quantity, metadata=metadata
         )
 
-    signal = (
-        signal_for(root, ctx) if ctx.snapshot else result("no_trade", "No OI snapshot")
-    )
+    if ctx.snapshot is None:
+        signal = result("no_trade", "No market snapshot")
+    elif use_flow:
+        signal = flow_skew_qqq(ctx)
+    else:
+        signal = signal_for(root, ctx)
     meta = signal.metadata or {}
-    metadata["oi_signal"] = signal.to_dict() if ctx.snapshot else None
+    metadata["flow_signal" if use_flow else "oi_signal"] = signal.to_dict() if ctx.snapshot else None
     if ctx.session_phase != "open":
         if state or not path.exists():
             atomic_json(path, state)
         return result("no_trade", signal.reason)
     metadata["bar_input_error"] = bars.error
-    reading = snap_time(ctx.snapshot.timestamp) if ctx.snapshot else None
-    imbalance = meta.get("imbalance_ratio")
-    threshold = meta.get("params", {}).get("imbalance_threshold", 0.0)
+    spot_time = snap_time(ctx.snapshot.timestamp) if ctx.snapshot else None
+    if use_flow:
+        # A high imbalance from a thin or gapped window cannot authorize a
+        # recovery. A genuinely neutral, covered window may reset the guard.
+        flow = meta.get("flow", {})
+        qualified = flow.get("lean") in ("call", "put", "neutral")
+        reading = datetime.fromtimestamp(flow["window_end_ms"] / 1000, ET) if qualified else None
+        imbalance = flow.get("imbalance") if qualified else None
+        threshold = flow.get("params", {}).get("imbalance_threshold", 0.0)
+    else:
+        reading = spot_time
+        imbalance = meta.get("imbalance_ratio")
+        threshold = meta.get("params", {}).get("imbalance_threshold", 0.0)
 
     def stage(proposal, after):
         if proposal.is_trade:
@@ -227,7 +251,7 @@ def decide(ctx, account, arm, bars, directory, decision_id):
         if signal.action == "buy":
             if not reading or not 0 <= (now - reading).total_seconds() <= 360:
                 return stage(
-                    result("no_trade", "OI reading outside causal freshness window"), {}
+                    result("no_trade", "Skew reading outside causal freshness window"), {}
                 )
             if chain:
                 allowed, why = chain.strategy_entry_allowed(
@@ -338,8 +362,8 @@ def decide(ctx, account, arm, bars, directory, decision_id):
         else:
             if (
                 not ctx.snapshot
-                or not reading
-                or not 0 <= (now - reading).total_seconds() <= 360
+                or not spot_time
+                or not 0 <= (now - spot_time).total_seconds() <= 360
             ):
                 return stage(
                     result("no_trade", "Recovery lacks fresh underlying reference"), {}

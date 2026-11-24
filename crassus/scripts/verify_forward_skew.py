@@ -1,5 +1,6 @@
 """Exercise the fill boundary and account isolation through the forward adapter."""
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from crassus import forward_skew as f
 from crassus.clock import ET
 from crassus.client import Book
+from crassus.order_flow import ContractFlow, FlowSnapshot
+from crassus.strategies import flow_skew
 from crassus.market import Quote
 from crassus.skew_bars import ingest
 from crassus.strategy import Decision
@@ -143,6 +146,66 @@ class Comparison(unittest.TestCase):
                 if d.is_trade:
                     fill(4, d, 1.80)
                     self.assertEqual(cycle(5, 1.17).action, "sell")
+
+    def test_flow_protection_reentry(self):
+        catalog = Path(__file__).resolve().parents[1] / "accounts.example.json"
+        account = SimpleNamespace(**next(a for a in json.loads(catalog.read_text())["accounts"]
+                                         if a["username"] == f.FLOW_RECOVERY_USER))
+        arm = f.arm_for(account)
+        self.assertEqual(arm, "protect_reentry")
+        self.assertFalse(account.active)
+        self.assertEqual(f.root_for(account), "QQQ")
+        with self.assertRaises(ValueError):
+            f.arm_for(SimpleNamespace(**{**vars(account), "strategy_id": "oi_skew_qqq"}))
+
+        trades = []
+        bars = SimpleNamespace(rows=[], error=None)
+        flow_skew.reset_state()
+        self.addCleanup(flow_skew.reset_state)
+        with TemporaryDirectory() as folder:
+            def cycle(n, bid, phase=None, gap=False):
+                now = START + timedelta(minutes=5*n)
+                end = int(now.timestamp()*1000) - 1000
+                contracts = {}
+                for strike in range(678, 683):
+                    symbol = f"QQQ261116C{strike*1000:08d}"
+                    contracts[symbol] = ContractFlow(symbol, "call", strike, 600*n, 0,
+                                                     3000 if n >= 7 else 0, 0)
+                projection = FlowSnapshot(now.date().isoformat(), end,
+                                          ((end-5000, None),) if gap else (), contracts)
+                bars.rows.append({"event_end": now.isoformat()})
+                row = dict(phase=phase, row_id=str(n), event_end=now.isoformat()) if phase else None
+                snapshot = SimpleNamespace(timestamp=now.isoformat(), underlying_price=680,
+                                           atm=lambda side: {"OptionSymbol": SYM, "Strike": 680})
+                ctx = SimpleNamespace(now_et=now, book=Book(trades), session_phase="open",
+                                      account_alias=account.alias, params=account.params, snapshot=snapshot,
+                                      quotes=lambda symbols: {SYM: Quote(SYM, bid, bid+.01,
+                                                                          now.isoformat(), now.isoformat())})
+                with patch.object(flow_skew._reader, "read", return_value=projection), patch.object(
+                    f, "direction", return_value=row
+                ):
+                    d = f.decide(ctx, account, arm, bars, Path(folder), str(n))
+                self.assertIn("flow_signal", d.metadata)
+                self.assertEqual(d.strategy_id, "flow_skew_qqq")
+                if d.is_trade:
+                    trades.append(dict(sym=d.symbol, side=d.action, qty=d.quantity, price=bid,
+                                       execution_request_id=str(n)))
+                return d
+
+            for n in range(3):
+                self.assertEqual(cycle(n, 1).action, "no_trade")
+            self.assertEqual(cycle(3, 1).action, "buy")
+            self.assertEqual(cycle(4, 1.25, "continuation").action, "no_trade")
+            self.assertEqual(cycle(5, 1.15, "breakdown").action, "sell")
+            self.assertEqual(cycle(6, 1.15, "recovery").action, "no_trade")
+            thin = cycle(7, 1.15, "recovery")
+            self.assertEqual(thin.metadata["flow_signal"]["metadata"]["flow"]["lean"], "thin")
+            self.assertEqual(thin.action, "no_trade")
+            self.assertEqual(cycle(8, 1.15, "recovery", gap=True).action, "no_trade")
+            self.assertEqual(cycle(9, 1.15, "recovery").action, "no_trade")
+            recovered = cycle(10, 1.15, "recovery")
+            self.assertEqual((recovered.action, recovered.symbol), ("buy", SYM))
+            self.assertEqual(cycle(11, .74, gap=True).action, "sell")
 
     def test_stop(self):
         self.scenario("stop")
