@@ -23,6 +23,7 @@ from . import reddit_sentiment  # noqa: F401
 from . import smoke  # noqa: F401
 from . import sma200  # noqa: F401
 from . import trump_whisperer  # noqa: F401
+from . import trump_oi_skew  # noqa: F401
 
 __all__ = [
     "smoke",
