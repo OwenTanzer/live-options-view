@@ -458,32 +458,33 @@ class TestPatterns(unittest.TestCase):
                             p["coins"] == ["BTC"] for p in found))
 
 
+class PublicationTests(unittest.TestCase):
+    def test_partial_publication_keeps_matching_provenance_in_latest(self):
+        import hashlib
+        import json
+        from unittest.mock import Mock, patch
+        from market_data.crypto_collector.publish import _publish_snapshot, SIDECAR_KEY, LATEST_KEY
+
+        objects = {}
+        def write(**kw):
+            objects[kw["Key"]] = kw["Body"]
+        client = Mock()
+        client.put_object.side_effect = write
+        with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
+            receipt = _publish_snapshot({"constructed_at": "previous"}, client, "test")
+        assert receipt["latest_published_at"] != "previous"
+        assert receipt["snapshot_sha256"] == hashlib.sha256(objects[LATEST_KEY]).hexdigest()
+
+        def fail_receipt(**kw):
+            if kw["Key"] == SIDECAR_KEY:
+                raise OSError("sidecar failed")
+            write(**kw)
+        client.put_object.side_effect = fail_receipt
+        with self.assertRaisesRegex(OSError, "sidecar failed"):
+            _publish_snapshot({"constructed_at": "new"}, client, "test")
+        assert json.loads(objects[LATEST_KEY])["provenance"]["constructed_at"] == "new"
+        assert json.loads(objects[SIDECAR_KEY])["snapshot_sha256"] != hashlib.sha256(objects[LATEST_KEY]).hexdigest()
+
+
 if __name__ == "__main__":
     unittest.main()
-
-def test_partial_publication_keeps_matching_provenance_in_latest():
-    import hashlib
-    import json
-    from unittest.mock import Mock, patch
-    from market_data.crypto_collector.publish import _publish_snapshot, SIDECAR_KEY, LATEST_KEY
-
-    objects = {}
-    def write(**kw):
-        objects[kw["Key"]] = kw["Body"]
-    client = Mock()
-    client.put_object.side_effect = write
-    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
-        receipt = _publish_snapshot({"constructed_at": "previous"}, client, "test")
-    assert receipt["latest_published_at"] != "previous"
-    assert receipt["snapshot_sha256"] == hashlib.sha256(objects[LATEST_KEY]).hexdigest()
-
-    def fail_receipt(**kw):
-        if kw["Key"] == SIDECAR_KEY:
-            raise OSError("sidecar failed")
-        write(**kw)
-    client.put_object.side_effect = fail_receipt
-    import pytest
-    with pytest.raises(OSError, match="sidecar failed"):
-        _publish_snapshot({"constructed_at": "new"}, client, "test")
-    assert json.loads(objects[LATEST_KEY])["provenance"]["constructed_at"] == "new"
-    assert json.loads(objects[SIDECAR_KEY])["snapshot_sha256"] != hashlib.sha256(objects[LATEST_KEY]).hexdigest()
