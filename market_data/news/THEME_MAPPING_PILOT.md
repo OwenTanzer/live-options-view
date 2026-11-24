@@ -1,8 +1,6 @@
 # Fed/Treasury headline mapping pilot
 
-Implemented locally on November 22, 2026, from master `9e67e45`.
-This is a rules-only pilot, disabled by default. No deployment, live collector
-configuration, stream, feed, price join or public rendering has changed.
+The existing News panel applies the headline rules when it renders an eligible article. Matching titles show a “Headline topic” badge with deduplicated tickers. This display-time annotation is separate from archived instrument mappings, prices and publication timestamps. The panel uses the published title, which may be truncated. Python replay operates on the full normalized title.
 
 `classify_rules(..., fed_treasury_pilot=True)` opts in. All existing call sites
 omit this keyword. No environment variable or production CLI flag enables it.
@@ -59,9 +57,7 @@ the enrichment time. No history is rewritten and replay output does not imply
 durability or availability in an as-of reader.
 
 `instrument_mapping` is `theme_relevance` only on a match, otherwise `unknown`;
-`instruments` contains candidate ticker strings. The public projection currently
-does not expose those ticker strings; any later public UI or archival integration
-requires its own review. This pilot's review artifact is the local JSONL output.
+`instruments` contains candidate ticker strings. The browser derives its display from the published source and title. Replay writes its own classification record locally.
 
 ## Verification and measurement
 
@@ -125,12 +121,3 @@ linear estimates are not billing receipts. Current account usage was not read.
 The local pilot adds $0 against the $5 cap; a future hosted enablement must fit
 within existing allocations after measuring full-cycle storage/copies and
 account rounding, without claiming the entire remaining reserve as free money.
-
-## Handoff
-
-Chej owns review of mapping scope, conservative exclusions and sample output,
-then any decision to authorize production wiring/activation. The baseline
-four-source collector remains a completed delivery. No push/PR was attempted:
-repository workflows are explicit release lanes, but current provider branch
-triggers were not inspected. A local branch and portable diff avoid auto-deploy
-uncertainty. No Jayden correspondence, account work or Workers KV operations.

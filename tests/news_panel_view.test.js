@@ -65,6 +65,20 @@ const pages = Object.fromEntries(pageKeys.map(k => [k, load(k)]));
 const oil = pages[q('news/v1/views/collector/oil/2026-11-09/page-0001.json')];
 const pub = pages[q('news/v1/views/publication/all/2026-11-09/page-0001.json')];
 
+test('News cards show the replay tickers for eligible headlines', () => {
+  const cases = require('./fixtures/news_theme_mapping/cases.json');
+  const page = clone(oil);
+  page.rows = [page.rows[0]];
+  for (const { observation, expected_instruments } of cases) {
+    Object.assign(page.rows[0], { title: observation.title, source_id: observation.source_id });
+    const tags = render(page).byClass('np-title')[0].byClass('np-badge')
+      .map(n => n.textContent).filter(value => value.startsWith('Headline topic: '));
+    assert.deepEqual(tags, expected_instruments.length ? ['Headline topic: ' + expected_instruments.join(', ')] : []);
+  }
+  Object.assign(page.rows[0], { title: 'FOMC minutes', source_id: 'unknown_feed' });
+  assert.ok(!render(page).textContent.includes('Headline topic:'));
+});
+
 test('the index and every fixture page validate and render', () => {
   assert.deepEqual(panel.validateIndex(index), []);
   assert.equal(index.views.length, 9);

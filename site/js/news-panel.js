@@ -435,6 +435,30 @@
       (r.synthetic ? ' SYNTHETIC' : '');
   }
 
+  // Mirrors fed-treasury-v4; fixture parity is tested on rendered cards.
+  var topicSources = ["ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch"];
+  var topicRules = [
+    [/\b(?:Federal Reserve|FOMC|Federal Open Market Committee)\b/i, ["QQQ", "SPY", "TLT"]],
+    [/\b(?:U\.?S\.?|United States) Treasury(?:['’]s)? (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|(?:bills?|notes?|bonds?) (?:yields?|auctions?|sales?|purchases?|issuance)|(?:quarterly )?refunding|debt issuance|general account)\b/i, ["TLT"]],
+    [/\b(?:U\.?S\.?|United States) Treasury (?:sells|issues) \d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)\b/i, ["TLT"]],
+    [/\b(?:U\.?S\.?|United States) Treasury auctions (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?)(?: and (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?))?\b/i, ["TLT"]],
+    [/\b(?:U\.?S\.?|United States) Treasury announces (?:(?:(?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?)(?: and (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?))? auctions?|auctions? of (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?)(?: and (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?))?)|(?:quarterly )?refunding)\b/i, ["TLT"]],
+    [/\b\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?) (?:sold|issued|auctioned) by (?:U\.?S\.?|United States) Treasury\b/i, ["TLT"]],
+    [/\b(?:(?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?)(?: and (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?))? auctions?|auctions? of (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?)(?: and (?:\d+[- ](?:week|month|year) (?:bills?|notes?|bonds?)|bills?|notes?|bonds?))?) announced by (?:U\.?S\.?|United States) Treasury\b/i, ["TLT"]],
+    [/\bdebt issuance by (?:U\.?S\.?|United States) Treasury\b/i, ["TLT"]]
+  ];
+
+  function headlineTopics(headline) {
+    if (!topicSources.includes(headline.source_id)) return [];
+    var tickers = new Set();
+    topicRules.forEach(function (rule) {
+      if (rule[0].test(headline.title)) {
+        rule[1].forEach(function (ticker) { tickers.add(ticker); });
+      }
+    });
+    return Array.from(tickers).sort();
+  }
+
   function row(doc, r) {
     var card = el(doc, 'article', 'np-row');
     card.setAttribute('data-revision', r.revision_id);
@@ -451,6 +475,12 @@
       add(title, badge(doc, 'link rejected' + (r.url_rejected ? ': ' + r.url_rejected.replace(/_/g, ' ') : ''), 'bad'));
     }
     if (r.title_truncated) add(title, badge(doc, 'title truncated', 'dim'));
+    var topics = headlineTopics(r);
+    if (topics.length) {
+      var tag = badge(doc, 'Headline topic: ' + topics.join(', '), 'mode');
+      tag.setAttribute('title', 'Topic relevance inferred from the displayed headline');
+      add(title, tag);
+    }
     add(card, title);
     // One line in the line of sight: when, who, which instrument, price state.
     // Everything else about the row's provenance is one click away.
