@@ -1950,7 +1950,9 @@
     Every price carries its source and as-of time; a missing source
     shows "source unavailable" and is never substituted from the other
     source. Crypto trades 24/7, so this panel has no equity session
-    close. No trading, no alerts, no favourites.
+    close. No trading, no alerts, no favourites. Next-hour
+    estimates, when published, appear below as estimates only —
+    never as live prices.
   </p>
   </details>
   <table id="crypto-table">
@@ -1970,6 +1972,8 @@
   </table>
   <h3>Trend patterns</h3>
   <ul id="crypto-patterns"></ul>
+  <h3>Next hour estimate</h3>
+  <div id="crypto-predictions" aria-label="Next-hour price estimates"></div>
 
 </div> <!-- /crypto-panel -->
 
@@ -2145,7 +2149,8 @@ let timerHandle = null;
 // first open, like the News panel. The banner stays here as the section's
 // marker.
 </script>
-<script src="js/crypto-panel.js?v=4ac1f1cbdebcdf92"></script>
+<script src="js/crypto-panel.js?v=7501b6f2d3e9bfb1"></script>
+<script type="module" src="js/crypto-predictions.js"></script>
 <script>
 
 // ── news panel (MediaFlow M4b) ──────────────────────────────────────────────

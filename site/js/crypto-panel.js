@@ -93,6 +93,66 @@ async function fetchCryptoLatest() {
   renderCryptoPanel();
 }
 
+// ── next-hour estimates (One Clock synthetic cohort) ─────────────
+// Estimates only: read through site/js/crypto-predictions.js when
+// it is loaded (window.CryptoPredictions). A prediction is a
+// computed guess about the next hour — rendered in its own section
+// as ESTIMATE ONLY / RESEARCH ONLY, never in the price table and
+// never as a live price. A retracted or expired prediction is not
+// shown as a price. BTC only in this version: it is the coin with
+// a checked-in prediction seed; per-coin expansion is future scope.
+let cryptoPrediction = null;
+let cryptoPredictionError = null;
+
+async function fetchCryptoPredictions() {
+  const predictionsModule = typeof window !== 'undefined' ? window.CryptoPredictions : null;
+  if (!predictionsModule) {
+    cryptoPrediction = null;
+    cryptoPredictionError = 'predictions module not loaded';
+    renderCryptoPredictions();
+    return;
+  }
+  try {
+    const result = await predictionsModule.readPredictionsAsOf({ coin: 'BTC', cutoff: cryptoNow() });
+    cryptoPrediction = result;
+    cryptoPredictionError = null;
+  } catch (e) {
+    cryptoPrediction = null;
+    cryptoPredictionError = e.message || 'fetch failed';
+  }
+  renderCryptoPredictions();
+}
+
+function renderCryptoPredictions() {
+  const predictionsEl = document.getElementById('crypto-predictions');
+  if (!predictionsEl) return;
+  if (cryptoPredictionError) {
+    predictionsEl.innerHTML = '<p class="crypto-empty">Next-hour estimates unavailable — ' + escapeHtml(cryptoPredictionError) + '.</p>';
+    return;
+  }
+  const result = cryptoPrediction;
+  if (!result || result.state === 'unavailable' || !result.reading || !result.reading.row || result.reading.row.value == null) {
+    predictionsEl.innerHTML = '<p class="crypto-empty">No live next-hour estimate' + (result && result.reason ? ' — ' + escapeHtml(result.reason) : '') + '.</p>';
+    return;
+  }
+  const value = result.reading.row.value;
+  const window = value.data_window || {};
+  const basis = Array.isArray(value.basis) ? value.basis.join(', ') : '';
+  predictionsEl.innerHTML =
+    '<p class="crypto-estimate-label">ESTIMATE ONLY · RESEARCH ONLY — not a live price, not a forecast to trade on.</p>' +
+    '<p><strong>BTC</strong> next-hour estimate ' +
+    '<span class="crypto-hero-price">' + formatUsd(value.estimated_price) + '</span> ' +
+    '<span>' + escapeHtml(value.direction || '') + ' ' + formatPct(value.pct_move) + '</span></p>' +
+    '<p>Range ' + formatUsd(value.range_low) + ' – ' + formatUsd(value.range_high) +
+    ' · confidence ' + (value.confidence == null ? '—' : Math.round(value.confidence * 100) + '%') +
+    ' · data: ' + (window.bars_1h == null ? '—' : window.bars_1h + ' 1h bars') +
+    (window.first_bar ? ' (' + formatAsOf(window.first_bar) + ' – ' + formatAsOf(window.last_bar) + ')' : '') +
+    (basis ? ' · basis: ' + escapeHtml(basis) : '') + '</p>' +
+    '<p>Estimate made ' + formatAsOf(value.target_start) +
+    ' · target hour ' + formatAsOf(value.target_start) + ' – ' + formatAsOf(value.target_end) +
+    ' · reading ' + escapeHtml(result.state) + '</p>';
+}
+
 function cryptoRowHtml(row) {
   const unavailable = row.status === 'source_unavailable' || row.price == null;
   const price = unavailable ? 'source unavailable' : formatUsd(row.price);
@@ -201,5 +261,6 @@ function renderCryptoPanel() {
 // Mounted once, on first open, like the News panel.
 function loadCryptoPanel() {
   fetchCryptoLatest();
+  fetchCryptoPredictions();
   if (!cryptoPollHandle) cryptoPollHandle = setInterval(fetchCryptoLatest, CRYPTO_POLL_MS);
 }

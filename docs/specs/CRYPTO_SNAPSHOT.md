@@ -92,6 +92,32 @@ no value is fabricated.
 - No consumer in this version joins crypto prices to news, options
   chains, One Clock or Crassus.
 
+## Predictions read path
+
+Hourly next-hour estimates live in a separate artifact —
+`crypto/predictions/<COIN>.json`, contract
+[CRYPTO_PREDICTIONS.md](CRYPTO_PREDICTIONS.md) — and are read by
+the panel through `site/js/crypto-predictions.js`, an ESM module
+that serves the files through One Clock's real `selectAsOf` /
+`readingAsOf` with `origin: "synthetic"`, session `"continuous"`,
+2h staleness bound like the snapshot:
+
+- A prediction is an estimate of the next hour's close, never a
+  live price. The panel renders it in its own "Next hour
+  estimate" section, labelled `ESTIMATE ONLY / RESEARCH ONLY`,
+  with estimated price, direction/% move, range, confidence, data
+  window, basis, and estimate/target times — never in the price
+  table, never as a live price, never a forecast to trade on.
+- A retracted or expired prediction (revision-2 null row once
+  its target hour passes) is not shown as a price; the section
+  says there is no live estimate, with the reason.
+- The estimate cohort never mixes with the live-price cohort:
+  the snapshot selects recorded prices, the predictions module
+  selects synthetic estimates, and a row of the wrong origin is
+  a malformed file, never silently served. BTC only in this
+  version (the coin with a checked-in prediction seed);
+  per-coin expansion is future scope.
+
 ## Open questions for reviewers
 
 - Is hourly the right cadence, or should the crypto collector run
