@@ -148,3 +148,44 @@ def test_ack_failure_leaves_gap_and_identical_retry_recovers(tmp_path, monkeypat
     assert spot_receipts.read_as_of(db, retry)["rows"][0]["price"] == 110
     assert spot_receipts.read_as_of(db, second)["state"] == "unmeasurable"
     assert spot_receipts.read_as_of(db, second-timedelta(seconds=1))["rows"][0]["price"] == 123
+
+
+def test_crypto_publication_age_buckets():
+    from market_data.panel_minute import crypto_freshness
+
+    receipt = NOW - timedelta(seconds=6)
+    prices = {str(age): mark("coinbase", 1, NOW - timedelta(seconds=age), receipt)
+              for age in (60, 65, 300, 301)}
+    prices["absent"] = mark("coingecko")
+    assert prices["65"]["freshness"] == "fresh"
+    providers = crypto_freshness(prices, NOW)["providers"]
+    assert prices["65"]["freshness"] == "stale"
+    assert providers["coinbase"] == {
+        "counts": {"fresh": 1, "stale_to_5m": 2, "stale_over_5m": 1},
+        "oldest_symbol": "301", "oldest_age_seconds": 301,
+    }
+    assert providers["coingecko"]["counts"] == {"missing": 1}
+
+
+def test_two_confirmed_minutes_replay_same_old_trade(tmp_path):
+    from market_data.crypto_collector.spot_receipts import prepare, confirm, read_as_of
+
+    db = tmp_path / "spot.sqlite3"
+    trade = NOW - timedelta(minutes=52)
+    baseline = {"constructed_at": (NOW-timedelta(hours=1)).isoformat(),
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    def record(stream, payload, at):
+        attempt = prepare(db, stream, json.dumps(payload).encode(), at)
+        confirm(db, attempt, at)
+    record("hourly", baseline, NOW-timedelta(minutes=5))
+    observations = set()
+    for minute in (0, 1):
+        at = NOW + timedelta(minutes=minute)
+        overlay = doc("coinbase", trade)
+        overlay.update(feed="crypto", baseline_at=baseline["constructed_at"], completed_at=at.isoformat())
+        overlay["prices"]["X"]["received_at"] = at.isoformat()
+        record("minute", overlay, at)
+        row, = read_as_of(db, at)["rows"]
+        assert f"{3120 + 60*minute}s old" in row["minuteLabel"]
+        observations.add((row["symbol"], row["source"], row["provider_observed_at"], row["price"]))
+    assert observations == {("X", "coinbase", trade.isoformat(), 123)}
