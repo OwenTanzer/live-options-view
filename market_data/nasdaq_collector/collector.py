@@ -229,6 +229,12 @@ def fetch_list_members(session):
     resp.raise_for_status()
     payload = resp.json()
     members = parse_list_response(payload)
+    table = payload["data"]["data"]
+    declared = str(table.get("totalrecords", "")).strip()
+    if not declared.isascii() or not declared.isdecimal():
+        raise ValueError("Missing or invalid Nasdaq constituent total")
+    if len(members) != int(declared):
+        raise ValueError(f"Nasdaq declared {declared} listings but returned {len(members)} distinct symbols")
     caps = {}
     for row in ((payload.get("data") or {}).get("data") or {}).get("rows") or []:
         cap = _money(row.get("marketCap")) if isinstance(row, dict) else None

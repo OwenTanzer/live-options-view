@@ -532,6 +532,32 @@ def test_resolve_universe_live_diff():
     assert "XEL" not in resolution["caps"]
 
 
+@pytest.mark.parametrize("issue", ["truncated", "duplicate", "missing_symbol", "invalid_total"])
+def test_incomplete_declared_membership_retains_baseline(issue):
+    session = _ListSession(_live_members())
+    table = session.payload["data"]["data"]
+    if issue == "truncated":
+        table["rows"].pop()
+    elif issue == "duplicate":
+        table["rows"][-1] = table["rows"][0]
+    elif issue == "missing_symbol":
+        table["rows"][-1]["symbol"] = ""
+    else:
+        table["totalrecords"] = "unknown"
+    result = resolve_universe(session, now=NOW)
+    assert result["source"] == "embedded_fallback"
+    assert result["universe"] == list(SYMBOLS)
+    assert result["added"] == result["removed"] == []
+
+
+def test_complete_one_hundred_listings_accepted():
+    session = _ListSession(_live_members()[:100])
+    session.payload["data"]["data"]["totalrecords"] = "100"
+    result = resolve_universe(session, now=NOW)
+    assert result["source"] == "live"
+    assert len(result["universe"]) == 100
+
+
 def test_resolve_universe_fallback_on_failure_and_on_empty_response():
     for session in (_FailingSession(),
                     _ListSession([]), _ListSession(_live_members()[:1])):
