@@ -83,6 +83,10 @@ jobs:
         run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
         run: node tests/browser_data.test.js
+      - name: Nasdaq panel fixtures
+        run: node --test tests/nasdaq_panel.test.js
+      - name: Nasdaq MCP fixtures
+        run: node --test market_mcp/nasdaq_snapshot.test.js
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
         run: node --test tests/order_flow_exposure.test.js tests/order_flow_model.test.js tests/order_flow_render.test.js tests/order_flow_profile.test.js tests/order_flow_heatmap.test.js
       - name: bounded legacy r2-proxy (#225, G4b)

@@ -492,7 +492,7 @@
   // can inject markup). An interval with no candles is an explicit
   // "candles unavailable" state, never an empty chart that reads as flat.
   function renderCandles(symbol, interval, candles) {
-    var list = candles && candles[symbol] && candles[symbol][interval];
+    var list = candles && (candles[symbol + '|' + interval] || (candles[symbol] && candles[symbol][interval]));
     if (list === 'loading') {
       return '<p class="nq-empty" role="status">Loading candles for ' + escapeHtml(symbol) +
         ' at the ' + escapeHtml(interval) + ' interval…</p>';
@@ -557,24 +557,29 @@
     }
     var out = [];
     var cur = null;
-    var count = 0;
-    var dayKey = null;
-    bars1m.forEach(function (b) {
-      if (!b || !isFiniteNumber(b.open) || !isFiniteNumber(b.close)) return;
+    var bucketKey = null;
+    var formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    bars1m.slice().sort(function (left, right) { return Date.parse(left.time) - Date.parse(right.time); }).forEach(function (b) {
+      if (!b || ![b.open, b.high, b.low, b.close].every(isFiniteNumber)) return;
       var t = Date.parse(b.time);
-      var key = Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : '';
-      if (!cur || count >= minutes || key !== dayKey) {
+      if (!Number.isFinite(t)) return;
+      var parts = Object.fromEntries(formatter.formatToParts(t).map(function (part) { return [part.type, part.value]; }));
+      var sessionMinute = Number(parts.hour) * 60 + Number(parts.minute) - 570;
+      if (sessionMinute < 0 || sessionMinute >= 390) return;
+      var bucket = Math.floor(sessionMinute / minutes);
+      var key = parts.year + '-' + parts.month + '-' + parts.day + '|' + bucket;
+      if (!cur || key !== bucketKey) {
         if (cur) out.push(cur);
         cur = { open: b.open, high: b.high, low: b.low, close: b.close,
-          volume: isFiniteNumber(b.volume) ? b.volume : 0, time: b.time };
-        count = 1;
-        dayKey = key;
+          volume: isFiniteNumber(b.volume) ? b.volume : 0,
+          time: new Date(t - (sessionMinute - bucket * minutes) * 60000).toISOString() };
+        bucketKey = key;
       } else {
         cur.high = Math.max(cur.high, b.high);
         cur.low = Math.min(cur.low, b.low);
         cur.close = b.close;
         cur.volume += isFiniteNumber(b.volume) ? b.volume : 0;
-        count++;
       }
     });
     if (cur) out.push(cur);

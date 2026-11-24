@@ -308,6 +308,12 @@ assert.equal(agg9[0].close, 108.5, 'first 9m bar closes at the ninth 1m close');
 assert.equal(agg9[0].high, 109, 'first 9m bar high is the max of its 1m highs');
 assert.equal(agg9[0].low, 99, 'first 9m bar low is the min of its 1m lows');
 assert.equal(agg9[0].volume, 9000, 'first 9m bar volume sums its 1m volumes');
+const sparseBars = bars1m(20, '2026-11-23T14:30:00Z').filter((_, index) => [2, 8, 9, 18].includes(index));
+const sparse9 = panel.aggregateBars(sparseBars, 9);
+assert.deepEqual(sparse9.map(bar => bar.time), ['2026-11-23T14:30:00.000Z', '2026-11-23T14:39:00.000Z', '2026-11-23T14:48:00.000Z']);
+assert.deepEqual(sparse9.map(bar => bar.volume), [2000, 1000, 1000]);
+const summerBars = bars1m(10, '2026-07-01T13:30:00Z');
+assert.equal(panel.aggregateBars(summerBars, 9)[1].time, '2026-07-01T13:39:00.000Z');
 assert.equal(panel.aggregateBars(bars1m(5, '2026-11-23T14:30:00Z'), 1).length, 5,
   '1m aggregation is the identity');
 // A partial trailing group (live, still-forming bar) is kept.
@@ -419,7 +425,7 @@ function clickTarget(container, attrs) {
   // --- on-demand candles through mount --------------------------------------
   // Stub Yahoo chart JSON: three 1m bars on 2026-11-23.
   function yahooJson() {
-    return { chart: { result: [{ timestamp: [1795470600, 1795470660, 1795470720],
+    return { chart: { result: [{ timestamp: [1795444200, 1795444260, 1795444320],
       indicators: { quote: [{ open: [100, 101, 102], high: [101, 102, 103],
         low: [99, 100, 101], close: [100.5, 101.5, 102.5], volume: [1000, 2000, 3000] }] } }] } };
   }
@@ -441,6 +447,7 @@ function clickTarget(container, attrs) {
   const loaded = await panel.loadCandles('NVDA', '3m', stubFetch, cache);
   assert.equal(loaded.length, 1, 'loadCandles returns the fetched bars');
   assert.equal(cache['NVDA|3m'].length, 1, 'loadCandles caches by symbol|interval');
+  assert.match(panel.renderCandles('NVDA', '3m', cache), /<svg/, 'fetched cache renders a chart');
   let fetchCount = 0;
   await panel.loadCandles('NVDA', '3m', async () => { fetchCount++; return stubFetch('x'); }, cache);
   assert.equal(fetchCount, 0, 'a cached interval is not re-fetched');

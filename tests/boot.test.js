@@ -37,7 +37,7 @@ function makeEl(id) {
 }
 const EL_IDS = ['underlying-select', 'auth-form', 'auth-username', 'auth-password',
   'auth-error', 'auth-submit', 'auth-toggle', 'auth-logout', 'margin-call-continue',
-  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'hist-date', 'hist-prev', 'hist-next'];
+  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'tab-nasdaq', 'hist-date', 'hist-prev', 'hist-next'];
 
 function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   const els = {};
@@ -92,6 +92,7 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
     renderSelectedChain: () => { calls.renderSelectedChain++; },
     hideMarginCallScreen: () => { calls.hideMarginCallScreen++; },
     showTab: tab => { calls.showTab.push(tab); },
+    TABS: Object.fromEntries(['live', 'history', 'bots', 'squeeze', 'news', 'nasdaq'].map(tab => [tab, [tab + '-panel', 'tab-' + tab]])),
     loadHistoryDate: value => { calls.loadHistoryDate.push(value); },
     stepHistoryDate() {},
     setStatus: (a, b) => { calls.setStatus.push([a, b]); },
@@ -172,6 +173,8 @@ function runBoot({ cachedSession = null, submitAuthImpl = null } = {}) {
   boot.els['tab-live'].onclick();
   boot.els['tab-news'].onclick();
   assert.deepEqual(boot.calls.showTab, ['bots', 'squeeze', 'history', 'live', 'news'], 'tab buttons must route to their tabs');
+  boot.els['tab-nasdaq'].onclick();
+  assert.equal(boot.calls.showTab.at(-1), 'nasdaq');
   boot.els['hist-date'].value = '2026-09-18';
   boot.els['hist-date'].onchange({ target: boot.els['hist-date'] });
   assert.deepEqual(boot.calls.loadHistoryDate, ['2026-09-18'], 'history date picker must load the chosen date');
