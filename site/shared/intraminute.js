@@ -95,7 +95,7 @@ export function flowResponse(data, index, width, minute, cutoff) {
 export const ALKALUS={COPPER_SPREADS:1,GOLDEN_SPREADS:5};
 export function alkalusFlow(data, index, width, minute) {
   const bin=data.bins[index];
-  if(!bin || !Number.isFinite(bin.firstMid) || !Number.isFinite(bin.mid)) return null;
+  if(!bin || ![bin.firstMid,bin.mid,bin.bid,bin.ask].every(Number.isFinite)) return null;
   const [cb,cs]=bin.C, [pb,ps]=bin.P, total=cb+cs+pb+ps;
   if(!total) return null;
   const spread=bin.ask-bin.bid;

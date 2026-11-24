@@ -79,7 +79,7 @@ const exact=(move,pressure=10)=>({bins:[{C:[Math.max(pressure,0),Math.max(-press
 for(const sign of [-1,1]) for(const [move,kind] of [[.019999,'lead'],[.02,'copper'],[.020001,'copper'],[.099999,'copper'],[.1,'golden'],[.100001,'golden']]) {
   assert.equal(alkalusFlow(exact(sign*move,sign*10),0,1000,minute).kind,kind,`${sign*move}`);
 }
-for(const key of ['firstMid','mid','bid','ask']) for(const value of [undefined,NaN,Infinity]) {
+for(const key of ['firstMid','mid','bid','ask']) for(const value of [undefined,null,NaN,Infinity]) {
   const data=exact(.04); data.bins[0][key]=value;
   assert.equal(alkalusFlow(data,0,1000,minute),null,`${key} ${value}`);
 }
