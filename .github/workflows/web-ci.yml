@@ -151,6 +151,11 @@ jobs:
         run: python -m unittest discover -s tests -p test_news_launcher.py -v
       - name: News optional Fed/Treasury headline mapping
         run: python -m unittest discover -s tests -p test_news_theme_mapping.py -v
+      - name: Mapped headline outcomes and account observation
+        run: |
+          python -m unittest discover -s tests -p test_news_media_performance.py
+          node tests/news_panel/media_performance.test.js
+          node --test tests/one_clock_headlines.test.mjs
       - name: News history checkpoint and bounded run listing (MediaFlow)
         run: python -m unittest discover -s tests -p test_news_checkpoint.py -v
       - name: News panel dedicated origin and generation contract (MediaFlow)
@@ -230,6 +235,7 @@ jobs:
           node tests/one_clock_dashboard_browser.test.cjs
           node tests/one_clock_encounter_browser.mjs
           node tests/one_clock_candle_browser.mjs
+          node tests/one_clock_headlines_browser.mjs
           node tests/order_flow_clock_browser.mjs
       - name: BTC monthly mobile fixture workflow
         run: |

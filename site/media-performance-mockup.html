@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Media performance — mockup B (inspection, fixture data)</title>
+<link rel="stylesheet" href="js/media-performance-panel.css">
+<style>body{font-family:system-ui,sans-serif;margin:24px;background:#fff;color:#212121}h1{font-size:20px}h2{font-size:14px;color:#424242}.mp-note{font-size:12px;color:#424242;max-width:640px}</style>
+</head>
+<body>
+<h1>Media performance — inspection view (mockup B, chosen)</h1>
+<p class="mp-note">Fixture data only — invented prices and headlines, not market
+data. Gate 2, alternative B: lead with the move. The 5m NVDA forward
+price is 10:20 (gap 10:10–10:19), not 10:10. A missing horizon is an
+empty chip, never 0.0%.</p>
+<h2>Inspection — one story</h2>
+<div id="mp-mockup"></div>
+<script src="js/media-performance-panel.js"></script>
+<script>
+(function () {
+  // Fixture view page, matching news-performance/v1 + performance_views.
+  var viewPage = {
+  "rows": [
+    {
+      "event_at": "2026-11-09T10:05:00Z",
+      "instrument_id": "eq.nvda",
+      "item_id": "tc-nvda-001",
+      "revision_id": "rev-nvda-001",
+      "title": "NVIDIA beats on data-center revenue as NVDA guides higher",
+      "performance": {
+        "horizons": {
+          "5m": {
+            "horizon": "5m",
+            "elapsed_seconds": 900.0,
+            "status": "matched",
+            "honesty_label": "delayed endpoint",
+            "return_pct": 0.8869179600886887,
+            "forward_price": 182.0,
+            "forward_price_time": "2026-11-09T10:20:00Z",
+            "base_price": 180.4
+          },
+          "30m": {
+            "horizon": "30m",
+            "elapsed_seconds": 1800.0,
+            "status": "matched",
+            "honesty_label": "fresh",
+            "return_pct": 1.718403547671837,
+            "forward_price": 183.5,
+            "forward_price_time": "2026-11-09T10:35:00Z",
+            "base_price": 180.4
+          },
+          "1h": {
+            "horizon": "1h",
+            "elapsed_seconds": 3600.0,
+            "status": "matched",
+            "honesty_label": "fresh",
+            "return_pct": 3.381374722838134,
+            "forward_price": 186.5,
+            "forward_price_time": "2026-11-09T11:05:00Z",
+            "base_price": 180.4
+          },
+          "1d": {
+            "horizon": "1d",
+            "elapsed_seconds": 86400,
+            "status": "missing",
+            "honesty_label": "pending",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": 180.4
+          }
+        }
+      },
+      "outlet": "TechCrunch",
+      "event_basis": "observed_at",
+      "matched_text": "NVDA",
+      "instrument_mapping": "mapped"
+    },
+    {
+      "event_at": "2026-11-09T10:10:00Z",
+      "instrument_id": "eq.xom",
+      "item_id": "op-xom-001",
+      "revision_id": "rev-xom-001",
+      "title": "OPEC+ delegates signal an extra output cut; Exxon Mobil shares in focus",
+      "performance": {
+        "horizons": {
+          "5m": {
+            "horizon": "5m",
+            "elapsed_seconds": 1200.0,
+            "status": "matched",
+            "honesty_label": "stale base, delayed endpoint",
+            "return_pct": 0.6802721088435374,
+            "forward_price": 111.0,
+            "forward_price_time": "2026-11-09T10:30:00Z",
+            "base_price": 110.25
+          },
+          "30m": {
+            "horizon": "30m",
+            "elapsed_seconds": 3000.0,
+            "status": "matched",
+            "honesty_label": "stale base, delayed endpoint",
+            "return_pct": 1.5873015873015872,
+            "forward_price": 112.0,
+            "forward_price_time": "2026-11-09T11:00:00Z",
+            "base_price": 110.25
+          },
+          "1h": {
+            "horizon": "1h",
+            "elapsed_seconds": 3600,
+            "status": "missing",
+            "honesty_label": "pending",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": 110.25
+          },
+          "1d": {
+            "horizon": "1d",
+            "elapsed_seconds": 86400,
+            "status": "missing",
+            "honesty_label": "pending",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": 110.25
+          }
+        }
+      },
+      "outlet": "OilPrice.com",
+      "event_basis": "observed_at",
+      "matched_text": "Exxon Mobil",
+      "instrument_mapping": "mapped"
+    },
+    {
+      "event_at": "2026-11-09T10:05:00Z",
+      "instrument_id": null,
+      "item_id": "tc-unmapped-001",
+      "revision_id": "rev-unmapped-001",
+      "title": "A startup raises a round to build a new chip",
+      "performance": {
+        "horizons": {
+          "5m": {
+            "horizon": "5m",
+            "elapsed_seconds": 300,
+            "status": "missing",
+            "honesty_label": "unknown mapping",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": null
+          },
+          "30m": {
+            "horizon": "30m",
+            "elapsed_seconds": 1800,
+            "status": "missing",
+            "honesty_label": "unknown mapping",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": null
+          },
+          "1h": {
+            "horizon": "1h",
+            "elapsed_seconds": 3600,
+            "status": "missing",
+            "honesty_label": "unknown mapping",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": null
+          },
+          "1d": {
+            "horizon": "1d",
+            "elapsed_seconds": 86400,
+            "status": "missing",
+            "honesty_label": "unknown mapping",
+            "return_pct": null,
+            "forward_price": null,
+            "forward_price_time": null,
+            "base_price": null
+          }
+        }
+      },
+      "outlet": "TechCrunch",
+      "event_basis": "observed_at",
+      "matched_text": "",
+      "instrument_mapping": "unknown"
+    }
+  ]
+};
+  var container = document.getElementById('mp-mockup');
+  window.MediaPerformance.renderMediaPerformance(document, container, viewPage);
+})();
+</script>
+</body>
+</html>

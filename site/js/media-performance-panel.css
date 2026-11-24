@@ -1,0 +1,149 @@
+/* Media performance panel tokens — Gate 4.
+ *
+ * Red/green: gain/loss ONLY. Blue/orange: story/horizon identity
+ * ONLY (survives colour-blindness). Intensity is single-hue with
+ * monotonic lightness: a larger move is a darker shade of the same
+ * hue, never a different hue. Colour is always paired with a word
+ * or glyph (+ / −), never colour alone.
+ *
+ * Type: 3-4 deliberate steps, 12px floor for anything meant to be
+ * read. If text needs to be 9px to fit, it belongs one layer deeper.
+ */
+
+.mp-card {
+  --mp-gain: #2e7d32;
+  --mp-gain-strong: #1b5e20;
+  --mp-loss: #c62828;
+  --mp-loss-strong: #8e0000;
+  --mp-neutral: #616161;
+  --mp-story: #1565c0;   /* blue: story / instrument identity */
+  --mp-horizon: #ef6c00; /* orange: horizon identity */
+  --mp-bg: #ffffff;
+  --mp-muted: #f5f5f5;
+  --mp-text: #212121;
+  --mp-secondary: #424242;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--mp-bg);
+  color: var(--mp-text);
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  max-width: 640px;
+}
+
+/* Stale looks stale: desaturated, dated — not just a banner. */
+.mp-card.mp-stale {
+  filter: saturate(0.55);
+  background: #fafafa;
+}
+
+.mp-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mp-ticker {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mp-story);
+}
+
+.mp-move {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.mp-move.mp-gain { color: var(--mp-gain-strong); }
+.mp-move.mp-loss { color: var(--mp-loss-strong); }
+.mp-move.mp-neutral { color: var(--mp-neutral); }
+.mp-move.mp-missing {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mp-neutral);
+}
+
+.mp-move-horizon {
+  font-size: 12px;
+  color: var(--mp-horizon);
+  font-weight: 600;
+}
+
+.mp-honesty {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-secondary);
+  border: 1px solid #bdbdbd;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.mp-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.mp-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--mp-muted);
+}
+
+.mp-chip.mp-gain { border-color: var(--mp-gain); }
+.mp-chip.mp-loss { border-color: var(--mp-loss); }
+
+.mp-chip-horizon {
+  font-weight: 700;
+  color: var(--mp-horizon);
+}
+
+.mp-chip-value { font-weight: 700; }
+.mp-chip.mp-gain .mp-chip-value { color: var(--mp-gain-strong); }
+.mp-chip.mp-loss .mp-chip-value { color: var(--mp-loss-strong); }
+.mp-chip-value.mp-missing { color: var(--mp-neutral); font-weight: 600; }
+
+.mp-chip-label {
+  font-size: 12px;
+  color: var(--mp-secondary);
+}
+
+.mp-title {
+  font-size: 14px;
+  line-height: 1.4;
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.mp-meta {
+  font-size: 12px;
+  color: var(--mp-secondary);
+  margin: 0 0 8px;
+}
+
+.mp-method {
+  font-size: 12px;
+  color: var(--mp-secondary);
+}
+
+.mp-method summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--mp-story);
+}
+
+.mp-provenance {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  margin: 8px 0 0;
+}

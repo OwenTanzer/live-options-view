@@ -25,6 +25,7 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
   if(outcome&&!reference)throw new Error('Outcome definition is unavailable.');
   const signature=reference?outcomeSignature(reference,definitions.get(outcome.ruleKey)):null;
   const query=(filters.query??'').trim().toLowerCase();
+  let excludedTiming=0;
   const seen=new Set(),rows=[];
   for(const event of events) {
     if(event.origin!==origin||event.triggeredAt>cutoff||(event.recordedAt??event.triggeredAt)>cutoff)continue;
@@ -32,7 +33,7 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
     const key=ruleKey(event),rule=definitions.get(key);
     if(!accepted(filters.ruleKeys,key)||!accepted(filters.instruments,event.instrument)||!accepted(filters.sessions,event.session)||
       !accepted(filters.collections,event.collection??'replay')||filters.from&&event.session<filters.from||filters.to&&event.session>filters.to)continue;
-    if(query&&!JSON.stringify([event.id,event.session,event.instrument,event.ruleId,event.ruleVersion,rule?.name]).toLowerCase().includes(query))continue;
+    if(query&&!JSON.stringify([event.id,event.session,event.instrument,event.ruleId,event.ruleVersion,rule?.name,event.headline?.title]).toLowerCase().includes(query))continue;
     // Outcome IDs are local to a rule. Pool only identical measurement specs,
     // never unlike horizons/units just because their human labels look alike.
     const candidates=signature?(rule?.outcomes??[]).filter(o=>outcomeSignature(o,rule)===signature):[];
@@ -40,11 +41,13 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
     const measured=spec?event.outcomes.find(o=>o.id===spec.id)??null:null;
     if(measured&&!['measured','pending','missing'].includes(measured.state))throw new Error('Invalid retained outcome state.');
     if(measured?.state==='measured'&&(!Number.isSafeInteger(measured.availableAt)||!Number.isSafeInteger(measured.measuredAt)||measured.availableAt>cutoff||measured.measuredAt>cutoff))throw new Error('Outcome has not passed the selected availability cutoff.');
+    if(filters.endpointTiming && event.headline && measured?.state==='measured' &&
+       (measured.lagMs>0?'delayed':'exact')!==filters.endpointTiming){excludedTiming++;continue;}
     if(!accepted(filters.states,measured?.state??'unscored'))continue;
     rows.push({event,outcome:measured});
   }
   rows.sort((a,b)=>a.event.triggeredAt-b.event.triggeredAt||(a.event.id<b.event.id?-1:a.event.id>b.event.id?1:0));
-  return {rows,summary:summarizeResults(rows,reference?.measure==='category'?'category':'numeric'),spec:reference,cutoff,origin};
+  return {rows,excludedTiming,summary:summarizeResults(rows,reference?.measure==='category'?'category':'numeric'),spec:reference,cutoff,origin};
 }
 
 export function summarizeResults(rows,kind='numeric') {

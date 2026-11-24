@@ -12,10 +12,12 @@ FIXTURE_SHA256 = {
     "feeds/eia_today_in_energy.xml": "07fd20e4905ae089bdc294c6f5cff1def71d4c41bc777549e005f15dda690c53",
     "feeds/oilprice_com.xml": "42e46c7d1f88573b386b8ed2e8d67a1d7303b734499ae5a519a18c2f96c55d81",
     "feeds/techcrunch.xml": "0829287bb2a8cb9920e6254a57b1059381f2e716161e3b0f619b974dfc1a0b9c",
+    "media_performance_events.json": "243de40150434b23c5392c7a2ecd87ade73a6d152ae47cf6f0cebdf3149c25fa",
     "parser/atom.xml": "48c8105670afe28020a6a6ce52d3e1517bb108c18ebe488a95c79d410a7c2fd0",
     "parser/entities.xml": "57c4184081b9f10a5b605dc9ab5943f4b7d28fbd087d9f17c8dfe4a01010f6c7",
     "parser/malformed.xml": "c3448ad09d909ff3a018afb215ff29b3116ad12548da2e571b5ae8d1a3fe328a",
     "parser/rdf.xml": "59feed618f453704338569a3c0119e387ea455b0ab6966884afc7c9aa45708a2",
+    "prices/media_performance.synthetic.jsonl": "2454fb7193c363d148020ecd0ced0f00f063827bce6b7ca4a3948561ad4476fd",
     "prices/qqq_2026-11-09.synthetic.jsonl": "4172e8f3cb087e0a962b61ba33da41c7a1a1f5cb8af3c8220d3d2117795310e2",
     "research/positioning_p1_prepared.json": "9acc2991df8bdc3d43863a4b1b4a337ae0fa3adabd51fe8f394cb80052fcd4ac",  # P1 prepared records (new)
     # REAL collector sidecar (public object intraday/20261113/snapshot_161416905398.provenance.json, read 2026-11-14);

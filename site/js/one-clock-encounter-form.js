@@ -1,24 +1,33 @@
+import {headlineDefinition,headlineTickers,hasHeadlinePriceRoute} from '../shared/one-clock-headlines.js';
 import {candleDefinition} from '../shared/one-clock-candle-breach.js';
 import {encounterGroups} from '../shared/one-clock-level-encounters.js';
 
 export function encounterForm(root) {
   const read=id=>root.querySelector('#'+id);
   const mode=read('study-kind'), fieldset=read('level-fields');
+  const ticker=read('headline-instrument');
+  for(const symbol of headlineTickers) {
+    const option=document.createElement('option');option.value=symbol;option.textContent=hasHeadlinePriceRoute(symbol)?symbol:symbol+" · headlines only, no price route";ticker.append(option);
+  }
+  ticker.value='NVDA';
   function visibility() {
     const level=mode.value==='level';
-    const candle=mode.value==='candle', specialized=level || candle;
+    const candle=mode.value==='candle', headline=mode.value==='headline', specialized=level || candle || headline;
+    read('headline-fields').hidden=!headline;
     read('candle-description').hidden=!candle;
     fieldset.hidden=!level;
     for(const id of ['combine','transition','missing'])read(id).closest('label').hidden=specialized;
     read('scalar-fields').hidden=specialized;
     read('instrument').disabled=specialized;
-    if(specialized)read('instrument').value='QQQ';
+    if(specialized)read('instrument').value=headline?ticker.value:'QQQ';
   }
+  ticker.addEventListener('change',visibility);
   mode.addEventListener('change',visibility);
   return {
     open(rule) {
       const config=rule.levelEncounter;
-      mode.value=config?'level':rule.transition==='per-candle-pair'?'candle':'scalar';
+      if(rule.transition==='per-headline')ticker.value=rule.instruments[0];
+      mode.value=rule.transition==='per-headline'?'headline':config?'level':rule.transition==='per-candle-pair'?'candle':'scalar';
       read('level-bucket').value=String(config?.minimumBucket??5);
       read('level-contact').value=config?.contact??'exact-or-bracketed';
       read('level-approach').value=config?.approach??'either';
@@ -29,6 +38,7 @@ export function encounterForm(root) {
       visibility();
     },
     definition() {
+      if(mode.value==='headline')return headlineDefinition(ticker.value);
       if(mode.value==='candle')return candleDefinition();
       if(mode.value!=='level')return null;
       const groups=encounterGroups.filter(g=>read(g).checked);

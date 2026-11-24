@@ -202,6 +202,7 @@ def project_row(row: dict, mapping: dict) -> dict:
         "observed_at": row["observed_at"], "archived_at": row["archived_at"],
         "event_at": row["event_at"], "event_basis": row["event_basis"], "run_id": row["run_id"],
         "classification_at_event": cls,
+        **({"company_mapping": row["company_mapping"]} if row.get("company_mapping", {}).get("reason") in {"ok", "ambiguous"} else {}),
         "instruments": {"mapping": cls["instrument_mapping"] if cls else "unknown", "linked": [],
                         "note": "unmapped: no instrument is linked to this item; the price is the page's series"},
         "later_context": {

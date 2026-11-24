@@ -1,3 +1,4 @@
+import {headlineDay} from '../site/shared/one-clock-headlines.js';
 import {requireSession,jsonResponse} from './common.js';
 import {instant} from '../site/shared/one-clock.js';
 import {validSession,sessionAt,sessionInstant} from '../site/shared/one-clock-session.js';
@@ -36,7 +37,8 @@ export async function handleOneClockResults(request,env,url=new URL(request.url)
     for(let day=Date.parse(from);day<=Date.parse(to);day+=86400000){
       const session=new Date(day).toISOString().slice(0,10),bounds=equitySession(session);if(!bounds)continue;
       for(const rule of definitions)for(const instrument of selected.filter(i=>rule.instruments.includes(i))) {
-        if(!activations.some(a=>a.rule_id===rule.id&&a.version===rule.version&&a.started_at<=Math.min(cutoff,bounds.close)&&(a.ended_at===null||a.ended_at>=bounds.open)))continue;
+        const interval=rule.transition==='per-headline'?headlineDay(session):bounds;
+        if(!activations.some(a=>a.rule_id===rule.id&&a.version===rule.version&&a.started_at<=Math.min(cutoff,interval.close)&&(a.ended_at===null||a.ended_at>=interval.open)))continue;
         evaluation.push(levelEvaluationStatus(byAttempt.get(JSON.stringify([session,instrument,rule.id,rule.version]))??{session,instrument,rule_id:rule.id,version:rule.version,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'},rule,sourceCoverage));
       }
     }
