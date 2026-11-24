@@ -1,10 +1,10 @@
 name: Nasdaq offline acceptance
 on:
   pull_request:
-    paths: ["site/**", "market_mcp/**", "market_data/nasdaq_collector/**", "tests/**", ".github/workflows/nasdaq-ci.yml"]
+    paths: ["site/**", "market_mcp/**", "market_data/nasdaq_collector/**", "market_data/panel_prices.py", "market_data/panel_minute.py", "ops/panel-minute/**", "tests/**", ".github/workflows/nasdaq-ci.yml"]
   push:
     branches: [master]
-    paths: ["site/**", "market_mcp/**", "market_data/nasdaq_collector/**", "tests/**", ".github/workflows/nasdaq-ci.yml"]
+    paths: ["site/**", "market_mcp/**", "market_data/nasdaq_collector/**", "market_data/panel_prices.py", "market_data/panel_minute.py", "ops/panel-minute/**", "tests/**", ".github/workflows/nasdaq-ci.yml"]
 jobs:
   fixtures:
     runs-on: ubuntu-latest
@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install requests pytest
-      - run: python -m pytest tests/test_nasdaq_collector.py -q
-      - run: node --test tests/nasdaq_panel.test.js tests/boot.test.js tests/tab_switching.test.js
+      - run: python -m pytest tests/test_nasdaq_collector.py tests/test_panel_prices.py tests/test_panel_minute.py -q
+      - run: node --test tests/panel_minute.test.js tests/nasdaq_panel.test.js tests/boot.test.js tests/tab_switching.test.js
       - run: node --test market_mcp/nasdaq_snapshot.test.js market_mcp/consumer.test.js
       - run: node tests/news_panel_view.test.js
