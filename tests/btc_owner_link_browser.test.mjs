@@ -1,3 +1,4 @@
+import { origin as usdcOrigin, usdcFixture } from './helpers/usdc_fixture.mjs';
 // Production HTML and real WebAuthn, all routed to disposable local bindings.
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
@@ -6,15 +7,13 @@ import { createPreview, fixtureNetwork } from '../scripts/preview-local.mjs';
 import { setupBtcOwner } from './helpers/btc_owner_fixture.mjs';
 import { seedAccounts } from './helpers/test_env.mjs';
 import { derivePasswordHash } from '../backend/auth.js';
-import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 
 const origin = 'https://options.moopertonic.net', originalFetch = global.fetch;
-const market = btcClockScenarios().find(s => s.name === 'ask_price').payload;
 const browser = await chromium.launch({ headless: true });
-global.fetch = async (url, options) => new URL(url).pathname === '/btc-options' ? Response.json(market) : fixtureNetwork(url, options);
+global.fetch = async (url, options) => new URL(url).origin === usdcOrigin ? usdcFixture(url) : fixtureNetwork(url, options);
 try {
   for (const width of [390, 320]) {
-    const preview = createPreview(); setupBtcOwner(preview.apiEnv);
+    const preview = createPreview(); setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_USDC_DATA_ORIGIN = usdcOrigin;
     // Exercise the real RP/origin with an entirely local API and asset binding.
     preview.env.ENVIRONMENT = 'production';
     for (const key of ['ISOLATION', 'PREVIEW_ORIGIN', 'API_ENVIRONMENT', 'PUBLIC_DATA_ENVIRONMENT']) delete preview.env[key];

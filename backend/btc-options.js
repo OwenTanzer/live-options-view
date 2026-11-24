@@ -1,7 +1,7 @@
 // Private BTC monthly paper product. No broker orders or public archive fallback.
 import { computeBookFromTrades, jsonResponse, requireSession, withUserRecord } from './common.js';
 import { createStorage } from './storage.js';
-import { linearKey, linearPayload, linearFinal, linearBookWindow } from './btc-usdc.js';
+import { linearKey, linearPayload, linearFinal } from './btc-usdc.js';
 import { btcAllowed, ownerLinkAvailable } from './btc-owner-link.js';
 
 export const BTC_KEY = /^(?:BTCOPT:[0-9a-f]{40}|USDC:BTC_USDC-\d{1,2}[A-Z]{3}\d{2}-\d+(?:\.\d+)?-[CP])$/;
@@ -74,18 +74,14 @@ export function heldBtc(record) {
   return Object.values(computeBookFromTrades(record.trades || [])).filter(b => b.instrument_type === 'futures_option' && b.pos > 0).map(b => b.contract);
 }
 export async function fetchBtc(env, record, symbols = [], expiry = null, product = null) {
-  if (product === 'usdc' || (product == null && linearKey(symbols[0]))) {
-    const keys = product == null ? symbols : [...new Set([...symbols, ...heldBtc(record).map(c => c.contract_key)])];
-    const payload = await linearPayload(env, keys.filter(linearKey), expiry, product == null, symbols.slice(0, 1));
-    return Response.json(payload);
+  const exact = product == null;
+  if ((exact && !linearKey(symbols[0])) || (!exact && product !== 'usdc')) {
+    return jsonResponse({ error: 'Bitcoin product retired' }, 410);
   }
-  if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) throw new Error('Quote service unavailable');
-  const url = new URL('/btc-options', env.LIVE_QUOTE_ORIGIN);
-  if (expiry) url.searchParams.set('expiry', expiry);
-  url.searchParams.set('symbols', symbols.filter(k => !linearKey(k)).join(','));
-  url.searchParams.set('held', JSON.stringify(heldBtc(record).filter(c => !linearKey(c.contract_key)).map(c => c.provider_symbol)));
-  return fetch(url, { headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY },
-    redirect: 'manual', signal: AbortSignal.timeout(10000), cf: { cacheTtl: 0, cacheEverything: false } });
+  const held = exact ? [] : heldBtc(record).map(c => c.contract_key);
+  const keys = [...new Set([...symbols, ...held].filter(linearKey))];
+  const payload = await linearPayload(env, keys, expiry, exact, symbols.slice(0, 1).filter(linearKey));
+  return Response.json(payload);
 }
 export async function handleBtcOptions(request, env) {
   const session = await requireSession(request, env);
@@ -97,31 +93,18 @@ export async function handleBtcOptions(request, env) {
   const symbols = (new URL(request.url).searchParams.get('symbols') || '').split(',').filter(Boolean);
   if (symbols.length > 64 || symbols.some(s => !BTC_KEY.test(s))) return jsonResponse({ error: 'Invalid contract keys' }, 400);
   const params = new URL(request.url).searchParams;
-  const product = params.get('product') || 'cme';
-  if (!['cme','usdc'].includes(product)) return jsonResponse({error:'Unknown Bitcoin product'},400);
-  if (product === 'usdc' && !env.BTC_USDC_DATA_ORIGIN) return jsonResponse({error:'USDC data source not configured'},503);
+  const product = params.get('product') || 'usdc';
+  if (product === 'cme' || product === 'micro') return jsonResponse({error:'Bitcoin product retired'},410);
+  if (product !== 'usdc') return jsonResponse({error:'Unknown Bitcoin product'},400);
+  if (!env.BTC_USDC_DATA_ORIGIN) return jsonResponse({error:'USDC data source not configured'},503);
   try {
     const response = await fetchBtc(env, session.record, symbols, params.get('expiry'), product);
     if (!response.ok) return jsonResponse({ error: 'BTC source unavailable', provider_status: response.status }, 503);
     const data = await response.json();
-    const held = heldBtc(session.record);
-    const other = held.filter(c => linearKey(c.contract_key) !== (product === 'usdc'));
-    if (other.length) {
-      const reads = product === 'usdc'
-        ? [fetchBtc(env,session.record,other.map(c=>c.contract_key)).then(r=>r.json())]
-        : linearBookWindow(other.map(c=>c.contract_key)).map(key=>linearPayload(env,[key],null,true));
-      for (const result of await Promise.allSettled(reads)) {
-        if (result.status === 'fulfilled') {
-          for (const quote of result.value.quotes || []) {
-            data.quotes.push({ ...quote, market_session: result.value.session ?? 'unavailable' });
-          }
-        }
-      }
-    }
     if (!await btcAllowed(env, session, request)) return jsonResponse({ error: 'Bitcoin data access revoked' }, 403);
     const entries = env.BTC_OPTIONS_ENTRIES === '1';
-    return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: product === 'usdc' ? null : BTC_FEE,
-      fee_model: product === 'usdc' ? 'Standard linear taker fee; simulated USDC at par; zero expiry fee' : 'Simulated $2.50 per contract per side; $0 expiration fee' }, 200);
+    return jsonResponse({ ...data, entries_enabled: entries, fee_per_side: null,
+      fee_model: 'Standard linear taker fee; simulated USDC at par; zero expiry fee' }, 200);
   } catch { return jsonResponse({ error: 'BTC source unavailable' }, 503); }
 }
 

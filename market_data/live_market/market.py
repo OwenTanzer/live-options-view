@@ -37,6 +37,7 @@ from .config import (
     log,
 )
 from .feed import DXLinkFeed
+from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
 from .quotes import _fresh_spy_spot, _observed_spy_price_with_basis, _provider_observed_spy_price, _spy_subscription_coverage
 from .state import (
     Counters,
@@ -594,7 +595,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     # The payload is only observable if the write succeeds, so its readings
     # carry the publication attempt time as `published_at`; a failed write
     # leaves no payload and the sidecar records `archived_unpublished`.
-    deferred = publication_queue is not None and ONE_CLOCK_PUBLICATIONS
+    publish_one_clock = ONE_CLOCK_PUBLICATIONS and us.symbol in ONE_CLOCK_INSTRUMENTS
+    deferred = publication_queue is not None and publish_one_clock
     publication_time = None if deferred else datetime.now(timezone.utc)
     finish_publication(readings, published_at=publication_time,
                        status="pending" if deferred else "published",
@@ -648,7 +650,7 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         _put_snapshot_provenance(s3, provenance, create_only=True)
         return
 
-    if ONE_CLOCK_PUBLICATIONS:
+    if publish_one_clock:
         from .one_clock import publish_snapshot
         try:
             # Authoritative immutable commit precedes the mutable compatibility

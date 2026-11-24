@@ -56,7 +56,7 @@ def contributing_provider_times_valid(provider_times, expiration, now):
 
 
 def publish_settlement_mark(s3, symbol, expiration, spot, observed_at, now):
-    if symbol not in {"SPY", "IBIT"} or not isinstance(spot, (int, float)) or not math.isfinite(spot) or spot <= 0:
+    if symbol not in {"SPY", "IBIT", "SLV", "DRAM"} or not isinstance(spot, (int, float)) or not math.isfinite(spot) or spot <= 0:
         return False
     if not _is_valid_observation(observed_at, expiration, now):
         return False

@@ -23,3 +23,5 @@ For example, open the archived checkout in a separate worktree:
 git fetch origin tag archive/options-view-studies-2026-11-08
 git worktree add --detach ../options-view-studies archive/options-view-studies-2026-11-08
 ~~~
+
+[Opening OI associators](oi_associator/README.md) fits four trading models and records their held-out paper ledgers.

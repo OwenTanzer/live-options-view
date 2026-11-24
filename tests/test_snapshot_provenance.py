@@ -30,10 +30,11 @@ from market_data.live_market import market  # noqa: E402
 from market_data.live_market.market import _select_underlying_quote  # noqa: E402
 
 UTC = timezone.utc
-NOW = datetime.now(UTC)
+# UTC has rolled to Tuesday while the exchange session is still Monday.
+NOW = datetime(2026, 11, 10, 0, 15, tzinfo=UTC)
 OLD = (NOW - timedelta(minutes=10)).isoformat()
 FRESH = (NOW - timedelta(seconds=5)).isoformat()
-TODAY = NOW.date()
+TODAY = NOW.astimezone(collector.ET).date()
 EXP = TODAY.isoformat()
 
 
@@ -95,10 +96,11 @@ def state_for(qqq: dict, option_quote=(1.0, 1.2)):
 
 def snapshot(s3, qqq, *, us=None, strikes=None, option_quote=(1.0, 1.2)):
     us = us or collector.UnderlyingSession("QQQ")
+    feed = FakeFeed(state_for(qqq, option_quote))
     collector.take_snapshot(
-        s3, FakeFeed(state_for(qqq, option_quote)), strikes or QQQ_STRIKES,
+        s3, feed, strikes or QQQ_STRIKES,
         EXP, "0DTE_Regular", TODAY, collector.Counters(),
-        collector.SnapshotTracker(), us,
+        collector.SnapshotTracker(), us, capture=(NOW, feed.get_state()),
     )
     return us
 
@@ -205,7 +207,7 @@ class SavedArtifacts(unittest.TestCase):
         }
         collector.take_snapshot(
             s3, FakeFeed(state), [strike("SPY", 670)], EXP, "0DTE_Regular",
-            TODAY, collector.Counters(), collector.SnapshotTracker(), spy)
+            TODAY, collector.Counters(), collector.SnapshotTracker(), spy, capture=(NOW, state))
         latest = s3.json(spy.latest_key)
         provenance = s3.json(sidecar_key(latest["snapshot_key"]))
         self.assertEqual(provenance["underlying"]["price_basis"], "bid_ask_midpoint")
@@ -351,7 +353,7 @@ class LastTradePriceEvidence(unittest.TestCase):
                             side_effect=lambda *a: calls.append(a[1:4] + a[4:5])):
                 collector.take_snapshot(
                     s3, FakeFeed(state), [strike("SPY", 670)], EXP, "0DTE_Regular",
-                    TODAY, collector.Counters(), collector.SnapshotTracker(), spy)
+                    TODAY, collector.Counters(), collector.SnapshotTracker(), spy, capture=(NOW, state))
             latest = s3.json(spy.latest_key)
             return calls, s3.json(sidecar_key(latest["snapshot_key"]))["underlying"]
 

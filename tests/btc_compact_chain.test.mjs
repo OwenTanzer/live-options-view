@@ -1,3 +1,4 @@
+import { origin as usdcOrigin, usdcFixture } from './helpers/usdc_fixture.mjs';
 // Real production entry, disposable API/auth; synthetic display data only.
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
@@ -9,12 +10,12 @@ import { derivePasswordHash } from '../backend/auth.js';
 import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 const scenario = btcClockScenarios().find(s => s.name === 'close_bid');
 const originalFetch = global.fetch;
-global.fetch = async (url, opts) => new URL(url).pathname === '/btc-options' ? Response.json(scenario.payload) : fixtureNetwork(url, opts);
+global.fetch = async (url, opts) => new URL(url).origin === usdcOrigin ? usdcFixture(url) : fixtureNetwork(url, opts);
 const browser = await chromium.launch({ headless: true });
 const evidence = process.env.BTC_COMPACT_EVIDENCE;
 try {
   for (const width of [320, 375, 390]) {
-    const preview = createPreview(); setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
+    const preview = createPreview(); setupBtcOwner(preview.apiEnv); preview.apiEnv.BTC_USDC_DATA_ORIGIN = usdcOrigin; preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
     const salt = btoa('compact-fixture'), password = 'synthetic-password';
     await seedAccounts(preview.apiEnv, [{ username: 'compact_fixture', salt, hash: await derivePasswordHash(password, salt), iterations: 100000, balance_cash: 10000, trades: [] }]);
     const context = await browser.newContext({ viewport: { width, height: 667 } });
@@ -44,7 +45,7 @@ try {
         let n = 0;
         for (const month of ['2026-11', '2026-12']) for (const strike of [85000, 86000, 87000, 88000, 89000, 90000, 91000, 92000]) for (const type of ['call','put']) {
           if (strike === 92000 && type === 'put') continue;
-          const c = { ...payload.contracts[0], contract_key:'BTCOPT:' + (++n).toString(16).padStart(40,'0'), strike, type, future_month:month, future_symbol:month === '2026-11' ? '/BTCX6' : '/BTCZ6', exp:month + '-27' };
+          const c = { ...payload.contracts[0], product:'BTC_USDC', exchange:'Deribit', contract_key:'BTCOPT:' + (++n).toString(16).padStart(40,'0'), strike, type, future_month:month, future_symbol:month === '2026-11' ? '/BTCX6' : '/BTCZ6', exp:month + '-27' };
           const ts = new Date().toISOString();
           contracts.push(c); quotes.push({ ...payload.quotes[0], symbol:c.contract_key, contract:c, bid:120 + n, ask:122 + n, bid_size:2, ask_size:3, bid_ts:ts, ask_ts:ts, bid_received_ts:ts, ask_received_ts:ts });
         }
@@ -95,7 +96,7 @@ try {
         btcOptions.refresh = () => { data.expiry = btcOptions.expiry; btcOptions.render(); };
       });
       for (const expiry of ['2026-11-27', '2026-12-27']) {
-        await page.getByLabel('Standard monthly expiry').selectOption(expiry);
+        await page.getByLabel('USDC option expiry').selectOption(expiry);
         assert.equal(await page.locator('.btc-series').count(), 1);
         assert.equal(await page.locator('.btc-contract').count(), 15);
         for (const edge of ['first', 'last']) {
@@ -107,77 +108,25 @@ try {
         }
       }
       if (width === 375) {
-        // Exercise the ordinary signed-in API and polling path at production chain size.
-        const months = ['2026-11-27', '2026-12-24'];
-        const listings = months.map((exp, month) => Array.from({ length: 414 }, (_, i) => ({
-          ...scenario.payload.contracts[0], exp, strike: 10000 + Math.floor(i / 2) * 1000,
-          type: i % 2 ? 'put' : 'call', contract_key: 'BTCOPT:' + (month * 414 + i).toString(16).padStart(40, '0')
-        })));
-        let outage = false, marketCenter = false;
-        global.fetch = async (url, opts) => {
-          const u = new URL(url);
-          if (u.pathname !== '/btc-options') return fixtureNetwork(url, opts);
-          if (outage) return new Response('', { status: 503 });
-          const month = u.searchParams.get('expiry') === months[1] ? 1 : 0;
-          const contracts = listings[month];
-          const display_prices = { [contracts[0].contract_key]: { mark: 50700, as_of: new Date(scenario.now).toISOString() } };
-          const keys = new Set((u.searchParams.get('symbols') || '').split(','));
-          const quotes = contracts.filter(c => keys.has(c.contract_key) && c !== contracts[0]).map(c => ({
-            ...scenario.payload.quotes[0], contract: c, symbol: c.contract_key,
-            ask_ts: new Date(scenario.now).toISOString(), ask_received_ts: new Date(scenario.now).toISOString()
-          }));
-          quotes.push({ ...scenario.payload.quotes[0], symbol: contracts[0].contract_key, contract: contracts[0], bid: 0, ask: 0 });
-          return Response.json({ ...scenario.payload, display_prices, contracts, quotes, entry_keys: contracts.map(c => c.contract_key),
-            expiry: months[month], expiries: months, subscribed_keys: quotes.map(q => q.symbol),
-            center: marketCenter ? 59000 : 113000, center_from_future: marketCenter });
-        };
-        try {
-          await page.addInitScript(() => {
-            const interval = window.setInterval.bind(window);
-            window.setInterval = (fn, ms, ...args) => ms === 5000 ? 0 : interval(fn, ms, ...args);
+        // A full USDC expiration should remain navigable without fetching each visible book.
+        await page.evaluate(() => {
+          const sample = btcOptions.data.contracts[0];
+          const contracts = Array.from({length:414}, (_, i) => {
+            const strike = 10000 + Math.floor(i / 2) * 1000;
+            const type = i % 2 ? 'put' : 'call';
+            return {...sample, strike, type, contract_key:'USDC:BTC_USDC-27NOV36-' + strike + '-' + (i % 2 ? 'P' : 'C')};
           });
-          await page.reload();
-          const rows = page.locator('.btc-strike-row');
-          await page.waitForFunction(() => document.querySelectorAll('.btc-strike-row').length === 207);
-          assert.deepEqual(new Set(await page.locator('.btc-contract').evaluateAll(els => els.map(el => el.dataset.symbol))),
-            new Set(listings[0].map(c => c.contract_key)));
-          marketCenter = true;
-          await page.evaluate(() => btcOptions.refresh());
-          const center = await rows.nth(49).boundingBox();
-          assert.ok(center.y >= 0 && center.y + center.height <= 667);
-          for (const row of [rows.first(), rows.last()]) {
-            await row.scrollIntoViewIfNeeded();
-            const top = await row.evaluate(el => el.getBoundingClientRect().top);
-            await page.waitForFunction(key => btcOptions.quotes.has(key), await row.locator('.btc-contract').last().getAttribute('data-symbol'));
-            await page.evaluate(() => btcOptions.refresh());
-            assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
-            outage = true;
-            await page.evaluate(() => btcOptions.refresh());
-            assert.equal(await row.locator('.btc-buy').first().isDisabled(), true);
-            outage = false;
-            await page.evaluate(() => btcOptions.refresh());
-            assert.equal(await row.evaluate(el => el.getBoundingClientRect().top), top);
-            const leg = row.locator('.btc-contract').last();
-            await leg.locator('.btc-buy').click();
-            assert.equal(await page.locator('#trade-ticket').getAttribute('data-btc'), await leg.getAttribute('data-symbol'));
-            await page.evaluate(() => closeTicket());
-          }
-          assert.equal(await rows.first().locator('.btc-reference-mark').first().isVisible(), true);
-          assert.equal(await rows.first().locator('.btc-reference-mark').first().textContent(), 'Mark 50,700*');
-          assert.equal(await rows.first().locator('.btc-buy').first().isDisabled(), true);
-          marketCenter = false;
-          await page.getByLabel('Standard monthly expiry').selectOption(months[1]);
-          await page.waitForFunction(exp => btcOptions.data.expiry === exp, months[1]);
-          await rows.first().scrollIntoViewIfNeeded();
-          const top = await rows.first().evaluate(el => el.getBoundingClientRect().top);
-          marketCenter = true;
-          await page.evaluate(() => btcOptions.refresh());
-          assert.equal(await rows.first().evaluate(el => el.getBoundingClientRect().top), top);
-        } finally {
-          global.fetch = async (url, opts) => new URL(url).pathname === '/btc-options' ? Response.json(scenario.payload) : fixtureNetwork(url, opts);
+          btcOptions.data = {...btcOptions.data, expiry:sample.exp, contracts, center:90000, center_from_future:true};
+          btcOptions.render();
+        });
+        assert.equal(await page.locator('.btc-strike-row').count(), 207);
+        assert.equal(await page.locator('.btc-contract').count(), 414);
+        for (const edge of ['first','last']) {
+          await page.locator('.btc-strike-row')[edge]().scrollIntoViewIfNeeded();
+          assert.equal(await page.evaluate(() => btcOptions.visibleSymbols()), '');
         }
       }
-      assert.deepEqual(errors,[]);
+      assert.deepEqual(errors, []);
       console.log(`PASS ${width}x667: ${rects.filter(r=>r.complete).length} COMPLETE distinct strike rows, paired calls/puts, correct buy/owned close tickets, stale denial, empty legs, no overflow`);
     } finally { await context.close(); preview.close(); }
   }
