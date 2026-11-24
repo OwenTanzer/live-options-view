@@ -5,7 +5,7 @@ NASDAQ-100 listings from Tiingo, and publishes them to R2 as
 `nasdaq/candles/<TICKER>/<interval>.json` — one file per interval
 (1m, 3m, 5m, 9m, 15m, 30m, 1h, 2h, 4h, 1d, 1w), plus one
 `snapshot_provenance.v1` sidecar per ticker
-(`nasdaq/candles/<TICKER>/provenance.json`). Open **Replay a stock candle archive** on the One Clock page. Select a ticker’s interval JSON and matching published provenance JSON, the trading session, and a cutoff in UTC. The page verifies the interval’s SHA-256 digest and uses its acknowledged upload time to select eligible bars. A local-only or older receipt with no publication evidence cannot establish recorded availability. Each pair represents a single publication. Keep earlier pairs to replay older versions after an update. The files are read in the browser.
+(`nasdaq/candles/<TICKER>/provenance.json`). The Stocks panel reads the latest digest-verified interval and links to the same symbol and interval in Event Builder. On the One Clock page choose a ticker and trading session under **Replay a stock candle archive**. The session cursor follows each acknowledged revision. Later corrections and withdrawals take effect at their own receipt times. Previously saved interval and receipt files can also be inspected offline. The publisher retains immutable interval bytes and commits their revision history through a conditional manifest update. Repeating an unchanged backfill preserves its original receipt. The flat interval keys are compatibility copies. Exchange session hours accompany the receipt where the repository calendar covers the date.
 
 Run from the repository root:
 
@@ -27,8 +27,7 @@ python -m market_data.single_stock_historical_backfill backfill --publish   # op
 | Daily bars | Tiingo `/tiingo/daily/{ticker}/prices` | From 2000 (one request; 6,764 bars for AAPL). Carries volume and split-adjusted fields |
 | Derived intervals | Aggregated by the collector, never fetched | 3m/5m/9m/15m/30m from 1m (09:30 ET session-open bucketing), 2h/4h from 1h (same-day groups only), 1w from 1d (Monday–Sunday, volume summed). See `resample.py` |
 
-Auth: `TIINGO_API_TOKEN` in the environment only (token as query
-param `token`). Free Starter limits: 50 requests/hour, 1,000/day,
+Auth: `TIINGO_API_TOKEN` in the environment only (token in the Authorization header). Free Starter limits: 50 requests/hour, 1,000/day,
 500 symbols/month. No other account or auth.
 
 ## Universe

@@ -1,3 +1,5 @@
+import {loadStockStudy} from './stock-candle-replay.js';
+import {gapReport} from './candle-cache-one-clock.js';
 import {candleTrials} from '../shared/one-clock-candle-breach.js';
 import {candleSessions,loadCandleStudy} from '../shared/one-clock-candle-replay.js';
 import {oiSkewAuditRule} from '../shared/one-clock-decision-events.js';
@@ -14,18 +16,19 @@ const $ = id => document.getElementById(id);
 const levelForm=encounterForm(document);
 const datasetId=new URLSearchParams(location.search).get('dataset');
 const candleMode=candleSessions.includes(datasetId);
-const archiveMode=datasetId==='order-flow' || candleMode;
+const stockMode=datasetId==='stock-candles';
+const archiveMode=stockMode || datasetId==='order-flow' || candleMode;
 const dataset = $('offline-dataset');
 dataset.value=archiveMode?datasetId:'synthetic';
-dataset.onchange=()=>{const url=new URL(location.href);if(dataset.value!=='synthetic')url.searchParams.set('dataset',dataset.value);else url.searchParams.delete('dataset');location.assign(url);};
+dataset.onchange=()=>{if(dataset.value==='stock-candles'){const form=$('stock-archive-controls');form.open=true;form.querySelector('[name=symbol]').focus();return;}const url=new URL(location.href);if(dataset.value!=='synthetic')url.searchParams.set('dataset',dataset.value);else url.searchParams.delete('dataset');location.assign(url);};
 let study={rules:demoRules,sources:demoSources,rows:demoRows,selection:demoSelection,start:demoStart,close:demoClose};
 if(archiveMode){
   const notice=document.querySelector('.notice');
-  notice.querySelector('strong').textContent=candleMode?'Reconstructed QQQ candles · '+datasetId:'Reconstructed QQQ order flow · September 25, 2026';
+  notice.querySelector('strong').textContent=stockMode?'Recorded stock candles':candleMode?'Reconstructed QQQ candles · '+datasetId:'Reconstructed QQQ order flow · September 25, 2026';
   notice.querySelector('span').textContent='Loading the audited archive…';
   const loadingSections = [document.querySelector('nav'), $('builder'), document.querySelector('.replay')];
   for (const section of loadingSections) section.inert=true;
-  try{study=candleMode?await loadCandleStudy(datasetId):await loadFlowStudy();}
+  try{study=stockMode?await loadStockStudy(new URLSearchParams(location.search)):candleMode?await loadCandleStudy(datasetId):await loadFlowStudy();}
   catch(error){
     notice.querySelector('span').textContent=error.message;
     $('builder').hidden=true;
@@ -33,14 +36,14 @@ if(archiveMode){
     document.querySelector('nav').hidden=true;
     throw error;
   }
-  notice.querySelector('span').textContent=candleMode?'Unadjusted one-minute bars. Replay advances at bar close. Historical receipt times are unknown.':'Minute samples of 16 contracts at strikes $740–747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
+  notice.querySelector('span').textContent=stockMode?'Availability follows the retained publication receipts.':candleMode?'Unadjusted one-minute bars. Replay advances at bar close. Historical receipt times are unknown.':'Minute samples of 16 contracts at strikes $740–747. Flow gamma assumes 100% passive dealer participation. Historical publication times are unavailable.';
   $('account-controls').hidden=!candleMode;$('account-help').hidden=!candleMode;
-  $('instrument').replaceChildren(option('QQQ'));
+  $('instrument').replaceChildren(option(study.selection.instrument));
   $('session-strip').hidden=true;
   for (const section of loadingSections) section.inert=false;
 }
 const {rules:initialRules,sources:studySources,rows:studyRows,selection:studySelection,start:studyStart,close:studyClose}=study;
-const storageKey = archiveMode?'one-clock.'+datasetId+'.rules.v1':'one-clock.rules.v1';
+const storageKey = archiveMode?'one-clock.'+datasetId+(stockMode?'.'+studySelection.instrument+'.'+new URLSearchParams(location.search).get('interval'):'')+'.rules.v1':'one-clock.rules.v1';
 $('cursor').max=String((studyClose-studyStart+1000)/1000);
 let versions = structuredClone(initialRules);
 let storageError = '';
@@ -103,7 +106,7 @@ function sourceFields(source, field) {
   sourceSelect.onchange = () => setChoices(fieldSelect, Object.entries(formFields.get(sourceSelect.value) ?? {}));
   return [sourceControl,fieldControl];
 }
-function condition(c = { source: archiveMode?'orderFlow':'skew', field: archiveMode?'k744.flow':'imbalance', op: '>=', value: archiveMode?0:0.3, maxAgeMs: 150000 }) {
+function condition(c = { source: stockMode?'candle-cache':archiveMode?'orderFlow':'skew', field: stockMode?'close':archiveMode?'k744.flow':'imbalance', op: '>=', value: archiveMode?0:0.3, maxAgeMs: 150000 }) {
   const row = document.createElement('div'); row.className = 'condition';
   row.append(...sourceFields(c.source,c.field),
     selectControl('Compare', 'op', ['>=','>','<=','<','=='].map(v => [v,v]), c.op), inputControl('Value', 'value', String(c.value)),
@@ -179,15 +182,23 @@ function showResults(active) {
 }
 function status(message, error = false) { $('form-status').textContent = message; $('form-status').classList.toggle('error', error); }
 function time(ms) { return new Date(ms).toISOString().slice(11,19); }
+function stockDescription(at) {
+  const bars = selectAsOf(studyRows,at).filter(row=>row.value !== null);
+  const last = bars.at(-1);
+  const labels = [...new Set(gapReport(bars,at.session,study.sessionHours).map(g=>g.label))];
+  return at.instrument+' · '+new Date(at.cutoff).toISOString()+' · '+bars.length+' eligible bars'+
+    (last?' · last close '+last.value.close:'')+' · '+labels.join(', ')+
+    (study.sessionClose ? '' : ' · session hours unknown; event triggers unavailable');
+}
 function render() {
   const at = clock.snapshot();
   $('cursor-time').textContent = time(at.cutoff) + ' UTC';
   const full = $('result-scope').value === 'full';
   const selection = { ...at, instrument: $('result-instrument').value, cutoff: full ? studyClose + 1000 : at.cutoff };
-  const events = evaluateEvents({ rule: currentRule, observations: studyRows, selection, sessionClose: studyClose });
+  const events = evaluateEvents({ rule: currentRule, observations: studyRows, selection, sessionClose: stockMode ? (study.sessionClose ?? studyStart) : studyClose });
   const outcomeId = $('outcome-choice').value;
   $('rule-description').textContent = `${currentRule.name} · ${selection.instrument} · ${previewing ? 'Unsaved preview' : 'v' + currentRule.version} · ${full ? 'Full session (retrospective)' : 'As of ' + time(at.cutoff) + ' UTC'} · ${studySelection.origin} data`;
-  $('replay-description').textContent = candleMode?'QQQ · reconstructed one-minute candles, UTC.':archiveMode?'QQQ · minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
+  $('replay-description').textContent = stockMode ? stockDescription(at) : candleMode?'QQQ · reconstructed one-minute candles, UTC.':archiveMode?'QQQ · minute-close reconstruction, UTC. Snapshot prices use their archive timestamps.':`SYN-1 · ${selection.instrument} · synthetic clock in UTC. Fixture coverage: QQQ only. Counts and outcomes follow this cursor.`;
   const sameSkew = currentRule.conditions.some(c => c.source === 'skew' && c.field === 'imbalance' && !c.relativeToAnchor && c.op === '>=' && c.value > 0);
   $('comparison-note').textContent = sameSkew && currentRule.combine === 'all' ? 'A positive same-input skew trigger necessarily agrees with a meter that labels every positive imbalance call-heavy. Disagreement is impossible for that pairing; these results do not compare independent signals.' : 'Descriptive observations only. No predictive conclusion is implied.';
   fixtureResults.update({events,rules:[currentRule],cutoff:selection.cutoff,origin:studySelection.origin,outcome:outcomeId?{ruleKey:ruleKey(currentRule),id:outcomeId}:null});

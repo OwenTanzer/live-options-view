@@ -2,8 +2,7 @@
 
 Read-only. The token comes from the environment only
 (``TIINGO_API_TOKEN``); it is never stored in the repository, logged,
-or written to any file. The token is sent as the ``token`` query
-parameter, exactly as Tiingo documents it.
+or written to any file. The token is sent in the Authorization header.
 
 Endpoints used (``https://api.tiingo.com``):
 
@@ -57,6 +56,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timedelta, timezone
 
+import math
 import requests
 
 BASE_URL = "https://api.tiingo.com"
@@ -144,46 +144,19 @@ def _normalise_time(value):
 
 
 def parse_intraday_bar(raw):
-    """Parse one Tiingo intraday bar.
-
-    Returns ``{"t", "open", "high", "low", "close"}`` — deliberately
-    no ``volume`` key: Tiingo intraday responses carry none, and
-    storing one (even null) would imply a measurement that does not
-    exist. Raises TiingoError on a bar with no usable price.
-    """
+    """Require four measured finite prices. Incomplete bars cannot form candles."""
     try:
-        close = raw["close"]
-        if close is None:
-            raise KeyError("close is null")
-        return {
-            "t": _normalise_time(raw["date"]),
-            "open": float(raw["open"]) if raw.get("open") is not None else float(close),
-            "high": float(raw["high"]) if raw.get("high") is not None else float(close),
-            "low": float(raw["low"]) if raw.get("low") is not None else float(close),
-            "close": float(close),
-        }
-    except (KeyError, TypeError, ValueError) as exc:
-        raise TiingoError(f"unparsable intraday bar: {raw!r}") from exc
+        values = {key: float(raw[key]) for key in ("open", "high", "low", "close")}
+        if not all(math.isfinite(value) for value in values.values()):
+            raise ValueError
+        return {"t": _normalise_time(raw["date"]), **values}
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise TiingoError("Incomplete or invalid Tiingo candle") from None
 
 
 def parse_daily_bar(raw):
-    """Parse one Tiingo daily bar.
-
-    Daily bars DO carry volume (and split-adjusted fields), so those
-    are stored: ``{"t", "open", "high", "low", "close", "volume",
-    "adj_close", "adj_volume"}``. ``t`` is midnight UTC on the bar date.
-    """
+    bar = parse_intraday_bar(raw)
     try:
-        close = raw["close"]
-        if close is None:
-            raise KeyError("close is null")
-        bar = {
-            "t": _normalise_time(raw["date"]),
-            "open": float(raw["open"]) if raw.get("open") is not None else float(close),
-            "high": float(raw["high"]) if raw.get("high") is not None else float(close),
-            "low": float(raw["low"]) if raw.get("low") is not None else float(close),
-            "close": float(close),
-        }
         if raw.get("volume") is not None:
             bar["volume"] = int(raw["volume"])
         if raw.get("adjClose") is not None:
@@ -192,7 +165,7 @@ def parse_daily_bar(raw):
             bar["adj_volume"] = int(raw["adjVolume"])
         return bar
     except (KeyError, TypeError, ValueError) as exc:
-        raise TiingoError(f"unparsable daily bar: {raw!r}") from exc
+        raise TiingoError("Invalid daily candle fields") from None
 
 
 class TiingoClient:
@@ -220,7 +193,7 @@ class TiingoClient:
         self.requests_made = 0
 
     def _get(self, path, params):
-        """One GET with the token as query param ``token``.
+        """One authenticated GET.
 
         The rate limiter is acquired once per HTTP request, before the
         request is made. Redirects are refused: a redirect on an
@@ -229,13 +202,13 @@ class TiingoClient:
         if self.limiter is not None:
             self.limiter.acquire()
         params = dict(params)
-        params["token"] = self.token
+        headers = {"Authorization": "Token " + self.token}
         url = BASE_URL + path
         try:
-            resp = self.session.get(url, params=params, timeout=30,
+            resp = self.session.get(url, params=params, headers=headers, timeout=30,
                                     allow_redirects=False)
         except requests.RequestException as exc:
-            raise TiingoError(f"Tiingo request failed: {exc}") from exc
+            raise TiingoError(f"Tiingo transport failed ({type(exc).__name__})") from None
         self.requests_made += 1
         if resp.status_code in (301, 302, 303, 307, 308):
             raise TiingoError(f"Tiingo redirected ({resp.status_code}); refused")
@@ -253,7 +226,7 @@ class TiingoClient:
         except ValueError as exc:
             raise TiingoError(f"Tiingo returned non-JSON for {path}") from exc
         if not isinstance(payload, list):
-            raise TiingoError(f"Tiingo returned a non-list payload for {path}: {payload!r}"[:200])
+            raise TiingoError(f"Tiingo returned a non-list payload for {path}")
         return payload
 
     def _fetch_page(self, ticker, base, start_date, end_date=None):

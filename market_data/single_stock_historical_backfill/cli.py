@@ -58,7 +58,10 @@ def _publish_hook_factory(config, out_dir):
 
     def on_symbol_done(symbol, files, provenance):
         result = publish_symbol(symbol, files, provenance, config=config)
-        (ticker_dir(Path(out_dir), symbol) / "provenance.json").write_text(
+        directory = ticker_dir(Path(out_dir), symbol)
+        for interval, body in result["files"].items():
+            (directory / f"{interval}.json").write_bytes(body)
+        (directory / "provenance.json").write_text(
             json.dumps(result["provenance"], indent=2))
         print(f"published {symbol} to R2 bucket {result['bucket']}: "
               f"{len(result['keys'])} keys")

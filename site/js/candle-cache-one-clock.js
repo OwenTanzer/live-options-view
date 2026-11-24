@@ -57,13 +57,13 @@ export function barsToObservations(file, envelope = {}) {
  * { state, row, ageMs, publicationAgeMs }, and gaps/labels are the
  * honest hole labels (see gapReport).
  */
-export function selectCandlesAsOf(observations, selection, { maxAgeMs } = {}) {
+export function selectCandlesAsOf(observations, selection, { maxAgeMs, sessionHours } = {}) {
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0) {
     throw new TypeError('maxAgeMs must be an explicit non-negative integer');
   }
-  const rows = selectAsOf(observations, selection);
+  const rows = selectAsOf(observations.filter(row => row.session === selection.session), selection);
   const reading = readingAsOf(rows, selection, { maxAgeMs });
-  const gaps = gapReport(rows, selection.session);
+  const gaps = gapReport(rows.filter(row => row.value !== null), selection.session, sessionHours);
   const labels = [...new Set(gaps.map((gap) => gap.label))].sort();
   if (reading.state === 'unavailable' && !labels.includes('unavailable')) labels.push('unavailable');
   return { rows, reading, gaps, labels: labels.sort() };
@@ -79,7 +79,7 @@ const INTERVAL_MINUTES = { '1m': 1, '3m': 3, '5m': 5, '9m': 9, '15m': 15, '30m':
  * inference (a missing trading day is not inferred without a
  * calendar). An empty selection is "unavailable".
  */
-export function gapReport(rows, session) {
+export function gapReport(rows, session, sessionHours) {
   if (!rows.length) return [{ label: 'unavailable', from: null, to: null, bars: 0 }];
   const ordered = [...rows].sort((a, b) => a.eventAt - b.eventAt);
   const report = [];
@@ -96,18 +96,8 @@ export function gapReport(rows, session) {
       }
       expected = Math.max(expected, row.eventAt + step * 60_000);
     }
-    const dayParts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: false,
-    }).formatToParts(new Date(ordered[0].eventAt));
-    const firstMinutes = Number(dayParts.find((p) => p.type === 'hour').value) * 60
-      + Number(dayParts.find((p) => p.type === 'minute').value);
-    const lastParts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: false,
-    }).formatToParts(new Date(ordered.at(-1).eventAt));
-    const lastMinutes = Number(lastParts.find((p) => p.type === 'hour').value) * 60
-      + Number(lastParts.find((p) => p.type === 'minute').value);
-    const weekday = !['Sat', 'Sun'].includes(dayParts.find((p) => p.type === 'weekday').value);
-    if (weekday && (firstMinutes > 9 * 60 + 30 || lastMinutes < 16 * 60 - step)) {
+    if (sessionHours && (ordered[0].eventAt > sessionHours[0] ||
+        ordered.at(-1).eventAt + step * 60000 < sessionHours[1])) {
       report.push({ label: PARTIAL_LABEL, from: fmt(ordered[0].eventAt), to: fmt(ordered.at(-1).eventAt), bars: ordered.length });
     }
   }

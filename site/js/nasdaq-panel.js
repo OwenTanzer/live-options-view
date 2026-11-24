@@ -541,7 +541,7 @@
       parts.join('') + '</svg>' +
       '<p class="nq-chart-meta">Range ' + fmtPrice(lo) + ' – ' + fmtPrice(hi) +
       ' · ' + list.length + ' candles · first ' + escapeHtml(fmtTime(first.time)) +
-      ' · last ' + escapeHtml(fmtTime(last.time)) + '</p>';
+      ' · last ' + escapeHtml(fmtTime(last.time)) + (last.source ? ' · ' + escapeHtml(last.source) : '') + '</p>';
   }
 
   // Aggregate 1-minute bars into a coarser intraday interval. Bars are
@@ -630,13 +630,16 @@
   // Load candles for (symbol, interval) into cache (key "SYM|interval").
   // While loading the entry is the string 'loading'; on completion it is
   // the bars array (possibly empty = unavailable). Returns a Promise.
-  function loadCandles(symbol, interval, fetchFn, cache) {
+  function loadCandles(symbol, interval, fetchFn, cache, archive) {
     if (!symbol || INTERVALS.indexOf(interval) === -1) return Promise.resolve(null);
     var key = symbol + '|' + interval;
     if (cache[key] && cache[key] !== 'loading') return Promise.resolve(cache[key]);
     if (cache[key] === 'loading') return Promise.resolve(null);
     cache[key] = 'loading';
-    return yahooBars(symbol, interval, fetchFn).then(function (bars) {
+    var archived = archive ? archive(symbol, interval).catch(function () { return []; }) : Promise.resolve([]);
+    return archived.then(function (rows) {
+      return rows.length ? rows : yahooBars(symbol, interval, fetchFn);
+    }).then(function (bars) {
       cache[key] = bars;
       return bars;
     });
@@ -671,7 +674,10 @@
       '<span>Rank: ' + (isFiniteNumber(stock.rank) ? stock.rank : '—') +
       (isFiniteNumber(total) ? ' of ' + total : '') + '</span></div>' +
       '<div class="nq-intervals" role="group" aria-label="Candle interval">' + buttons + '</div>' +
-      renderCandles(stock.symbol, interval, candles) +
+      '<a href="/one-clock.html?dataset=stock-candles&amp;symbol=' + encodeURIComponent(stock.symbol) +
+      '&amp;interval=' + encodeURIComponent(interval) + '&amp;session=' + encodeURIComponent(
+        new Intl.DateTimeFormat('en-CA', {timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(stock.as_of || Date.now()))) +
+      '">Replay archived candles in Event Builder</a>' + renderCandles(stock.symbol, interval, candles) +
       '<h4>Daily headlines</h4>' + renderNews(stock);
   }
 
@@ -776,7 +782,7 @@
     // leaves an empty array in the cache: an explicit "unavailable" state.
     function ensureCandles() {
       if (!state.selected) return;
-      loadCandles(state.selected, state.interval, fetchCandles, candleCache).then(function () {
+      loadCandles(state.selected, state.interval, fetchCandles, candleCache, opts.archive).then(function () {
         rerender();
       });
     }
@@ -895,6 +901,9 @@ function loadNasdaqPanel() {
     });
   }
   return NasdaqPanel.mount(document, container, fetchJson, {
+    archive: function (symbol, interval) {
+      return import('./stock-candle-replay.js').then(function (module) { return module.latestStockCandles(symbol, interval); });
+    },
     watchMinute: typeof PanelMinute === 'undefined' ? null : cb => PanelMinute.watch('nasdaq', root, cb)
   });
 }

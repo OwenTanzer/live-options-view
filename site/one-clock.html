@@ -10,8 +10,16 @@
 <main>
   <div class="intro"><div><p class="eyebrow">ONE CLOCK</p><h1>Define a moment.<br>Follow what happens.</h1></div>
   <p class="lede">Register a market event, inspect each occurrence, and measure its outcome on the same clock.</p></div>
-  <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option><option value="2026-10-29">QQQ candle breaches · 2026-10-29</option><option value="2026-10-30">QQQ candle breaches · 2026-10-30</option><option value="2026-11-02">QQQ candle breaches · 2026-11-02</option></select></label>
-  <details><summary>Replay a stock candle archive</summary>
+  <label>Replay dataset <select id="offline-dataset"><option value="synthetic">Synthetic engineering session</option><option value="stock-candles">Stock candle archive</option><option value="order-flow">QQQ order flow · September 25, 2026 (reconstructed)</option><option value="2026-10-29">QQQ candle breaches · 2026-10-29</option><option value="2026-10-30">QQQ candle breaches · 2026-10-30</option><option value="2026-11-02">QQQ candle breaches · 2026-11-02</option></select></label>
+  <details id="stock-archive-controls"><summary>Replay a stock candle archive</summary>
+    <form action="one-clock.html"><input type="hidden" name="dataset" value="stock-candles">
+      <label>Ticker <input name="symbol" required maxlength="10" placeholder="AAPL"></label>
+      <label>Trading session <input name="session" type="date" required></label>
+      <label>Interval <select name="interval"><option>1m</option><option>3m</option><option>5m</option><option>9m</option><option>15m</option><option>30m</option><option>1h</option><option>2h</option><option>4h</option><option>1d</option><option>1w</option></select></label>
+      <button>Open in Event Builder</button>
+    </form>
+  </details>
+  <details><summary>Inspect saved interval and receipt files</summary>
     <form id="stock-candle-replay">
       <label>Interval file <input name="interval" type="file" accept=".json" required></label>
       <label>Publication receipt (provenance.json) <input name="receipt" type="file" accept=".json" required></label>
@@ -20,7 +28,7 @@
       <button>Read at cutoff</button>
     </form><p id="stock-candle-reading" role="status"></p>
   </details>
-  <script type="module" src="./js/stock-candle-replay.js"></script>
+  <script type="module" src="./js/stock-candle-files.js"></script>
   <aside class="notice"><strong>Offline engineering session · SYN-1</strong><span>Hand-authored synthetic data. Fixture results are not market evidence. Account observation has its own recorded evidence and coverage.</span></aside>
   <nav aria-label="Workspace"><button id="show-builder" aria-pressed="true">Event Builder</button><button id="show-results" aria-pressed="false">Replay Results</button><button id="show-observed" aria-pressed="false">Observed Results</button></nav>
   <section id="builder" aria-labelledby="builder-title">

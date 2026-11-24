@@ -84,7 +84,7 @@ class FakeTiingoSession:
         self.calls = []
         self.headers = {}
 
-    def get(self, url, params=None, timeout=None, allow_redirects=None):
+    def get(self, url, params=None, timeout=None, allow_redirects=None, headers=None):
         params = params or {}
         self.calls.append((url, dict(params)))
         if "/iex/" in url:
@@ -394,7 +394,7 @@ def test_rate_limited_carries_retry_after():
             super().__init__({})
             self.calls_made = 0
 
-        def get(self, url, params=None, timeout=None, allow_redirects=None):
+        def get(self, url, params=None, timeout=None, allow_redirects=None, headers=None):
             self.calls_made += 1
             if self.calls_made == 1:
                 return FakeResponse(429, [], {"Retry-After": "120"})
@@ -615,38 +615,52 @@ def test_provenance_keys():
     assert sidecar_key("MSFT") == "nasdaq/candles/MSFT/provenance.json"
 
 
-class FakeR2Client:
-    def __init__(self):
-        self.puts = []
-
-    def put_object(self, Bucket, Key, Body, ContentType):
-        self.puts.append({"Bucket": Bucket, "Key": Key, "Body": Body,
-                          "ContentType": ContentType})
+from tests_stock_archive_store import FakeR2Client
 
 
-def test_publish_writes_interval_files_then_sidecar():
-    files = {iv: {"symbol": "AAPL", "interval": iv, "bars": []}
-             for iv in resample_mod.INTERVALS}
-    sidecar = build_provenance("AAPL", {iv: {} for iv in files}, generated_at="2026-11-23T21:00:00Z")
+def test_publish_retains_revisions_and_retries_without_changing_receipts():
     fake = FakeR2Client()
-    config = {"R2_ENDPOINT_URL": "https://example.r2.dev",
-              "R2_ACCESS_KEY_ID": "id", "R2_SECRET_ACCESS_KEY": "secret",
-              "TIINGO_R2_BUCKET": "qqq-options-chain-data"}
-    result = publish_symbol("AAPL", files, sidecar, config=config, client=fake)
-    assert result["bucket"] == "qqq-options-chain-data"
-    receipt = json.loads(fake.puts[-1]["Body"])
-    assert receipt == result["provenance"]
-    assert receipt["publication"]["status"] == "published"
-    from hashlib import sha256
-    for upload in fake.puts[:-1]:
-        iv = Path(upload["Key"]).stem
-        assert receipt["files"][iv]["sha256"] == sha256(upload["Body"]).hexdigest()
-        assert datetime.fromisoformat(receipt["files"][iv]["available_at"]).tzinfo is not None
-    assert len(result["keys"]) == 12  # 11 intervals + sidecar
-    assert result["keys"][-1] == "nasdaq/candles/AAPL/provenance.json"
-    assert result["keys"][:-1] == sorted(result["keys"][:-1])  # intervals sorted
-    assert result["keys"][0] == "nasdaq/candles/AAPL/15m.json"
-    assert all(p["ContentType"] == "application/json" for p in fake.puts)
+    config = {"TIINGO_R2_BUCKET": "fixture"}
+    def run(day, close):
+        files = {"1m": interval_file("AAPL", "1m", [
+            {"t": "2026-11-23T15:00:00Z", "open": 1, "high": 3, "low": 1, "close": close}], day)}
+        provenance = build_provenance("AAPL", {"1m": {}}, generated_at=day)
+        return publish_symbol("AAPL", files, provenance, config=config, client=fake)
+    first = run("2026-11-24", 2)
+    retry = run("2026-11-25", 2)
+    assert retry["keys"] == []
+    assert retry["provenance"] == first["provenance"]
+    fake.fail_next = "nasdaq/candles/AAPL/1m.json"
+    with pytest.raises(RuntimeError):
+        run("2026-11-26", 3)
+    recovered = run("2026-11-26", 3)
+    assert recovered["keys"] == ["nasdaq/candles/AAPL/1m.json"]
+    versions = recovered["provenance"]["history"]["1m"]
+    assert len(versions) == 2
+    for entry, price in zip(versions, [2, 3]):
+        body = fake.objects[entry["version_key"]]
+        assert json.loads(body)["bars"][0]["close"] == price
+    assert recovered["provenance"]["sessions"]["2026-11-23"][1] > 0
+
+
+@pytest.mark.parametrize("parse", [parse_daily_bar, parse_intraday_bar])
+def test_incomplete_candles_are_rejected(parse):
+    with pytest.raises(Exception, match="Incomplete"):
+        parse({"date": "2026-11-23", "close": 10})
+
+
+def test_transport_errors_do_not_disclose_token():
+    import requests
+    import traceback
+    class FailingSession:
+        def get(self, url, **options):
+            assert "token" not in options["params"]
+            assert options["headers"]["Authorization"] == "Token dummy-secret"
+            raise requests.ConnectionError("dummy-secret")
+    sentinel = "dummy-secret"
+    with pytest.raises(Exception) as caught:
+        TiingoClient(token=sentinel, session=FailingSession())._get("/iex/AAPL/prices", {})
+    assert "dummy-secret" not in "".join(traceback.format_exception(caught.value))
 
 
 def test_publish_config_missing_env_raises():

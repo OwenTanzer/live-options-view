@@ -101,7 +101,7 @@ test('gapReport labels a missing minute as a price gap, honestly', () => {
 
 test('gapReport labels a late-starting session as coverage partial', () => {
   const rows = fixtureRows(minuteBars(10, 900)); // 10:00 ET start
-  const report = gapReport(rows, '2026-11-23');
+  const report = gapReport(rows, '2026-11-23', [Date.parse('2026-11-23T14:30Z'),Date.parse('2026-11-23T21:00Z')]);
   assert.ok(report.some((entry) => entry.label === 'coverage partial'));
 });
 
@@ -113,14 +113,17 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 from market_data.single_stock_historical_backfill.provenance import build_provenance
 from market_data.single_stock_historical_backfill.publish import publish_symbol
-class MemoryStore:
-    def put_object(self, **obj):
-        print(base64.b64encode(obj["Body"]).decode())
+import sys
+sys.path.insert(0, "tests")
+from tests_stock_archive_store import FakeR2Client
+store = FakeR2Client()
 file = json.loads(input())
 with patch("market_data.single_stock_historical_backfill.publish.datetime") as clock:
     clock.now.return_value = datetime(2026, 11, 24, 1, tzinfo=timezone.utc)
     publish_symbol("AAPL", {"1m":file}, build_provenance("AAPL", {"1m":{}}),
-               config={"TIINGO_R2_BUCKET":"fixture"}, client=MemoryStore())
+               config={"TIINGO_R2_BUCKET":"fixture"}, client=store)
+for key in ["nasdaq/candles/AAPL/1m.json", "nasdaq/candles/AAPL/provenance.json"]:
+    print(base64.b64encode(store.objects[key]).decode())
 `], {input:JSON.stringify(file(minuteBars(2))),encoding:'utf8'});
   const [interval, sidecar] = output.trimEnd().split('\n');
   const bytes = Buffer.from(interval, 'base64');
@@ -133,4 +136,26 @@ with patch("market_data.single_stock_historical_backfill.publish.datetime") as c
   assert.equal(selectAsOf(rows,selection).length,2);
   assert.deepEqual(await readPublishedCandles(bytes,null),[]);
   assert.deepEqual(await readPublishedCandles(Buffer.concat([bytes,Buffer.from(' ')]),receipt),[]);
+});
+
+test('daily history from 2000 does not block a later session or its own session', () => {
+  const bars = ['2000-01-03','2026-11-23'].map(day => ({
+    ...minuteBars(1)[0], t:day+'T00:00:00Z',
+  }));
+  const rows = barsToObservations(file(bars,{interval:'1d'}),{
+    origin:'recorded',available_at:'2026-11-24T01:00:00Z',
+  });
+  for (const session of ['2000-01-03','2026-11-23']) {
+    const result = selectCandlesAsOf(rows, {instrument:'AAPL',session,cutoff:Date.parse('2026-11-24T02:00Z')},{maxAgeMs:60000});
+    assert.equal(result.rows.length,1);
+    assert.equal(result.rows[0].session,session);
+  }
+});
+
+test('complete early close has no partial label; missing closing minute does', () => {
+  const bars = minuteBars(210).map(row=>({...row,t:row.t.replace('11-23','11-27')}));
+  const rows = barsToObservations(file(bars),{origin:'recorded',available_at:'2026-11-28T00:00Z'});
+  const hours=[Date.parse('2026-11-27T14:30Z'),Date.parse('2026-11-27T18:00Z')];
+  assert.deepEqual(gapReport(rows,'2026-11-27',hours),[]);
+  assert.equal(gapReport(rows.slice(0,-1),'2026-11-27',hours)[0].label,'coverage partial');
 });

@@ -1,6 +1,6 @@
 # Single-stock historical candle backfill contract
 
-The producer is `market_data/single_stock_historical_backfill/`. One Clock reads the resulting interval file and its publication receipt through the stock candle archive control. The usual Stocks chart retains its existing source.
+The producer is `market_data/single_stock_historical_backfill/`. The Stocks chart reads the latest verified revision with its existing Yahoo fallback. Event Builder loads the retained versions by symbol, interval and trading session.
 
 ## Artifacts
 
@@ -29,8 +29,7 @@ starts a collector, or deploys.
   with `startDate`, `endDate`, from 2000 (one request; 6,764 bars for
   AAPL).
 
-Auth: `TIINGO_API_TOKEN` in the environment only (token as query
-param `token`). Free Starter limits: 50 requests/hour, 1,000/day,
+Auth: `TIINGO_API_TOKEN` in the environment only (token in the Authorization header). Free Starter limits: 50 requests/hour, 1,000/day,
 500 unique symbols/month. Who owns the Tiingo token in the repo
 environment is an open question (see below).
 
