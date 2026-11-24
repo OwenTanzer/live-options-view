@@ -67,6 +67,22 @@ def test_conditional_publish_and_expired_capture():
     assert client.put_object.call_count == 1
 
 
+def test_future_msi_completion_logs_source_cost_without_publishing(capsys):
+    client = Mock()
+    candidate = doc("coinbase")
+    candidate.update(feed="crypto", completed_at=(NOW + timedelta(seconds=1)).isoformat(),
+                     calls={"coinbase": 29, "coingecko": 1}, failures={"coingecko.http_429": 1},
+                     retry_after={"coingecko": "60"})
+    with pytest.raises(ValueError, match="Expired or future"):
+        publish(client, "bucket", "crypto", candidate, NOW)
+    report = json.loads(capsys.readouterr().out)
+    assert report["outcome"] == "rejected_capture_time"
+    assert report["linux_checked_at"] == NOW.isoformat()
+    for key in ("started_at", "completed_at", "calls", "failures", "retry_after"):
+        assert report[key] == candidate[key]
+    assert not client.mock_calls
+
+
 def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quote():
     for label in (None, "Dec 04, 2026"):
         poisoned = doc(ts=NOW+timedelta(days=7))
