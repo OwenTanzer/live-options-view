@@ -32,14 +32,14 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     if(candidates.some(a=>!Number.isSafeInteger(a.availableAt)||a.availableAt>now))
       throw new Error('invalid artifact availability');
     candidates.sort((a,b)=>a.availableAt-b.availableAt||a.key.localeCompare(b.key));
-    work=candidates.slice(0,INGESTION_LIMITS.artifacts);
+    work=candidates.slice(0,adapter.orderedBudget?.artifacts??INGESTION_LIMITS.artifacts);
   } else {
     candidates.sort((a,b)=>a.eventAt-b.eventAt||a.key.localeCompare(b.key));
     const oldest=adapter.liveTailSlots ? INGESTION_LIMITS.artifacts-adapter.liveTailSlots : INGESTION_LIMITS.artifacts/2;
     const newest=INGESTION_LIMITS.artifacts-oldest;
     work=[...candidates.slice(0,oldest),...candidates.slice(Math.max(oldest,candidates.length-newest))];
   }
-  const byteLimit=adapter.orderedAvailability?INGESTION_LIMITS.orderedBytes:INGESTION_LIMITS.bytes;
+  const byteLimit=adapter.orderedAvailability?(adapter.orderedBudget?.bytes??INGESTION_LIMITS.orderedBytes):INGESTION_LIMITS.bytes;
   let bytes=0,gets=0;
   const sharedObjects=new Map();
   const readBucket={async get(key) {

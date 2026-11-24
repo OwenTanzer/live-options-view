@@ -5,7 +5,10 @@ import {observation} from '../site/shared/one-clock.js';
 import {readOpeningOi,openingIndex} from './one-clock-opening-oi.js';
 export {calibratedLevels} from './one-clock-opening-oi.js';
 export const levelIngestion={
-  id:'calibrated-oi-levels',version:'2',owner:'market_data.live_market',demandDriven:true,orderedAvailability:true,reuseObjects:true,reportGapReasons:true,
+  id:'calibrated-oi-levels',version:'2',owner:'market_data.live_market',demandDriven:true,orderedAvailability:true,reportGapReasons:true,
+  // Account rotation can leave multiple 15-minute intervals between visits.
+  // Chain blobs are unique to each minute; release their bodies after verification.
+  orderedBudget:{artifacts:96,bytes:40*1024*1024},
   instruments:['QQQ'],outputs:['oi-levels','level-spot'],fields:{'level-spot':{spot:'Qualified underlying observation'},'oi-levels':{qualified:'Calibrated QQQ strike levels'}},
   async discover(bucket,{instrument,session,cutoff},db) {
     const bounds=equitySession(session);
