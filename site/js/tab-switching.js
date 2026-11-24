@@ -13,6 +13,8 @@
 let historyLoaded = false;
 // The News panel (js/news-panel.js) mounts once, on first open, like history.
 let newsLoaded = false;
+// The Crypto panel (js/crypto-panel.js) mounts once, on first open, like news.
+let cryptoLoaded = false;
 
 // tab id -> [panel element id, tab button id]
 const TABS = {
@@ -21,6 +23,7 @@ const TABS = {
   bots:    ['bots-panel',    'tab-bots'],
   squeeze: ['squeeze-panel', 'tab-squeeze'],
   news:    ['news-panel',    'tab-news'],
+  crypto:  ['crypto-panel',  'tab-crypto'],
 };
 
 function showTab(tab) {
@@ -37,6 +40,10 @@ function showTab(tab) {
   if (tab === 'news' && !newsLoaded) {
     newsLoaded = true;
     loadNewsPanel();
+  }
+  if (tab === 'crypto' && !cryptoLoaded) {
+    cryptoLoaded = true;
+    loadCryptoPanel();
   }
   // The bot roster is only polled while its tab is on screen -- no point
   // holding an extra request cycle open behind a hidden panel.
