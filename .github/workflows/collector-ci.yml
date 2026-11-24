@@ -49,6 +49,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
+      - "tests/test_provisional_collector.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -99,6 +100,7 @@ on:
       - "tests/verify_collector_vwap_rvol.py"
       - "tests/verify_collector_spy.py"
       - "tests/test_multi_underlying.py"
+      - "tests/test_provisional_collector.py"
       - "tests/verify_crude_calibration.py"
       - "tests/verify_eia_steo_calibration.py"
       - "tests/verify_weekly_collection.py"
@@ -160,6 +162,8 @@ jobs:
         run: python tests/verify_collector_spy.py
       - name: Run multi-underlying settlement marks suite (#182)
         run: python -m unittest discover -s tests -p test_multi_underlying.py -v
+      - name: Verify provisional collector isolation
+        run: python -m unittest discover -s tests -p test_provisional_collector.py -v
       - name: Run crude calibration suite
         run: python tests/verify_crude_calibration.py
       - name: Run EIA STEO calibration suite
