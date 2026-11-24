@@ -60,8 +60,9 @@ def run_once(*, out, publish, previous):
     result = write_local(out, snapshot)
     print(f"wrote {result['latest']} and {result['sidecar']}", flush=True)
     if publish:
-        publish_r2(snapshot)
-        print("published crypto/latest.json to R2", flush=True)
+        receipt = publish_r2(snapshot)
+        print("crypto/latest.json publication confirmed" if receipt else
+              "newer crypto snapshot already published", flush=True)
     return 0
 
 

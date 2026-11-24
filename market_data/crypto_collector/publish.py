@@ -24,10 +24,12 @@ self-contained. Only a matching receipt can establish its publication time.
 from __future__ import annotations
 
 import hashlib
+import json
+from contextlib import closing
 import os
 from pathlib import Path
 
-from .collector import ARTIFACT_KEY, iso, snapshot_to_json, utcnow
+from .collector import ARTIFACT_KEY, iso, parse_time, snapshot_to_json, utcnow
 from .provenance import build_provenance
 
 LATEST_KEY = ARTIFACT_KEY  # crypto/latest.json
@@ -74,17 +76,67 @@ def publish_r2(snapshot, *, bucket=None, endpoint_url=None):
     return _publish_snapshot(snapshot, client, bucket)
 
 
+def _error_code(exc):
+    return str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+
+
+def _read(client, bucket, key):
+    try:
+        response = client.get_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        if _error_code(exc) in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    with closing(response["Body"]) as stream:
+        body = stream.read()
+    return body, response["ETag"], response["LastModified"]
+
+
+def _timestamp(record):
+    timestamp = parse_time(record.get("constructed_at"))
+    if timestamp is None:
+        raise ValueError("Missing or invalid snapshot construction time")
+    return timestamp
+
+
+def _advance(client, bucket, key, record):
+    """Compare the exact version read; retry only a concurrent-write conflict."""
+    stamp = _timestamp(record)
+    body = snapshot_to_json(record).encode("utf-8")
+    for _ in range(8):
+        current = _read(client, bucket, key)
+        condition = {"IfNoneMatch": "*"}
+        if current is not None:
+            existing, etag, modified = current
+            prior = json.loads(existing)
+            previous_stamp = _timestamp(prior)
+            if previous_stamp > stamp:
+                return None, None
+            if previous_stamp == stamp:
+                if existing != body and not (
+                    key == SIDECAR_KEY and prior.get("snapshot_sha256") == record["snapshot_sha256"]
+                ):
+                    raise ValueError(f"Conflicting {key} contents for the same construction time")
+                return prior, iso(modified)
+            condition = {"IfMatch": etag}
+        try:
+            client.put_object(Bucket=bucket, Key=key, Body=body,
+                              ContentType="application/json", **condition)
+        except Exception as exc:
+            if _error_code(exc) in ("PreconditionFailed", "ConditionalRequestConflict", "409", "412"):
+                continue
+            raise
+        return record, iso(utcnow())
+    raise RuntimeError(f"Concurrent writers prevented publication of {key}")
+
+
 def _publish_snapshot(snapshot, client, bucket):
     provenance = build_provenance(snapshot, publication_status="published")
-    # A reader receives prices and their provenance in one atomic object read.
-    # Publication acknowledgement time becomes knowable only after the PUT.
     payload = {**snapshot, "provenance": provenance}
-    body = snapshot_to_json(payload).encode("utf-8")
-    client.put_object(Bucket=bucket, Key=LATEST_KEY, Body=body,
-                      ContentType="application/json")
-    receipt = {**provenance, "latest_published_at": iso(utcnow()),
-               "snapshot_sha256": hashlib.sha256(body).hexdigest()}
-    client.put_object(Bucket=bucket, Key=SIDECAR_KEY,
-                      Body=snapshot_to_json(receipt).encode("utf-8"),
-                      ContentType="application/json")
-    return receipt
+    accepted, acknowledged = _advance(client, bucket, LATEST_KEY, payload)
+    if accepted is None:
+        return None
+    digest = hashlib.sha256(snapshot_to_json(payload).encode("utf-8")).hexdigest()
+    receipt = {**provenance, "latest_published_at": acknowledged, "snapshot_sha256": digest}
+    stored, _ = _advance(client, bucket, SIDECAR_KEY, receipt)
+    return stored

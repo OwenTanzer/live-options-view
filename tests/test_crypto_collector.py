@@ -458,32 +458,91 @@ class TestPatterns(unittest.TestCase):
                             p["coins"] == ["BTC"] for p in found))
 
 
+class ConditionalError(Exception):
+    def __init__(self, code):
+        self.response = {"Error": {"Code": code}}
+
+
+class FakeObjectStore:
+    def __init__(self):
+        self.objects = {}
+        self.before_write = None
+        self.writes = []
+
+    def get_object(self, *, Key, **kwargs):
+        from io import BytesIO
+        if Key not in self.objects:
+            raise ConditionalError("NoSuchKey")
+        body, tag, modified = self.objects[Key]
+        return {"Body": BytesIO(body), "ETag": tag, "LastModified": modified}
+
+    def put_object(self, *, Key, Body, IfMatch=None, IfNoneMatch=None, **kwargs):
+        if self.before_write:
+            self.before_write(Key)
+        current = self.objects.get(Key)
+        if IfNoneMatch == "*" and current:
+            raise ConditionalError("PreconditionFailed")
+        if IfMatch is not None and (not current or IfMatch != current[1]):
+            raise ConditionalError("PreconditionFailed")
+        assert (IfMatch is None) != (IfNoneMatch is None)
+        tag = str(len(self.writes) + 1)
+        self.writes.append((Key, IfMatch, IfNoneMatch))
+        self.objects[Key] = (Body, tag, NOW)
+
+
 class PublicationTests(unittest.TestCase):
-    def test_partial_publication_keeps_matching_provenance_in_latest(self):
-        import hashlib
+    def setUp(self):
+        from market_data.crypto_collector.publish import _publish_snapshot, LATEST_KEY, SIDECAR_KEY
+        self.store = FakeObjectStore()
+        self.latest = LATEST_KEY
+        self.sidecar = SIDECAR_KEY
+        self.publish = lambda minute: _publish_snapshot(
+            {"constructed_at": f"2026-11-23T21:{minute:02}:00Z"}, self.store, "test")
+
+    def test_duplicate_and_stale_retry_leave_both_objects_untouched(self):
+        first = self.publish(1)
+        self.assertNotEqual(first["latest_published_at"], first["constructed_at"])
+        winner = self.publish(2)
+        before = dict(self.store.objects)
+        self.assertIsNone(self.publish(1))
+        self.assertEqual(self.publish(2), winner)
+        self.assertEqual(self.store.objects, before)
+        self.assertEqual(self.store.writes[0], (self.latest, None, "*"))
+        self.assertEqual(self.store.writes[2], (self.latest, "1", None))
+
+    def test_concurrent_newer_write_wins_create_replace_and_receipt_races(self):
+        for baseline, race_key in [(False, self.latest), (True, self.latest), (True, self.sidecar)]:
+            with self.subTest(baseline=baseline, race_key=race_key):
+                self.store = FakeObjectStore()
+                if baseline:
+                    self.publish(1)
+                wins = []
+                def race(key):
+                    if key == race_key:
+                        self.store.before_write = None
+                        wins.append(self.publish(3))
+                self.store.before_write = race
+                self.assertIsNone(self.publish(2))
+                self.assertEqual(self.publish(3), wins[0])
+
+    def test_failed_receipt_retry_recovers_without_rewriting_latest(self):
         import json
-        from unittest.mock import Mock, patch
-        from market_data.crypto_collector.publish import _publish_snapshot, SIDECAR_KEY, LATEST_KEY
-
-        objects = {}
-        def write(**kw):
-            objects[kw["Key"]] = kw["Body"]
-        client = Mock()
-        client.put_object.side_effect = write
-        with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
-            receipt = _publish_snapshot({"constructed_at": "previous"}, client, "test")
-        assert receipt["latest_published_at"] != "previous"
-        assert receipt["snapshot_sha256"] == hashlib.sha256(objects[LATEST_KEY]).hexdigest()
-
-        def fail_receipt(**kw):
-            if kw["Key"] == SIDECAR_KEY:
-                raise OSError("sidecar failed")
-            write(**kw)
-        client.put_object.side_effect = fail_receipt
-        with self.assertRaisesRegex(OSError, "sidecar failed"):
-            _publish_snapshot({"constructed_at": "new"}, client, "test")
-        assert json.loads(objects[LATEST_KEY])["provenance"]["constructed_at"] == "new"
-        assert json.loads(objects[SIDECAR_KEY])["snapshot_sha256"] != hashlib.sha256(objects[LATEST_KEY]).hexdigest()
+        import hashlib
+        from market_data.crypto_collector.collector import iso
+        self.publish(1)
+        def fail(key):
+            if key == self.sidecar:
+                raise OSError("receipt failed")
+        self.store.before_write = fail
+        with self.assertRaisesRegex(OSError, "receipt failed"):
+            self.publish(2)
+        body, etag, modified = self.store.objects[self.latest]
+        self.assertEqual(json.loads(body)["provenance"]["constructed_at"], "2026-11-23T21:02:00Z")
+        self.store.before_write = None
+        receipt = self.publish(2)
+        self.assertEqual(self.store.objects[self.latest][1], etag)
+        self.assertEqual(receipt["snapshot_sha256"], hashlib.sha256(body).hexdigest())
+        self.assertEqual(receipt["latest_published_at"], iso(modified))
 
 
 if __name__ == "__main__":
