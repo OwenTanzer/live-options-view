@@ -217,6 +217,25 @@ reset_strategy_state()
 d = run(window({}, even(1000, "C", "buy", low=300, unsigned=300)), held=call)
 check("thin (low-confidence) reading closes the held call", d.action == "sell", d.reason)
 
+print("baseline timing and missed cycles")
+after_outage = flow(T0 + 60 * MIN, even(1000))
+outage = [flow(T0), after_outage]
+for held in (None, sym("P", 400)):
+    reset_strategy_state()
+    d = run(outage, held=held)
+    check(f"hour-long read outage retains position {held}", d.action == "no_trade"
+          and d.metadata["flow"]["lean"] == "unavailable", d.reason)
+reset_strategy_state()
+recovered = flow(T0 + 75 * MIN, scale(even(1000), 2))
+d = run(outage + [recovered])
+check("signal recovers using only post-outage flow", d.action == "buy"
+      and d.metadata["flow"]["window_start_ms"] == after_outage.last_received_ms, d.reason)
+for offset in (-30001, -30000, 30000, 30001):
+    reset_strategy_state()
+    d = run([flow(T0 + offset), flow(T0 + 15 * MIN, even(1000))])
+    expected = "call" if abs(offset) <= 30000 else "unavailable"
+    check(f"baseline offset {offset} ms", d.metadata["flow"]["lean"] == expected, d.reason)
+
 print("session and accounts")
 reset_strategy_state()
 hist = window({}, even(1000))

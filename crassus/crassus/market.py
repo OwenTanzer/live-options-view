@@ -38,6 +38,9 @@ class Quote:
     ask: float | None
     quote_ts: str | None
     server_ts: str | None
+    instrument_class: str | None = None
+    bid_ts: str | None = None
+    ask_ts: str | None = None
 
     @property
     def age_seconds(self) -> float | None:
@@ -476,6 +479,9 @@ class QuoteReader:
                     ask=q.get("ask"),
                     quote_ts=q.get("quote_ts"),
                     server_ts=server_ts,
+                    instrument_class=q.get("instrument_class"),
+                    bid_ts=q.get("bid_ts"),
+                    ask_ts=q.get("ask_ts"),
                 )
                 for q in payload.get("quotes", [])
             }

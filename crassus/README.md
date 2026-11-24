@@ -17,7 +17,7 @@ record of what the bot saw, decided, and did.
 
 ---
 
-[Four-arm forward paper comparison](docs/forward-skew.md)
+[Four-arm forward paper comparison](docs/forward-skew.md) · [Opening OI associator paper strategies](docs/oi-associator.md)
 
 ## Status
 

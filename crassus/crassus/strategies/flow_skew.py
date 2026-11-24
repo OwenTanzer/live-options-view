@@ -11,8 +11,8 @@ Reading, per runner cycle:
 
 * Window: the change in each contract's session totals over the last
   `window_minutes` (default 15). The strategy keeps its own history of
-  projection readings per account; until it holds a reading at least that old
-  (after a start or restart) it has no window and makes no call.
+  projection readings per account; a baseline must fall within 30 seconds of the intended
+  window start. Missing that baseline leaves the reading unavailable.
 * Band: contracts whose strike is within `near_money_pct` (default 2%) of the
   snapshot's underlying price, same as `oi_skew_qqq`.
 * Pressure: only quote-signed volume with a prevailing quote at most 5 s old
@@ -70,8 +70,8 @@ DEFAULTS = dict(
     max_feed_age_s=120,
     max_spot_age_s=360,
 )
-# Readings kept beyond the window, so a slightly late cycle still finds a base.
-_HISTORY_SLACK_MS = 10 * 60_000
+# Allow small differences in cycle timing at the start of the measurement window.
+_BASELINE_TOLERANCE_MS = 30_000
 
 
 class FlowWindowTracker:
@@ -88,16 +88,16 @@ class FlowWindowTracker:
             return False
         self.readings.append((flow.last_received_ms, flow))
         floor = flow.last_received_ms - keep_ms
-        while len(self.readings) > 2 and self.readings[1][0] <= floor:
+        while self.readings and self.readings[0][0] < floor:
             self.readings.pop(0)
         return True
 
-    def base(self, at_or_before_ms: int) -> FlowSnapshot | None:
-        best = None
-        for t, flow in self.readings:
-            if t <= at_or_before_ms:
-                best = flow
-        return best
+    def base(self, target_ms: int) -> FlowSnapshot | None:
+        timestamp, snapshot = min(self.readings, key=lambda reading: abs(reading[0] - target_ms))
+        if abs(timestamp - target_ms) <= _BASELINE_TOLERANCE_MS:
+            return snapshot
+        return None
+
 
 
 _trackers: dict[tuple[str, str], FlowWindowTracker] = {}
@@ -202,7 +202,7 @@ def flow_reading(ctx: StrategyContext, flow: FlowSnapshot | None, error: str | N
     if not 0 <= age_s <= params["max_feed_age_s"] + 5:
         return {"lean": "unavailable", "why": f"Order-flow projection is {age_s:.0f}s old "
                                               f"(limit {params['max_feed_age_s']}s); stale feed, not a quiet market."}
-    if not tracker.observe(flow, window_ms + _HISTORY_SLACK_MS):
+    if not tracker.observe(flow, window_ms + _BASELINE_TOLERANCE_MS):
         return {"lean": "stale", "why": "Order-flow projection is not newer than the last recorded reading."}
     spot = _spot(ctx, params["max_spot_age_s"])
     if spot is None:
@@ -210,7 +210,7 @@ def flow_reading(ctx: StrategyContext, flow: FlowSnapshot | None, error: str | N
     base = tracker.base(flow.last_received_ms - window_ms)
     if base is None:
         return {"lean": "unavailable",
-                "why": f"No reading {params['window_minutes']} min old yet (warming up after start)."}
+                "why": f"Missing baseline near the {params['window_minutes']}-minute window start (warming up)."}
     for start, end in flow.gaps:
         if start < flow.last_received_ms and (end is None or end > base.last_received_ms):
             return {"lean": "unavailable", "why": "A feed gap overlaps the window; the window is incomplete."}

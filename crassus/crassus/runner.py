@@ -25,6 +25,7 @@ from urllib.parse import urljoin
 
 from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
 from .strategies.me_bots_inputs import Inputs as MeBotInputs
+from .strategies.oi_associator import IDS as OI_ASSOCIATORS, checked_flatten as oi_share_flatten
 from .strategies.oi_skew import REFERENCE_ROOTS as _OI_REFERENCE_ROOTS
 from .strategies.trump_oi_skew import ROOTS as _TRUMP_OI_SKEW_ROOTS
 from typing import Any
@@ -599,6 +600,8 @@ class Runner:
             flatten_decision = maybe_flatten(ctx, account.params)
             if flatten_decision is not None:
                 decision: Decision = flatten_decision
+                if account.strategy_id in OI_ASSOCIATORS and decision.is_trade:
+                    decision = oi_share_flatten(ctx, account.strategy_id, observed_quotes.get("QQQ"))
                 if account.strategy_id in ME_BOTS and decision.is_trade:
                     limit = me_limit_price(ctx, decision.symbol, decision.action)
                     if limit is None:
