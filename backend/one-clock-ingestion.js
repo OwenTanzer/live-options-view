@@ -41,7 +41,9 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
   }
   const byteLimit=adapter.orderedAvailability?(adapter.orderedBudget?.bytes??INGESTION_LIMITS.orderedBytes):INGESTION_LIMITS.bytes;
   let bytes=0,gets=0;
+  const sharedObjects=new Map();
   const readBucket={async get(key) {
+    if(adapter.reuseObjects && sharedObjects.has(key))return sharedObjects.get(key);
     const object=await bucket.get(key);gets++;
     if(!object)return null;
     if(!Number.isSafeInteger(object.size)||object.size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
@@ -52,7 +54,9 @@ export async function ingestPublicSource(db,bucket,adapter,{session,instrument,n
     const text=await object.text(),size=new TextEncoder().encode(text).byteLength;
     if(size>INGESTION_LIMITS.objectBytes)throw new Error('source object bound');
     if(size!==object.size)throw new Error('source object size mismatch');
-    return {size,etag:object.etag,uploaded:object.uploaded,text:async()=>text};
+    const retained={size,etag:object.etag,uploaded:object.uploaded,text:async()=>text};
+    if(adapter.reuseObjects)sharedObjects.set(key,retained);
+    return retained;
   }};
   const completed=[],rows=[];
   if(index.complete)for(const artifact of work) {
