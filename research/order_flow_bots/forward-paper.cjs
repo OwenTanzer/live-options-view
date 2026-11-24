@@ -113,11 +113,12 @@ function applyFrame(db, {frame, open, close, receivedAt, eligibleSlots}, now = D
       const prev = last.find(r => r.id === rule.id);
       let reason = rule.reason;
       let signal = rule.signal;
-      if (!eligibleSlots.includes(rule.id) || (rule.id === 9 && history[0].t !== open) ||
+      const missingOpening = rule.id === 9 && history[0].t !== open && !frame.officialOpeningReference;
+      if (!eligibleSlots.includes(rule.id) || missingOpening ||
           (rule.id === 11 && history.at(-2)?.parityQualified === false)) {
         reason = 'required forward input unavailable';
         if (rule.id===3 && !frame.oiVerified) reason='opening OI clearing date unverified';
-        if (rule.id===9 && (history[0].t!==open || !history[0].contracts.length ||
+        if (rule.id===9 && !frame.officialOpeningReference && (missingOpening || !history[0].contracts.length ||
             history[0].contracts.some(c=>!Number.isFinite(c.openOi)))) reason='opening put-OI reference unavailable';
         if (rule.id===11 && history.at(-2)?.parityQualified===false) reason='prior synchronized underlying unavailable';
         signal = null;
