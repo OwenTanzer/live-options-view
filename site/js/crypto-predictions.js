@@ -14,9 +14,13 @@
 // Estimates only. A prediction is a computed guess about the next
 // hour, labelled ESTIMATE ONLY / RESEARCH ONLY wherever it is
 // shown — never a live price, never a forecast to trade on. A
-// retracted or expired prediction is not shown as a price: the
-// producer publishes a revision-2 null row when the target hour
-// passes, and readingAsOf then reports "unavailable".
+// passed prediction is retained in the file as historical
+// evidence, never retracted — but it is not shown as the live
+// next-hour estimate: readPredictionsAsOf checks the returned
+// row's target hour and reports "unavailable" once it has
+// passed, so a past estimate can never stand in for the next
+// hour's. The retained rows stay readable through selectAsOf
+// for judging the prediction after the fact.
 //
 // The classic crypto-panel.js script talks to this module through
 // window.CryptoPredictions when it exists; the panel works without
@@ -63,9 +67,13 @@ export function toObservations(file, coin) {
 // the global fetch against BROWSER_DATA (the same public-data
 // origin the snapshot uses); tests pass a fake. Returns
 // { state, rows, reading, reason } where state is readingAsOf's
-// fresh / stale / unavailable. A 404, a malformed file, or an
-// expired/retracted prediction yields state 'unavailable' with a
-// reason — the caller renders that, never an estimate as a price.
+// fresh / stale / unavailable. A 404 or a malformed file yields
+// state 'unavailable' with a reason — the caller renders that,
+// never an estimate as a price. A passed prediction also yields
+// 'unavailable' here: it is retained in the file as historical
+// evidence, but its target hour has passed, so it is not the
+// live next-hour estimate; the reason names the retained history
+// and its target hour, so a reader can still judge it.
 export async function readPredictionsAsOf({
   fetchFn, coin, cutoff, maxAgeMs = MAX_AGE_MS,
 }) {
@@ -100,9 +108,26 @@ export async function readPredictionsAsOf({
   const selection = { session: SESSION, instrument: coin, cutoff: at, origin: ORIGIN };
   const rows = selectAsOf(observations, selection);
   const reading = readingAsOf(rows, selection, { maxAgeMs });
+  // The live next-hour estimate is the returned row only while
+  // its target hour has not passed. A passed prediction is
+  // retained in the file with its value intact — readingAsOf
+  // returns it fresh/stale, never unavailable — so this check
+  // is what keeps a past estimate from standing in for the
+  // next hour's. (A legacy revision-2 null row, from a file
+  // published before retention, still reads unavailable.)
+  if (reading.state !== 'unavailable' && reading.row && reading.row.value) {
+    const targetEnd = reading.row.value.target_end
+      ? Date.parse(reading.row.value.target_end) : null;
+    if (targetEnd !== null && targetEnd <= at) {
+      return { state: 'unavailable', rows, reading,
+        reason: `no live estimate for this hour — the latest prediction `
+          + `(target ${reading.row.value.target_start}–${reading.row.value.target_end}) `
+          + `is retained as historical evidence` };
+    }
+  }
   const reason = reading.state === 'unavailable'
     ? (reading.row && reading.row.value === null
-      ? 'estimate retracted — its target hour has passed'
+      ? 'estimate retracted in a legacy file — its target hour has passed'
       : 'no live estimate for this hour')
     : null;
   return { state: reading.state, rows, reading, reason };

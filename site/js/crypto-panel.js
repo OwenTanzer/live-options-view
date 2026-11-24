@@ -98,8 +98,10 @@ async function fetchCryptoLatest() {
 // it is loaded (window.CryptoPredictions). A prediction is a
 // computed guess about the next hour — rendered in its own section
 // as ESTIMATE ONLY / RESEARCH ONLY, never in the price table and
-// never as a live price. A retracted or expired prediction is not
-// shown as a price. BTC only in this version: it is the coin with
+// never as a live price. A passed prediction is not shown as the
+// live estimate — it is retained in the file as historical
+// evidence, and the read path reports "no live estimate" once
+// its target hour has passed. BTC only in this version: it is the coin with
 // a checked-in prediction seed; per-coin expansion is future scope.
 let cryptoPrediction = null;
 let cryptoPredictionError = null;

@@ -6,7 +6,10 @@
 // The prediction file (crypto/predictions/<COIN>.json) already holds
 // One Clock observation rows, so the module validates them through
 // the real selectAsOf / readingAsOf — never an estimate as a live
-// price, never a retracted estimate shown at all. Estimates are
+// price, and never a passed estimate shown as the live next-hour
+// estimate: passed predictions are retained as historical
+// evidence, and the read path reports "no live estimate" once
+// their target hour has passed. Estimates are
 // labelled ESTIMATE ONLY / RESEARCH ONLY wherever they are shown.
 // Plain node:assert; the panel half drives the shipped classic
 // script with fakes, like tests/crypto_panel.test.js does.
@@ -60,14 +63,14 @@ function predictionRow(targetStart, targetEnd, revision = 1, value = undefined) 
 }
 
 function predictionFile() {
-  // One expired hour (value row + retraction) and one live hour.
+  // One passed hour (value row retained as historical evidence)
+  // and one live hour. No retraction rows are published.
   return {
     schema_version: 1, dataset: 'crypto_predictions', symbol: 'BTC',
     horizon: '1h', generated_at: GENERATED_AT, coverage: 'current',
-    reason: null, observations_count: 3,
+    reason: null, observations_count: 2,
     observations: [
       predictionRow('2026-11-23T23:00:00Z', '2026-11-24T00:00:00Z'),
-      predictionRow('2026-11-23T23:00:00Z', '2026-11-24T00:00:00Z', 2, null),
       predictionRow('2026-11-24T00:00:00Z', '2026-11-24T01:00:00Z'),
     ],
   };
@@ -92,7 +95,9 @@ assert.equal(MAX_AGE_MS, 2 * 60 * 60 * 1000,
 // --- module: validation and as-of reads ------------------------------------
 {
   const { observations } = toObservations(predictionFile(), 'BTC');
-  assert.equal(observations.length, 3, 'the fixture file holds three rows');
+  assert.equal(observations.length, 2, 'the fixture file holds two rows');
+  assert.ok(observations.every((r) => r.revision === 1),
+    'every row is a revision-1 value row: no retractions are published');
   assert.ok(observations.every((r) => r.origin === 'synthetic'),
     'every validated row is synthetic');
 
@@ -107,14 +112,14 @@ assert.equal(MAX_AGE_MS, 2 * 60 * 60 * 1000,
     'a row for another coin must not pass');
 
   // Live estimate as of 00:45: the 00:00 prediction is fresh; the
-  // retracted 23:00 hour does not resurrect.
+  // retained 23:00 hour is history, not the live estimate.
   const live = await readPredictionsAsOf({
     fetchFn: async () => response(predictionFile()),
     coin: 'BTC', cutoff: NOW,
   });
   assert.equal(live.state, 'fresh', 'the live estimate reads fresh');
   assert.equal(live.reading.row.id, 'BTC|1h|2026-11-24T00:00:00Z',
-    'the reading is the 00:00 target hour, not the retracted 23:00 one');
+    'the reading is the 00:00 target hour, not the retained 23:00 one');
   assert.equal(live.reading.row.value.estimated_price, 61192.0);
 
   // A cutoff before the live prediction was available sees
@@ -129,21 +134,32 @@ assert.equal(MAX_AGE_MS, 2 * 60 * 60 * 1000,
   assert.match(early.reason, /no live estimate/,
     'the reason says there is no live estimate yet');
 
-  // A cutoff after the target hour, with a retraction published,
-  // is unavailable — the estimate is never shown past its hour.
-  const retractedOnly = {
+  // A cutoff after the target hour, with the prediction retained
+  // as historical evidence, is unavailable as a *live* estimate —
+  // the past estimate is never shown as the next hour's — but
+  // its value is still there to be judged: the reading row
+  // carries the estimate, and the reason names the retained
+  // history and its target hour.
+  const retainedOnly = {
     ...predictionFile(),
     observations: [
       predictionRow('2026-11-24T00:00:00Z', '2026-11-24T01:00:00Z'),
-      predictionRow('2026-11-24T00:00:00Z', '2026-11-24T01:00:00Z', 2, null),
     ],
   };
   const past = await readPredictionsAsOf({
-    fetchFn: async () => response(retractedOnly),
+    fetchFn: async () => response(retainedOnly),
     coin: 'BTC', cutoff: Date.parse('2026-11-24T01:30:00Z'),
   });
-  assert.equal(past.state, 'unavailable', 'a retracted estimate is not shown');
-  assert.equal(past.reading.row.value, null, 'the reading row is the retraction');
+  assert.equal(past.state, 'unavailable',
+    'a passed estimate is not shown as the live next-hour estimate');
+  assert.equal(past.reading.row.id, 'BTC|1h|2026-11-24T00:00:00Z',
+    'the reading row is still the retained prediction');
+  assert.equal(past.reading.row.value.estimated_price, 61192.0,
+    'the retained prediction keeps its value for judging');
+  assert.match(past.reason, /retained as historical evidence/,
+    'the reason names the retained history');
+  assert.match(past.reason, /2026-11-24T00:00:00Z/,
+    'the reason names the target hour');
 
   // 404 and malformed files are unavailable with a reason.
   const missing = await readPredictionsAsOf({
@@ -207,7 +223,7 @@ function fakeResult(state, rowValue) {
       ageMs: 45 * 60 * 1000, publicationAgeMs: 12 * 60 * 1000,
     },
     reason: state === 'unavailable'
-      ? 'estimate retracted — its target hour has passed' : null,
+      ? 'no live estimate for this hour — the latest prediction (target 2026-11-24T00:00:00Z–2026-11-24T01:00:00Z) is retained as historical evidence' : null,
   };
 }
 
@@ -233,17 +249,19 @@ function fakeResult(state, rowValue) {
   assert.match(rendered, /00:00 UTC/, 'the estimate/target times are shown');
   assert.match(rendered, /01:00 UTC/, 'the target hour end is shown');
 
-  // A retracted prediction renders as "no live estimate" — and
-  // the estimated price appears nowhere in the section.
-  const retracted = loadPanel({
+  // A passed prediction renders as "no live estimate" — and
+  // the estimated price appears nowhere in the section, even
+  // though the prediction itself is retained in the file.
+  const passed = loadPanel({
     readPredictionsAsOf: async () => fakeResult('unavailable', null),
   });
-  await retracted.fetchCryptoPredictions();
+  await passed.fetchCryptoPredictions();
   const gone = el('crypto-predictions').innerHTML;
   assert.match(gone, /No live next-hour estimate/,
-    'a retracted prediction is not shown as a price');
-  assert.match(gone, /retracted/, 'the reason names the retraction');
-  assert.doesNotMatch(gone, /\$61,192/, 'no estimated price survives a retraction');
+    'a passed prediction is not shown as the live estimate');
+  assert.match(gone, /retained as historical evidence/,
+    'the reason names the retained history');
+  assert.doesNotMatch(gone, /\$61,192/, 'no estimated price is shown for a passed hour');
 
   // No predictions module: explicit state, no invented numbers.
   const nomodule = loadPanel(null);

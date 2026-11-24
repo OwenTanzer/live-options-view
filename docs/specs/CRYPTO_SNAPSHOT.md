@@ -108,9 +108,12 @@ that serves the files through One Clock's real `selectAsOf` /
   with estimated price, direction/% move, range, confidence, data
   window, basis, and estimate/target times — never in the price
   table, never as a live price, never a forecast to trade on.
-- A retracted or expired prediction (revision-2 null row once
-  its target hour passes) is not shown as a price; the section
-  says there is no live estimate, with the reason.
+- A passed prediction is retained in the file as historical
+  evidence, never retracted — but it is not shown as the live
+  next-hour estimate: the read path checks the returned row's
+  target hour and the section says there is no live estimate,
+  with the reason naming the retained history and its target
+  hour, so the prediction can still be judged after the fact.
 - The estimate cohort never mixes with the live-price cohort:
   the snapshot selects recorded prices, the predictions module
   selects synthetic estimates, and a row of the wrong origin is
