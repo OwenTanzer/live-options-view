@@ -107,6 +107,19 @@ class PublicDecisions(unittest.TestCase):
         record["decision"]["metadata"]["anchor_observed_at"]="2026-11-20T15:10:00Z"
         self.assertIsNone(project(record)[1][1]["value"])
 
+    def test_flow_pair_decisions_and_evaluations(self):
+        for name in ("crassus_flowskew", "crassus_flow_recover"):
+            with self.subTest(bot=name):
+                record = decision(name, "flow_skew_qqq")
+                record["strategy_decided_at"] = "2026-11-20T15:00:01Z"
+                instrument, rows = project(record)
+                self.assertEqual(instrument, "QQQ")
+                self.assertEqual([row["source"] for row in rows], ["bot-decision", "bot-evaluation"])
+                self.assertTrue(all(row["value"]["bot"] == name for row in rows))
+                self.assertEqual(rows[1]["eventAt"], "2026-11-20T15:00:01+00:00")
+                self.assertNotIn("PRIVATE", json.dumps(rows))
+                self.assertIsNone(project(decision(name, "oi_skew_qqq")))
+
     def test_identity(self):
         record=decision("crassus_skew_ibit","oi_skew_ibit_adaptive")
         record.pop("account_state_before");record["outcome_class"]="transport_error"
