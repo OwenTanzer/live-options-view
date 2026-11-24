@@ -22,7 +22,15 @@
         ? (time <= now && now - time <= 60000 ? 'fresh' : 'stale')
         : (mark.freshness === 'stale' ? 'stale' : 'time unknown');
       const when = mark.provider_observed_at || mark.provider_time_label || 'no provider time';
-      return {...row, price, minuteLabel: 'Minute price · ' + state + ' · ' + when,
+      const age = feed === 'crypto' && state === 'stale' && time <= now
+        ? ' (' + Math.floor((now - time) / 1000) + 's old)' : '';
+      const observedAt = price !== null && Number.isFinite(time) ? mark.provider_observed_at : null;
+      const timing = feed === 'crypto' ? {
+        provider_observed_at: observedAt,
+        as_of: observedAt,
+        freshness: observedAt === null ? 'unavailable' : state,
+      } : {};
+      return {...row, ...timing, price, minuteLabel: 'Minute price · ' + state + age + ' · ' + when,
         status: price === null ? 'source_unavailable' : 'ok'};
     });
   }

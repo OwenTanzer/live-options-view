@@ -124,6 +124,27 @@ def protect_observations(candidate, prior, feed, now):
             row["watermark_at"] = observed.isoformat()
 
 
+def crypto_freshness(prices, assessed_at):
+    providers = {}
+    for symbol, row in prices.items():
+        stats = providers.setdefault(row["source"], {
+            "counts": Counter(), "oldest_symbol": None, "oldest_age_seconds": None,
+        })
+        observed = crypto_time(row.get("provider_observed_at"))
+        if row["price_usd"] is None:
+            bucket = row["freshness"] = "missing"
+        elif observed is None:
+            bucket = row["freshness"] = "unknown_time"
+        else:
+            age = (assessed_at - observed).total_seconds()
+            row["freshness"] = "fresh" if age <= 60 else "stale"
+            bucket = "fresh" if age <= 60 else "stale_to_5m" if age <= 300 else "stale_over_5m"
+            if stats["oldest_age_seconds"] is None or age > stats["oldest_age_seconds"]:
+                stats.update(oldest_symbol=symbol, oldest_age_seconds=age)
+        stats["counts"][bucket] += 1
+    return {"assessed_at": assessed_at.isoformat(), "providers": providers}
+
+
 def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     if candidate.get("schema_version") != "panel_minute.v1" or candidate.get("feed") != feed:
         raise ValueError("Invalid capture identity")
@@ -160,6 +181,8 @@ def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
             return "older_baseline"
         condition = {"IfMatch": etag}
         protect_observations(candidate, prior, feed, now)
+    if feed == "crypto":
+        candidate["freshness_summary"] = crypto_freshness(candidate["prices"], utcnow())
     candidate["coverage"] = dict(Counter(v["freshness"] for v in candidate["prices"].values()))
     body = encode(candidate)
     attempt = None
@@ -215,8 +238,11 @@ def main():
                           config=Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1}))
     outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow(),
                       crypto_receipts=root / "private" / "crypto-spot.sqlite3")
-    print(json.dumps(dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
-                          coverage=candidate["coverage"], calls=candidate["calls"])), flush=True)
+    report = dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
+                  coverage=candidate["coverage"], calls=candidate["calls"])
+    if outcome == "published" and feed == "crypto":
+        report["freshness_summary"] = candidate["freshness_summary"]
+    print(json.dumps(report), flush=True)
 
 
 if __name__ == "__main__":

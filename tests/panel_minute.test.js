@@ -20,3 +20,18 @@ test('missing price and old provider times cannot promote the hour', () => {
   const newer={...baseline,coins:[{...old,provider_observed_at:new Date(now).toISOString()}]};
   assert.equal(rows('crypto',newer,overlay,now)[0].price,1);
 });
+test('crypto freshness and both price timestamps follow the selected mark', () => {
+  const stamp = overlay.prices.BTC.provider_observed_at;
+  const base = {...baseline, coins:[{...old, freshness:'fresh', as_of:stamp, provider_observed_at:stamp}]};
+  for (const [mark, expectedTime, freshness] of [
+    [overlay.prices.BTC, stamp, 'fresh'],
+    [{source:'coinbase', price_usd:null, provider_observed_at:stamp}, null, 'unavailable'],
+    [{source:'coinbase', price_usd:2}, null, 'unavailable'],
+  ]) {
+    // A priced mark without a timestamp may overlay an undated hourly price.
+    const hourly = mark.price_usd && !mark.provider_observed_at ? baseline : base;
+    const [row] = rows('crypto', hourly, {...overlay,prices:{BTC:mark}}, now);
+    assert.deepEqual([row.as_of, row.provider_observed_at, row.freshness],
+      [expectedTime, expectedTime, freshness]);
+  }
+});
