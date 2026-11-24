@@ -31,16 +31,25 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def _usable_row(row):
-    if not isinstance(row, dict):
+def _usable_row(row, expiry, occ_prefix):
+    if not isinstance(row, dict) or row.get("Type") not in ("call", "put"):
         return False
-    oi = row.get("OpenInterest")
+    symbol = row.get("OptionSymbol")
+    prefix = occ_prefix + ("C" if row["Type"] == "call" else "P")
+    if not isinstance(symbol, str) or not symbol.startswith(prefix):
+        return False
+    digits = symbol[len(prefix) :]
     strike = row.get("Strike")
+    oi = row.get("OpenInterest")
     return (
-        row.get("Type") in ("call", "put")
-        and isinstance(row.get("OptionSymbol"), str)
+        len(digits) == 8
+        and digits.isascii()
+        and digits.isdigit()
         and _number(strike)
         and strike > 0
+        and strike == int(digits) / 1000
+        and row.get("TradeDate", expiry) == expiry
+        and row.get("Expiration", expiry) == expiry
         and (oi is None or _number(oi) and oi >= 0)
     )
 
@@ -66,15 +75,17 @@ def _reading(ctx, last):
         return None, None, None
     observed = _timestamp(snap.timestamp)
     now = ctx.now_et
+    expiry = now.date().isoformat()
+    occ_prefix = f"QQQ{now:%y%m%d}"
     if (
         observed is None
         or observed < last
         or not 0 <= now.timestamp() - observed <= MAX_BOARD_AGE_SECONDS
-        or snap.expiration != now.date().isoformat()
+        or snap.expiration != expiry
         or not _number(snap.underlying_price)
         or snap.underlying_price <= 0
         or not isinstance(snap.rows, list)
-        or not all(_usable_row(row) for row in snap.rows)
+        or not all(_usable_row(row, expiry, occ_prefix) for row in snap.rows)
     ):
         return None, None, None
     pin, both = max_pain._compute_max_pain(snap.rows)

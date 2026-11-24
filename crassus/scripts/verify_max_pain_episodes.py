@@ -68,6 +68,7 @@ class Episodes(unittest.TestCase):
         fill=True,
         quote_age=0,
         ask_age=None,
+        ask=None,
         bid_age=None,
         corrupt=None,
         session=START,
@@ -93,7 +94,7 @@ class Episodes(unittest.TestCase):
                 s: Quote(
                     s,
                     bid,
-                    bid + 0.01,
+                    bid + 0.01 if ask is None else ask,
                     stamp,
                     stamp,
                     bid_ts=bid_time.isoformat(),
@@ -201,6 +202,7 @@ class Episodes(unittest.TestCase):
         self.assertEqual(self.act(2, 399).action, "buy")
 
     def test_traded_side_clock_and_malformed_board(self):
+        self.assertEqual(self.act(0, ask=0.99).action, "no_trade")
         self.assertEqual(self.act(0, ask_age=20).action, "no_trade")
         self.assertEqual(self.act(1, bid_age=20).action, "buy")
         self.assertEqual(self.act(2, bid=0.85, bid_age=20).action, "no_trade")
@@ -223,6 +225,19 @@ class Episodes(unittest.TestCase):
                 "no_trade",
             )
         self.assertEqual(self.act(6, 398).action, "no_trade")
+
+    def test_mismatched_contract_identity_cannot_contribute_or_open(self):
+        good = board(START, 399).rows[0]
+        for overrides in (
+            {"OptionSymbol": "SPY261124C00398000"},
+            {"OptionSymbol": "QQQ261125C00398000"},
+            {"Type": "put"},
+            {"Strike": 399},
+            {"TradeDate": "2026-11-23"},
+        ):
+            self.assertEqual(
+                self.act(0, corrupt={**good, **overrides}).action, "no_trade"
+            )
 
     def test_corrupt_state_preserves_evidence_and_allows_risk_exit(self):
         for raw in ("{", '{"blocked":42}'):
