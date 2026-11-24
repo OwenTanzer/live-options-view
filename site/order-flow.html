@@ -232,6 +232,7 @@
       <div>
         <small>OPTIONS VIEW</small>
         <h1>QQQ order flow</h1>
+        <a id="intraminute-link" href="/intraminute.html">Inside the QQQ minute</a>
       </div>
       <strong id="mode">QQQ · Live feed</strong>
     </header>
@@ -607,7 +608,10 @@ canvas{display:block;width:100%;touch-action:pan-x pan-y pinch-zoom}
       dirty = true,
       tableAt = 0,
       forceTable = true;
-    cursor.subscribe(selection => { end = selection.cutoff; });
+    cursor.subscribe(selection => {
+      end = selection.cutoff;
+      document.getElementById("intraminute-link").href = selection.mode==="live" ? "/intraminute.html?live=1" : "/intraminute.html?at="+end;
+    });
     const live = () => el("source").value !== "replay";
     const capture = () => el("source").value === "capture";
     const capturedScale = PF.liveScale(null);

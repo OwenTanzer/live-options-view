@@ -83,3 +83,39 @@ change unrelated services. An interrupted session remains partial.
 Historical rollout receipts and the detailed original IBIT proposal are available
 in [documentation history](../../docs/HISTORY.md). Past acceptance appointments
 are not current pending tasks.
+
+## QQQ intraminute order flow
+
+Open **Inside the QQQ minute** from Order Flow or One Clock. The three bundled
+minutes are actual 2026-11-13 14:35–14:38 UTC observations (stop exclusive),
+from QQQ archive owner c69563a38bff. Segments 0000–0003 supplied quote/signing
+warmup. Every chart uses collector receipt time for visibility. Option prints
+keep their provider time, sequence, strike, contract count, label and basis.
+Pressure weights each q1/q5 contract equally. A one-second response uses
+observed endpoint quote bins, excluding known gaps. It measures association.
+
+Live activation uses the existing Tradier producer. Set QQQ_TAPE_PORT to the
+service's routed HTTP port and QQQ_TAPE_KEY to a shared secret. Configure the
+API Worker with the corresponding HTTPS QQQ_TAPE_ORIGIN and secret QQQ_TAPE_KEY.
+Enable QQQ_TAPE_ARCHIVE=1 for derived minute publication. Deploy API then assets
+through their protected lanes and activate the Tradier revision between sessions.
+Remove those producer switches to revert the projection. No extra provider
+session, subscriptions, KV operations or per-event database writes are needed.
+The browser requests cursor deltas at a 250 ms target plus transfer/render time.
+It backs off on failure and suspends requests while hidden. Each batch holds up
+to 4,096 observations from a 100,000-row ring. A cursor reset discloses a truncated
+window. Quote side times retain their original provider precision.
+
+A background reader writes provisionally closed minutes under
+order-flow/qqq/intraminute/v1/<UTC epoch milliseconds>.json. On finalization,
+a complete single-owner QQQ summary is replayed in segment order; each compressed
+input is checked against its recorded SHA-256. A failed derived write can be
+retried independently with the following command using the existing R2 settings:
+
+    python -m market_data.tradier.intraminute_archive moo144/tradier/YYYY-MM-DD/summary-OWNER.json
+
+Multiple-owner and partial summaries require reconciliation before final replay.
+The UI reports absent minutes. A last trade and a midpoint can differ; the
+underlying curve uses quote midpoints, while the optional trade range uses
+as-received regular-sale prints. Cancel/correction messages stay in the stock
+tape. This view does not reconstruct an official corrected OHLC.

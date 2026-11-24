@@ -235,6 +235,9 @@ jobs:
           node tests/one_clock_candle_browser.mjs
           node tests/one_clock_headlines_browser.mjs
           node tests/order_flow_clock_browser.mjs
+          node tests/intraminute_model.mjs
+          node tests/intraminute_api.mjs
+          node tests/intraminute_browser.mjs
       - name: BTC monthly mobile fixture workflow
         run: |
           node --test tests/btc_owner_link.test.mjs

@@ -51,5 +51,10 @@ export function renderReceipt(container,event) {
     link.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(event.triggeredAt)})+'#history-clock';
     link.textContent='Open Historical at the encounter';container.append(link);
   } else details.open=true;
+  if(event.instrument==='QQQ' && Number.isFinite(event.triggeredAt)){
+    const link=document.createElement('a'), query=new URLSearchParams({at:String(event.triggeredAt)});
+    if(Number.isFinite(event.encounter?.strike))query.set('strike',String(event.encounter.strike));
+    link.href='/intraminute.html?'+query;link.textContent='Inspect QQQ flow at trigger';container.append(link);
+  }
   container.append(details);container.hidden=false;
 }
