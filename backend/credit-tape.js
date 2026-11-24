@@ -4,7 +4,7 @@ function error(message, status) {
 const CREDIT_ORIGIN = 'https://prolific-essence-production.up.railway.app';
 const CREDIT_PATHS = new Set(['/credit-tape/', '/credit-tape/replay', '/credit-tape/table.css', '/credit-tape/table.js',
   '/credit-tape/auth/login', '/credit-tape/auth/callback', '/credit-tape/auth/logout']);
-const RETURN_PATHS = new Map([['btc', '/?chain=BTC'], ['kalshi', '/kalshi.html']]);
+const RETURN_PATHS = new Map([['btc', '/?chain=BTC'], ['kalshi', '/kalshi.html'], ['history', '/history.html?market=crypto']]);
 const REPLAY_QUERY = /^\?one_clock_at=([1-9]\d{12})(?:&end=(\d{1,16})&seq=(\d{1,16}))?$/;
 function replayHint(query) {
   const kalshi = /^\?return=kalshi&one_clock_at=([1-9]\d{12})$/.exec(query);
@@ -61,7 +61,7 @@ export async function creditTape(request) {
   // Fixed navigation hint only, never OAuth state or an identity claim. The
   // trusted upstream still owns approval/state/callback/session validation.
   if (url.pathname.endsWith('/login')) {
-    const destination = url.search === '?return=btc' ? 'btc' : url.search === '?return=kalshi' ? 'kalshi' : replayHint(url.search);
+    const destination = url.search === '?return=btc' ? 'btc' : url.search === '?return=kalshi' ? 'kalshi' : url.search === '?return=history' ? 'history' : replayHint(url.search);
     outgoing.append('Set-Cookie', returnCookie(destination ? 600 : 0, destination));
   }
   if (logout) outgoing.append('Set-Cookie', returnCookie(0));
