@@ -12,7 +12,7 @@ FIXTURE_SHA256 = {
     "feeds/eia_today_in_energy.xml": "07fd20e4905ae089bdc294c6f5cff1def71d4c41bc777549e005f15dda690c53",
     "feeds/oilprice_com.xml": "42e46c7d1f88573b386b8ed2e8d67a1d7303b734499ae5a519a18c2f96c55d81",
     "feeds/techcrunch.xml": "0829287bb2a8cb9920e6254a57b1059381f2e716161e3b0f619b974dfc1a0b9c",
-    "media_performance_events.json": "50de3e5a16cb993a1a048882f03190973a1a16ed7d64f5d811aafe7b3df9106c",
+    "media_performance_events.json": "243de40150434b23c5392c7a2ecd87ade73a6d152ae47cf6f0cebdf3149c25fa",
     "parser/atom.xml": "48c8105670afe28020a6a6ce52d3e1517bb108c18ebe488a95c79d410a7c2fd0",
     "parser/entities.xml": "57c4184081b9f10a5b605dc9ab5943f4b7d28fbd087d9f17c8dfe4a01010f6c7",
     "parser/malformed.xml": "c3448ad09d909ff3a018afb215ff29b3116ad12548da2e571b5ae8d1a3fe328a",

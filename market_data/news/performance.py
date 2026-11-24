@@ -7,9 +7,8 @@ the move is evaluated?
 
 It is the forward half of the M3 join. The backward half stays in
 ``join.py`` and is unchanged: ``join.match_price`` gives the base price
-(the newest price available by ``event_at``). This module never
-recomputes the base, never uses publication time as the event for a
-performance claim, and never invents a price.
+(the newest price available by ``event_at``). The batch join selects this base separately for each mapped instrument.
+Publication-time rows carry no performance claim.
 
 Event-known / no-lookahead rules
 --------------------------------
@@ -74,7 +73,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 
-from .join import PriceSeries
+from .companies import map_company
+from .join import PriceSeries, match_price
 from .normalize import iso, parse_iso
 
 PERFORMANCE_SCHEMA = "news-performance/v1"
@@ -138,6 +138,8 @@ def performance_for_event(event: dict, base: dict, series_by_instrument: dict,
     an ISO string. ``mode`` is ``"collector"`` or ``"archive"`` for a
     claim; ``"publication"`` rows are labelled hindsight with no return.
     """
+    if mode not in {"collector", "archive", "publication"}:
+        raise ValueError("unknown performance clock mode")
     cutoff_dt = _to_datetime(cutoff)
     event_at = _to_datetime(event["event_at"])
     instrument_id = event.get("instrument_id")
@@ -188,14 +190,20 @@ def performance_for_event(event: dict, base: dict, series_by_instrument: dict,
                           missing_reason="unknown mapping: no instrument to price")
             rows.append(common)
             continue
+        series = series_by_instrument.get(instrument_id)
+        if series is None or series.instrument_id != instrument_id:
+            common.update(status="missing", missing_reason="no_series")
+            rows.append(common)
+            continue
+        if base_record and (base_record.get("instrument_id") != instrument_id
+                            or not base_record.get("available_at")
+                            or _to_datetime(base_record["available_at"]) > min(event_at, cutoff_dt)):
+            common.update(status="missing", missing_reason="ineligible_base")
+            rows.append(common)
+            continue
         if base_status != "matched" and base_status != "stale":
             common.update(status="missing",
                           missing_reason="no_base_price: no price was available by the event")
-            rows.append(common)
-            continue
-        series = series_by_instrument.get(instrument_id)
-        if series is None:
-            common.update(status="missing", missing_reason="no_series")
             rows.append(common)
             continue
         common["coverage"]["series"] = series.series
@@ -215,7 +223,7 @@ def performance_for_event(event: dict, base: dict, series_by_instrument: dict,
             continue
         ret, bps = forward_return(float(base_record["price"]), float(forward.price))
         common.update(
-            forward=forward.summary(),
+            forward={**forward.summary(), "price_time": iso(forward.price_time)},
             return_pct=ret * 100.0,
             return_bps=bps,
             status="matched",
@@ -243,9 +251,17 @@ def performance_for_join(join_result: dict, series_by_instrument: dict,
     mode = join_result.get("mode", "collector")
     cutoff_dt = _to_datetime(cutoff if cutoff is not None else join_result["cutoff"])
     all_rows: list[dict] = []
-    for row in join_result.get("rows", []):
-        all_rows.extend(performance_for_event(
-            row, row.get("price") or {}, series_by_instrument, cutoff_dt, mode, horizons))
+    eligible = [row for row in join_result.get("rows", []) if _to_datetime(row["event_at"]) <= cutoff_dt]
+    for row in eligible:
+        mapping = row.get("company_mapping") or row.get("instrument_mapping_detail") or map_company(row.get("title", ""))
+        instrument = mapping["instrument_id"]
+        series = series_by_instrument.get(instrument)
+        base = {}
+        if series and series.instrument_id == instrument:
+            tolerance = timedelta(seconds=join_result.get("price_series", {}).get("tolerance_s", 120))
+            base = match_price(series, _to_datetime(row["event_at"]), cutoff_dt, tolerance)
+        mapped = dict(row, instrument_id=instrument, instrument_mapping_detail=mapping)
+        all_rows.extend(performance_for_event(mapped, base, series_by_instrument, cutoff_dt, mode, horizons))
     matched = sum(1 for r in all_rows if r["status"] == "matched")
     return {
         "schema_version": PERFORMANCE_SCHEMA,
@@ -255,7 +271,7 @@ def performance_for_join(join_result: dict, series_by_instrument: dict,
         "horizons": list(horizons),
         "rows": all_rows,
         "summary": {
-            "events": len(join_result.get("rows", [])),
+            "events": len(eligible),
             "rows": len(all_rows),
             "matched": matched,
             "missing": sum(1 for r in all_rows if r["status"] == "missing"),

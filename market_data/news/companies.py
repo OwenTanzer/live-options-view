@@ -13,7 +13,8 @@ Matching
 --------
 * Input text is title + excerpt + categories, joined with spaces.
 * A ticker matches only as a whole word (``\\bNVDA\\b``), case-insensitive,
-  optionally with a leading ``$`` (``$NVDA``). ``NVDA2`` or ``ANVDA``
+  Ambiguous BP, COP, SPY and META tokens require a cashtag or an explicit company phrase.
+  Other tickers match ``$`` (``$NVDA``). ``NVDA2`` or ``ANVDA``
   do not match.
 * A company name matches only as one of the explicit phrases listed for
   that company, case-insensitive, word-boundary aware. Distinctive
@@ -55,9 +56,11 @@ not fall back to QQQ.
 from __future__ import annotations
 
 import re
+import json
+from pathlib import Path
 from dataclasses import dataclass
 
-MAPPING_VERSION = "companies-v1"
+MAPPING_VERSION = "companies-v2"
 SCHEMA = "news-company-mapping/v1"
 
 
@@ -74,43 +77,9 @@ class Company:
     distinctive: tuple[str, ...] = ()
 
 
-COMPANIES: tuple[Company, ...] = (
-    Company("QQQ", "etf.qqq", "Invesco QQQ Trust",
-            ("invesco qqq", "qqq trust", "nasdaq-100 etf", "nasdaq 100 etf")),
-    Company("SPY", "etf.spy", "SPDR S&P 500 ETF Trust",
-            ("spdr s&p 500", "s&p 500 etf", "spy etf")),
-    Company("NVDA", "eq.nvda", "NVIDIA",
-            ("nvidia", "nvidia corporation")),
-    Company("MSFT", "eq.msft", "Microsoft",
-            ("microsoft", "microsoft corporation")),
-    Company("AAPL", "eq.aapl", "Apple",
-            ("apple inc", "apple incorporated"),
-            ("iphone", "tim cook", "macbook", "ios")),
-    Company("GOOGL", "eq.googl", "Alphabet",
-            ("alphabet", "alphabet inc", "google", "google cloud")),
-    Company("AMZN", "eq.amzn", "Amazon",
-            ("amazon", "amazon.com", "amazon web services", "aws")),
-    Company("META", "eq.meta", "Meta Platforms",
-            ("meta platforms", "facebook"),
-            ("mark zuckerberg",)),
-    Company("AMD", "eq.amd", "Advanced Micro Devices",
-            ("advanced micro devices", "amd")),
-    Company("TSM", "eq.tsm", "Taiwan Semiconductor",
-            ("taiwan semiconductor", "taiwan semiconductor manufacturing",
-             "tsmc", "taiwan semiconductor manufacturing company")),
-    Company("ORCL", "eq.orcl", "Oracle",
-            ("oracle", "oracle corporation", "oracle cloud")),
-    Company("XOM", "eq.xom", "Exxon Mobil",
-            ("exxon mobil", "exxonmobil", "exxon")),
-    Company("CVX", "eq.cvx", "Chevron",
-            ("chevron", "chevron corporation")),
-    Company("COP", "eq.cop", "ConocoPhillips",
-            ("conocophillips", "conoco phillips")),
-    Company("BP", "eq.bp", "BP",
-            ("bp plc", "british petroleum")),
-    Company("SHEL", "eq.shel", "Shell",
-            ("shell plc", "royal dutch shell")),
-)
+COMPANIES = tuple(Company(**entry) for entry in
+                  json.loads(Path(__file__).with_name("companies-v2.json").read_text()))
+
 
 _BY_TICKER = {c.ticker: c for c in COMPANIES}
 
@@ -123,8 +92,13 @@ def _word_re(phrase: str) -> "re.Pattern[str]":
     return re.compile(r"\b" + inner + r"\b", re.IGNORECASE)
 
 
-_TICKER_RES = {c.ticker: re.compile(r"\$?\b" + re.escape(c.ticker) + r"\b",
-                                     re.IGNORECASE) for c in COMPANIES}
+# Ordinary words and rate units require an explicit cashtag or company phrase.
+_AMBIGUOUS = {"BP", "COP", "SPY", "META"}
+_TICKER_RES = {
+    c.ticker: re.compile((r"\$" if c.ticker in _AMBIGUOUS else r"\$?\b")
+                         + re.escape(c.ticker) + r"\b", re.IGNORECASE)
+    for c in COMPANIES
+}
 _NAME_RES = {c.ticker: [_word_re(p) for p in c.name_phrases]
              for c in COMPANIES}
 _DISTINCTIVE_RES = {c.ticker: [_word_re(p) for p in c.distinctive]

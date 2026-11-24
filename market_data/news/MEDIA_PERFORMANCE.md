@@ -1,11 +1,11 @@
 # Media performance pipeline — news -> stock performance
 
-Status: PR prep, fixture-only, inert by default. No live feeds, no bucket
+Status: the original fixture design follows below. The mapped-headline study is now wired into the One Clock Event Builder, observer, Results, and retained-evidence Replay. No live feeds, no bucket
 writes, no trading signal, no sentiment model.
 Repo path (intended): `market_data/news/MEDIA_PERFORMANCE.md`
 Branch (intended): `jay/media-news-stock-performance`, base master
 `a250f6f2e82fab0bc257ba7edd88712be2e0ffe2`
-Schema: `news-performance/v1`. Mapping: `companies-v1`.
+Schema: `news-performance/v1`. Mapping: `companies-v2`.
 
 > Sequencing note (Jay, 2026-11-23): the pipeline design in sections
 > 1-6 was settled FIRST. Critical Design Theory (sections 7-12) was
@@ -78,7 +78,7 @@ by default, no live feeds, no producer restarts. The pipeline runs on
 local fixtures; `build-views` / `publish` wiring is out of scope for
 this PR and is listed as an open question.
 
-## 5. Company / ticker mapping — `companies.py` (`companies-v1`)
+## 5. Company / ticker mapping — `companies.py` (`companies-v2`)
 
 Explicit allowlist only (16 entries, named in code and here):
 
@@ -330,7 +330,7 @@ answers a different question first. All three use the same data
 
 ```
 Story ─────●───────────────────────● 5m  ● 30m  ● 1h  ● 1d
-10:05      10:10 (+0.83%)        10:35 (+1.66%)  11:05 (+3.32%)
+10:05      10:20 (+0.89%, 5m target)        10:35 (+1.72%)  11:05 (+3.38%)
 ```
 - Time is horizontal; the story is a point on a line, the moves are
   points after it. Answers first: "what happened after, and when?"
@@ -343,8 +343,8 @@ Story ─────●──────────────────�
 ### B. Lead-with-move card (inspection) — CHOSEN
 
 ```
-NVDA  +3.32%  in 1h  ·  fresh
-  5m +0.83% · 30m +1.66% · 1h +3.32% · 1d not yet available
+NVDA  +3.38%  in 1h  ·  fresh
+  5m +0.89% · 30m +1.72% · 1h +3.38% · 1d not yet available
   "NVIDIA beats on data-center revenue…" — TechCrunch, 10:05 UTC
   [Methodology & provenance ▸]
 ```
@@ -368,7 +368,7 @@ NVDA  +3.32%  in 1h  ·  fresh
 
 ```
 Story                          5m      30m     1h      1d
-NVIDIA beats… (NVDA)          +0.83%  +1.66%  +3.32%  —
+NVIDIA beats… (NVDA)          +0.89%  +1.72%  +3.38%  —
 OPEC+ cut… (XOM)              +0.45%  +0.91%  +1.36%  —
 Startup raises… (—)           —       —       —       —
 ```
@@ -498,7 +498,7 @@ for this PR lists the feedback but not the verbatim 7):
    hidden in a menu).
 3. Rearrange: put the object first, the provenance one layer deeper.
 4. One thing to hold: the reader should be able to repeat the
-   claim ("NVDA +3.32% in 1h, fresh") after one glance.
+   claim ("NVDA +3.38% in 1h, fresh") after one glance.
 5. Find it again: a returning reader, given one timestamp and no
    coaching, can get to the same card, tell what was observed vs
    estimated vs stale, open the evidence, and return to the same

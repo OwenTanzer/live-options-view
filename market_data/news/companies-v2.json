@@ -1,0 +1,180 @@
+[
+  {
+    "ticker": "QQQ",
+    "instrument_id": "etf.qqq",
+    "display_name": "Invesco QQQ Trust",
+    "name_phrases": [
+      "invesco qqq",
+      "qqq trust",
+      "nasdaq-100 etf",
+      "nasdaq 100 etf"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "SPY",
+    "instrument_id": "etf.spy",
+    "display_name": "SPDR S&P 500 ETF Trust",
+    "name_phrases": [
+      "spdr s&p 500",
+      "s&p 500 etf",
+      "spy etf"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "NVDA",
+    "instrument_id": "eq.nvda",
+    "display_name": "NVIDIA",
+    "name_phrases": [
+      "nvidia",
+      "nvidia corporation"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "MSFT",
+    "instrument_id": "eq.msft",
+    "display_name": "Microsoft",
+    "name_phrases": [
+      "microsoft",
+      "microsoft corporation"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "AAPL",
+    "instrument_id": "eq.aapl",
+    "display_name": "Apple",
+    "name_phrases": [
+      "apple inc",
+      "apple incorporated"
+    ],
+    "distinctive": [
+      "iphone",
+      "tim cook",
+      "macbook",
+      "ios"
+    ]
+  },
+  {
+    "ticker": "GOOGL",
+    "instrument_id": "eq.googl",
+    "display_name": "Alphabet",
+    "name_phrases": [
+      "alphabet",
+      "alphabet inc",
+      "google",
+      "google cloud"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "AMZN",
+    "instrument_id": "eq.amzn",
+    "display_name": "Amazon",
+    "name_phrases": [
+      "amazon",
+      "amazon.com",
+      "amazon web services",
+      "aws"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "META",
+    "instrument_id": "eq.meta",
+    "display_name": "Meta Platforms",
+    "name_phrases": [
+      "meta platforms",
+      "facebook"
+    ],
+    "distinctive": [
+      "mark zuckerberg"
+    ]
+  },
+  {
+    "ticker": "AMD",
+    "instrument_id": "eq.amd",
+    "display_name": "Advanced Micro Devices",
+    "name_phrases": [
+      "advanced micro devices",
+      "amd"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "TSM",
+    "instrument_id": "eq.tsm",
+    "display_name": "Taiwan Semiconductor",
+    "name_phrases": [
+      "taiwan semiconductor",
+      "taiwan semiconductor manufacturing",
+      "tsmc",
+      "taiwan semiconductor manufacturing company"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "ORCL",
+    "instrument_id": "eq.orcl",
+    "display_name": "Oracle",
+    "name_phrases": [
+      "oracle",
+      "oracle corporation",
+      "oracle cloud"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "XOM",
+    "instrument_id": "eq.xom",
+    "display_name": "Exxon Mobil",
+    "name_phrases": [
+      "exxon mobil",
+      "exxonmobil",
+      "exxon"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "CVX",
+    "instrument_id": "eq.cvx",
+    "display_name": "Chevron",
+    "name_phrases": [
+      "chevron",
+      "chevron corporation"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "COP",
+    "instrument_id": "eq.cop",
+    "display_name": "ConocoPhillips",
+    "name_phrases": [
+      "conocophillips",
+      "conoco phillips"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "BP",
+    "instrument_id": "eq.bp",
+    "display_name": "BP",
+    "name_phrases": [
+      "bp plc",
+      "british petroleum"
+    ],
+    "distinctive": []
+  },
+  {
+    "ticker": "SHEL",
+    "instrument_id": "eq.shel",
+    "display_name": "Shell",
+    "name_phrases": [
+      "shell plc",
+      "royal dutch shell"
+    ],
+    "distinctive": []
+  }
+]

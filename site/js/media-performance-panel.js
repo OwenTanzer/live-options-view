@@ -68,7 +68,7 @@
 
   function renderHorizonChip(doc, horizon) {
     var chip = el(doc, 'span', 'mp-chip ' + returnClass(horizon.return_pct, horizon.status));
-    var label = el(doc, 'span', 'mp-chip-horizon', horizon.horizon);
+    var label = el(doc, 'span', 'mp-chip-horizon', horizon.horizon + (horizon.elapsed_seconds ? ' target · ' + horizon.elapsed_seconds / 60 + ' min elapsed' : ''));
     chip.appendChild(label);
     if (horizon.status === 'matched') {
       chip.appendChild(el(doc, 'span', 'mp-chip-value', formatReturn(horizon.return_pct)));
@@ -91,7 +91,7 @@
       var move = el(doc, 'span', 'mp-move ' + returnClass(lead.return_pct, lead.status),
         formatReturn(lead.return_pct));
       header.appendChild(move);
-      header.appendChild(el(doc, 'span', 'mp-move-horizon', 'in ' + lead.horizon));
+      header.appendChild(el(doc, 'span', 'mp-move-horizon', lead.elapsed_seconds ? 'after ' + (lead.elapsed_seconds / 60) + ' min (' + lead.horizon + ' target)' : 'target ' + lead.horizon));
       header.appendChild(el(doc, 'span', 'mp-honesty', lead.honesty_label));
     } else if (lead) {
       header.appendChild(el(doc, 'span', 'mp-move mp-missing', lead.honesty_label));

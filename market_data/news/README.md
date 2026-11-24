@@ -283,8 +283,7 @@ optional rendered checks `NODE_PATH=<playwright> node tests/news_panel_browser.t
 
 `MEDIA_PERFORMANCE.md` is the design doc: news -> mapping -> event ->
 base price -> forward prices -> view, with event-known / no-lookahead
-rules, horizons, coverage and missing states. The pipeline is
-fixture-only and inert by default. The interface follows Critical
+rules, horizons, coverage and missing states. The Python calculator supports offline prices. The Event Builder’s Mapped company headline study uses the published archive and existing price strip on demand; see [One Clock](../../docs/ONE_CLOCK.md#mapped-company-headlines). The interface follows Critical
 Design Theory (Gate 0 mission through Gate 5 fidelity; see sections
 7-12 of the design doc): lead with the move, short honesty labels in
 sight (`fresh`, `stale base`, `pending`, `not yet available`,

@@ -37,6 +37,8 @@ headline. See MEDIA_PERFORMANCE.md, Gate 1 and Gate 3.
 
 from __future__ import annotations
 
+from .normalize import parse_iso
+
 HONESTY_LABELS = (
     "fresh", "stale base", "pending", "not yet available",
     "no coverage", "unknown mapping", "hindsight",
@@ -48,7 +50,12 @@ def honesty_label(row: dict) -> str:
     if row.get("hindsight") or row.get("status") == "hindsight":
         return "hindsight"
     if row.get("status") == "matched":
-        return "stale base" if row.get("base_stale") else "fresh"
+        labels = []
+        if row.get("base_stale"):
+            labels.append("stale base")
+        if row.get("coverage", {}).get("forward_lag_seconds", 0) > 0:
+            labels.append("delayed endpoint")
+        return ", ".join(labels) or "fresh"
     reason = row.get("missing_reason") or ""
     if reason == "not_yet_available":
         return "pending"
@@ -68,6 +75,9 @@ def summarise_for_event(performance_rows: list[dict]) -> dict | None:
         horizon = row["horizon"]
         by_horizon[horizon] = {
             "horizon": horizon,
+            "elapsed_seconds": row.get("horizon_seconds", 0) + row.get("coverage", {}).get("forward_lag_seconds", 0),
+            "base_record": (row.get("base") or {}).get("record"),
+            "forward_record": row.get("forward"),
             "status": row["status"],
             "honesty_label": honesty_label(row),
             # Numbers only when matched; otherwise explicitly None so
@@ -91,6 +101,10 @@ def attach_performance(view_page: dict, performance_result: dict) -> dict:
     performance rows gets ``performance: None`` — the panel renders
     "performance not yet available", never a zero.
     """
+    if performance_result.get("rows") and (view_page.get("mode") != performance_result.get("mode")
+            or not view_page.get("as_of") or not performance_result.get("cutoff")
+            or parse_iso(performance_result["cutoff"]) > parse_iso(view_page["as_of"])):
+        raise ValueError("performance requires a compatible view clock and cutoff")
     by_event: dict[tuple, list[dict]] = {}
     for row in performance_result.get("rows", []):
         by_event.setdefault((row["item_id"], row["revision_id"]), []).append(row)

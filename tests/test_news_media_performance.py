@@ -85,6 +85,12 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(got["reason"], "ambiguous")
         self.assertEqual(got["candidates"], ["MSFT", "NVDA"])
 
+    def test_ambiguous_tokens_require_company_context(self):
+        for title in ["Rates fall 25 bp", "spy films return", "a cop investigates", "meta commentary"]:
+            self.assertEqual(map_company(title)["reason"], "no_match")
+        self.assertEqual(map_company("$bp raises dividend")["ticker"], "BP")
+        self.assertEqual(map_company("British Petroleum raises dividend")["ticker"], "BP")
+
     def test_no_match_is_unknown(self):
         got = map_company("A startup raises a round to build a new chip", "")
         self.assertEqual(got["instrument_mapping"], "unknown")
@@ -115,7 +121,7 @@ class ForwardJoinTests(unittest.TestCase):
                 "eq.xom": self.series["eq.xom"]}
 
     def test_forward_5m_nvda_uses_earliest_at_or_after_target(self):
-        # E1: event 10:05, base 180.50. Target 10:10. NVDA gap 10:10-10:19,
+        # E1: event 10:05, base 180.40. Target 10:10. NVDA gap 10:10-10:19,
         # so the earliest qualifying forward is 10:20 at 182.00.
         event = self.events["tc-nvda-001"]
         rows = performance_for_event(
@@ -125,9 +131,30 @@ class ForwardJoinTests(unittest.TestCase):
         self.assertEqual(five["status"], "matched")
         self.assertEqual(five["forward"]["record_id"], "nvda-102000")
         self.assertEqual(five["coverage"]["forward_lag_seconds"], 600.0)
-        expected = (182.0 - 180.5) / 180.5
+        expected = (182.0 - 180.4) / 180.4
         self.assertAlmostEqual(five["return_pct"], expected * 100.0, places=6)
         self.assertAlmostEqual(five["return_bps"], expected * 10000.0, places=4)
+
+    def test_refuse_wrong_or_late_baselines(self):
+        event = self.events["tc-nvda-001"]
+        for bad in [{"instrument_id": "etf.qqq"}, {"available_at": "2026-11-09T10:05:02Z"}]:
+            base = {**event["price"], "record": {**event["price"]["record"], **bad}}
+            result = performance_for_event(event, base, self.series_by_instrument(),
+                                           "2026-11-09T11:05:02Z", "collector", ["5m"])
+            self.assertEqual(result[0]["missing_reason"], "ineligible_base")
+            self.assertIsNone(result[0]["return_pct"])
+
+    def test_batch_join_reprices_and_preserves_delayed_evidence(self):
+        event = self.events["tc-nvda-001"]
+        raw = dict(event, price={"status": "matched", "record": {"instrument_id": "etf.qqq", "price": 600}})
+        result = performance_for_join({"rows": [raw], "mode": "archive", "cutoff": "2026-11-09T10:20:02Z"},
+                                      self.series_by_instrument(), horizons=["5m"])
+        row = result["rows"][0]
+        self.assertEqual(row["base"]["record"]["record_id"], "nvda-100400")
+        view = summarise_for_event([row])["horizons"]["5m"]
+        self.assertEqual(view["elapsed_seconds"], 900)
+        self.assertEqual(view["forward_price_time"], "2026-11-09T10:20:00Z")
+        self.assertEqual(view["honesty_label"], "delayed endpoint")
 
     def test_forward_30m_and_1h_nvda(self):
         event = self.events["tc-nvda-001"]
@@ -139,8 +166,8 @@ class ForwardJoinTests(unittest.TestCase):
             "2026-11-09T11:05:02Z", "collector")
         by_h = {r["horizon"]: r for r in rows}
         # 30m target 10:35 -> 183.50; 1h target 11:05 -> 186.50.
-        self.assertAlmostEqual(by_h["30m"]["return_pct"], (183.5 - 180.5) / 180.5 * 100.0)
-        self.assertAlmostEqual(by_h["1h"]["return_pct"], (186.5 - 180.5) / 180.5 * 100.0)
+        self.assertAlmostEqual(by_h["30m"]["return_pct"], (183.5 - 180.4) / 180.4 * 100.0)
+        self.assertAlmostEqual(by_h["1h"]["return_pct"], (186.5 - 180.4) / 180.4 * 100.0)
 
     def test_missing_forward_when_cutoff_before_target(self):
         event = self.events["tc-nvda-001"]

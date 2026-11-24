@@ -160,7 +160,7 @@ export async function observedEventsAsOf(db, { namespace, selection }) {
 
 export async function observedEventsRangeAsOf(db,{namespace,from,to,instruments,cutoff}) {
   boundedText(namespace,'namespace');instant(cutoff);
-  if(!Array.isArray(instruments)||instruments.length<1||instruments.length>3)throw new Error('result instrument bound');
+  if(!Array.isArray(instruments)||instruments.length<1||instruments.length>32)throw new Error('result instrument bound');
   // Drive from the session scope index, then look up one eligible revision per
   // occurrence. Unrelated historical sessions are not scanned for a range read.
   const scope=`FROM one_clock_events e INDEXED BY one_clock_event_scope
