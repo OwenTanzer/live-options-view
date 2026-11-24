@@ -535,7 +535,7 @@
     },
     {
       "alias": "Bowman Max Pain",
-      "username": "crassus_bowman_max_pain",
+      "username": "crassus_bowman_pin",
       "password_env": "CRASSUS_PW_BOWMAN_MAX_PAIN",
       "strategy_id": "bowman_max_pain_qqq",
       "active": false
