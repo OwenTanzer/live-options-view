@@ -77,13 +77,17 @@ class Writer:
 
 def snapshots(path):
     with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        # Both tables must describe the same commit. Release the read lock before
+        # handing rows to a potentially slow replay consumer.
+        db.execute("BEGIN")
         versions = {key: json.loads(value) for key, value in db.execute("SELECT id,value FROM versions")}
         query = "SELECT name,header,members FROM polls JOIN listings ON listing=listings.id ORDER BY name"
-        for name, header, packed in db.execute(query):
-            members = json.loads(zlib.decompress(packed))
-            entries = {k: [versions[i] for i in v] if isinstance(v, list) else v["literal"]
-                       for k, v in members.items()}
-            yield name, {**json.loads(header), "entries": entries}
+        receipts = db.execute(query).fetchall()
+    for name, header, packed in receipts:
+        members = json.loads(zlib.decompress(packed))
+        entries = {k: [versions[i] for i in v] if isinstance(v, list) else v["literal"]
+                   for k, v in members.items()}
+        yield name, {**json.loads(header), "entries": entries}
 
 
 def record(root, name, snapshot):

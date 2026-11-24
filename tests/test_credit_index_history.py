@@ -138,3 +138,26 @@ class IndexHistoryTests(unittest.TestCase):
             self.assertEqual(results, [0])
             dtcc.assert_not_called()
             treu.assert_not_called()
+
+    def test_new_poll_commits_between_replay_queries(self):
+        first = self.sample({"CFTC_CR": [{"sliceId": 1}]})
+        second = self.sample({"CFTC_CR": [{"sliceId": 2}]}, 1)
+        history.record(self.root, "one", first)
+        connect = sqlite3.connect
+        with closing(connect(self.path)) as setup:
+            setup.execute("PRAGMA journal_mode=WAL")
+
+        class Interleave(sqlite3.Connection):
+            def execute(reader, sql, *args):
+                if sql.startswith("SELECT name,header,members"):
+                    history.record(self.root, "two", second)
+                return super().execute(sql, *args)
+
+        def open_db(path, **kwargs):
+            if kwargs.get("uri"):
+                kwargs["factory"] = Interleave
+            return connect(path, **kwargs)
+
+        with patch.object(sqlite3, "connect", side_effect=open_db):
+            self.assertEqual(dict(history.snapshots(self.path)), {"one": first})
+        self.assertEqual(dict(history.snapshots(self.path)), {"one": first, "two": second})
