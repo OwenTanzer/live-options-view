@@ -14,6 +14,7 @@ from . import canopus_down_day  # noqa: F401
 from . import looking_glass_straddle  # noqa: F401
 from . import me_bots  # noqa: F401
 from . import max_pain  # noqa: F401
+from . import max_pain_episodes  # noqa: F401
 from . import momentum_puts_only  # noqa: F401
 from . import momentum_qqq  # noqa: F401
 from . import oi_associator  # noqa: F401
@@ -38,6 +39,7 @@ __all__ = [
     "flow_skew",
     "oi_associator",
     "max_pain",
+    "max_pain_episodes",
     "put_call_ratio",
     "canopus_down_day",
     "looking_glass_straddle",
