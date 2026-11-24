@@ -8,6 +8,7 @@ They have separate lifecycles; a browser request does not start them.
 | [Live market](live_market/README.md) | QQQ/SPY snapshots, price strip, health and in-memory live quotes | `python -m market_data.live_market` |
 | [Tradier archive](tradier/OPERATIONS.md) | Daily time-and-sales archives; no identified in-repository consumer | `python -u -m market_data.tradier.launcher` |
 | [Options scanner](options_scanner/README.md) | Session sweeps, contract rankings and active snapshots | `python -u -m market_data.options_scanner run` |
+| [Candle-cache backend](candle_cache_backend/README.md) | Local reader/writer for the R2 candle layout (`nasdaq/candles/`), One Clock envelope stamping and as-of selection; seeded AAPL sample | `python -m market_data.candle_cache_backend seed --out <dir>` |
 
 All use the [shared Python image](../deployment/python/README.md). Schedules,
 activation and provider configuration are documented with each service.
