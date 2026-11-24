@@ -42,11 +42,12 @@ test('polls are shared, executable quotes precede new orders and survive a flow 
     observe({ flow, chainReceivedAt, frozenLadderSpot }) {
       assert.equal(frozenLadderSpot, 400);
       assert.equal(chainReceivedAt, open);
-      return { frames: flow ? [{}] : [] };
+      return { frames: flow ? [{receivedAt:time}] : [] };
     }
   }
+  const db = require('./forward-paper.cjs').openPaper(':memory:');
   const service = createService({
-    db: {}, paper, feeds: { FLOW_URL: 'flow', CHAIN_URL: 'chain', ForwardFeed },
+    db, paper, feeds: { FLOW_URL: 'flow', CHAIN_URL: 'chain', ForwardFeed },
     clock: () => time, fetchQuote: async () => { quoteHits++; return { bid: 1, ask: 2 }; },
     createOpeningOiReader: () => () => new Promise(() => {}),
     fetchImpl: async url => {
@@ -65,6 +66,7 @@ test('polls are shared, executable quotes precede new orders and survive a flow 
   assert.deepEqual(result.errors, ['flow: offline']); assert.equal(quoteHits, 2);
   time = close + 60001;
   assert.equal((await service.cycle()).status, 'idle'); assert.equal(quoteHits, 2);
+  db.close();
 });
 
 test('real adapters persist eleven decisions and an opening packet in one active session cycle', async () => {

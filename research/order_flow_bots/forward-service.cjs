@@ -3,6 +3,7 @@ const path = require('node:path');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { equitySession } = require('../../backend/one-clock-calendar.js');
 const { sessionAt } = require('../../site/shared/one-clock-session.js');
+const { createDeadlineTracker, FRAME_GRACE_MS } = require('./forward-deadlines.cjs');
 
 const FLOW_MS = 3000;
 const CHAIN_MS = 30000;
@@ -38,15 +39,18 @@ function artifact(url, cadence, fetchImpl, clock) {
 
 function createService({ db, paper, feeds, fetchQuote, createOpeningOiReader, fetchImpl = fetch, clock = Date.now }) {
   let current;
+  const deadlines = createDeadlineTracker(db);
   async function cycle() {
     const now = clock();
     const bounds = schedule(now);
     if (!bounds) {
       current = null;
-      return { status: 'idle' };
+      const missedFrames = deadlines.expire(now);
+      return { status: 'idle', missedFrames, decisions: missedFrames * 11 };
     }
     if (current?.session !== bounds.session) {
       paper.registerSession(db, bounds);
+      deadlines.attach(bounds, now);
       current = {
         session: bounds.session, feed: new feeds.ForwardFeed(), quoteBucket: null, lastQuote: null,
         restored: paper.restoreFeedState(db, bounds.session),
@@ -87,18 +91,36 @@ function createService({ db, paper, feeds, fetchQuote, createOpeningOiReader, fe
     // Slot 6 also uses this tape to establish the pre-signal breakout range.
     const quoteAccepted = quote ? paper.applyQuote(db, quote, clock()).accepted : false;
     if (quote) current.lastQuote = quote;
+    const observedAt = clock();
     const observation = await attempt('frames', () => current.feed.observe({
       flow: flow?.body || null, chain: chain?.body || null,
       chainReceivedAt: chain?.receivedAt ?? null, spotQuote: current.lastQuote,
-      receivedAt: clock(), ...current.restored, openingOi: current.oi, ...bounds
+      receivedAt: observedAt, ...current.restored, openingOi: current.oi, ...bounds
     }));
+    const flowSession = flow?.body?.session;
+    const watermark = flowSession?.day === bounds.session && Number.isSafeInteger(flowSession.last) &&
+      flowSession.last <= observedAt ? flowSession.last : null;
+    // Expiration uses the instant the adapter saw the packet. A frame that
+    // reaches its inclusive deadline can be committed before any later poll.
+    const observed = observation?.frames ?? [];
+    const missedFrames = deadlines.expire(observedAt, { session:bounds.session, flowDay:flowSession?.day, watermark });
+    const relevantTime = Math.min(observedAt, bounds.close);
+    if (observedAt > bounds.open + FRAME_GRACE_MS &&
+        (watermark === null || relevantTime - watermark > FRAME_GRACE_MS)) {
+      errors.push(flowSession?.day && flowSession.day !== bounds.session
+        ? 'flow: expected '+bounds.session+' but received '+flowSession.day
+        : 'flow: decision source watermark is missing or stale');
+    }
+    if (missedFrames) errors.push('flow: decision deadline missed');
     let accepted = 0, decisions = 0;
-    for (const frame of observation?.frames ?? []) {
+    for (const frame of observed) {
       const result = paper.applyFrame(db, frame, clock());
       if (result.accepted) { accepted++; decisions += result.decisions.length; }
     }
+    const coverageError = deadlines.latestCoverageError(bounds.session);
+    if (coverageError) errors.push('flow: ' + coverageError);
     return { status: errors.length ? 'degraded' : 'polling', session: bounds.session,
-      frames: accepted, decisions, quoteAccepted, errors };
+      frames: accepted, missedFrames, decisions: decisions + missedFrames * 11, quoteAccepted, errors };
   }
   return { cycle };
 }

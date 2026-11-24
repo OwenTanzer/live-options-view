@@ -17,6 +17,8 @@ New positions require two minutes between their target exit and the scheduled cl
 
 For decisions using a QQQ midpoint, both sides must have reached the collector by the decision cutoff. The later side sets the midpoint's availability and the older observation determines its freshness. A last trade also becomes usable only after the collector receives it.
 
+Each decision minute has a fifteen-second receipt deadline. If a usable projection never arrives, the service writes eleven abstentions with the decision minute, deadline and actual detection time. A persistent session cursor covers missed polls and process restarts through the closing minute. A first launch partway through the day starts with the earliest deadline it can still meet. The service reports stale or wrong-session flow as degraded and keeps sampling current quotes for outstanding positions.
+
 On a Linux host with systemd user services, pin the checkout to the reviewed commit, then install the unit as the persistent owner of a new ledger. Keep the release checkout at its installed path.
 
 ```sh
