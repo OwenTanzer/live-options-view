@@ -1,5 +1,6 @@
 """Exercise the fill boundary and account isolation through the forward adapter."""
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,67 @@ START = datetime(2026, 11, 16, 10, 30, tzinfo=ET)
 
 
 class Comparison(unittest.TestCase):
+    def test_recovery_pairs_preserve_all_other_order(self):
+        from crassus.runner import _pair_recovery_accounts
+
+        catalog = Path(__file__).resolve().parents[1] / "accounts.example.json"
+        rows = [SimpleNamespace(**{"params": {}, **r}) for r in json.loads(catalog.read_text())["accounts"]]
+        if not any(r.username == "crassus_flow_recover" for r in rows):
+            rows.append(SimpleNamespace(username="crassus_flow_recover", strategy_id="flow_skew_qqq", params={}))
+        pairs = {
+            "crassus_oiskew": "crassus_oif_recover",
+            "crassus_skew_ibit": "crassus_oif_ibit_recover",
+            "crassus_skew_slv": "crassus_oif_slv_recover",
+            "crassus_skew_dram": "crassus_oif_dram_recover",
+            "crassus_flowskew": "crassus_flow_recover",
+        }
+        for roster in (rows, rows[::-1]):
+            names = [a.username for a in _pair_recovery_accounts(roster)]
+            self.assertCountEqual(names, [a.username for a in roster])
+            for source, recovery in pairs.items():
+                self.assertEqual(names.index(recovery), names.index(source) + 1)
+                strategy = next(a.strategy_id for a in roster if a.username == source)
+                controls = [a.username for a in roster if a.strategy_id == strategy and
+                            a.params.get("forward_skew_arm") in ("baseline", "stop", "protect_only")]
+                start = names.index(recovery) + 1
+                self.assertEqual(names[start:start + len(controls)], controls)
+            cohort = {a.username for a in roster if a.params.get("forward_skew_arm")} | set(pairs.values())
+            self.assertEqual([n for n in names if n not in cohort],
+                             [a.username for a in roster if a.username not in cohort])
+        no_source = [a for a in rows if a.username not in pairs]
+        self.assertEqual(_pair_recovery_accounts(no_source), no_source)
+
+    def test_repeated_bucket_routes_ordinary_signal_without_replaying_recovery(self):
+        account = SimpleNamespace(username="crassus_oif_recover")
+        symbol = SYM
+        bar = int(START.timestamp() // 300)
+        quote = Quote(symbol, 1, 1.01, START.isoformat(), START.isoformat())
+        ctx = SimpleNamespace(now_et=START, session_phase="open",
+                              snapshot=SimpleNamespace(timestamp=START.isoformat(), underlying_price=680),
+                              quotes=lambda _: {symbol: quote})
+        signal = Decision("sell", "skew invalidated", "oi_skew_qqq", "1", symbol, 1)
+        bars = SimpleNamespace(rows=[], error=None)
+        with TemporaryDirectory() as directory, patch.object(f, "signal_for", return_value=signal), \
+                patch.object(f, "direction", side_effect=AssertionError("replayed bar")):
+            path = Path(directory) / (account.username + "-" + START.date().isoformat() + ".json")
+            chain = f.ProtectionChain("call", 1, 1, bar - 1, 1, contract_symbol=symbol)
+            chain._last_bar = bar
+            path.write_text(json.dumps({"chain": f.freeze(chain)}))
+            ctx.book = Book([dict(sym=symbol, side="buy", qty=1, price=1, execution_request_id="entry")])
+            decision = f.decide(ctx, account, "protect_reentry", bars, Path(directory), "exit")
+            self.assertEqual((decision.action, decision.symbol), ("sell", symbol))
+            self.assertEqual(json.loads(path.read_text())["pending"]["id"], "exit")
+            chain.held, chain.exited_by = False, "protection"
+            path.write_text(json.dumps({"chain": f.freeze(chain)}))
+            ctx.book = Book([])
+            signal.action = "buy"
+            decision = f.decide(ctx, account, "protect_reentry", bars, Path(directory), "unchanged")
+            self.assertEqual(decision.action, "no_trade")
+            self.assertIn("unchanged signal", decision.reason)
+            signal.symbol = symbol.replace("C", "P")
+            decision = f.decide(ctx, account, "protect_reentry", bars, Path(directory), "flip")
+            self.assertEqual((decision.action, decision.symbol), ("buy", signal.symbol))
+
     def test_matched_policy(self):
         self.assertIsNone(
             f.arm_for(SimpleNamespace(username="crassus_oiskew", params={}))

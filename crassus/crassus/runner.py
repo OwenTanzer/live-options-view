@@ -164,6 +164,37 @@ def decision_base(*, decision_id: str, alias: str, strategy_id: str,
     }
 
 
+def _pair_recovery_accounts(accounts):
+    """Schedule each recovery account immediately after its ordinary signal account."""
+    source_for = {
+        "crassus_oif_recover": "crassus_oiskew",
+        "crassus_oif_ibit_recover": "crassus_skew_ibit",
+        "crassus_oif_slv_recover": "crassus_skew_slv",
+        "crassus_oif_dram_recover": "crassus_skew_dram",
+        "crassus_flow_recover": "crassus_flowskew",
+    }
+    by_name = {a.username: a for a in accounts}
+    cohorts = {}
+    for recovery, source in source_for.items():
+        if recovery not in by_name or source not in by_name:
+            continue
+        strategy = by_name[source].strategy_id
+        if by_name[recovery].strategy_id != strategy:
+            continue
+        # Keep the forward comparison baseline, stop and protection nearby
+        # too. Otherwise recovery could move a minute ahead of its controls.
+        controls = [a for a in accounts if a.strategy_id == strategy
+                    and a.params.get("forward_skew_arm") in ("baseline", "stop", "protect_only")]
+        cohorts[source] = [by_name[recovery], *controls]
+    moved = {a.username for cohort in cohorts.values() for a in cohort}
+    ordered = []
+    for account in accounts:
+        if account.username not in moved:
+            ordered.append(account)
+            ordered.extend(cohorts.get(account.username, ()))
+    return ordered
+
+
 class Runner:
     def __init__(
         self,
@@ -182,7 +213,7 @@ class Runner:
         key = bot_registration_key if bot_registration_key is not None else BOT_REGISTRATION_KEY
         _validate_bot_registration_key(key)
 
-        self.accounts = accounts
+        self.accounts = _pair_recovery_accounts(accounts)
         self.interval_s = interval_s
         self.dry_run = dry_run
         self.state_dir = Path(state_dir)

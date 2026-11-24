@@ -1,6 +1,6 @@
 # OI Skew forward paper comparison, v1
 
-Four new simulator accounts share a start, the original OI strategy, ordinary one-contract sizing, 0DTE selection, mandatory flatten, and the existing Crassus market snapshot and rate limiter. Each has its own cash, fills, cookie, decision ledger attribution and durable chain. The original account is outside the comparison. The cohort is appended after existing accounts. Arrival and fill times can differ within a cycle.
+Four new simulator accounts share a start, the original OI strategy, ordinary one-contract sizing, 0DTE selection, mandatory flatten, and the existing Crassus market snapshot and rate limiter. Each has its own cash, fills, cookie, decision ledger attribution and durable chain. The original account is outside the comparison. The serial runner visits each recovery account immediately after its ordinary skew account when both are configured. The same-strategy forward comparison controls follow the recovery account together in their configured order. The remaining accounts retain their relative ordering. The preceding account can still be reconciling or filling an order, and each recovery arm obtains its own current book and quotes. Compare decision timestamps separately from fills. During repeated visits in a five-minute bucket the premium stop and ordinary signal remain eligible while the direction/recovery overlay consumes that bucket only once.
 
 | Account suffix | Policy |
 | --- | --- |
