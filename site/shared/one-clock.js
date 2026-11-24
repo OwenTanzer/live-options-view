@@ -11,7 +11,7 @@ function required(value, name) {
 
 export function instant(value, name = 'time') {
   // Reject naive dates and epoch seconds: adapters must explicitly normalize units.
-  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1e12) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= Date.UTC(2000, 0, 1)) return value;
   if (typeof value === 'string' && /T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
     const ms = Date.parse(value);
     if (Number.isSafeInteger(ms)) return ms;
