@@ -13,5 +13,7 @@ These specifications are repository documentation, not served assets. Return to 
 | [NASDAQ-100 snapshot](NASDAQ_SNAPSHOT.md) | Hourly NASDAQ-100 + NDX snapshot contract, provenance sidecar and read-only MCP tool | No R2 artifact is published yet; the panel reads the artifact only after a maintainer publishes it |
 | [Adaptive quote panel](ADAPTIVE_QUOTE_PANEL.md) | Core/pins/movers behaviour, device-local pin scope, one refresh controller and release path | Real extended-session observation depends on the deployed #178 lane |
 | [Extended price lane](EXTENDED_PRICE_LANE.md) | Continuous price-only collection, explicit session rules, rolling references and rollback | Fixtures do not establish sustained overnight/weekend provider availability |
+| [Crypto candle cache](CRYPTO_CANDLE_CACHE.md) | R2-backed historical crypto candles, 24/7 UTC bucketing, One Clock as-of reads | The full backfill data lives outside the repository; the panel change stacks on PR #389 |
+| [Crypto predictions](CRYPTO_PREDICTIONS.md) | Hourly next-hour crypto price estimates, One Clock synthetic observations, retention as historical evidence after the target hour | Estimates only — never a price, never a forecast to trade on; the panel change stacks on PR #389 |
 
 The original root filenames remain small compatibility pointers; the full text has one maintained home here. Public plans stay under `site/plans/` with unchanged public paths, rather than being silently unpublished or duplicated into this directory.

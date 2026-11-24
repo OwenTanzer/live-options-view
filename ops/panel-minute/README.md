@@ -91,3 +91,25 @@ Legacy minute-only receipts do not establish an hourly baseline. Replay models
 the prices available on refresh at the cutoff. It does not track individual
 browser refreshes. To roll back the hourly change, remove only the
 crypto-hourly-receipts.conf override and reload the user manager.
+
+### Historical crypto archive
+
+The Linux host keeps Cian's original Crypto Backend ZIP and a private SQLite
+snapshot per ZIP SHA-256 under ~/.local/share/optionsview-crypto-history.
+Each snapshot retains the manifest-selected series and the separate alternate
+CoinGecko daily price histories supplied in the same ZIP. The reader defaults
+to the manifest selection. Pass --provider coingecko to read the alternate
+price series without substituting a sample for a candle. Coinbase and
+Tiingo rows retain their OHLCV values. CoinGecko market-chart samples have
+a price at a timestamp and do not imply OHLC. The importer verifies member
+counts and date ranges and withholds candles that had not closed when Cian's batch began. A query before the local archive receipt returns no rows. Repeating
+the import retains the original availability time. Choose the corresponding
+immutable database explicitly when replaying different deliveries.
+
+    python -m market_data.crypto_candle_cache.archive import crypto-backend.zip ~/.local/share/optionsview-crypto-history/snapshots
+    python -m market_data.crypto_candle_cache.archive read DATABASE ETH 1h --as-of 2026-11-24T08:01:00Z --limit 24
+    python -m market_data.crypto_candle_cache.archive panel DATABASE > site/data/crypto-history.json
+
+The generated site asset contains coverage and up to 24 recorded Coinbase BTC
+hourly candles. Other raw price history stays on the host. Refresh the asset
+from the intended snapshot and publish through the normal staged asset release.
