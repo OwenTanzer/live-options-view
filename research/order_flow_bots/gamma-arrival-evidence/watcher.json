@@ -1,0 +1,192 @@
+[
+  {
+    "key": "intraday/20261124/snapshot_104100001249.csv",
+    "received": 1795534870966,
+    "flowAt": 1795534871611,
+    "decisionAt": 1795534871611,
+    "quote": {
+      "symbol": "QQQ",
+      "t": 1795534871237,
+      "spot": 636.37,
+      "bid": 636.33,
+      "ask": 636.41,
+      "bidAt": 1795534871237,
+      "askAt": 1795534871237,
+      "bidThrough": 1795534871238,
+      "askThrough": 1795534871238,
+      "receivedAt": 1795534871293
+    },
+    "flowDay": "2026-11-24",
+    "lastPrint": 1795534870075,
+    "sequence": 715,
+    "source": "intraday/20261124/snapshot_104100001249.provenance.json",
+    "sourceSha256": "72982067178d635f935483cdb565dc6ca819fdd84e8e1d21f31ca892ab743b25",
+    "receipt": {
+      "snapshot_key": "intraday/20261124/snapshot_104100001249.csv",
+      "one_clock_publication": {
+        "stream": "collector-chain/QQQ",
+        "sequence": 715,
+        "publicationId": "c75e1aae-d30d-5139-b40a-abf5bb865c18",
+        "digest": "fef71f1652dd07fa5254def8b774be710bbe04dcc45f6098399ff54b64f66274",
+        "key": "publications/v1/collector-chain/QQQ/entries/000000000715.json"
+      },
+      "latest_published_at": "2026-11-24T15:41:09.261190+00:00",
+      "publication": {
+        "status": "published",
+        "reason": null
+      }
+    }
+  },
+  {
+    "key": "intraday/20261124/snapshot_104200001363.csv",
+    "received": 1795534929858,
+    "flowAt": 1795534930452,
+    "decisionAt": 1795534930452,
+    "quote": {
+      "symbol": "QQQ",
+      "t": 1795534929736,
+      "spot": 636.11,
+      "bid": 636.07,
+      "ask": 636.15,
+      "bidAt": 1795534929736,
+      "askAt": 1795534929736,
+      "bidThrough": 1795534929737,
+      "askThrough": 1795534929737,
+      "receivedAt": 1795534930205
+    },
+    "flowDay": "2026-11-24",
+    "lastPrint": 1795534929097,
+    "sequence": 716,
+    "source": "intraday/20261124/snapshot_104200001363.provenance.json",
+    "sourceSha256": "40b66e61d8c7f90cc1c1417c13ed27df07dca43094277b99900139ae258b8328",
+    "receipt": {
+      "snapshot_key": "intraday/20261124/snapshot_104200001363.csv",
+      "one_clock_publication": {
+        "stream": "collector-chain/QQQ",
+        "sequence": 716,
+        "publicationId": "db6e0230-e3af-50d3-877d-c6f61fc861b8",
+        "digest": "cfcc088ad0485611217c7eeae7846b9432afc4246258389733739d65d617fec2",
+        "key": "publications/v1/collector-chain/QQQ/entries/000000000716.json"
+      },
+      "latest_published_at": "2026-11-24T15:42:09.456903+00:00",
+      "publication": {
+        "status": "published",
+        "reason": null
+      }
+    }
+  },
+  {
+    "key": "intraday/20261124/snapshot_104300001430.csv",
+    "received": 1795534992177,
+    "flowAt": 1795534992734,
+    "decisionAt": 1795534992734,
+    "quote": {
+      "symbol": "QQQ",
+      "t": 1795534992235,
+      "spot": 634.87,
+      "bid": 634.84,
+      "ask": 634.9,
+      "bidAt": 1795534992235,
+      "askAt": 1795534992235,
+      "bidThrough": 1795534992236,
+      "askThrough": 1795534992236,
+      "receivedAt": 1795534992521
+    },
+    "flowDay": "2026-11-24",
+    "lastPrint": 1795534988683,
+    "sequence": 717,
+    "source": "intraday/20261124/snapshot_104300001430.provenance.json",
+    "sourceSha256": "692aee2c926a399828dd347312d7c4476207117e619365608c3cfe8917ea1b55",
+    "receipt": {
+      "snapshot_key": "intraday/20261124/snapshot_104300001430.csv",
+      "one_clock_publication": {
+        "stream": "collector-chain/QQQ",
+        "sequence": 717,
+        "publicationId": "adbb19cd-d7f0-5db2-b19a-be06c8478091",
+        "digest": "cf23afccf895010a09952e13628ab8d5b1bd1cde099e414832f3dd723c448033",
+        "key": "publications/v1/collector-chain/QQQ/entries/000000000717.json"
+      },
+      "latest_published_at": "2026-11-24T15:43:09.488778+00:00",
+      "publication": {
+        "status": "published",
+        "reason": null
+      }
+    }
+  },
+  {
+    "key": "intraday/20261124/snapshot_104400007301.csv",
+    "received": 1795535050985,
+    "flowAt": 1795535051629,
+    "decisionAt": 1795535051629,
+    "quote": {
+      "symbol": "QQQ",
+      "t": 1795535051239,
+      "spot": 634.35,
+      "bid": 634.32,
+      "ask": 634.38,
+      "bidAt": 1795535051239,
+      "askAt": 1795535051239,
+      "bidThrough": 1795535051240,
+      "askThrough": 1795535051240,
+      "receivedAt": 1795535051383
+    },
+    "flowDay": "2026-11-24",
+    "lastPrint": 1795535048131,
+    "sequence": 718,
+    "source": "intraday/20261124/snapshot_104400007301.provenance.json",
+    "sourceSha256": "560b5783ed9d385427595c01d3ba57e39ca706435bb8f333060da9190cb1033e",
+    "receipt": {
+      "snapshot_key": "intraday/20261124/snapshot_104400007301.csv",
+      "one_clock_publication": {
+        "stream": "collector-chain/QQQ",
+        "sequence": 718,
+        "publicationId": "026df33c-1f86-5870-96b7-05c316a5c01f",
+        "digest": "88b32c4433e3f15ea550b5c74c38c0d8c5d8f9ab8562c0814ddba3f65dfb6312",
+        "key": "publications/v1/collector-chain/QQQ/entries/000000000718.json"
+      },
+      "latest_published_at": "2026-11-24T15:44:09.401440+00:00",
+      "publication": {
+        "status": "published",
+        "reason": null
+      }
+    }
+  },
+  {
+    "key": "intraday/20261124/snapshot_104500001445.csv",
+    "received": 1795535110190,
+    "flowAt": 1795535110741,
+    "decisionAt": 1795535110741,
+    "quote": {
+      "symbol": "QQQ",
+      "t": 1795535110235,
+      "spot": 632.675,
+      "bid": 632.58,
+      "ask": 632.77,
+      "bidAt": 1795535110235,
+      "askAt": 1795535110235,
+      "bidThrough": 1795535110236,
+      "askThrough": 1795535110236,
+      "receivedAt": 1795535110514
+    },
+    "flowDay": "2026-11-24",
+    "lastPrint": 1795535106552,
+    "sequence": 719,
+    "source": "intraday/20261124/snapshot_104500001445.provenance.json",
+    "sourceSha256": "d1f6ad543a22565fc371d36a4b0b067d3ac5414197cdbbe1f45df4a604e42c43",
+    "receipt": {
+      "snapshot_key": "intraday/20261124/snapshot_104500001445.csv",
+      "one_clock_publication": {
+        "stream": "collector-chain/QQQ",
+        "sequence": 719,
+        "publicationId": "a0ae2af6-07e8-55d9-a9c9-2e411055de88",
+        "digest": "06205145960f33541265dab9aec9e16acc80ed7d0d002b8edc0e1dff858902e6",
+        "key": "publications/v1/collector-chain/QQQ/entries/000000000719.json"
+      },
+      "latest_published_at": "2026-11-24T15:45:09.723428+00:00",
+      "publication": {
+        "status": "published",
+        "reason": null
+      }
+    }
+  }
+]

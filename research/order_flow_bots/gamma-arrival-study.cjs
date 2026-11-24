@@ -51,11 +51,14 @@ function readTape(dir,ladder,open) {
     digest:hash(fs.readFileSync(path.join(dir,'manifest.json')))};
 }
 function frameAt(t,open,tape,chains,ladder) {
-  const q=at(tape.quotes,t), chain=at(chains,t);
+  // Tape 'at' is truncated. Only a bucket ending by the decision instant is known.
+  const q=at(tape.quotes,t-1), chain=at(chains,t);
   const spot=q && t-Math.min(q.bidAt,q.askAt)<=15000?(q.bid+q.ask)/2:null;
+  // A possible loss at the endpoint vetoes a decision conservatively, even
+  // though an ambiguous positive observation never contributes to the signal.
   const complete=t>=open && t<=tape.last && spot!==null && !tape.gaps.some(g=>g<=t);
   const contracts=ladder.map(c=>{
-    const arr=tape.rowsBySymbol.get(c.symbol),end=at(arr,t)||zeros(),start=at(arr,t-MIN)||zeros();
+    const arr=tape.rowsBySymbol.get(c.symbol),end=at(arr,t-1)||zeros(),start=at(arr,t-MIN-1)||zeros();
     const minute=Object.fromEntries(keyFields.map(k=>[k,end[k]-start[k]]));
     return {...c,...minute,spot,gamma:chain?.gamma.get(c.symbol)??null,flow:{B:end.buy,S:end.sell,U:end.unknown}};
   });
@@ -89,21 +92,26 @@ function confirmedMs(s) {
   const parsed=timeBounds(s);if(!parsed) throw Error('Invalid dated timestamp');
   return parsed.upper;
 }
-function main([dbPath,day,archive,dir,stopIso,out]) {
+function readInputs([dbPath,day,archive,dir,stopIso]) {
   const stop=Date.parse(stopIso);
   if(!Number.isFinite(stop)) throw Error('Specify immutable UTC cutoff');
   const db=new DatabaseSync(dbPath,{readOnly:true});db.exec('BEGIN');
   const {open}=db.prepare('SELECT open FROM sessions WHERE session=?').get(day);
   const decisions=db.prepare('SELECT t,id,evaluated_at,signal,reason FROM decisions WHERE session=? AND evaluated_at<=? AND id IN (1,4,5) ORDER BY t,id').all(day,stop);
   const frames=db.prepare('SELECT t,body FROM frames WHERE session=? AND t<=? ORDER BY t').all(day,stop).map(x=>JSON.parse(x.body));
-  const ledgerQuotes=db.prepare('SELECT t,received_at,bid,ask FROM quotes WHERE received_at BETWEEN ? AND ? ORDER BY received_at').all(open,stop);
+  const ledgerQuotes=db.prepare('SELECT t,received_at,bid,ask,bid_at,ask_at,bid_through,ask_through FROM quotes WHERE received_at BETWEEN ? AND ? ORDER BY received_at').all(open,stop);
   db.exec('COMMIT');db.close();
-  const byMinute=new Map(frames.map(f=>[f.t,f]));
   const first=frames.find(f=>f.contracts?.length===16);if(!first) throw Error('Missing fixed ladder');
   const ladder=first.contracts.map(({symbol,strike,type})=>({symbol,strike,type}));
   const chains=fs.readFileSync(archive,'utf8').trim().split('\n').map(JSON.parse).filter(r=>!r.excluded)
     .map(r=>({...r,at:confirmedMs(r.arrival),captureMs:confirmedMs(r.capture),gamma:new Map(r.rows.map(c=>[c.symbol,c.gamma]))})).sort((a,b)=>a.at-b.at);
-  const tape=readTape(dir,ladder,open), pairs=[],excluded={};
+  const tape=readTape(dir,ladder,open);
+  return {day,open,stopIso,decisions,frames,ledgerQuotes,ladder,chains,tape};
+}
+function compare({day,open,stopIso,decisions,frames,ledgerQuotes,ladder,chains,tape}) {
+  const stop=Date.parse(stopIso);
+  const byMinute=new Map(frames.map(f=>[f.t,f]));
+  const pairs=[],excluded={};
   const exclude=why=>{excluded[why]=(excluded[why]||0)+1;};
   for(const chain of chains) {
     if(chain.captureMs<open || chain.at>stop) continue;
@@ -139,7 +147,11 @@ function main([dbPath,day,archive,dir,stopIso,out]) {
       sameDirection:rr.filter(p=>p.aSignal && p.aSignal===p.bSignal).length,differingSignals:rr.filter(p=>p.aSignal!==p.bSignal).length,
       differingReasons:rr.filter(p=>p.aReason!==p.bReason).length,productionSignals:rr.filter(p=>p.productionSignal).length,
       boundaryProductionDifferences:rr.filter(p=>p.bSignal!==p.productionSignal).length};})};
-  fs.writeFileSync(out,JSON.stringify({summary,pairs},null,2)+'\n',{flag:'wx'});console.log(JSON.stringify(summary,null,2));
+  return {summary,pairs};
 }
-module.exports={at,frameAt,runArm,fillOpportunity,stats,confirmedMs};
-if(require.main===module) main(process.argv.slice(2));
+module.exports={at,frameAt,runArm,fillOpportunity,stats,confirmedMs,readInputs,compare,keyFields};
+if(require.main===module) {
+  const result=compare(readInputs(process.argv.slice(2)));
+  fs.writeFileSync(process.argv[7],JSON.stringify(result,null,2)+'\n',{flag:'wx'});
+  console.log(JSON.stringify(result.summary,null,2));
+}
