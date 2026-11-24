@@ -67,7 +67,7 @@ function list() {
   for (const m of visible) {
     const node = el('article','contract'); node.dataset.market = m.ticker;
     const identity = el('div','identity'); identity.append(el('h3','',m.title+(m.outcome&&!m.title.includes(m.outcome)?' · '+m.outcome:'')));
-    const meta = el('div','meta',m.category + ' · ' + new Date(m.cutoff).toLocaleDateString());
+    const meta = el('div','meta',m.category + ' · ' + new Date(m.cutoff).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }));
     const terms = el('button','terms','Terms'); terms.onclick = () => run(() => details(m)); meta.append(terms); identity.append(meta); node.append(identity);
     const label = el('label','quantity','Qty'); const input = el('input'); input.type='number'; input.min='1'; input.max='10000'; input.step='1';
     input.value=quantities.get(m.ticker) || '1'; input.setAttribute('aria-label','Quantity for '+m.title);
@@ -147,8 +147,10 @@ async function details(m) {
   $('detail').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function categories() {
+  const selected = $('category').value;
   $('category').replaceChildren(new Option('All categories',''));
   for(const c of [...new Set(catalog.map(m=>m.category))].sort()) $('category').add(new Option(c,c));
+  if (catalog.some(m => m.category === selected)) $('category').value = selected;
 }
 async function check() {
   clearPrivate(); const g=generation,s=await api('status'); if(g!==generation) return;

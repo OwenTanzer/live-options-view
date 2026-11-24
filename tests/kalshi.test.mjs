@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { handleKalshi, kalshiTick, settleKalshiMarket } from '../backend/kalshi.js';
 import { ACCOUNT, CREDIT_ORIGIN, SITE, OWNER_ID } from '../backend/kalshi-access.js';
 import { kalshiFee, kalshiSnapshot } from '../backend/kalshi-model.js';
-import { fetchMarket, displayMarket, effectiveFee, publicRead } from '../backend/kalshi-source.js';
+import { discover, fetchMarket, displayMarket, effectiveFee, publicRead } from '../backend/kalshi-source.js';
 import { quoteEvent, compareEvent } from '../backend/prediction-model.js';
 import { archive, getArchive, budget, pruneArchive } from '../backend/kalshi-store.js';
 import { createStorage } from '../backend/storage.js';
@@ -247,3 +247,25 @@ test('frozen private evidence enforces the same cutoff on indexes and details', 
   assert.equal((await read(at,'&before='+new Date(at+1).toISOString()+'&before_id='+id)).status,400);
   assert.equal(env.DB.db.prepare('SELECT count(*) AS n FROM users').get().n,0);
 }));
+
+for (const [series, asset] of Object.entries({ KXBTC15M: 'BTC', KXETH15M: 'ETH', KXSOL15M: 'SOL', KXXRP15M: 'XRP' })) {
+  test(`${series} discovers the new window and rejects paper entries after cutoff`, async () => scenario(async (env, f) => {
+    f.series.ticker = f.event.series_ticker = series;
+    f.event.category = 'Crypto';
+    f.series.settlement_sources = [{ name: 'Synthetic crypto index', url: 'https://example.invalid' }];
+    f.raw.rules_primary = 'Synthetic index up/down contract';
+    f.raw.title = `${asset} 15 min`;
+    for (const window of ['FIRST', 'NEXT']) {
+      f.event.event_ticker = f.raw.event_ticker = `${series}-${window}`;
+      f.raw.ticker = f.raw.event_ticker + '-15';
+      f.raw.close_time = new Date(Date.now() + 900000).toISOString();
+      const { markets } = await discover(env);
+      assert.deepEqual(markets.map(m => m.ticker), [f.raw.ticker]);
+      const { market } = await fetchMarket(env, f.raw.ticker);
+      assert.equal(market.rules.underlying, asset);
+      assert.equal(market.rules.cutoff, f.raw.close_time);
+      assert.equal(quoteEvent(market, 'YES', 'buy', 1, Date.now()).error, undefined);
+      assert.ok(quoteEvent(market, 'YES', 'buy', 1, Date.parse(f.raw.close_time)).error);
+    }
+  }));
+}

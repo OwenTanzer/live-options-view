@@ -103,7 +103,7 @@ export async function discover(env) {
       }
     }
   }
-  return { markets: result, collected_at: new Date().toISOString(), scope: 'Selected series span space, mathematics, music, games, geology, economics, climate, health and city temperatures. Inspect a contract for its current executable sides.' };
+  return { markets: result, collected_at: new Date().toISOString(), scope: 'Selected series include 15-minute Bitcoin, Ether, Solana and XRP markets. Use Update markets to load the next trading window. Other series span space, mathematics, music, games, geology, economics, climate, health and city temperatures. Inspect a contract for its current executable sides.' };
 }
 export function displayMarket(evidence, now = Date.now()) {
   const m = evidence.market, yes = quoteEvent(m, 'YES', 'buy', 1, now), no = quoteEvent(m, 'NO', 'buy', 1, now);

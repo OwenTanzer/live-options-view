@@ -79,7 +79,9 @@ are not evidence those production steps occurred.
 Read-only transport calls only `https://external-api.kalshi.com/trade-api/v2`.
 There is no order/portfolio provider client and no Kalshi credential. Discovery
 samples at most two open events per allowlisted series; weather takes three
-outcomes per event, other subjects six. The 12 series in `SERIES_SUBJECT` span
+outcomes per event, other subjects six. The 16 series in `SERIES_SUBJECT` include 15-minute Bitcoin, Ether, Solana and XRP
+up/down contracts. Use **Update markets** to discover the next window after a
+cutoff; price refreshes only read the currently visible tickers. Other series span
 space, mathematics, music, games, geology, economics, climate, health and four
 city daily highs. This is bounded discovery, not an exhaustive venue scanner.
 No volume threshold excludes small contracts. Unsupported contract shapes stay
