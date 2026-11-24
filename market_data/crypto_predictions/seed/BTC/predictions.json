@@ -6,7 +6,7 @@
   "generated_at": "2026-11-24T00:32:44Z",
   "coverage": "current",
   "reason": null,
-  "observations_count": 13,
+  "observations_count": 7,
   "observations": [
     {
       "source": "crypto_predictions",
@@ -53,21 +53,6 @@
         "target_start": "2026-11-23T18:00:00Z",
         "target_end": "2026-11-23T19:00:00Z"
       },
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T18:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795456800000,
-      "valueAt": 1795456800000,
-      "availableAt": 1795480364000,
-      "value": null,
       "provider": "crypto_predictions",
       "horizon": "1h"
     },
@@ -121,21 +106,6 @@
     },
     {
       "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T19:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795460400000,
-      "valueAt": 1795460400000,
-      "availableAt": 1795480364000,
-      "value": null,
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
       "id": "BTC|1h|2026-11-23T20:00:00Z",
       "instrument": "BTC",
       "session": "continuous",
@@ -179,21 +149,6 @@
         "target_start": "2026-11-23T20:00:00Z",
         "target_end": "2026-11-23T21:00:00Z"
       },
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T20:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795464000000,
-      "valueAt": 1795464000000,
-      "availableAt": 1795480364000,
-      "value": null,
       "provider": "crypto_predictions",
       "horizon": "1h"
     },
@@ -247,21 +202,6 @@
     },
     {
       "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T21:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795467600000,
-      "valueAt": 1795467600000,
-      "availableAt": 1795480364000,
-      "value": null,
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
       "id": "BTC|1h|2026-11-23T22:00:00Z",
       "instrument": "BTC",
       "session": "continuous",
@@ -310,21 +250,6 @@
     },
     {
       "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T22:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795471200000,
-      "valueAt": 1795471200000,
-      "availableAt": 1795480364000,
-      "value": null,
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
       "id": "BTC|1h|2026-11-23T23:00:00Z",
       "instrument": "BTC",
       "session": "continuous",
@@ -368,21 +293,6 @@
         "target_start": "2026-11-23T23:00:00Z",
         "target_end": "2026-11-24T00:00:00Z"
       },
-      "provider": "crypto_predictions",
-      "horizon": "1h"
-    },
-    {
-      "source": "crypto_predictions",
-      "id": "BTC|1h|2026-11-23T23:00:00Z",
-      "instrument": "BTC",
-      "session": "continuous",
-      "evidence": "crypto/predictions/BTC.json",
-      "origin": "synthetic",
-      "revision": 2,
-      "eventAt": 1795474800000,
-      "valueAt": 1795474800000,
-      "availableAt": 1795480364000,
-      "value": null,
       "provider": "crypto_predictions",
       "horizon": "1h"
     },

@@ -32,16 +32,24 @@ The mapping (contract in ``docs/specs/CRYPTO_PREDICTIONS.md``):
 - ``value`` is the estimate (``estimated_price``, ``direction``,
   ``pct_move``, ``range_low`` / ``range_high``, ``confidence``,
   ``data_window``, ``basis``, ``signals``, ``last_close``) plus
-  ``target_start`` / ``target_end``. ``value: null`` is a
-  retraction, never a fake zero.
+  ``target_start`` / ``target_end``. ``value`` is always an
+  estimate: this adapter never emits a ``null`` value. (One Clock
+  itself still allows ``null`` as a retraction for other
+  adapters; predictions simply never use it.)
 
-Retraction: a prediction is live only for its target hour. Once
-the hour has passed (``now > target_end``) the producer publishes
-revision 2 of the same id with ``value: null``. The selector's
-highest-revision-wins rule then makes the retraction win, and
-``reading_as_of`` reports ``unavailable`` — a stale estimate is
-never shown as a current one, and a retraction never resurrects a
-prior value.
+Retention: a prediction stays in One Clock after its target hour
+passes, with its value intact, as historical evidence against
+which the prediction can be judged. Nothing retracts it. A
+reader judges a passed prediction by its ``eventAt`` /
+``availableAt`` (and its ``target_start`` / ``target_end`` in
+the value), which mark it as a past prediction, not a current
+price. ``current_prediction`` still only ever returns the
+latest estimate as of a cutoff, and a reader that wants the
+live next-hour estimate must check that the returned row's
+target hour has not passed — see :func:`current_prediction`.
+The file keeps up to 7 days of past predictions, then prunes
+the oldest; the retention window is a bound on file size, not
+a retraction.
 """
 
 from __future__ import annotations
@@ -96,30 +104,33 @@ def prediction_to_observation(symbol, estimate, target_start_ms,
                               generated_at, revision=1):
     """Map one estimate to a One Clock observation row.
 
-    ``estimate`` is the :func:`estimator.estimate` result (or
-    ``None`` for a retraction row — see
-    :func:`retraction_observation`). ``generated_at`` is the
-    producer run time (ISO-8601 UTC); it must be at or after the
-    target hour's start. Raises ``TypeError`` via
-    :func:`one_clock.observation` when the envelope is invalid.
+    ``estimate`` is the :func:`estimator.estimate` result.
+    ``generated_at`` is the producer run time (ISO-8601 UTC); it
+    must be at or after the target hour's start. Raises
+    ``TypeError`` via :func:`one_clock.observation` when the
+    envelope is invalid. The estimate is always revision 1:
+    a passed prediction is retained as-is, never superseded by
+    a revision-2 null row (see the module docstring).
     """
     target_start_iso = _iso(target_start_ms)
-    value = None
-    if estimate is not None:
-        value = {
-            "estimated_price": estimate["estimated_price"],
-            "direction": estimate["direction"],
-            "pct_move": estimate["pct_move"],
-            "range_low": estimate["range_low"],
-            "range_high": estimate["range_high"],
-            "confidence": estimate["confidence"],
-            "last_close": estimate["last_close"],
-            "data_window": estimate["data_window"],
-            "basis": estimate["basis"],
-            "signals": estimate["signals"],
-            "target_start": target_start_iso,
-            "target_end": _iso(target_end_ms(target_start_ms)),
-        }
+    if estimate is None:
+        raise ValueError(
+            "predictions never emit a null value: a passed prediction "
+            "is retained with its estimate, never retracted")
+    value = {
+        "estimated_price": estimate["estimated_price"],
+        "direction": estimate["direction"],
+        "pct_move": estimate["pct_move"],
+        "range_low": estimate["range_low"],
+        "range_high": estimate["range_high"],
+        "confidence": estimate["confidence"],
+        "last_close": estimate["last_close"],
+        "data_window": estimate["data_window"],
+        "basis": estimate["basis"],
+        "signals": estimate["signals"],
+        "target_start": target_start_iso,
+        "target_end": _iso(target_end_ms(target_start_ms)),
+    }
     return oc.observation({
         "source": SOURCE,
         "id": prediction_id(symbol, target_start_iso),
@@ -137,26 +148,17 @@ def prediction_to_observation(symbol, estimate, target_start_ms,
     })
 
 
-def retraction_observation(symbol, target_start_ms, generated_at):
-    """Revision 2 of a prediction, with a null value.
-
-    Published once the target hour has passed. The selector keeps
-    the highest revision per identity, so this row supersedes the
-    estimate and the reading becomes ``unavailable``.
-    """
-    return prediction_to_observation(symbol, None, target_start_ms,
-                                     generated_at, revision=2)
-
-
 def build_prediction_file(symbol, observations, generated_at,
                           coverage="current", reason=None):
     """Build one prediction file dict from observation rows.
 
-    ``observations`` are validated One Clock rows (value rows and
-    retractions, oldest first). ``coverage`` is ``"current"`` (the
-    latest row is a live estimate), ``"expired"`` (every row is
-    retracted) or ``"absent"`` (no rows at all — the coin cannot be
-    estimated, e.g. no hourly bars).
+    ``observations`` are validated One Clock rows (revision-1
+    value rows, oldest first — no retraction rows are ever
+    published). ``coverage`` is ``"current"`` (the latest row's
+    target hour has not passed), ``"historical"`` (every
+    target hour has passed, but the value rows are retained as
+    historical evidence) or ``"absent"`` (no rows at all — the
+    coin cannot be estimated, e.g. no hourly bars).
     """
     rows = [oc.observation(row) for row in observations]
     for row in rows:
@@ -217,10 +219,19 @@ def current_prediction(observations, symbol, cutoff_ms, max_age_ms):
     Selects with ``origin: "synthetic"`` — the estimate cohort
     only — and returns :func:`one_clock.reading_as_of`'s
     ``{"state", "row", "ageMs", "publicationAgeMs"}``. ``state`` is
-    ``"unavailable"`` when no prediction exists, when the latest
-    row is a retraction, or when the estimate is older than
-    ``max_age_ms``. A retracted hour never resurrects a prior
-    estimate.
+    ``"unavailable"`` when no prediction exists or when the
+    estimate is older than ``max_age_ms``. Otherwise the state
+    is ``"fresh"`` (age within ``max_age_ms``) or ``"stale"``
+    (older than ``max_age_ms``) — and in both cases the row's
+    value is intact: a passed prediction is retained, never
+    retracted, so a reader judging it after its target hour
+    gets the estimate itself, with ``eventAt`` /
+    ``availableAt`` and the value's ``target_start`` /
+    ``target_end`` marking it as a past prediction. Callers
+    that need only the *live* next-hour estimate must check
+    that the returned row's target hour has not passed at the
+    cutoff (``not is_expired(eventAt, cutoff)``) — the panel
+    does exactly that.
     """
     return oc.reading_as_of(
         observations,

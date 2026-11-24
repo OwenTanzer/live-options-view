@@ -17,13 +17,20 @@ Rules:
   the last completed bar's close. Re-running within the same hour
   produces the same id at revision 1 (same estimate — the window
   is unchanged); a re-run after new bars close produces a new id.
-- Retractions are carried, not dropped: when a new prediction is
-  built, every previously published prediction whose target hour
-  has passed is re-published as a revision-2 null row in the same
-  file, so an as-of reader at any later cutoff sees the
-  retraction and reports ``unavailable`` instead of the stale
-  estimate. Retraction rows older than 7 days are pruned (they
-  have been unavailable for a week; the file stays bounded).
+- Retention, not retraction: a prediction whose target hour has
+  passed stays in the file with its value intact, as historical
+  evidence against which the prediction can be judged — it is
+  never published as a revision-2 null row. Past predictions
+  are carried forward for 7 days, then pruned (a bound on file
+  size, not a retraction). A reader judges a passed prediction
+  by its ``eventAt`` / ``availableAt`` and its value's
+  ``target_start`` / ``target_end``. A producer run that lands
+  after its target hour has already passed publishes the
+  estimate as historical evidence in the same file: it was
+  never selectable during its hour (its ``availableAt`` is
+  after the hour ended), and its value is retained so the
+  judgement can still be made.
+- A coin with no 1h file — CoinGecko-labelled coins have a 1d
 - A coin with no 1h file — CoinGecko-labelled coins have a 1d
   base only — produces no prediction file. Its provenance entry
   says ``"absent"`` with the reason; a price is never
@@ -83,10 +90,10 @@ def build_seed_history(symbol, bars, generated_at, now_ms, count=7):
     One prediction per completed hour for the last ``count``
     hours, each computed causally — only from bars that had closed
     by that hour's end. Predictions whose target hour has passed
-    at ``now_ms`` are carried as revision-2 retractions alongside
-    their revision-1 value rows, so the seed demonstrates the
-    retraction mechanism with real computed values. The latest
-    target hour stays live (revision 1 only).
+    at ``now_ms`` are carried as revision-1 value rows, retained
+    as historical evidence — no retraction rows are published.
+    The latest target hour stays live (revision 1 only, same as
+    every other row).
     """
     rows = []
     ordered = sorted(bars, key=lambda b: b["t"])
@@ -99,16 +106,13 @@ def build_seed_history(symbol, bars, generated_at, now_ms, count=7):
             continue
         rows.append(pred_mod.prediction_to_observation(
             symbol, estimate, target_start_ms, generated_at))
-        if pred_mod.is_expired(target_start_ms, now_ms):
-            rows.append(pred_mod.retraction_observation(
-                symbol, target_start_ms, generated_at))
     rows.sort(key=lambda r: (r["eventAt"], r["revision"]))
     # "current" only when the latest target hour has not passed;
-    # the value rows of expired hours are audit trail, superseded
-    # by their retractions.
+    # otherwise "historical" — the value rows are retained, so
+    # the seed still demonstrates the full history.
     latest_target = max(oc.instant_ms(r["eventAt"], "eventAt") for r in rows)
     coverage = ("current" if not pred_mod.is_expired(latest_target, now_ms)
-                else "expired")
+                else "historical")
     return pred_mod.build_prediction_file(
         symbol, rows, generated_at, coverage=coverage), coverage
 
@@ -129,11 +133,12 @@ def build_symbol_from_bars(symbol, bars, generated_at, now_ms,
     last_bar = bars[-1]
     target_start_ms = oc.bar_end_ms(last_bar, "1h")
     rows = []
-    # Carry forward retractions for previously published target
-    # hours that have now expired (and are still within retention):
-    # the revision-1 value row stays as the audit trail and the
-    # revision-2 null row is what the selector returns — the same
-    # shape the seed carries for expired hours.
+    # Carry forward previously published predictions whose target
+    # hours have now passed (and are still within the 7-day
+    # retention window): their revision-1 value rows stay as
+    # historical evidence, never retracted. Rows older than the
+    # window are dropped, which bounds the file — it is not a
+    # retraction of anything still in the file.
     if previous:
         for row in previous.get("observations", []):
             if row.get("revision") != 1 or row.get("value") is None:
@@ -141,24 +146,17 @@ def build_symbol_from_bars(symbol, bars, generated_at, now_ms,
             event_ms = oc.instant_ms(row["eventAt"], "eventAt")
             if event_ms == target_start_ms:
                 continue  # superseded by the new estimate below
-            if pred_mod.is_expired(event_ms, now_ms):
-                if now_ms - pred_mod.target_end_ms(event_ms) <= RETENTION_MS:
-                    rows.append(dict(row))
-                    rows.append(pred_mod.retraction_observation(
-                        symbol, event_ms, generated_at))
+            if now_ms - pred_mod.target_end_ms(event_ms) <= RETENTION_MS:
+                rows.append(dict(row))
     rows.append(pred_mod.prediction_to_observation(
         symbol, estimate, target_start_ms, generated_at))
     # A run that lands after the target hour has already passed
-    # publishes the estimate and retracts it in the same file: the
-    # value row is the audit trail (it was never selectable during
-    # its hour — its availableAt is after the hour ended), and the
-    # retraction is what the selector returns.
-    if pred_mod.is_expired(target_start_ms, now_ms):
-        rows.append(pred_mod.retraction_observation(
-            symbol, target_start_ms, generated_at))
-        coverage = "expired"
-    else:
-        coverage = "current"
+    # publishes the estimate as historical evidence in the same
+    # file: the value row is retained (it was never selectable
+    # during its hour — its availableAt is after the hour
+    # ended), and no retraction row is published.
+    coverage = ("historical" if pred_mod.is_expired(target_start_ms, now_ms)
+                else "current")
     rows.sort(key=lambda r: (r["eventAt"], r["revision"]))
     return pred_mod.build_prediction_file(
         symbol, rows, generated_at, coverage=coverage), coverage
@@ -169,9 +167,10 @@ def build_symbol(symbol, cache_dir, generated_at, now_ms, btc_bars=None,
     """Build one coin's prediction file content (or None if absent).
 
     ``previous`` is the coin's previously published file content
-    (if any), used only to carry forward retractions for expired
-    target hours. Returns ``(content, status)`` where ``status``
-    is ``"current"``, ``"expired"`` (only retractions remain) or
+    (if any), used only to carry forward retained predictions
+    for past target hours. Returns ``(content, status)`` where
+    ``status`` is ``"current"``, ``"historical"`` (the latest
+    target hour has passed, but its value is retained) or
     ``"absent"`` with a reason in the content's ``reason`` field.
     """
     try:

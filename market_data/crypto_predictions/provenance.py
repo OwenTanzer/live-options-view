@@ -9,7 +9,9 @@ the as-of time and the universe. One sidecar per coin.
 Coverage is stated honestly:
 
 - ``"current"`` — the file holds a live estimate for the next hour.
-- ``"expired"`` — every published estimate has been retracted.
+- ``"historical"`` — every published estimate's target hour has
+  passed, but the value rows are retained as historical evidence
+  (never retracted), so the prediction can still be judged.
 - ``"absent"`` — no prediction file, with a reason. CoinGecko-labelled
   coins have no 1h base at all (CoinGecko free OHLC has no 1m/1h
   series), so they have no estimate by design, not by failure. A coin
@@ -19,6 +21,8 @@ A missing sidecar means unknown provenance.
 """
 
 from __future__ import annotations
+
+from market_data.crypto_candle_cache import one_clock as oc
 
 SCHEMA = "snapshot_provenance.v1"
 DATASET = "crypto_predictions"
@@ -45,12 +49,25 @@ def build_provenance(symbol, content, generated_at=None, universe=None,
     --publish not given"``).
     """
     rows = content.get("observations", []) if content else []
-    # Effective live: a value row superseded by a revision-2
-    # retraction of the same id is not live.
-    retracted_ids = {r.get("id") for r in rows if r.get("value") is None}
-    live = [r for r in rows if r.get("value") is not None
-            and r.get("id") not in retracted_ids]
-    retracted = [r for r in rows if r.get("value") is None]
+    # Live: a value row whose target hour has not passed at the
+    # generation time. Historical: a value row whose target hour
+    # has passed — retained, never retracted. No null-value rows
+    # are ever published by this adapter.
+    generated_ms = None
+    if generated_at:
+        generated_ms = oc.instant_ms(generated_at, "generated_at")
+    live = []
+    historical = []
+    for r in rows:
+        if r.get("value") is None:
+            continue
+        target_end = r["value"].get("target_end")
+        if generated_ms is not None and target_end is not None:
+            if oc.instant_ms(target_end, "target_end") <= generated_ms:
+                historical.append(r)
+                continue
+        live.append(r)
+    latest = [r for r in rows if r.get("value") is not None]
     return {
         "schema": SCHEMA,
         "dataset": DATASET,
@@ -70,16 +87,16 @@ def build_provenance(symbol, content, generated_at=None, universe=None,
                 "source": "crypto_predictions",
                 "observations": len(rows),
                 "live": len(live),
-                "retracted": len(retracted),
+                "historical": len(historical),
                 "coverage": content.get("coverage") if content else "absent",
                 "reason": content.get("reason") if content else None,
             },
         },
         "coverage": {
             "live_predictions": len(live),
-            "retracted": len(retracted),
-            "target_start": live[-1]["value"]["target_start"] if live else None,
-            "target_end": live[-1]["value"]["target_end"] if live else None,
+            "historical": len(historical),
+            "target_start": latest[-1]["value"]["target_start"] if latest else None,
+            "target_end": latest[-1]["value"]["target_end"] if latest else None,
         },
         "estimator": {
             "module": "market_data.crypto_predictions.estimator",
@@ -87,8 +104,8 @@ def build_provenance(symbol, content, generated_at=None, universe=None,
                         "hourly volatility", "last-hour range",
                         "BTC correlation"],
             "note": "Estimates only. Origin synthetic; a prediction is "
-                    "never a recorded price and is retracted when its "
-                    "target hour passes.",
+                    "never a recorded price and is retained as "
+                    "historical evidence when its target hour passes.",
         },
         "notes": [
             "Crypto trades 24/7: buckets align to 00:00 UTC, not an "

@@ -14,7 +14,7 @@ This is the companion to the [front door](README.md). It reuses the service/cont
 | Read-only Market MCP | [server.js](market_mcp/server.js), [production.js](market_mcp/production.js), [guide](market_mcp/README.md) | Client-driven discovery/query/detail; no trading, scanner invocation or producer credentials | Image tests establish packaging; dated [rollout](market_mcp/ROLLOUT.md) is historical, not a current service inventory. Live connector acceptance is recorded separately from source |
 | Other tools | [synthetic days](research/synthetic_days/README.md) | Simulation entry point | Their presence is not evidence of an unattended deployed service |
 | Crypto candle cache | [package](market_data/crypto_candle_cache/), [contract](docs/specs/CRYPTO_CANDLE_CACHE.md) | `python -m market_data.crypto_candle_cache backfill/update`; per-coin R2 publication, opt-in `--publish`; 24/7 continuous session | The package has a module entry point. No R2 artifact published yet; the full backfill lives in the parallel Crypto Backend job, not in this repository |
-| Crypto predictions | [package](market_data/crypto_predictions/), [contract](docs/specs/CRYPTO_PREDICTIONS.md) | `python -m market_data.crypto_predictions predict`; per-coin R2 publication, opt-in `--publish`; 24/7 continuous session, origin synthetic | The package has a module entry point. No R2 artifact published yet; estimates only, retracted when the target hour passes |
+| Crypto predictions | [package](market_data/crypto_predictions/), [contract](docs/specs/CRYPTO_PREDICTIONS.md) | `python -m market_data.crypto_predictions predict`; per-coin R2 publication, opt-in `--publish`; 24/7 continuous session, origin synthetic | The package has a module entry point. No R2 artifact published yet; estimates only, retained as historical evidence when the target hour passes |
 
 The UTC Railway cron values do not shift with US daylight saving time; session-aware code waits for the exchange calendar. No schedule is changed by moving source or documentation. The three producer services live under [market_data/](market_data/README.md), with module entry points and service-specific operating guides. Active offline backtesting lives in [research/](research/README.md); retired studies and prototypes are indexed in [history](docs/HISTORY.md).
 
@@ -58,8 +58,8 @@ R2 bucket `qqq-options-chain-data` holds several products, not one interchangeab
 | `system/bot-membership-v1.json`, `paper-trades/requests/*`, D1 `users`/`sessions`/`bot_markers` | Worker | Bot roster, canonical execution records, authenticated account/session state; never conflated with public market readings |
 | `crypto/candles/<COIN>/<interval>.json` | Crypto candle cache, opt-in publish | Eleven intervals per coin; 1m/1h/1d fetched bases, the rest derived locally; every bar carries source time, observed time and state chip |
 | `crypto/candles/<COIN>/provenance.json` | Crypto candle cache | `snapshot_provenance.v1` sidecar per coin; coverage full/partial/absent per interval, gaps labelled, never smoothed over |
-| `crypto/predictions/<COIN>.json` | Crypto predictions, opt-in publish | One horizon (1h ahead) per coin; live estimate plus revision-2 retractions for expired target hours; every prediction is a synthetic One Clock observation |
-| `crypto/predictions/<COIN>/provenance.json` | Crypto predictions | `snapshot_provenance.v1` sidecar per coin; coverage current/expired/absent, estimator signals named |
+| `crypto/predictions/<COIN>.json` | Crypto predictions, opt-in publish | One horizon (1h ahead) per coin; live estimate plus retained past predictions (up to 7 days) kept as historical evidence; every prediction is a synthetic One Clock observation |
+| `crypto/predictions/<COIN>/provenance.json` | Crypto predictions | `snapshot_provenance.v1` sidecar per coin; coverage current/historical/absent, estimator signals named |
 
 ## Following one value
 

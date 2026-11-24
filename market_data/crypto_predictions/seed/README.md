@@ -11,9 +11,9 @@ closed by its target hour's end — for the target hours starting
 18:00, 19:00, 20:00, 21:00, 22:00, 23:00 on 2026-11-23 and
 00:00 on 2026-11-24 (UTC). At the seed generation time
 (2026-11-24T00:32:44Z) the 18:00–23:00 target hours had passed,
-so each of those predictions appears twice: revision 1 with the
-computed estimate, and revision 2 with `value: null` (the
-retraction). The 00:00 prediction is live (revision 1 only).
+so those six predictions are retained as historical evidence:
+revision-1 value rows only, never retracted. The 00:00
+prediction is live.
 
 All rows carry `availableAt` 2026-11-24T00:32:44Z — the actual
 seed generation time, not a simulated hourly run time. No

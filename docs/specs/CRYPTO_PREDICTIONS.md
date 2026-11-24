@@ -20,8 +20,8 @@ as the candle cache):
 
 | Artifact | Writer | Readers and meaning |
 |---|---|---|
-| `crypto/predictions/<COIN>.json` | Prediction producer, hourly | The coin's live estimate for the next hour, plus revision-2 retractions for expired target hours. A missing file means no prediction has been published for the coin, never a live price. |
-| `crypto/predictions/<COIN>/provenance.json` | Prediction producer, after the prediction file | `snapshot_provenance.v1` sidecar: `constructed_at`, `archive_uploaded_at` (null until a dated archive copy exists), `latest_published_at`, `publication.status`, estimator signals, live/retracted counts, coverage. A missing sidecar means unknown provenance. |
+| `crypto/predictions/<COIN>.json` | Prediction producer, hourly | The coin's live estimate for the next hour, plus retained past predictions (up to 7 days) kept as historical evidence. A missing file means no prediction has been published for the coin, never a live price. |
+| `crypto/predictions/<COIN>/provenance.json` | Prediction producer, after the prediction file | `snapshot_provenance.v1` sidecar: `constructed_at`, `archive_uploaded_at` (null until a dated archive copy exists), `latest_published_at`, `publication.status`, estimator signals, live/historical counts, coverage. A missing sidecar means unknown provenance. |
 
 No dated archive tree is defined in this version; `archive_uploaded_at`
 stays null until one is. Do not invent archive keys from the equity
@@ -33,9 +33,10 @@ stays null until one is. Do not invent archive keys from the equity
 `dataset: "crypto_predictions"`, `horizon: "1h"` and:
 
 - `generated_at`: ISO-8601 UTC producer run time.
-- `coverage`: `"current"` (the latest row is a live estimate),
-  `"expired"` (every target hour has passed and been retracted),
-  or `"absent"` (no estimate could be computed — see below).
+- `coverage`: `"current"` (the latest row's target hour has not
+  passed), `"historical"` (every target hour has passed, but the
+  value rows are retained as historical evidence), or `"absent"`
+  (no estimate could be computed — see below).
 - `observations`: One Clock observation rows (see below), oldest
   first. `observations_count` must match.
 
@@ -53,12 +54,15 @@ from `site/shared/one-clock.js` (`source`, `id`, `revision`,
 | `session` | `"continuous"` — crypto trades 24/7, the same session string the candle cache uses |
 | `origin` | `"synthetic"`, always. An estimate is computed, not observed |
 | `id` | `"<COIN>\|1h\|<target hour start ISO>"` — one identity per coin per target hour |
-| `revision` | `1` for the estimate; `2` for its retraction |
+| `revision` | `1`, always. A passed prediction is retained at
+  revision 1; no revision-2 null row is ever published |
 | `eventAt` | The target hour's start (= the close of the last completed 1h bar: the moment the estimate was made), epoch ms |
 | `valueAt` | The same instant as `eventAt` |
 | `availableAt` | The producer run time, epoch ms; must be at or after `eventAt` (One Clock rejects availability before the event) |
 | `evidence` | The R2 key `crypto/predictions/<COIN>.json` |
-| `value` | The estimate (below), or `null` for a retraction |
+| `value` | The estimate (below). Always an estimate: this adapter
+  never emits a `null` value. (One Clock itself still allows
+  `null` as a retraction for other adapters.) |
 
 `value` for a live estimate:
 
@@ -115,20 +119,35 @@ confidence = completeness * max(0, 1 - volatility / 0.04),
   it from selection — an estimate never rests on a bar that has
   not closed.
 
-## Retraction
+## Retention — predictions are never retracted
 
-A prediction is live only for its target hour. Once the hour has
-passed (`now > target_end`) the producer publishes revision 2 of
-the same id with `value: null`. One Clock's highest-revision-wins
-rule makes the retraction win, and `readingAsOf` reports
-`unavailable` — a stale estimate is never shown as a current
-one, and a retraction never resurrects a prior value. Retraction
-rows are carried in the file for 7 days, then pruned. A producer
-run that lands after its target hour has already passed publishes
-the estimate and its retraction in the same file: the value row
-is the audit trail (it was never selectable during its hour —
-its `availableAt` is after the hour ended), the retraction is
-what the selector returns.
+A prediction stays in One Clock after its target hour passes,
+with its value intact, as historical evidence against which
+the prediction can be judged. Nothing retracts it: the
+producer never publishes a revision-2 null row, and a passed
+prediction is never removed until it ages out of the file
+(past predictions are carried for 7 days, then pruned — a
+bound on file size, not a retraction). A reader judges a
+passed prediction by its `eventAt` / `availableAt` and its
+value's `target_start` / `target_end`, which mark it as a past
+prediction, not a current price.
+
+What `readingAsOf` returns for a passed prediction, honestly:
+the selector returns the latest row as of the cutoff with its
+value intact, so the state is `fresh` while its age
+(`cutoff − valueAt`) is within the caller's `max_age_ms` and
+`stale` once it is older — never `unavailable` merely because
+the hour passed. `unavailable` means no prediction exists at
+all as of the cutoff (or the estimate is older than the
+caller's bound in a reader that treats that as unavailable).
+A consumer that shows only the *live* next-hour estimate must
+therefore check that the returned row's target hour has not
+passed at the cutoff (`target_end > cutoff`); the panel does
+exactly that, and renders anything else as "no live estimate",
+with the reason naming the retained history. The daily PR
+batch (see the PR body) scores retained predictions against
+the actual prices that followed — that judgement is the
+reason they are kept.
 
 ## Cohorts: live prices and estimates never mix
 
@@ -166,7 +185,11 @@ what the selector returns.
 - The Crypto panel reads `crypto/predictions/<COIN>.json` through
   the real `selectAsOf` / `readingAsOf` (`site/js/crypto-predictions.js`,
   origin `"synthetic"`, 2h staleness bound like the snapshot).
-  A retracted or expired prediction is not shown as a price.
+  A passed prediction is not shown as the live next-hour
+  estimate: the read path checks the returned row's target hour
+  and reports "no live estimate" when it has passed, naming the
+  retained history as the reason. The retained rows themselves
+  stay readable through `selectAsOf` for judging.
 - No consumer joins predictions to news, options chains, One
   Clock equity fields, Crassus, or the private BTC lane. No
   trading, no alerts.
@@ -204,6 +227,13 @@ access must add the following steps; they are **not** in this PR.
 
 ## Open questions for reviewers
 
+- **Retention (decided 2026-11-23, at Cian's direction):**
+  predictions are retained as historical evidence, not
+  retracted — a passed prediction stays in One Clock with its
+  value intact so it can be judged against the actual price.
+  The open question that remains is whether 7 days of history
+  per coin is the right bound, or whether the daily PR batch
+  archive should keep them longer.
 - Is an hourly estimate the right product, or does a synthetic
   cohort in One Clock invite readers to treat estimates as
   prices? The cohort separation and the estimate-only labelling

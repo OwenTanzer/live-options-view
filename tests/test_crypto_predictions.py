@@ -8,13 +8,14 @@ No provider calls, no R2, no clock dependence beyond fixed fixtures::
 Covers the estimator (pure function: range contains the estimate,
 direction consistent with momentum sign, confidence bounds, too
 few bars, BTC correlation), the One Clock envelope (origin
-synthetic, retraction after the target hour, as-of selection,
-live vs estimate cohorts never mixing), the prediction file
-round-trip, the producer (from cached 1h bars, CoinGecko-style
-absence, retraction carry-forward), the provenance sidecar and
-publish keys, the CLI seed command (byte-identical to the
-checked-in seed) — plus the checked-in BTC seed (real Coinbase
-bars, real computed estimates).
+synthetic, retention after the target hour — a passed prediction
+stays readable with its value intact, as-of selection, live vs
+estimate cohorts never mixing), the prediction file round-trip,
+the producer (from cached 1h bars, CoinGecko-style absence,
+history carry-forward), the provenance sidecar and publish keys,
+the CLI seed command (byte-identical to the checked-in seed) —
+plus the checked-in BTC seed (real Coinbase bars, real computed
+estimates).
 """
 
 from __future__ import annotations
@@ -176,29 +177,42 @@ class EnvelopeTests(unittest.TestCase):
             pred_mod.prediction_to_observation(
                 "BTC", self.est, self.target_ms, "2026-11-24T05:59:00Z")
 
-    def test_retraction_is_revision_two_with_null_value(self):
-        row = pred_mod.retraction_observation(
-            "BTC", self.target_ms, self.generated_at)
-        self.assertEqual(row["revision"], 2)
-        self.assertIsNone(row["value"])
-        self.assertEqual(row["id"], "BTC|1h|2026-11-24T06:00:00Z")
-        self.assertEqual(row["origin"], "synthetic")
+    def test_no_retraction_helper_exists_and_null_is_rejected(self):
+        # Retention, not retraction: there is no revision-2 null
+        # row to publish, and a null estimate is refused outright.
+        self.assertFalse(hasattr(pred_mod, "retraction_observation"))
+        with self.assertRaises(ValueError):
+            pred_mod.prediction_to_observation(
+                "BTC", None, self.target_ms, self.generated_at)
 
-    def test_retraction_after_target_hour_wins_selection(self):
+    def test_passed_prediction_is_retained_with_value_intact(self):
+        # The target hour (06:00–07:00) has passed at the 07:30
+        # cutoff, but the prediction stays readable with its value
+        # intact: readingAsOf reports it fresh (age 90 minutes,
+        # inside the 2h bound), and a reader judges it by its
+        # eventAt / target window, which mark it as past.
         value_row = pred_mod.prediction_to_observation(
             "BTC", self.est, self.target_ms, self.generated_at)
-        retract_row = pred_mod.retraction_observation(
-            "BTC", self.target_ms, "2026-11-24T07:05:00Z")
-        rows = [value_row, retract_row]
+        rows = [value_row]
         selected = oc.select_as_of(rows, {
             "session": "continuous", "instrument": "BTC",
             "cutoff": _ms("2026-11-24T07:30:00Z"), "origin": "synthetic"})
         self.assertEqual(len(selected), 1)
-        self.assertIsNone(selected[0]["value"])
+        self.assertIsNotNone(selected[0]["value"])
+        self.assertEqual(selected[0]["value"]["direction"], "up")
         reading = pred_mod.current_prediction(
             rows, "BTC", _ms("2026-11-24T07:30:00Z"), 2 * 60 * 60 * 1000)
-        self.assertEqual(reading["state"], "unavailable")
-        self.assertIsNone(reading["row"]["value"])
+        self.assertEqual(reading["state"], "fresh")
+        self.assertEqual(reading["row"]["id"], "BTC|1h|2026-11-24T06:00:00Z")
+        self.assertIsNotNone(reading["row"]["value"])
+        # Past the staleness bound the same row is stale, still
+        # with its value intact — never unavailable merely
+        # because the hour passed.
+        stale = pred_mod.current_prediction(
+            rows, "BTC", _ms("2026-11-24T08:30:00Z"), 2 * 60 * 60 * 1000)
+        self.assertEqual(stale["state"], "stale")
+        self.assertIsNotNone(stale["row"]["value"])
+        self.assertEqual(stale["row"]["value"]["direction"], "up")
 
     def test_select_as_of_returns_prediction_available_at_cutoff_only(self):
         first = pred_mod.prediction_to_observation(
@@ -281,14 +295,17 @@ class FileTests(unittest.TestCase):
         content = pred_mod.read_prediction_file(seed)
         self.assertEqual(content["symbol"], "BTC")
         self.assertEqual(content["coverage"], "current")
-        # Seven value rows (one per target hour) + six retractions.
-        self.assertEqual(content["observations_count"], 13)
+        # Seven value rows (one per target hour), no retractions:
+        # the six passed hours are retained as historical evidence.
+        self.assertEqual(content["observations_count"], 7)
         live = [r for r in content["observations"] if r["value"] is not None]
         self.assertEqual(len(live), 7)
+        self.assertTrue(all(r["revision"] == 1
+                            for r in content["observations"]))
         latest = live[-1]
         self.assertEqual(latest["value"]["target_start"], "2026-11-24T00:00:00Z")
-        # Every expired target hour is retracted, and the
-        # retraction is the row the selector returns for it.
+        # Every passed target hour is retained, and the latest
+        # row is the one the selector returns for it.
         reading = pred_mod.current_prediction(
             content["observations"], "BTC",
             _ms("2026-11-24T00:45:00Z"), 2 * 60 * 60 * 1000)
@@ -297,14 +314,17 @@ class FileTests(unittest.TestCase):
         self.assertAlmostEqual(reading["row"]["value"]["estimated_price"],
                                61192.0, delta=1.0)
         self.assertEqual(reading["row"]["value"]["last_close"], 61189.97)
-        # At 02:00 the 00:00 hour has passed and its retraction is
-        # not in the seed (the seed was generated at 00:32), so the
-        # reading is stale by age, not retracted — the seed is a
-        # snapshot, and the producer would retract on its next run.
+        # At 02:30 the 00:00 hour has passed; the reading is stale
+        # by age, with its value intact — the seed is a snapshot,
+        # and the producer would carry the row forward as history
+        # on its next run.
         stale = pred_mod.current_prediction(
             content["observations"], "BTC",
             _ms("2026-11-24T02:30:00Z"), 2 * 60 * 60 * 1000)
         self.assertEqual(stale["state"], "stale")
+        self.assertIsNotNone(stale["row"]["value"])
+        self.assertAlmostEqual(stale["row"]["value"]["estimated_price"],
+                               61192.0, delta=1.0)
 
 
 class ProducerTests(unittest.TestCase):
@@ -365,7 +385,7 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(content["observations"], [])
         self.assertIn("1d base only", content["reason"])
 
-    def test_retraction_carried_forward_from_previous_file(self):
+    def test_history_carried_forward_from_previous_file(self):
         import tempfile
         bars = _up_bars()
         with tempfile.TemporaryDirectory() as tmp:
@@ -374,7 +394,7 @@ class ProducerTests(unittest.TestCase):
             first, _ = producer_mod.build_symbol(
                 "BTC", str(cache_dir), "2026-11-24T06:05:00Z", now_ms)
             # One hour later the cache has one more bar; the old
-            # target hour has passed and must be retracted.
+            # target hour has passed and is retained as history.
             more = _up_bars(n=31)
             cache_dir = self._cache_dir(tmp, {"BTC": more})
             later_ms = _ms("2026-11-24T07:05:00Z")
@@ -385,11 +405,42 @@ class ProducerTests(unittest.TestCase):
         ids = [(r["id"], r["revision"], r["value"] is None)
                for r in second["observations"]]
         self.assertIn(("BTC|1h|2026-11-24T06:00:00Z", 1, False), ids)
-        self.assertIn(("BTC|1h|2026-11-24T06:00:00Z", 2, True), ids)
         self.assertIn(("BTC|1h|2026-11-24T07:00:00Z", 1, False), ids)
+        self.assertNotIn(("BTC|1h|2026-11-24T06:00:00Z", 2, True), ids)
+        self.assertTrue(all(r["value"] is not None
+                            for r in second["observations"]))
+        # The passed 06:00 prediction is still readable as of a
+        # cutoff inside its hour — and still readable afterwards
+        # as history: select_as_of at 07:05 returns both rows,
+        # the 06:00 value intact.
+        past = oc.select_as_of(second["observations"], {
+            "session": "continuous", "instrument": "BTC",
+            "cutoff": later_ms, "origin": "synthetic"})
+        self.assertEqual([r["id"] for r in past],
+                         ["BTC|1h|2026-11-24T06:00:00Z",
+                          "BTC|1h|2026-11-24T07:00:00Z"])
+        self.assertTrue(all(r["value"] is not None for r in past))
         reading = pred_mod.current_prediction(
             second["observations"], "BTC", later_ms, 2 * 60 * 60 * 1000)
         self.assertEqual(reading["row"]["id"], "BTC|1h|2026-11-24T07:00:00Z")
+
+    def test_late_run_publishes_historical_coverage(self):
+        # A producer run landing after its target hour has already
+        # passed publishes the estimate as historical evidence:
+        # coverage "historical", value intact, no retraction.
+        import tempfile
+        bars = _up_bars()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = self._cache_dir(tmp, {"BTC": bars})
+            late_ms = _ms("2026-11-24T07:05:00Z")
+            content, status = producer_mod.build_symbol(
+                "BTC", str(cache_dir), "2026-11-24T07:05:00Z", late_ms)
+        self.assertEqual(status, "historical")
+        self.assertEqual(content["coverage"], "historical")
+        self.assertEqual(len(content["observations"]), 1)
+        self.assertIsNotNone(content["observations"][0]["value"])
+        self.assertEqual(content["observations"][0]["id"],
+                         "BTC|1h|2026-11-24T06:00:00Z")
 
     def test_unknown_symbol_rejected(self):
         with self.assertRaises(ValueError):
@@ -412,6 +463,8 @@ class ProvenanceAndPublishTests(unittest.TestCase):
         self.assertEqual(sidecar["schema"], "snapshot_provenance.v1")
         self.assertEqual(sidecar["dataset"], "crypto_predictions")
         self.assertEqual(sidecar["coverage"]["live_predictions"], 1)
+        self.assertEqual(sidecar["coverage"]["historical"], 0)
+        self.assertEqual(sidecar["files"]["predictions"]["historical"], 0)
         self.assertEqual(sidecar["publication"]["status"], "not_published")
         self.assertEqual(prov_mod.sidecar_key("BTC"),
                          "crypto/predictions/BTC/provenance.json")

@@ -9,15 +9,16 @@ never recorded prices. The contract is
 
 | Object key (R2 bucket `qqq-options-chain-data`, expected — unconfirmed) | Contents |
 |---|---|
-| `crypto/predictions/<COIN>.json` | One prediction file per coin, `schema_version: 1`, `dataset: "crypto_predictions"`: the live estimate for the next hour plus revision-2 retractions for expired target hours |
+| `crypto/predictions/<COIN>.json` | One prediction file per coin, `schema_version: 1`, `dataset: "crypto_predictions"`: the live estimate for the next hour plus retained past predictions (up to 7 days), kept as historical evidence so each prediction can be judged after its hour |
 | `crypto/predictions/<COIN>/provenance.json` | `snapshot_provenance.v1` sidecar for the coin |
 
 One horizon only (1h ahead), one prediction per coin per hour.
-A prediction is live only for its target hour; once the hour has
-passed the producer publishes a revision-2 row with `value: null`,
-so an as-of reader reports `unavailable` instead of a stale
-estimate. Live prices and future estimates stay in separate
-cohorts: the candle cache selects `origin: "recorded"` /
+A prediction stays in One Clock after its target hour passes,
+with its value intact — it is never retracted. A reader judges
+a passed prediction by its `eventAt` / `availableAt` and its
+value's `target_start` / `target_end`, which mark it as a past
+prediction, not a current price. Live prices and future estimates
+stay in separate cohorts: the candle cache selects `origin: "recorded"` /
 `"reconstructed"`, predictions select `origin: "synthetic"`, and
 neither selection ever sees the other's rows.
 

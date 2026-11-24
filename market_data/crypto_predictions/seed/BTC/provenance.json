@@ -17,16 +17,16 @@
     "predictions": {
       "key": "crypto/predictions/BTC.json",
       "source": "crypto_predictions",
-      "observations": 13,
+      "observations": 7,
       "live": 1,
-      "retracted": 6,
+      "historical": 6,
       "coverage": "current",
       "reason": null
     }
   },
   "coverage": {
     "live_predictions": 1,
-    "retracted": 6,
+    "historical": 6,
     "target_start": "2026-11-24T00:00:00Z",
     "target_end": "2026-11-24T01:00:00Z"
   },
@@ -40,7 +40,7 @@
       "last-hour range",
       "BTC correlation"
     ],
-    "note": "Estimates only. Origin synthetic; a prediction is never a recorded price and is retracted when its target hour passes."
+    "note": "Estimates only. Origin synthetic; a prediction is never a recorded price and is retained as historical evidence when its target hour passes."
   },
   "notes": [
     "Crypto trades 24/7: buckets align to 00:00 UTC, not an equity session open. There is no session filter.",

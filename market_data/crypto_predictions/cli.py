@@ -180,12 +180,26 @@ def cmd_status(args):
         except ValueError as exc:
             print(f"{symbol}: invalid ({exc})")
             continue
-        live = [r for r in content["observations"]
-                if r.get("value") is not None
-                and not any(o.get("id") == r["id"] and o.get("revision") == 2
-                            for o in content["observations"])]
+        # Live: value rows whose target hour has not passed at the
+        # file's generation time; the rest are retained history.
+        generated_ms = None
+        if content.get("generated_at"):
+            generated_ms = oc.instant_ms(
+                content["generated_at"], "generated_at")
+        live = []
+        historical = 0
+        for r in content["observations"]:
+            if r.get("value") is None:
+                continue
+            target_end = r["value"].get("target_end")
+            if (generated_ms is not None and target_end is not None
+                    and oc.instant_ms(target_end, "target_end") <= generated_ms):
+                historical += 1
+                continue
+            live.append(r)
         print(f"{symbol}: {content.get('coverage')} "
-              f"({len(live)} live / {len(content['observations'])} observations, "
+              f"({len(live)} live / {historical} historical / "
+              f"{len(content['observations'])} observations, "
               f"generated {content.get('generated_at')})")
 
 
