@@ -60,6 +60,8 @@ intervals, and the tail since the last run is reported.
 
 from __future__ import annotations
 
+from .companies import map_company
+
 from datetime import datetime, timedelta
 
 from . import config
@@ -221,6 +223,7 @@ def news_events(archive: Archive, cutoff: datetime, mode: str, stream: str | Non
                 "published_at": o["published_at"], "time_quality": o["time_quality"],
                 "observed_at": o["observed_at"], "archived_at": o["archived_at"], "run_id": o["run_id"],
                 "classification_at_event": at_event,
+                "company_mapping": map_company(o["title"], o.get("excerpt", ""), o.get("categories")),
                 "event_at": iso(event_at), "event_basis": basis, "_event_at": event_at,
                 "later_context": later,
             })

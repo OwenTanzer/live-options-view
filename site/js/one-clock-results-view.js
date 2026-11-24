@@ -19,6 +19,8 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
   select('instrument','Filter instrument',[['','All loaded instruments']]);
   select('collection','Collection',[['','All collections'],['prospective','Prospective'],['backfill','Backfill'],['replay','Replay'],['retrospective','Retrospective'],['unknown','Unknown']]);
   select('state','Outcome state',[['','All occurrences'],['measured','Measured'],['pending','Pending'],['missing','Missing'],['unscored','No compatible outcome']]);
+  select('timing','Headline endpoint timing',[['exact','On target'],['delayed','After target']]);
+  controls.timing.parentElement.hidden=true;
   const searchLabel=el('label','Search occurrences'),search=el('input');search.type='search';search.setAttribute('aria-label','Search occurrences');searchLabel.append(search);toolbar.append(searchLabel);
   if(fixture){controls.class.parentElement.hidden=true;controls.outcome.parentElement.hidden=true;}
   const scope=el('p'),distribution=el('div'),comparison=el('details'),summary=el('summary','Compare measured outcomes');scope.className='muted';comparison.append(summary);
@@ -46,28 +48,34 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
     if(!dataset)return;
     try {
       const outcome=fixture?dataset.outcome:controls.outcome.value?JSON.parse(controls.outcome.value):null;
+      const headline=dataset.rules.find(r=>ruleKey(r)===outcome?.ruleKey)?.transition==='per-headline';
+      controls.timing.parentElement.hidden=!headline;
       view=projectResults({...dataset,outcome,filters:{ruleKeys:controls.class.value?[controls.class.value]:[],
         instruments:controls.instrument.value?[controls.instrument.value]:[],collections:controls.collection.value?[controls.collection.value]:[],
-        states:controls.state.value?[controls.state.value]:[],query:search.value}});
+        endpointTiming:headline?controls.timing.value:null,states:controls.state.value?[controls.state.value]:[],query:search.value}});
       renderEncounterSummary(encounterTable,view.rows.map(r=>r.event),dataset.rules.filter(r=>!controls.class.value||ruleKey(r)===controls.class.value));
       const s=view.summary;
       scope.textContent=`${view.origin} evidence · ${s.occurrences} matching rows from ${dataset.events.length} loaded occurrences at ${new Date(view.cutoff).toISOString()}. Statistics use measured outcomes only; incompatible or absent measurements are counted separately.`;
+      if(headline)scope.textContent+=' '+view.excludedTiming+' measured returns belong to the other timing group.';
       stats.replaceChildren(...[['Occurrences',s.occurrences],['Sessions',s.sessions],['Measured',s.measured],['Pending',s.pending],['Missing',s.missing],['Unscored',s.unscored],['Mean',number(s.mean)],['Median',number(s.median)]].map(([name,value])=>{
         const box=el('div');box.className='stat';box.append(el('strong',value),el('span',name));return box;
       }));
       ledger.replaceChildren(...view.rows.map(({event,outcome})=>{
         const tr=el('tr'),definition=dataset.rules.find(r=>ruleKey(r)===ruleKey(event));
-        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.breach?' · '+event.breach.direction+' · '+event.breach.closeClass.replaceAll('_',' '):''}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
+        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.headline?' · '+event.headline.title:event.breach?' · '+event.breach.direction+' · '+event.breach.closeClass.replaceAll('_',' '):''}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
             ? (event.breach?'Candle close ':'Decision ') + new Date(event.decisionAt).toISOString() + (event.breach && event.origin==='reconstructed'?'': ' · '+(event.breach?'received ':'published ')+new Date(event.triggeredAt).toISOString())
             : new Date(event.triggeredAt).toISOString(),
           event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.decisionAt === undefined || event.breach ? event.collection??'replay' :
             [event.collection??'replay', 'no sealed forecast', outcome?.baselineTiming === 'reconstructed' ? 'reconstructed baseline' : null].filter(Boolean).join(' · '),
-          outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
+          outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':'')+(event.headline?' · '+number(outcome.elapsedMs/60000)+' min elapsed'+(outcome.baseStale?' · stale base':''):''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
         if(onReplay) {
           const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : event.breach?'Replay evidence':'Replay publication');
           replay.onclick = () => onReplay(event, event.triggeredAt);
           cell.append(replay);
+          if(event.headline && outcome?.availableAt){
+            const endpoint=el('button','Replay quote receipt');endpoint.onclick=()=>onReplay(event,outcome.availableAt);cell.append(endpoint);
+          }
           if (event.decisionAt !== undefined) {
             const decision = el('button', event.breach?'Replay candle close':'Replay decision');
             decision.onclick = () => onReplay(event, event.decisionAt);

@@ -1,3 +1,4 @@
+import {headlineIngestion,headlineQuoteIngestion} from './one-clock-headline-ingestion.js';
 import {candleIngestion} from './one-clock-candle-ingestion.js';
 import {levelIngestion} from "./one-clock-level-ingestion.js";
 import { shortlistIngestion } from './one-clock-shortlist-ingestion.js';
@@ -61,7 +62,7 @@ export const chainIngestion=Object.freeze({id:'archived-chain',version:'1',owner
   }
 });
 // A stream joins once here; all accounts share the same public ingestion pass.
-export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion,levelIngestion,candleIngestion]);
+export const publicIngestionSources=Object.freeze([chainIngestion,shortlistIngestion,levelIngestion,candleIngestion,headlineIngestion,headlineQuoteIngestion]);
 
 export function levelEvaluationStatus(attempt,rule,coverage) {
   if(rule.transition==='per-candle-pair' && attempt.state==='evaluated') {

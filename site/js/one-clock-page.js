@@ -65,7 +65,10 @@ const fixtureResults=createResultsView({container:$('stats'),stats:$('stats'),le
 const retainedResults=createResultsView({container:$('observed-stats'),stats:$('observed-stats'),ledger:$('observed-ledger'),
   onFilter:()=>{$('observed-evidence').hidden=true;},
   onInspect:event=>renderReceipt($('observed-evidence'),event),
-  onReplay:(event,at)=>{location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(at)})+'#history-clock';}});
+  onReplay:(event,at)=>{
+    if(event.headline){showHeadlineReplay({session:event.session,ruleId:event.ruleId,version:event.ruleVersion,
+      revisionId:event.headline.revisionId,itemId:event.headline.itemId},at);return;}
+    location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(at)})+'#history-clock';}});
 
 function option(value, label = value) { const el = document.createElement('option'); el.value = value; el.textContent = label; return el; }
 function selectControl(label, name, options, value) {
@@ -146,7 +149,7 @@ function versionOptions() {
 function openRule(rule) {
   editing = rule;
   levelForm.open(rule);
-  $('archive-encounter-controls').hidden=(!rule.levelEncounter && rule.transition!=='per-candle-pair') || archiveMode;
+  $('archive-encounter-controls').hidden=(!rule.levelEncounter && !['per-headline','per-candle-pair'].includes(rule.transition)) || archiveMode;
   $('rule-origin').hidden=!rule.archiveHandoff;
   $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
@@ -318,6 +321,7 @@ async function readObserved(selection,generation) {
   }catch(error){if(observedMode&&generation===observedGeneration){retainedResults.clear({forget:true});$('observed-status').textContent=error.message;}}
 }
 function commitObserved(live) {
+  $('headline-replay-controls').hidden=true;
   const generation=++observedGeneration;clearInterval(timer);timer=null;
   observedSelection=Object.freeze({session:$('observed-day').value+'/'+$('observed-end').value,instrument:$('observed-instrument').value,
     mode:live?'live':'replay',origin:'recorded',cutoff:live?Date.now():Date.parse($('observed-cutoff').value+'Z')});
@@ -326,11 +330,31 @@ function commitObserved(live) {
   if(live)timer=setInterval(()=>readObserved(selection,generation),60000);
 }
 function showObservedPanel() {
+  $('headline-replay-controls').hidden=true;
   observedGeneration++;observedSelection=null;
   observedMode=true;clearInterval(timer);timer=null;$('builder').hidden=true;$('results').hidden=true;document.querySelector('.replay').hidden=true;$('observed-results').hidden=false;
   $('show-observed').setAttribute('aria-pressed','true');$('show-builder').setAttribute('aria-pressed','false');$('show-results').setAttribute('aria-pressed','false');
   document.querySelector('.notice').hidden=true;retainedResults.clear();$('observed-coverage').textContent='';$('observed-evidence').hidden=true;
   return observedGeneration;
+}
+async function showHeadlineReplay(scope,at) {
+  const generation=showObservedPanel();
+  const control=$('headline-replay-controls'), cursor=$('headline-replay-time');
+  control.hidden=false;cursor.value=new Date(at).toISOString().slice(0,23);
+  $('headline-replay-read').onclick=()=>{
+    const selected=Date.parse(cursor.value+'Z');
+    if(Number.isFinite(selected))showHeadlineReplay(scope,selected);
+  };
+  $('observed-status').textContent='Reading headline evidence at the replay cursor…';
+  try {
+    const body=await accountRequest({action:'replay-headlines',session:scope.session,ruleId:scope.ruleId,version:scope.version,cutoff:at});
+    if(generation!==observedGeneration)return;
+    const events=scope.revisionId ? body.events.filter(e=>e.headline.itemId===scope.itemId && e.headline.revisionId===scope.revisionId) : body.events;
+    $('observed-status').textContent=scope.session+' · '+body.instrument+' · '+events.length+' headline occurrences visible at '+new Date(at).toISOString();
+    $('observed-coverage').textContent=body.coverage.reason+' Includes premarket and after-hours headlines on New York trading dates.';
+    retainedResults.update({events,rules:[body.rule],cutoff:at,origin:'recorded'});
+    if(scope.revisionId && events.length)renderReceipt($('observed-evidence'),events[0]);
+  }catch(error){if(generation===observedGeneration)$('observed-status').textContent=error.message;}
 }
 $('encounter-run').onclick=async()=>{
   const button=$('encounter-run'), progress=$('encounter-progress');
@@ -341,6 +365,9 @@ $('encounter-run').onclick=async()=>{
     const draft=formRule();
     const fields=['transition','conditions','name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
     if(JSON.stringify(draft,fields)!==JSON.stringify(eventRule(rule),fields))throw new Error('Save your edited study to your account before replaying it.');
+    if(rule.transition==='per-headline'){
+      await showHeadlineReplay({session,ruleId:rule.id,version:rule.version},Date.now());return;
+    }
     progress.textContent='Opening the archived session…';
     for(let batch=0;batch<100;batch++) {
       const body=await accountRequest({action:rule.transition==='per-candle-pair'?'replay-candles':'replay-encounters',session,ruleId:rule.id,version:rule.version});

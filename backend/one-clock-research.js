@@ -1,3 +1,5 @@
+import {headlineDay} from '../site/shared/one-clock-headlines.js';
+import {replayHeadlines} from './one-clock-headline-ingestion.js';
 import {replayCandleSession} from './one-clock-candle-ingestion.js';
 import {replayEncounter} from './one-clock-encounter-replay.js';
 import {fanoutChanges,snapshotVersion,generationWrites,finishHistory} from './one-clock-reevaluation.js';
@@ -20,6 +22,8 @@ function validatedRule(input) {
   const rule=eventRule(input);
   if(rule.id.length>100||rule.name.length>120||rule.instruments.length>3||rule.instruments.some(i=>!instruments.includes(i)))throw new Error('unsupported rule scope');
   for(const c of [...rule.conditions,...rule.outcomes]) {
+    if(rule.transition!=='per-headline' && ['company-quote','company-headline'].includes(c.source))
+      throw new Error('Choose the mapped headline study for this input.');
     if(!Object.hasOwn(researchFields,c.source)||!Object.hasOwn(researchFields[c.source],c.field))throw new Error('This input is not yet available to the public observer.');
     if(rule.instruments.some(instrument=>![...publicIngestionSources,...nativePublicationSources].some(source=>(Array.isArray(source.outputs)?source.outputs.includes(c.source):Object.hasOwn(source.outputs,c.source))&&(source.instrumentsByOutput?.[c.source]??source.instruments).includes(instrument))))throw new Error('Input unavailable for a selected instrument');
     if(c.maxAgeMs>86400000||(c.horizonMs??0)>86400000||(c.toleranceMs??0)>86400000)throw new Error('rule time bound');
@@ -52,8 +56,9 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
       const bounds=equitySession(session);
       const applicable=bounds?await list(stmt(db,`SELECT DISTINCT r.rule_id,r.version,r.payload FROM one_clock_rules r JOIN one_clock_activations a
         ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
-        WHERE r.namespace=? AND r.registered_at<=? AND a.started_at<=? AND (a.ended_at IS NULL OR a.ended_at>=?)
-        AND EXISTS(SELECT 1 FROM json_each(r.payload,'$.instruments') WHERE value=?) LIMIT 101`,namespace,cutoff,Math.min(cutoff,bounds.close),bounds.open,instrument)):[];
+        WHERE r.namespace=? AND r.registered_at<=? AND a.started_at<=CASE WHEN r.payload->>'$.transition'='per-headline' THEN ? ELSE ? END
+        AND (a.ended_at IS NULL OR a.ended_at>=CASE WHEN r.payload->>'$.transition'='per-headline' THEN ? ELSE ? END)
+        AND EXISTS(SELECT 1 FROM json_each(r.payload,'$.instruments') WHERE value=?) LIMIT 101`,namespace,cutoff,Math.min(cutoff,headlineDay(session).close),Math.min(cutoff,bounds.close),headlineDay(session).open,bounds.open,instrument)):[];
       const sourceCoverage=coverage.map(r=>JSON.parse(r.coverage));
       const evaluation=applicable.map(({rule_id,version,payload})=>{
         const attempt=attempts.find(a=>a.rule_id===rule_id&&a.version===version)??{rule_id,version,state:'pending',attempted_at:null,reason:'No evaluation receipt at this cutoff.'};
@@ -66,6 +71,7 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
     const parsed=await readJsonBody(request);if(parsed.error)return parsed.error;
     const body=parsed.body,now=Date.now();
+    if(body?.action==='replay-headlines')return jsonResponse(await replayHeadlines(db,namespace,body,now));
     if(body?.action==='replay-candles')return jsonResponse(await replayCandleSession(db,namespace,body,now));
     if(body?.action==='replay-encounters')return jsonResponse(await replayEncounter(env,namespace,body,now));
     if(body?.action==='save') {
@@ -125,14 +131,34 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
     SELECT DISTINCT r.namespace,d.value,i.value FROM one_clock_activations a INDEXED BY one_clock_one_active_version
     CROSS JOIN one_clock_rules r ON a.namespace=r.namespace AND a.rule_id=r.rule_id AND a.version=r.version
     JOIN json_each(r.payload,'$.instruments') i JOIN json_each(json_array(?,?)) d
-    WHERE a.ended_at IS NULL AND a.started_at<=MIN(?,CASE WHEN d.value=? THEN ? ELSE ? END)
+    WHERE a.ended_at IS NULL AND a.started_at<=MIN(?,CASE WHEN r.payload->>'$.transition'='per-headline' THEN CASE WHEN d.value=? THEN ? ELSE ? END
+      ELSE CASE WHEN d.value=? THEN ? ELSE ? END END)
     AND NOT EXISTS(SELECT 1 FROM one_clock_evaluation_work w WHERE w.namespace=r.namespace AND w.session=d.value AND w.instrument=i.value)
-    ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,equitySession(day).close,equitySession(previous).close).run();
+    ORDER BY r.namespace,d.value,i.value LIMIT 300 ON CONFLICT DO NOTHING`,day,previous,now,day,headlineDay(day).close,headlineDay(previous).close,day,equitySession(day).close,equitySession(previous).close).run();
   // Two accounts/four rules each per invocation; shared source reads are memoized.
   const nativeEnabled=env.ONE_CLOCK_PUBLICATIONS==='enabled';
   let discovery=null;
   if(nativeEnabled) discovery=await fanoutChanges(db,now);
   const jobs=await list(stmt(db,'SELECT * FROM one_clock_evaluation_work WHERE session IN (?,?) ORDER BY updated_at,namespace,session,instrument LIMIT 2',day,previous));
+  // The 24h headline target and its 24h observation window can extend into
+  // a third New York date. Share the same two-job budget and rotate the
+  // oldest due account first. Only retained open outcomes justify this read.
+  const oldestHeadlineDay=sessionAt(now-2*86400000);
+  if(oldestHeadlineDay<previous) {
+    const due=await stmt(db,`SELECT w.* FROM one_clock_evaluation_work w INDEXED BY one_clock_evaluation_due
+      WHERE w.session>=? AND w.session<? AND EXISTS (
+        SELECT 1 FROM one_clock_events e INDEXED BY one_clock_event_scope
+        WHERE e.namespace=w.namespace AND e.session=w.session AND e.instrument=w.instrument AND e.origin='recorded'
+        AND e.state='active' AND json_type(e.payload,'$.headline')='object'
+        AND EXISTS (SELECT 1 FROM json_each(e.payload,'$.outcomes') o
+          WHERE o.value->>'$.state'='pending' AND o.value->>'$.deadlineAt'>=w.updated_at))
+      ORDER BY w.updated_at,w.namespace,w.session,w.instrument LIMIT 1`,oldestHeadlineDay,previous).first();
+    if(due) {
+      jobs.push({...due,headlineOnly:true});
+      jobs.sort((a,b)=>a.updated_at-b.updated_at || a.session.localeCompare(b.session));
+      jobs.splice(2);
+    }
+  }
   if(nativeEnabled && discovery.state!=='indexing') {
     const backlog=await list(stmt(db,'SELECT * FROM one_clock_historical_rules WHERE retry_at<=? ORDER BY retry_at,enqueued_at LIMIT 2',now));
     const target=backlog[0];
@@ -154,7 +180,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
   for(const job of jobs) {
     try {
       const historic=job.target!==undefined;
-      const version=nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
+      const version=!job.headlineOnly && nativeEnabled && discovery.state!=='indexing' ? await snapshotVersion(db,job.session,job.instrument,now) : null;
       if(historic && version.generation<job.target) {
         await finishHistory(db,job,now,'Queued evidence is not yet visible.');
         continue;
@@ -172,8 +198,13 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         const ruleKey=JSON.stringify([a.rule_id,a.version]);(windows[ruleKey]??=[]).push(a);
       }
       const bounds=equitySession(job.session);
-      const rules=(await ruleList(db,job.namespace)).filter(r=>JSON.parse(r.payload).instruments.includes(job.instrument)&&
-        (windows[JSON.stringify([r.rule_id,r.version])]??[]).some(w=>w.started_at<=bounds.close&&(w.ended_at===null||w.ended_at>=bounds.open)));
+      const rules=(await ruleList(db,job.namespace)).filter(r=>{
+        const rule=JSON.parse(r.payload);
+        if(job.headlineOnly && rule.transition!=='per-headline')return false;
+        const interval=rule.transition==='per-headline'?headlineDay(job.session):bounds;
+        return rule.instruments.includes(job.instrument) && (windows[JSON.stringify([r.rule_id,r.version])]??[])
+          .some(w=>w.started_at<=interval.close && (w.ended_at===null || w.ended_at>=interval.open));
+      });
       const start=(job.rule_cursor??0)%Math.max(1,rules.length);let chosen=historic?rules.filter(r=>r.rule_id===job.rule_id&&r.version===job.version):rules.slice(start,start+4);
       const inputs = r => {
         const rule=JSON.parse(r.payload);
@@ -185,7 +216,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       const key=JSON.stringify([job.session,job.instrument,now,version?.generation,historic,optional.map(a=>a.id)]);
       if(!reads.has(key))reads.set(key,(async()=>{
         const coverage=[],owners=new Map();
-        if(env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
+        if(!job.headlineOnly && env.ONE_CLOCK_PUBLICATIONS==='enabled')for(const descriptor of publicationSources.filter(d=>d.instruments.includes(job.instrument))) {
           const native=await nativeScopeRecords(db,descriptor,{session:job.session,instrument:job.instrument,cutoff:now,
             maxSequence:version ? (version.sequences[descriptor.id+'/'+job.instrument]??0) : null,
             currentProgress:publicationProgress.find(p=>p.stream===descriptor.id+'/'+job.instrument)});
@@ -197,7 +228,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
             owners.set(source,{descriptor,native});
           }
         }
-        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument))) {
+        for(const adapter of sources.filter(a=>a.instruments.includes(job.instrument) && (!job.headlineOnly || optional.includes(a)))) {
           if(adapter.outputs.every(source=>owners.get(source)?.descriptor.supersedes?.[source]===adapter.id))continue;
           if(adapter.demandDriven && !optional.includes(adapter))continue;
           if(!historic || adapter.demandDriven) {
@@ -233,7 +264,9 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
         // the original tick cutoff. Historical jobs wait for complete coverage.
         const candlePair=JSON.parse(rule.payload).transition==='per-candle-pair';
         const partialCandle=c=>candlePair && !historic && c.source==='qqq-closed-minutes' && c.indexComplete;
-        const blocking=c=>incomplete(c) && !partialCandle(c);
+        const headline=JSON.parse(rule.payload).transition==='per-headline';
+        const partialHeadline=c=>headline && ['mapped-news-archive','mapped-price-strip'].includes(c.source);
+        const blocking=c=>incomplete(c) && !partialCandle(c) && !partialHeadline(c);
         if(data.coverage.some(c=>blocking(c) && (providerOutputs.get(c.source)??[]).some(output=>used.includes(output))))return false;
         for(const output of used) {
           const nativeOnly=publicationSources.some(source=>outputsOf(source).includes(output)) &&
@@ -246,6 +279,8 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
           if(!receipt || blocking(receipt))return false;
           const unseenBars=receipt.processed>0 && receipt.updatedAt>now;
           if(historic && candlePair && unseenBars)return false;
+          if(partialHeadline(receipt) && (!receipt.indexComplete || receipt.pending || receipt.gaps))
+            partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           if(partialCandle(receipt) && (receipt.pending || receipt.gaps || unseenBars))
             partialRules.add(JSON.stringify([rule.rule_id,rule.version]));
           if(historic && receipt.through<(receipt.verifiedAvailabilityPrefix?now:targetThrough))return false;
@@ -269,7 +304,7 @@ export async function advanceOneClockResearch(env,{now=Date.now(),sources=public
       const selection={session:job.session,instrument:job.instrument,cutoff:now,origin:'recorded'};
       // Regular-session observations share the producer's calendar; premarket
       // payloads do not silently become an anchor or trigger for this policy.
-      const sourceRecords=data.records.filter(r=>r.event_at>=bounds.open&&r.event_at<=bounds.close);
+      const sourceRecords=data.records.filter(r=>['company-quote','company-headline'].includes(r.source) || (r.event_at>=bounds.open && r.event_at<=bounds.close));
       if(statementBudget<4)break; // Defer untouched rules, rather than call a depleted budget a failure.
       const attempts=(selected,state,reason)=>selected.map(r=>stmt(db,`INSERT INTO one_clock_evaluation_history
         (namespace,session,instrument,rule_id,version,attempted_at,state,reason) VALUES(?,?,?,?,?,?,?,?)

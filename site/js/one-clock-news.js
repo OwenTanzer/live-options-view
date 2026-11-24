@@ -3,7 +3,7 @@ import {sessionAt, sessionInstant} from '../shared/one-clock-session.js';
 
 // Only archive-mode revision rows can establish historical knowledge. The
 // source page also contains retrospective context, which stays off this path.
-function availableMillisecond(iso) {
+export function availableMillisecond(iso) {
   const floor = Date.parse(iso);
   if (!Number.isFinite(floor)) throw Error('Invalid news timestamp.');
   // Python publishes microseconds. A record arriving between two selectable
@@ -12,7 +12,7 @@ function availableMillisecond(iso) {
   return floor + (/[1-9]/.test(remainder) ? 1 : 0);
 }
 
-function archiveOrigin(label) {
+export function archiveOrigin(label) {
   if (label === 'PILOT news: prices unavailable (no price input connected)') return 'recorded';
   if (label === 'SYNTHETIC fixture data (not real news or market data)') return 'synthetic';
   throw Error('Unrecognized news archive provenance.');
@@ -37,7 +37,7 @@ export function headlinesAt(pages, selection) {
   return [...selectAsOf(rows, selection)].reverse();
 }
 
-export async function archiveNews(selection, fetchJson, panel, leaseValid) {
+export async function archiveNews(selection, fetchJson, panel, leaseValid, project = headlinesAt) {
   const index = await fetchJson(panel.INDEX_KEY);
   if (panel.validateIndex(index).length) throw Error('News archive index unavailable.');
   const start = new Date(sessionInstant(selection.session, 0)).toISOString().slice(0,10);
@@ -73,7 +73,7 @@ export async function archiveNews(selection, fetchJson, panel, leaseValid) {
     }
     if (rowCount + view.rows_omitted !== view.rows_total) throw Error('News archive row count mismatch.');
   }
-  return {rows: headlinesAt(pages, selection), partial};
+  return {rows: project(pages, selection), partial};
 }
 
 export function followNews({container, research, panel, fetchJson, mountLive, dashboard, events}) {
