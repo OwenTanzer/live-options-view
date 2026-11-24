@@ -1,5 +1,5 @@
 import {renderEncounterSummary} from './one-clock-encounter-summary.js';
-import {projectResults,compareResults,ruleKey} from '../shared/one-clock-results.js';
+import {projectResults,compareResults,measureLabel,ruleKey} from '../shared/one-clock-results.js';
 const el=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);return node;};
 const number=value=>value==null?'—':typeof value==='number'?value.toLocaleString(undefined,{maximumFractionDigits:4}):JSON.stringify(value);
 function options(select,items,keepMissing=false) {
@@ -57,19 +57,19 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       }));
       ledger.replaceChildren(...view.rows.map(({event,outcome})=>{
         const tr=el('tr'),definition=dataset.rules.find(r=>ruleKey(r)===ruleKey(event));
-        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
-            ? 'Decision ' + new Date(event.decisionAt).toISOString() + ' · published ' + new Date(event.triggeredAt).toISOString()
+        for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.breach?' · '+event.breach.direction+' · '+event.breach.closeClass.replaceAll('_',' '):''}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
+            ? (event.breach?'Candle close ':'Decision ') + new Date(event.decisionAt).toISOString() + (event.breach && event.origin==='reconstructed'?'': ' · '+(event.breach?'received ':'published ')+new Date(event.triggeredAt).toISOString())
             : new Date(event.triggeredAt).toISOString(),
-          event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.decisionAt === undefined ? event.collection??'replay' :
+          event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.decisionAt === undefined || event.breach ? event.collection??'replay' :
             [event.collection??'replay', 'no sealed forecast', outcome?.baselineTiming === 'reconstructed' ? 'reconstructed baseline' : null].filter(Boolean).join(' · '),
           outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
         if(onReplay) {
-          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : 'Replay publication');
+          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : event.breach?'Replay evidence':'Replay publication');
           replay.onclick = () => onReplay(event, event.triggeredAt);
           cell.append(replay);
           if (event.decisionAt !== undefined) {
-            const decision = el('button', 'Replay decision');
+            const decision = el('button', event.breach?'Replay candle close':'Replay decision');
             decision.onclick = () => onReplay(event, event.decisionAt);
             cell.append(decision);
           }
@@ -96,7 +96,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       const owner=value.owner??'fixture';if(lastOwner!==null&&lastOwner!==owner)this.clear({forget:true});lastOwner=owner;
       dataset=value;panel.hidden=false;comparison.hidden=false;
       options(controls.class,[['','All classes and versions'],...value.rules.map(r=>[ruleKey(r),`${r.name} v${r.version}`])],true);
-      options(controls.outcome,[['','Tracking only'],...value.rules.flatMap(r=>r.outcomes.map(o=>[JSON.stringify({ruleKey:ruleKey(r),id:o.id}),`${r.name} v${r.version}: ${o.field} · ${o.horizonMs/60000} min · ${o.measure}`]))],true);
+      options(controls.outcome,[['','Tracking only'],...value.rules.flatMap(r=>r.outcomes.map(o=>[JSON.stringify({ruleKey:ruleKey(r),id:o.id}),`${r.name} v${r.version}: ${o.field} · ${o.horizonMs/60000} min · ${measureLabel(o,r)}`]))],true);
       if(!outcomeChosen&&!controls.outcome.value&&controls.outcome.options.length>1)controls.outcome.selectedIndex=1;
       options(controls.instrument,[['','All loaded instruments'],...[...new Set(value.events.map(e=>e.instrument))].map(i=>[i,i])],true);
       draw();

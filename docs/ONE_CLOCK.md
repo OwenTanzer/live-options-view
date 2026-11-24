@@ -535,3 +535,19 @@ publisher, cron or KV operation.
 The Order Flow tape selector keeps the current view as its default. Time & Sales, the QQQ price chart, the ten-second strike footprint, the mirrored premium ladder and the event feed share the displayed minute and contract filter. All optional views receive the whole collected strike universe. Zooming the main tape or profile changes its viewport. Inspect available prints opens the published live tail or archive through the selected cursor with the contract filter applied. Each optional view scrolls within its panel. The price chart fits the full minute across the viewport. Scroll vertically to browse five strikes at a time. Scroll horizontally through strike columns in the footprint, or vertically through strike rows in the mirrored ladder. Its header shows the visible and available strike ranges. When the live display cap shortens the minute, the summary shows the earliest retained print time. Ticket highlighting begins at $10,000 in premium. Archive rows without provider sequences retain their archive row number.
 
 The November 23 recorded close freezes the public QQQ recent-print feed through its last recorded print (15:59:56.507 ET), including the session contract roster and the original sequences. The matching QQQ chain comes from the publication-qualified One Clock chain reader at that cutoff. The capture keeps only the chain fields the page consumes. Its 201 recorded strikes span $500–$900. The September 25 trade archive covers 16 contracts at eight strikes ($740–$747). The chart, footprint and ladder also show strikes from the chain snapshot at the replay cursor. At 09:31 ET that snapshot spans $709–$775. Strikes outside the trade archive have unavailable individual trade data.
+
+### QQQ opposite-color candle breach
+
+Choose **QQQ opposite-color candle breach** under **Study type** in Event Builder.
+Save the version to your account and choose **Observe saved version**. The observer
+uses its existing periodic schedule to fetch one shared QQQ regular-session
+one-minute chart per requested session and retain finalized OHLC values. It
+uses the first retained finalized version of each minute. The receipt can be
+later than the bar close. Missing minutes break adjacency and leave exact
+five-minute outcomes unknown. A positive change means movement in the breach
+direction. Each eligible pair can be reconstructed from its retained inputs;
+saved-study replay returns the trial ledger including non-events.
+
+The three QQQ candle dates in **Replay dataset** use the raw bars from
+research/qqq_candle_breach and a reconstructed bar-close cursor. Their original
+publication times are unknown. Observed Results uses actual retained receipts.

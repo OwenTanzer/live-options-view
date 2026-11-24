@@ -3,8 +3,14 @@
 import { instant } from './one-clock.js';
 
 export const ruleKey = rule => JSON.stringify([rule.ruleId ?? rule.id, rule.ruleVersion ?? rule.version]);
-export function outcomeSignature(outcome) {
-  return JSON.stringify([outcome.source,outcome.field,outcome.measure,outcome.horizonMs,outcome.toleranceMs,outcome.maxAgeMs]);
+function measurement(outcome,rule) {
+  return rule?.transition==='per-candle-pair' && outcome.measure==='change'?'directional-change':outcome.measure;
+}
+export function measureLabel(outcome,rule) {
+  return measurement(outcome,rule)==='directional-change'?'Change in breach direction (QQQ points)':outcome.measure;
+}
+export function outcomeSignature(outcome,rule) {
+  return JSON.stringify([outcome.source,outcome.field,measurement(outcome,rule),outcome.horizonMs,outcome.toleranceMs,outcome.maxAgeMs]);
 }
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const categoryKey = value => JSON.stringify([typeof value,value]);
@@ -17,7 +23,7 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
   const definitions=new Map(rules.map(rule=>[ruleKey(rule),rule]));
   const reference=outcome?definitions.get(outcome.ruleKey)?.outcomes.find(o=>o.id===outcome.id):null;
   if(outcome&&!reference)throw new Error('Outcome definition is unavailable.');
-  const signature=reference?outcomeSignature(reference):null;
+  const signature=reference?outcomeSignature(reference,definitions.get(outcome.ruleKey)):null;
   const query=(filters.query??'').trim().toLowerCase();
   const seen=new Set(),rows=[];
   for(const event of events) {
@@ -29,7 +35,7 @@ export function projectResults({events,rules,cutoff,origin,filters={},outcome=nu
     if(query&&!JSON.stringify([event.id,event.session,event.instrument,event.ruleId,event.ruleVersion,rule?.name]).toLowerCase().includes(query))continue;
     // Outcome IDs are local to a rule. Pool only identical measurement specs,
     // never unlike horizons/units just because their human labels look alike.
-    const candidates=signature?(rule?.outcomes??[]).filter(o=>outcomeSignature(o)===signature):[];
+    const candidates=signature?(rule?.outcomes??[]).filter(o=>outcomeSignature(o,rule)===signature):[];
     const spec=key===outcome?.ruleKey?reference:candidates.length===1?candidates[0]:null;
     const measured=spec?event.outcomes.find(o=>o.id===spec.id)??null:null;
     if(measured&&!['measured','pending','missing'].includes(measured.state))throw new Error('Invalid retained outcome state.');
