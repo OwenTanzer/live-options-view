@@ -1,0 +1,68 @@
+{
+  "schema": "snapshot_provenance.v1",
+  "dataset": "crypto_candles",
+  "artifact": "crypto/candles/BTC/",
+  "symbol": "BTC",
+  "constructed_at": "2026-11-24T00:32:44Z",
+  "archive_uploaded_at": null,
+  "latest_published_at": null,
+  "publication": {
+    "status": "not_published",
+    "reason": "seed: checked-in sample, never published directly"
+  },
+  "session_model": "continuous_24_7",
+  "as_of": "2026-11-24T00:31:00Z",
+  "universe": {
+    "source": "seed: single-coin sample, not the universe",
+    "coins": [
+      "BTC"
+    ]
+  },
+  "files": {
+    "1d": {
+      "key": "crypto/candles/BTC/1d.json",
+      "derived_from": null,
+      "source": "coinbase",
+      "bars": 90,
+      "first_bar": "2026-08-26T00:00:00Z",
+      "last_bar": "2026-11-23T00:00:00Z",
+      "requests": 2,
+      "coverage": "full",
+      "reason": null
+    },
+    "1h": {
+      "key": "crypto/candles/BTC/1h.json",
+      "derived_from": null,
+      "source": "coinbase",
+      "bars": 168,
+      "first_bar": "2026-11-17T00:00:00Z",
+      "last_bar": "2026-11-23T23:00:00Z",
+      "requests": 2,
+      "coverage": "full",
+      "reason": null
+    },
+    "1m": {
+      "key": "crypto/candles/BTC/1m.json",
+      "derived_from": null,
+      "source": "coinbase",
+      "bars": 120,
+      "first_bar": "2026-11-23T22:32:00Z",
+      "last_bar": "2026-11-24T00:31:00Z",
+      "requests": 2,
+      "coverage": "full",
+      "reason": null
+    }
+  },
+  "coverage": {
+    "intervals": 3,
+    "bars_total": 378,
+    "first_bar": "2026-08-26T00:00:00Z",
+    "last_bar": "2026-11-24T00:31:00Z"
+  },
+  "notes": [
+    "Crypto trades 24/7: buckets align to 00:00 UTC, not an equity session open. There is no session filter; a bar is never dropped for falling outside market hours.",
+    "Every bar carries its source time (t), observed time (observed_at) and state chip (origin: recorded for a fetched base bar, reconstructed for a locally derived bar). Synthetic bars are never written by this collector.",
+    "Derived intervals are aggregated by the collector, never fetched: 3m/5m/9m/15m/30m from 1m, 2h/4h from 1h, 1w from 1d.",
+    "CoinGecko-labelled coins have no intraday base: CoinGecko free OHLC has no 1m/1h series, so their intraday intervals are absent by design and labelled as such."
+  ]
+}
