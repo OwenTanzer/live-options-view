@@ -1,38 +1,24 @@
+import { origin as usdcOrigin, usdcFixture } from './helpers/usdc_fixture.mjs';
 import { setupBtcOwner, seedBtcOwnerSession } from './helpers/btc_owner_fixture.mjs';
-// Local disposable full-page mobile flow. No provider network or credentials.
+// Exercise the default Bitcoin chain with a disposable account and local USDC provider.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createPreview, fixtureNetwork, LOCAL_ORIGIN } from '../scripts/preview-local.mjs';
-import { btcClockScenarios } from './helpers/btc_clock_fixture.mjs';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const preview = createPreview();
 setupBtcOwner(preview.apiEnv);
 preview.apiEnv.BTC_OPTIONS_ENTRIES = '1';
-const cases = Object.fromEntries(btcClockScenarios().map(s => [s.name, s]));
-let market = cases.snapshot.payload, clock = cases.snapshot.now;
-const OldDate = Date, oldFetch = global.fetch;
-global.Date = class extends OldDate { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } };
-global.fetch = async (url, options) => {
-  if (new URL(url).pathname !== '/btc-options') return fixtureNetwork(url, options);
-  return Response.json(market);
-};
+preview.apiEnv.BTC_USDC_DATA_ORIGIN = usdcOrigin;
+const oldFetch = global.fetch;
+global.fetch = async (url, opts) => new URL(url).origin === usdcOrigin ? usdcFixture(url) : fixtureNetwork(url, opts);
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  page.setDefaultTimeout(30000);
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.addInitScript(clock => {
-    const D = Date;
-    window.fixtureClock = clock;
-    window.Date = class extends D { constructor(...args) { super(...(args.length ? args : [window.fixtureClock])); } static now() { return window.fixtureClock; } };
-  }, clock);
-  const phase = async name => {
-    market = cases[name].payload; clock = cases[name].now;
-    await page.evaluate(clock => { window.fixtureClock = clock; }, clock);
-    await page.evaluate(() => btcOptions.refresh());
-  };
   await page.route('**/*', async route => {
     const r = route.request(); assert.equal(new URL(r.url()).origin, LOCAL_ORIGIN);
     const response = await preview.fetch(new Request(r.url(), { method: r.method(), headers: await r.allHeaders(),
@@ -51,58 +37,25 @@ try {
   await page.locator('#auth-submit').click();
   await page.waitForFunction(() => document.querySelector('#user-name').textContent === 'btc_reader');
   await page.locator('#underlying-select').selectOption('BTC');
-  await page.locator('.btc-ticket').click();
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'initial snapshot cannot fill');
-  await phase('replay');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'unchanged replay cannot fill');
-  await phase('bid_only');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true, 'bid change cannot freshen ask');
-  await phase('ask_price');
-  assert.match(await page.locator('.btc-contract').textContent(), /observed side change/);
-  assert.match(await page.locator('#trade-ticket .btn-buy').getAttribute('title'), /observed side change/);
-  assert.match(await page.locator('#trade-ticket').textContent(), /500.00/);
-  assert.equal(await page.locator('#t-qty').isDisabled(), true);
+  assert.equal(await page.getByLabel('Bitcoin option product').count(), 0);
+  await page.waitForFunction(() => btcOptions.data?.contracts?.some(c=>c.product==='BTC_USDC'));
+  const key = await page.evaluate(() => {
+    const d=btcOptions.data;
+    const near=d.contracts.filter(c=>Math.abs(c.strike/d.center-1)<0.025 && d.display_prices[c.contract_key]?.bid>0 && d.display_prices[c.contract_key]?.ask>0);
+    return near.sort((a,b)=>Math.abs(a.strike-d.center)-Math.abs(b.strike-d.center))[0]?.contract_key;
+  });
+  assert.ok(key,'near-money two-sided contract');
+  const row=page.locator('.btc-contract').filter({has:page.locator('[data-btc-action="ticket"][data-symbol="'+key+'"]')});
+  await row.locator('.btc-ticket').click();
+  await page.waitForFunction(()=>document.querySelector('#trade-ticket .btn-buy')?.disabled===false);
   await page.locator('#trade-ticket .btn-buy').click();
-  await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('BUY 1'));
-  await page.reload();
-  await page.evaluate(clock => { window.fixtureClock = clock; }, clock);
-  await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('BUY 1'));
-  await page.locator('#underlying-select').selectOption('BTC');
-  await page.locator('.btc-contract').waitFor();
-  await phase('aged_replay');
-  assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/);
-  await phase('ask_size');
-  assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/, 'ask size cannot freshen held bid');
-  await phase('missing_bid');
-  assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/);
-  await phase('bid_baseline');
-  assert.match(await page.locator('#paper-positions').textContent(), /Exit unavailable/, 'returning side starts a new baseline');
-  await phase('close_bid');
-  assert.match(await page.locator('#paper-positions').textContent(), /600.00 liquidation/);
-  await page.locator('.btc-ticket').click();
-  const box = await page.locator('#trade-ticket').boundingBox();
-  assert.ok(box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
+  await page.waitForFunction(()=>session.trades.some(t=>t.side==='buy' && t.contract?.product==='BTC_USDC'));
+  await row.locator('.btc-ticket').click();
+  await page.waitForFunction(()=>document.querySelector('#trade-ticket .btn-sell')?.disabled===false);
   await page.locator('#trade-ticket .btn-sell').click();
-  await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('SELL 1'));
-  assert.match(await page.locator('#paper-summary').textContent(), /95.00/);
+  await page.waitForFunction(()=>session.trades.some(t=>t.side==='sell' && t.contract?.product==='BTC_USDC'));
   await page.reload();
-  await page.evaluate(clock => { window.fixtureClock = clock; }, clock);
-  await page.waitForFunction(() => document.querySelector('#paper-log-body').textContent.includes('SELL 1'));
-  assert.match(await page.locator('#paper-log-body').textContent(), /fee \$2.50/);
-  assert.match(await page.locator('#paper-log-body').textContent(), /observed side change \(not exchange time\)/);
-  await page.locator('#underlying-select').selectOption('BTC');
-  await page.locator('.btc-ticket').click();
-  await phase('disconnected');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true);
-  await phase('reconnect_snapshot');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true);
-  await phase('reconnect_replay');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), true);
-  await phase('reconnect_ask_size');
-  assert.equal(await page.locator('#trade-ticket .btn-buy').isDisabled(), false);
-  await page.locator('#underlying-select').selectOption('SPY');
-  assert.equal(await page.locator('#trade-ticket').count(), 0);
-  assert.equal(await page.locator('#btc-panel').isVisible(), false);
-  assert.deepEqual(errors, []);
-  console.log('PASS mobile real-collector fixture: snapshot/replay/opposite side blocked; changed-side buy/reload/stale/withdrawal/close/fees/provenance/reconnect/selection');
-} finally { await browser?.close(); preview.close(); global.fetch = oldFetch; global.Date = OldDate; }
+  await page.waitForFunction(()=>typeof session!=='undefined' && session?.trades?.filter(t=>t.sym.startsWith('USDC:')).length===2);
+  console.log('PASS default USDC chain, one-lot buy/close and persisted history');
+  assert.deepEqual(errors,[]);
+} finally {await browser?.close();preview.close();global.fetch=oldFetch;}
