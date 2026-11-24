@@ -2,7 +2,7 @@ import {handleOpeningOi} from "./one-clock-opening-oi.js";
 import { archive } from './strategy-archive.js';
 
 import { handlePrediction, settlePredictions } from './prediction.js';
-import { handleKalshi, kalshiTick } from './kalshi.js';
+import { handleKalshi, kalshiTick, captureKalshiMinute } from './kalshi.js';
 import {handleBitcoinReplay} from './one-clock-btc.js';
 import { handleBtcOptions } from './btc-options.js';
 import { handleBtcOwnerLink } from './btc-owner-link.js';
@@ -173,6 +173,10 @@ export default {
   // "invoked", then exactly one of "completed" (settled / no_op + reason) or
   // "error" (re-thrown, so failure behavior is unchanged). Counts only.
   async scheduled(event, env, ctx) {
+    if (event.cron === '* * * * *') {
+      await captureKalshiMinute(env, event.scheduledTime);
+      return;
+    }
     const outcome = createCronOutcomeLog(event);
     outcome.invoked();
     // A settlement sweep during the cutover window would be a second writer
