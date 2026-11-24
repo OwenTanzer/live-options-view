@@ -301,7 +301,7 @@ class TiingoClient:
         return bars, pages
 
     def fetch_newer(self, ticker, base, after_t):
-        """Fetch bars for ``base`` strictly newer than ``after_t``.
+        """Fetch bars for ``base`` from the newest stored timestamp, inclusive.
 
         ``after_t`` is an ISO-8601 UTC timestamp (the newest stored bar).
         Used by incremental ``update`` runs; returns ``(bars, pages)``
@@ -318,7 +318,7 @@ class TiingoClient:
             pages += 1
             new = 0
             for bar in page:
-                if bar["t"] > after_t and bar["t"] not in merged:
+                if bar["t"] >= after_t and bar["t"] not in merged:
                     merged[bar["t"]] = bar
                     new += 1
             if len(page) < PAGE_CAP:

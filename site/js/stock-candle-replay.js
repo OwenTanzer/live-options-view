@@ -10,10 +10,23 @@ async function get(path, fetchImpl) {
   return response;
 }
 
+// A successful manifest GET is independent evidence that this reader can
+// discover a pending revision now. Never project it into an earlier cutoff.
+async function getManifest(prefix, fetchImpl) {
+  const manifest = await (await get(prefix + '/provenance.json',fetchImpl)).json();
+  const seenAt = new Date().toISOString();
+  for (const interval of manifest.pending_intervals ?? []) {
+    const entry = manifest.files[interval];
+    entry.available_at = seenAt;
+    manifest.history[interval].at(-1).available_at = seenAt;
+  }
+  return manifest;
+}
+
 export async function latestStockCandles(symbol, interval, fetchImpl = fetch) {
   if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) || symbol.includes('..') || !intervals.has(interval)) return [];
   const prefix = 'nasdaq/candles/' + symbol;
-  const manifest = await (await get(prefix + '/provenance.json',fetchImpl)).json();
+  const manifest = await getManifest(prefix,fetchImpl);
   const entry = manifest.files?.[interval];
   if (manifest.symbol !== symbol || !entry || !/^[0-9a-f]{64}$/.test(entry.sha256)) return [];
   const path = entry.version_key ?? prefix + '/' + interval + '.json';
@@ -30,7 +43,7 @@ export async function loadStockStudy(params, fetchImpl = fetch) {
   if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) || symbol.includes('..') ||
       !intervals.has(interval) || !validSession(session)) throw new Error('Choose a valid ticker, interval and session.');
   const prefix = 'nasdaq/candles/' + symbol;
-  const manifest = await (await get(prefix + '/provenance.json',fetchImpl)).json();
+  const manifest = await getManifest(prefix,fetchImpl);
   if (manifest.symbol !== symbol || manifest.publication?.status !== 'published') throw new Error('Published receipt unavailable.');
   const history = manifest.history?.[interval] ?? [manifest.files?.[interval]];
   const rows = [];

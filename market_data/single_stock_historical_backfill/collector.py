@@ -327,7 +327,7 @@ def update_symbol(client, limiter, checkpoint, symbol, out_dir,
                   pages_1m=3, on_symbol_done=None, universe=None):
     """Incrementally update one ticker; return its summary dict.
 
-    Fetches only bars newer than the newest stored bar per base. A
+    Refreshes the newest stored bar and appends later observations. A
     ticker with no stored files is backfilled instead.
     """
     stored = read_symbol_files(out_dir, symbol)
@@ -357,7 +357,7 @@ def update_symbol(client, limiter, checkpoint, symbol, out_dir,
             for bar in bars:
                 merged[bar["t"]] = bar
             bases[base] = [merged[t] for t in sorted(merged)]
-            new_counts[base] = len(bars)
+            new_counts[base] = len(merged) - len(existing)
         made_after = getattr(client, "requests_made", 0)
         base_requests[base] = max(pages, made_after - made_before)
         base_pages[base] = pages

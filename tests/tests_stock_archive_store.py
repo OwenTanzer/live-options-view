@@ -30,3 +30,4 @@ class FakeR2Client:
         if IfMatch and (old is None or sha256(old).hexdigest() != IfMatch):
             raise StoreError("PreconditionFailed")
         self.objects[Key] = Body
+        return {"ETag": sha256(Body).hexdigest()}

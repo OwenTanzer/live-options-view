@@ -79,7 +79,7 @@ def _encode(value):
 
 def _put(client, bucket, key, data, etag=None):
     condition = {"IfMatch": etag} if etag else {"IfNoneMatch": "*"}
-    client.put_object(Bucket=bucket, Key=key, Body=data, ContentType="application/json",
+    return client.put_object(Bucket=bucket, Key=key, Body=data, ContentType="application/json",
                       CacheControl="no-store", **condition)
 
 
@@ -106,6 +106,22 @@ def _session_calendar():
     return json.loads(path.read_bytes())["sessions"]
 
 
+def _confirm_manifest(client, bucket, key, manifest, etag):
+    """After GET proves discoverability, durably acknowledge only pending versions."""
+    from datetime import timedelta
+    if not manifest.get("pending_intervals"):
+        return manifest, etag
+    now = datetime.now(timezone.utc)
+    # One Clock stores milliseconds. Round a receipt forward, never backward.
+    stamp = (now + timedelta(microseconds=(-now.microsecond % 1000))).isoformat()
+    for interval in manifest.pop("pending_intervals"):
+        manifest["history"][interval][-1]["available_at"] = stamp
+        manifest["files"][interval]["available_at"] = stamp
+    manifest["latest_published_at"] = stamp
+    result = _put(client, bucket, key, _encode(manifest), etag)
+    return manifest, result["ETag"]
+
+
 def publish_symbol(symbol, files, provenance, config=None, client=None):
     """Commit immutable interval bytes through a conditional per-symbol manifest.
 
@@ -120,6 +136,7 @@ def publish_symbol(symbol, files, provenance, config=None, client=None):
     prior = json.loads(previous) if previous is not None else {}
     if prior and (prior.get("symbol") != symbol or prior.get("dataset") != provenance["dataset"]):
         raise ValueError("Unexpected candle manifest identity")
+    prior, etag = _confirm_manifest(client, bucket, manifest, prior, etag)
     receipt = deepcopy(provenance)
     history = deepcopy(prior.get("history", {}))
     changed = False
@@ -155,7 +172,7 @@ def publish_symbol(symbol, files, provenance, config=None, client=None):
             written.append(version_key)
             entry = dict(receipt["files"][interval], sha256=digest, version_key=version_key,
                          generated_at=file.get("generated_at"),
-                         available_at=datetime.now(timezone.utc).isoformat())
+                         available_at=None)
             versions.append(entry)
             changed = True
         receipt["files"][interval] = entry
@@ -166,8 +183,13 @@ def publish_symbol(symbol, files, provenance, config=None, client=None):
                                {bar["t"][:10] for obj in files.values() for bar in obj["bars"]}
                                if day in calendar}
         receipt.update(history=history, publication={"status": "published", "reason": None},
-                       latest_published_at=max(entry["available_at"] for entry in receipt["files"].values()))
+                       latest_published_at=prior.get("latest_published_at"),
+                       pending_intervals=[iv for iv, entry in receipt["files"].items() if entry["available_at"] is None])
         _put(client, bucket, manifest, _encode(receipt), etag)
+        visible, visible_etag = _read(client, bucket, manifest)
+        if visible != _encode(receipt):
+            raise RuntimeError("Publication superseded during acknowledgement; retry")
+        receipt, _ = _confirm_manifest(client, bucket, manifest, json.loads(visible), visible_etag)
         written.append(manifest)
     else:
         receipt = prior

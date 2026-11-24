@@ -406,7 +406,7 @@ def test_rate_limited_carries_retry_after():
     assert excinfo.value.retry_after == 120
 
 
-def test_fetch_newer_returns_only_newer_bars():
+def test_fetch_newer_refreshes_the_newest_stored_bar():
     raw = _raw_intraday("2026-08-10", 100)
     session = FakeTiingoSession({("intraday", "AAPL"): raw})
     client = TiingoClient(token="fake-token", session=session)
@@ -414,11 +414,13 @@ def test_fetch_newer_returns_only_newer_bars():
     assert len(bars) == 100
     after = bars[-1]["t"]
     newer_raw = _raw_intraday("2026-08-10", 110)
+    newer_raw[99]["close"] = 12
     session.bars_by_key[("intraday", "AAPL")] = newer_raw
     new_bars, pages = client.fetch_newer("AAPL", "1m", after)
     assert pages == 1
-    assert len(new_bars) == 10
-    assert all(b["t"] > after for b in new_bars)
+    assert len(new_bars) == 11
+    assert new_bars[0]["close"] == 12
+    assert all(b["t"] >= after for b in new_bars)
 
 
 # --- pacing -------------------------------------------------------------------
@@ -688,7 +690,7 @@ class FakeClient:
         self.requests_made += 1
         if ticker in self.unavailable:
             raise TiingoNotFound(f"Tiingo has no data for {ticker}")
-        newer = [b for b in self.bases_by_symbol[ticker][base] if b["t"] > after_t]
+        newer = [b for b in self.bases_by_symbol[ticker][base] if b["t"] >= after_t]
         return [dict(b) for b in newer], 1
 
 
@@ -843,3 +845,42 @@ def test_interval_file_shape():
     assert content["first_bar"] == bars[0]["t"]
     base = interval_file("AAPL", "1m", bars, "2026-11-23T21:00:00Z")
     assert base["base"] is True and base["derived_from"] is None
+
+
+def test_manifest_discovery_precedes_stamp_and_interrupted_confirmation_recovers():
+    from unittest.mock import patch
+    key = "nasdaq/candles/AAPL/provenance.json"
+
+    class DelayedManifest(FakeR2Client):
+        fail_confirmation = True
+        seen = None
+
+        def put_object(self, **args):
+            if args["Key"] == key and not json.loads(args["Body"]).get("pending_intervals") and self.fail_confirmation:
+                raise RuntimeError("Lost confirmation")
+            return super().put_object(**args)
+
+        def get_object(self, Bucket, Key):
+            obj = super().get_object(Bucket, Key)
+            if Key == key and json.loads(self.objects[Key]).get("pending_intervals"):
+                self.seen = datetime(2026, 11, 24, 17, 0, 15, tzinfo=timezone.utc)
+                clock.now.return_value = self.seen
+            return obj
+
+    store = DelayedManifest()
+    config = {"TIINGO_R2_BUCKET": "fixture"}
+    file = interval_file("AAPL", "1m", [], "2026-11-24")
+    provenance = build_provenance("AAPL", {"1m": {}}, generated_at="2026-11-24")
+    def publish():
+        return publish_symbol("AAPL", {"1m": file}, provenance, config=config, client=store)
+
+    with patch("market_data.single_stock_historical_backfill.publish.datetime") as clock:
+        clock.now.return_value = datetime(2026, 11, 24, 17, 0, 5, tzinfo=timezone.utc)
+        with pytest.raises(RuntimeError, match="Lost confirmation"):
+            publish()
+        assert json.loads(store.objects[key])["files"]["1m"]["available_at"] is None
+        store.fail_confirmation = False
+        receipt = publish()["provenance"]
+        assert receipt["files"]["1m"]["available_at"] == store.seen.isoformat()
+        assert publish()["keys"] == []
+        assert len(receipt["history"]["1m"]) == 1
