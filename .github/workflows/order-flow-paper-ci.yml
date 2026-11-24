@@ -1,0 +1,20 @@
+name: QQQ order flow paper validation
+on:
+  pull_request:
+    paths:
+      - 'research/order_flow_bots/**'
+      - 'site/shared/**'
+      - 'site/order-flow-replay.json'
+      - '.github/workflows/order-flow-paper-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test research/order_flow_bots/*.test.cjs
