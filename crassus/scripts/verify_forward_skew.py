@@ -154,6 +154,7 @@ class Comparison(unittest.TestCase):
         arm = f.arm_for(account)
         self.assertEqual(arm, "protect_reentry")
         self.assertFalse(account.active)
+        self.assertRegex(account.username, r"^[A-Za-z0-9_]{3,20}$")
         self.assertEqual(f.root_for(account), "QQQ")
         with self.assertRaises(ValueError):
             f.arm_for(SimpleNamespace(**{**vars(account), "strategy_id": "oi_skew_qqq"}))

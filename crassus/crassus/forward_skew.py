@@ -50,7 +50,7 @@ FAMILIES = {
 }
 
 
-FLOW_RECOVERY_USER = "crassus_flowskew_recover"
+FLOW_RECOVERY_USER = "crassus_flow_recover"
 
 
 def root_for(account):
