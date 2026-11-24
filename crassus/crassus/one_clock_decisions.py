@@ -28,7 +28,7 @@ ROOTS = {
     **dict.fromkeys(("smoke_atm_roundtrip", "smoke_atm_roundtrip_fixed_window",
                      "smoke_atm_roundtrip_phelps", "momentum_qqq", "momentum_qqq_fixed_window",
                      "momentum_qqq_phelps", "trump_whisperer_qqq", "trump_whisperer_qqq_phelps",
-                     "trump_whisperer_qqq_fixed_window", "max_pain_qqq", "oi_skew_qqq",
+                     "trump_whisperer_qqq_fixed_window", "max_pain_qqq", "oi_skew_qqq", "flow_skew_qqq",
                      "put_call_ratio_qqq", "canopus_down_day_14", "looking_glass_straddle",
                      "phelps_pure_qqq", "momentum_puts_only_qqq", "momentum_puts_only_qqq_phelps",
                      "qqq_gated_strangle"), "QQQ")

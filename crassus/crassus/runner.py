@@ -226,7 +226,7 @@ class Runner:
         self.forward_accounts = [a for a in accounts if forward_skew.arm_for(a)]
         if self.forward_accounts:
             for root, family in forward_skew.FAMILIES.items():
-                active = {a.username for a in self.forward_accounts if forward_skew.root_for(a) == root}
+                active = {a.username for a in self.forward_accounts if a.username in family["arms"]}
                 if active and active != set(family["arms"]):
                     raise ValueError(f"activate all {len(family['arms'])} {root} comparison accounts together")
             if base_url.rstrip("/") != forward_skew.PAPER_ORIGIN:

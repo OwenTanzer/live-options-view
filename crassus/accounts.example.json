@@ -539,6 +539,16 @@
       "password_env": "CRASSUS_PW_FLOW_SKEW",
       "strategy_id": "flow_skew_qqq",
       "active": false
+    },
+    {
+      "alias": "Flow Skew Protection + Re-entry",
+      "username": "crassus_flow_recover",
+      "password_env": "CRASSUS_PW_FLOW_SKEW_RECOVER",
+      "strategy_id": "flow_skew_qqq",
+      "params": {
+        "forward_skew_arm": "protect_reentry"
+      },
+      "active": false
     }
   ]
 }
