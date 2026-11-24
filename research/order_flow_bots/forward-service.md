@@ -13,6 +13,10 @@ An off-hours smoke test prints `"status":"idle"` and performs zero network reads
 
 Beginning at the open, a separate bounded reader checks the session's immutable opening OI packet. Retrieval runs alongside ordinary polling. The feed receives the verified quantities and actual receipt time as they become available. A delayed packet leaves the associated rules subject to their coverage gates.
 
+New positions require two minutes between their target exit and the scheduled close, including on half-days. This leaves time to receive both sides of an executable quote. If a genuine outage prevents an existing position from closing, the ledger records the later recovery fill at its observed price.
+
+For decisions using a QQQ midpoint, both sides must have reached the collector by the decision cutoff. The later side sets the midpoint's availability and the older observation determines its freshness. A last trade also becomes usable only after the collector receives it.
+
 On a Linux host with systemd user services, pin the checkout to the reviewed commit, then install the unit as the persistent owner of a new ledger. Keep the release checkout at its installed path.
 
 ```sh
