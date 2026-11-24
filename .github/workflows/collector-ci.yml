@@ -10,6 +10,7 @@ on:
       - "market_data/**"
       - "deployment/python/**"
       - "tests/producer_packaging.py"
+      - "tests/test_credit_index_history.py"
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
@@ -58,6 +59,7 @@ on:
       - "market_data/**"
       - "deployment/python/**"
       - "tests/producer_packaging.py"
+      - "tests/test_credit_index_history.py"
       - "tests/test_market_overview.py"
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
@@ -110,6 +112,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Credit tape retention, replay and capacity regression tests
+        run: |
+          python -m unittest discover -s tests -p 'test_credit_index_history.py'
+          python -m unittest discover -s tests -p 'test_credit_tape.py'
       - name: Install dependencies
         run: pip install -r deployment/python/requirements.txt
       - name: Run collector unit suite

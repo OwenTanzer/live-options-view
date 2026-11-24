@@ -27,6 +27,8 @@ Structure (so live collection keeps moving through replay and retries):
 """
 from __future__ import annotations
 
+from market_data.credit_tape import index_history
+
 import csv
 import hashlib
 import io
@@ -352,12 +354,12 @@ class SliceRoute:
             index = json.loads(body)
         except ValueError as exc:
             return self._index_fail(exc)
-        day = t_recv[:10]
-        os.makedirs(os.path.join(self.dir, "index", day), exist_ok=True)
         entries = {k: index.get(k) for k in CHANNELS}
-        _atomic_json(os.path.join(self.dir, "index", day, f"{t_recv.replace(':', '')}_{(etag or '').strip(chr(34))[:12]}.json"),
-                     {"fetched_at": t_recv, "etag": etag, "last_modified": lastmod,
-                      "index_sha256": hashlib.sha256(body).hexdigest(), "entries": entries})
+        # Use an internally generated basename; the publisher controls the ETag.
+        name = t_recv.replace(":", "") + "_" + hashlib.sha256(body).hexdigest() + ".json"
+        index_history.record(self.dir, name, {"fetched_at": t_recv, "etag": etag,
+                             "last_modified": lastmod, "index_sha256": hashlib.sha256(body).hexdigest(),
+                             "entries": entries})
         self.append(os.path.join(self.dir, "polls.jsonl"), {"t": t_req, "recv": t_recv, "ok": True, "http": 200,
                                                            "etag": etag, "last_modified": lastmod, "bytes": len(body)})
         added = 0
