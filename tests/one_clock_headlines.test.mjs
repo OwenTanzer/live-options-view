@@ -34,7 +34,8 @@ test('authenticated save, activate, twice-delivered revision, Results and origin
     await db.exec(readFileSync(new URL('../backend/migrations/'+name,import.meta.url),'utf8'));
   let tick=storyAt-2*minute, quoteAt=tick-1000,price=100;
   t.mock.method(Date,'now',()=>tick);
-  t.mock.method(globalThis,'fetch',async url=>{
+  t.mock.method(globalThis,'fetch',async (url,opts)=>{
+    assert.equal(opts.redirect,'manual');
     const u=new URL(url);assert.equal(u.origin,'https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev');
     return published[u.pathname.slice(1)]?Response.json(published[u.pathname.slice(1)]):new Response('',{status:404});
   });
@@ -120,4 +121,26 @@ test('headline endpoint window is inclusive and rejects weekend spillover',()=>{
   assert.equal(run(deadline,deadline+2,deadline+2).state,'measured');
   assert.equal(run(deadline+1,deadline+2,deadline+2).state,'missing');
   assert.equal(run(monday,monday+1,monday+1).state,'missing');
+});
+
+test('headline archive refuses redirects without fetching the destination',async t=>{
+  const calls=[];
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    calls.push([url,options.redirect]);
+    return new Response(null,{status:302,headers:{Location:'https://example.com/'}});
+  });
+  await assert.rejects(headlineIngestion.discover(null,scope),/archive unavailable/);
+  assert.deepEqual(calls,[['https://pub-102bfd9119094f0092ad5c4c0a204200.r2.dev/news/v2/views/index.json','manual']]);
+});
+
+test('price snapshot published during discovery retains its real availability',async t=>{
+  const uploaded=storyAt+800;
+  t.mock.method(Date,'now',()=>uploaded+10);
+  const raw={instrument_id:'NVDA',source_symbol:'NVDA',source:'dxlink',price_basis:'last_trade',
+    observed_at:iso(storyAt+100),collector_received_at:iso(storyAt+200),price:120};
+  const bucket={async get(){return {size:512,uploaded:new Date(uploaded),text:async()=>
+    JSON.stringify({schema_version:2,timestamp:iso(storyAt+700),prices:{NVDA:raw}})};}};
+  const result=await headlineQuoteIngestion.discover(bucket,scope);
+  assert.equal(result.artifacts[0].row.availableAt,uploaded);
+  assert.equal(headlineQuoteIngestion.receiptAfterDiscovery,true);
 });
