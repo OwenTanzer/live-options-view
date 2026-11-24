@@ -58,14 +58,14 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
       ledger.replaceChildren(...view.rows.map(({event,outcome})=>{
         const tr=el('tr'),definition=dataset.rules.find(r=>ruleKey(r)===ruleKey(event));
         for(const value of [`${definition?.name??event.ruleId} · v${event.ruleVersion} · ${event.instrument}${event.breach?' · '+event.breach.direction+' · '+event.breach.closeClass.replaceAll('_',' '):''}${event.encounter?' · $'+event.encounter.strike+' · '+event.encounter.cohort+' · '+event.encounter.approach+' · '+event.encounter.contact:''}`,event.decisionAt !== undefined
-            ? (event.breach?'Candle close ':'Decision ') + new Date(event.decisionAt).toISOString() + ' · published ' + new Date(event.triggeredAt).toISOString()
+            ? (event.breach?'Candle close ':'Decision ') + new Date(event.decisionAt).toISOString() + (event.breach && event.origin==='reconstructed'?'': ' · '+(event.breach?'received ':'published ')+new Date(event.triggeredAt).toISOString())
             : new Date(event.triggeredAt).toISOString(),
           event.recordedAt?new Date(event.recordedAt).toISOString():event.session,event.decisionAt === undefined || event.breach ? event.collection??'replay' :
             [event.collection??'replay', 'no sealed forecast', outcome?.baselineTiming === 'reconstructed' ? 'reconstructed baseline' : null].filter(Boolean).join(' · '),
           outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
         if(onReplay) {
-          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : 'Replay publication');
+          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : event.breach?'Replay evidence':'Replay publication');
           replay.onclick = () => onReplay(event, event.triggeredAt);
           cell.append(replay);
           if (event.decisionAt !== undefined) {

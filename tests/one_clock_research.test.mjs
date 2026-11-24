@@ -1,3 +1,4 @@
+import {candleDefinition} from '../site/shared/one-clock-candle-breach.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -347,4 +348,19 @@ test('account audit preserves each bot decision and its own settlement on delaye
   assert.equal(byId('late').outcomes[0].reason,'session-closed-before-horizon');
   assert.equal(byId('missing-endpoint').outcomes[0].reason,'no-qualified-endpoint');
   assert.equal((await events(beforeCorrection)).find(e=>e.id===original[0].id).inputEvidence[0].revision,1);
+});
+
+test('account can save, reopen, activate and replay a QQQ candle study', async t=>{
+  const {call}=await setup(t);
+  const rule={id:'qqq-candle',version:1,name:'QQQ candle study',...candleDefinition()};
+  assert.equal((await call('alice',{action:'save',rule})).status,201);
+  const account=await (await call('alice')).json();
+  assert.deepEqual(account.rules[0].rule,rule);
+  assert.ok(account.sources['qqq-minute-bar'].high);
+  assert.equal((await call('alice',{action:'activate',ruleId:rule.id,version:1})).status,200);
+  const replay={action:'replay-candles',session:observerSessions(Date.now())[1],ruleId:rule.id,version:1};
+  const result=await call('alice',replay);
+  assert.equal(result.status,200);
+  assert.equal((await result.json()).complete,false);
+  assert.notEqual((await call('other',replay)).status,200);
 });
