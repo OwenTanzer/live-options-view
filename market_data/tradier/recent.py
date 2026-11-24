@@ -7,6 +7,18 @@ Two products share one signing pass:
   (same process) and collector restarts (``rebuild`` replays the session's archived
   segments, deduplicating overlaps by provider identity). Reconnect outages and any
   unarchived restart interval are published as gaps, never as zero flow.
+
+Each print also carries a second, tiered signing (``label`` + ``basis``) that leaves
+``side`` and the B/S/U totals untouched. It uses only what was known before the print:
+* ``q1``/``q5``/``q30``: quote rule against the *prevailing* quote, i.e. the latest quote
+  in a short per-contract history whose receipt and bid/ask dates both precede the
+  print's provider time, by that quote's age (<=1 s, <=5 s, <=30 s);
+* ``tick``/``zero_tick``: tick test against the previous print in sequence order, so
+  same-millisecond sweep legs are compared rather than reset to unknown;
+* ``mid``/``locked``/``none``: still unsigned (midpoint, locked/crossed quote, nothing).
+Session totals per contract add ``label`` = {q1: [B, S], q5: [B, S], low: [B, S], U}, where
+``low`` pools q30/tick/zero_tick, which agreed with the provider's own trade-time bid/ask
+little better than chance in the 2026-11-23 audit and should not be read as signal.
 """
 from collections import deque
 from datetime import datetime, timezone
@@ -21,6 +33,9 @@ KEY = "order-flow/qqq/v1/recent.json"
 OPTION = re.compile(r"QQQ\d{6}([CP])(\d{8})")
 ET = ZoneInfo("America/New_York")
 SIDES = ("buy", "sell", "unknown")
+QUOTE_TIERS = ((1000, "q1"), (5000, "q5"), (30000, "q30"))
+QUOTE_HISTORY = 32
+LABEL_SLOTS = {"q1": 0, "q5": 2, "q30": 4, "tick": 4, "zero_tick": 4}  # buy slot; sell = +1; else U at 6
 
 
 def _ms(stamp):
@@ -65,16 +80,20 @@ class Session:
         return self.seen.setdefault(symbol, SeqSet()).add(seq)
 
     def add(self, row):
-        c = self.contracts.setdefault(row["symbol"], [0, 0, 0, 0])
+        c = self.contracts.setdefault(row["symbol"], [0, 0, 0, 0, [0] * 7])
         c[SIDES.index(row["side"])] += row["size"]
         c[3] += 1
+        slot = LABEL_SLOTS.get(row.get("basis"))
+        c[4][6 if slot is None else slot + (row["label"] == "sell")] += row["size"]
         self.prints += 1
         self.first = row["t"] if self.first is None else min(self.first, row["t"])
         self.last = row["t"] if self.last is None else max(self.last, row["t"])
 
     def snapshot(self):
         return dict(day=self.day, first=self.first, last=self.last, prints=self.prints,
-                    contracts={s: dict(zip(("B", "S", "U", "prints"), v)) for s, v in sorted(self.contracts.items())},
+                    contracts={s: dict(zip(("B", "S", "U", "prints"), v[:4]),
+                                       label=dict(q1=v[4][0:2], q5=v[4][2:4], low=v[4][4:6], U=v[4][6]))
+                               for s, v in sorted(self.contracts.items())},
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
 
@@ -82,6 +101,8 @@ class RecentPrints:
     def __init__(self):
         self.quotes = {}
         self.previous = {}
+        self.history = {}   # symbol -> deque of (receipt_ms, newest_date, bid, ask), ten-thousandths
+        self.sequence = {}  # symbol -> (seq, price, last nonzero tick side)
         self.rows = deque(maxlen=2048)
         self.session = None
         self.open_gap = None
@@ -101,6 +122,7 @@ class RecentPrints:
                 return None
             self.session = Session(day)
             self.previous = {}
+            self.sequence = {}
         return self.session
 
     def _observe(self, event):
@@ -125,6 +147,7 @@ class RecentPrints:
             return
         if event["type"] == "quote":
             self.quotes[symbol] = event
+            self._remember(symbol, event)
             return
         if event["type"] != "timesale" or any(event.get(k) for k in ("duplicate_in_run", "correction", "cancel")):
             return
@@ -156,12 +179,48 @@ class RecentPrints:
                     side = "buy" if delta > 0 else "sell" if delta < 0 else tick
             except (KeyError, TypeError, ValueError, OverflowError, OSError):
                 pass
+        if symbol not in self.history and event.get("preceding_quote_context"):
+            self._remember(symbol, event["preceding_quote_context"])
+        label, basis = self._label(symbol, ts, price, int(seq))
         row = dict(t=ts, size=size, price=price/10000, symbol=symbol,
-                   strike=int(option[2])/1000, type=option[1], side=side, seq=seq)
+                   strike=int(option[2])/1000, type=option[1], side=side, seq=seq, label=label, basis=basis)
         with self.lock:
             self.rows.append(row)
             session.add(row)
             self.version += 1
+
+    def _remember(self, symbol, quote):
+        try:
+            entry = (_ms(quote["collector_receipt_timestamp"]), max(int(quote["biddate"]), int(quote["askdate"])),
+                     round(float(quote["bid"]) * 10000), round(float(quote["ask"]) * 10000))
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            return
+        self.history.setdefault(symbol, deque(maxlen=QUOTE_HISTORY)).append(entry)
+
+    def _label(self, symbol, ts, price, seq):
+        """Tiered side for one print from information that preceded it (see module doc)."""
+        label = basis = None
+        for receipt, newest, bid, ask in reversed(self.history.get(symbol, ())):
+            if receipt < ts and newest < ts:
+                tier = next((name for limit, name in QUOTE_TIERS if ts - newest <= limit), None)
+                if tier:
+                    delta = 2 * price - bid - ask
+                    if not 0 < bid < ask:
+                        basis = "locked"
+                    elif delta:
+                        label, basis = ("buy" if delta > 0 else "sell"), tier
+                    else:
+                        basis = "mid"
+                break
+        previous = self.sequence.get(symbol)
+        if previous is None or seq > previous[0]:
+            tick = None
+            if previous is not None:
+                tick = "buy" if price > previous[1] else "sell" if price < previous[1] else previous[2]
+                if label is None and tick:
+                    label, basis = tick, "tick" if price != previous[1] else "zero_tick"
+            self.sequence[symbol] = (seq, price, tick or (previous[2] if previous else None))
+        return label or "unknown", basis if label else (basis or "none")
 
     def rebuild(self, client, bucket, prefix, local_segments=(), now=None, session_open=None):
         """Replay this session's archived segments (R2, then unuploaded local spool) before capture.
