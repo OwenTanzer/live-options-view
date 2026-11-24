@@ -422,7 +422,7 @@ class LaneRuntime(unittest.TestCase):
         def broken(now):
             raise price_sessions.ExchangeCalendarUnavailable("offline")
         lane._calendar_builder = broken
-        self.assertEqual(lane.cycle(), price_lane.PRICES_SECS)
+        self.assertEqual(lane.cycle(), 10)
         context = self.published[0]["lane_context"]
         self.assertEqual(context["summary"]["mode"], "futures")
         self.assertEqual(context["sessions"].get("QQQ"), "unknown")

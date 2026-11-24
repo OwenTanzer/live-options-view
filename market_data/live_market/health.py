@@ -1,7 +1,7 @@
 """Health telemetry: the intraday/health.json lifecycle feed.
 
 WHY this module: health.json is the collector's own pulse -- counters,
-feed staleness, SPY collection state -- published every 60 seconds for
+feed staleness, SPY collection state -- published every 15 seconds for
 operators, not for the market-data path. It reads the quote helpers and
 the session state, and nothing else.
 """
@@ -24,7 +24,7 @@ from .feed import DXLinkFeed
 from .quotes import _fresh_spy_spot, _observed_spy_price, _spy_subscription_coverage
 from .state import Counters, SnapshotTracker
 
-# -- health.json upload (every 60s) ------------------------------------------
+# -- health.json upload (every 15s) ------------------------------------------
 
 def push_health(s3, feed: DXLinkFeed, counters: Counters, tracker: SnapshotTracker,
                 run_id: str, process_start: datetime, classification: str, today: date,

@@ -227,7 +227,7 @@ All commands take `--config`, `--live` and the environment above. `publish-statu
 
 `publish-status` exits 1 on any problem. During the pilot, read the `PUBLISHING.md` list. In
 particular:
-- `published_views_stale` (older than 2 × 15 min + 180 s);
+- `published_views_stale` (older than 2 × the configured cycle interval + 180 s since publication or the latest clean skipped cycle for that publication);
 - `publication_paused` (cap or withdrawal);
 - `open_index_commits`;
 - `page_uploads_unsettled` (quarantine; permanent by policy);

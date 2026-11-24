@@ -15,8 +15,8 @@ R2 output:
   intraday/latest.json                   -- live QQQ feed for the web viewer
   intraday/spy/latest.json               -- live SPY feed (same contract, "symbol": "SPY")
   intraday/spy/YYYYMMDD/...              -- SPY archive, mirroring the QQQ intraday/YYYYMMDD/ layout
-  intraday/prices.json                   -- macro price strip (every 30s; yfinance fill cached 60s)
-  intraday/health.json                   -- lifecycle telemetry (every 60s)
+  intraday/prices.json                   -- macro price strip (every 10s; yfinance fill cached 60s)
+  intraday/health.json                   -- lifecycle telemetry (every 15s)
   raw/weekly/YYYYMMDD/qqq_chain_*.csv    -- nearest-weekly snapshots (~hourly RTH)
   manifest.json                          -- existing pipeline manifest + weekly keys
   macro/eia_steo.json                    -- EIA STEO crude calibration + OVX regime

@@ -737,6 +737,13 @@ class EmptyCycleSkip(Base):
         self.assertEqual(len(manifests), len(before) + 1,
                          "the empty run is still committed to the private archive (coverage)")
 
+    def test_quiet_cycle_extends_health_until_collection_stops(self):
+        self.cycle("2026-11-09T10:05:00Z")
+        self.cycle("2026-11-09T10:35:00Z")
+        for when, stale in [("2026-11-09T11:20:00Z", False), ("2026-11-09T11:45:00Z", True)]:
+            result = pub.status(self.private, self.public, self.clock.set(when), interval_s=1800)
+            self.assertEqual("published_views_stale" in result["problems"], stale)
+
     def test_failed_source_still_publishes(self):
         from market_data.news.adapters.rss import FetchResponse
 

@@ -49,7 +49,7 @@ R2 bucket `qqq-options-chain-data` holds several products, not one interchangeab
 |---|---|---|
 | `intraday/latest.json`, `intraday/spy/latest.json` | Main collector, nominal 60-second snapshots | Live chain, per-underlying VWAP/RVOL/momentum; MCP. QQQ also supplies Crassus. Missing SPY never substitutes QQQ |
 | `intraday/YYYYMMDD/snapshot_*.csv`, parallel `intraday/spy/YYYYMMDD/` | Main collector | Session archives, restart state and offline analysis; a CSV alone does not reconstruct the full published JSON |
-| `intraday/prices.json`, `intraday/health.json` | Main collector, nominal 30/60 seconds | Browser price/health displays and MCP overview; publication time is not necessarily provider observation time |
+| `intraday/prices.json`, `intraday/health.json` | Main collector, nominal 10/15 seconds | Browser price/health displays and MCP overview; publication time is not necessarily provider observation time |
 | `manifest.json` | External daily pipeline owns `dates`; this collector updates weekly metadata | Historical date selection versus weekly archive discovery. Top-level `updated_at` is not date-index freshness |
 | `raw/qqq_chain_YYYYMMDD.csv`, `raw/opex/qqq_chain_*.csv`, `prices/qqq_intraday_*.csv`, `derived/OIranges.csv` | External producer identified in source as `qqq-data-pipeline`; schedule unconfirmed | Historical heatmap/candles/calibration; settlement also reads daily chain spot marks |
 | `raw/weekly/<expiry>/...` | Main collector | Separate weekly snapshots; they do not replace the daily Historical archive |

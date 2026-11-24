@@ -312,7 +312,7 @@ present:
 
 - `last_publication_failed`: the stage (pages, index, cleanup, state) and the error are in `last_failure`.
 - `publication_interrupted`: a generation was started and not committed.
-- `published_views_stale`: the last publication is older than 2 × 15 min + 180 s and the pilot is not stopped.
+- `published_views_stale`: the last publication is older than 2 × the configured cycle interval + 180 s since publication or the latest clean skipped cycle for that publication and the pilot is not stopped.
 - `public_index_differs_from_state`: the live index is not the one the publisher committed.
 - `never_published`: no generation has ever been committed, and the pilot is neither stopped nor withdrawn.
 - `publication_blocked`: the live index could not be matched to a prepared commit, or the head is

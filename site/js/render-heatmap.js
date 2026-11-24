@@ -52,7 +52,7 @@ function renderHeatmap(data, symbol = 'QQQ') {
 
   // VWAP/RVOL -- same underlying_market block the QQQ tile's second line
   // reads (updateQqqVwapRvolLine below); both driven by this one 60s-cadence
-  // render, not the 30s prices.json / live-quotes cadence (see
+  // render, not the 10s prices.json/live-quotes cadence (see
   // docs/plans/2026-07-vwap-rvol.md for why).
   const vr = formatVwapRvol(underlying_market);
   const vrEl = document.getElementById('vwap-rvol');

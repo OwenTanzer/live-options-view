@@ -83,6 +83,7 @@ PAGES_PREFIX = f"{PAGES_ROOT}/"                     # news/v2/views/p/<gen>.<n>/
 BUILDER_INDEX_SCHEMA = "news-view-index/v1"         # the builder's unqualified index (in memory only)
 PUBLISH_PREFIX = f"{config.NAMESPACE}/publish/"
 STATE_KEY = PUBLISH_PREFIX + "state.json"
+QUIET_CYCLE_KEY = PUBLISH_PREFIX + "last-quiet-cycle.json"
 STOP_KEY = PUBLISH_PREFIX + "stop.json"
 PUBLISH_LEASE_KEY = PUBLISH_PREFIX + "lease.json"
 SNAPSHOT_PREFIX = PUBLISH_PREFIX + "snapshots/"
@@ -1736,7 +1737,10 @@ def status(private, public, clock, *, interval_s: int = config.INTERVAL_S,
     if obs["problem"]:
         problems.append("live_index_unmatched")
     if committed and age is not None and age > stale_after and not stopped(private):
-        problems.append("published_views_stale")
+        quiet = _read_json(private, QUIET_CYCLE_KEY) or {}
+        quiet_at = parse_iso(quiet["committed_at"]) if quiet.get("commit") == committed["commit"] and quiet.get("committed_at") else None
+        if quiet_at is None or not 0 <= (now - quiet_at).total_seconds() <= stale_after:
+            problems.append("published_views_stale")
     if committed and obs.get("nonce") != committed.get("commit"):
         problems.append("public_index_differs_from_state")
     if head.get("live") is None and not head.get("withdrawn") and not head.get("withdrawing") and not stopped(private):
@@ -1946,7 +1950,7 @@ def pilot_cycle(private, public, spool, fetch, clock, cfg: PilotConfig, *, commi
     revisions and completed cleanly, the cycle returns ``skipped_empty`` without building
     views or publishing anything. The run itself is already committed to the private archive
     by ``collect_once`` — that is the durable coverage record for the interval (sources
-    fetched OK, nothing new) — so the skip costs the collect side only (~13 Class A
+    fetched OK, nothing new) — so the skip needs only collection and one private health receipt (~14 Class A
     measured, vs ~170 for a full publish cycle). Only a clean run skips: a partial or
     failed run still publishes, so a source failure stays visible in the public coverage
     instead of going quiet. An interrupted publication never skips either: if a publish
@@ -1966,8 +1970,13 @@ def pilot_cycle(private, public, spool, fetch, clock, cfg: PilotConfig, *, commi
                           break_stale_lease=break_stale_lease)
     counts = report.manifest["counts"]
     publish_lease = _read_json(private, PUBLISH_LEASE_KEY)
-    if (counts["new_items"] == 0 and counts["new_revisions"] == 0
+    state = read_state(private)
+    committed = state.get("committed")
+    needs_recovery = any(state.get(flag) for flag in ("in_progress", "last_failure", "blocked", "paused"))
+    if (committed and not needs_recovery and not report.index_error and counts["new_items"] == 0 and counts["new_revisions"] == 0
             and report.manifest["status"] == "complete" and publish_lease is None):
+        private.put(QUIET_CYCLE_KEY, encode_json({"commit": committed["commit"],
+                                                "committed_at": report.manifest["committed_at"]}), "application/json")
         return {"status": "skipped_empty",
                 "reason": "no new items or revisions in this cycle; views unchanged, nothing published",
                 "run": {"run_id": report.run_id, "status": report.manifest["status"],

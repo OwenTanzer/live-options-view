@@ -34,8 +34,8 @@ Each figure is labelled:
 | --- | --- | --- |
 | Class A per full (publishing) cycle, steady (192 cycles, expiry on) | 170 | 170 |
 | Class B per full (publishing) cycle, steady | 231, plus one content replay a day (428 at 192 runs: 4 GETs per raw run) | 233, no replay spike (max 42 private) |
-| Class A per empty (skipped) cycle, steady (12 cycles at `*/30`) | — | 13 (private only; 0 public) |
-| Class B per empty (skipped) cycle, steady | — | 23 (private only; 0 public) |
+| Class A per empty (skipped) cycle, steady (12 cycles at `*/30`) | — | 14 (private only; 0 public) |
+| Class B per empty (skipped) cycle, steady | — | 25 (private only; 0 public) |
 | Listings of `news/v1/runs/` per cycle | 4, each over the whole raw history | 4, each after the frontier only |
 | Run keys listed per cycle, 1,500-run history | > 6,000 per listing | ≤ 16 in total (`BoundedListing`) |
 | ListObjectsV2 for runs per cycle, 1,500 runs | ≥ 2 × 6 + … (grows) | constant over 10 further cycles |
@@ -44,7 +44,7 @@ Each figure is labelled:
 | Private growth per cycle with no new items | ~58 KB, 6 objects | unchanged |
 
 - **Empty-cycle skip (2026-11-24, OBSERVED):** a cycle with no new items or revisions on a clean run
-  publishes nothing: 13 Class A + 23 Class B (collect side only, all private), vs 171 + 171 for a full
+  publishes nothing: 14 Class A + 25 Class B (including the private quiet-cycle receipt), vs 171 + 173 for a full
   cycle. Measured over 12 fixture cycles at `*/30` (1 full, 11 skipped). The empty run is still
   committed to the private archive (coverage), so private growth per skipped cycle is ~26 KB. A
   partial/failed run still publishes, and a cycle with a publish lease held from an interrupted
@@ -80,11 +80,11 @@ cycle, i.e. at most 35 full cycles a day. Both bounds include the ×1.25 failure
 
 | Month | Class A (clustered–spread) | Total (clustered–spread) |
 | --- | --- | --- |
-| 1 | 30 k–231 k | **$0.26–$1.48** |
-| 2 | 30 k–231 k | $0.26–$1.49 |
-| 3 | 30 k–232 k | $0.27–$1.49 |
-| 6 | 32 k–233 k | $0.27–$1.50 |
-| 12 | 34 k–236 k | $0.29–$1.51 |
+| 1 | 31 k–232 k | $0.27–$1.49 |
+| 2 | 32 k–232 k | $0.28–$1.49 |
+| 3 | 32 k–232 k | $0.28–$1.50 |
+| 6 | 33 k–234 k | $0.29–$1.50 |
+| 12 | 36 k–236 k | $0.30–$1.52 |
 
 Breakdown at `*/30`, month 1, spread bound:
 - R2 $1.13: Class A $1.04, Class B $0.08, storage < $0.01.
