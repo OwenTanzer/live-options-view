@@ -100,3 +100,31 @@ test('unmarked position survives close and recovers at the next regular session 
   assert.equal(tr.reason,'late recovery exit at observed price');
   db.close();
 });
+test('regular and shortened sessions reserve a complete exit window before placing an order', () => {
+  for (const [day,minutes] of [['2026-11-24',390],['2026-11-27',210]]) {
+    const sessionOpen=Date.parse(day+'T14:30:00Z'),sessionClose=sessionOpen+minutes*minute;
+    for (const remaining of [0,1,2]) {
+      const db=openPaper(':memory:');
+      const due=sessionClose-remaining*minute, decision=due-10*minute;
+      for(let i=0;i<=11;i++) {
+        const frame={...frameAt(i),session:day,t:decision-(11-i)*minute};
+        frame.snapshotTime=frame.t;
+        applyFrame(db,{frame,open:sessionOpen,close:sessionClose,receivedAt:frame.t,eligibleSlots:[7]},frame.t);
+      }
+      quote(db,decision+5000,101);
+      if(remaining<2) {
+        const tr=db.prepare('SELECT * FROM trades').get();
+        assert.equal(tr.status,'skipped');
+        assert.equal(tr.reason,'insufficient regular-session exit window');
+        assert.equal(tr.entry_price,null);
+      } else {
+        assert.equal(db.prepare('SELECT status FROM trades').get().status,'open');
+        quote(db,due+10000,102);
+        const tr=db.prepare('SELECT * FROM trades').get();
+        assert.equal(tr.status,'closed');
+        assert.ok(tr.exit_t<sessionClose);
+      }
+      db.close();
+    }
+  }
+});

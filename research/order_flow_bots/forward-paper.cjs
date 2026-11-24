@@ -138,9 +138,13 @@ function applyFrame(db, {frame, open, close, receivedAt, eligibleSlots}, now = D
       const busy = db.prepare("SELECT 1 FROM trades WHERE id=? AND status IN ('watch','pending','open')").get(rule.id);
       let status = signal === 'range' ? 'watch' : 'pending';
       const range = signal === 'range' ? frozenRange(db,frame.t,open,now) : null;
-      if (due > close || now >= due || busy || (signal === 'range' && !range)) {
+      // Keep the normal two-minute exit observation window inside this
+      // session, including shortened sessions. Late recovery is for outages.
+      if (due + maxAge > close || now >= due || busy || (signal === 'range' && !range)) {
         status = 'skipped';
-        reason = busy ? 'slot occupied' : due > close || now >= due ? 'outside session horizon' : 'incomplete pre-signal range';
+        if (due + maxAge > close) reason = 'insufficient regular-session exit window';
+        else if (now >= due) reason = 'outside session horizon';
+        else reason = busy ? 'slot occupied' : 'incomplete pre-signal range';
       }
       db.prepare(`INSERT INTO trades(session,id,decision_t,accepted_at,due,status,direction,range_low,range_high,reason)
         VALUES (?,?,?,?,?,?,?,?,?,?)`).run(frame.session,rule.id,frame.t,now,due,status,signal,range?.low??null,range?.high??null,reason);
@@ -162,7 +166,7 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
     return {accepted:false,reason:'required fresh two-sided QQQ quote unavailable'};
   const fillPrice = side => side>0 ? ask : bid;
   return transaction(db, () => {
-    const inSession = db.prepare('SELECT session FROM sessions WHERE open<=? AND close>=?')
+    const inSession = db.prepare('SELECT session,close FROM sessions WHERE open<=? AND close>=?')
       .get(t,Math.max(bidAt,askAt));
     if (!inSession) return {accepted:false,reason:'outside registered paper session'};
     const last = db.prepare('SELECT t FROM quotes ORDER BY t DESC LIMIT 1').get();
@@ -172,6 +176,12 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
     const orders = db.prepare("SELECT rowid,* FROM trades WHERE status IN ('watch','pending','open')").all();
     for (const order of orders) {
       const side = order.direction === 'long' ? 1 : -1;
+      // Also protect pending orders persisted by an earlier runner version.
+      if (order.status!=='open' && (order.session!==inSession.session || order.due+maxAge>inSession.close)) {
+        db.prepare("UPDATE trades SET status='skipped',reason='insufficient regular-session exit window' WHERE rowid=?")
+          .run(order.rowid);
+        continue;
+      }
       if (order.status === 'open') {
         if (t < order.due || t <= order.entry_t) continue;
         const price = fillPrice(-side);
