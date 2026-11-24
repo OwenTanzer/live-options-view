@@ -30,7 +30,12 @@ from market_data.single_stock_historical_backfill import (  # noqa: E402
     resample as resample_mod,
 )
 from market_data.single_stock_historical_backfill.collector import (  # noqa: E402
-    interval_file, read_symbol_files, run, ticker_dir,
+    interval_file, read_symbol_files, resolve_universe, run, ticker_dir,
+    universe_block,
+)
+from market_data.single_stock_historical_backfill.symbols import (  # noqa: E402
+    DUAL_CLASS_PAIRS, EXPECTED_LISTINGS, SYMBOLS, diff_universe, names,
+    parse_list_response, symbols, validate, validate_unique,
 )
 from market_data.single_stock_historical_backfill.pacing import (  # noqa: E402
     CheckpointStore, RateLimiter,
@@ -42,7 +47,8 @@ from market_data.single_stock_historical_backfill.publish import (  # noqa: E402
     publish_symbol, read_config,
 )
 from market_data.single_stock_historical_backfill.symbols import (  # noqa: E402
-    DUAL_CLASS_PAIRS, EXPECTED_LISTINGS, SYMBOLS, names, symbols, validate,
+    DUAL_CLASS_PAIRS, EXPECTED_LISTINGS, SYMBOLS, diff_universe, names,
+    parse_list_response, symbols, validate, validate_unique,
 )
 from market_data.single_stock_historical_backfill.tiingo import (  # noqa: E402
     BASE_SPECS, PAGE_CAP, TiingoClient, TiingoNotFound, TiingoRateLimited,
@@ -166,6 +172,133 @@ def test_universe_names_match_nasdaq_list():
     # Spot-check the dual-class pair names.
     assert names()["GOOGL"] == "Alphabet Inc. Class A Common Stock"
     assert names()["GOOG"] == "Alphabet Inc. Class C Capital Stock"
+
+
+# --- dynamic universe -------------------------------------------------------
+
+def _list_payload(members):
+    return {"data": {"data": {"rows": [
+        {"symbol": s, "companyName": n, "marketCap": 1_000_000_000}
+        for s, n in members]}}}
+
+
+class _FakeListSession:
+    def __init__(self, payload=None, error=None):
+        self.payload = payload
+        self.error = error
+
+    def get(self, url, timeout=None):
+        if self.error is not None:
+            raise self.error
+        return _FakeListResponse(self.payload)
+
+
+class _FakeListResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def test_parse_list_response_parses_rows_and_sorts():
+    members = parse_list_response(_list_payload(
+        [("MSFT", "Microsoft Corporation Common Stock"),
+         ("AAPL", "Apple Inc. Common Stock")]))
+    assert members == [("AAPL", "Apple Inc. Common Stock"),
+                       ("MSFT", "Microsoft Corporation Common Stock")]
+
+
+def test_parse_list_response_rejects_empty_and_garbled():
+    for payload in ({}, {"data": {}}, {"data": {"data": {"rows": []}}},
+                    {"data": {"data": {"rows": [{"companyName": "No Symbol"}]}}},
+                    "not a dict"):
+        with pytest.raises(ValueError):
+            parse_list_response(payload)
+
+
+def test_validate_unique_allows_a_changed_count():
+    validate_unique([("AAPL", "Apple Inc. Common Stock"),
+                     ("NEW", "New Corp")])
+    with pytest.raises(ValueError):
+        validate_unique([("AAPL", "Apple Inc. Common Stock"),
+                         ("AAPL", "Apple Inc. Common Stock")])
+
+
+def test_diff_universe_added_and_removed():
+    live = [("AAPL", "Apple Inc. Common Stock"),
+            ("NEW", "New Corp Common Stock")]
+    changes = diff_universe([("AAPL", "Apple Inc. Common Stock"),
+                             ("OLD", "Old Corp Common Stock")], live)
+    assert changes == {"added": [("NEW", "New Corp Common Stock")],
+                       "removed": [("OLD", "Old Corp Common Stock")]}
+
+
+def test_resolve_universe_live_list_with_one_change():
+    live = [m for m in SYMBOLS if m[0] != "XEL"]
+    live.append(("NEW", "New Corp Common Stock"))
+    resolution = resolve_universe(
+        _FakeListSession(_list_payload(live)), now=NOW)
+    assert resolution["source"] == "live"
+    assert resolution["universe"] == sorted(live)
+    assert resolution["added"] == [("NEW", "New Corp Common Stock")]
+    assert resolution["removed"] == [("XEL", "Xcel Energy Inc. Common Stock")]
+    assert resolution["error"] is None
+    assert resolution["as_of"] == "2026-11-23"
+
+
+def test_resolve_universe_falls_back_on_failed_empty_and_garbled():
+    for session in (_FakeListSession(error=RuntimeError("boom")),
+                    _FakeListSession({"data": {"data": {"rows": []}}}),
+                    _FakeListSession("garbled")):
+        resolution = resolve_universe(session, now=NOW)
+        assert resolution["source"] == "embedded_fallback"
+        assert resolution["universe"] == list(SYMBOLS)
+        assert resolution["added"] == []
+        assert resolution["removed"] == []
+        assert resolution["error"] is not None
+
+
+def test_universe_block_records_membership_changes():
+    live = [m for m in SYMBOLS if m[0] != "XEL"]
+    live.append(("NEW", "New Corp Common Stock"))
+    resolution = resolve_universe(
+        _FakeListSession(_list_payload(live)), now=NOW)
+    block = universe_block(resolution)
+    assert block["listings"] == 101
+    assert block["companies"] == 100
+    assert block["membership_source"] == "live"
+    assert block["added"] == [{"symbol": "NEW", "name": "New Corp Common Stock"}]
+    assert block["removed"] == [{"symbol": "XEL",
+                                 "name": "Xcel Energy Inc. Common Stock"}]
+    assert block["resolution_as_of"] == "2026-11-23"
+
+
+def test_run_with_live_resolution_collects_only_live_members(tmp_path):
+    live = [m for m in SYMBOLS if m[0] != "XEL"]
+    live.append(("NEW", "New Corp Common Stock"))
+    resolution = resolve_universe(
+        _FakeListSession(_list_payload(live)), now=NOW)
+    bases = {"AAPL": _fixture_bases(), "NEW": _fixture_bases()}
+    client = FakeClient(bases)
+    checkpoint = CheckpointStore(tmp_path / "checkpoint.json")
+    out = tmp_path / "out"
+    summary = run(["AAPL", "NEW"], out, mode="backfill",
+                  client=client, checkpoint=checkpoint,
+                  universe_resolution=resolution)
+    assert summary["complete"] == 2
+    assert summary["universe"]["membership_source"] == "live"
+    assert summary["universe"]["added"] == [
+        {"symbol": "NEW", "name": "New Corp Common Stock"}]
+    sidecar = json.loads(
+        (ticker_dir(out, "AAPL") / "provenance.json").read_text())
+    assert sidecar["universe"]["removed"] == [
+        {"symbol": "XEL", "name": "Xcel Energy Inc. Common Stock"}]
+    # The leaver is not collected: no files, no checkpoint entry.
+    assert not ticker_dir(out, "XEL").exists()
 
 
 # --- Tiingo bar parsing ------------------------------------------------------

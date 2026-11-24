@@ -1,15 +1,17 @@
 """CLI for the single-stock historical backfill collector.
 
 ``backfill`` is the first fill: fetch the three Tiingo bases for the
-101 listings (or a ``--symbols`` subset), derive the other eight
+live NASDAQ-100 listings (or a ``--symbols`` subset), derive the other eight
 intervals, write the per-ticker interval files plus provenance
 sidecar into ``--out`` (the root of the ``nasdaq/candles/`` R2 key
 tree), and publish to R2 only with ``--publish`` (opt-in; see
 ``publish.py`` for the env vars, which are unconfirmed against live
 service config). ``update`` is the incremental run: only bars newer
 than the stored ones are fetched. ``status`` reads the checkpoint
-only — no provider calls. ``universe`` prints the embedded
-constituent list without touching any provider.
+only — no provider calls. ``universe`` re-fetches Nasdaq's official
+list-type endpoint and prints the live constituent list with its
+membership changes (falling back to the embedded 101 on a bad
+fetch).
 
 A full backfill is 606 Tiingo requests (6 per listing) and takes
 ~12 hours at the free-Starter 50 requests/hour budget. The
@@ -28,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .collector import run as run_collector
+from .collector import live_universe, resolve_universe, run as run_collector
 from .pacing import CheckpointStore, RateLimiter
 from .provenance import build_provenance
 from .publish import publish_symbol, read_config
@@ -86,7 +88,7 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    uni = sub.add_parser("universe", help="print the embedded 101-listing universe (no provider calls)")
+    uni = sub.add_parser("universe", help="print the live NASDAQ-100 universe (re-fetched; falls back to the embedded 101 on a bad fetch)")
     uni.add_argument("--json", action="store_true", help="print as JSON")
 
     parsers = {}
@@ -121,15 +123,30 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "universe":
-        validate()
+        resolution = live_universe()
+        live_symbols = [s for s, _ in resolution["universe"]]
         if args.json:
             print(json.dumps({"source": SOURCE_LABEL, "as_of": SOURCE_AS_OF,
-                              "listings": EXPECTED_LISTINGS, "symbols": symbols()}))
+                              "membership_source": resolution["source"],
+                              "resolution_as_of": resolution["as_of"],
+                              "listings": len(live_symbols),
+                              "symbols": live_symbols,
+                              "added": [{"symbol": s, "name": n}
+                                        for s, n in resolution["added"]],
+                              "removed": [{"symbol": s, "name": n}
+                                          for s, n in resolution["removed"]],
+                              "error": resolution["error"]}))
         else:
-            print(f"# NASDAQ-100 universe: {EXPECTED_LISTINGS} listings "
-                  f"(source: {SOURCE_LABEL}, as of {SOURCE_AS_OF})")
-            for symbol in symbols():
+            print(f"# NASDAQ-100 universe: {len(live_symbols)} listings "
+                  f"(source: {SOURCE_LABEL}, as of {SOURCE_AS_OF}; "
+                  f"membership: {resolution['source']})")
+            for symbol in live_symbols:
                 print(symbol)
+            if resolution["added"] or resolution["removed"]:
+                print(f"# added: {', '.join(s for s, _ in resolution['added']) or 'none'}; "
+                      f"removed: {', '.join(s for s, _ in resolution['removed']) or 'none'}")
+            if resolution["error"]:
+                print(f"# fallback: {resolution['error']}", file=sys.stderr)
         return 0
 
     if args.command == "status":
@@ -188,11 +205,30 @@ def main(argv=None) -> int:
         limiter.acquire = capped_acquire
 
     try:
+        # Membership is dynamic: unless an explicit --symbols subset
+        # is given, the live NASDAQ-100 list is re-fetched first and
+        # only its members are collected; a bad list fetch falls back
+        # to the embedded 101 and records that fallback in every
+        # sidecar's universe block.
+        if selected is None:
+            resolution = resolve_universe()
+            selected = [s for s, _ in resolution["universe"]]
+            if resolution["error"]:
+                print(f"universe fallback: embedded 101 "
+                      f"({resolution['error']})", file=sys.stderr)
+            elif resolution["added"] or resolution["removed"]:
+                print(f"universe changes: "
+                      f"+{', '.join(s for s, _ in resolution['added']) or 'none'} "
+                      f"-{', '.join(s for s, _ in resolution['removed']) or 'none'}",
+                      file=sys.stderr)
+        else:
+            resolution = None
         summary = run_collector(
-            selected or symbols(), args.out, mode=args.command,
+            selected, args.out, mode=args.command,
             checkpoint=checkpoint, pages_1m=args.pages_1m,
             on_symbol_done=on_symbol_done,
-            force=getattr(args, "force", False))
+            force=getattr(args, "force", False),
+            universe_resolution=resolution)
     except _RequestCapReached as exc:
         checkpoint.save()
         print(f"stopped: {exc} (checkpoint saved; resume with the same command)",

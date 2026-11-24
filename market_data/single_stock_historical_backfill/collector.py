@@ -22,6 +22,17 @@ as Tiingo returns them — including the occasional flat stub bar on a
 market holiday at a page boundary (see ``tiingo.py``) — never
 corrected, dropped or invented.
 
+Membership is dynamic, mirroring PR #391's collector: the universe
+is the live NASDAQ-100 list, re-fetched from Nasdaq's official
+list-type endpoint on every run (see :func:`resolve_universe`),
+not the embedded 101-listing list — the embedded list is the
+fallback and the diff baseline. A failed, empty or garbled list
+fetch falls back to the embedded 101 and records that fallback in
+every sidecar's ``universe`` block; a bad fetch never empties the
+backfill. A ticker that leaves the index is not backfilled or
+updated further, but its stored files and checkpoint entries are
+kept; a ticker that enters it is backfilled from scratch.
+
 A ticker whose Tiingo fetch 404s (Tiingo has no such ticker) is
 recorded ``source_unavailable`` in the checkpoint and the run summary,
 with no files written; the run continues with the next ticker. A
@@ -51,11 +62,107 @@ BASES = ("1m", "1h", "1d")
 RETRY_AFTER_CAP_SECONDS = 3600
 
 
-def universe_block():
-    """The universe claim recorded in every provenance sidecar."""
+from . import __version__, resample as resample_mod
+from .pacing import CheckpointStore, RateLimiter
+from .provenance import build_provenance, interval_key, sidecar_key
+from .symbols import (EXPECTED_LISTINGS, SOURCE_AS_OF, SOURCE_LABEL,
+                      SOURCE_URL, SYMBOLS, diff_universe,
+                      parse_list_response, validate_unique)
+from .tiingo import BASE_SPECS, TiingoClient, TiingoNotFound, TiingoRateLimited
+
+UTC = timezone.utc
+BASES = ("1m", "1h", "1d")
+RETRY_AFTER_CAP_SECONDS = 3600
+USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+
+
+def _session():
+    import requests
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT,
+                            "Accept": "application/json"})
+    return session
+
+
+def fetch_list_members(session):
+    """Fetch the live constituent list in one request.
+
+    Returns the sorted ``[(symbol, name)]`` list from
+    :func:`symbols.parse_list_response`. Raises on transport/HTTP
+    errors or on an empty/garbled response; the caller falls back
+    to the embedded universe rather than publishing a bad one.
+    """
+    resp = session.get(SOURCE_URL, timeout=20)
+    resp.raise_for_status()
+    return parse_list_response(resp.json())
+
+
+def resolve_universe(session=None, now=None):
+    """Resolve the universe for this run: live list vs embedded fallback.
+
+    Returns a dict with ``universe`` (sorted ``[(symbol, name)]``),
+    ``added`` / ``removed`` (the diff against the embedded list,
+    each a sorted ``[(symbol, name)]``), ``source`` (``"live"`` or
+    ``"embedded_fallback"``) and ``error`` (the fetch failure, or
+    None). A failed, empty or garbled list fetch returns the
+    embedded universe with no recorded changes — a bad fetch never
+    empties the backfill, and the fallback is visible in every
+    sidecar's ``universe`` block.
+    """
+    now = now or datetime.now(UTC)
+    own_session = session is None
+    session = session or _session()
+    try:
+        try:
+            members = fetch_list_members(session)
+        except Exception as exc:  # noqa: BLE001 - any list failure falls back
+            return {"universe": list(SYMBOLS), "added": [], "removed": [],
+                    "source": "embedded_fallback", "error": str(exc),
+                    "as_of": now.date().isoformat()}
+        validate_unique(members)
+        changes = diff_universe(SYMBOLS, members)
+        return {"universe": members, "added": changes["added"],
+                "removed": changes["removed"], "source": "live",
+                "error": None, "as_of": now.date().isoformat()}
+    finally:
+        if own_session:
+            session.close()
+
+
+def live_universe():
+    """Resolve the live universe with a throwaway session (CLI helper)."""
+    return resolve_universe()
+
+
+def universe_block(resolution=None):
+    """The universe claim recorded in every provenance sidecar.
+
+    ``resolution`` is a :func:`resolve_universe` result, or None —
+    then the block describes the embedded universe with no
+    membership claim, as before. ``listings`` is the live count when
+    a resolution is given; ``companies`` counts distinct companies
+    the same way PR #391 does (Alphabet Inc. appears twice, as
+    GOOGL/GOOG, so companies is one less than listings for the
+    embedded universe).
+    """
+    if resolution is None:
+        return {"source": SOURCE_LABEL, "source_url": SOURCE_URL,
+                "as_of": SOURCE_AS_OF, "listings": EXPECTED_LISTINGS,
+                "companies": 100}
+    universe = resolution["universe"]
+    companies = len({name.split(" Common")[0].split(" Class")[0].strip()
+                     for _, name in universe})
     return {"source": SOURCE_LABEL, "source_url": SOURCE_URL,
-            "as_of": SOURCE_AS_OF, "listings": EXPECTED_LISTINGS,
-            "companies": 100}
+            "as_of": SOURCE_AS_OF, "listings": len(universe),
+            "companies": companies,
+            "membership_source": resolution["source"],
+            "added": [{"symbol": s, "name": n}
+                      for s, n in resolution["added"]],
+            "removed": [{"symbol": s, "name": n}
+                        for s, n in resolution["removed"]],
+            "resolution_as_of": resolution["as_of"],
+            "error": resolution["error"]}
 
 
 def _now_iso():
@@ -151,7 +258,8 @@ def _fetch_with_pacing(limiter, fetch):
 
 
 def backfill_symbol(client, limiter, checkpoint, symbol, out_dir,
-                    pages_1m=3, on_symbol_done=None, force=False):
+                    pages_1m=3, on_symbol_done=None, force=False,
+                    universe=None):
     """Backfill one ticker; return its summary dict.
 
     ``on_symbol_done`` (optional) is called with
@@ -196,7 +304,8 @@ def backfill_symbol(client, limiter, checkpoint, symbol, out_dir,
         meta[base]["requests"] = base_requests[base]
         meta[base]["pages"] = base_pages[base]
     provenance = build_provenance(
-        symbol, meta, universe=universe_block(), generated_at=generated_at,
+        symbol, meta, universe=universe_block(universe),
+        generated_at=generated_at,
         publication_status="not_published",
         publication_reason="local run: --publish not given")
     (ticker_dir(out_dir, symbol) / "provenance.json").write_text(
@@ -215,7 +324,7 @@ def backfill_symbol(client, limiter, checkpoint, symbol, out_dir,
 
 
 def update_symbol(client, limiter, checkpoint, symbol, out_dir,
-                  pages_1m=3, on_symbol_done=None):
+                  pages_1m=3, on_symbol_done=None, universe=None):
     """Incrementally update one ticker; return its summary dict.
 
     Fetches only bars newer than the newest stored bar per base. A
@@ -224,7 +333,8 @@ def update_symbol(client, limiter, checkpoint, symbol, out_dir,
     stored = read_symbol_files(out_dir, symbol)
     if stored is None:
         return backfill_symbol(client, limiter, checkpoint, symbol, out_dir,
-                               pages_1m=pages_1m, on_symbol_done=on_symbol_done)
+                               pages_1m=pages_1m, on_symbol_done=on_symbol_done,
+                               universe=universe)
     generated_at = _now_iso()
     bases = {}
     new_counts = {}
@@ -264,7 +374,8 @@ def update_symbol(client, limiter, checkpoint, symbol, out_dir,
         meta[base]["requests"] = base_requests[base]
         meta[base]["pages"] = base_pages[base]
     provenance = build_provenance(
-        symbol, meta, universe=universe_block(), generated_at=generated_at,
+        symbol, meta, universe=universe_block(universe),
+        generated_at=generated_at,
         publication_status="not_published",
         publication_reason="local run: --publish not given")
     (ticker_dir(out_dir, symbol) / "provenance.json").write_text(
@@ -283,7 +394,8 @@ def update_symbol(client, limiter, checkpoint, symbol, out_dir,
 
 
 def run(symbols, out_dir, mode="backfill", client=None, checkpoint=None,
-        pages_1m=3, on_symbol_done=None, force=False):
+        pages_1m=3, on_symbol_done=None, force=False,
+        universe_resolution=None):
     """Run ``mode`` (``backfill`` or ``update``) over ``symbols``.
 
     Returns a summary dict. A ticker whose Tiingo fetch 404s is
@@ -308,12 +420,14 @@ def run(symbols, out_dir, mode="backfill", client=None, checkpoint=None,
                 if mode == "update":
                     summary = update_symbol(client, checkpoint.limiter, checkpoint,
                                             symbol, out_dir, pages_1m=pages_1m,
-                                            on_symbol_done=on_symbol_done)
+                                            on_symbol_done=on_symbol_done,
+                                            universe=universe_resolution)
                 else:
                     summary = backfill_symbol(client, checkpoint.limiter, checkpoint,
                                               symbol, out_dir, pages_1m=pages_1m,
                                               on_symbol_done=on_symbol_done,
-                                              force=force)
+                                              force=force,
+                                              universe=universe_resolution)
             except TiingoNotFound:
                 for base in BASES:
                     checkpoint.mark_base(symbol, base, "source_unavailable")
@@ -336,6 +450,7 @@ def run(symbols, out_dir, mode="backfill", client=None, checkpoint=None,
         "collector": "single_stock_historical_backfill",
         "version": __version__,
         "mode": mode,
+        "universe": universe_block(universe_resolution),
         "symbols": len(symbols),
         "complete": complete,
         "source_unavailable": unavailable,

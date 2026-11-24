@@ -37,15 +37,26 @@ param `token`). Free Starter limits: 50 requests/hour, 1,000/day,
 
 ## Universe
 
-The 101 listings (100 companies) are embedded in `symbols.py`, taken
-from Nasdaq's official `list-type/nasdaq100` API and re-verified live
-on 2026-11-23 (`totalrecords: 101`, API date "Nov 23, 2026") — the
+The universe is the live NASDAQ-100 list, resolved on every run
+(`collector.resolve_universe`, mirroring PR #391): Nasdaq's official
+`list-type/nasdaq100` API is re-fetched and only the live members
+are collected. The 101 listings (100 companies) are embedded in
+`symbols.py`, taken from the same API and re-verified live on
+2026-11-23 (`totalrecords: 101`, API date "Nov 23, 2026") — the
 live symbol set is identical to the embedded set. Alphabet Inc.
 appears twice — GOOGL (Class A) and GOOG (Class C) — which is why
-there are 101 listings for 100 companies. Re-verify against the same
-endpoint after each annual reconstitution (December) or announced
-change; `symbols.validate()` fails closed on a wrong count or a
-duplicate.
+there are 101 listings for 100 companies. The embedded list is the
+fallback and the diff baseline: a failed, empty or garbled list
+fetch collects the embedded 101 and records
+`membership_source: "embedded_fallback"` in every sidecar's
+`universe` block. Membership changes (added/removed with symbol
+and name, plus the resolution date) are recorded in the same block
+and in the run summary; a leaver keeps its stored files and
+checkpoint entries, an entrant is backfilled from scratch.
+`universe` prints the live list with its changes. Re-verify
+against the same endpoint after each annual reconstitution
+(December) or announced change; `symbols.validate()` fails closed
+on a wrong count or a duplicate in the embedded list.
 
 ## Interval files
 

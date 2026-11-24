@@ -99,7 +99,13 @@ environment is an open question (see below).
 
 ## Universe
 
-The 101 listings (100 companies) are embedded in
+The universe is the live NASDAQ-100 list, resolved on every run
+by `collector.resolve_universe` and mirroring PR #391's collector
+(same endpoint, same parse/diff helpers, same fallback rule):
+
+- Re-fetch Nasdaq's official `list-type/nasdaq100` API on every
+  run; collect/backfill only the live members.
+- The 101 listings (100 companies) are embedded in
 `market_data/single_stock_historical_backfill/symbols.py` — the same
 list as `market_data/nasdaq_collector/symbols.py` (PR #391, unmerged
 when this was written), re-verified live against Nasdaq's official
@@ -108,9 +114,22 @@ date "Nov 23, 2026"): the live symbol set is identical to the
 embedded set. This collector is self-contained on master and does not
 import the unmerged package. Alphabet Inc. appears twice — GOOGL
 (Class A) and GOOG (Class C) — hence 101 listings for 100 companies.
-Re-verify against the same endpoint after each annual reconstitution
-(December) or announced change; `symbols.validate()` fails closed on
-a wrong count or a duplicate symbol.
+- The embedded list is the fallback and the diff baseline: when
+  the live list fetch fails, or returns an empty/garbled response,
+  the run collects the embedded 101 and records
+  `membership_source: "embedded_fallback"` with the error in every
+  sidecar's `universe` block — a bad fetch never empties the
+  backfill. Membership changes (added/removed with symbol and
+  name, plus the resolution date) are recorded in the same block
+  and in the run summary's `universe` block. A ticker that leaves
+  the index is not backfilled or updated further, but its stored
+  files and checkpoint entries are kept; a ticker that enters it
+  is backfilled from scratch. Re-verify against the same endpoint
+  after each annual reconstitution (December) or announced change;
+  `symbols.validate()` fails closed on a wrong count or a duplicate
+  symbol in the embedded list, while the live list is validated
+  for uniqueness only (`validate_unique`), since its count
+  legitimately differs after a reconstitution.
 
 ## Interval file shape (`nasdaq/candles/<TICKER>/<interval>.json`)
 
@@ -218,7 +237,9 @@ One `snapshot_provenance.v1` sidecar per ticker
   "as_of": "2026-11-23T20:59:00Z",
   "universe": {"source": "Nasdaq official list-type/nasdaq100 API",
                "source_url": "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
-               "as_of": "2026-11-23", "listings": 101, "companies": 100},
+               "as_of": "2026-11-23", "listings": 101, "companies": 100,
+               "membership_source": "live", "added": [], "removed": [],
+               "resolution_as_of": "2026-11-23", "error": null},
   "files": {"1m": {"key": "nasdaq/candles/AAPL/1m.json",
                    "derived_from": null, "bars": 29250,
                    "first_bar": "2026-08-10T13:30:00Z",
