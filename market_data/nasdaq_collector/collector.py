@@ -264,6 +264,9 @@ def resolve_universe(session, now=None):
     now = now or datetime.now(UTC)
     try:
         members, caps = fetch_list_members(session)
+        # The index tracks 100 companies and may include multiple share classes.
+        if len(members) < 100:
+            raise ValueError(f"Incomplete Nasdaq-100 list: {len(members)} usable listings")
     except Exception as exc:  # noqa: BLE001 - any list failure falls back
         return {"universe": list(SYMBOLS), "caps": {}, "added": [],
                 "removed": [], "source": "embedded_fallback",

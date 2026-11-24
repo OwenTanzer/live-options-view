@@ -534,7 +534,7 @@ def test_resolve_universe_live_diff():
 
 def test_resolve_universe_fallback_on_failure_and_on_empty_response():
     for session in (_FailingSession(),
-                    _ListSession([])):
+                    _ListSession([]), _ListSession(_live_members()[:1])):
         resolution = resolve_universe(session, now=NOW)
         assert resolution["source"] == "embedded_fallback"
         assert resolution["universe"] == list(SYMBOLS)
