@@ -29,6 +29,7 @@ export const BROWSER_DATA_KEYS = new Set([
   'derived/OIranges.csv',
   'crypto/latest.json',
   'crypto/predictions/BTC.json',
+  'nasdaq/latest.json',
   'macro/eia_steo.json',
   'manifest.json',
   'squeeze-scanner/v1/scheduled/latest.json',

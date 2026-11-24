@@ -35,8 +35,8 @@ function makeEl() {
 const els = {};
 els['crypto-panel'] = makeEl();
 els['tab-crypto'] = makeEl();
-for (const id of ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 'news-panel',
-                  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news']) {
+for (const id of ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 'news-panel', 'nasdaq-panel',
+                  'tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'tab-nasdaq']) {
   els[id] = makeEl();
 }
 // The live tab starts visible / active in the shipped markup.
@@ -44,6 +44,7 @@ els['tab-live']._classes.add('active');
 let manifestCalls = 0;
 let newsLoads = 0;
 let cryptoLoads = 0;
+let nasdaqLoads = 0;
 let pollingCalls = [];
 const sandbox = {
   console,
@@ -51,6 +52,7 @@ const sandbox = {
   loadHistoryManifest: () => { manifestCalls++; },
   loadNewsPanel: () => { newsLoads++; },
   loadCryptoPanel: () => { cryptoLoads++; },
+  loadNasdaqPanel: () => { nasdaqLoads++; },
   setBotsPolling: on => { pollingCalls.push(on); },
 };
 const context = vm.createContext(sandbox);
@@ -58,12 +60,12 @@ vm.runInContext(moduleSource, context, { filename: 'site/js/tab-switching.js' })
 const get = name => vm.runInContext(name, context);
 
 assert.equal(typeof get('showTab'), 'function', 'module must define showTab');
-assert.deepEqual(Object.keys(get('TABS')).sort(), ['bots', 'crypto', 'history', 'live', 'news', 'squeeze'], 'TABS must include Crypto');
+assert.deepEqual(Object.keys(get('TABS')).sort(), ['bots', 'crypto', 'history', 'live', 'nasdaq', 'news', 'squeeze'], 'TABS must include Crypto');
 
 const visible = id => !els[id]._classes.has('hidden');
 const active = id => els[id]._classes.has('active');
-const onlyVisible = id => ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 'news-panel'].every(p => visible(p) === (p === id));
-const onlyActive = id => ['tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news'].every(b => active(b) === (b === id));
+const onlyVisible = id => ['live-panel', 'history-panel', 'bots-panel', 'squeeze-panel', 'news-panel', 'nasdaq-panel'].every(p => visible(p) === (p === id));
+const onlyActive = id => ['tab-live', 'tab-history', 'tab-bots', 'tab-squeeze', 'tab-news', 'tab-nasdaq'].every(b => active(b) === (b === id));
 
 // Live: the default tab. No manifest fetch, bots polling off.
 vm.runInContext("showTab('live')", context);
@@ -107,6 +109,19 @@ assert.equal(newsLoads, 1, 'reopening news must not mount the panel again');
 assert.equal(manifestCalls, 1, 'news never loads the history manifest');
 pollingCalls = pollingCalls.slice(0, 5);
 
+// Stocks: mounts the panel exactly once, and keeps bots polling off.
+assert.equal(nasdaqLoads, 0, 'no Stocks request before the tab is opened');
+vm.runInContext("showTab('nasdaq')", context);
+assert.ok(onlyVisible('nasdaq-panel'), 'stocks tab shows only the stocks panel');
+assert.ok(onlyActive('tab-nasdaq'), 'stocks tab marks only the stocks button active');
+assert.equal(nasdaqLoads, 1, 'first stocks visit mounts the panel');
+vm.runInContext("showTab('live')", context);
+vm.runInContext("showTab('nasdaq')", context);
+assert.equal(nasdaqLoads, 1, 'reopening stocks must not mount the panel again');
+assert.equal(manifestCalls, 1, 'stocks never loads the history manifest');
+assert.equal(newsLoads, 1, 'stocks never mounts the news panel');
+pollingCalls = pollingCalls.slice(0, 5);
+
 // Unknown tab falls back to live — and does not re-trigger the manifest.
 vm.runInContext("showTab('bogus')", context);
 assert.ok(onlyVisible('live-panel'), 'unknown tab falls back to the live panel');
@@ -123,3 +138,4 @@ assert.ok(!visible('crypto-panel'));
 vm.runInContext("showTab('crypto')", context);
 assert.equal(cryptoLoads, 1);
 console.log('tab switching: hash pinned, extraction verified, live/history/bots/squeeze/news/crypto/unknown passed');
+console.log('tab switching: hash pinned, extraction verified, live/history/bots/squeeze/news/nasdaq/unknown passed');

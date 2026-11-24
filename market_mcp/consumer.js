@@ -5,7 +5,7 @@ const { formatSqueezeScheduleStatus } = require('../site/shared.js');
 const { DataError, LIMITS, UUID, errorRecord } = require('./source');
 const overview = require('./overview');
 
-const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows', 'crypto_snapshot'];
+const DATASETS = ['qqq_snapshot', 'spy_snapshot', 'scheduled_squeeze', 'options_returns', 'cross_market_overview', 'options_active', 'options_windows', 'crypto_snapshot', 'nasdaq_snapshot'];
 // Chain underlyings (#121). QQQ keeps its original artifact and dataset id, so
 // an omitted selector behaves exactly as before; SPY has its own tree.
 const UNDERLYINGS = Object.freeze({
@@ -142,6 +142,27 @@ function squeeze(p, isSuccess = false) {
   if (isSuccess) check(['complete', 'empty'].includes(p.status) && p.display_schema_version === 1 && Array.isArray(p.candidates) && p.candidates.length <= 10 &&
     p.candidates.every(r => object(r) && SYMBOL.test(r.ticker) && object(r.scores) && object(r.ranks) && Number.isInteger(r.ranks.combined)), 'Invalid squeeze shortlist.');
 }
+const NASDAQ_KEY = 'nasdaq/latest.json';
+const NASDAQ_STALE_SECONDS = 3600; // hourly collector cadence
+function nasdaqSnapshot(p) {
+  check(object(p) && p.schema_version === 1 && p.dataset === 'nasdaq_snapshot' &&
+    typeof p.as_of === 'string' && Number.isFinite(Date.parse(p.as_of)) &&
+    object(p.universe) && Number.isInteger(p.universe.listings) && p.universe.listings > 0 &&
+    Array.isArray(p.stocks) &&
+    p.stocks.length <= p.universe.listings && object(p.index) && p.index.symbol === 'NDX' &&
+    object(p.coverage), 'Unsupported NASDAQ snapshot contract.');
+  check(p.stocks.every(r => object(r) && SYMBOL.test(r.symbol) && typeof r.name === 'string' &&
+    (r.price === null || typeof r.price === 'number') &&
+    (r.percent_change === null || typeof r.percent_change === 'number') &&
+    typeof r.percent_change_basis === 'string' && typeof r.status === 'string' &&
+    ['available', 'source_unavailable'].includes(r.status) &&
+    Array.isArray(r.news) && r.news.every(n => object(n) && typeof n.title === 'string')),
+    'Invalid NASDAQ snapshot rows.');
+  check(typeof p.index.percent_change_basis === 'string' &&
+    p.index.percent_change_basis !== (p.stocks[0]?.percent_change_basis ?? null) &&
+    p.stocks.every(r => r.percent_change_basis === (p.stocks[0]?.percent_change_basis ?? r.percent_change_basis)),
+    'NASDAQ per-stock and index percent-change bases must be labelled differently.');
+}
 // Last success and latest attempt side by side. The pointer carries no
 // producer reason for a partial/failed outcome, so only the coverage counts
 // that can account for one are reported, labeled as such.
@@ -254,6 +275,7 @@ const units = {
 };
 units.spy_snapshot = units.qqq_snapshot;
 units.options_active = units.options_returns;
+units.nasdaq_snapshot = { price: 'USD/share', change: 'USD/share', percent_change: 'percentage points', market_cap: 'USD', volume: 'shares', change_1h_pct: 'percentage points', change_7d_pct: 'percentage points', 'index.level': 'index points', 'index.percent_change': 'percentage points' };
 units.options_windows = { '*_pct': 'fractional return (1 = 100%)', '*_entry, *_exit': 'USD/share', '*_ms': 'UTC epoch milliseconds', '*_entry_delay_from_boundary_s, *_exit_lead_before_close_s': 'seconds from the session boundary', '*_quote_age_s': 'seconds between quote observation and sample', '*_relative_spread': 'spread / midpoint', '*_size': 'contracts at quoted side', rank: 'producer ordinal rank within the selected basis', contracts_evaluated: 'contracts evaluated in this window, eligible plus excluded' };
 units.cross_market_overview = overview.units;
 units.crypto_snapshot = { price: 'USD', high_24h: 'USD', low_24h: 'USD', change_24h_pct: 'percentage points', change_1h_pct: 'percentage points', change_7d_pct: 'percentage points', volume_24h: 'USD', market_cap: 'USD', rank: 'producer market-cap rank' };
@@ -268,6 +290,10 @@ warnings.spy_snapshot = [...warnings.qqq_snapshot,
   'SPY RVOL reports insufficient_history/no_data until its own baseline has five completed collection sessions; QQQ baselines are never used for SPY.',
   'SPY is collected 0DTE only (no nearest-weekly archive). Live SPY collection must be observed before it is treated as supported in production.'];
 warnings.crypto_snapshot = ['A Coinbase price is never substituted for a CoinGecko price or vice versa; a missing source publishes a null price with status source_unavailable.', 'Rank, market cap and 1h/7d change are CoinGecko metadata, not the price basis.', 'Fear & Greed is best-effort; an unavailable feed publishes value null, never a fabricated value.', 'Crypto trades 24/7; freshness is judged against each provider observation time, not an equity session clock.'];
+warnings.nasdaq_snapshot = ['Per-stock percent_change is Nasdaq\'s latest reported move (after-hours move after the close); the index percent_change is the regular-session move vs previous close. The two bases differ and are labelled on every row.',
+  'Freshness is measured from Nasdaq\'s last-trade timestamp when published, else collector receipt; date-only stamps (as for NDX) carry no usable time.',
+  'News headlines are evidence only; they do not establish a cause for any price move.',
+  'A source-unavailable stock carries null price fields; no price is substituted or carried forward.'];
 
 class Consumer {
   constructor(source, { now = () => Date.now(), scheduleCalendar = calendar } = {}) { this.source = source; this.now = now; this.calendar = scheduleCalendar; this.references = new Map(); this.retainedBytes = 0; }
@@ -286,7 +312,7 @@ class Consumer {
   async call(name, a = {}) {
     const q = this.source.query();
     const marketDataset = supportedUnderlying(underlyingOf(a)) ? UNDERLYINGS[underlyingOf(a)].dataset : 'unsupported_underlying';
-    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview', crypto_snapshot:'crypto_snapshot'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
+    const dataset = ({market_context:marketDataset, squeeze_results:'scheduled_squeeze', return_rankings:'options_returns', active_rankings:'options_returns', window_rankings:'options_windows', market_overview:'cross_market_overview', crypto_snapshot:'crypto_snapshot', nasdaq_snapshot:'nasdaq_snapshot'})[name] || (name === 'discover_sources' ? 'source_catalog' : 'detail');
     let out = this.envelope(dataset, a, q);
     try {
       if (name === 'discover_sources') out = await this.discover(a, q, out);
@@ -297,6 +323,7 @@ class Consumer {
       else if (name === 'active_rankings') out = await this.active(a, q, out);
       else if (name === 'window_rankings') out = await this.window(a, q, out);
       else if (name === 'market_overview') out = await this.overview(a, q, out);
+      else if (name === 'nasdaq_snapshot') out = await this.nasdaq(a, q, out);
       else if (name === 'result_detail') out = await this.detail(a, q, out);
       else throw new DataError('invalid_filter', 'Unknown tool.');
     } catch (e) { out.errors.push(errorRecord(e)); out.status = e.code === 'missing_artifact' ? 'missing' : 'failed'; }
@@ -333,12 +360,12 @@ class Consumer {
     // spy_snapshot is appended so existing clients' capability positions stay put.
     const probes = [['qqq_snapshot', 'intraday/latest.json'], ['scheduled_squeeze', 'squeeze-scanner/v1/scheduled/latest.json'],
       ['options_returns', a.session ? `oa203/scanner/${a.session}/summary.json` : null], ['spy_snapshot', UNDERLYINGS.SPY.key],
-      ['cross_market_overview', overview.KEY], ['crypto_snapshot', 'crypto/latest.json']];
+      ['cross_market_overview', overview.KEY], ['crypto_snapshot', 'crypto/latest.json'], ['nasdaq_snapshot', NASDAQ_KEY]];
     const chainSymbol = id => id === 'qqq_snapshot' ? 'QQQ' : id === 'spy_snapshot' ? 'SPY' : null;
     out.capabilities = [];
     for (const [id, key] of probes) {
       const probe = key ? await q.optionalJson(key) : {value:null,error:null};
-      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else if (id === 'crypto_snapshot') cryptoSnapshot(probe.value); else returnSummary(probe.value, a.session); }
+      if (key && !probe.error) try { if (chainSymbol(id)) snapshot(probe.value, chainSymbol(id)); else if (id === 'cross_market_overview') overview.validate(probe.value); else if (id === 'scheduled_squeeze') squeeze(probe.value, true); else if (id === 'crypto_snapshot') cryptoSnapshot(probe.value); else if (id === 'nasdaq_snapshot') nasdaqSnapshot(probe.value); else returnSummary(probe.value, a.session); }
       catch (e) { probe.error = errorRecord(e, key); probe.value = null; }
       if (id === 'cross_market_overview') {
         const p = probe.value;
@@ -373,14 +400,14 @@ class Consumer {
         continue;
       }
       const chain = chainSymbol(id);
-      out.capabilities.push({ dataset: id, ...(chain ? {underlying: chain} : {}), producer_schema: chain ? 'unversioned collector snapshot (symbol-labeled since #121)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : 'oa203-returns-v1',
+      out.capabilities.push({ dataset: id, ...(chain ? {underlying: chain} : {}), producer_schema: chain ? 'unversioned collector snapshot (symbol-labeled since #121)' : id === 'scheduled_squeeze' ? 'schema_version=1/display_schema_version=1' : id === 'nasdaq_snapshot' ? 'schema_version=1, dataset nasdaq_snapshot' : 'oa203-returns-v1',
         availability: probe.error ? (probe.error.code === 'missing_artifact' ? 'missing_publication' : 'failed') : key ? 'available' : 'explicit_session_required',
-        actual:probe.value ? chain?{underlying:chain,snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
-        freshness: probe.value ? chain ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : {status:'historical'} : {status:'unknown'},
+        actual:probe.value ? chain?{underlying:chain,snapshot_timestamp:probe.value.timestamp,snapshot_key:probe.value.snapshot_key??null,session:probe.value.date}:id==='scheduled_squeeze'?{run_id:probe.value.run_id,archive:probe.value.archive,session:probe.value.session_date??null}:id==='nasdaq_snapshot'?{as_of:probe.value.as_of,listings:probe.value.universe?.listings??null,available:probe.value.coverage?.available??null,index_level:probe.value.index?.level??null,index_status:probe.value.index?.status??null}:{session:probe.value.trade_date,final:probe.value.final}:null,
+        freshness: probe.value ? chain ? age(probe.value.timestamp,this.now()) : id === 'scheduled_squeeze' ? {...age(probe.value.finished_at,this.now()),schedule_confirmation:'query squeeze_results for attempt/schedule/calendar status'} : id === 'nasdaq_snapshot' ? {...age(probe.value.as_of,this.now(),NASDAQ_STALE_SECONDS),basis:'collector receipt; hourly cadence'} : {status:'historical'} : {status:'unknown'},
         source_locator: key, error: probe.error, units: units[id], warnings: warnings[id],
-        fields: chain ? ['symbol','timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : ['summary','universe','leaderboard','qualified_ask_bid_v1','selected_contract_quote_path'],
-        filters: chain ? ['underlying','expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : ['session','underlying','type','view','limit','offset'],
-        cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : 'selected finalized session; about five-minute samples',
+        fields: chain ? ['symbol','timestamp','snapshot_key','underlying_market','rows'] : id === 'scheduled_squeeze' ? ['candidates','coverage','latest-attempt','latest-schedule','manifest','inputs','results'] : id === 'nasdaq_snapshot' ? ['symbol','name','price','change','percent_change','percent_change_basis','market_cap','rank','day_high','day_low','volume','change_1h_pct','change_7d_pct','news','status','index','coverage'] : ['summary','universe','leaderboard','qualified_ask_bid_v1','selected_contract_quote_path'],
+        filters: chain ? ['underlying','expiry','type','strike','contract','limit','offset'] : id === 'scheduled_squeeze' ? ['limit','offset'] : id === 'nasdaq_snapshot' ? ['symbols','sort','limit','offset'] : ['session','underlying','type','view','limit','offset'],
+        cadence: chain ? 'collector session cycles; field timestamps govern age' : id === 'scheduled_squeeze' ? '09:00 and 12:00 America/New_York exchange-session calendar' : id === 'nasdaq_snapshot' ? 'hourly collector run; snapshot as_of governs age' : 'selected finalized session; about five-minute samples',
         coverage: probe.value?.coverage || probe.value?.assessment || (chain ? `latest ${chain} 0DTE snapshot only` : null), historical_index: 'not_supported' });
     }
     // Windows have no global index or window list to probe: the producer writes
@@ -460,6 +487,40 @@ class Consumer {
     if (unavailable) out.warnings.push(`${unavailable} coin${unavailable === 1 ? '' : 's'} source-unavailable; no price was substituted from the other source.`);
     out.coverage = {source_rows: p.coins.length, matched_rows: rows.length, unavailable_rows: unavailable};
     out.status = unavailable ? 'partial' : p.coins.length ? 'available' : 'empty';
+    return out;
+  }
+  // NASDAQ-100 snapshot: read-only, same envelope/freshness shape as
+  // market_context. Per-stock percent_change is Nasdaq's latest reported
+  // move (after-hours move after the close); the index percent_change is
+  // the regular-session move vs previous close. The two bases are labelled
+  // on the payload and never reconciled into one number.
+  async nasdaq(a, q, out) {
+    args(a, ['symbols', 'sort', 'limit', 'offset']); const {limit, offset} = page(a);
+    if (a.symbols !== undefined) check(Array.isArray(a.symbols) && a.symbols.length >= 1 && a.symbols.length <= LIMITS.rows && a.symbols.every(s => typeof s === 'string' && SYMBOL.test(s)), `symbols must be 1..${LIMITS.rows} NASDAQ-100 tickers.`, 'invalid_filter');
+    const sort = a.sort ?? 'strip'; check(['strip', 'percent_desc', 'percent_asc'].includes(sort), 'sort must be strip, percent_desc or percent_asc.', 'invalid_filter');
+    const p = await q.json(NASDAQ_KEY); nasdaqSnapshot(p);
+    const now = this.now();
+    out.actual = { universe_version: `${p.universe.listings} listings as of ${p.universe.as_of}`, as_of: p.as_of, generated_at: p.generated_at ?? null, payload_sha256: q.evidence.at(-1).retrieved_sha256 };
+    out.producer_times = { observation: null, acquisition_start: p.as_of, acquisition_end: null, publication: null };
+    out.freshness = {...age(p.as_of, now, NASDAQ_STALE_SECONDS), basis: 'collector receipt; hourly cadence'};
+    out.index = p.index;
+    const wanted = a.symbols ? new Set(a.symbols) : null;
+    const filtered = p.stocks.filter(r => !wanted || wanted.has(r.symbol));
+    if (sort !== 'strip') {
+      const sign = sort === 'percent_desc' ? -1 : 1;
+      filtered.sort((x, y) => (x.percent_change === null) - (y.percent_change === null) || sign * ((x.percent_change ?? 0) - (y.percent_change ?? 0)) || x.symbol.localeCompare(y.symbol));
+    }
+    const paged = slice(filtered, limit, offset); out.pagination = { ...paged.pagination, sort, ranked_over: sort === 'strip' ? null : 'all matching rows; rows without a percent change sort last' };
+    out.rows = paged.rows.map(row => ({ ...row, detail_reference: this.reference({ dataset: 'nasdaq_snapshot', row, actual: out.actual, evidence: [...q.evidence] }) }));
+    const available = p.stocks.filter(r => r.status === 'available').length;
+    out.coverage = { listings: p.universe.listings, available, source_unavailable: p.stocks.length - available,
+      with_news: p.stocks.filter(r => r.news.length).length, matched_rows: filtered.length,
+      advancers: p.index.breadth?.advancers ?? null, decliners: p.index.breadth?.decliners ?? null,
+      unchanged: p.index.breadth?.unchanged ?? null, index_status: p.index.status };
+    out.unmatched_symbols = wanted ? [...wanted].filter(s => !p.stocks.some(r => r.symbol === s)).map(s => ({ symbol: s, status: 'not_in_nasdaq_100' })) : [];
+    if (out.unmatched_symbols.length) out.warnings.push(`Symbols outside the NASDAQ-100 universe: ${out.unmatched_symbols.map(s => s.symbol).join(', ')}.`);
+    if (p.index.status !== 'available') out.warnings.push('NDX index block is source-unavailable; stock rows still stand on their own.');
+    out.status = p.stocks.length - available || p.index.status !== 'available' ? 'partial' : filtered.length ? 'available' : 'empty';
     return out;
   }
   async overview(a, q, out) {
@@ -1075,6 +1136,12 @@ class Consumer {
       if(out.status!=='partial')out.status='in_progress';
       out.warnings.push('Calculation cells and ranks are producer values from the exact immutable cutoff; no after-cutoff observations are used.');
       return out;
+    }
+    if(v.dataset==='nasdaq_snapshot') {
+      out.producer_times={observation:null,acquisition_start:v.actual.as_of??null,acquisition_end:null,publication:null};
+      out.freshness={...age(v.actual.as_of,this.now(),NASDAQ_STALE_SECONDS),basis:'collector receipt; hourly cadence',note:'freshness as of the originating query; repeat nasdaq_snapshot for current age'};
+      out.coverage={scope:'one retained row from the exact queried snapshot'};
+      out.warnings.push('Detail uses the retained queried row; a newer snapshot publication does not change it.');return out;
     }
     // OA-203 session files are mutable rebuild products. Detect change instead
     // of attaching a new quote path to an old ranking/reference.

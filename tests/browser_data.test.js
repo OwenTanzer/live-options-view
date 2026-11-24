@@ -9,6 +9,7 @@ const KEYS = [
   'intraday/health.json', 'derived/OIranges.csv',
   'crypto/latest.json',
   'crypto/predictions/BTC.json',
+  'nasdaq/latest.json',
   'macro/eia_steo.json',
   'manifest.json', 'raw/qqq_chain_20261027.csv',
   'raw/opex/qqq_chain_20240229.csv', 'prices/qqq_intraday_20261027.csv',

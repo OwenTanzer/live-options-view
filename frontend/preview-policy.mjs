@@ -26,6 +26,7 @@ const PUBLIC_KEYS = new Set([
   'intraday/prices.json', 'intraday/health.json', 'derived/OIranges.csv',
   'crypto/latest.json',
   'crypto/predictions/BTC.json',
+  'nasdaq/latest.json',
   'macro/eia_steo.json', 'manifest.json',
   'squeeze-scanner/v1/scheduled/latest.json',
   'squeeze-scanner/v1/scheduled/latest-attempt.json',
