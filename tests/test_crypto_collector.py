@@ -99,6 +99,176 @@ class TestUniverse(unittest.TestCase):
         self.assertEqual(len(set(ranks)), 39)
 
 
+class TestDynamicUniverse(unittest.TestCase):
+    """The live top-50 resolver: tokenized exclusion, probing, fallback."""
+
+    def _top_rows(self):
+        # Live top 50 after tokenized exclusion, as verified live
+        # 2026-11-24: the embedded 39 minus ASTER/DOT/ATOM, plus
+        # USDD/BFUSD/HTX and eleven further entrants; two tokenized
+        # rows sit inside the raw top 100 and must be excluded.
+        kept = [c for c in coins_mod.COINS
+                if c.symbol not in ("ASTER", "DOT", "ATOM")]
+        rows = []
+        rank = 1
+        for coin in kept:
+            rows.append({"id": coin.coingecko_id,
+                         "symbol": coin.symbol.lower(),
+                         "name": coin.name, "market_cap_rank": rank})
+            rank += 1
+        entrants = [
+            ("usdd", "USDD", "USDD", 51),
+            ("bfusd", "BFUSD", "BFUSD", 55),
+            ("htx-dao", "HTX", "HTX DAO", 57),
+            ("mantle", "MNT", "Mantle", 58),
+            ("venice-token", "VVV", "Venice Token", 60),
+            ("just", "JST", "JUST", 61),
+            ("internet-computer", "ICP", "Internet Computer", 62),
+            ("filecoin", "FIL", "Filecoin", 63),
+            ("aptos", "APT", "Aptos", 64),
+            ("arbitrum", "ARB", "Arbitrum", 65),
+            ("optimism", "OP", "Optimism", 66),
+            ("immutable", "IMX", "Immutable", 67),
+            ("stacks", "STX", "Stacks", 68),
+            ("the-graph", "GRT", "The Graph", 69),
+        ]
+        for coin_id, symbol, name, rank in entrants:
+            rows.append({"id": coin_id, "symbol": symbol.lower(),
+                         "name": name, "market_cap_rank": rank})
+        rows.append({"id": "figure-heloc", "symbol": "figr_heloc",
+                     "name": "Figure Heloc", "market_cap_rank": 9})
+        rows.append({"id": "tether-gold", "symbol": "xaut",
+                     "name": "Tether Gold", "market_cap_rank": 28})
+        rows.sort(key=lambda r: r["market_cap_rank"])
+        return rows
+
+    def test_parse_top_markets_excludes_tokenized_and_takes_first_50(self):
+        from market_data.crypto_collector.coins import parse_top_markets
+        entries = parse_top_markets(self._top_rows())
+        self.assertEqual(len(entries), 50)
+        self.assertNotIn("figure-heloc", [e["coingecko_id"] for e in entries])
+        self.assertNotIn("tether-gold", [e["coingecko_id"] for e in entries])
+        self.assertEqual([e["rank"] for e in entries],
+                         sorted(e["rank"] for e in entries))
+        self.assertIn("usdd", [e["coingecko_id"] for e in entries])
+
+    def test_parse_top_markets_rejects_partial_and_garbled(self):
+        from market_data.crypto_collector.coins import parse_top_markets
+        with self.assertRaises(ValueError):
+            parse_top_markets(self._top_rows()[:10])
+        with self.assertRaises(ValueError):
+            parse_top_markets({"not": "a list"})
+        with self.assertRaises(ValueError):
+            parse_top_markets([])
+
+    def _fake_session(self, rows):
+        import requests
+
+        class FakeResponse:
+            def __init__(self, payload=None, status=200):
+                self._payload = payload
+                self.status_code = status
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if self.status_code != 200:
+                    response = requests.Response()
+                    response.status_code = self.status_code
+                    raise requests.HTTPError(
+                        f"HTTP {self.status_code}", response=response)
+
+        class FakeSession:
+            def get(self, url, params=None, timeout=None):
+                if "/coins/markets" in url:
+                    return FakeResponse(rows)
+                if "/products/MNT-USD/ticker" in url:
+                    return FakeResponse({"price": "1.00",
+                                         "time": "2026-11-23T21:55:00Z"})
+                if "/products/" in url and "/ticker" in url:
+                    return FakeResponse(None, status=404)
+                raise AssertionError(f"unexpected URL {url}")
+
+        return FakeSession()
+
+    def test_resolve_live_top_50_with_probed_sources(self):
+        from market_data.crypto_collector.collector import resolve_universe
+        resolution = resolve_universe(self._fake_session(self._top_rows()),
+                                      now=NOW)
+        self.assertEqual(resolution["source"], "live")
+        self.assertEqual(len(resolution["coins"]), 50)
+        by_symbol = {c.symbol: c for c in resolution["coins"]}
+        # Entrants with no Coinbase pair are CoinGecko-sourced;
+        # the one entrant whose pair answers is Coinbase-sourced.
+        for symbol in ("USDD", "BFUSD", "HTX"):
+            self.assertEqual(by_symbol[symbol].source, "coingecko", symbol)
+        self.assertEqual(by_symbol["MNT"].source, "coinbase")
+        self.assertEqual(by_symbol["MNT"].coinbase_product, "MNT-USD")
+        # Embedded coins keep their verified labels and live ranks.
+        self.assertEqual(by_symbol["USDT"].source, "coingecko")
+        self.assertEqual(by_symbol["BTC"].rank, 1)
+        added = [r["symbol"] for r in resolution["added"]]
+        removed = [r["symbol"] for r in resolution["removed"]]
+        self.assertIn("USDD", added)
+        self.assertIn("BFUSD", added)
+        self.assertIn("HTX", added)
+        self.assertEqual(sorted(removed), ["ASTER", "ATOM", "DOT"])
+        usdd = next(r for r in resolution["added"] if r["symbol"] == "USDD")
+        self.assertEqual(usdd["rank"], 51)
+        self.assertEqual(usdd["source"], "coingecko")
+        self.assertEqual(resolution["as_of"], "2026-11-23")
+
+    def test_resolve_falls_back_on_failed_and_partial_list(self):
+        import requests
+        from market_data.crypto_collector.collector import resolve_universe
+
+        class FailingSession:
+            def get(self, url, params=None, timeout=None):
+                raise requests.RequestException("boom")
+
+        for session, rows in ((FailingSession(), None),
+                              (self._fake_session(self._top_rows()[:10]), None)):
+            resolution = resolve_universe(session, now=NOW)
+            self.assertEqual(resolution["source"], "embedded_fallback")
+            self.assertEqual(resolution["coins"], coins_mod.COINS)
+            self.assertEqual(resolution["added"], [])
+            self.assertEqual(resolution["removed"], [])
+            self.assertIsNotNone(resolution["error"])
+
+    def test_snapshot_from_live_universe_has_50_rows_and_changes(self):
+        from market_data.crypto_collector.collector import (
+            build_snapshot, resolve_universe)
+        resolution = resolve_universe(self._fake_session(self._top_rows()),
+                                      now=NOW)
+        coinbase, cg = {}, {}
+        for coin in resolution["coins"]:
+            cg[coin.coingecko_id] = _cg_row(coin)
+            if coin.source == "coinbase":
+                coinbase[coin.symbol] = _coinbase_entry()
+        snap = build_snapshot(
+            coinbase=coinbase, coingecko_markets=cg,
+            coingecko_global={"total_market_cap": {"usd": 2_130_000_000_000.0},
+                              "market_cap_percentage": {"btc": 58.0}},
+            fear_greed={"value": 11, "classification": "Extreme Fear",
+                        "as_of": "2026-11-23T21:00:00Z", "status": "ok",
+                        "source": "alternative.me"},
+            now=NOW, universe=resolution)
+        self.assertEqual(len(snap["coins"]), 50)
+        self.assertEqual(snap["counts"]["coins"], 50)
+        self.assertEqual(snap["universe"]["source"], "live")
+        self.assertEqual(snap["universe"]["coins"], 50)
+        self.assertEqual(
+            [r["symbol"] for r in snap["universe"]["added"]][:3],
+            ["USDD", "BFUSD", "HTX"])
+        self.assertEqual(
+            sorted(r["symbol"] for r in snap["universe"]["removed"]),
+            ["ASTER", "ATOM", "DOT"])
+        sidecar = build_provenance(snap, publication_status="published")
+        self.assertEqual(sidecar["universe"]["source"], "live")
+        self.assertEqual(len(sidecar["universe"]["added"]), 14)
+
+
 class TestSnapshotBuild(unittest.TestCase):
     def test_source_labelling_per_coin(self):
         snap = build_snapshot(**_fixture_inputs(), now=NOW)

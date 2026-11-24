@@ -45,6 +45,7 @@ def build_provenance(snapshot, *, publication_status, archive_uploaded_at=None,
         },
         "session_model": snapshot.get("session_model"),
         "cadence": snapshot.get("cadence"),
+        "universe": snapshot.get("universe"),
         "coins": coins,
         "market": {
             "fear_greed": (snapshot.get("market") or {}).get("fear_greed"),

@@ -26,6 +26,17 @@ equity session clock: a row is ``fresh`` while its provider
 observation is under ``STALE_AFTER_SECONDS`` old, ``stale`` after
 that, and ``unavailable`` when its source could not be read at all.
 
+Membership is dynamic, mirroring the Coinbase Price Tracker: the
+universe is the live top 50 by market cap (see
+:func:`resolve_universe`), not the embedded 39-coin list — the
+embedded list is the fallback and the diff baseline. A failed,
+empty or partial CoinGecko top-markets fetch falls back to the
+embedded 39 and records that fallback in the snapshot's
+``universe`` block; a bad fetch never shrinks or empties the
+snapshot. Membership changes (added/removed, with symbol, rank,
+source and date) are recorded in the same block, so the panel can
+show them.
+
 A missing source is never papered over: a Coinbase coin whose
 product is absent (404) or whose ticker fails publishes a row with
 ``price: null``, ``status: "source_unavailable"`` and a reason -- it
@@ -41,7 +52,8 @@ from datetime import datetime, timezone
 
 import requests
 
-from .coins import COINGECKO_COINS, COINBASE_COINS, COINS
+from .coins import (COINGECKO_COINS, COINBASE_COINS, COINS,
+                    coin_from_market_row, diff_universe, parse_top_markets)
 from .patterns import dedupe_patterns, detect_patterns
 
 SCHEMA_VERSION = "crypto_snapshot.v1"
@@ -118,6 +130,89 @@ def fetch_coinbase(session, coins=COINBASE_COINS):
                 entry[kind] = {"error": str(exc)}
         out[coin.symbol] = entry
     return out
+
+
+def fetch_coingecko_top_markets(session):
+    """Fetch the CoinGecko top-100 markets list (no id filter).
+
+    Returns the raw row list, ordered by market cap. Raises on a
+    transport/HTTP error or a non-list payload; the caller falls
+    back to the embedded universe rather than publishing a bad one.
+    This is the same ``/coins/markets`` endpoint as
+    :func:`fetch_coingecko_markets`, without the ``ids`` filter, so
+    the universe — not just the already-known coins — is re-read.
+    """
+    rows = _get(session, COINGECKO_BASE + "/coins/markets", params={
+        "vs_currency": "usd",
+        "order": "market_cap_desc",
+        "per_page": 100,
+        "page": 1,
+        "price_change_percentage": "1h,24h,7d",
+    })
+    if not isinstance(rows, list):
+        raise ValueError("unexpected CoinGecko top-markets payload")
+    return rows
+
+
+def probe_coinbase(session, symbol):
+    """Does Coinbase Exchange list a USD pair for ``symbol``?
+
+    One ticker read: HTTP 200 means the pair answers. A 404/400
+    means no such product; any other transport failure is treated
+    the same way — the coin is priced from CoinGecko instead, which
+    still publishes a price rather than dropping the coin. Only
+    entrants are probed (see :func:`resolve_universe`): embedded
+    coins keep their verified source label even if a probe would
+    now answer differently (USDT keeps its CoinGecko label, as the
+    snapshot contract requires).
+    """
+    try:
+        _get(session, COINBASE_BASE + f"/products/{symbol}-USD/ticker")
+    except requests.RequestException:
+        return False
+    return True
+
+
+def resolve_universe(session, now=None):
+    """Resolve the universe for this run: live top 50 vs embedded fallback.
+
+    Returns a dict with ``coins`` (the :class:`coins.Coin` tuple to
+    publish, in live rank order), ``added`` / ``removed`` (the diff
+    against the embedded list, each a list of change records with
+    symbol, name, CoinGecko id, rank and source), ``source``
+    (``"live"`` or ``"embedded_fallback"``) and ``error`` (the fetch
+    failure, or None). A failed, empty or partial top-markets fetch
+    returns the embedded 39 with no recorded changes — a bad fetch
+    never shrinks or empties the snapshot, and the fallback is
+    visible in the snapshot's ``universe`` block.
+    """
+    now = now or utcnow()
+    as_of = now.date().isoformat()
+    try:
+        entries = parse_top_markets(fetch_coingecko_top_markets(session))
+    except Exception as exc:  # noqa: BLE001 - any list failure falls back
+        return {"coins": COINS, "added": [], "removed": [],
+                "source": "embedded_fallback", "error": str(exc),
+                "as_of": as_of}
+    by_id = {coin.coingecko_id: coin for coin in COINS}
+    live = []
+    for entry in entries:
+        embedded = by_id.get(entry["coingecko_id"])
+        if embedded is not None:
+            # Keep the embedded coin (symbol, name, verified source)
+            # with its live rank.
+            live.append(type(embedded)(
+                embedded.symbol, embedded.name, embedded.coingecko_id,
+                embedded.source, embedded.coinbase_product, entry["rank"]))
+        else:
+            source = ("coinbase" if probe_coinbase(session, entry["symbol"])
+                      else "coingecko")
+            live.append(coin_from_market_row(entry, source))
+    live = tuple(live)
+    changes = diff_universe(COINS, live)
+    return {"coins": live, "added": changes["added"],
+            "removed": changes["removed"], "source": "live",
+            "error": None, "as_of": as_of}
 
 
 def fetch_coingecko_markets(session, coins=COINS):
@@ -318,19 +413,26 @@ def _unavailable_row(coin, now, *, reason):
 
 
 def build_snapshot(*, coinbase, coingecko_markets, coingecko_global,
-                   fear_greed, previous=None, now=None):
+                   fear_greed, previous=None, now=None, universe=None):
     """Assemble ``crypto_snapshot.v1`` from fetched provider payloads.
 
     ``coinbase``: ``fetch_coinbase`` output. ``coingecko_markets``:
     ``fetch_coingecko_markets`` output. ``coingecko_global``:
     ``fetch_coingecko_global`` output. ``fear_greed``:
     ``fetch_fear_greed`` output. ``previous``: the previous snapshot
-    dict, or None. Pure apart from the ``now`` default.
+    dict, or None. ``universe``: a :func:`resolve_universe` result,
+    or None for the embedded fallback (the shape existing callers
+    and tests use). Pure apart from the ``now`` default.
     """
     now = now or utcnow()
+    if universe is None:
+        universe = {"coins": COINS, "added": [], "removed": [],
+                    "source": "embedded_fallback", "error": None,
+                    "as_of": now.date().isoformat()}
+    coins = universe["coins"]
     cg_error = coingecko_markets.get("_error") if isinstance(coingecko_markets, dict) else None
     rows = []
-    for coin in COINS:
+    for coin in coins:
         if coin.source == "coinbase":
             rows.append(_coinbase_row(
                 coin, coinbase.get(coin.symbol, {}),
@@ -368,6 +470,15 @@ def build_snapshot(*, coinbase, coingecko_markets, coingecko_global,
         "session_model": "continuous_24_7",
         "cadence": "hourly",
         "coins": rows,
+        "universe": {
+            "source": universe["source"],
+            "as_of": universe["as_of"],
+            "coins": len(rows),
+            "membership_source": universe["source"],
+            "added": universe["added"],
+            "removed": universe["removed"],
+            "error": universe["error"],
+        },
         "market": market,
         "patterns": [],
         "sources": {
@@ -389,16 +500,25 @@ def build_snapshot(*, coinbase, coingecko_markets, coingecko_global,
 
 
 def collect(*, previous=None, now=None, session=None):
-    """One hourly collection: fetch all providers, build the snapshot."""
+    """One hourly collection: fetch all providers, build the snapshot.
+
+    The universe is resolved first (live top 50, or the embedded
+    fallback on a bad list fetch); the price/metadata fetches then
+    run over exactly the resolved coins, so an entrant is priced in
+    the same run it enters.
+    """
     session = session or requests.Session()
-    coinbase = fetch_coinbase(session)
-    coingecko_markets = fetch_coingecko_markets(session)
+    resolution = resolve_universe(session, now=now or utcnow())
+    coins = resolution["coins"]
+    coinbase = fetch_coinbase(session, coins=tuple(
+        c for c in coins if c.source == "coinbase"))
+    coingecko_markets = fetch_coingecko_markets(session, coins=coins)
     coingecko_global = fetch_coingecko_global(session)
     fear_greed = fetch_fear_greed(session)
     return build_snapshot(
         coinbase=coinbase, coingecko_markets=coingecko_markets,
         coingecko_global=coingecko_global, fear_greed=fear_greed,
-        previous=previous, now=now or utcnow())
+        previous=previous, now=now or utcnow(), universe=resolution)
 
 
 def snapshot_to_json(snapshot) -> str:

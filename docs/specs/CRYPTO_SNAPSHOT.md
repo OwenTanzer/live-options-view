@@ -13,8 +13,8 @@ R2 bucket `qqq-options-chain-data`:
 
 | Artifact | Writer | Readers and meaning |
 |---|---|---|
-| `crypto/latest.json` | Crypto collector, hourly | Latest 39-coin snapshot; Crypto panel and MCP. A missing file means no publication yet, never an equity snapshot. |
-| `crypto/latest.provenance.json` | Crypto collector, after `latest.json` | `snapshot_provenance.v1` sidecar: `constructed_at`, `archive_uploaded_at` (null until a dated archive copy exists), `latest_published_at`, `publication.status`, per-coin `price_basis` / `provider_observed_at` / `freshness`. A missing sidecar means unknown provenance. |
+| `crypto/latest.json` | Crypto collector, hourly | Latest 50-coin snapshot; Crypto panel and MCP. A missing file means no publication yet, never an equity snapshot. |
+| `crypto/latest.provenance.json` | Crypto collector, after `latest.json` | `snapshot_provenance.v1` sidecar: `constructed_at`, `archive_uploaded_at` (null until a dated archive copy exists), `latest_published_at`, `publication.status`, per-coin `price_basis` / `provider_observed_at` / `freshness`, and the `universe` block (below). A missing sidecar means unknown provenance. |
 
 No dated archive tree is defined in this version; `archive_uploaded_at`
 stays null until one is. Do not invent archive keys from the equity
@@ -28,13 +28,16 @@ stays null until one is. Do not invent archive keys from the equity
 - `session_model: "continuous_24_7"`, `cadence: "hourly"`. Crypto
   has no equity session close; no field in this artifact means a
   session open/close.
-- `coins`: 39 rows, sorted by live CoinGecko market-cap rank. The
-  fixed universe is
-  [market_data/crypto_collector/coins.py](../../market_data/crypto_collector/coins.py):
-  30 `coinbase` rows and 9 `coingecko` rows (USDT, USDC, TRX, XMR,
-  LEO, WBT, DAI, CC, GRAM) — the 39 coins of the live Coinbase Price
-  Tracker, not the top 39 by market cap (the tracker's Coinbase set
-  reaches down to rank 85, ATOM).
+- `coins`: 50 rows, sorted by live CoinGecko market-cap rank. The
+  universe is dynamic — see "Universe" below — and is the live top
+  50 by market cap, not a fixed list.
+- `universe`: `{source, as_of, coins, membership_source, added,
+  removed, error}` — `source` is `"live"` or
+  `"embedded_fallback"`; `added`/`removed` are membership-change
+  records (`symbol`, `name`, `coingecko_id`, `rank`, `source`) with
+  the resolution date in `as_of`, so the panel can show what
+  entered/left the top 50. On a fallback run both lists are empty
+  and `error` names the failed list fetch.
 - Per-coin fields: `rank`, `symbol`, `name`, `source`, `price_basis`,
   `metadata_source`, `currency` (`USD`), `price`, `high_24h`,
   `low_24h`, `change_24h_pct`, `change_1h_pct`, `change_7d_pct`,
@@ -51,6 +54,38 @@ stays null until one is. Do not invent archive keys from the equity
   deduped within 90 minutes. Same detection list as the tracker;
   see the collector README.
 - `counts`: `coins`, `available`, `partial`, `source_unavailable`.
+
+## Universe
+
+The universe is the live top 50 by market cap, resolved on every
+run by `collector.resolve_universe` and mirroring the Coinbase
+Price Tracker (which is itself dynamic top 50 since 2026-11-23):
+
+- Re-fetch the CoinGecko markets list (top 100, ordered by market
+  cap) on every run; exclude tokenized assets under the tracker's
+  standing rule — Figure Heloc, Tether Gold, tokenized funds/yield
+  coins (the seven CoinGecko ids in
+  `coins.TOKENIZED_EXCLUDED_IDS`); take the first 50.
+- Probe each entrant's source live: a Coinbase Exchange USD pair
+  that answers means `coinbase`, otherwise `coingecko`. Coins
+  already in the embedded list keep their verified source label
+  (USDT stays `coingecko` even though a USDT-USD pair exists).
+- The embedded 39-coin list in
+  [market_data/crypto_collector/coins.py](../../market_data/crypto_collector/coins.py)
+  (30 `coinbase`, 9 `coingecko`: USDT, USDC, TRX, XMR, LEO, WBT,
+  DAI, CC, GRAM — the tracker's 39 as verified 2026-11-23 22:06
+  UTC) is the fallback and the diff baseline: when the CoinGecko
+  list is missing or partial (fewer than 50 usable coins after
+  exclusion), the run publishes the embedded 39 and records
+  `source: "embedded_fallback"` with the error — a bad fetch never
+  shrinks or empties the snapshot.
+- Membership changes are recorded in the snapshot's `universe`
+  block (and the provenance sidecar) with symbol, rank, source
+  and date. Ground truth from the tracker's first live
+  reconciliation (2026-11-24): USDD (rank 51), BFUSD (55) and HTX
+  (57) entered and ASTER, DOT, ATOM left; the live resolver
+  reproduced exactly that diff against the embedded 39 on a live
+  read the same day.
 
 ## Isolation: no substitution
 
@@ -127,9 +162,10 @@ that serves the files through One Clock's real `selectAsOf` /
   more often?
 - Who owns the CoinGecko source (rate limits, attribution) and the
   Fear & Greed feed?
-- The 39-coin universe matches the live Coinbase Price Tracker
-  (30 Coinbase + 9 CoinGecko, verified 2026-11-23 22:06 UTC); all
-  30 `coinbase`-labelled coins have a live Coinbase Exchange USD
-  pair.
+- The 50-coin universe is dynamic (live top 50 by market cap,
+  tokenized assets excluded; see "Universe" above). The tracker's
+  first live reconciliation (2026-11-24) had USDD, BFUSD and HTX
+  entering and ASTER, DOT, ATOM leaving; all entrants probed
+  CoinGecko-sourced (no Coinbase USD pair answers for them).
 - Should a dated archive tree (`crypto/YYYYMMDD/…`) be added, and
   who owns its retention?

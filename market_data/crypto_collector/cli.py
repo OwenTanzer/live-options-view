@@ -44,10 +44,15 @@ def _load_previous(path):
 def run_once(*, out, publish, previous):
     snapshot = collect(previous=previous)
     counts = snapshot["counts"]
+    universe = snapshot.get("universe") or {}
     print(f"crypto snapshot {snapshot['constructed_at']}: "
           f"{counts['available']} ok, {counts['partial']} partial, "
           f"{counts['source_unavailable']} source-unavailable, "
-          f"{len(snapshot['patterns'])} patterns", flush=True)
+          f"{len(snapshot['patterns'])} patterns; universe "
+          f"{universe.get('membership_source', universe.get('source'))} "
+          f"({universe.get('coins')} coins, "
+          f"+{len(universe.get('added') or [])} "
+          f"-{len(universe.get('removed') or [])})", flush=True)
     for row in snapshot["coins"]:
         if row["status"] != "ok":
             print(f"  {row['symbol']}: {row['status']} -- "
