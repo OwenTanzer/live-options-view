@@ -135,3 +135,22 @@ test('earlier provider timestamp cannot backdate receipt of last trade',()=>{
   assert.equal(result.quote.t,later);assert.equal(result.quote.oldest,boundary-700);
   assert.equal(result.frames[0].frame.spot,650.5);
 });
+
+test('direct published BBO cannot qualify parity when its ask arrived 900 microseconds after the boundary',()=>{
+  const {parseQqqQuote}=require('./forward-quote.cjs');
+  const t=open+60000,receivedAt=t+1000;
+  function apply(askIso) {
+    const f=new ForwardFeed(),events=[event(open,1)];poll(f,open,events);events.push(event(t,2));
+    const row={symbol:'QQQ',instrument_class:'equity',kind:'ticker',source:'dxlink',bid:650.8,ask:651,
+      bid_ts:new Date(t-2).toISOString(),ask_ts:askIso};
+    const spotQuote=parseQqqQuote({health:{state:'live'},quotes:[row]},receivedAt);
+    const [decision]=f.observe({open,close,flow:projection(events),spotQuote,receivedAt}).frames;
+    return {decision,spotQuote};
+  }
+  const post=apply(new Date(t).toISOString().replace('.000Z','.000900Z'));
+  assert.equal(post.spotQuote.askAt,t);assert.equal(post.spotQuote.askThrough,t+1);
+  assert.equal(post.decision.frame.spot,650.5);assert.ok(!post.decision.eligibleSlots.includes(11));
+  const good=apply(new Date(t-1).toISOString().replace('.999Z','.999900Z'));
+  assert.equal(good.spotQuote.askThrough,t);assert.equal(good.decision.frame.snapshotTime,t);
+  assert.equal(good.decision.frame.spot,650.9);assert.ok(good.decision.eligibleSlots.includes(11));
+});

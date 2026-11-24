@@ -1,4 +1,5 @@
 'use strict';
+const {timeBounds}=require('./forward-quote.cjs');
 const {parseSymbol} = require('../../site/shared/order-flow-model.js');
 const {ofStrike,OF_SNAPSHOT_MAX_AGE_MS} = require('../../site/shared/order-flow-exposure.js');
 
@@ -68,10 +69,7 @@ function sameTotals(previous,current,added) {
 // Preserve sub-millisecond boundaries from the collector's ISO timestamps.
 // Date.parse alone truncates a side at 09:30:00.000500 back to the open.
 function stamp(value) {
-  if(typeof value!=='string') return NaN;
-  const ms=Date.parse(value);
-  const fraction=value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i)?.[1]??'';
-  return ms + Number('0.'+(fraction.slice(3)||'0'));
+  return timeBounds(value)?.upper??NaN;
 }
 
 function spotObservation(chain,ct,receivedAt) {
@@ -92,7 +90,7 @@ function spotObservation(chain,ct,receivedAt) {
     const raw=legs[side+'_observed_at'];
     const source=raw==null?arrival:stamp(raw);
     if(!Number.isFinite(source) || source>arrival) return null;
-    ages.push(source);
+    ages.push(timeBounds(raw??legs[side+'_ts']).lower);
   }
   if(Math.min(...receipts)!==collector) return null;
   const provider=p.provider_observed_at==null?null:stamp(p.provider_observed_at);
@@ -100,16 +98,17 @@ function spotObservation(chain,ct,receivedAt) {
   // The later receipt establishes when the whole value existed. The older
   // observation establishes freshness. Each governs a different decision.
   return {symbol:'QQQ',spot:m.spot,t:Math.ceil(Math.max(...receipts)),
-    oldest:Math.floor(Math.min(...ages,provider??Infinity)),receivedAt};
+    oldest:Math.floor(Math.min(...ages,timeBounds(p.provider_observed_at)?.lower??Infinity)),receivedAt};
 }
 
 function usableBbo(q,now) {
-  if(q?.symbol!=='QQQ' || !positive(q.bid) || !positive(q.ask) || q.ask<q.bid ||
-     ![q.bidAt,q.askAt,q.receivedAt].every(Number.isSafeInteger) ||
-     Math.max(q.bidAt,q.askAt)>q.receivedAt || q.receivedAt>now || now-Math.min(q.bidAt,q.askAt)>MAX_DELAY) return null;
-  // Both sides must have existed for this midpoint to have been observed.
-  return {symbol:'QQQ',spot:(q.bid+q.ask)/2,t:Math.max(q.bidAt,q.askAt),receivedAt:q.receivedAt,
-    oldest:Math.min(q.bidAt,q.askAt)};
+  if(q?.symbol!=='QQQ' || !positive(q.bid) || !positive(q.ask) || q.ask<q.bid) return null;
+  const bidThrough=q.bidThrough??q.bidAt,askThrough=q.askThrough??q.askAt;
+  const latest=Math.max(bidThrough,askThrough),oldest=Math.min(q.bidAt,q.askAt);
+  if(![q.bidAt,q.askAt,bidThrough,askThrough,q.receivedAt].every(Number.isSafeInteger) ||
+     bidThrough<q.bidAt || bidThrough>q.bidAt+1 || askThrough<q.askAt || askThrough>q.askAt+1 ||
+     latest>q.receivedAt || q.receivedAt>now || now-oldest>MAX_DELAY) return null;
+  return {symbol:'QQQ',spot:(q.bid+q.ask)/2,t:latest,receivedAt:q.receivedAt,oldest};
 }
 
 class ForwardFeed {

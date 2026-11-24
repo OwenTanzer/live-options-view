@@ -43,3 +43,16 @@ test('one shared request uses local receipt time after reading the body; failure
   assert.equal(result.receivedAt,now);
   await assert.rejects(fetchQqqQuote({fetchImpl:async()=>({ok:false,status:503})}),/503/);
 });
+
+test('two side bounds preserve sub-ms availability and age without loss at epoch precision',()=>{
+  const raw=(ms,fraction)=>new Date(ms).toISOString().replace(/Z$/,fraction+'Z');
+  for(const fraction of ['9','000001']) {
+    assert.equal(parseQqqQuote(payload({...qqq,ask_ts:raw(now,fraction)}),now),null);
+    const q=parseQqqQuote(payload({...qqq,ask_ts:raw(now-1,fraction)}),now);
+    assert.equal(q.askAt,now-1);assert.equal(q.askThrough,now);
+  }
+  const exact=parseQqqQuote(payload({...qqq,ask_ts:raw(now,'000000')}),now);
+  assert.equal(exact.askAt,now);assert.equal(exact.askThrough,now);
+  assert.equal(parseQqqQuote(payload({...qqq,bid_ts:raw(now-15001,'999')}),now),null);
+  assert.ok(parseQqqQuote(payload({...qqq,bid_ts:raw(now-15000,'001')}),now));
+});
