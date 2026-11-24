@@ -71,3 +71,29 @@ assert.ok(Math.abs(flowResponse(laterDown,0,1000,minute,alkOpts.cutoff).response
 assert.deepEqual(alkalusFlow(laterGold,0,1000,minute),alkalusFlow(laterDown,0,1000,minute));
 assert.equal(alkalusFlow(laterGold,0,1000,minute).kind,'copper');
 console.log('Alkalus flow classification (golden/copper/lead, unclassified, owned-interval-only) passed');
+
+// Decimal quotes on the exact boundaries, both directions, and genuinely
+// below/above them. These prices reproduced a five-spread rounding failure.
+const exact=(move,pressure=10)=>({bins:[{C:[Math.max(pressure,0),Math.max(-pressure,0),0],P:[0,0,0],
+  firstMid:669.08,mid:669.08+move,bid:669.08+move-.01,ask:669.08+move+.01}],gaps:[]});
+for(const sign of [-1,1]) for(const [move,kind] of [[.019999,'lead'],[.02,'copper'],[.020001,'copper'],[.099999,'copper'],[.1,'golden'],[.100001,'golden']]) {
+  assert.equal(alkalusFlow(exact(sign*move,sign*10),0,1000,minute).kind,kind,`${sign*move}`);
+}
+for(const key of ['firstMid','mid','bid','ask']) for(const value of [undefined,NaN,Infinity]) {
+  const data=exact(.04); data.bins[0][key]=value;
+  assert.equal(alkalusFlow(data,0,1000,minute),null,`${key} ${value}`);
+}
+for(const spread of [0,-.02]) {
+  const data=exact(.04);data.bins[0].ask=data.bins[0].bid+spread;
+  assert.equal(alkalusFlow(data,0,1000,minute),null);
+}
+for(const [gap,expected] of [[[minute-100,minute],'copper'],[[minute+1000,minute+1100],'copper'],[[minute,minute+1],null],[[minute+999,minute+1001],null]]) {
+  const data=exact(.04);data.gaps=[gap];
+  assert.equal(alkalusFlow(data,0,1000,minute)?.kind??null,expected);
+}
+assert.match(alkalusFlow(exact(-.1),0,1000,minute).reason,/against signed flow/);
+// Make later-bin access throw rather than merely compare two outputs.
+const isolated=exact(.04);
+Object.defineProperty(isolated.bins,1,{get(){throw Error('Later bin read');}});
+assert.equal(alkalusFlow(isolated,0,1000,minute).kind,'copper');
+console.log('Exact boundaries, missing/invalid inputs, gap edges and forbidden later-bin access passed');

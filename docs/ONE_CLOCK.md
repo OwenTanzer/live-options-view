@@ -590,6 +590,10 @@ label is not a trading signal.
 Inputs, all from the owned interval only: the first-to-last observed quote
 midpoint displacement inside the bin, the bin's last observed quote spread
 (ask − bid) as the friction unit, and the bin's signed contract pressure.
+Threshold comparisons allow only floating-point roundoff at the quote price
+scale so exact decimal boundaries retain their intended class. Non-finite
+midpoints are unclassified. Lead includes a visible reason distinguishing
+balanced signed flow, adverse movement and movement below one spread.
 Thresholds, in spread units, with signed pressure agreeing in sign with the
 displacement: golden time at 5 spreads or more, working copper at 1 to under
 5 spreads, lead time below 1 spread — or whenever the signed flow did not

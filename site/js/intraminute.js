@@ -98,8 +98,8 @@ function inspect(second) {
     const cls=alkalusFlow(data,index,width,minute);
     const label=cls===null?null:cls.kind==='golden'?'golden time':cls.kind==='copper'?'working copper':'lead time';
     $('response').textContent='At '+(index*width/1000).toFixed(1)+' s · net '+flow.pressure+' directional contracts · imbalance '+(flow.imbalance===null?'unclassified':flow.imbalance.toFixed(2))+' · Alkalus (preliminary, flow only) · '+(cls===null
-      ?'unclassified — no midpoint, no option flow, or interrupted coverage in this interval.'
-      :label+' · midpoint moved '+(cls.displacement>=0?'+':'')+cls.displacement.toFixed(3)+' ('+cls.displacementSpreads.toFixed(1)+' spreads)');
+      ?'unclassified - missing or invalid midpoint/spread, no signed option flow, or interrupted coverage in this interval.'
+      :label+' · '+cls.reason+' · midpoint moved '+(cls.displacement>=0?'+':'')+cls.displacement.toFixed(3)+' ('+cls.displacementSpreads.toFixed(1)+' spreads)');
     $('next-second').textContent='Next-second observation — not part of this interval’s classification: midpoint change one second later '+(flow.response===null?'unavailable':(flow.response>=0?'+':'')+flow.response.toFixed(3));
   }
   const bucket=data.bins[index];

@@ -95,7 +95,7 @@ export function flowResponse(data, index, width, minute, cutoff) {
 export const ALKALUS={COPPER_SPREADS:1,GOLDEN_SPREADS:5};
 export function alkalusFlow(data, index, width, minute) {
   const bin=data.bins[index];
-  if(!bin || bin.firstMid===undefined || bin.mid===undefined) return null;
+  if(!bin || !Number.isFinite(bin.firstMid) || !Number.isFinite(bin.mid)) return null;
   const [cb,cs]=bin.C, [pb,ps]=bin.P, total=cb+cs+pb+ps;
   if(!total) return null;
   const spread=bin.ask-bin.bid;
@@ -106,7 +106,14 @@ export function alkalusFlow(data, index, width, minute) {
   const displacement=bin.mid-bin.firstMid;
   const displacementSpreads=Math.abs(displacement)/spread;
   const agrees=pressure!==0 && Math.sign(pressure)===Math.sign(displacement);
-  const kind=displacementSpreads>=ALKALUS.GOLDEN_SPREADS && agrees ? 'golden'
-    : displacementSpreads>=ALKALUS.COPPER_SPREADS && agrees ? 'copper' : 'lead';
-  return {kind,displacement,spread,displacementSpreads,pressure,imbalance:total?pressure/total:null};
+  // Bound arithmetic roundoff at the quote's price scale, not a market-sized
+  // tolerance: decimal quotes exactly on a threshold must stay on it.
+  const roundoff=Number.EPSILON*Math.max(1,Math.abs(bin.firstMid),Math.abs(bin.mid),Math.abs(bin.bid),Math.abs(bin.ask))*4;
+  const reaches=n=>Math.abs(displacement)+roundoff*(1+n)>=n*spread;
+  const kind=reaches(ALKALUS.GOLDEN_SPREADS) && agrees ? 'golden'
+    : reaches(ALKALUS.COPPER_SPREADS) && agrees ? 'copper' : 'lead';
+  const reason=pressure===0?'balanced signed flow'
+    : displacement!==0 && !agrees?'midpoint moved against signed flow'
+    : kind==='lead'?'less than one spread in the flow direction':'midpoint moved with signed flow';
+  return {kind,reason,displacement,spread,displacementSpreads,pressure,imbalance:total?pressure/total:null};
 }
