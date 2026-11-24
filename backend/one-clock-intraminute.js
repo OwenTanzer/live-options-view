@@ -15,7 +15,7 @@ export async function intraminute(request, env, url) {
     const target=new URL('/tape',env.QQQ_TAPE_ORIGIN);
     if(target.protocol!=='https:') return error('Invalid tape origin',503);
     target.search=new URLSearchParams({cursor,epoch});
-    const res=await fetch(target,{headers:{Authorization:'Bearer '+env.QQQ_TAPE_KEY},redirect:'error',signal:AbortSignal.timeout(3000)});
+    const res=await fetch(target,{headers:{Authorization:'Bearer '+env.QQQ_TAPE_KEY},redirect:'manual',signal:AbortSignal.timeout(3000)});
     if(!res.ok) return error('Live QQQ tape unavailable',503);
     return new Response(res.body,{headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   } catch { return error('Live QQQ tape unavailable',503); }
