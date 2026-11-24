@@ -86,9 +86,16 @@ function createOpeningOiReader(bounds,fetchImpl=fetch,clock=Date.now,credentials
         nextVerification=clock();
         return reference;
       }
-      const next=credentials.id && credentials.secret
-        ? await readAlpaca(reference,fetchImpl,clock,credentials)
-        : await readPublic(reference,fetchImpl,clock);
+      let next=null, alpacaError=null;
+      if(credentials.id && credentials.secret) {
+        try { next=await readAlpaca(reference,fetchImpl,clock,credentials); }
+        catch(error) { alpacaError=error; }
+      }
+      if(!next || !Object.keys(next.bySymbol).length) {
+        const fallback=await readPublic(reference,fetchImpl,clock);
+        if(fallback) next=fallback;
+        else if(alpacaError) throw alpacaError;
+      }
       if(!next) return dated?.sha256 ? {...reference,dated}:reference;
       // Keep the earliest corroborated receipt while the covered subset is identical.
       // A new subset (including a retraction) needs two new observations.

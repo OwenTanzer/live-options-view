@@ -11,7 +11,8 @@ const reference={open,session:day,settledSession:settled,openingSpot:640.15,vers
 const row={symbol:sym,underlying_symbol:'QQQ',root_symbol:'QQQ',size:'100',expiration_date:day,
   strike_price:'637',type:'call',open_interest_date:settled,open_interest:'4'};
 const alpaca=(rows=[row])=>Buffer.from(JSON.stringify({option_contracts:rows,next_page_token:null}));
-const archive=Buffer.from(['# QQQ', 'Open interest settled 2026-11-23 vs 2026-11-20.',
+const archive=Buffer.from(['# QQQ Options Open Interest by Strike, Nov 23 Settlement', 'Open interest settled 2026-11-23 vs 2026-11-20.',
+  'Computed from the Nov 23 settlement. Next update: the next successful scheduled archive capture.',
   '## Expiration 2026-11-24','','| Strike | Type | Prior OI | Settled OI | Change |','|---:|---|---:|---:|---:|',
   '| 637 | call | 6 | 4 | -2 |',''].join('\n'));
 const line='QQQ\t\t2026\t11\t24\t637\t000\tC P\t4\t0\t180000000';
@@ -101,7 +102,17 @@ test('reader propagates a dated receipt and never re-requests a fully verified p
     if(String(url).includes('marketdata.theocc.com')) return new Response(occ);
     throw Error('unexpected URL');
   };
-  const read=createOpeningOiReader({session:day,open,close},fetchImpl,()=>now,{});
+  for (const authOutcome of ['none','forbidden','empty']) {
+    calls=[];
+    const fetchWithAuth=async(url,options)=>{
+      if(String(url).startsWith('https://paper-api.alpaca.markets/')){
+        calls.push('alpaca');
+        return authOutcome==='forbidden'?new Response('',{status:403}):new Response(alpaca([]));
+      }
+      return fetchImpl(url,options);
+    };
+    const credentials=authOutcome==='none'?{}:{id:'paper-test',secret:'paper-test'};
+    const read=createOpeningOiReader({session:day,open,close},fetchWithAuth,()=>now,credentials);
   const first=await read();
   assert.equal(first.dated,undefined);
   now+=100;
@@ -111,5 +122,40 @@ test('reader propagates a dated receipt and never re-requests a fully verified p
   assert.equal(second.dated.receivedAt,now);
   now+=20*60000;
   assert.equal((await read()).dated.receivedAt,second.dated.receivedAt);
-  assert.equal(calls.length,3);
+  assert.equal(calls.length,authOutcome==='none'?3:4);
+  }
+});
+
+test('cross-source attestation binds archive ticker, date hierarchy, directory columns and exact OCC cells',()=>{
+  const match=(source,dir)=>matchPublicSeries(Buffer.from(source),Buffer.from(dir),reference,open+30);
+  const source=archive.toString(),dir=occ.toString();
+  for(const altered of [
+    source.replace('# QQQ','# SPY'),
+    source.replace('Nov 23 Settlement','Nov 22 Settlement'),
+    source.replace('from the Nov 23 settlement','from the Nov 20 settlement'),
+    source.replace('vs 2026-11-20','vs 2026-11-24'),
+    source.replace('vs 2026-11-20','vs 2026-11-23'),
+    source.replace('vs 2026-11-20','vs 2026-11-22'),
+    source+'Open interest settled 2026-11-23 vs 2026-11-20.\n',
+    source+'## Expiration 2026-11-24\n',
+    source.replace('## Expiration 2026-11-24','## Expiration 2026-11-25')
+  ]) assert.equal(match(altered,dir),null);
+  assert.throws(()=>match(source.replace('| 6 | 4 | -2 |','| 6 | 4 | +2 |'),dir));
+  assert.throws(()=>match(source,dir.replace('C/P\tCall\tPut','C/P\tPut\tCall')));
+  assert.throws(()=>match(source,dir.replace('Integer\tDec','Dec\tInteger')));
+  assert.throws(()=>match(source,dir.replace(line,line.replace('QQQ\t\t','QQQ\t'))));
+  assert.throws(()=>match(source,dir.replace(line,line.replace('\t24\t637','\t31\t637'))));
+  const putOnly=dir.replace(line,'QQQ   \t\t2026\t11\t24\t637\t000\t  P \t\t4\t180000000');
+  const callEmpty=dir.replace(line,'QQQ   \t\t2026\t11\t24\t637\t000\tC P \t\t4\t180000000');
+  assert.deepEqual(match(source,putOnly).bySymbol,{});
+  assert.deepEqual(match(source,callEmpty).bySymbol,{});
+  const putSym=sym.replace('C00','P00');
+  const putSource=Buffer.from(source.replace('| 637 | call','| 637 | put'));
+  const got=matchPublicSeries(putSource,Buffer.from(putOnly),{...reference,bySymbol:{[putSym]:4}},open+30);
+  assert.equal(got.bySymbol[putSym],4);
+  // Unmodified field layout of three rows from the OCC November 24 read, including adjusted products.
+  const observed=['QQQ   \t\t2026\t11\t23\t500\t000\tC P \t0\t8231\t180000000',
+    '4QQQ  \t\t2026\t11\t23\t741\t390\tC   \t7\t0\t180000000',
+    '1QQQ  \t\t2026\t11\t23\t628\t480\t  P \t0\t98\t180000000'];
+  assert.equal(match(source,dir+observed.join('\n')),null);
 });

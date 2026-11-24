@@ -1,5 +1,6 @@
 'use strict';
 const {createHash} = require('node:crypto');
+const {equitySession,observerSessions} = require('../../backend/one-clock-calendar.js');
 
 const endpoint = 'https://paper-api.alpaca.markets/v2/options/contracts';
 const maxBytes = 512 * 1024;
@@ -63,18 +64,33 @@ const archiveUrl = 'https://squawkflow.com/oi-changes/QQQ.md';
 const occUrl = 'https://marketdata.theocc.com/series-search?symbolType=U&symbol=QQQ';
 function archiveRows(raw, reference) {
   const lines=raw.toString().split(/\r?\n/);
-  const dateLine=lines.find(line=>line.startsWith('Open interest settled '));
-  if (!new RegExp('^Open interest settled '+reference.settledSession+' vs \\d{4}-\\d{2}-\\d{2}\\.$').test(dateLine))
-    return null;
-  const start=lines.indexOf('## Expiration '+reference.session);
-  if(start<0 || !lines.slice(start+1,start+5).includes('| Strike | Type | Prior OI | Settled OI | Change |')) return null;
+  const dateLines=lines.filter(line=>line.startsWith('Open interest settled '));
+  const dates=dateLines.length===1 && /^Open interest settled (\d{4}-\d{2}-\d{2}) vs (\d{4}-\d{2}-\d{2})\.$/.exec(dateLines[0]);
+  if(!dates || dates[1]!==reference.settledSession || dates[2]>=dates[1]) return null;
+  const [session,settled]=observerSessions(reference.open);
+  if(reference.session!==session || dates[1]!==settled || !equitySession(dates[2])) return null;
+  const monthDay=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',timeZone:'UTC'})
+    .format(new Date(settled+'T12:00:00Z'));
+  if(lines[0]!=='# QQQ Options Open Interest by Strike, '+monthDay+' Settlement' ||
+     lines.filter(line=>line.startsWith('# ')).length!==1) return null;
+  const computed=lines.filter(line=>line.startsWith('Computed from the '));
+  if(computed.length!==1 || !computed[0].startsWith('Computed from the '+monthDay+' settlement.')) return null;
+  const label='## Expiration '+reference.session;
+  const start=lines.indexOf(label);
+  if(start<0 || start!==lines.lastIndexOf(label)) return null;
+  const table=lines.slice(start+1);
+  while(table[0]==='') table.shift();
+  if(table.shift()!=='| Strike | Type | Prior OI | Settled OI | Change |' ||
+     table.shift()!=='|---:|---|---:|---:|---:|') return null;
   const values=new Map();
-  for(const line of lines.slice(start+1)) {
+  for(const line of table) {
     if(line.startsWith('## ')) break;
-    if(!/^\|\s*[0-9]/.test(line)) continue;
+    if(!line.startsWith('|')) continue;
+    if (!line.endsWith('|')) throw Error('Truncated settled OI archive row');
     const fields=line.split('|').slice(1,-1).map(x=>x.trim());
     if(fields.length!==5 || !/^\d+(\.\d{1,3})?$/.test(fields[0]) ||
-       !['call','put'].includes(fields[1]) || !numericOi(fields[3])) throw Error('Malformed settled OI archive row');
+       !['call','put'].includes(fields[1]) || !numericOi(fields[2]) || !numericOi(fields[3]) ||
+       !/^[+-]?\d+$/.test(fields[4]) || Number(fields[3])-Number(fields[2])!==Number(fields[4])) throw Error('Malformed settled OI archive row');
     const key=Number(fields[0])+'/'+fields[1];
     if(values.has(key)) throw Error('Duplicate settled OI archive row');
     values.set(key,Number(fields[3]));
@@ -87,22 +103,33 @@ function matchPublicSeries(archive, occ, reference, receivedAt) {
   if(!values || !Number.isSafeInteger(receivedAt) || receivedAt<reference.receivedAt) return null;
   const lines=occ.toString().split(/\r?\n/);
   if(lines[0]!=='Series Search Results for QQQ') throw Error('Unexpected OCC series identity');
-  const header=lines.findIndex(line=>line.startsWith('ProductSymbol\t'));
-  if(header<0 || !lines[header].includes('C/P\tCall\tPut\t')) throw Error('Unexpected OCC series columns');
+  const columns='ProductSymbol\tyear\tMonth\tDay\tInteger\tDec\tC/P\tCall\tPut\tPosition Limit';
+  const headers=lines.filter(line=>line.startsWith('ProductSymbol'));
+  if(headers.length!==1 || headers[0].replace(/\t$/,'')!==columns)
+    throw Error('Unexpected OCC series columns');
+  const header=lines.indexOf(headers[0]);
   let firstExpiry=null;
   const products=new Map();
   for(const line of lines.slice(header+1)) {
     if(!line.trim()) continue;
-    const fields=line.split(/\t+/).map(s=>s.trim());
-    if(fields.length<9 || !/^\d{4}$/.test(fields[1]) || !/^\d{2}$/.test(fields[2]) ||
-       !/^\d{2}$/.test(fields[3]) || !/^\d+$/.test(fields[4]) || !/^\d{3}$/.test(fields[5]))
+    // The data layout has one padding column after the product symbol. Empty
+    // OI cells occupy their own column. Merging tabs can turn a put into a call.
+    const fields=line.split('\t').map(s=>s.trim());
+    if(fields.length!==11 || !fields[0] || fields[1]!=='' || !/^\d{4}$/.test(fields[2]) ||
+       !/^\d{2}$/.test(fields[3]) || !/^\d{2}$/.test(fields[4]) ||
+       !/^\d+$/.test(fields[5]) || !/^\d{3}$/.test(fields[6]) ||
+       !['C','P','C P'].includes(fields[7]) || !numericOi(fields[10]) ||
+       [fields[8],fields[9]].some(value=>value!=='' && !numericOi(value)))
       throw Error('Malformed OCC series row');
-    const [root,year,month,day,whole,frac,rights]=fields;
+    const [root,,year,month,day,whole,frac,rights,call,put]=fields;
     const expiry=[year,month,day].join('-');
+    const instant=Date.parse(expiry+'T00:00:00Z');
+    if (!Number.isFinite(instant) || new Date(instant).toISOString().slice(0,10)!==expiry)
+      throw Error('Invalid OCC expiration');
     if(root==='QQQ' && (firstExpiry===null || expiry<firstExpiry)) firstExpiry=expiry;
     if(expiry!==reference.session) continue;
     const strike=Number(whole+'.'+frac);
-    for(const [side,amount] of [['call',fields[7]],['put',fields[8]]]) {
+    for(const [side,amount] of [['call',call],['put',put]]) {
       if(!rights.split(/\s+/).includes(side==='call'?'C':'P')) continue;
       const key=strike+'/'+side;
       if(products.has(key)) products.set(key,null); // any second root makes the archive key ambiguous
