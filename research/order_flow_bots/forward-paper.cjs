@@ -30,6 +30,18 @@ function openPaper(filename) {
     CREATE UNIQUE INDEX IF NOT EXISTS one_order_per_slot ON trades(id)
       WHERE status IN ('watch','pending','open');
   `);
+  transaction(db, () => {
+    // Additive migration supports ledgers created before quote side precision
+    // was retained. Existing trades and their original times remain auditable.
+    for (const [table,columns] of Object.entries({
+      quotes:['bid_through','ask_through'],trades:['entry_quote_t','exit_quote_t']
+    })) {
+      const existing = new Set(db.prepare('PRAGMA table_info('+table+')').all().map(c=>c.name));
+      for (const column of columns) {
+        if (!existing.has(column)) db.exec('ALTER TABLE '+table+' ADD COLUMN '+column+' INTEGER');
+      }
+    }
+  });
   return db;
 }
 
@@ -76,7 +88,8 @@ function restoreFeedState(db, session) {
 function frozenRange(db, t, open, now) {
   if (t - 5 * minute < open) return null;
   const rows = db.prepare(`SELECT t,spot FROM quotes WHERE t BETWEEN ? AND ?
-    AND bid_at<=? AND ask_at<=? AND received_at<=? ORDER BY t`).all(t - 5 * minute,t,t,t,now);
+    AND COALESCE(bid_through,bid_at+1)<=? AND COALESCE(ask_through,ask_at+1)<=?
+    AND received_at<=? ORDER BY t`).all(t - 5 * minute,t,t,t,now);
   if (rows.length < 2 || rows[0].t - (t - 5 * minute) > maxAge ||
       t - rows.at(-1).t > maxAge || rows.some((r, i) => i && r.t - rows[i-1].t > maxAge)) return null;
   return {low: Math.min(...rows.map(r => r.spot)), high: Math.max(...rows.map(r => r.spot))};
@@ -157,21 +170,24 @@ function hasQuoteWork(db) {
   return Boolean(db.prepare("SELECT 1 FROM trades WHERE status IN ('watch','pending','open') LIMIT 1").get());
 }
 
-function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Date.now()) {
+function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt,bidThrough=bidAt,askThrough=askAt}, now = Date.now()) {
   if (symbol !== 'QQQ' || !fresh(t,receivedAt,now) || !Number.isFinite(spot) || spot <= 0)
     return {accepted:false,reason:'invalid or stale QQQ quote'};
   if (![bid,ask].every(Number.isFinite) || bid<=0 || ask<bid ||
-      ![bidAt,askAt].every(at=>Number.isSafeInteger(at) && at <= receivedAt && now-at<=15_000) ||
+      ![[bidAt,bidThrough],[askAt,askThrough]].every(([at,through])=>Number.isSafeInteger(at) &&
+        Number.isSafeInteger(through) && through>=at && through-at<=1 && through<=receivedAt && now-at<=15_000) ||
       t!==Math.min(bidAt,askAt))
     return {accepted:false,reason:'required fresh two-sided QQQ quote unavailable'};
   const fillPrice = side => side>0 ? ask : bid;
+  const completeAt = Math.max(bidThrough,askThrough);
   return transaction(db, () => {
     const inSession = db.prepare('SELECT session,close FROM sessions WHERE open<=? AND close>=?')
-      .get(t,Math.max(bidAt,askAt));
+      .get(t,completeAt);
     if (!inSession) return {accepted:false,reason:'outside registered paper session'};
     const last = db.prepare('SELECT t FROM quotes ORDER BY t DESC LIMIT 1').get();
     if (last && t <= last.t) return {accepted:false,reason:'repeated or late quote'};
-    db.prepare('INSERT INTO quotes VALUES (?,?,?,?,?,?,?)').run(t,receivedAt,spot,bid,ask,bidAt,askAt);
+    db.prepare('INSERT INTO quotes(t,received_at,spot,bid,ask,bid_at,ask_at,bid_through,ask_through) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(t,receivedAt,spot,bid,ask,bidAt,askAt,bidThrough,askThrough);
     expireOrders(db,now);
     const orders = db.prepare("SELECT rowid,* FROM trades WHERE status IN ('watch','pending','open')").all();
     for (const order of orders) {
@@ -186,9 +202,9 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
         if (t < order.due || t <= order.entry_t) continue;
         const price = fillPrice(-side);
         const reason = now-order.due > maxAge ? 'late recovery exit at observed price' : 'fixed-horizon exit';
-        db.prepare("UPDATE trades SET status='closed',exit_t=?,exit_price=?,pnl=?,reason=? WHERE rowid=?")
-          .run(t,price,side*(price-order.entry_price),reason,order.rowid);
-      } else if (t > (order.trigger_at ?? order.accepted_at) && t < order.due) {
+        db.prepare("UPDATE trades SET status='closed',exit_t=?,exit_quote_t=?,exit_price=?,pnl=?,reason=? WHERE rowid=?")
+          .run(completeAt,t,price,side*(price-order.entry_price),reason,order.rowid);
+      } else if (t > (order.trigger_at ?? order.accepted_at) && completeAt < order.due) {
         if (order.status === 'watch') {
           if (!last || t-last.t > maxAge) {
             db.prepare("UPDATE trades SET status='skipped',reason='gap during breakout watch' WHERE rowid=?").run(order.rowid);
@@ -202,8 +218,8 @@ function applyQuote(db, {symbol,t,spot,receivedAt,bid,ask,bidAt,askAt}, now = Da
           if (price > account.equity) {
             db.prepare("UPDATE trades SET status='skipped',reason='insufficient one-share collateral' WHERE rowid=?").run(order.rowid);
           } else {
-            db.prepare("UPDATE trades SET status='open',entry_t=?,entry_price=?,reason='synthetic one-share entry' WHERE rowid=?")
-              .run(t,price,order.rowid);
+            db.prepare("UPDATE trades SET status='open',entry_t=?,entry_quote_t=?,entry_price=?,reason='synthetic one-share entry' WHERE rowid=?")
+              .run(completeAt,t,price,order.rowid);
           }
         }
       }

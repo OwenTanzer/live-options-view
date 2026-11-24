@@ -115,7 +115,8 @@ test('ten strategies can enter and exit from forward observations through the pa
     assert.deepEqual(entered,[1,2,4,5,6,7,8,9,10,11]);
     assert.equal(audit.filter(r=>r.id===3 && r.signal!==null).length,0);
     const invalid = db.prepare(`SELECT COUNT(*) AS n FROM trades t
-      LEFT JOIN quotes entry ON entry.t=t.entry_t LEFT JOIN quotes exit ON exit.t=t.exit_t
+      LEFT JOIN quotes entry ON entry.t=COALESCE(t.entry_quote_t,t.entry_t)
+      LEFT JOIN quotes exit ON exit.t=COALESCE(t.exit_quote_t,t.exit_t)
       WHERE status='closed' AND (entry.t IS NULL OR exit.t IS NULL OR
       entry_t<=accepted_at OR exit_t<=entry_t OR exit_t<due OR
       entry_price != CASE WHEN direction='long' THEN entry.ask ELSE entry.bid END OR
