@@ -174,19 +174,24 @@ def _pair_recovery_accounts(accounts):
         "crassus_flow_recover": "crassus_flowskew",
     }
     by_name = {a.username: a for a in accounts}
-    paired = {}
+    cohorts = {}
     for recovery, source in source_for.items():
-        if recovery in by_name and source in by_name:
-            if by_name[source].strategy_id == by_name[recovery].strategy_id:
-                paired[source] = by_name[recovery]
-    moved = {a.username for a in paired.values()}
+        if recovery not in by_name or source not in by_name:
+            continue
+        strategy = by_name[source].strategy_id
+        if by_name[recovery].strategy_id != strategy:
+            continue
+        # Keep the forward comparison baseline, stop and protection nearby
+        # too. Otherwise recovery could move a minute ahead of its controls.
+        controls = [a for a in accounts if a.strategy_id == strategy
+                    and a.params.get("forward_skew_arm") in ("baseline", "stop", "protect_only")]
+        cohorts[source] = [by_name[recovery], *controls]
+    moved = {a.username for cohort in cohorts.values() for a in cohort}
     ordered = []
     for account in accounts:
-        if account.username in moved:
-            continue
-        ordered.append(account)
-        if account.username in paired:
-            ordered.append(paired[account.username])
+        if account.username not in moved:
+            ordered.append(account)
+            ordered.extend(cohorts.get(account.username, ()))
     return ordered
 
 

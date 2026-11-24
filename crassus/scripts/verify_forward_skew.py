@@ -33,9 +33,9 @@ class Comparison(unittest.TestCase):
         from crassus.runner import _pair_recovery_accounts
 
         catalog = Path(__file__).resolve().parents[1] / "accounts.example.json"
-        rows = [SimpleNamespace(**r) for r in json.loads(catalog.read_text())["accounts"]]
+        rows = [SimpleNamespace(**{"params": {}, **r}) for r in json.loads(catalog.read_text())["accounts"]]
         if not any(r.username == "crassus_flow_recover" for r in rows):
-            rows.append(SimpleNamespace(username="crassus_flow_recover", strategy_id="flow_skew_qqq"))
+            rows.append(SimpleNamespace(username="crassus_flow_recover", strategy_id="flow_skew_qqq", params={}))
         pairs = {
             "crassus_oiskew": "crassus_oif_recover",
             "crassus_skew_ibit": "crassus_oif_ibit_recover",
@@ -48,8 +48,14 @@ class Comparison(unittest.TestCase):
             self.assertCountEqual(names, [a.username for a in roster])
             for source, recovery in pairs.items():
                 self.assertEqual(names.index(recovery), names.index(source) + 1)
-            self.assertEqual([n for n in names if n not in pairs.values()],
-                             [a.username for a in roster if a.username not in pairs.values()])
+                strategy = next(a.strategy_id for a in roster if a.username == source)
+                controls = [a.username for a in roster if a.strategy_id == strategy and
+                            a.params.get("forward_skew_arm") in ("baseline", "stop", "protect_only")]
+                start = names.index(recovery) + 1
+                self.assertEqual(names[start:start + len(controls)], controls)
+            cohort = {a.username for a in roster if a.params.get("forward_skew_arm")} | set(pairs.values())
+            self.assertEqual([n for n in names if n not in cohort],
+                             [a.username for a in roster if a.username not in cohort])
         no_source = [a for a in rows if a.username not in pairs]
         self.assertEqual(_pair_recovery_accounts(no_source), no_source)
 
