@@ -504,6 +504,34 @@
       "password_env": "CRASSUS_PW_TWSKEW_DRAM",
       "strategy_id": "trump_whisperer_oi_skew_dram",
       "active": false
+    },
+    {
+      "alias": "Opening OI Ridge",
+      "username": "crassus_oi_ridge",
+      "password_env": "CRASSUS_PW_OI_RIDGE",
+      "strategy_id": "oi_associator_ridge",
+      "active": false
+    },
+    {
+      "alias": "Opening OI Forest",
+      "username": "crassus_oi_forest",
+      "password_env": "CRASSUS_PW_OI_FOREST",
+      "strategy_id": "oi_associator_forest",
+      "active": false
+    },
+    {
+      "alias": "Opening OI Prototype",
+      "username": "crassus_oi_prototype",
+      "password_env": "CRASSUS_PW_OI_PROTOTYPE",
+      "strategy_id": "oi_associator_prototype",
+      "active": false
+    },
+    {
+      "alias": "Opening OI Pls",
+      "username": "crassus_oi_pls",
+      "password_env": "CRASSUS_PW_OI_PLS",
+      "strategy_id": "oi_associator_pls",
+      "active": false
     }
   ]
 }

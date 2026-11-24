@@ -15,6 +15,7 @@ from . import me_bots  # noqa: F401
 from . import max_pain  # noqa: F401
 from . import momentum_puts_only  # noqa: F401
 from . import momentum_qqq  # noqa: F401
+from . import oi_associator  # noqa: F401
 from . import oi_skew  # noqa: F401
 from . import phelps_pure  # noqa: F401
 from . import phelps_variants  # noqa: F401
@@ -33,6 +34,7 @@ __all__ = [
     "momentum_qqq",
     "momentum_puts_only",
     "oi_skew",
+    "oi_associator",
     "max_pain",
     "put_call_ratio",
     "canopus_down_day",
