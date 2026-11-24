@@ -96,3 +96,26 @@ test('body budget commits complete artifacts only and resumes remaining work',as
   assert.equal(records.length,20);assert.ok(records.every(r=>!r.payload.includes('xxxx')));
   assert.ok(records.every(r=>r.collection==='backfill'));
 });
+
+test('calibrated catch-up drains overdue minutes at production-sized body weights and resumes at its bound',async t=>{
+  const {levelIngestion}=await import('../backend/one-clock-level-ingestion.js');
+  const db=await setup(t);
+  const artifacts=Array.from({length:110},(_,i)=>({key:String(i),version:'1',eventAt:T+i*60000,availableAt:T+i*60000+1000}));
+  const adapter={...levelIngestion,discover:async()=>({complete:true,artifacts:[...artifacts].reverse()}),
+    async read(bucket,scope,a){
+      await Promise.all(['csv','json'].map(ext=>bucket.get(a.key+'.'+ext)));
+      return {rows:[{source:'level-spot',id:a.key,revision:1,session,instrument:'QQQ',origin:'recorded',
+        eventAt:a.eventAt,availableAt:a.availableAt,evidence:a.key,value:{spot:650}}]};
+    }};
+  const body='x'.repeat(220*1024),bucket={get:async()=>({size:body.length,text:async()=>body})};
+  const go=now=>ingestPublicSource(db,bucket,adapter,{session,instrument:'QQQ',now});
+  const now=T+120*60000;
+  const first=await go(now);
+  assert.equal(first.processed,Math.floor(adapter.orderedBudget.bytes/(2*body.length)));
+  assert.equal(first.through,artifacts[first.processed].availableAt-1);
+  assert.ok(first.bytes<=adapter.orderedBudget.bytes);
+  assert.equal((await go(now+1)).pending,0);
+  assert.equal((await go(now+2)).gets,0);
+  assert.equal((await ingestedAsOf(db,{session,instrument:'QQQ',cutoff:now-1})).length,0);
+  assert.equal((await ingestedAsOf(db,{session,instrument:'QQQ',cutoff:now+1})).length,artifacts.length);
+});
