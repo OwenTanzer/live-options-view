@@ -1,0 +1,699 @@
+[
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "oilprice_com",
+      "source_name": "OilPrice.com",
+      "source_streams": [
+        "oil"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "f9b87c942c06fd23b0495be32ece2cd7691a11852b1d294dc8fe2d8c28d0749e",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/0",
+      "canonical_url": "https://example.invalid/pilot/0",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "a6055fa223691611d53c9ad0dd01c51b4c1a77d0d51cadeb4fdb5f052e3a5128",
+      "previous_revision_id": null,
+      "payload_digest": "548b0cd5fa507be929514308c59f7c5c2f27842a8723e446054fb1f7958de048",
+      "title": "Federal Reserve holds interest rates steady",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "fed_topic"
+    ],
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "eia_today_in_energy",
+      "source_name": "EIA Today in Energy",
+      "source_streams": [
+        "oil",
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "66f1159d8a1edc4d501c3cc24a00613d6d903cfdd1cda80c853f9b2e3c431c25",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/1",
+      "canonical_url": "https://example.invalid/pilot/1",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "3a687609c9f5c1a1d6d659ed5940a2a84d1f23fe0d5a3a782d5bb7f2d1bdf859",
+      "previous_revision_id": null,
+      "payload_digest": "de8e55533d69f540ab7ed00f3700f551c2c4e91ccc0e17b61a31a62f426f4cb7",
+      "title": "FOMC minutes signal uncertainty",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": null,
+      "published_at": null,
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "missing",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "fed_topic"
+    ],
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "techcrunch",
+      "source_name": "TechCrunch",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "c7817e2b57fbe316fc2276cce09562a437ead4135f5ee3605d031cb4ee4991e7",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/2",
+      "canonical_url": "https://example.invalid/pilot/2",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "1d9a12ec7d65675fded349b0441c2ddc3713cd233ae66cf9a6d1a3526e2a2465",
+      "previous_revision_id": null,
+      "payload_digest": "ccc60763be2a8dacd200ed789533cc97dccecbf2276017879ef839487ac304de",
+      "title": "Federal Open Market Committee will not cut rates",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "fed_topic"
+    ],
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "ars_technica",
+      "source_name": "Ars Technica",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "7d2749150d9f173295e7c099bde6f98b0a3266c860b44deb24ffac76c9c678eb",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/3",
+      "canonical_url": "https://example.invalid/pilot/3",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "d15a4f39224cc6ea8c745af4a5d06aa1cd8e27a1a6bc47928ac3c7be67b295f7",
+      "previous_revision_id": null,
+      "payload_digest": "fbbdd99cb84b858ce618c8e58dd00fd691571b38c9dfd09c72a6df7ab7db218c",
+      "title": "U.S. Treasury announces bond auction",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "treasury_financing"
+    ],
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "oilprice_com",
+      "source_name": "OilPrice.com",
+      "source_streams": [
+        "oil"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "c0761e58f3d4b5134c1e6ab4326a9068d9936c6d2b8859eff80cd284a400d737",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/4",
+      "canonical_url": "https://example.invalid/pilot/4",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "dbc4bb1b244a08ea393903b0a80437e01412b3aaf9336703bf67b816a48bcd9a",
+      "previous_revision_id": null,
+      "payload_digest": "59cbfda35a7279c1992be6ff8f9cd35c86c7866ec87d69c8ba5fa5acf83b7149",
+      "title": "US Treasury quarterly refunding outlook",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "treasury_financing"
+    ],
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "eia_today_in_energy",
+      "source_name": "EIA Today in Energy",
+      "source_streams": [
+        "oil",
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "ed7da3eecc656ecee1844c842f97e8fa12e504a73eddce269595084c45c2961f",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/5",
+      "canonical_url": "https://example.invalid/pilot/5",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "ec7ffacd038eea512a5342e4037762228075b91cddb4c93592943ad1b332ccb1",
+      "previous_revision_id": null,
+      "payload_digest": "d8dbddab3e2d8942809a81aff1ba414d33d56d13ffc7aea934877ed024faccf2",
+      "title": "Debt issuance by United States Treasury rises",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "treasury_financing"
+    ],
+    "expected_instruments": [
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "techcrunch",
+      "source_name": "TechCrunch",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "f7aa162e09bb00eed73f0f8b4451102d9f7d29bd9052f97f058430e10767ea80",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/6",
+      "canonical_url": "https://example.invalid/pilot/6",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "062d9b4008a3b557958daccc10c0f5968299aacdcb2730230a791ac3ba1752f6",
+      "previous_revision_id": null,
+      "payload_digest": "de7a5c11f47f9eae9dc6efeefbd5eaef9547a140854dc80a254009f032040772",
+      "title": "Federal Reserve weighs U.S. Treasury bond purchases",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [
+      "fed_topic",
+      "treasury_financing"
+    ],
+    "expected_instruments": [
+      "QQQ",
+      "SPY",
+      "TLT"
+    ]
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "ars_technica",
+      "source_name": "Ars Technica",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "0d04498efe7736ca8ee5bb91e3d6896996275157ff0e57aa4856533cf4fbb956",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/7",
+      "canonical_url": "https://example.invalid/pilot/7",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "20d9eb743c10df11c5931b2c7a14743e5719d9f91bde311936d44c5fda52a02f",
+      "previous_revision_id": null,
+      "payload_digest": "cd3d5b5e0fadb0f61f193c88da1d9be05e67b4f8e01c96a1ca3cbbd95008e719",
+      "title": "UK Treasury announces bond auction",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "oilprice_com",
+      "source_name": "OilPrice.com",
+      "source_streams": [
+        "oil"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "6823e973fd5557f2479716d0969d62be04ed69cbb0dfde291a8929d8b1f970c8",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/8",
+      "canonical_url": "https://example.invalid/pilot/8",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "18ab84ac6f47250cead7519a846679e79bd4989b13a0e6cd88448d6f9eb12346",
+      "previous_revision_id": null,
+      "payload_digest": "c6b1b61fb983861fe4e786ba4ef7adc69a24f8dac393a10135d44884583075ea",
+      "title": "Investors are fed up with higher prices",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "eia_today_in_energy",
+      "source_name": "EIA Today in Energy",
+      "source_streams": [
+        "oil",
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "5d06c6c14c9c1087660056cc7176d13aa40ac08e0cd6790070008fcfabe8299b",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/9",
+      "canonical_url": "https://example.invalid/pilot/9",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "bda0310879be20ed92ceb2d89cbd23daa0fce10c9f9f967e65d342524241804f",
+      "previous_revision_id": null,
+      "payload_digest": "f28ddfba06fa373f78d729998557f723a2ea7706532ac40a3e6c995ab72c4370",
+      "title": "FedEx earnings beat expectations",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "techcrunch",
+      "source_name": "TechCrunch",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "850f51b1621efa3f3611b6bb1b6ab0f1a2a35331f9fddd31ff2e538f0e4cd46b",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/10",
+      "canonical_url": "https://example.invalid/pilot/10",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "f94ce521443986e3c24efa0e57bc1de7585f0716ab908012210831f9c6410113",
+      "previous_revision_id": null,
+      "payload_digest": "04b4ad57889552ac2aee8a7adf84f0173bb16f136b6aab016c7143425d9169a8",
+      "title": "Treasury sanctions oil companies",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "ars_technica",
+      "source_name": "Ars Technica",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "972e7cc370b308468f445ae36cadbc5650fba5136afe9517cdc81eecaea2ca03",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/11",
+      "canonical_url": "https://example.invalid/pilot/11",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "4586611a73804c33e2614dca7d893290e80133a4a246495d2ad9628b7edc76c3",
+      "previous_revision_id": null,
+      "payload_digest": "c4c7af487dfc2b48c0360e57a268546920ed3ce93de7a5d26c00d4cb0229c640",
+      "title": "U.S. Treasury announces new sanctions",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "oilprice_com",
+      "source_name": "OilPrice.com",
+      "source_streams": [
+        "oil"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "c57b6da9f22fcde41c2bb3af667abfad985c0fb4f2949dc6be170f7057527ff4",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/12",
+      "canonical_url": "https://example.invalid/pilot/12",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "d8ddd9dbe96ce5d23a56e4e5e215d65e6b19158718928d694465d60f37461d5c",
+      "previous_revision_id": null,
+      "payload_digest": "4e087d41c4f5aae621b4fbd8572279c3952b02fd38ac2e18700234ec6a278221",
+      "title": "Powell speaks at university",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "eia_today_in_energy",
+      "source_name": "EIA Today in Energy",
+      "source_streams": [
+        "oil",
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "4aca3c489a2c99e5b897f51a87d32d078c41f5d6675294274e3122c1dfc261bd",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/13",
+      "canonical_url": "https://example.invalid/pilot/13",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "bc9d39af1799eab80a6c725faa772ecad2cff5f2e8f5164f81ca8baaba21b5c4",
+      "previous_revision_id": null,
+      "payload_digest": "346b295033fdcc0f642e82acce24afec608ff2baf9524e2e3e35d8d8a5b8a4d0",
+      "title": "Oil prices fall on demand fears",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "techcrunch",
+      "source_name": "TechCrunch",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "8e842166e105e3db2bbe3e463a0425542feff7c8adb287bf56b6665497c37d44",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/14",
+      "canonical_url": "https://example.invalid/pilot/14",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "169a1b88b7f1d9a925c29ae34a86c77a81730fdf4208945e86a9a28fc1fe1d0e",
+      "previous_revision_id": null,
+      "payload_digest": "32b4db544a9cfb10e15dd542a9917a83e680b3e8cf869287d87376472ee5cc68",
+      "title": "Fed cuts rates",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  },
+  {
+    "observation": {
+      "schema_version": "news-record/v1",
+      "record_type": "observation",
+      "run_id": "fixture-input",
+      "source_id": "ars_technica",
+      "source_name": "Ars Technica",
+      "source_streams": [
+        "ai_buildout"
+      ],
+      "adapter_version": "rss-v1",
+      "config_digest": "5b4508f9214a9f908f575d7b01e92b6f7341e5a0ef0a1aae71552d76f58ef538",
+      "item_id": "391cd3f092f6ff4a4869f2ccf079ec89358badb3509493c38386418050bc8c27",
+      "identity_quality": "url",
+      "original_url": "https://example.invalid/pilot/15",
+      "canonical_url": "https://example.invalid/pilot/15",
+      "url_status": "ok",
+      "source_guid": null,
+      "outlet": null,
+      "categories": [],
+      "revision_id": "5e0a1c5e0287bbeedd3e9df980c08e80b242cd0e50b4ce9a507c8694cb0c9845",
+      "previous_revision_id": null,
+      "payload_digest": "85642a41e0094b32cf949ae8aeb86d82c325345d6dcf1c81d3f3b2b894bf0b47",
+      "title": "Corporate treasury increases bond holdings",
+      "excerpt": "Synthetic fixture; not a source quotation.",
+      "excerpt_truncated": false,
+      "content_kind": "feed_entry",
+      "published_raw": "Sun, 22 Nov 2026 05:00:00 GMT",
+      "published_at": "2026-11-22T05:00:00Z",
+      "updated_raw": null,
+      "updated_at": null,
+      "time_quality": {
+        "published": "explicit",
+        "updated": "missing"
+      },
+      "observed_at": "2026-11-22T05:10:00Z",
+      "first_seen_at": "2026-11-22T05:10:00Z"
+    },
+    "expected_themes": [],
+    "expected_instruments": []
+  }
+]
