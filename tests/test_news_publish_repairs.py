@@ -13,8 +13,8 @@ import sys
 import textwrap
 from datetime import timedelta
 
-from test_news_publish import (BUILD_INDEX, INDEX, PANEL, ROOT, Base, RecordingStore, patched_config_path,
-                               qualified)
+from test_news_publish import (BUILD_INDEX, INDEX, PANEL, ROOT, Base, RecordingStore, fresh_fixture_dir,
+                               patched_config_path, qualified)
 from market_data.news import publish as pub
 from market_data.news.archive import WriterBusy
 from market_data.news.reader import load_archive
@@ -254,8 +254,10 @@ class Identity(Small):
 CRASH = textwrap.dedent("""
     import os, sys
     sys.path.insert(0, {root!r}); sys.path.insert(0, {tests!r})
-    from test_news_support import Clock, feeds
+    from pathlib import Path
+    from test_news_support import Clock
     from market_data.news import publish as pub
+    from market_data.news.__main__ import fixture_fetcher
     from market_data.news.archive import LocalObjectStore
     from market_data.news.adapters import rss
 
@@ -275,7 +277,7 @@ CRASH = textwrap.dedent("""
     def dying_fetch(url, timeout):
         if {where!r} == "collect":
             os._exit(3)
-        return feeds()(url, timeout)
+        return fixture_fetcher(Path({feeds_dir!r}))(url, timeout)
 
     clock = Clock({when!r})
     pub.pilot_cycle(LocalObjectStore({private!r}), pub.PublicViewStore(Dying({public!r})), {spool!r},
@@ -286,7 +288,12 @@ CRASH = textwrap.dedent("""
 
 class AbandonedLease(Base):
     def crash(self, where, when):
+        # A crash during publication needs the cycle to reach publication: serve one fresh item,
+        # or the empty-cycle skip exits cleanly before any public write.
+        feeds_dir = fresh_fixture_dir(self.tmp, "crash-" + when.replace(":", "").replace("-", ""),
+                                      when)
         code = CRASH.format(root=str(ROOT), tests=str(ROOT / "tests"), where=where, when=when,
+                            feeds_dir=str(feeds_dir),
                             private=str(self.tmp / "private"), public=str(self.tmp / "public"),
                             spool=str(self.spool), config=str(patched_config_path(self.tmp)))
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

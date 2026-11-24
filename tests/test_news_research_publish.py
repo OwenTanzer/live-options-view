@@ -51,9 +51,17 @@ class ResearchPublishTest(unittest.TestCase):
         private = S.prepared_store(self.root / "priv") if prepared else LocalObjectStore(self.root / "priv")
         return private, LocalObjectStore(self.root / "pub")
 
-    def cycle(self, private, public, t: datetime):
-        return pub.pilot_cycle(private, public, str(self.root / "spool"), fixture_fetcher(Path(DEFAULT_FIXTURES)),
-                               clock(t), self.cfg)
+    def cycle(self, private, public, t: datetime, fresh=False):
+        if fresh:
+            # The shipped fixtures are static: a repeat cycle sees no new items and, since the
+            # empty-cycle skip, publishes nothing. A test needing a second generation serves one
+            # fresh item.
+            from test_news_publish import fresh_fixture_dir
+            fetch = fixture_fetcher(fresh_fixture_dir(self.root, "research-" + t.strftime("%H%M"),
+                                                      t.strftime("%Y-%m-%dT%H:%M:%SZ")))
+        else:
+            fetch = fixture_fetcher(Path(DEFAULT_FIXTURES))
+        return pub.pilot_cycle(private, public, str(self.root / "spool"), fetch, clock(t), self.cfg)
 
     def index(self, public):
         return json.loads(public.get(pub.PUBLIC_INDEX))
@@ -169,7 +177,7 @@ class ResearchPublishTest(unittest.TestCase):
         self.cycle(private, public, t1)
         first = self.index(public)
         t2 = t1 + timedelta(minutes=15)
-        self.cycle(private, public, t2)
+        self.cycle(private, public, t2, fresh=True)
         second = self.index(public)
         self.assertNotEqual(first["gen"], second["gen"])
         self.assertNotEqual(first["research"]["page"], second["research"]["page"])

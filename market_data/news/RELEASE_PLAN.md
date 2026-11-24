@@ -4,7 +4,7 @@
 delivery authority for MediaFlow (Chej, 2026-11-13). Chej coordinates merge and release operations and
 provider access; production runs go through the protected "production" environment. Done: the landing
 (section 1) and the web release (section 5, steps 1–2). Not done: provisioning, provider checks, the
-config flip, the first cycle and the 15-minute schedule. New paid services or extra spending stay
+config flip, the first cycle and the 30-minute schedule. New paid services or extra spending stay
 Owen's decision. Accepted engineering stays accepted; this plan adds no new finish line. It is drawn from `PUBLISHING.md` (operations, generations,
 settlement), `RESEARCH.md` (research publication) and the accepted local evidence. No new tests
 were run for it.
@@ -109,7 +109,7 @@ D7 (shared-file and landing coordination) is Chej's to reconcile. D3 is settled:
   serves the existing "No news views published yet" state on production without any upstream request.
 - A **scheduler service** (for example a new Railway cron service), Chej provisioning, within Owen's
   $5/month incremental News budget (see `deploy/COSTS.md`).
-  - Cron `*/15 * * * *` UTC, one-shot, restart policy NEVER, paused until activation.
+  - Cron `*/30 * * * *` UTC, one-shot, restart policy NEVER, paused until activation.
   - Command: the bounded launcher (`market_data/news/launch.py`), never `pilot-cycle` directly.
   - Watch paths must not overlap the collectors' (#225).
 
@@ -194,7 +194,7 @@ before the next one starts.
    - the pages and the research entry (`none` from a fresh, unseeded ledger: see "Research in a live pilot") render on both bases;
    - receipts are written;
    - the public bucket has nothing under `news/v1/`.
-6. **Unpause the 15-minute schedule.** Proposed: watch `publish-status` each hour on the first
+6. **Unpause the 30-minute schedule.** Proposed: watch `publish-status` each hour on the first
    day, and a review by Chej after the first live day.
 7. **Clock bound.** With `clock_bound_verified: false`, replaced generations are never deleted
    (`expiry_blocked_clock_bound_unverified`), so pages accumulate against the cap until the safe
@@ -227,7 +227,7 @@ All commands take `--config`, `--live` and the environment above. `publish-statu
 
 `publish-status` exits 1 on any problem. During the pilot, read the `PUBLISHING.md` list. In
 particular:
-- `published_views_stale` (older than 2 × 15 min + 180 s);
+- `published_views_stale` (older than 2 × the configured cycle interval + 180 s since publication or the latest clean skipped cycle for that publication);
 - `publication_paused` (cap or withdrawal);
 - `open_index_commits`;
 - `page_uploads_unsettled` (quarantine; permanent by policy);

@@ -37,6 +37,13 @@ RETRY_BACKOFF_S = (2.0, 4.0)
 MAX_CONCURRENT_SOURCES = 4
 CYCLE_BUDGET_S = 180
 INTERVAL_S = 900
+# The pilot's scheduled cadence is 30 minutes (deploy/news-pilot.json), not INTERVAL_S.
+# INTERVAL_S is the coverage-segment interval used by the join/reader defaults; the pilot
+# cycle runs every PILOT_INTERVAL_S. The two were equal while the pilot ran every 15
+# minutes; the D1/R2 cost cut (2026-11-24) moved the pilot to 30 minutes and left the
+# segment interval at 15 minutes, so one missed cycle is still not a missed interval.
+PILOT_INTERVAL_S = 1800
+PILOT_CRON = "*/30 * * * *"
 MAX_RESPONSE_BYTES = 5_000_000
 MAX_EXCERPT_CHARS = 2_000
 LATEST_LIMIT = 200

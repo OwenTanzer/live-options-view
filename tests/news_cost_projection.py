@@ -1,6 +1,6 @@
 """Monthly cost projection for the News pilot, from measured cycles (news_cycle_cost_measure.py).
 
-    python tests/news_cost_projection.py MEASUREMENTS.json [--months 12] [--interval-min 15]
+    python tests/news_cost_projection.py MEASUREMENTS.json [--months 12] [--interval-min 30]
 
 Everything printed is labelled OBSERVED (taken from the measurement file) or PROJECTED (arithmetic on
 it plus the stated assumptions). Prices are the published list prices checked 2026-11-14 (Cloudflare
@@ -8,10 +8,19 @@ R2 Standard; Railway standard services) and are inputs here, not measurements. T
 account-wide and already shared with the market collectors, so it is NOT subtracted: these are
 incremental costs as if no free allowance were left.
 
-Model (bounded run listing, checkpoint frontier):
-  * Per-cycle requests are the measured steady-state cycle (the last measured cycle). Its listings of
-    news/v1/runs/ start after the checkpoint frontier, so they stay one request each however long the
-    history (tests/test_news_checkpoint.py BoundedListing measures this over 1,500 runs).
+Model (bounded run listing, checkpoint frontier, empty-cycle skip):
+  * A cycle is either full (publishes: new items or revisions, or a non-clean run) or empty
+    (skipped: no new items or revisions on a clean run). The measured steady-state full cycle is the
+    last measured published cycle; the steady-state empty cycle is the last measured skipped cycle
+    (an older measurement file with no skipped cycles uses its last cycle for both).
+  * How many cycles a month are full depends on how arrivals cluster, which the fixtures cannot
+    measure, so the projection is a range: the clustered bound assumes one full cycle a day (all of
+    a day's items arrive together); the spread bound assumes one item per full cycle, i.e. at most
+    ITEMS_PER_DAY full cycles a day. The printed class_a / class_b / total_usd are the spread
+    (conservative) bound; *_low are the clustered bound.
+  * Per-cycle listings of news/v1/runs/ start after the checkpoint frontier, so they stay one
+    request each however long the history (tests/test_news_checkpoint.py BoundedListing measures
+    this over 1,500 runs).
   * news/v1/runs/ grows by RUN_OBJECTS_PER_CYCLE objects per cycle (measured: 4) and is never pruned.
     Once per FULL_VERIFY_S (24 h) a writer lists it in full FULL_LISTINGS_PER_VERIFICATION times (the
     verifying read and its save), one ListObjectsV2 request per 1,000 keys: the only growing term. That
@@ -54,44 +63,65 @@ def project(meas: dict, months: int, interval_min: int) -> dict:
     rows = meas["rows"]
     last = rows[-1]
     n_measured = len(rows)
-    pa, pb = classes(last, "private")
-    qa, qb = classes(last, "public")
-    base_a = pa + qa
-    base_b = pb + qb
+    published = [r for r in rows if r["status"] == "published"]
+    skipped = [r for r in rows if r["status"] == "skipped_empty"]
+    full = published[-1] if published else last
+    empty = skipped[-1] if skipped else full
+
+    def totals(row):
+        pa, pb = classes(row, "private")
+        qa, qb = classes(row, "public")
+        return pa + qa, pb + qb
+
+    full_a, full_b = totals(full)
+    empty_a, empty_b = totals(empty)
     private_growth = (rows[-1]["private"]["bytes"] - rows[min(10, n_measured - 1)]["private"]["bytes"]) / max(1, n_measured - 1 - min(10, n_measured - 1))
     public_bytes = last["public"]["bytes"]
-    requests = (pa + qa + pb + qb) * FAILURE_FACTOR
-    runtime_s = last["wall_s"] + FEED_FETCH_S + requests * REQUEST_LATENCY_S
     cycles_per_month = int(30 * 24 * 60 / interval_min)
+    non_empty_clustered = 30                                  # one full cycle a day
+    non_empty_spread = min(cycles_per_month, ITEMS_PER_DAY * 30)   # one item per full cycle
+    full_runtime = full["wall_s"] + FEED_FETCH_S + (full_a + full_b) * FAILURE_FACTOR * REQUEST_LATENCY_S
+    empty_runtime = empty["wall_s"] + FEED_FETCH_S + (empty_a + empty_b) * FAILURE_FACTOR * REQUEST_LATENCY_S
     out = {"observed": {
         "measured_cycles": n_measured, "feeds": meas["feeds"], "expiry_simulated": meas["expiry_simulated"],
-        "last_cycle_class_a": pa + qa, "last_cycle_class_b": pb + qb,
+        "full_cycle_class_a": full_a, "full_cycle_class_b": full_b,
+        "empty_cycle_class_a": empty_a, "empty_cycle_class_b": empty_b,
         "private_bytes_per_cycle": round(private_growth), "public_bytes_held": public_bytes,
         "public_objects_held": last["public"]["objects"], "local_wall_s_last_cycle": last["wall_s"]},
         "assumptions": {"failure_factor": FAILURE_FACTOR, "request_latency_s": REQUEST_LATENCY_S,
                         "feed_fetch_s": FEED_FETCH_S, "cpu_share": CPU_SHARE, "peak_ram_gb": PEAK_RAM_GB,
                         "items_per_day": ITEMS_PER_DAY, "private_bytes_per_item": PRIVATE_BYTES_PER_ITEM,
-                        "interval_min": interval_min, "free_tier_subtracted": False, "prices": PRICES},
-        "projected": {"runtime_s_per_cycle": round(runtime_s, 1), "months": []}}
+                        "interval_min": interval_min, "free_tier_subtracted": False, "prices": PRICES,
+                        "non_empty_cycles_per_month": {"clustered": non_empty_clustered,
+                                                       "spread": non_empty_spread}},
+        "projected": {"runtime_s_full_cycle": round(full_runtime, 1),
+                      "runtime_s_empty_cycle": round(empty_runtime, 1), "months": []}}
     stored = 0.0
     for m in range(1, months + 1):
         first, last_cycle = cycles_per_month * (m - 1), cycles_per_month * m
         cycles_per_day = cycles_per_month // 30
         run_pages = sum(FULL_LISTINGS_PER_VERIFICATION * max(1, math.ceil(RUN_OBJECTS_PER_CYCLE * n / 1000))
                         for n in range(first, last_cycle, max(1, cycles_per_day // VERIFICATIONS_PER_DAY)))
-        class_a = (base_a * cycles_per_month + run_pages) * FAILURE_FACTOR
-        class_b = base_b * cycles_per_month * FAILURE_FACTOR
+        month = {"month": m}
+        for key, non_empty in (("low", non_empty_clustered), ("", non_empty_spread)):
+            class_a = (full_a * non_empty + empty_a * (cycles_per_month - non_empty) + run_pages) * FAILURE_FACTOR
+            class_b = (full_b * non_empty + empty_b * (cycles_per_month - non_empty)) * FAILURE_FACTOR
+            minutes = (non_empty * full_runtime + (cycles_per_month - non_empty) * empty_runtime) / 60
+            railway = minutes * (CPU_SHARE * PRICES["railway_vcpu_minute"] + PEAK_RAM_GB * PRICES["railway_gb_ram_minute"])
+            stored_month = stored + private_growth * cycles_per_month + ITEMS_PER_DAY * 30 * PRIVATE_BYTES_PER_ITEM
+            gb = (stored_month + public_bytes) / 1e9
+            r2 = (class_a / 1e6 * PRICES["r2_class_a_per_million"] + class_b / 1e6 * PRICES["r2_class_b_per_million"]
+                  + gb * PRICES["r2_storage_gb_month"])
+            month[f"class_a{key and '_low' or ''}"] = round(class_a)
+            month[f"class_b{key and '_low' or ''}"] = round(class_b)
+            month[f"r2_usd{key and '_low' or ''}"] = round(r2, 2)
+            month[f"railway_usd{key and '_low' or ''}"] = round(railway, 2)
+            month[f"total_usd{key and '_low' or ''}"] = round(r2 + railway, 2)
         stored += private_growth * cycles_per_month + ITEMS_PER_DAY * 30 * PRIVATE_BYTES_PER_ITEM
         gb = (stored + public_bytes) / 1e9
-        r2 = (class_a / 1e6 * PRICES["r2_class_a_per_million"] + class_b / 1e6 * PRICES["r2_class_b_per_million"]
-              + gb * PRICES["r2_storage_gb_month"])
-        minutes = cycles_per_month * runtime_s / 60
-        railway = minutes * (CPU_SHARE * PRICES["railway_vcpu_minute"] + PEAK_RAM_GB * PRICES["railway_gb_ram_minute"])
-        out["projected"]["months"].append({
-            "month": m, "class_a": round(class_a), "class_b": round(class_b),
-            "full_listing_share_of_class_a": round(run_pages * FAILURE_FACTOR / class_a, 3),
-            "stored_gb_end": round(gb, 3), "r2_usd": round(r2, 2), "railway_usd": round(railway, 2),
-            "total_usd": round(r2 + railway, 2)})
+        month["full_listing_share_of_class_a"] = round(run_pages * FAILURE_FACTOR / month["class_a"], 3)
+        month["stored_gb_end"] = round(gb, 3)
+        out["projected"]["months"].append(month)
     return out
 
 
@@ -99,7 +129,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("measurements")
     ap.add_argument("--months", type=int, default=12)
-    ap.add_argument("--interval-min", type=int, default=15)
+    ap.add_argument("--interval-min", type=int, default=30)
     a = ap.parse_args(argv)
     meas = json.loads(Path(a.measurements).read_text(encoding="utf-8"))
     print(json.dumps(project(meas, a.months, a.interval_min), indent=1))
