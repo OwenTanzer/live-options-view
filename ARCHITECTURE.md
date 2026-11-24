@@ -13,6 +13,7 @@ This is the companion to the [front door](README.md). It reuses the service/cont
 | OA-203 / Big Banana | [scanner](market_data/options_scanner), [module entry](market_data/options_scanner/__main__.py), [operations](market_data/options_scanner/README.md), [contract](site/plans/2026-09-options-return-scanner.md) | Service-managed cron starts a session-aware scanner, approximately five-minute sweeps and final rankings | The service-managed command is the normal `run` launch; readiness is a separate runtime setting. Active publication policy is a separate [specification](docs/specs/OA203_ACTIVE_LOOKUP.md) |
 | Read-only Market MCP | [server.js](market_mcp/server.js), [production.js](market_mcp/production.js), [guide](market_mcp/README.md) | Client-driven discovery/query/detail; no trading, scanner invocation or producer credentials | Image tests establish packaging; dated [rollout](market_mcp/ROLLOUT.md) is historical, not a current service inventory. Live connector acceptance is recorded separately from source |
 | Other tools | [synthetic days](research/synthetic_days/README.md) | Simulation entry point | Their presence is not evidence of an unattended deployed service |
+| Crypto candle cache | [package](market_data/crypto_candle_cache/), [contract](docs/specs/CRYPTO_CANDLE_CACHE.md) | `python -m market_data.crypto_candle_cache backfill/update`; per-coin R2 publication, opt-in `--publish`; 24/7 continuous session | The package has a module entry point. No R2 artifact published yet; the full backfill lives in the parallel Crypto Backend job, not in this repository |
 
 The UTC Railway cron values do not shift with US daylight saving time; session-aware code waits for the exchange calendar. No schedule is changed by moving source or documentation. The three producer services live under [market_data/](market_data/README.md), with module entry points and service-specific operating guides. Active offline backtesting lives in [research/](research/README.md); retired studies and prototypes are indexed in [history](docs/HISTORY.md).
 
@@ -54,6 +55,8 @@ R2 bucket `qqq-options-chain-data` holds several products, not one interchangeab
 | `oa203/scanner/<date>/` | OA-203 scanner | Final retrospective rankings and sweep evidence for MCP; active `inprogress/` generations are provisional, digest-pinned and policy-gated |
 | `moo144/tradier[/-ibit]/<date>/` | Separate Tradier collector | Archived time-and-sales; no website/MCP reader in this tree. Product purpose remains a separate decision |
 | `system/bot-membership-v1.json`, `paper-trades/requests/*`, D1 `users`/`sessions`/`bot_markers` | Worker | Bot roster, canonical execution records, authenticated account/session state; never conflated with public market readings |
+| `crypto/candles/<COIN>/<interval>.json` | Crypto candle cache, opt-in publish | Eleven intervals per coin; 1m/1h/1d fetched bases, the rest derived locally; every bar carries source time, observed time and state chip |
+| `crypto/candles/<COIN>/provenance.json` | Crypto candle cache | `snapshot_provenance.v1` sidecar per coin; coverage full/partial/absent per interval, gaps labelled, never smoothed over |
 
 ## Following one value
 

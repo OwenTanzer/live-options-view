@@ -11,5 +11,6 @@ These specifications are repository documentation, not served assets. Return to 
 | [Cross-market overview](CROSS_MARKET_OVERVIEW.md) | Current MCP strip consumer and broader proposed coverage | The proposed stock universe is not current subscriptions |
 | [Adaptive quote panel](ADAPTIVE_QUOTE_PANEL.md) | Core/pins/movers behaviour, device-local pin scope, one refresh controller and release path | Real extended-session observation depends on the deployed #178 lane |
 | [Extended price lane](EXTENDED_PRICE_LANE.md) | Continuous price-only collection, explicit session rules, rolling references and rollback | Fixtures do not establish sustained overnight/weekend provider availability |
+| [Crypto candle cache](CRYPTO_CANDLE_CACHE.md) | R2-backed historical crypto candles, 24/7 UTC bucketing, One Clock as-of reads | The full backfill data lives outside the repository; the panel change stacks on PR #389 |
 
 The original root filenames remain small compatibility pointers; the full text has one maintained home here. Public plans stay under `site/plans/` with unchanged public paths, rather than being silently unpublished or duplicated into this directory.
