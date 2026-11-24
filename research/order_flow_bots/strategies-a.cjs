@@ -139,19 +139,32 @@ function turnover(history, end) {
   if (!frame.oiVerified) return r('opening OI clearing date unverified');
   if (!closeWindow(history, end, 1)) return r('no complete preceding observation');
   const prev = new Map(history[end-1].contracts.map(c => [c.symbol, c]));
-  const signs = new Set();
+  const signs = new Set(), uncertain = new Set();
+  const forward = Boolean(frame.oiReference);
+  if (forward && (!frame.oiReference.dated || history[end-1].oiReference?.dated?.sha256 !== frame.oiReference.dated.sha256))
+    return r('dated OI not present across both observations');
   for (const c of frame.contracts) {
     const prior = prev.get(c.symbol);
-    if (!prior || !valid(c.openOi) || c.openOi <= 0 || c.openOi !== prior.openOi) continue;
+    if (!prior) return r('missing preceding contract observation');
+    const threshold=forward?c.verifiedOpenOi:c.openOi;
+    const priorThreshold=forward?prior.verifiedOpenOi:prior.openOi;
     if (![c.cumBuy, c.cumSell, c.cumUnknown, prior.cumBuy, prior.cumSell, prior.cumUnknown]
       .every(n => valid(n) && n >= 0) || c.cumBuy < prior.cumBuy ||
-      c.cumSell < prior.cumSell || c.cumUnknown < prior.cumUnknown) continue;
+      c.cumSell < prior.cumSell || c.cumUnknown < prior.cumUnknown) {
+      if(forward) return r('turnover counters unavailable');
+      continue;
+    }
     const classified = c.cumBuy + c.cumSell, total = classified + c.cumUnknown;
     const previous = prior.cumBuy + prior.cumSell + prior.cumUnknown;
-    if (previous > c.openOi || total <= c.openOi || !classified || c.cumUnknown / total > 0.3) continue;
-    if (Math.max(c.cumBuy, c.cumSell) / classified <= 0.7) continue;
-    signs.add((c.cumBuy > c.cumSell) === (c.type === 'C') ? 'long' : 'short');
+    if (!classified || total <= Math.max(previous,1) || c.cumUnknown / total > 0.3 ||
+        Math.max(c.cumBuy,c.cumSell)/classified <= 0.7) continue;
+    const sign=(c.cumBuy>c.cumSell)===(c.type==='C')?'long':'short';
+    if (!valid(threshold) || threshold !== priorThreshold) {
+      if(forward) uncertain.add(sign);
+    } else if (threshold>0 && previous<=threshold && total>threshold) signs.add(sign);
   }
+  if (signs.size===1 && [...uncertain].some(sign=>!signs.has(sign)))
+    return r('unverified contract could reverse turnover consensus');
   return signs.size === 1 ? r('directional turnover crossing', [...signs][0]) : r(signs.size ? 'conflicting turnover directions' : 'no qualified turnover crossing');
 }
 
