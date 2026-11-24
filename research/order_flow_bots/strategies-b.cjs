@@ -74,8 +74,16 @@ module.exports = function evaluateB(history) {
   }
   let downside = result(9,15,'no approach with bearish pressure');
   const opening = history[0];
-  const below = opening.contracts.filter(c => c.type==='P' && c.strike < opening.spot);
-  if (!opening.complete || !below.length || below.some(c => !(c.openOi >= 0) || c.openOi == null)) {
+  // The original open can have sound price/OI evidence before every
+  // subscribed contract has traded. A received official opening reference
+  // can recover these same inputs after a late start.
+  const hasOpening = opening.openingReferenceComplete ?? opening.complete;
+  const official = now.officialOpeningReference;
+  const spotAtOpen = hasOpening ? opening.spot : official?.spot;
+  const candidates = hasOpening ? opening.contracts :
+    now.contracts.map(c => ({...c,openOi:official?.bySymbol[c.symbol]}));
+  const below = candidates.filter(c => c.type==='P' && c.strike < spotAtOpen);
+  if (!Number.isFinite(spotAtOpen) || !below.length || below.some(c => !Number.isFinite(c.openOi) || c.openOi < 0)) {
     downside = result(9,15,'opening put-OI reference unavailable');
   } else if (window(2)) {
     const wall = below.reduce((a,b) => a.openOi>b.openOi || (a.openOi===b.openOi && a.strike>b.strike)?a:b);
