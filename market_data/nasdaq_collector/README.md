@@ -1,6 +1,6 @@
 # NASDAQ-100 snapshot collector
 
-Hourly snapshots of the 101 NASDAQ-100 listings plus the NDX index, from
+Hourly snapshots of the NASDAQ-100 listings plus the NDX index, from
 public sources only — no account, no auth. Publishes `nasdaq/latest.json`
 and its `snapshot_provenance.v1` sidecar `nasdaq/latest.provenance.json`
 to R2 (opt-in `--publish`).
@@ -27,9 +27,21 @@ The 101 listings (100 companies) are embedded in `symbols.py`, taken from
 Nasdaq's official `list-type/nasdaq100` API on 2026-11-23
 (`totalrecords: 101`). Alphabet Inc. appears twice — GOOGL (Class A) and
 GOOG (Class C) — which is why there are 101 listings for 100 companies.
-Re-verify against the same endpoint after each annual reconstitution
-(December) or announced change; `symbols.validate()` fails closed on a
-wrong count or a duplicate.
+
+Membership is dynamic: on every run the collector re-fetches the live
+constituent list from the same official endpoint (the same request also
+supplies the market caps), diffs it against the embedded list, and
+collects the live members — entrants get full treatment, leavers get no
+live row, and the diff is recorded in the snapshot's `index_changes`
+section (added/removed with names and the run date) and in the
+provenance sidecar. A failed, empty or garbled list fetch falls back to
+the embedded universe and records that fallback — a bad fetch never
+empties the snapshot. After a recorded change, update the embedded list
+in `symbols.py` (and `SOURCE_AS_OF`) so the next run diffs against the
+new baseline; `python -m market_data.nasdaq_collector universe --live`
+prints the live list and the diff. Re-verify against the same endpoint
+after each annual reconstitution (December) or announced change;
+`symbols.validate()` fails closed on a wrong count or a duplicate.
 
 ## Snapshot shape
 
@@ -45,6 +57,11 @@ wrong count or a duplicate.
   (title, source, link, published_at), `status` and `price_basis`.
 - `coverage`: listings / available / source-unavailable / with-news /
   with-candles counts. `session`: the session model (below).
+- `index_changes`: additions/removals against the embedded universe on
+  this run (`added`/`removed` with symbol and name, run date, `source`,
+  `fallback`); a listing that left the index is preserved here, not as
+  a live row. `universe.membership_source` is `live` or
+  `embedded_fallback`.
 
 The two percentage bases are labelled differently on purpose: a stock's
 `percent_change` and the index's `percent_change` are not the same
@@ -93,6 +110,8 @@ python -m pytest tests/test_nasdaq_collector.py
 
 Offline: universe count, snapshot schema, provenance shape, candle
 aggregation (including 9m bucketing from 1-minute bars), the two `%`
-labels, news parsing / the 12-hour publication window and the session model. No test touches a
+labels, news parsing / the 12-hour publication window, the session model,
+and dynamic membership (live-list parsing, the added/removed diff, the
+embedded fallback, and an end-to-end `collect()` with a fake session). No test touches a
 provider or R2.
 

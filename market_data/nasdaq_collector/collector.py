@@ -30,6 +30,17 @@ and freshness falls back to collector receipt. That basis is stated on
 every row rather than implied. ``secondaryData`` is the regular-session
 close; ``primaryData`` is the latest (after-hours) quote, which is what
 the per-stock price/percent report.
+
+Dynamic membership: on every run the collector re-fetches Nasdaq's
+official constituent list (the same list-type endpoint the embedded
+universe came from), diffs it against the embedded list, and collects
+the live members — entrants get full treatment (quote, market cap, news,
+candles on demand) and leavers get no live row. The diff is recorded in
+the snapshot's ``index_changes`` section (added/removed with names and
+the run date), so a leaver's identity is preserved in the snapshot and
+its provenance sidecar even though it is no longer a live row. A failed,
+empty or garbled list fetch falls back to the embedded universe and
+records that fallback — a bad fetch never empties the snapshot.
 """
 
 from __future__ import annotations
@@ -41,7 +52,8 @@ from zoneinfo import ZoneInfo
 
 from . import candles as candles_mod
 from . import news as news_mod
-from .symbols import EXPECTED_LISTINGS, SOURCE_AS_OF, SOURCE_LABEL, SYMBOLS, names, validate
+from .symbols import (SOURCE_AS_OF, SOURCE_LABEL, SYMBOLS, diff_universe,
+                      parse_list_response, validate_unique)
 
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
@@ -204,6 +216,27 @@ def parse_nasdaq_quote(payload, symbol):
     }
 
 
+def fetch_list_members(session):
+    """Fetch the live constituent list and market caps in one request.
+
+    Returns ``(members, caps)`` where ``members`` is the sorted
+    ``[(symbol, name)]`` list from :func:`symbols.parse_list_response`
+    and ``caps`` is ``{symbol: market_cap}`` from the same rows. Raises
+    on transport/HTTP errors or on an empty/garbled response; the caller
+    falls back to the embedded universe rather than publishing a bad one.
+    """
+    resp = session.get(NASDAQ_LIST_URL, timeout=20)
+    resp.raise_for_status()
+    payload = resp.json()
+    members = parse_list_response(payload)
+    caps = {}
+    for row in ((payload.get("data") or {}).get("data") or {}).get("rows") or []:
+        cap = _money(row.get("marketCap")) if isinstance(row, dict) else None
+        if isinstance(row, dict) and row.get("symbol") and cap is not None:
+            caps[row["symbol"]] = cap
+    return members, caps
+
+
 def fetch_list_market_caps(session):
     """Fetch per-listing market caps from Nasdaq's list-type endpoint.
 
@@ -211,15 +244,43 @@ def fetch_list_market_caps(session):
     Returns ``{symbol: market_cap}``. Raises on transport/HTTP errors;
     the caller leaves market caps (and ranks) null rather than guessing.
     """
-    resp = session.get(NASDAQ_LIST_URL, timeout=20)
-    resp.raise_for_status()
-    rows = resp.json()["data"]["data"]["rows"]
-    caps = {}
-    for row in rows:
-        cap = _money(row.get("marketCap"))
-        if row.get("symbol") and cap is not None:
-            caps[row["symbol"]] = cap
+    _, caps = fetch_list_members(session)
     return caps
+
+
+def resolve_universe(session, now=None):
+    """Resolve the universe for this run: live list vs embedded fallback.
+
+    Returns a dict with ``universe`` (sorted ``[(symbol, name)]``),
+    ``caps`` (``{symbol: market_cap}`` from the same response),
+    ``added`` / ``removed`` (the diff against the embedded list, each a
+    sorted ``[(symbol, name)]``), ``source`` (``"live"`` or
+    ``"embedded_fallback"``) and ``error`` (the fetch failure, or None).
+    A failed, empty or garbled list fetch returns the embedded universe
+    with empty caps and no recorded changes — a bad fetch never empties
+    the snapshot, and the fallback is visible in the snapshot's
+    ``universe.membership_source`` and ``index_changes``.
+    """
+    now = now or datetime.now(UTC)
+    try:
+        members, caps = fetch_list_members(session)
+    except Exception as exc:  # noqa: BLE001 - any list failure falls back
+        return {"universe": list(SYMBOLS), "caps": {}, "added": [],
+                "removed": [], "source": "embedded_fallback",
+                "error": str(exc), "as_of": now.date().isoformat()}
+    changes = diff_universe(SYMBOLS, members)
+    return {"universe": members, "caps": caps, "added": changes["added"],
+            "removed": changes["removed"], "source": "live",
+            "error": None, "as_of": now.date().isoformat()}
+
+
+def live_universe():
+    """Resolve the live universe with a throwaway session (CLI helper)."""
+    session = _session()
+    try:
+        return resolve_universe(session)
+    finally:
+        session.close()
 
 
 def fetch_nasdaq_quote(symbol, session, asset_class="stocks"):
@@ -257,27 +318,49 @@ def _freshness(fetched_at, now, observed_at=None):
             "basis": FRESHNESS_BASIS}
 
 
+def _companies(universe):
+    """Distinct companies in a universe, by name before any class suffix.
+
+    Alphabet Inc. appears as GOOGL (Class A) and GOOG (Class C), so the
+    company count is one less than the listing count for the embedded
+    universe; the same stripping applies to any live universe.
+    """
+    return len({name.split(" Common")[0].split(" Class")[0].strip()
+                for _, name in universe})
+
+
 def build_snapshot(quotes, index_quote, news_by_symbol=None,
-                   candles_by_symbol=None, now=None):
+                   candles_by_symbol=None, now=None, universe=None,
+                   membership=None):
     """Build the ``nasdaq/latest.json`` snapshot from fetched inputs.
 
     ``quotes`` maps symbol -> parsed Nasdaq quote dict or None (unavailable).
     ``index_quote`` is the parsed NDX quote or None. ``news_by_symbol``
     maps symbol -> headline list; ``candles_by_symbol`` maps symbol ->
     ``{"bars_1m": [...], "daily": [...]}`` for the 1h/7d changes.
-    Pure apart from the clock: no network, no files.
+    ``universe`` is the ``[(symbol, name)]`` list to publish live rows
+    for (default: the embedded ``SYMBOLS``); ``membership`` is the
+    ``resolve_universe`` result for this run (default: an embedded
+    fallback with no recorded changes). Pure apart from the clock: no
+    network, no files. Only the universe's members get live rows; a
+    listing that left the index is preserved in ``index_changes.removed``
+    (symbol + name) instead of as a row.
     """
     now = now or datetime.now(UTC)
+    universe = list(universe) if universe is not None else list(SYMBOLS)
+    validate_unique(universe)
+    membership = membership or {"added": [], "removed": [],
+                                "source": "embedded_fallback", "error": None,
+                                "as_of": now.date().isoformat()}
     # Read-time enforcement of the 12-hour publication window: anything
     # stored or passed in that is older than 12 hours (or undated) is
     # cycled out here, so nothing older is ever published.
     news_by_symbol = {symbol: news_mod.filter_recent(items, now)
                       for symbol, items in (news_by_symbol or {}).items()}
     candles_by_symbol = candles_by_symbol or {}
-    name_by_symbol = names()
-    validate()
+    name_by_symbol = dict(universe)
     rows = []
-    for symbol, _ in SYMBOLS:
+    for symbol, _ in universe:
         quote = quotes.get(symbol)
         candle_data = candles_by_symbol.get(symbol) or {}
         bars_1m = candle_data.get("bars_1m") or []
@@ -374,14 +457,24 @@ def build_snapshot(quotes, index_quote, news_by_symbol=None,
         "as_of": as_of,
         "generated_at": as_of,
         "universe": {"source": SOURCE_LABEL, "source_url": NASDAQ_LIST_URL,
-                     "as_of": SOURCE_AS_OF, "listings": EXPECTED_LISTINGS,
-                     "companies": 100},
+                     "as_of": SOURCE_AS_OF, "listings": len(universe),
+                     "companies": _companies(universe),
+                     "membership_source": membership["source"]},
+        "index_changes": {
+            "as_of": membership.get("as_of") or now.date().isoformat(),
+            "added": [{"symbol": s, "name": n}
+                      for s, n in membership.get("added") or []],
+            "removed": [{"symbol": s, "name": n}
+                        for s, n in membership.get("removed") or []],
+            "source": membership["source"],
+            "fallback": membership["source"] == "embedded_fallback",
+        },
         "index": index,
         "stocks": rows,
         "coverage": {
-            "listings": EXPECTED_LISTINGS,
+            "listings": len(universe),
             "available": len(available),
-            "source_unavailable": EXPECTED_LISTINGS - len(available),
+            "source_unavailable": len(universe) - len(available),
             "with_news": sum(1 for r in rows if r["news"]),
             "with_candles": sum(1 for s in candles_by_symbol
                                 if (candles_by_symbol[s] or {}).get("bars_1m")),
@@ -421,15 +514,41 @@ def collect(symbols=None, include_news=True, include_candles=True,
     its symbols source-unavailable; it never aborts the whole collection.
     News is re-fetched fresh on every run (hourly, and on demand) and only
     headlines published within the last 12 hours are kept — see ``news.py``.
+    Membership is dynamic: unless an explicit symbol subset is given, the
+    live constituent list is re-fetched first and the run collects the
+    live members (see :func:`resolve_universe`); a failed, empty or
+    garbled list fetch falls back to the embedded universe and records
+    that fallback in the snapshot and in ``stats["membership"]``.
     """
     now = now or datetime.now(UTC)
-    symbols = list(symbols) if symbols else [s for s, _ in SYMBOLS]
+    explicit = list(symbols) if symbols else None
     own_session = session is None
     session = session or _session()
     stats = {"quotes_ok": 0, "quotes_failed": 0, "news_ok": 0,
              "news_failed": 0, "candles_ok": 0, "candles_failed": 0,
-             "market_caps": 0, "errors": {}}
+             "market_caps": 0, "errors": {}, "membership": {}}
     try:
+        if explicit is not None:
+            from .symbols import names as _names
+            embedded_names = _names()
+            universe = [(s, embedded_names.get(s, s)) for s in explicit]
+            caps: dict = {}
+            membership = {"added": [], "removed": [],
+                          "source": "explicit_subset", "error": None,
+                          "as_of": now.date().isoformat()}
+        else:
+            resolution = resolve_universe(session, now=now)
+            universe = resolution["universe"]
+            caps = resolution["caps"]
+            membership = resolution
+            stats["market_caps"] = len(caps)
+            if resolution["error"]:
+                stats["errors"]["__membership__"] = resolution["error"]
+        stats["membership"] = {
+            "added": [s for s, _ in membership["added"]],
+            "removed": [s for s, _ in membership["removed"]],
+            "source": membership["source"]}
+        symbols = [s for s, _ in universe]
         quotes = {}
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(_safe_quote, session, s): s for s in symbols}
@@ -473,19 +592,16 @@ def collect(symbols=None, include_news=True, include_candles=True,
                     else:
                         stats["candles_ok"] += 1
                         candles_by_symbol[symbol] = data
-        # Market caps come from the list-type endpoint (one request); the
-        # quote endpoint does not publish them. A failed list fetch leaves
-        # caps (and ranks) null rather than guessed.
-        try:
-            caps = fetch_list_market_caps(session)
-            stats["market_caps"] = len(caps)
-            for quote in quotes.values():
-                if quote is not None:
-                    quote["market_cap"] = caps.get(quote["symbol"])
-        except Exception as exc:  # noqa: BLE001 - caps failure is recorded, not fatal
-            stats["errors"]["__market_caps__"] = str(exc)
+        # Market caps come from the list-type endpoint (one request, the
+        # same fetch that resolved the universe); the quote endpoint does
+        # not publish them. A fallback run leaves caps (and ranks) null
+        # rather than guessed.
+        for quote in quotes.values():
+            if quote is not None:
+                quote["market_cap"] = caps.get(quote["symbol"])
         snapshot = build_snapshot(quotes, index_quote, news_by_symbol,
-                                  candles_by_symbol, now=now)
+                                  candles_by_symbol, now=now,
+                                  universe=universe, membership=membership)
         return snapshot, stats
     finally:
         if own_session:

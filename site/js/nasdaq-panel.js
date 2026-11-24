@@ -15,6 +15,12 @@
 // squeeze panel reads from):
 // {
 //   "as_of": "2026-11-23T21:00:00Z", "schema_version": 1, "dataset": "nasdaq_snapshot",
+//   "universe": { "source": "Nasdaq official list-type/nasdaq100 API",
+//     "listings": 101, "companies": 100, "membership_source": "live" },
+//   "index_changes": { "as_of": "2026-11-23",
+//     "added": [{ "symbol": "NEW1", "name": "New Entrant Inc." }],
+//     "removed": [{ "symbol": "OLD1", "name": "Old Leaver Inc." }],
+//     "source": "live", "fallback": false },
 //   "index": { "symbol": "NDX", "status": "available", "level": 25431.10,
 //     "percent_change": 0.42, "percent_change_basis": "regular-session move vs previous close",
 //     "previous_close": 25324.50, "day_low": 25210.00, "day_high": 25480.00,
@@ -45,6 +51,21 @@
 // be compared directly. Sources: prices from Nasdaq's official API, candles
 // from Yahoo Finance, headlines from Google News per ticker (as the
 // NASDAQ-100 Stock Tracker records them).
+// Membership is dynamic: the collector re-fetches Nasdaq's live
+// constituent list every run, so the snapshot's stock rows follow index
+// entrants and leavers; additions/removals are recorded in
+// `index_changes` (with the run date) and shown under the controls. A
+// leaver has no live row but its symbol and name stay in `index_changes`.
+// Views: the Heatmap is the default view on open, with a Heatmap/Table
+// toggle in the controls. Heatmap tiles are a squarified treemap of the
+// same live snapshot rows as the table (so it follows dynamic membership
+// and updates on every refresh), sized by market cap with SQUARE-ROOT
+// scaling and a minimum-size floor (readability and tappability over
+// extreme fidelity to market-cap proportionality), coloured green/red by
+// daily % change with intensity by magnitude (full at +/-3%), each tile
+// labelled ticker + % change with a -3%/+3% gradient legend. Tapping a
+// tile opens the same stock detail view (candle chart + news) as tapping
+// a table row.
 (function (root) {
   'use strict';
 
@@ -59,6 +80,15 @@
   var YAHOO_CHART = 'https://query1.finance.yahoo.com/v8/finance/chart/';
   var INTERVAL_MINUTES = { '1m': 1, '3m': 3, '5m': 5, '9m': 9, '15m': 15, '30m': 30,
     '1h': 60, '2h': 120, '4h': 240, '1d': 1440, '1w': 10080 };
+  // Heatmap: tile colour reaches full green/red at +/-3% daily change.
+  var HEATMAP_FULL_PCT = 3;
+  // Heatmap: every tile gets at least this share of the total treemap area
+  // (0.5%), so the smallest listings stay readable and tappable. Visibility
+  // and ease of access win over extreme fidelity to market-cap proportions.
+  var HEATMAP_MIN_SHARE = 0.005;
+  // Treemap coordinate space (percentages are derived from it in
+  // renderHeatmap); the container's aspect-ratio CSS matches it.
+  var HEATMAP_W = 1000, HEATMAP_H = 620;
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -280,6 +310,184 @@
     }).join('');
   }
 
+  // ── Heatmap (squarified treemap of the same snapshot rows) ──────────
+
+  // Tile colour: green/red by daily % change, intensity by magnitude,
+  // full at +/-HEATMAP_FULL_PCT. Interpolated from a dark neutral so a
+  // flat stock is a visible tile, not a hole; a missing % is neutral.
+  function heatmapColor(pct) {
+    var neutral = [42, 47, 55];
+    var up = [0, 204, 85], down = [238, 51, 0];
+    if (!isFiniteNumber(pct) || pct === 0) return 'rgb(42, 47, 55)';
+    var t = Math.min(Math.abs(pct), HEATMAP_FULL_PCT) / HEATMAP_FULL_PCT;
+    var base = pct > 0 ? up : down;
+    var rgb = [0, 1, 2].map(function (i) {
+      return Math.round(neutral[i] + (base[i] - neutral[i]) * t);
+    });
+    return 'rgb(' + rgb.join(', ') + ')';
+  }
+
+  // Raise any weight below minShare of the total until every share is at
+  // least minShare (bounded iteration; converges, since each pass raises
+  // the small weights toward a fixed point). Returns normalised shares
+  // summing to 1. A missing market cap is replaced by the median weight
+  // by the caller, so it never becomes a zero tile.
+  function applyMinShare(weights, minShare) {
+    var total = 0;
+    weights.forEach(function (v) { total += v; });
+    if (!weights.length || total <= 0) {
+      return weights.map(function () { return 0; });
+    }
+    var w = weights.slice();
+    for (var i = 0; i < 10; i++) {
+      var sum = 0;
+      w.forEach(function (v) { sum += v; });
+      var floor = minShare * sum;
+      var changed = false;
+      w = w.map(function (v) { if (v < floor) { changed = true; return floor; } return v; });
+      if (!changed) break;
+    }
+    var sum2 = 0;
+    w.forEach(function (v) { sum2 += v; });
+    return w.map(function (v) { return v / sum2; });
+  }
+
+  // Squarified treemap layout (Bruls et al.): items [{key, weight}] with
+  // weight > 0; returns [{key, x, y, w, h}] in the same units as
+  // width/height, tiling the rectangle exactly. Rows are laid out along
+  // the shorter side of the remaining rectangle and closed when adding
+  // the next item would make the row's rectangles less square. Largest
+  // first (stable for ties), so the biggest listings land first.
+  function layoutTreemap(items, width, height) {
+    var list = (items || []).filter(function (it) {
+      return it && isFiniteNumber(it.weight) && it.weight > 0;
+    });
+    var total = 0;
+    list.forEach(function (it) { total += it.weight; });
+    if (!list.length || total <= 0 || width <= 0 || height <= 0) return [];
+    var sorted = list.slice().sort(function (a, b) { return b.weight - a.weight; });
+    var scale = (width * height) / total;
+    var rects = [];
+    var x = 0, y = 0, w = width, h = height;
+    var row = [], rowSum = 0;
+    function worst(rowItems, sum, side) {
+      var max = 0, min = Infinity;
+      rowItems.forEach(function (it) {
+        var a = it.weight * scale;
+        if (a > max) max = a;
+        if (a < min) min = a;
+      });
+      var rowArea = sum * scale;
+      return Math.max((side * side * max) / (rowArea * rowArea),
+        (rowArea * rowArea) / (side * side * min));
+    }
+    function layoutRow(rowItems, sum) {
+      var rowArea = sum * scale;
+      if (w >= h) {
+        var rh = rowArea / w;
+        var cx = x;
+        rowItems.forEach(function (it) {
+          var cw = (it.weight * scale) / rh;
+          rects.push({ key: it.key, x: cx, y: y, w: cw, h: rh });
+          cx += cw;
+        });
+        y += rh; h = Math.max(0, h - rh);
+      } else {
+        var cw2 = rowArea / h;
+        var cy = y;
+        rowItems.forEach(function (it) {
+          var ch = (it.weight * scale) / cw2;
+          rects.push({ key: it.key, x: x, y: cy, w: cw2, h: ch });
+          cy += ch;
+        });
+        x += cw2; w = Math.max(0, w - cw2);
+      }
+    }
+    sorted.forEach(function (it) {
+      var side = Math.min(w, h);
+      if (row.length && side > 0 &&
+          worst(row.concat([it]), rowSum + it.weight, side) > worst(row, rowSum, side)) {
+        layoutRow(row, rowSum);
+        row = [it]; rowSum = it.weight;
+      } else {
+        row.push(it); rowSum += it.weight;
+      }
+    });
+    if (row.length) layoutRow(row, rowSum);
+    return rects;
+  }
+
+  function renderHeatmap(stocks) {
+    var list = (stocks || []).slice();
+    if (!list.length) return '<p class="nq-empty">No stocks to show in the heatmap.</p>';
+    // Largest market cap first: the squarified layout places the biggest
+    // tiles first. Tile area is proportional to the SQUARE ROOT of market
+    // cap (a $4T listing is ~66x a $1B one by cap, ~8x by square root),
+    // with a minimum-share floor so small caps stay readable and tappable.
+    var ordered = sortStocks(list, 'market_cap', -1);
+    var roots = ordered.map(function (s) {
+      return isFiniteNumber(s.market_cap) && s.market_cap > 0 ? Math.sqrt(s.market_cap) : null;
+    });
+    var present = roots.filter(function (v) { return v !== null; }).sort(function (a, b) { return a - b; });
+    var median = present.length ? present[Math.floor(present.length / 2)] : 1;
+    var raw = roots.map(function (v) { return v === null ? median : v; });
+    var shares = applyMinShare(raw, HEATMAP_MIN_SHARE);
+    var rects = layoutTreemap(ordered.map(function (s, i) {
+      return { key: s.symbol, weight: shares[i] };
+    }), HEATMAP_W, HEATMAP_H);
+    var bySymbol = {};
+    rects.forEach(function (r) { bySymbol[r.key] = r; });
+    var tiles = ordered.map(function (s) {
+      var r = bySymbol[s.symbol];
+      if (!r) return '';
+      return '<button type="button" class="nq-tile" data-symbol="' + escapeHtml(s.symbol) + '"' +
+        ' style="left:' + (r.x / HEATMAP_W * 100).toFixed(2) + '%;top:' + (r.y / HEATMAP_H * 100).toFixed(2) +
+        '%;width:' + (r.w / HEATMAP_W * 100).toFixed(2) + '%;height:' + (r.h / HEATMAP_H * 100).toFixed(2) +
+        '%;background:' + heatmapColor(s.percent_change) + '"' +
+        ' title="' + escapeHtml(s.symbol) + ' ' + fmtPct(s.percent_change) +
+        ' · ' + fmtMarketCap(s.market_cap) + '">' +
+        '<span class="nq-tile-sym">' + escapeHtml(s.symbol) + '</span>' +
+        '<span class="nq-tile-pct">' + fmtPct(s.percent_change) + '</span></button>';
+    }).join('');
+    return '<div class="nq-heatmap" role="group" aria-label="NASDAQ-100 heatmap: tiles sized by market cap, coloured by daily percent change">' +
+      tiles + '</div>' +
+      '<div class="nq-legend" role="img" aria-label="Heatmap legend: full red at minus 3 percent, full green at plus 3 percent">' +
+      '<span>-3%</span><span class="nq-legend-bar"></span><span>+3%</span></div>';
+  }
+
+  // The snapshot's index_changes section, as one line under the controls:
+  // additions/removals with the run date, a "no changes" line when the
+  // live list matches the embedded one, and an explicit fallback line
+  // when the live list was unavailable (additions/removals unknown).
+  // A leaver's symbol and name are preserved here even though it has no
+  // live row. `membership_changes` is accepted as an alias, same shape.
+  function renderIndexChanges(data) {
+    var changes = (data && (data.index_changes || data.membership_changes)) || null;
+    if (!changes) return '';
+    var added = Array.isArray(changes.added) ? changes.added : [];
+    var removed = Array.isArray(changes.removed) ? changes.removed : [];
+    var when = (typeof changes.as_of === 'string' && changes.as_of)
+      ? ' as of ' + escapeHtml(changes.as_of) : '';
+    function names(list) {
+      return list.map(function (c) {
+        var sym = (typeof c === 'string') ? c : (c && c.symbol);
+        var nm = (c && typeof c === 'object' && c.name) ? ' (' + c.name + ')' : '';
+        return escapeHtml(sym || '') + escapeHtml(nm);
+      }).join(', ');
+    }
+    if (changes.fallback) {
+      return '<p class="nq-changes">Index membership' + when + ': the live constituent list was ' +
+        'unavailable on this run, so the embedded universe is shown and additions/removals are unknown.</p>';
+    }
+    if (!added.length && !removed.length) {
+      return '<p class="nq-changes">Index membership' + when + ': no changes.</p>';
+    }
+    var parts = [];
+    if (added.length) parts.push('Added: ' + names(added));
+    if (removed.length) parts.push('Removed: ' + names(removed));
+    return '<p class="nq-changes">Index changes' + when + ': ' + parts.join('; ') + '.</p>';
+  }
+
   // Candlesticks as inline SVG (numbers only, so nothing from the artifact
   // can inject markup). An interval with no candles is an explicit
   // "candles unavailable" state, never an empty chart that reads as flat.
@@ -442,7 +650,7 @@
     }).join('') + '</ul>';
   }
 
-  function renderDetail(stock, interval, candles) {
+  function renderDetail(stock, interval, candles, total) {
     var buttons = INTERVALS.map(function (iv) {
       return '<button type="button" class="nq-iv-btn' + (iv === interval ? ' active' : '') +
         '" data-interval="' + iv + '"' + (iv === interval ? ' aria-pressed="true"' : '') + '>' + iv + '</button>';
@@ -455,16 +663,20 @@
       '<div class="nq-detail-stats"><span>Day range: ' + fmtPrice(stock.day_low) + ' – ' + fmtPrice(stock.day_high) + '</span>' +
       '<span>Volume: ' + fmtInt(stock.volume) + '</span>' +
       '<span>Market cap: ' + fmtMarketCap(stock.market_cap) + '</span>' +
-      '<span>Rank: ' + (isFiniteNumber(stock.rank) ? stock.rank : '—') + ' of 101</span></div>' +
+      '<span>Rank: ' + (isFiniteNumber(stock.rank) ? stock.rank : '—') +
+      (isFiniteNumber(total) ? ' of ' + total : '') + '</span></div>' +
       '<div class="nq-intervals" role="group" aria-label="Candle interval">' + buttons + '</div>' +
       renderCandles(stock.symbol, interval, candles) +
       '<h4>Daily headlines</h4>' + renderNews(stock);
   }
 
   // Renders the panel from a validated snapshot. state: {query, sortKey,
-  // sortDir, selected, interval}. `candles` is the on-demand candle cache
+  // sortDir, view, selected, interval}. `candles` is the on-demand candle cache
   // {SYMBOL: {interval: bars | 'loading'}}; data.candles (if a publisher
   // ever adds it) is used as a fallback. Returns the visible row count.
+  // The heatmap is the default view; both views render from the same
+  // filtered snapshot rows, so a search filters both and a refresh
+  // updates both. The toggle only switches which one is shown.
   function renderSnapshot(doc, data, state, nowMs, candles) {
     candles = candles || data.candles || {};
     var stale = isStale(data.as_of, nowMs);
@@ -474,6 +686,12 @@
     var tbody = doc.getElementById('nasdaq-tbody');
     var detailEl = doc.getElementById('nasdaq-detail');
     var countEl = doc.getElementById('nasdaq-count');
+    var heatmapEl = doc.getElementById('nasdaq-heatmap');
+    var changesEl = doc.getElementById('nasdaq-changes');
+    var tableWrap = doc.getElementById('nasdaq-table-wrap');
+    var viewHeatmapBtn = doc.getElementById('nasdaq-view-heatmap');
+    var viewTableBtn = doc.getElementById('nasdaq-view-table');
+    var view = state.view === 'table' ? 'table' : 'heatmap';
     var filtered = sortStocks(searchStocks(data.stocks, state.query), state.sortKey, state.sortDir);
     statusEl.textContent = stale
       ? 'STALE — snapshot as of ' + fmtTime(data.as_of) + ' is older than ' + Math.round(STALE_AFTER_MS / 60000) +
@@ -482,6 +700,14 @@
     statusEl.setAttribute('data-state', stale ? 'stale' : 'live');
     heroEl.innerHTML = renderHero(data, stale);
     moversEl.innerHTML = renderMovers(data.stocks);
+    if (changesEl) changesEl.innerHTML = renderIndexChanges(data);
+    if (heatmapEl) {
+      heatmapEl.innerHTML = renderHeatmap(filtered);
+      heatmapEl.hidden = view !== 'heatmap';
+    }
+    if (tableWrap) tableWrap.hidden = view !== 'table';
+    if (viewHeatmapBtn) viewHeatmapBtn.setAttribute('aria-pressed', view === 'heatmap' ? 'true' : 'false');
+    if (viewTableBtn) viewTableBtn.setAttribute('aria-pressed', view === 'table' ? 'true' : 'false');
     tbody.innerHTML = renderRows(filtered);
     if (countEl) countEl.textContent = filtered.length + ' of ' + data.stocks.length + ' stocks';
     var selected = null;
@@ -489,7 +715,7 @@
       selected = (data.stocks || []).filter(function (s) { return s.symbol === state.selected; })[0] || null;
     }
     if (selected) {
-      detailEl.innerHTML = renderDetail(selected, state.interval, candles);
+      detailEl.innerHTML = renderDetail(selected, state.interval, candles, data.stocks.length);
       detailEl.hidden = false;
     } else {
       detailEl.innerHTML = '';
@@ -505,10 +731,16 @@
     var tbody = doc.getElementById('nasdaq-tbody');
     var detailEl = doc.getElementById('nasdaq-detail');
     var countEl = doc.getElementById('nasdaq-count');
+    var heatmapEl = doc.getElementById('nasdaq-heatmap');
+    var changesEl = doc.getElementById('nasdaq-changes');
+    var tableWrap = doc.getElementById('nasdaq-table-wrap');
     statusEl.textContent = message;
     statusEl.setAttribute('data-state', kind || 'failed');
     heroEl.innerHTML = '';
     moversEl.innerHTML = '';
+    if (heatmapEl) { heatmapEl.innerHTML = ''; heatmapEl.hidden = true; }
+    if (changesEl) changesEl.innerHTML = '';
+    if (tableWrap) tableWrap.hidden = false;
     tbody.innerHTML = '<tr><td colspan="6" class="nq-empty">' + escapeHtml(message) + '</td></tr>';
     if (countEl) countEl.textContent = '';
     detailEl.innerHTML = '';
@@ -520,7 +752,7 @@
   function mount(doc, container, fetchJson, opts) {
     opts = opts || {};
     var nowMs = opts.nowMs || Date.now();
-    var state = { query: '', sortKey: 'percent_change', sortDir: -1, selected: null, interval: '1d' };
+    var state = { query: '', sortKey: 'percent_change', sortDir: -1, view: 'heatmap', selected: null, interval: '1d' };
     var data = null;
     var candleCache = {};
     var fetchCandles = opts.fetchCandles || null;
@@ -571,6 +803,8 @@
             else { state.sortKey = key; state.sortDir = key === 'name' ? 1 : -1; }
             rerender(); return;
           }
+          var view = t.getAttribute('data-view');
+          if (view === 'heatmap' || view === 'table') { state.view = view; rerender(); return; }
           var sym = t.getAttribute('data-symbol');
           if (sym) { state.selected = sym; rerender(); ensureCandles(); return; }
         }
@@ -600,12 +834,16 @@
   }
 
   var api = { INTERVALS: INTERVALS, ARTIFACT_PATH: ARTIFACT_PATH, STALE_AFTER_MS: STALE_AFTER_MS,
+    HEATMAP_FULL_PCT: HEATMAP_FULL_PCT, HEATMAP_MIN_SHARE: HEATMAP_MIN_SHARE,
+    HEATMAP_W: HEATMAP_W, HEATMAP_H: HEATMAP_H,
     INDEX_PCT_LABEL: INDEX_PCT_LABEL, STOCK_PCT_LABEL: STOCK_PCT_LABEL, SOURCE_LINE: SOURCE_LINE,
     escapeHtml: escapeHtml, safeUrl: safeUrl, fmtPrice: fmtPrice, fmtPct: fmtPct,
     fmtMarketCap: fmtMarketCap, fmtInt: fmtInt, fmtTime: fmtTime, isStale: isStale,
     validateSnapshot: validateSnapshot, sortStocks: sortStocks, searchStocks: searchStocks,
     topMovers: topMovers, breadth: breadth, renderHero: renderHero, renderMovers: renderMovers,
     renderRows: renderRows, renderCandles: renderCandles, renderNews: renderNews,
+    heatmapColor: heatmapColor, applyMinShare: applyMinShare, layoutTreemap: layoutTreemap,
+    renderHeatmap: renderHeatmap, renderIndexChanges: renderIndexChanges,
     marketStatusText: marketStatusText, aggregateBars: aggregateBars, yahooBars: yahooBars,
     loadCandles: loadCandles,
     renderDetail: renderDetail, renderSnapshot: renderSnapshot, renderFailure: renderFailure, mount: mount };

@@ -7,7 +7,10 @@ No provider calls, no R2, no clock dependence beyond fixed fixtures:
 Covers the embedded universe (101 listings), the snapshot schema and its
 two differently-labelled percentage bases, the provenance sidecar shape,
 candle aggregation (including 9m bucketing from 1-minute bars), news
-parsing / the 12-hour publication window and the equity session model.
+parsing / the 12-hour publication window, the equity session model, and
+dynamic membership (live constituent list re-fetched every run, diffed
+against the embedded list, with an embedded fallback that never empties
+the snapshot).
 """
 
 from __future__ import annotations
@@ -26,13 +29,14 @@ if str(ROOT) not in sys.path:
 from market_data.nasdaq_collector import candles as candles_mod  # noqa: E402
 from market_data.nasdaq_collector import news as news_mod  # noqa: E402
 from market_data.nasdaq_collector.collector import (  # noqa: E402
-    INDEX_PCT_BASIS, STOCK_PCT_BASIS, build_snapshot, market_status,
-    parse_nasdaq_quote,
+    INDEX_PCT_BASIS, STOCK_PCT_BASIS, build_snapshot, collect, market_status,
+    parse_nasdaq_quote, resolve_universe,
 )
 from market_data.nasdaq_collector.provenance import build_provenance  # noqa: E402
 from market_data.nasdaq_collector.publish import publish_snapshot  # noqa: E402
 from market_data.nasdaq_collector.symbols import (  # noqa: E402
-    DUAL_CLASS_PAIRS, EXPECTED_LISTINGS, SYMBOLS, names, symbols, validate,
+    DUAL_CLASS_PAIRS, EXPECTED_LISTINGS, SYMBOLS, diff_universe, names,
+    parse_list_response, symbols, validate, validate_unique,
 )
 
 UTC = timezone.utc
@@ -425,4 +429,215 @@ def test_market_status_session_model():
     assert market_status(datetime(2026, 11, 21, 15, 0, tzinfo=UTC)) == {"status": "closed", "reason": "weekend"}  # Sat
     assert market_status(datetime(2026, 11, 26, 15, 0, tzinfo=UTC)) == {"status": "closed", "reason": "holiday_2026"}  # Thanksgiving
     assert market_status(datetime(2026, 11, 23, 21, 0, tzinfo=UTC))["status"] == "closed"  # Mon 16:00 ET, close
+
+
+# ------------------------------------------------------- dynamic membership
+
+def _list_payload(members):
+    """Nasdaq list-type payload for ``[(symbol, name, market_cap)]``."""
+    return {"data": {"data": {
+        "totalrecords": len(members),
+        "rows": [{"symbol": s, "companyName": n, "marketCap": c}
+                 for s, n, c in members]}}}
+
+
+def _live_members():
+    """Embedded universe minus XEL plus NEW1 — one removal, one entrant."""
+    embedded = [(s, names()[s], 10**9) for s in symbols() if s != "XEL"]
+    return embedded + [("NEW1", "New Entrant Inc. Common Stock", 5 * 10**9)]
+
+
+class _ListResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _ListSession:
+    """Serves the list-type endpoint from a fixed member list."""
+
+    def __init__(self, members):
+        self.payload = _list_payload(members)
+        self.calls = 0
+
+    def get(self, url, timeout=20):
+        self.calls += 1
+        assert "list-type" in url
+        return _ListResp(self.payload)
+
+
+class _FailingSession:
+    def get(self, url, timeout=20):
+        raise RuntimeError("list endpoint down")
+
+
+def test_parse_list_response_members_sorted_and_named():
+    members = parse_list_response(_list_payload(
+        [("MSFT", "Microsoft Corporation Common Stock", 3 * 10**12),
+         ("AAPL", "Apple Inc. Common Stock", 5 * 10**12),
+         ("NONAME", None, 10**9)]))
+    assert members == [("AAPL", "Apple Inc. Common Stock"),
+                       ("MSFT", "Microsoft Corporation Common Stock"),
+                       ("NONAME", "NONAME")]
+    # Duplicate symbols keep the first row; symbol-less rows are skipped.
+    assert parse_list_response(_list_payload(
+        [("AAPL", "Apple Inc. Common Stock", 1),
+         ("AAPL", "Apple Inc. (duplicate)", 1)])) == [
+        ("AAPL", "Apple Inc. Common Stock")]
+
+
+def test_parse_list_response_empty_or_garbled_raises():
+    for bad in ({}, {"data": {}}, {"data": {"data": {}}},
+                {"data": {"data": {"rows": []}}},
+                {"data": {"data": {"rows": "not a list"}}},
+                {"data": {"data": {"rows": [{"companyName": "No Symbol"}]}}},
+                "not an object", None):
+        with pytest.raises(ValueError):
+            parse_list_response(bad)
+
+
+def test_diff_universe_added_removed():
+    old = [("AAPL", "Apple Inc. Common Stock"), ("XEL", "Xcel Energy Inc. Common Stock")]
+    new = [("AAPL", "Apple Inc. Common Stock"), ("NEW1", "New Entrant Inc. Common Stock")]
+    assert diff_universe(old, new) == {
+        "added": [("NEW1", "New Entrant Inc. Common Stock")],
+        "removed": [("XEL", "Xcel Energy Inc. Common Stock")]}
+    assert diff_universe(old, old) == {"added": [], "removed": []}
+
+
+def test_validate_unique_allows_other_counts_but_not_duplicates():
+    validate_unique([("AAPL", "Apple"), ("MSFT", "Microsoft")])
+    with pytest.raises(ValueError):
+        validate_unique([("AAPL", "Apple"), ("AAPL", "Apple")])
+    # The embedded 101-count check still applies to validate() itself.
+    with pytest.raises(ValueError):
+        validate(SYMBOLS[:100])
+
+
+def test_resolve_universe_live_diff():
+    resolution = resolve_universe(_ListSession(_live_members()), now=NOW)
+    assert resolution["source"] == "live"
+    assert resolution["error"] is None
+    assert len(resolution["universe"]) == 101
+    assert ("NEW1", "New Entrant Inc. Common Stock") in resolution["universe"]
+    assert all(s != "XEL" for s, _ in resolution["universe"])
+    assert resolution["added"] == [("NEW1", "New Entrant Inc. Common Stock")]
+    assert resolution["removed"] == [("XEL", "Xcel Energy Inc. Common Stock")]
+    assert resolution["caps"]["NEW1"] == 5 * 10**9
+    assert "XEL" not in resolution["caps"]
+
+
+def test_resolve_universe_fallback_on_failure_and_on_empty_response():
+    for session in (_FailingSession(),
+                    _ListSession([])):
+        resolution = resolve_universe(session, now=NOW)
+        assert resolution["source"] == "embedded_fallback"
+        assert resolution["universe"] == list(SYMBOLS)
+        assert resolution["caps"] == {}
+        assert resolution["added"] == [] and resolution["removed"] == []
+        assert resolution["error"] is not None
+
+
+def test_build_snapshot_dynamic_universe_and_index_changes():
+    universe = [("AAPL", "Apple Inc. Common Stock"),
+                ("NEW1", "New Entrant Inc. Common Stock"),
+                ("MSFT", "Microsoft Corporation Common Stock")]
+    quotes = {"AAPL": _quote("AAPL", 350.0, 2.0, 5 * 10**12),
+              "NEW1": _quote("NEW1", 42.0, 1.0, 5 * 10**9),
+              "MSFT": _quote("MSFT", 490.0, -0.5, 3 * 10**12)}
+    membership = {"added": [("NEW1", "New Entrant Inc. Common Stock")],
+                  "removed": [("XEL", "Xcel Energy Inc. Common Stock")],
+                  "source": "live", "error": None, "as_of": "2026-11-23"}
+    snap = build_snapshot(quotes, _index(), now=NOW, universe=universe,
+                          membership=membership)
+    assert len(snap["stocks"]) == 3
+    assert snap["coverage"] == {"listings": 3, "available": 3,
+                                "source_unavailable": 0, "with_news": 0,
+                                "with_candles": 0}
+    assert snap["universe"]["listings"] == 3
+    assert snap["universe"]["companies"] == 3
+    assert snap["universe"]["membership_source"] == "live"
+    assert snap["index_changes"] == {
+        "as_of": "2026-11-23",
+        "added": [{"symbol": "NEW1", "name": "New Entrant Inc. Common Stock"}],
+        "removed": [{"symbol": "XEL", "name": "Xcel Energy Inc. Common Stock"}],
+        "source": "live", "fallback": False}
+    # The leaver is preserved in index_changes, not as a live row.
+    assert all(r["symbol"] != "XEL" for r in snap["stocks"])
+    assert next(r for r in snap["stocks"]
+                if r["symbol"] == "NEW1")["name"] == "New Entrant Inc. Common Stock"
+    # No membership given: an embedded fallback with no recorded changes.
+    default = build_snapshot(quotes, _index(), now=NOW, universe=universe)
+    assert default["index_changes"]["source"] == "embedded_fallback"
+    assert default["index_changes"]["fallback"] is True
+    assert default["index_changes"]["added"] == []
+    assert default["index_changes"]["removed"] == []
+
+
+class _QuoteSession:
+    """Serves list-type plus one quote/info response per requested symbol."""
+
+    def __init__(self, members):
+        self.payload = _list_payload(members)
+
+    def get(self, url, timeout=20, params=None):
+        if "list-type" in url:
+            return _ListResp(self.payload)
+        symbol = url.split("/quote/")[1].split("/")[0]
+        return _ListResp({"data": {
+            "primaryData": {"lastSalePrice": "$100.00", "netChange": "$1.00",
+                            "percentageChange": "1.00%", "volume": "1,000",
+                            "lastTradeTimestamp": "Nov 23, 2026 10:00 AM ET"},
+            "keyStats": {"dayrange": {"value": "99.00 - 101.00"}}}})
+
+
+def test_collect_dynamic_membership_end_to_end():
+    snap, stats = collect(include_news=False, include_candles=False,
+                          session=_QuoteSession(_live_members()), now=NOW)
+    assert len(snap["stocks"]) == 101
+    assert snap["coverage"]["listings"] == 101
+    assert snap["coverage"]["available"] == 101
+    new1 = next(r for r in snap["stocks"] if r["symbol"] == "NEW1")
+    assert new1["name"] == "New Entrant Inc. Common Stock"
+    assert new1["market_cap"] == 5 * 10**9
+    assert new1["status"] == "available"
+    assert all(r["symbol"] != "XEL" for r in snap["stocks"])
+    assert snap["index_changes"]["added"] == [
+        {"symbol": "NEW1", "name": "New Entrant Inc. Common Stock"}]
+    assert snap["index_changes"]["removed"] == [
+        {"symbol": "XEL", "name": "Xcel Energy Inc. Common Stock"}]
+    assert snap["index_changes"]["fallback"] is False
+    assert stats["membership"] == {"added": ["NEW1"], "removed": ["XEL"],
+                                   "source": "live"}
+    assert stats["quotes_ok"] == 101
+    assert stats["market_caps"] == 101
+    prov = build_provenance(snap)
+    assert prov["index_changes"] == snap["index_changes"]
+
+
+def test_collect_falls_back_to_embedded_universe_when_list_fails():
+    # The list fetch fails; quotes still come from a session that serves
+    # the embedded symbols. (Built inline: _QuoteSession with the
+    # embedded members would serve the list, so fail the list only.)
+    class _ListFailsQuotesOk(_QuoteSession):
+        def get(self, url, timeout=20, params=None):
+            if "list-type" in url:
+                raise RuntimeError("list endpoint down")
+            return super().get(url, timeout=timeout, params=params)
+
+    snap, stats = collect(include_news=False, include_candles=False,
+                          session=_ListFailsQuotesOk(
+                              [(s, names()[s], 10**9) for s in symbols()]),
+                          now=NOW)
+    assert len(snap["stocks"]) == 101
+    assert snap["index_changes"]["source"] == "embedded_fallback"
+    assert snap["index_changes"]["fallback"] is True
+    assert stats["membership"]["source"] == "embedded_fallback"
+    assert "__membership__" in stats["errors"]
+    assert stats["market_caps"] == 0  # no caps without the list response
 

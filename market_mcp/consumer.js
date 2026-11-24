@@ -134,8 +134,9 @@ const NASDAQ_STALE_SECONDS = 3600; // hourly collector cadence
 function nasdaqSnapshot(p) {
   check(object(p) && p.schema_version === 1 && p.dataset === 'nasdaq_snapshot' &&
     typeof p.as_of === 'string' && Number.isFinite(Date.parse(p.as_of)) &&
-    object(p.universe) && p.universe.listings === 101 && Array.isArray(p.stocks) &&
-    p.stocks.length <= 101 && object(p.index) && p.index.symbol === 'NDX' &&
+    object(p.universe) && Number.isInteger(p.universe.listings) && p.universe.listings > 0 &&
+    Array.isArray(p.stocks) &&
+    p.stocks.length <= p.universe.listings && object(p.index) && p.index.symbol === 'NDX' &&
     object(p.coverage), 'Unsupported NASDAQ snapshot contract.');
   check(p.stocks.every(r => object(r) && SYMBOL.test(r.symbol) && typeof r.name === 'string' &&
     (r.price === null || typeof r.price === 'number') &&

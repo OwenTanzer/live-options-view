@@ -3,10 +3,14 @@
 Source: Nasdaq official list-type API
     https://api.nasdaq.com/api/quote/list-type/nasdaq100
 fetched 2026-11-23 (API date "Nov 23, 2026", totalrecords 101).
-The list is embedded so the collector does not depend on the
-constituent endpoint at collection time; re-verify against the
-same endpoint after each annual reconstitution (December) or
-announced change, and update SOURCE_AS_OF below.
+The list is embedded so the collector has a last-known universe to fall
+back on; the collector re-fetches the same endpoint on every run and
+diffs the live list against this embedded one (see :func:`diff_universe`
+and ``collector.resolve_universe``), so entrants are picked up and leavers
+dropped without a code change. Re-verify against the same endpoint after
+each annual reconstitution (December) or announced change, and update
+SOURCE_AS_OF below — the embedded list is the diff baseline, so keeping
+it current keeps the recorded changes accurate.
 
 Dual-class pair: Alphabet Inc. is included twice, as GOOGL
 (Class A) and GOOG (Class C) — hence 101 listings for 100
@@ -152,4 +156,67 @@ def validate(universe: object = SYMBOLS) -> None:
         raise ValueError(
             f"NASDAQ-100 universe has {len(seen_symbols)} listings, expected {EXPECTED_LISTINGS}"
         )
+
+
+def validate_unique(universe: object) -> None:
+    """Fail closed unless the universe has no duplicate symbol.
+
+    Unlike :func:`validate`, no count is asserted: a live constituent
+    list legitimately differs from 101 after a reconstitution, so the
+    collector validates uniqueness only and records the size.
+    """
+    seen_symbols = [symbol for symbol, _ in universe]  # type: ignore[union-attr]
+    if len(seen_symbols) != len(set(seen_symbols)):
+        raise ValueError("NASDAQ-100 universe contains a duplicate symbol")
+
+
+def parse_list_response(payload) -> list[tuple[str, str]]:
+    """Parse Nasdaq's list-type/nasdaq100 response into ``(symbol, name)``.
+
+    Rows live at ``data.data.rows`` with ``symbol``, ``companyName`` and
+    ``marketCap`` per row (verified live 2026-11-23). Returns the members
+    sorted by symbol. Raises ValueError when the response is empty or
+    garbled — no ``data.data.rows`` list, no row with a usable symbol —
+    so the caller can fall back to the embedded list instead of ever
+    publishing an emptied universe. A row without a company name keeps
+    its symbol as the name; a duplicate symbol keeps its first row.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("Nasdaq list response is not an object")
+    rows = ((payload.get("data") or {}).get("data") or {}).get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Nasdaq list response carries no constituent rows")
+    members: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = row.get("symbol")
+        if not isinstance(symbol, str) or not symbol.strip():
+            continue
+        symbol = symbol.strip()
+        name = (row.get("companyName") or row.get("name")
+                or row.get("company_name"))
+        if not isinstance(name, str) or not name.strip():
+            name = symbol
+        members.setdefault(symbol, name.strip())
+    if not members:
+        raise ValueError("Nasdaq list response carries no usable symbols")
+    return sorted(members.items())
+
+
+def diff_universe(old, new) -> dict[str, list[tuple[str, str]]]:
+    """Diff two universes (iterables of ``(symbol, name)``).
+
+    Returns ``{"added": [...], "removed": [...]}``, each a
+    symbol-sorted list of ``(symbol, name)`` — ``added`` takes names
+    from ``new``, ``removed`` from ``old``. The collector diffs the
+    live list against the embedded list, so ``added`` is what entered
+    the index and ``removed`` is what left it since the embedded list
+    was last verified.
+    """
+    old_map = dict(old)
+    new_map = dict(new)
+    added = sorted((s, new_map[s]) for s in new_map if s not in old_map)
+    removed = sorted((s, old_map[s]) for s in old_map if s not in new_map)
+    return {"added": added, "removed": removed}
 

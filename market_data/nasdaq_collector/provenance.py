@@ -47,6 +47,7 @@ def build_provenance(snapshot, publication_status="not_published",
         "source": snapshot.get("sources", {}).get("prices"),
         "as_of": snapshot.get("as_of"),
         "universe": snapshot.get("universe"),
+        "index_changes": snapshot.get("index_changes"),
         "index": {
             "symbol": index.get("symbol"),
             "price_basis": index.get("price_basis"),

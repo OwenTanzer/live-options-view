@@ -1,6 +1,8 @@
 // NASDAQ-100 Stocks panel tests: interval list, table sort/search helpers,
-// % labelling strings, stale-state rendering, candle availability, and the
-// site wiring (Stocks tab + #nasdaq-panel section + hashed script tag).
+// % labelling strings, stale-state rendering, candle availability, the
+// Heatmap view (default, squarified treemap, toggle, tile tap -> detail),
+// index-changes rendering, and the site wiring (Stocks tab +
+// #nasdaq-panel section + hashed script tag).
 // Plain node:assert, no DOM dependency — render helpers return strings and
 // mount() is driven with a minimal fake document/container.
 const assert = require('node:assert/strict');
@@ -24,6 +26,7 @@ function stock(symbol, overrides) {
 }
 const snapshot = {
   as_of: FRESH_AS_OF,
+  index_changes: { as_of: '2026-11-23', added: [], removed: [], source: 'live', fallback: false },
   index: { level: 25431.10, percent_change: 0.42, market_status: 'closed', prev_close: 25324.50,
     day_low: 25210.00, day_high: 25480.00, advancers: 62, decliners: 38 },
   stocks: [
@@ -112,6 +115,109 @@ assert.equal(panel.fmtMarketCap(4.35e12), '$4.35T', 'market cap formats in trill
 assert.equal(panel.fmtMarketCap(812.3e9), '$812.3B', 'market cap formats in billions');
 assert.equal(panel.fmtPrice(null), '—', 'a missing price renders as a dash, never zero');
 assert.equal(panel.fmtPct(null), '—', 'a missing % renders as a dash, never zero');
+
+// --- heatmap --------------------------------------------------------------
+assert.equal(panel.HEATMAP_FULL_PCT, 3, 'heatmap colour reaches full intensity at +/-3%');
+assert.equal(panel.heatmapColor(3), 'rgb(0, 204, 85)', '+3% is full green');
+assert.equal(panel.heatmapColor(-3), 'rgb(238, 51, 0)', '-3% is full red');
+assert.equal(panel.heatmapColor(9), 'rgb(0, 204, 85)', 'beyond +3% clamps to full green');
+assert.equal(panel.heatmapColor(-9), 'rgb(238, 51, 0)', 'beyond -3% clamps to full red');
+assert.equal(panel.heatmapColor(0), 'rgb(42, 47, 55)', 'a flat stock is the neutral tile colour');
+assert.equal(panel.heatmapColor(null), 'rgb(42, 47, 55)', 'a missing % is neutral, never an error');
+assert.equal(panel.heatmapColor(1.5), 'rgb(21, 126, 70)', '+1.5% is half-intensity green');
+assert.equal(panel.heatmapColor(-1.5), 'rgb(140, 49, 28)', '-1.5% is half-intensity red');
+
+// Minimum-share floor: the smallest weights are raised to at least the
+// floor share, and the shares still sum to 1.
+const floored = panel.applyMinShare([100, 1, 1, 1], 0.05);
+assert.ok(Math.abs(floored.reduce((a, b) => a + b, 0) - 1) < 1e-9, 'floored shares sum to 1');
+assert.ok(Math.min(...floored) >= 0.049, 'every share is at least the floor after raising');
+assert.ok(floored[0] > floored[1], 'the largest weight stays the largest tile');
+assert.deepEqual(panel.applyMinShare([], 0.05), [], 'no weights in, no shares out');
+
+// Squarified layout: tiles the rectangle exactly, no overlaps, in bounds.
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+const treemap = panel.layoutTreemap(
+  [{ key: 'A', weight: 4 }, { key: 'B', weight: 3 }, { key: 'C', weight: 2 }, { key: 'D', weight: 1 }],
+  100, 100);
+assert.equal(treemap.length, 4, 'one rect per item');
+assert.ok(Math.abs(treemap.reduce((s, r) => s + r.w * r.h, 0) - 10000) < 1,
+  'tile areas sum to the container area');
+treemap.forEach(r => {
+  assert.ok(r.x >= -1e-9 && r.y >= -1e-9 && r.x + r.w <= 100 + 1e-9 && r.y + r.h <= 100 + 1e-9,
+    'every tile stays inside the container');
+});
+for (let i = 0; i < treemap.length; i++) {
+  for (let j = i + 1; j < treemap.length; j++) {
+    assert.ok(!rectsOverlap(treemap[i], treemap[j]), 'tiles must not overlap');
+  }
+}
+assert.deepEqual(panel.layoutTreemap([{ key: 'ONLY', weight: 1 }], 100, 60),
+  [{ key: 'ONLY', x: 0, y: 0, w: 100, h: 60 }], 'a single tile fills the container');
+assert.deepEqual(panel.layoutTreemap([], 100, 100), [], 'no items, no tiles');
+// Square-root scaling with the floor: a 10,000x market-cap ratio becomes a
+// 100x weight ratio before the floor, and the smallest tile keeps >= 0.5%.
+const tiny = panel.layoutTreemap(
+  [{ key: 'BIG', weight: 1 }, { key: 'SMALL', weight: 0.01 }], 100, 100);
+assert.ok(tiny.find(r => r.key === 'SMALL').w * tiny.find(r => r.key === 'SMALL').h >= 0.5,
+  'the minimum-size floor keeps the smallest tile visible');
+
+// Heatmap rendering: same rows as the table, ticker + % on every tile,
+// -3%/+3% legend, and a tile even for the stock with no market cap.
+const heatmap = panel.renderHeatmap(snapshot.stocks);
+assert.ok(heatmap.includes('nq-heatmap'), 'heatmap renders its container');
+assert.equal((heatmap.match(/data-symbol="/g) || []).length, 4,
+  'one tile per stock row, including the no-price row');
+for (const sym of ['NVDA', 'AAPL', 'MSFT', 'ZZZ']) {
+  assert.ok(heatmap.includes('data-symbol="' + sym + '"'), 'heatmap has a tile for ' + sym);
+}
+assert.ok(heatmap.includes('NVDA') && heatmap.includes('+1.83%'), 'tiles label ticker + % change');
+assert.ok(heatmap.includes('-3%') && heatmap.includes('+3%'), 'legend spans -3% to +3%');
+assert.ok(heatmap.includes('nq-legend-bar'), 'legend has its gradient bar');
+const nvdaTile = /data-symbol="NVDA"[^>]*background:([^;"]+)/.exec(heatmap);
+assert.ok(nvdaTile, 'the NVDA tile carries a background colour');
+assert.equal(nvdaTile[1], panel.heatmapColor(1.83), 'the +1.83% tile is coloured by its % change');
+assert.match(panel.renderHeatmap([]), /No stocks to show in the heatmap/,
+  'an empty heatmap says so explicitly');
+// Extreme caps: a $100T listing next to a $1M one — square-root scaling
+// plus the floor keeps the small tile at its minimum share of the area.
+const extreme = panel.renderHeatmap([
+  stock('BIG', { market_cap: 1e14, percent_change: 1 }),
+  stock('SMALL', { market_cap: 1e6, percent_change: -1 }),
+]);
+const smallTile = /data-symbol="SMALL"[^>]*width:([\d.]+)%;height:([\d.]+)%/.exec(extreme);
+assert.ok(smallTile, 'the small-cap tile renders');
+assert.ok((parseFloat(smallTile[1]) / 100) * (parseFloat(smallTile[2]) / 100) >= 0.004,
+  'the small-cap tile keeps at least ~0.4% of the heatmap area');
+
+// --- index changes ----------------------------------------------------------
+const changes = panel.renderIndexChanges({
+  index_changes: { as_of: '2026-11-23',
+    added: [{ symbol: 'NEW1', name: 'New Entrant Inc.' }],
+    removed: [{ symbol: 'XEL', name: 'Xcel Energy Inc.' }],
+    source: 'live', fallback: false } });
+assert.ok(changes.includes('Index changes as of 2026-11-23'), 'changes carry the run date');
+assert.ok(changes.includes('NEW1') && changes.includes('New Entrant Inc.'), 'entrants are named');
+assert.ok(changes.includes('XEL') && changes.includes('Xcel Energy Inc.'), 'leavers are named');
+assert.ok(panel.renderIndexChanges(snapshot).includes('no changes'),
+  'a live run with no changes says so');
+assert.ok(panel.renderIndexChanges({
+  index_changes: { as_of: '2026-11-23', added: [], removed: [],
+    source: 'embedded_fallback', fallback: true } }).includes('embedded universe'),
+  'a fallback run says the live list was unavailable');
+assert.equal(panel.renderIndexChanges({}), '', 'no index_changes, no changes line');
+assert.equal(panel.renderIndexChanges(null), '', 'a null snapshot has no changes line');
+const hostileChange = panel.renderIndexChanges({
+  index_changes: { as_of: '2026-11-23', added: [{ symbol: 'X', name: '<script>' }],
+    removed: [], source: 'live', fallback: false } });
+assert.doesNotMatch(hostileChange, /<script>/, 'change names are escaped');
+// Detail rank uses the live listing count, not a hard-coded 101.
+assert.ok(panel.renderDetail(snapshot.stocks[0], '1d', snapshot.candles, 4).includes('Rank: 1 of 4'),
+  'detail ranks against the snapshot size');
+assert.ok(!panel.renderDetail(snapshot.stocks[0], '1d', snapshot.candles).includes(' of '),
+  'detail without a total states no count');
 
 // --- candles ----------------------------------------------------------------
 const chart = panel.renderCandles('NVDA', '1d', snapshot.candles);
@@ -224,11 +330,18 @@ function fakeDoc(ids) {
   ids.forEach(id => { els[id] = fakeEl(); });
   return { els, getElementById: id => els[id] || null };
 }
-const DOC_IDS = ['nasdaq-status', 'nasdaq-hero', 'nasdaq-movers', 'nasdaq-tbody', 'nasdaq-detail', 'nasdaq-count'];
+const DOC_IDS = ['nasdaq-status', 'nasdaq-hero', 'nasdaq-movers', 'nasdaq-tbody', 'nasdaq-detail',
+  'nasdaq-count', 'nasdaq-heatmap', 'nasdaq-changes', 'nasdaq-table-wrap',
+  'nasdaq-view-heatmap', 'nasdaq-view-table'];
+function clickTarget(container, attrs) {
+  const target = { getAttribute: k => (k in attrs ? attrs[k] : null), parentNode: container };
+  container._listeners.click.forEach(fn => fn({ target }));
+}
 (async () => {
   const doc = fakeDoc(DOC_IDS);
   const container = fakeEl();
-  await panel.mount(doc, container, async () => snapshot, { nowMs: NOW });
+  const noCandles = async () => ({ ok: false, json: async () => ({}) });
+  await panel.mount(doc, container, async () => snapshot, { nowMs: NOW, fetchCandles: noCandles });
   assert.equal(container.getAttribute('data-state'), 'ready', 'a fresh snapshot mounts ready');
   assert.equal(doc.els['nasdaq-status'].getAttribute('data-state'), 'live', 'status is live for a fresh snapshot');
   assert.ok(doc.els['nasdaq-hero'].innerHTML.includes('25,431.10'), 'hero renders the index level');
@@ -237,6 +350,42 @@ const DOC_IDS = ['nasdaq-status', 'nasdaq-hero', 'nasdaq-movers', 'nasdaq-tbody'
   assert.ok(doc.els['nasdaq-tbody'].innerHTML.includes('Nasdaq latest reported move') === false,
     'table rows carry no per-row basis label; the basis lives in the hero and footnote');
   assert.equal(doc.els['nasdaq-count'].textContent, '4 of 4 stocks', 'count line renders');
+
+  // --- heatmap is the default view -----------------------------------------
+  assert.equal(doc.els['nasdaq-heatmap'].hidden, false, 'the heatmap is shown by default');
+  assert.equal(doc.els['nasdaq-table-wrap'].hidden, true, 'the table is hidden by default');
+  assert.equal(doc.els['nasdaq-view-heatmap'].getAttribute('aria-pressed'), 'true',
+    'the Heatmap toggle is pressed by default');
+  assert.equal(doc.els['nasdaq-view-table'].getAttribute('aria-pressed'), 'false',
+    'the Table toggle is not pressed by default');
+  assert.ok(doc.els['nasdaq-heatmap'].innerHTML.includes('data-symbol="NVDA"'),
+    'the heatmap renders tiles from the same snapshot rows as the table');
+  assert.ok(doc.els['nasdaq-heatmap'].innerHTML.includes('nq-legend-bar'),
+    'the heatmap renders its legend');
+  assert.ok(doc.els['nasdaq-changes'].innerHTML.includes('no changes'),
+    'the index-changes line renders under the controls');
+
+  // --- toggle switches views -------------------------------------------------
+  clickTarget(container, { 'data-view': 'table' });
+  assert.equal(doc.els['nasdaq-table-wrap'].hidden, false, 'Table view shows the table');
+  assert.equal(doc.els['nasdaq-heatmap'].hidden, true, 'Table view hides the heatmap');
+  assert.equal(doc.els['nasdaq-view-table'].getAttribute('aria-pressed'), 'true',
+    'the Table toggle is pressed after switching');
+  clickTarget(container, { 'data-view': 'heatmap' });
+  assert.equal(doc.els['nasdaq-heatmap'].hidden, false, 'Heatmap view shows the heatmap again');
+  assert.equal(doc.els['nasdaq-table-wrap'].hidden, true, 'Heatmap view hides the table again');
+
+  // --- tile tap opens the same detail view as a table row -------------------
+  clickTarget(container, { 'data-symbol': 'AAPL' });
+  assert.equal(doc.els['nasdaq-detail'].hidden, false, 'tapping a tile opens the detail view');
+  assert.ok(doc.els['nasdaq-detail'].innerHTML.includes('AAPL — Apple Inc'),
+    'tile tap shows the tapped stock detail');
+  assert.ok(doc.els['nasdaq-detail'].innerHTML.includes('Rank: 2 of 4'),
+    'tile-tap detail ranks against the snapshot size');
+  assert.ok(doc.els['nasdaq-detail'].innerHTML.includes('Candles unavailable'),
+    'tile-tap detail states candle availability explicitly');
+  clickTarget(container, { 'data-close': '1' });
+  assert.equal(doc.els['nasdaq-detail'].hidden, true, 'closing the detail hides it again');
 
   // Stale snapshot: same table, but the stale state is explicit everywhere.
   const staleDoc = fakeDoc(DOC_IDS);
@@ -306,6 +455,16 @@ const DOC_IDS = ['nasdaq-status', 'nasdaq-hero', 'nasdaq-movers', 'nasdaq-tbody'
   assert.ok(html.includes('id="nasdaq-tbody"'), 'the panel has a stock table body');
   assert.ok(html.includes('id="nasdaq-search"'), 'the panel has a search box');
   assert.ok(html.includes('id="nasdaq-detail"'), 'the panel has a detail section');
+  assert.ok(html.includes('id="nasdaq-heatmap"'), 'the panel has a heatmap container');
+  assert.ok(html.includes('id="nasdaq-changes"'), 'the panel has an index-changes line');
+  assert.ok(html.includes('id="nasdaq-view-heatmap"'), 'the panel has a Heatmap toggle button');
+  assert.ok(html.includes('id="nasdaq-view-table"'), 'the panel has a Table toggle button');
+  assert.ok(html.includes('data-view="heatmap"') && html.includes('data-view="table"'),
+    'the toggle buttons carry their view names');
+  assert.ok(html.includes('id="nasdaq-table-wrap" hidden'), 'the table starts hidden; the heatmap is the default view');
+  assert.ok(panelSource.includes('HEATMAP_FULL_PCT'), 'the full-intensity % constant must be in the panel source');
+  assert.ok(panelSource.includes('renderHeatmap'), 'the panel source must define the heatmap renderer');
+  assert.ok(panelSource.includes('renderIndexChanges'), 'the panel source must define the index-changes renderer');
   assert.ok(/#nasdaq-panel\.hidden \{ display: none; \}/.test(html) ||
     html.includes('#nasdaq-panel.hidden'), 'the hidden rule covers the new panel');
   assert.ok(tabSwitching.includes("nasdaq: ['nasdaq-panel',  'tab-nasdaq']"),
@@ -316,5 +475,5 @@ const DOC_IDS = ['nasdaq-status', 'nasdaq-hero', 'nasdaq-movers', 'nasdaq-tbody'
   assert.ok(order('js/news-panel.js?v=') < order('js/nasdaq-panel.js?v=') &&
     order('js/nasdaq-panel.js?v=') < order('js/tab-switching.js?v='),
     'nasdaq-panel loads after news-panel and before tab-switching');
-  console.log('PASS nasdaq panel: intervals, sort/search, % labelling, stale/absent/failed states, candles, escaping, site wiring');
+  console.log('PASS nasdaq panel: intervals, sort/search, % labelling, stale/absent/failed states, candles, escaping, heatmap + toggle + tile tap, index changes, site wiring');
 })().catch(e => { console.error(e); process.exitCode = 1; });

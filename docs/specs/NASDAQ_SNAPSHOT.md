@@ -54,6 +54,33 @@ two listings. Re-verify against the same endpoint after each annual
 reconstitution (December) or announced change; `symbols.validate()` fails
 closed on a wrong count or a duplicate symbol.
 
+### Dynamic membership
+
+The embedded list is the last-known universe, not a fixed one. On every
+collector run, `collector.resolve_universe()` re-fetches the live
+constituent list from the same official `list-type/nasdaq100` endpoint
+(the same single request also supplies the market caps), diffs it against
+the embedded list (`symbols.diff_universe()`), and collects the live
+members: a listing that entered the index gets full treatment (quote,
+market cap, news, candles on demand) and a listing that left it gets no
+live row. The diff is recorded in the snapshot's `index_changes` section
+(`as_of` run date, `added`/`removed` with symbol and name, `source`,
+`fallback`), and carried into the provenance sidecar, so a leaver's
+identity is preserved even though it is no longer published as a live
+row. The site panel shows the changes under the controls, and the
+heatmap and the table both render the live rows, so both follow
+membership changes on every refresh.
+
+A failed, empty or garbled list fetch falls back to the embedded
+universe (`membership_source: "embedded_fallback"`, `index_changes`
+with `fallback: true` and no recorded changes) — a bad fetch never
+empties the snapshot. After a recorded change, update the embedded list
+in `symbols.py` (and `SOURCE_AS_OF`) so the next run diffs against the
+new baseline; `python -m market_data.nasdaq_collector universe --live`
+prints the live list and the diff for that. `collect --symbols` accepts
+a ticker that is live but not yet in the embedded list (checked against
+one live fetch); other unknown tickers are still rejected.
+
 ## Snapshot shape (`nasdaq/latest.json`)
 
 ```json
@@ -64,7 +91,12 @@ closed on a wrong count or a duplicate symbol.
   "generated_at": "2026-11-23T15:00:00+00:00",
   "universe": {"source": "Nasdaq official list-type/nasdaq100 API",
                "source_url": "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
-               "as_of": "2026-11-23", "listings": 101, "companies": 100},
+               "as_of": "2026-11-23", "listings": 101, "companies": 100,
+               "membership_source": "live"},
+  "index_changes": {"as_of": "2026-11-23",
+                    "added": [{"symbol": "NEW1", "name": "New Entrant Inc."}],
+                    "removed": [{"symbol": "OLD1", "name": "Old Leaver Inc."}],
+                    "source": "live", "fallback": false},
   "index": {"symbol": "NDX", "status": "available", "level": 27000.0,
             "change": 200.0, "percent_change": 0.8,
             "percent_change_basis": "regular-session move vs previous close",
@@ -116,6 +148,9 @@ both labels verbatim.
   null `price`, `change`, `percent_change`, `market_cap`, `rank`,
   `day_high`, `day_low` and `volume`. A price is never substituted, carried
   forward, or invented.
+- A listing that left the index has no live row at all; its symbol and
+  name are preserved in `index_changes.removed` (and in the provenance
+  sidecar's `index_changes`), never silently dropped.
 - A failed NDX fetch leaves the index block `status:
   "source_unavailable"` with null level/change/percent; stock rows still
   stand on their own and breadth is still computed from the stocks.
@@ -161,6 +196,21 @@ per symbol+interval. A failed fetch is an explicit "Candles unavailable"
 state in the panel, never a substituted chart. The collector keeps
 fetching 1m/daily bars only to compute `change_1h_pct` / `change_7d_pct`.
 
+## Panel views
+
+The site panel (`site/js/nasdaq-panel.js`) renders the snapshot's live
+rows in two views, switched by a Heatmap/Table toggle in the controls;
+the Heatmap is the default view on open. Both views render from the same
+filtered snapshot rows, so a search filters both and a refresh updates
+both. Heatmap tiles are a squarified treemap sized by market cap with
+square-root scaling and a minimum-size floor (0.5% of the total area per
+tile, so the smallest listings stay readable and tappable), coloured
+green/red by daily % change with intensity by magnitude (full at
++/-3%), each tile labelled ticker + % change, with a -3%/+3% gradient
+legend. Tapping a tile opens the same stock detail view (candle chart +
+news) as tapping a table row. The panel shows the snapshot's
+`index_changes` under the controls.
+
 ## Provenance sidecar (`nasdaq/latest.provenance.json`)
 
 `snapshot_provenance.v1`, mirroring the live-market collector's sidecar:
@@ -171,6 +221,9 @@ fetching 1m/daily bars only to compute `change_1h_pct` / `change_7d_pct`.
   (e.g. `"local run: --publish not given"`).
 - `source` label, `as_of`, `universe`, `index` block and per-stock
   `price_basis`, `provider_observed_at`, `freshness`, `status`.
+- `index_changes` as in the snapshot (added/removed listings, run date,
+  source, fallback), so a leaver's identity survives in provenance even
+  though it has no live row.
 - `coverage` counts as in the snapshot.
 
 The snapshot is uploaded first, then the sidecar; a sidecar failure is
@@ -194,8 +247,9 @@ publish.
 Read-only. Reads `nasdaq/latest.json` through the allowlisted source
 (`market_mcp/source.js`), validated by `nasdaqSnapshot` in
 `market_mcp/consumer.js`: `schema_version === 1`,
-`dataset === "nasdaq_snapshot"`, `universe.listings === 101`, at most 101
-stock rows, `index.symbol === "NDX"`, and per-stock vs index
+`dataset === "nasdaq_snapshot"`, `universe.listings` a positive integer
+(the live listing count — not hard-coded 101, since membership is
+dynamic), at most `universe.listings` stock rows, `index.symbol === "NDX"`, and per-stock vs index
 `percent_change_basis` labelled differently. Same envelope/freshness shape
 as `market_context`: `freshness` from `as_of` with
 `stale_after_seconds: 3600` and basis `collector receipt; hourly cadence`;
@@ -217,10 +271,20 @@ are unchanged. `market_context`'s QQQ/SPY-only contract is unchanged.
   snapshot schema, provenance shape, candle aggregation incl. 9m bucketing
   from 1-minute bars, the two `%` labels, news parsing / the 12-hour
   publication window, session
-  model, R2 key order with a fake client.
+  model, R2 key order with a fake client, and dynamic membership (live
+  list parsing incl. empty/garbled rejection, the added/removed diff,
+  the embedded fallback on list failure or an empty response,
+  `build_snapshot` with a changed universe and `index_changes`, and an
+  end-to-end `collect()` run with a fake session).
 - `market_mcp/nasdaq_snapshot.test.js` (node:test, offline fixtures):
   discovery, query, filters/sort, retained detail, missing vs failed,
-  hourly staleness, tools/list count 9.
+  hourly staleness, tools/list count 9, and a changed listing count
+  (100 listings) validating while rows over the declared count fail.
+- `tests/nasdaq_panel.test.js` (node:test, offline fixtures): intervals,
+  sort/search, % labelling, stale/absent/failed states, candles,
+  escaping, the heatmap (colour scale, minimum-share floor, squarified
+  layout tiling, tile labels and legend, default view, toggle, tile tap
+  -> detail), index-changes rendering, and site wiring.
 
 ## CI wiring (maintainer)
 

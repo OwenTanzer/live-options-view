@@ -960,10 +960,31 @@
   #nasdaq-status { font-size: 0.78rem; color: var(--dim); }
   #nasdaq-status[data-state="stale"] { color: #d29922; font-weight: 600; }
   #nasdaq-status[data-state="failed"], #nasdaq-status[data-state="absent"] { color: #ee3300; }
-  #nasdaq-hero, #nasdaq-movers, #nasdaq-controls, #nasdaq-detail, #nasdaq-table-wrap {
+  #nasdaq-hero, #nasdaq-movers, #nasdaq-controls, #nasdaq-detail, #nasdaq-table-wrap,
+  #nasdaq-heatmap, #nasdaq-changes {
     background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;
   }
-  #nasdaq-hero:empty, #nasdaq-movers:empty { display: none; }
+  #nasdaq-hero:empty, #nasdaq-movers:empty, #nasdaq-changes:empty { display: none; }
+  #nasdaq-heatmap[hidden], #nasdaq-table-wrap[hidden] { display: none; }
+  .nq-changes { font-size: 0.76rem; color: var(--dim); margin: 0; }
+  .nq-view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .nq-view-toggle button {
+    font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--dim); background: var(--bg);
+    border: 0; padding: 3px 10px; cursor: pointer;
+  }
+  .nq-view-toggle button[aria-pressed="true"] { color: var(--bright); background: #1c2128; }
+  .nq-heatmap { position: relative; width: 100%; aspect-ratio: 1000 / 620; }
+  .nq-tile {
+    position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1px; overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.35); border-radius: 2px; color: #fff;
+    font: inherit; cursor: pointer; padding: 2px; text-align: center;
+  }
+  .nq-tile-sym { font-size: 0.72rem; font-weight: 700; line-height: 1.1; }
+  .nq-tile-pct { font-size: 0.66rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .nq-legend { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--dim); margin-top: 0.5rem; }
+  .nq-legend-bar { flex: 1; height: 8px; border-radius: 4px;
+    background: linear-gradient(to right, rgb(238, 51, 0), rgb(42, 47, 55) 50%, rgb(0, 204, 85)); }
   .nq-hero { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: baseline; }
   .nq-hero-main { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: baseline; }
   .nq-hero-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
@@ -1952,10 +1973,16 @@
       <option value="market_cap:asc">Market cap ↑</option>
       <option value="name:asc">Name A–Z</option>
     </select></label>
+    <span class="nq-view-toggle" role="group" aria-label="View">
+      <button type="button" id="nasdaq-view-heatmap" data-view="heatmap" aria-pressed="true">Heatmap</button>
+      <button type="button" id="nasdaq-view-table" data-view="table" aria-pressed="false">Table</button>
+    </span>
     <span id="nasdaq-count"></span>
   </div>
+  <div id="nasdaq-changes"></div>
+  <div id="nasdaq-heatmap"></div>
   <div id="nasdaq-detail" hidden></div>
-  <div id="nasdaq-table-wrap">
+  <div id="nasdaq-table-wrap" hidden>
     <table id="nasdaq-table">
       <thead>
         <tr>
@@ -2149,7 +2176,7 @@ let timerHandle = null;
 // Lives in js/nasdaq-panel.js, loaded below; the Stocks tab mounts it on first
 // open. The banner stays here as the section's marker.
 </script>
-<script src="js/nasdaq-panel.js?v=590be8c2d99df723"></script>
+<script src="js/nasdaq-panel.js?v=5b16e87e0456610f"></script>
 <script>
 
 // ── tab switching ────────────────────────────────────────────────────────────

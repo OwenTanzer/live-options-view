@@ -137,6 +137,29 @@ test('snapshot older than the hourly cadence is stale, not fresh', async () => {
   assert.equal(out.freshness.stale_after_seconds, 3600);
 });
 
+test('dynamic membership: a snapshot with a changed listing count still validates', async () => {
+  // The collector re-fetches the live constituent list every run, so the
+  // listing count is whatever the index holds now — not hard-coded 101.
+  // A snapshot with 100 listings (and the same 3 fixture rows) must read
+  // fine; a snapshot whose rows exceed its declared listings must not.
+  const { consumer } = setup({ files: { 'nasdaq/latest.json': JSON.stringify(snapshot({
+    universe: { source: 'Nasdaq official list-type/nasdaq100 API', as_of: '2026-11-23',
+      listings: 100, companies: 99 },
+    coverage: { listings: 100, available: 2, source_unavailable: 1, with_news: 0, with_candles: 0 },
+  })) } });
+  const out = await consumer.call('nasdaq_snapshot');
+  assert.equal(out.status, 'partial');
+  assert.equal(out.rows.length, 3);
+  assert.equal(out.coverage.listings, 100);
+  const bad = setup({ files: { 'nasdaq/latest.json': JSON.stringify(snapshot({
+    universe: { source: 'Nasdaq official list-type/nasdaq100 API', as_of: '2026-11-23',
+      listings: 2, companies: 2 },
+  })) } });
+  const failed = await bad.consumer.call('nasdaq_snapshot');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.errors[0].code, 'incompatible_schema');
+});
+
 test('tools/list exposes nine read-only tools including nasdaq_snapshot', async () => {
   assert.equal(tools.length, 9);
   const entry = tools.find(t => t.name === 'nasdaq_snapshot');
