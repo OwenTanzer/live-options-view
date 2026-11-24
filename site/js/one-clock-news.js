@@ -31,7 +31,7 @@ export function headlinesAt(pages, selection) {
       const availableAt = Math.max(availableMillisecond(item.archived_at), availableMillisecond(item.event_at));
       rows.push({source:'news-archive', session:selection.session, instrument:selection.instrument,
         id:item.item_id, revision:item.revision_number, eventAt:item.observed_at, availableAt,
-        origin, evidence:item.revision_id, value:{title:item.title, outlet:item.outlet || item.source_id}});
+        origin, evidence:item.revision_id, value:{title:item.title, source_id:item.source_id, outlet:item.outlet || item.source_id}});
     }
   }
   return [...selectAsOf(rows, selection)].reverse();
@@ -150,6 +150,8 @@ export function followNews({container, research, panel, fetchJson, mountLive, da
       for (const row of result.rows) {
         const line = document.createElement('p');
         line.textContent = new Date(row.availableAt).toISOString()+' · '+row.value.outlet+' · '+row.value.title;
+        line.append(' ');
+        panel.appendHeadlineTopics(document, line, row.value);
         replay.append(line);
       }
     } catch (error) {

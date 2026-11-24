@@ -450,13 +450,33 @@
 
   function headlineTopics(headline) {
     if (!topicSources.includes(headline.source_id)) return [];
+    // Python's word boundary treats Unicode letters and numbers as word characters.
+    // These English rules only use non-ASCII digits for a tenor and otherwise
+    // need word membership, the curly apostrophe, and Python's four extra
+    // case-insensitive ASCII-letter equivalents. Preserve the displayed title.
+    var title = headline.title.replace(/[^\x00-\x7f]/gu, function (ch) {
+      if (ch === 'İ' || ch === 'ı') return 'i';
+      if (ch === 'ſ') return 's';
+      if (ch === 'K') return 'k';
+      if (/\p{Decimal_Number}/u.test(ch)) return '0';
+      return /[\p{Letter}\p{Number}]/u.test(ch) ? '_' : ch;
+    });
     var tickers = new Set();
     topicRules.forEach(function (rule) {
-      if (rule[0].test(headline.title)) {
+      if (rule[0].test(title)) {
         rule[1].forEach(function (ticker) { tickers.add(ticker); });
       }
     });
     return Array.from(tickers).sort();
+  }
+
+  function appendHeadlineTopics(doc, parent, r) {
+    var topics = headlineTopics(r);
+    if (topics.length) {
+      var tag = badge(doc, 'Headline topic: ' + topics.join(', '), 'mode');
+      tag.setAttribute('title', 'Topic relevance inferred from the displayed headline');
+      add(parent, tag);
+    }
   }
 
   function row(doc, r) {
@@ -475,12 +495,7 @@
       add(title, badge(doc, 'link rejected' + (r.url_rejected ? ': ' + r.url_rejected.replace(/_/g, ' ') : ''), 'bad'));
     }
     if (r.title_truncated) add(title, badge(doc, 'title truncated', 'dim'));
-    var topics = headlineTopics(r);
-    if (topics.length) {
-      var tag = badge(doc, 'Headline topic: ' + topics.join(', '), 'mode');
-      tag.setAttribute('title', 'Topic relevance inferred from the displayed headline');
-      add(title, tag);
-    }
+    appendHeadlineTopics(doc, title, r);
     add(card, title);
     // One line in the line of sight: when, who, which instrument, price state.
     // Everything else about the row's provenance is one click away.
@@ -768,7 +783,7 @@
     });
   }
 
-  var api = { safeUrl: safeUrl, validatePage: validatePage, validateIndex: validateIndex, renderPage: renderPage,
+  var api = { appendHeadlineTopics: appendHeadlineTopics, safeUrl: safeUrl, validatePage: validatePage, validateIndex: validateIndex, renderPage: renderPage,
     mount: mount, segmentText: segmentText, isNewsViewKey: isNewsViewKey, makeFetcher: makeFetcher,
     isGen: isGen, genOf: genOf, researchGenOf: researchGenOf, startLease: startLease, tombstoneState: tombstoneState,
     VIEW_SCHEMA: VIEW_SCHEMA, INDEX_SCHEMA: INDEX_SCHEMA, INDEX_KEY: INDEX_KEY, MODES: MODES, STREAMS: STREAMS, MAX_PAGES: MAX_PAGES,

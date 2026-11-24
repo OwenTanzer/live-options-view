@@ -18,6 +18,12 @@ WHEN = at("2026-11-22T05:20:00Z")
 
 
 class ThemeMapping(unittest.TestCase):
+    def test_unicode_headlines(self):
+        for case in json.loads((FIXTURES / "unicode.json").read_text()):
+            with self.subTest(title=case["title"]):
+                result = self.classify(self.headline(case["title"]))
+                self.assertEqual(case["expected_instruments"], result["instruments"])
+
     def test_browser_policy_matches_versioned_replay_policy(self):
         panel = (Path(__file__).resolve().parents[1] / "site/js/news-panel.js").read_text()
         self.assertIn("var topicSources = " + json.dumps(theme_mapping.SOURCE_IDS) + ";", panel)

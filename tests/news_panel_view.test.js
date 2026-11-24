@@ -69,7 +69,10 @@ test('News cards show the replay tickers for eligible headlines', () => {
   const cases = require('./fixtures/news_theme_mapping/cases.json');
   const page = clone(oil);
   page.rows = [page.rows[0]];
-  for (const { observation, expected_instruments } of cases) {
+  const unicode = require('./fixtures/news_theme_mapping/unicode.json').map(c => ({
+    observation: { title: c.title, source_id: 'oilprice_com' }, expected_instruments: c.expected_instruments
+  }));
+  for (const { observation, expected_instruments } of cases.concat(unicode)) {
     Object.assign(page.rows[0], { title: observation.title, source_id: observation.source_id });
     const tags = render(page).byClass('np-title')[0].byClass('np-badge')
       .map(n => n.textContent).filter(value => value.startsWith('Headline topic: '));
