@@ -207,14 +207,17 @@ def capture_session(
                 gap_open = True
                 gap_started_at = last_good_at
                 consecutive_failures = 1
-                spool.write(stats.observe({
+                disconnect = stats.observe({
                     "type": "gap",
                     "reason": "stream_disconnect",
                     "receipt_timestamp": utc_now(),
                     "error_type": type(exc).__name__,
                     "error": diagnostics,
                     "phase": phase,
-                }))
+                })
+                spool.write(disconnect)
+                if recent is not None:
+                    recent.observe(disconnect)
             else:
                 consecutive_failures += 1
             result.reconnects += 1

@@ -181,6 +181,8 @@ function status(message, error = false) { $('form-status').textContent = message
 function time(ms) { return new Date(ms).toISOString().slice(11,19); }
 function render() {
   const at = clock.snapshot();
+  $('intraminute-cursor').hidden=!archiveMode || at.instrument!=='QQQ';
+  $('intraminute-cursor').href='/intraminute.html?at='+at.cutoff;
   $('cursor-time').textContent = time(at.cutoff) + ' UTC';
   const full = $('result-scope').value === 'full';
   const selection = { ...at, instrument: $('result-instrument').value, cutoff: full ? studyClose + 1000 : at.cutoff };

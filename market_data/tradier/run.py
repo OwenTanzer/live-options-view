@@ -25,6 +25,7 @@ from .artifacts import json_artifact, write_health
 from .archive import lease_key
 from . import config
 from .recent import RecentPrints
+from .intraminute_live import start as start_intraminute
 from .capture import CaptureResult, capture_session
 from .config import (
     ET,
@@ -311,6 +312,11 @@ def main(
                    session_open=session_open)
     threading.Thread(target=recent.publish, args=(r2, bucket, lease_stop, lease_lost_event),
                      daemon=True).start()
+    display, tape_server = start_intraminute(recent)
+    if tape_server and os.getenv("QQQ_TAPE_ARCHIVE") == "1":
+        from .intraminute_minutes import publish_closed
+        threading.Thread(target=publish_closed, args=(display, r2, bucket, lease_stop, lease_lost_event),
+                         daemon=True).start()
     capture_started_at = clock_et()
     try:
         if datetime.now(timezone.utc) >= lease_confirmed_until_ref["value"]:
@@ -319,7 +325,7 @@ def main(
         capture_result = capture_session(
             client, router.symbols, stream_spool, stream_stats, session_close, settings.max_reconnects,
             lease_lost=lease_lost_event, sleeper=sleeper, now_et=clock_et,
-            result=capture_result, recent=recent,
+            result=capture_result, recent=display,
             session_open=session_open,
         )
     except Exception as exc:
@@ -328,6 +334,9 @@ def main(
         capture_result.gap_seconds = getattr(exc, "gap_seconds", capture_result.gap_seconds)
     finally:
         lease_stop.set()
+        if tape_server:
+            tape_server.shutdown()
+            tape_server.server_close()
         for lane in active:
             lane.spool.close()
         for lane in active:
@@ -654,4 +663,15 @@ def finalize_run(
             + "; ".join(f"{name}: {', '.join(r['partial_reasons']) or 'incomplete coverage'}"
                         for name, r in lane_results.items())
         )
+    from .intraminute_archive import publish, replayable
+    if (os.getenv("QQQ_TAPE_ARCHIVE") == "1" and primary.underlying == "QQQ"
+            and replayable(lane_results["QQQ"])):
+        try:
+            minutes = publish(r2, bucket, f"{primary.prefix}/summary-{owner_id}.json")
+            print(json.dumps({"event": "qqq_intraminute_archived", "minutes": minutes}), flush=True)
+        except Exception as exc:
+            # This derivative can be regenerated from the finalized raw archive.
+            # A display failure must never relaunch the provider session.
+            print(json.dumps({"event": "qqq_intraminute_archive_failed",
+                              "reason": str(exc)[:200]}), flush=True)
     return 0
