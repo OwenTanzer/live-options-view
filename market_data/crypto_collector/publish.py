@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 
 from .collector import ARTIFACT_KEY, iso, parse_time, snapshot_to_json, utcnow
+from . import spot_receipts
 from .provenance import build_provenance
 
 LATEST_KEY = ARTIFACT_KEY  # crypto/latest.json
@@ -99,7 +100,7 @@ def _timestamp(record):
     return timestamp
 
 
-def _advance(client, bucket, key, record):
+def _advance(client, bucket, key, record, archive=None):
     """Compare the exact version read; retry only a concurrent-write conflict."""
     stamp = _timestamp(record)
     body = snapshot_to_json(record).encode("utf-8")
@@ -108,6 +109,8 @@ def _advance(client, bucket, key, record):
         condition = {"IfNoneMatch": "*"}
         if current is not None:
             existing, etag, modified = current
+            if archive:
+                spot_receipts.reconcile(archive, "hourly", existing, utcnow())
             prior = json.loads(existing)
             previous_stamp = _timestamp(prior)
             if previous_stamp > stamp:
@@ -119,6 +122,7 @@ def _advance(client, bucket, key, record):
                     raise ValueError(f"Conflicting {key} contents for the same construction time")
                 return prior, iso(modified)
             condition = {"IfMatch": etag}
+        attempt = spot_receipts.prepare(archive, "hourly", body, utcnow()) if archive else None
         try:
             client.put_object(Bucket=bucket, Key=key, Body=body,
                               ContentType="application/json", **condition)
@@ -126,14 +130,18 @@ def _advance(client, bucket, key, record):
             if _error_code(exc) in ("PreconditionFailed", "ConditionalRequestConflict", "409", "412"):
                 continue
             raise
-        return record, iso(utcnow())
+        acknowledged = utcnow()
+        if attempt is not None:
+            spot_receipts.confirm(archive, attempt, acknowledged)
+        return record, iso(acknowledged)
     raise RuntimeError(f"Concurrent writers prevented publication of {key}")
 
 
 def _publish_snapshot(snapshot, client, bucket):
     provenance = build_provenance(snapshot, publication_status="published")
     payload = {**snapshot, "provenance": provenance}
-    accepted, acknowledged = _advance(client, bucket, LATEST_KEY, payload)
+    accepted, acknowledged = _advance(client, bucket, LATEST_KEY, payload,
+                                      os.environ.get("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS"))
     if accepted is None:
         return None
     digest = hashlib.sha256(snapshot_to_json(payload).encode("utf-8")).hexdigest()

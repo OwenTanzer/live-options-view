@@ -81,3 +81,70 @@ def test_future_provider_stamp_and_prior_future_watermark_cannot_hide_valid_quot
         protect_observations(good, poisoned, "nasdaq", NOW)
         assert good["prices"]["X"]["watermark_at"] == NOW.isoformat()
         assert good["prices"]["X"]["price_usd"] == 123
+
+
+def test_crypto_replay_uses_confirmed_baseline_and_actual_panel_rules(tmp_path, monkeypatch):
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector.spot_receipts import read_as_of
+
+    path = tmp_path / "private" / "spot.sqlite3"
+    store = FakeObjectStore()
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(path))
+    candidate = doc("coinbase")
+    candidate["feed"] = "crypto"
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW-timedelta(minutes=1)):
+        _publish_snapshot(baseline, store, "test")
+    confirmed = NOW+timedelta(seconds=1)
+    with patch("market_data.panel_minute.utcnow", return_value=confirmed):
+        publish(store, "test", "crypto", candidate, NOW, crypto_receipts=path)
+    assert read_as_of(path, NOW)["state"] == "unmeasurable"
+    assert read_as_of(path, NOW+timedelta(seconds=119, milliseconds=999))["rows"][0]["price"] == 123
+    assert read_as_of(path, NOW+timedelta(seconds=120))["rows"] == baseline["coins"]
+    later = NOW+timedelta(seconds=40)
+    newer = {"constructed_at": later.isoformat(),
+             "coins": [{"symbol": "X", "source": "coinbase", "price": 101}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=later):
+        _publish_snapshot(newer, store, "test")
+    assert read_as_of(path, later)["rows"] == newer["coins"]
+    assert read_as_of(path, later-timedelta(microseconds=1))["rows"][0]["price"] == 123
+
+
+def test_ack_failure_leaves_gap_and_identical_retry_recovers(tmp_path, monkeypatch):
+    import sqlite3
+    from test_crypto_collector import FakeObjectStore
+    from market_data.crypto_collector.publish import _publish_snapshot
+    from market_data.crypto_collector import spot_receipts
+
+    db = tmp_path / "private" / "spot.sqlite3"
+    store = FakeObjectStore()
+    candidate = doc("coinbase")
+    candidate["feed"] = "crypto"
+    monkeypatch.setenv("OPTIONSVIEW_CRYPTO_SPOT_RECEIPTS", str(db))
+    baseline = {"constructed_at": candidate["baseline_at"],
+                "coins": [{"symbol": "X", "source": "coinbase", "price": 100}]}
+    with patch("market_data.crypto_collector.publish.utcnow", return_value=NOW):
+        _publish_snapshot(baseline, store, "bucket")
+    with patch("market_data.panel_minute.utcnow", return_value=NOW):
+        publish(store, "bucket", "crypto", candidate, NOW, crypto_receipts=db)
+    second = NOW+timedelta(seconds=30)
+    update = doc("coinbase", second)
+    update.update(feed="crypto", started_at=(second-timedelta(seconds=1)).isoformat(),
+                  completed_at=second.isoformat())
+    update["prices"]["X"] = mark("coinbase", 110, second, second)
+    with patch("market_data.panel_minute.utcnow", return_value=second), \
+            patch.object(spot_receipts, "confirm", side_effect=sqlite3.OperationalError("disk error")), \
+            pytest.raises(sqlite3.OperationalError):
+        publish(store, "bucket", "crypto", update, second, crypto_receipts=db)
+    assert json.loads(store.objects["crypto/prices.json"][0])["prices"]["X"]["price_usd"] == 110
+    assert spot_receipts.read_as_of(db, second)["unverified_stream"] == "minute"
+    count = len(store.writes)
+    retry = second+timedelta(seconds=1)
+    with patch("market_data.panel_minute.utcnow", return_value=retry):
+        assert publish(store, "bucket", "crypto", update, retry, crypto_receipts=db) == "superseded"
+    assert len(store.writes) == count
+    assert spot_receipts.read_as_of(db, retry)["rows"][0]["price"] == 110
+    assert spot_receipts.read_as_of(db, second)["state"] == "unmeasurable"
+    assert spot_receipts.read_as_of(db, second-timedelta(seconds=1))["rows"][0]["price"] == 123

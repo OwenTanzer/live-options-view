@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .yahoo_receipts import capture_response
+
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 
@@ -151,7 +153,11 @@ def fetch_1m_bars(symbol, session, range_="5d"):
     resp = session.get(url, params={"interval": "1m", "range": range_,
                                     "includePrePost": "false"}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
-    return parse_yahoo_chart(resp.json())
+    parsed = parse_yahoo_chart(resp.json())
+    if parsed["meta"].get("symbol") != symbol or parsed["meta"].get("dataGranularity") != "1m":
+        raise ValueError("Yahoo chart identity does not match the request")
+    capture_response(symbol, "1m", resp)
+    return parsed
 
 
 def fetch_daily_bars(symbol, session, range_="10d"):
@@ -159,7 +165,11 @@ def fetch_daily_bars(symbol, session, range_="10d"):
     url = YAHOO_CHART_URL.format(symbol=symbol)
     resp = session.get(url, params={"interval": "1d", "range": range_}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
-    return parse_yahoo_chart(resp.json())
+    parsed = parse_yahoo_chart(resp.json())
+    if parsed["meta"].get("symbol") != symbol or parsed["meta"].get("dataGranularity") != "1d":
+        raise ValueError("Yahoo chart identity does not match the request")
+    capture_response(symbol, "1d", resp)
+    return parsed
 
 
 def change_1h_pct(bars, now=None):

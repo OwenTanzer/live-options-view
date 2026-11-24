@@ -10,6 +10,7 @@ import subprocess
 
 from .panel_prices import Capture, collect, crypto_time, utcnow, ET
 from .crypto_collector.publish import _error_code
+from .crypto_collector import spot_receipts
 
 MAX_BYTES = 128 * 1024
 FEEDS = ("crypto", "nasdaq")
@@ -123,7 +124,7 @@ def protect_observations(candidate, prior, feed, now):
             row["watermark_at"] = observed.isoformat()
 
 
-def publish(client, bucket, feed, candidate, now):
+def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     if candidate.get("schema_version") != "panel_minute.v1" or candidate.get("feed") != feed:
         raise ValueError("Invalid capture identity")
     stamp = crypto_time(candidate.get("started_at"))
@@ -150,6 +151,8 @@ def publish(client, bucket, feed, candidate, now):
     condition = {"IfNoneMatch": "*"}
     if previous:
         raw, etag = previous
+        if feed == "crypto" and crypto_receipts is not None:
+            spot_receipts.reconcile(crypto_receipts, "minute", raw, utcnow())
         prior = json.loads(raw)
         if crypto_time(prior["started_at"]) >= stamp:
             return "superseded"
@@ -159,8 +162,13 @@ def publish(client, bucket, feed, candidate, now):
         protect_observations(candidate, prior, feed, now)
     candidate["coverage"] = dict(Counter(v["freshness"] for v in candidate["prices"].values()))
     body = encode(candidate)
+    attempt = None
+    if feed == "crypto" and crypto_receipts is not None:
+        attempt = spot_receipts.prepare(crypto_receipts, "minute", body, utcnow())
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
                       CacheControl="no-store", **condition)
+    if attempt is not None:
+        spot_receipts.confirm(crypto_receipts, attempt, utcnow())
     return "published"
 
 
@@ -205,7 +213,8 @@ def main():
                           aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
                           aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
                           config=Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 1}))
-    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow())
+    outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow(),
+                      crypto_receipts=root / "private" / "crypto-spot.sqlite3")
     print(json.dumps(dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
                           coverage=candidate["coverage"], calls=candidate["calls"])), flush=True)
 

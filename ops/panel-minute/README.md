@@ -61,3 +61,33 @@ established protected release lanes. The hourly service names are separate.
 systemctl --user disable --now optionsview-minute@crypto.timer optionsview-minute@nasdaq.timer
 systemctl --user stop optionsview-minute@crypto.service optionsview-minute@nasdaq.service
 ```
+
+Crypto spot replay uses both confirmed Linux publications. After staging the
+reviewed revision, install the hourly unit override on Linux before its next
+scheduled run. Both publishers need the same private database and effective
+user. A daemon reload picks up the command for the next invocation.
+
+    mkdir -p ~/.config/systemd/user/optionsview-crypto-hourly.service.d
+    install -m 0644 "$HOME/.local/share/optionsview-panel-minute/app/ops/panel-minute/crypto-hourly-receipts.conf" ~/.config/systemd/user/optionsview-crypto-hourly.service.d/crypto-hourly-receipts.conf
+    systemctl --user daemon-reload
+    systemctl --user cat optionsview-crypto-hourly.service
+
+The hourly wrapper runs the installed capture command and retains the exact
+hourly price payload. The minute publisher retains its final overlay. Both
+journal their intent locally before the conditional R2 write, then confirm it
+after acknowledgement. A journal failure before upload fails the job. An
+ambiguous write or failed local confirmation leaves a visible replay gap and
+fails the job. The next read of matching remote bytes confirms the pending
+attempt at readback time. The gap up to that confirmation stays unmeasurable.
+
+From the staged Linux checkout (Python and Node required):
+
+    python -m market_data.crypto_collector.spot_receipts "$HOME/.local/share/optionsview-panel-minute/private/crypto-spot.sqlite3" --as-of 2026-11-24T07:00:00+00:00
+
+Replay returns rows using the production panel selector, including the hourly
+fallback at two minutes and during baseline rollover. Before both streams have
+verified evidence, or during an uncertain write, it returns unmeasurable.
+Legacy minute-only receipts do not establish an hourly baseline. Replay models
+the prices available on refresh at the cutoff. It does not track individual
+browser refreshes. To roll back the hourly change, remove only the
+crypto-hourly-receipts.conf override and reload the user manager.
