@@ -3,7 +3,6 @@
 -- publications (2026-11-23), snapshot results unchanged.
 -- Preserves every native generation and both lane indexes
 -- (one_clock_lane_at_time, one_clock_lane_at_generation).
--- Outside-repository reader check: PENDING on Owen's side — do not apply
--- to production D1 until confirmed. Kalshi minute capture is untouched.
+-- Restore with backend/rollbacks/0016_one_clock_lean_change_indexes.sql.
 DROP INDEX IF EXISTS one_clock_changes_at_cutoff;
 DROP INDEX IF EXISTS one_clock_changes_at_generation;

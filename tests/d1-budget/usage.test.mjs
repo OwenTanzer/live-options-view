@@ -145,7 +145,20 @@ test('QQQ November 23 replay preserves frozen sequence targets with fewer indexe
       for (const file of ['0004_one_clock.sql','0010_one_clock_ingestion.sql','0011_one_clock_publications.sql','0012_one_clock_handoff.sql','0013_one_clock_reevaluation.sql']) {
         schema.exec(read('../../backend/migrations/' + file));
       }
-      if (lean) schema.exec(read(folder + 'lean_change_indexes.sql'));
+      if (lean) {
+        const migration = read('../../backend/migrations/0016_one_clock_lean_change_indexes.sql');
+        const rollback = read('../../backend/rollbacks/0016_one_clock_lean_change_indexes.sql');
+        const indexes = () => schema.prepare("SELECT name,sql FROM sqlite_schema WHERE type='index' AND tbl_name='one_clock_native_changes' ORDER BY name").all();
+        const before = indexes();
+        schema.exec(migration);
+        schema.exec(migration);
+        const removed = new Set(['one_clock_changes_at_cutoff','one_clock_changes_at_generation']);
+        assert.deepEqual(indexes(), before.filter(index => !removed.has(index.name)));
+        schema.exec(rollback);
+        schema.exec(rollback);
+        assert.deepEqual(indexes(), before);
+        schema.exec(migration);
+      }
       for (const {sql} of schema.prepare('SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid').all()) {
         await db.prepare(sql).run();
       }
