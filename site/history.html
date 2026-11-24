@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Historical prices · Options View</title>
+<style>
+:root{color-scheme:dark;font:16px/1.45 system-ui;background:#10151c;color:#e7edf3}body{max-width:78rem;margin:auto;padding:1.25rem}a{color:#82ccff}h1{margin:.6em 0}form,nav{display:flex;gap:1rem;flex-wrap:wrap;align-items:end}label{display:grid;gap:.25rem}select,input,button{font:inherit;padding:.35rem .6rem;border-radius:.3rem}section{overflow:auto}table{border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:.9rem}th,td{padding:.35rem .7rem;text-align:right;white-space:nowrap;border-bottom:1px solid #354252}th:first-child,td:first-child{text-align:left}nav{margin:.75rem 0}button:disabled{opacity:.5}[hidden]{display:none}
+</style></head><body><a href="/">Options View</a><h1>Historical prices</h1>
+<form id="filters"><label>Market<select id="market"><option value="stocks">Stocks</option><option value="crypto">Crypto</option></select></label>
+<label>Symbol<select id="symbol"></select></label><label>Series<select id="series"></select></label>
+<label>Through date (UTC)<input id="date" type="date"></label></form>
+<p id="status" role="status">Loading archive…</p><p id="auth" hidden><a href="/credit-tape/auth/login?return=history">Sign in for private crypto history</a></p>
+<nav><button type="button" id="newer" disabled>Newer</button><button type="button" id="older" disabled>Older</button><a hidden id="download">Download full series (JSON)</a></nav>
+<section><table><thead id="head"></thead><tbody id="rows"></tbody></table></section>
+<script type="module" src="/js/history.js"></script></body></html>
