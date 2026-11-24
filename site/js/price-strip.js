@@ -132,7 +132,7 @@ function updatePriceStrip(pricesData) {
 
 // Updates the QQQ tile's second line from renderHeatmap()'s 60s-cadence
 // underlying_market read -- deliberately not driven by updatePriceStrip's
-// 10s prices.json/live-quotes cadence, see docs/plans/2026-07-vwap-rvol.md.
+// 30s prices.json / live-quotes cadence, see docs/plans/2026-07-vwap-rvol.md.
 function updateQqqVwapRvolLine(underlyingMarket) {
   const el = document.getElementById('tk-QQQ');
   if (!el) return;

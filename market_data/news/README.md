@@ -413,7 +413,7 @@ All fixtures are synthetic (see `tests/fixtures/news/README.md`).
 
 ## M5: publisher and inactive pilot (local preparation)
 
-`publish.py` publishes sanitized views from the private archive to a separate public store (cleanup, then pages, then index.json), with stop/restore/reseal/withdraw and `publish-status`. `pilot-cycle` runs one 15-minute pilot cycle (four sources, prices unavailable). The config `deploy/news-pilot.json` is inactive and `--live` is refused. Operating plan and open storage decisions: [PUBLISHING.md](PUBLISHING.md). Tests: `tests/test_news_publish.py`, `tests/news_publish_browser.test.js`.
+`publish.py` publishes sanitized views from the private archive to a separate public store (cleanup, then pages, then index.json), with stop/restore/reseal/withdraw and `publish-status`. `pilot-cycle` runs one 30-minute pilot cycle (four sources, prices unavailable). The config `deploy/news-pilot.json` is inactive and `--live` is refused. Operating plan and open storage decisions: [PUBLISHING.md](PUBLISHING.md). Tests: `tests/test_news_publish.py`, `tests/news_publish_browser.test.js`.
 
 ## Publication generations and settlement (G3 + G6, never run)
 

@@ -3,7 +3,8 @@
     python tests/news_cycle_cost_measure.py OUT_DIR [--cycles 96] [--expiry] [--live-feeds]
 
 Runs `publish.pilot_cycle` with the shipped (inactive) news-pilot.json, once per simulated
-15-minute tick, against two counting LocalObjectStore directories (private, public). Each store
+tick (the shipped interval_s, 30 minutes since the D1/R2 cost cut), against two counting
+LocalObjectStore directories (private, public). Each store
 call is recorded under the R2 operation it maps to in R2ObjectStore (archive.py):
 
   put / put_if_absent / put_if_match  -> PutObject       (Class A)
@@ -21,8 +22,9 @@ What this is and is not:
     local CPU/wall time of the code as shipped, on this machine.
   * NOT OBSERVED: provider latency, provider-side retries, real feed volume over a day, R2 billing.
     Those are projections (see the cost packet) or need provider access.
-  * The simulated clock advances 15 minutes per cycle. The store's own clock (last_modified) is the
-    simulated time of the write, so generation expiry can be exercised with --expiry (which sets
+  * The simulated clock advances by the shipped interval_s per cycle. The store's own clock
+    (last_modified) is the simulated time of the write, so generation expiry can be exercised with
+    --expiry (which sets
     generations.clock_bound_verified true in a temporary copy of the config); the shipped config
     keeps it false, and so does this harness unless --expiry is passed.
   * Feeds: the repo fixtures by default (static: every cycle after the first sees no new items);

@@ -99,7 +99,7 @@ provisioned and no paid inference is involved.
 For a future in-process integration, the November 15 baseline records a $4.40
 monthly producer request allowance, $0.30 storage reserve and $0.30 for readers
 and probes. Those are allocations, not current billing or measured headroom.
-The existing 15-minute cadence is 2,880 cycles per 30-day month; mapping would
+The existing 30-minute cadence is 1,440 cycles per 30-day month; mapping would
 run only for classified revisions, not once per ticker or per new feed.
 
 Illustration using the repository's historical assumption of 35 new revisions

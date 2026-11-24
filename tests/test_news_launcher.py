@@ -121,8 +121,8 @@ class ConfigBounds(unittest.TestCase):
             "no launcher block": lambda c: c.pop("launcher"),
             "deadline inside the collection budget": lambda c: c["launcher"].update(deadline_s=180),
             "grace shorter than one fetch": lambda c: c["launcher"].update(interrupt_grace_s=30),
-            "runs into the next tick": lambda c: c["launcher"].update(deadline_s=800),
-            "exactly the interval": lambda c: c["launcher"].update(deadline_s=800, interrupt_grace_s=90, kill_wait_s=10),
+            "runs into the next tick": lambda c: c["launcher"].update(deadline_s=1800),
+            "exactly the interval": lambda c: c["launcher"].update(deadline_s=1700, interrupt_grace_s=90, kill_wait_s=10),
             "zero kill wait": lambda c: c["launcher"].update(kill_wait_s=0),
             "bool deadline": lambda c: c["launcher"].update(deadline_s=True),
             "text deadline": lambda c: c["launcher"].update(deadline_s="600"),
@@ -136,8 +136,8 @@ class ConfigBounds(unittest.TestCase):
 
     def test_largest_bound_below_the_interval_is_accepted(self):
         raw = copy.deepcopy(self.raw)
-        raw["launcher"].update(deadline_s=799, interrupt_grace_s=90, kill_wait_s=10)   # 899 < 900
-        self.assertEqual(self.load(raw)["launcher"]["deadline_s"], 799)
+        raw["launcher"].update(deadline_s=800, interrupt_grace_s=90, kill_wait_s=10)   # 900 < 901 (lease bound)
+        self.assertEqual(self.load(raw)["launcher"]["deadline_s"], 800)
 
 
 class RealCycle(unittest.TestCase):

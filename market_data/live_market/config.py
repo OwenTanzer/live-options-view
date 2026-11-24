@@ -51,8 +51,12 @@ STRIKE_WINDOW   = 33
 SPY_MAX_STRIKES = 67
 SNAPSHOT_SECS   = 60
 WEEKLY_SNAPSHOT_SECS = 60 * 60
-PRICES_SECS     = 10
-HEALTH_SECS     = 15
+# Hot-overwrite cadences (D1/R2 cost cut, 2026-11-24): prices.json and health.json are
+# small files rewritten on a fixed clock, each rewrite a Class A R2 PUT. 30 s / 60 s keeps
+# the displays fresh enough — live quotes stay the fresh path via /api/live-quotes, and the
+# price strip labels prices.json data as fallback, never as live.
+PRICES_SECS     = 30
+HEALTH_SECS     = 60
 PREMARKET_HOUR  = 6
 STOP_HOUR       = 16
 STOP_MIN        = 15

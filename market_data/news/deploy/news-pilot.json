@@ -3,9 +3,9 @@
  "active": false,
  "note": "INACTIVE. Nothing reads this file except `python -m market_data.news pilot-cycle`, which refuses live sources and bucket stores while active is false. Activation is a reviewed change by Owen, together with the storage choices below.",
  "schedule": {
-  "cron": "*/15 * * * *",
+  "cron": "*/30 * * * *",
   "timezone": "UTC",
-  "interval_s": 900,
+  "interval_s": 1800,
   "restart_policy": "NEVER",
   "overlap": "a cycle that finds the writer or publish lease held exits non-zero without writing; the next tick retries",
   "command": "python -m market_data.news.launch --config market_data/news/deploy/news-pilot.json --live"

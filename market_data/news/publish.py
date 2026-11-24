@@ -1849,8 +1849,9 @@ def load_pilot_config(path) -> PilotConfig:
     if cfg.get("active") not in (True, False):
         problems.append("active must be true or false")
     sched = cfg.get("schedule") or {}
-    if sched.get("interval_s") != config.INTERVAL_S or sched.get("cron") != "*/15 * * * *":
-        problems.append("the pilot cadence is 15 minutes (interval_s 900, cron */15 * * * *)")
+    if sched.get("interval_s") != config.PILOT_INTERVAL_S or sched.get("cron") != config.PILOT_CRON:
+        problems.append(f"the pilot cadence is 30 minutes (interval_s {config.PILOT_INTERVAL_S}, "
+                        f"cron {config.PILOT_CRON})")
     if sched.get("timezone") != "UTC":
         problems.append("schedule.timezone must be UTC")
     if sched.get("restart_policy") != "NEVER":
@@ -1939,7 +1940,21 @@ def build_research(private, archive, now: datetime, data_label: str, limits=LIMI
 
 def pilot_cycle(private, public, spool, fetch, clock, cfg: PilotConfig, *, commit_clock=None,
                 lease_holder=None, break_stale_lease=False) -> dict:
-    """One scheduled cycle: collect the four sources, build bounded views, publish. A stop marker no-ops."""
+    """One scheduled cycle: collect the four sources, build bounded views, publish. A stop marker no-ops.
+
+    An empty cycle skips publication: when the collect run found no new items and no new
+    revisions and completed cleanly, the cycle returns ``skipped_empty`` without building
+    views or publishing anything. The run itself is already committed to the private archive
+    by ``collect_once`` — that is the durable coverage record for the interval (sources
+    fetched OK, nothing new) — so the skip costs the collect side only (~13 Class A
+    measured, vs ~170 for a full publish cycle). Only a clean run skips: a partial or
+    failed run still publishes, so a source failure stays visible in the public coverage
+    instead of going quiet. An interrupted publication never skips either: if a publish
+    lease record exists (a previous publisher exited mid-publication), the cycle proceeds
+    to ``publish`` so the held lease refuses loudly, as before, instead of the skip
+    hiding the interruption. The research page is likewise not republished on a skipped
+    cycle; it is rebuilt and published on the next non-empty one.
+    """
     public = public if isinstance(public, PublicViewStore) else PublicViewStore(public)
     assert_separate(private, public)
     marker = stopped(private)
@@ -1949,6 +1964,16 @@ def pilot_cycle(private, public, spool, fetch, clock, cfg: PilotConfig, *, commi
                           only_sources=list(cfg["sources"]), budget_s=cfg["cycle_budget_s"],
                           commit_clock=commit_clock, lease_holder=lease_holder,
                           break_stale_lease=break_stale_lease)
+    counts = report.manifest["counts"]
+    publish_lease = _read_json(private, PUBLISH_LEASE_KEY)
+    if (counts["new_items"] == 0 and counts["new_revisions"] == 0
+            and report.manifest["status"] == "complete" and publish_lease is None):
+        return {"status": "skipped_empty",
+                "reason": "no new items or revisions in this cycle; views unchanged, nothing published",
+                "run": {"run_id": report.run_id, "status": report.manifest["status"],
+                        "committed_at": report.manifest["committed_at"], "counts": counts,
+                        "index_error": report.index_error, "history": report.checkpoint},
+                "publication": None}
     now = (commit_clock or clock)()
     v = cfg["views"]
     archive = load_archive(private)

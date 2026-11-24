@@ -263,7 +263,7 @@ distinct buckets (or distinct non-nested directories locally), configured throug
 
 ## Cadence and load (estimates)
 
-- **Schedule:** `*/15 * * * *` UTC, one-shot, restart policy NEVER. A cycle that finds a lease held
+- **Schedule:** `*/30 * * * *` UTC, one-shot, restart policy NEVER. A cycle that finds a lease held
   exits non-zero without writing, and the next tick retries.
 - **Fetch:** 4 requests per cycle, with the accepted 180 s budget and the 4-worker bound.
 - **Public writes:** each cycle writes a new generation (its pages under new keys, because

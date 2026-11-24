@@ -26,7 +26,7 @@ from unittest import mock
 
 from test_news_support import ROOT, Clock, feeds
 from market_data.news import publish as pub
-from market_data.news.__main__ import main
+from market_data.news.__main__ import fixture_fetcher, main
 from market_data.news.archive import LocalObjectStore, WriterBusy
 from market_data.news.reader import load_archive
 from market_data.news.views import (LIMITS, build_views, commit_index, generation_name, qualified_limits,
@@ -63,6 +63,29 @@ def patched_config_path(directory) -> Path:
 def config():
     with tempfile.TemporaryDirectory(prefix="news-g6-cfg-") as tmp:
         return pub.load_pilot_config(patched_config_path(tmp))
+
+
+def fresh_fixture_dir(directory, tag, when="2026-11-09T12:00:00Z"):
+    """A copy of the fixture feeds with one extra TechCrunch item (new guid), so a cycle
+    sees new items. The shipped fixtures are static: a repeat cycle sees the same entries
+    and, since the empty-cycle skip, publishes nothing. Tests that need a second publish
+    use this helper instead of the static fixtures."""
+    src = ROOT / "tests" / "fixtures" / "news" / "feeds"
+    dst = Path(directory) / f"feeds-{tag}"
+    shutil.copytree(src, dst)
+    path = dst / "techcrunch.xml"
+    text = path.read_text(encoding="utf-8")
+    item = (f'<item><title>Fresh item {tag}</title>'
+            f'<link>https://techcrunch.com/fresh-{tag}/</link>'
+            f'<guid isPermaLink="false">https://techcrunch.com/?p=fresh-{tag}</guid>'
+            f'<description>Synthetic fresh item for {tag}.</description>'
+            f'<dc:date>{when}</dc:date></item>')
+    path.write_text(text.replace("</channel>", item + "</channel>"), encoding="utf-8")
+    return dst
+
+
+def fresh_feeds(directory, tag, when="2026-11-09T12:00:00Z"):
+    return fixture_fetcher(fresh_fixture_dir(directory, tag, when))
 
 
 def with_nonce0(index_bytes: bytes) -> bytes:
@@ -140,9 +163,14 @@ class Base(unittest.TestCase):
         self.clock = Clock("2026-11-09T10:05:00Z")
         self.cfg = config()
 
-    def cycle(self, when):
+    def cycle(self, when, fetch=None):
         self.clock.set(when)
-        return pub.pilot_cycle(self.private, self.public, self.spool, feeds(), self.clock, self.cfg)
+        return pub.pilot_cycle(self.private, self.public, self.spool, fetch or feeds(), self.clock, self.cfg)
+
+    def fresh_cycle(self, when):
+        """A cycle that sees one new item, so it publishes instead of skipping as empty."""
+        tag = when.replace(":", "").replace("-", "").replace("T", "-")
+        return self.cycle(when, fetch=fresh_feeds(self.tmp, tag, when))
 
     def generation(self, when, days=None):
         """A builder generation (unqualified) from the current private archive, without publishing it."""
@@ -297,7 +325,7 @@ class Ordering(Base):
         # Next day: the oldest date leaves the 7-day window of the NEW generation; the old generation stays
         # public (reader-protected) instead of being deleted after the new index.
         self.log.clear()
-        self.cycle("2026-11-10T10:05:00Z")
+        self.fresh_cycle("2026-11-10T10:05:00Z")
         puts = [k for op, k in self.log if op == "put"]
         self.assertEqual(puts[-1], INDEX, "index.json must be the last public write")
         self.assertEqual([k for op, k in self.log if op == "delete"], [], "nothing is deleted at the commit")
@@ -468,7 +496,7 @@ class StopRestoreWithdraw(Base):
         self.cycle("2026-11-09T10:05:00Z")
         self.gen1 = self.public_files()
         self.gen1_id = pub.read_state(self.private)["committed"]["gen_id"]
-        self.cycle("2026-11-09T10:20:00Z")
+        self.fresh_cycle("2026-11-09T10:20:00Z")
         self.gen2 = self.public_files()
 
     def test_stop_makes_cycles_a_clean_no_op(self):
@@ -485,7 +513,7 @@ class StopRestoreWithdraw(Base):
         self.assertNotIn("published_views_stale", st["problems"], "a deliberate stop is not a staleness alarm")
         self.assertEqual(st["stopped"]["reason"], "pilot paused for review")
         self.assertTrue(pub.resume(self.private))
-        self.assertEqual(self.cycle("2026-11-09T12:05:00Z")["status"], "published")
+        self.assertEqual(self.fresh_cycle("2026-11-09T12:05:00Z")["status"], "published")
 
     def test_restore_reuses_a_still_pinned_incarnation_with_a_fresh_nonce(self):
         with self.assertRaises(pub.PublishError):
@@ -544,8 +572,8 @@ class StopRestoreWithdraw(Base):
 
     def test_snapshot_retention_keeps_the_newest_and_never_the_live_one_away(self):
         for minute in ("35", "50"):
-            self.cycle(f"2026-11-09T10:{minute}:00Z")
-        self.cycle("2026-11-09T11:05:00Z")
+            self.fresh_cycle(f"2026-11-09T10:{minute}:00Z")
+        self.fresh_cycle("2026-11-09T11:05:00Z")
         ids = pub.snapshot_ids(self.private)
         self.assertEqual(len(ids), self.cfg["retention"]["snapshots"])
         live = pub.read_state(self.private)["committed"]["gen_id"]
@@ -597,7 +625,8 @@ class PilotConfig(Base):
     def test_shipped_config_is_inactive_and_valid(self):
         cfg = config()
         self.assertFalse(cfg.active)
-        self.assertEqual(cfg["schedule"]["cron"], "*/15 * * * *")
+        self.assertEqual(cfg["schedule"]["cron"], "*/30 * * * *")
+        self.assertEqual(cfg["schedule"]["interval_s"], 1800)
         self.assertEqual(sorted(cfg["sources"]), ["ars_technica", "eia_today_in_energy", "oilprice_com", "techcrunch"])
         self.assertIsNone(cfg["storage"]["private"]["bucket"])
         self.assertIsNone(cfg["storage"]["public"]["bucket"])
@@ -609,6 +638,7 @@ class PilotConfig(Base):
         raw = patched_config_raw()
         cases = {
             "cadence": lambda c: c["schedule"].update(cron="*/5 * * * *"),
+            "old 15-minute cadence": lambda c: c["schedule"].update(cron="*/15 * * * *", interval_s=900),
             "extra source": lambda c: c["sources"].append("gnews_ai_bubble"),
             "price input": lambda c: c["prices"].update(input="file"),
             "shared credentials": lambda c: c["storage"]["public"].update(env_prefix="NEWS_PRIVATE_"),
@@ -680,8 +710,59 @@ class PilotConfig(Base):
         self.assertEqual(json.loads(index.read_bytes())["state"], "withdrawn", "a tombstone, not a deleted key")
         self.assertFalse((self.tmp / "q" / "news" / "v1").exists(), "legacy keys untouched")
         self.assertEqual(self.run_cli("publish-resume", *base)[0], 0)
-        self.assertEqual(self.run_cli("pilot-cycle", *cyc, "--clock", "2026-11-09T10:50:00Z")[0], 0)
+        fresh = fresh_fixture_dir(self.tmp, "1050", "2026-11-09T10:50:00Z")
+        self.assertEqual(self.run_cli("pilot-cycle", *cyc, "--clock", "2026-11-09T10:50:00Z",
+                                      "--fixtures", str(fresh))[0], 0)
         self.assertEqual(json.loads(index.read_bytes())["state"], "published")
+
+
+class EmptyCycleSkip(Base):
+    """An empty cycle publishes nothing (D1/R2 cost cut): no view rebuild, no public write."""
+
+    def test_second_cycle_with_no_new_items_skips_publication(self):
+        first = self.cycle("2026-11-09T10:05:00Z")
+        self.assertEqual(first["status"], "published")
+        published_files = self.public_files()
+        runs_before = self.private.list("news/v1/runs/")
+        self.log.clear()
+        out = self.cycle("2026-11-09T10:35:00Z")
+        self.assertEqual(out["status"], "skipped_empty")
+        self.assertEqual(out["run"]["counts"]["new_items"], 0)
+        self.assertEqual(out["run"]["counts"]["new_revisions"], 0)
+        self.assertIsNone(out["publication"])
+        self.assertEqual(self.log, [], "no public write on a skipped cycle")
+        self.assertEqual(self.public_files(), published_files, "published views unchanged")
+        manifests = [k for k in self.private.list("news/v1/runs/") if k.endswith("/manifest.json")]
+        before = [k for k in runs_before if k.endswith("/manifest.json")]
+        self.assertEqual(len(manifests), len(before) + 1,
+                         "the empty run is still committed to the private archive (coverage)")
+
+    def test_failed_source_still_publishes(self):
+        from market_data.news.adapters.rss import FetchResponse
+
+        self.cycle("2026-11-09T10:05:00Z")
+        real = feeds()
+
+        def failing(url, timeout):
+            if "techcrunch" in url:
+                return FetchResponse(500, b"")
+            return real(url, timeout)
+
+        out = self.cycle("2026-11-09T10:35:00Z", fetch=failing)
+        self.assertEqual(out["status"], "published")
+        self.assertEqual(out["run"]["counts"]["new_items"], 0)
+        self.assertNotEqual(out["run"]["status"], "complete",
+                            "a failed source is not a clean run, so it must not skip")
+
+    def test_held_publish_lease_is_never_skipped(self):
+        # A previous publisher exited mid-publication and left its lease behind. An empty
+        # cycle must not skip quietly past it: it proceeds to publish, which refuses loudly.
+        self.cycle("2026-11-09T10:05:00Z")
+        lease = {"holder": "crashed-publisher", "acquired_at": "2026-11-09T10:20:00Z",
+                 "expires_at": "2026-11-09T10:35:00Z"}
+        self.private.put(pub.PUBLISH_LEASE_KEY, json.dumps(lease).encode())
+        with self.assertRaises(WriterBusy):
+            self.cycle("2026-11-09T10:35:00Z")
 
 
 if __name__ == "__main__":
