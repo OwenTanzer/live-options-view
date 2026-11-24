@@ -270,7 +270,7 @@ assert.deepEqual(panel.validateSnapshot(collectorSnapshot), [],
 const collectorHero = panel.renderHero(collectorSnapshot, false);
 assert.ok(collectorHero.includes('62 advancers · 38 decliners'),
   'hero must read breadth from index.breadth');
-assert.ok(collectorHero.includes('closed (outside_hours)'),
+assert.ok(collectorHero.includes('Market at hourly snapshot: closed (outside_hours)'),
   'hero must render market_status as status + reason, never [object Object]');
 assert.ok(collectorHero.includes('25,324.50'), 'hero must read index.previous_close');
 assert.ok(!collectorHero.includes('[object Object]'), 'hero must never render [object Object]');

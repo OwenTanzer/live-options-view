@@ -1,4 +1,4 @@
-import {model,receiptMinute,flowResponse} from '../shared/intraminute.js';
+import {model,receiptMinute,flowResponse,alkalusFlow} from '../shared/intraminute.js';
 
 const $=id=>document.getElementById(id);
 const sample=1794580560000, api='/api/one-clock/intraminute';
@@ -89,7 +89,19 @@ function inspect(second) {
   $('detail-summary').textContent='Second '+second+' · '+slice.length+' observed events through the cutoff';
   const width=Number($('width').value), index=Math.floor((second*1000+detailOffset)/width);
   const flow=flowResponse(data,index,width,minute,minute+Number($('cursor').value));
-  $('response').textContent=flow?'At '+(index*width/1000).toFixed(1)+' s · net '+flow.pressure+' directional contracts · imbalance '+(flow.imbalance===null?'unclassified':flow.imbalance.toFixed(2))+' · midpoint change one second later '+(flow.response===null?'unavailable':(flow.response>=0?'+':'')+flow.response.toFixed(3)):'Selected flow interval is beyond the cutoff.';
+  if(!flow){$('response').textContent='Selected flow interval is beyond the cutoff.';$('next-second').textContent='';}
+  else {
+    // The Alkalus classification and the one-second-later response are two
+    // separate items. The classification uses only this interval's own
+    // first-to-last midpoint move and signed flow; the later response is a
+    // next-interval observation and never changes the classification.
+    const cls=alkalusFlow(data,index,width,minute);
+    const label=cls===null?null:cls.kind==='golden'?'golden time':cls.kind==='copper'?'working copper':'lead time';
+    $('response').textContent='At '+(index*width/1000).toFixed(1)+' s · net '+flow.pressure+' directional contracts · imbalance '+(flow.imbalance===null?'unclassified':flow.imbalance.toFixed(2))+' · Alkalus (preliminary, flow only) · '+(cls===null
+      ?'unclassified - missing or invalid midpoint/spread, no signed option flow, or interrupted coverage in this interval.'
+      :label+' · '+cls.reason+' · midpoint moved '+(cls.displacement>=0?'+':'')+cls.displacement.toFixed(3)+' ('+cls.displacementSpreads.toFixed(1)+' spreads)');
+    $('next-second').textContent='Next-second observation — not part of this interval’s classification: midpoint change one second later '+(flow.response===null?'unavailable':(flow.response>=0?'+':'')+flow.response.toFixed(3));
+  }
   const bucket=data.bins[index];
   if(bucket?.first) $('response').textContent+=' · QQQ trades O '+bucket.first.price+' / H '+bucket.high+' / L '+bucket.low+' / C '+bucket.last.price+' · '+bucket.shares+' shares';
   const body=$('rows');body.replaceChildren();
