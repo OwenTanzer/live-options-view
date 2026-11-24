@@ -1,4 +1,4 @@
-"""Versioned paper-only overlays for specific fresh OI accounts (QQQ and IBIT families)."""
+"""Versioned paper-only overlays for specific fresh OI accounts (QQQ, IBIT, SLV and DRAM families)."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -29,9 +29,23 @@ IBIT_ARMS = dict(
     crassus_oif_ibit_protect="protect_only",
     crassus_oif_ibit_recover="protect_reentry",
 )
+# SLV (silver) and DRAM (memory) run the IBIT design unchanged: three arms on
+# their own adaptive-window signal, protection arms keep the 35% premium stop.
+SLV_ARMS = dict(
+    crassus_oif_slv_baseline="baseline",
+    crassus_oif_slv_protect="protect_only",
+    crassus_oif_slv_recover="protect_reentry",
+)
+DRAM_ARMS = dict(
+    crassus_oif_dram_baseline="baseline",
+    crassus_oif_dram_protect="protect_only",
+    crassus_oif_dram_recover="protect_reentry",
+)
 FAMILIES = {
     "QQQ": dict(strategy_id="oi_skew_qqq", arms=ARMS),
     "IBIT": dict(strategy_id="oi_skew_ibit_adaptive", arms=IBIT_ARMS),
+    "SLV": dict(strategy_id="oi_skew_slv_adaptive", arms=SLV_ARMS),
+    "DRAM": dict(strategy_id="oi_skew_dram_adaptive", arms=DRAM_ARMS),
 }
 
 
@@ -50,12 +64,18 @@ def arm_for(account):
     return arm
 
 
+def reference_signal(ctx, strategy_id):
+    return _reference_decision(ctx, strategy_id)
+
+
 def ibit_signal(ctx):
-    return _reference_decision(ctx, "oi_skew_ibit_adaptive")
+    return reference_signal(ctx, "oi_skew_ibit_adaptive")
 
 
 def signal_for(root, ctx):
-    return oi_skew_qqq(ctx) if root == "QQQ" else ibit_signal(ctx)
+    if root == "QQQ":
+        return oi_skew_qqq(ctx)
+    return reference_signal(ctx, FAMILIES[root]["strategy_id"])
 
 
 def snap_time(value):

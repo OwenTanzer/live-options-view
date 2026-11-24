@@ -22,6 +22,7 @@ export const OI_SKEW_PROJECTION_KEY = 'crassus/oi-skew/v1/latest.json';
 export const OI_SKEW_PROJECTION_PUBLIC = true;
 const PUBLIC_KEYS = new Set([
   'intraday/latest.json', 'intraday/spy/latest.json', 'intraday/ibit/latest.json',
+  'intraday/slv/latest.json', 'intraday/dram/latest.json',
   'intraday/prices.json', 'intraday/health.json', 'derived/OIranges.csv',
   'macro/eia_steo.json', 'manifest.json',
   'squeeze-scanner/v1/scheduled/latest.json',

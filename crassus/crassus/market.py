@@ -183,7 +183,7 @@ def _snapshot_key(payload: dict[str, Any]) -> tuple[str | None, str]:
     key = payload["snapshot_key"]
     if not isinstance(key, str):
         return None, "invalid"
-    match = re.fullmatch(r"intraday/(?:spy/|ibit/)?([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
+    match = re.fullmatch(r"intraday/(?:spy/|ibit/|slv/|dram/)?([0-9]{8})/snapshot_([0-9]{4}|[0-9]{6}|[0-9]{12})\.csv", key)
     if match is None:
         return None, "invalid"
     date_part, time_part = match.groups()

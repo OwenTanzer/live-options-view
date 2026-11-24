@@ -17,7 +17,7 @@ import { createStorage } from './storage.js';
 import { botUsernames } from './bots.js';
 
 const SETTLEMENT_ID_PREFIX = 'settle';
-const UNDERLYINGS = new Set(['QQQ', 'SPY', 'IBIT']);
+const UNDERLYINGS = new Set(['QQQ', 'SPY', 'IBIT', 'SLV', 'DRAM']);
 export function settlementMark(b, marks) {
   const underlying = b.underlying ?? 'QQQ'; // pre-migration books were QQQ only
   const value = marks[`${underlying}:${b.exp}`] ?? (underlying === 'QQQ' ? marks[b.exp] : null);

@@ -29,9 +29,19 @@ from .config import (
     TICKER_CLASSES,
     log,
     COLLECT_IBIT,
+    COLLECT_SLV,
+    COLLECT_DRAM,
 )
 from .chain import _dxlink_symbol
 from .feed import DXLinkFeed
+
+
+def _collected(root: str) -> bool:
+    """Opt-in underlyings answer only while their collection flag is on.
+
+    Reads the module globals at call time so tests can patch one flag."""
+    flags = {"IBIT": COLLECT_IBIT, "SLV": COLLECT_SLV, "DRAM": COLLECT_DRAM}
+    return flags.get(root, True)
 
 # -- ephemeral live quote HTTP service ----------------------------------------
 
@@ -150,14 +160,14 @@ class LiveQuoteRegistry:
                     continue
                 # Shape first: a malformed symbol is malformed in any session
                 # state, and saying "session_closed" about it would be a lie.
-                match = re.fullmatch(r"(QQQ|SPY|IBIT)(\d{6})([CP])(\d{8})", symbol)
+                match = re.fullmatch(r"(QQQ|SPY|IBIT|SLV|DRAM)(\d{6})([CP])(\d{8})", symbol)
                 if not match:
                     skip_reason[symbol] = "unknown_symbol"
                     continue
                 if not self._feed:
                     skip_reason[symbol] = self._session
                     continue
-                if match[1] == "IBIT" and not COLLECT_IBIT:
+                if not _collected(match[1]):
                     skip_reason[symbol] = "not_collected"
                     continue
                 if len(self._requested_contracts) >= MAX_REQUESTED_CONTRACTS:

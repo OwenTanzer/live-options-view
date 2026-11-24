@@ -10,6 +10,8 @@ points (start_live_quote_server, make_s3, wait_for_premarket, _run_session)
 resolve through the package entry, as they did in the flat file.
 """
 
+import os
+import tempfile
 import secrets
 import threading
 import time
@@ -20,6 +22,8 @@ import market_data.live_market as _entry  # entry indirection for main()'s test 
 from .config import (
     COLLECT_SPY,
     COLLECT_IBIT,
+    COLLECT_SLV,
+    COLLECT_DRAM,
     ET,
     ONE_CLOCK_PUBLICATIONS,
     HEALTH_SECS,
@@ -41,6 +45,7 @@ from .chain import load_chain
 from .steo import eia_steo_loop
 from .health import health_loop, push_health
 from .market import take_snapshot
+from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
 from .publication_queue import PublicationQueue
 from .prices import (
     _classify_startup,
@@ -81,10 +86,12 @@ _publication_queues = {}
 
 
 def _publication_queue(us, today, counters):
-    if not ONE_CLOCK_PUBLICATIONS:
+    if not ONE_CLOCK_PUBLICATIONS or us.symbol not in ONE_CLOCK_INSTRUMENTS:
         return None
     if us.symbol not in _publication_queues:
-        queue = PublicationQueue(make_s3(publication=True), R2_BUCKET, us.symbol)
+        spool_root = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") or tempfile.gettempdir()
+        queue = PublicationQueue(make_s3(publication=True), R2_BUCKET, us.symbol,
+                                 spool_dir=os.path.join(spool_root, "collector-publication-v1", R2_BUCKET))
         _publication_queues[us.symbol] = queue
         queue.start()
     queue = _publication_queues[us.symbol]
@@ -130,7 +137,8 @@ def _run_session(token_manager: OAuthTokenManager, quote_registry: LiveQuoteRegi
     spy_context = {"status": "disabled" if not COLLECT_SPY else "unavailable",
                    "reason": "COLLECT_SPY=0" if not COLLECT_SPY else "chain_not_loaded"}
     for sym, us in UNDERLYING_SESSIONS.items():
-        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or (sym == "IBIT" and not COLLECT_IBIT):
+        opted_out = {"IBIT": not COLLECT_IBIT, "SLV": not COLLECT_SLV, "DRAM": not COLLECT_DRAM}
+        if us is QQQ_SESSION or (sym == "SPY" and not COLLECT_SPY) or opted_out.get(sym, False):
             continue
         try:
             us_strikes, us_exp, _, _ = load_chain(auth["access_token"], today, ticker=sym, include_weekly=False)

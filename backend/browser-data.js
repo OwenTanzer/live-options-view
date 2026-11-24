@@ -22,6 +22,8 @@ export const BROWSER_DATA_KEYS = new Set([
   'intraday/latest.json',
   'intraday/spy/latest.json',
   'intraday/ibit/latest.json',
+  'intraday/slv/latest.json',
+  'intraday/dram/latest.json',
   'intraday/prices.json',
   'intraday/health.json',
   'derived/OIranges.csv',
@@ -199,10 +201,14 @@ export async function handleLiveQuotes(url, env) {
   }
 }
 export function fetchLiveQuotes(symbols, env) {
-  if (!env.LIVE_QUOTE_ORIGIN || !env.LIVE_QUOTE_KEY) {
+  const provisional = env.PROVISIONAL_QUOTE_ORIGIN && symbols.length > 0 &&
+    symbols.every(symbol => /^(SLV|DRAM)\d{6}[CP]\d{8}$/.test(symbol));
+  const origin = provisional ? env.PROVISIONAL_QUOTE_ORIGIN : env.LIVE_QUOTE_ORIGIN;
+  const key = provisional ? env.PROVISIONAL_QUOTE_KEY : env.LIVE_QUOTE_KEY;
+  if (!origin || !key) {
     throw new Error('Live quote service is not configured');
   }
-  const upstreamUrl = new URL('/live-quotes', env.LIVE_QUOTE_ORIGIN);
+  const upstreamUrl = new URL('/live-quotes', origin);
   upstreamUrl.searchParams.set('symbols', symbols.join(','));
   // Live quote data must never be served from an intermediate cache: the
   // upstream URL is the cache key, and a stale cached 503 (pre-#222, no
@@ -212,7 +218,7 @@ export function fetchLiveQuotes(symbols, env) {
   // unknown query params (it reads only `symbols`).
   upstreamUrl.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   return fetch(upstreamUrl, {
-    headers: { 'X-Live-Quote-Key': env.LIVE_QUOTE_KEY, 'Cache-Control': 'no-cache' },
+    headers: { 'X-Live-Quote-Key': key, 'Cache-Control': 'no-cache' },
     cf: { cacheTtl: 0, cacheEverything: false },
   });
 }

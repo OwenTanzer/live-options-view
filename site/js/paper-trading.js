@@ -95,7 +95,7 @@ const NO_DATA_TEXT = document.getElementById('no-data')?.textContent || 'No live
 function readSavedUnderlying() {
   if (typeof location !== 'undefined') {
     const linked = new URLSearchParams(location.search).get('chain');
-    if (['QQQ', 'SPY', 'IBIT', 'BTC'].includes(linked)) return linked;
+    if (['QQQ', 'SPY', 'IBIT', 'SLV', 'DRAM', 'BTC'].includes(linked)) return linked;
   }
   try { return localStorage.getItem(UNDERLYING_KEY) || 'QQQ'; } catch (e) { return 'QQQ'; }
 }

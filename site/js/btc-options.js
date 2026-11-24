@@ -1,6 +1,6 @@
 // Authenticated, memory-only product view. Never ingested as an equity snapshot.
 const btcOptions = {
-  product: 'cme', active: false, generation: 0, request: 0, quotes: new Map(), data: null,
+  active: false, generation: 0, request: 0, quotes: new Map(), data: null,
   owner: null, error: null, access: null, ownerLinkAvailable: false,
   syncSession() {
     const username = sessionVerified ? session?.username || null : null;
@@ -14,14 +14,7 @@ const btcOptions = {
     this.render();
   },
   visibleSymbols() {
-    if (this.product === 'usdc') return ticketEl?.dataset?.btc || '';
-    const rows = [...document.querySelectorAll('.btc-contract')];
-    const visible = rows.filter(el => {
-      const rect = el.getBoundingClientRect();
-      return rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
-    }).map(el => el.dataset.symbol);
-    if (ticketEl?.dataset.btc) visible.unshift(ticketEl.dataset.btc);
-    return [...new Set(visible)].slice(0, 64).join(',');
+    return ticketEl?.dataset?.btc?.startsWith('USDC:') ? ticketEl.dataset.btc : '';
   },
   requestVisible() {
     if (!this.active || !this.data || this.access) return;
@@ -38,13 +31,13 @@ const btcOptions = {
       await btcOwnerLink.github(true);
       this.syncSession();
     }
-    const hasHoldings = session && Object.values(computeBook()).some(b => b.instrument_type === 'futures_option' && b.pos > 0);
+    const hasHoldings = session && Object.entries(computeBook()).some(([key, b]) => key.startsWith('USDC:') && b.pos > 0);
     if (!sessionVerified || !session || (!this.active && !hasHoldings)) { this.quotes.clear(); this.render(); return; }
     const generation = this.generation, request = ++this.request, username = session.username;
     try {
       const query = new URLSearchParams();
       if (this.active) query.set('expiry', this.expiry || 'front');
-      query.set('product', this.product);
+      query.set('product', 'usdc');
       const visible = this.visibleSymbols();
       this.requestedWindow = visible;
       if (visible) query.set('symbols', visible);
@@ -113,7 +106,7 @@ const btcOptions = {
   },
   header() {
     document.getElementById('underlying-select').value = 'BTC';
-    const name = this.product === 'usdc' ? 'Bitcoin options (USDC)' : 'Bitcoin futures options';
+    const name = 'Bitcoin options (USDC)';
     document.getElementById('title').textContent = name;
     document.title = name + ' - moopertonic';
   },
@@ -241,7 +234,7 @@ const btcOptions = {
       for (const [action, side] of [['buy', 'ask'], ['sell', 'bid']]) {
         const price = this.side(sym, side), reason = this.reason(sym, action, book);
         const button = row.querySelector('.btc-' + action);
-        const reviewQuote = this.product === 'usdc' && Number.isFinite(snapshot?.[side]) && snapshot[side] > 0;
+        const reviewQuote = Number.isFinite(snapshot?.[side]) && snapshot[side] > 0;
         button.disabled = !(reviewQuote || (!reason && price != null));
         const q = quote;
         const streamed = Number.isFinite(q?.[side]) && q[side] > 0;
@@ -262,9 +255,9 @@ const btcOptions = {
     const data = this.data, root = document.getElementById('btc-chain');
     const focus = document.activeElement?.dataset;
     const focused = focus?.btcAction ? { ...focus } : null;
-    const listed = (data?.contracts || []).filter(c => (!data.expiry || c.exp === data.expiry) && (this.product !== 'usdc' || c.product === 'BTC_USDC'));
+    const listed = (data?.contracts || []).filter(c => (!data.expiry || c.exp === data.expiry) && c.product === 'BTC_USDC');
     const book = computeBook();
-    const layout = JSON.stringify([this.owner, this.product, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
+    const layout = JSON.stringify([this.owner, data?.expiry, data?.expiries, listed.map(c => [c.contract_key, book[c.contract_key]?.pos])]);
     const sameExpiry = data?.expiry && root.dataset.expiry === data.expiry && root.querySelector('.btc-series');
     if (data && root.dataset.layout === layout && root.querySelector('.btc-series')) {
       this.updateActions();
@@ -311,17 +304,6 @@ const btcOptions = {
       }
       return;
     }
-    const products = element('select', '', '');
-    products.setAttribute('aria-label', 'Bitcoin option product');
-    for (const [key,label] of [['cme','CME standard'],['usdc','BTC options · USDC']]) {
-      const option = element('option', '', label); option.value = key; products.appendChild(option);
-    }
-    products.value = this.product;
-    products.onchange = () => {
-      this.product = products.value; this.expiry = null; this.data = null; this.error = null;
-      this.generation++; this.quotes.clear(); closeTicket(); this.render(); this.refresh();
-    };
-    status.appendChild(products);
     if (!data) {
       status.appendChild(element('p', '', this.error || 'Loading Bitcoin option contracts…'));
       if (this.error) { const retry = element('button', '', 'Retry quotes'); retry.onclick = () => this.refresh(); status.appendChild(retry); }
@@ -335,7 +317,7 @@ const btcOptions = {
     }
     if (data.expiries?.length) {
       const picker = element('select', '', '');
-      picker.setAttribute('aria-label', this.product === 'usdc' ? 'USDC option expiry' : 'Standard monthly expiry');
+      picker.setAttribute('aria-label', 'USDC option expiry');
       for (const expiry of data.expiries) picker.add(new Option(expiry, expiry));
       picker.value = data.expiry;
       picker.onchange = () => { this.expiry = picker.value; this.refresh(); };
@@ -363,7 +345,7 @@ const btcOptions = {
       for (const [action, side] of [['sell', 'bid'], ['buy', 'ask']]) {
         const cell = element('div', 'btc-side', ''), button = element('button', 'btc-' + action, '');
         button.dataset.btcAction = action; button.dataset.symbol = c.contract_key;
-        button.onclick = e => { if (this.product === 'usdc' || (!this.reason(c.contract_key, action) && this.side(c.contract_key, side) != null)) this.openContract(e, c, action); };
+        button.onclick = e => { this.openContract(e, c, action); };
         cell.appendChild(button);
         cell.appendChild(element('span', 'btc-sr btc-freshness btc-' + side + '-time', ''));
         const reason = element('span', 'btc-sr btc-reason btc-' + action + '-reason', '');

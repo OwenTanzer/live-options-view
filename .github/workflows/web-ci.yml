@@ -82,7 +82,7 @@ jobs:
           NODE_OPTIONS: --experimental-sqlite
         run: node --test tests/one_clock*.test.mjs
       - name: public browser data allowlist
-        run: node tests/browser_data.test.js
+        run: node --test tests/browser_data.test.js tests/provisional_quotes.test.mjs
       - name: order-flow exposure calculation, replay/live agreement, strike profile scale and replay heatmap
         run: node --test tests/order_flow_exposure.test.js tests/order_flow_model.test.js tests/order_flow_render.test.js tests/order_flow_profile.test.js tests/order_flow_heatmap.test.js
       - name: bounded legacy r2-proxy (#225, G4b)

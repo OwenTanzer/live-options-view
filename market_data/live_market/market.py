@@ -37,6 +37,7 @@ from .config import (
     log,
 )
 from .feed import DXLinkFeed
+from .one_clock import INSTRUMENTS as ONE_CLOCK_INSTRUMENTS
 from .quotes import _fresh_spy_spot, _observed_spy_price_with_basis, _provider_observed_spy_price, _spy_subscription_coverage
 from .state import (
     Counters,
@@ -370,17 +371,20 @@ def _snapshot_provenance_record(
     }
 
 
-def _put_snapshot_provenance(s3, record: dict[str, Any]) -> None:
+def _put_snapshot_provenance(s3, record: dict[str, Any], *, create_only=False) -> None:
     key = record["snapshot_key"][:-4] + ".provenance.json"
     try:
         s3.put_object(
             Bucket=R2_BUCKET, Key=key,
             Body=json.dumps(record, default=str, allow_nan=False).encode(),
+            **({"IfNoneMatch": "*"} if create_only else {}),
             ContentType="application/json",
             CacheControl="no-cache, max-age=0",
         )
         log.info(f"-> {key}")
     except Exception as e:
+        if create_only and getattr(e, "response", {}).get("Error", {}).get("Code") in {"412", "PreconditionFailed"}:
+            return  # The worker already finalized provenance.
         # The CSV and latest.json already exist; losing the sidecar loses
         # provenance for this snapshot, not the snapshot itself. Record the
         # gap rather than failing a collection cycle.
@@ -591,7 +595,8 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
     # The payload is only observable if the write succeeds, so its readings
     # carry the publication attempt time as `published_at`; a failed write
     # leaves no payload and the sidecar records `archived_unpublished`.
-    deferred = publication_queue is not None and ONE_CLOCK_PUBLICATIONS
+    publish_one_clock = ONE_CLOCK_PUBLICATIONS and us.symbol in ONE_CLOCK_INSTRUMENTS
+    deferred = publication_queue is not None and publish_one_clock
     publication_time = None if deferred else datetime.now(timezone.utc)
     finish_publication(readings, published_at=publication_time,
                        status="pending" if deferred else "published",
@@ -633,18 +638,19 @@ def take_snapshot(s3, feed: DXLinkFeed, strikes: list[dict],
         # The sidecar can report pending while the publisher is catching up.
         provenance["market_readings_availability_basis"] = "confirmed_latest_publication"
         provenance["publication"] = {"status": "pending", "reason": "awaiting_one_clock"}
-        _put_snapshot_provenance(s3, provenance)
         try:
-            publication_queue.enqueue(payload, provenance, csv_buf.getvalue().encode())
+            admitted = publication_queue.enqueue(payload, provenance, csv_buf.getvalue().encode())
         except Exception:
-            # An ambiguous write may already be in flight. Leave the pending
-            # sidecar (or a concurrent successful finalization) intact.
-            log.error("Could not confirm queued publication %s", csv_key)
+            log.exception("Could not retain publication %s", csv_key)
             counters.inc_failure()
             raise
+        if not admitted:
+            provenance["publication"] = {"status": "pending", "reason": "awaiting_queue_admission"}
+            counters.inc_failure()
+        _put_snapshot_provenance(s3, provenance, create_only=True)
         return
 
-    if ONE_CLOCK_PUBLICATIONS:
+    if publish_one_clock:
         from .one_clock import publish_snapshot
         try:
             # Authoritative immutable commit precedes the mutable compatibility
