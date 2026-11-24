@@ -68,7 +68,7 @@ export const headlineIngestion={...shared,id:'mapped-news-archive',outputs:[head
     let bytes=0;
     const fetchJson=async key=>{
       if(!lease() || !isPublicNewsViewKey(key))throw Error('Invalid news view request');
-      const response=await fetch(NEWS_R2_ORIGIN+'/'+key,{redirect:'error',signal:AbortSignal.timeout(Math.max(1,15000-(Date.now()-started)))});
+      const response=await fetch(NEWS_R2_ORIGIN+'/'+key,{redirect:'manual',signal:AbortSignal.timeout(Math.max(1,15000-(Date.now()-started)))});
       if(!response.ok)throw Error('News archive unavailable');
       const reader=response.body.getReader(),chunks=[];
       try {
@@ -81,7 +81,7 @@ export const headlineIngestion={...shared,id:'mapped-news-archive',outputs:[head
     return {artifacts:rows.map(artifact),complete:true,missingMinutes:partial?1:0};
   }};
 
-export const headlineQuoteIngestion={...shared,id:'mapped-price-strip',outputs:[quoteSource],
+export const headlineQuoteIngestion={...shared,id:'mapped-price-strip',receiptAfterDiscovery:true,outputs:[quoteSource],
   fields:{[quoteSource]:{price:'Mapped quote price'}},
   async discover(bucket,{session,instrument,cutoff}) {
     if(!hasHeadlinePriceRoute(instrument))return {artifacts:[],complete:true};
@@ -94,7 +94,7 @@ export const headlineQuoteIngestion={...shared,id:'mapped-price-strip',outputs:[
     const uploaded=object.uploaded?.getTime(),published=checkedTime(doc.timestamp);
     if(doc.schema_version!==2 || raw?.instrument_id!==providerId || raw.source_symbol!==instrument ||
       !Number.isFinite(raw.price) || raw.price<=0 || ![quoteAt,received,published,uploaded].every(Number.isSafeInteger) ||
-      quoteAt>received || Math.max(received,published)>uploaded || uploaded>cutoff ||
+      quoteAt>received || Math.max(received,published)>uploaded || uploaded>Math.max(cutoff,Date.now()) ||
       quoteAt<bounds.open || quoteAt>bounds.close+2*86400000)
       return {artifacts:[],complete:true,missingMinutes:1};
     const id=JSON.stringify([instrument,raw.source,raw.price_basis,quoteAt,received,raw.price]);
