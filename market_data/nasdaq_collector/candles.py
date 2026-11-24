@@ -135,6 +135,11 @@ def parse_yahoo_chart(payload):
     return {"bars": bars, "meta": meta}
 
 
+# Nasdaq requires browser-style headers; identify the collector explicitly
+# when using Yahoo's chart endpoint rather than inheriting Nasdaq's headers.
+YAHOO_HEADERS = {"User-Agent": "OptionsView/1.0", "Accept": "*/*"}
+
+
 def fetch_1m_bars(symbol, session, range_="5d"):
     """Fetch real 1-minute bars for ``symbol`` from Yahoo Finance.
 
@@ -144,7 +149,7 @@ def fetch_1m_bars(symbol, session, range_="5d"):
     """
     url = YAHOO_CHART_URL.format(symbol=symbol)
     resp = session.get(url, params={"interval": "1m", "range": range_,
-                                    "includePrePost": "false"}, timeout=20)
+                                    "includePrePost": "false"}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
     return parse_yahoo_chart(resp.json())
 
@@ -152,7 +157,7 @@ def fetch_1m_bars(symbol, session, range_="5d"):
 def fetch_daily_bars(symbol, session, range_="10d"):
     """Fetch daily bars for ``symbol`` (used for the 7-day change)."""
     url = YAHOO_CHART_URL.format(symbol=symbol)
-    resp = session.get(url, params={"interval": "1d", "range": range_}, timeout=20)
+    resp = session.get(url, params={"interval": "1d", "range": range_}, headers=YAHOO_HEADERS, timeout=20)
     resp.raise_for_status()
     return parse_yahoo_chart(resp.json())
 
