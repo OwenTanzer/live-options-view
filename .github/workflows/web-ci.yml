@@ -85,6 +85,8 @@ jobs:
         run: node --test tests/crypto_panel.test.js tests/crypto_predictions_panel.test.mjs
       - name: public browser data allowlist
         run: node --test tests/browser_data.test.js tests/provisional_quotes.test.mjs
+      - name: Stock candle replay and publisher contract
+        run: node --test tests/candle_cache_one_clock.test.mjs
       - name: Nasdaq panel fixtures
         run: node --test tests/nasdaq_panel.test.js
       - name: Nasdaq MCP fixtures

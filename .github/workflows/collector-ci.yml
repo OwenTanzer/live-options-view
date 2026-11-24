@@ -14,6 +14,7 @@ on:
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
       - "tests/test_btc_options.py"
+      - "tests/test_single_stock_historical_backfill.py"
       - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
@@ -66,6 +67,7 @@ on:
       - "tests/test_price_observations.py"
       - "tests/test_price_lane.py"
       - "tests/test_btc_options.py"
+      - "tests/test_single_stock_historical_backfill.py"
       - "tests/test_crypto_collector.py"
       - "tests/test_feed_reauth.py"
       - "tests/test_snapshot_provenance.py"
@@ -120,6 +122,10 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r deployment/python/requirements.txt
+      - name: Stock candle archive fixtures
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_single_stock_historical_backfill.py
       - name: Crypto collector fixtures
         run: python -m unittest discover -s tests -p test_crypto_collector.py -v
       - name: Run collector unit suite
