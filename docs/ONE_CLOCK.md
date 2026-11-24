@@ -571,3 +571,38 @@ subsequent one-second price response and tape. Use the receipt cutoff to replay
 what had arrived by that instant. The bundled Nov 13 sample opens offline.
 See [Tradier operations](../market_data/tradier/OPERATIONS.md#qqq-intraminute-order-flow)
 for source coverage and live activation.
+
+#### Alkalus flow classification (preliminary)
+
+Each selected interval also carries a preliminary Alkalus classification —
+golden time, working copper, or lead time — from the
+[Preliminary Guideline — Alkalus](https://app.notion.com/p/3bb3c519147b8186863ecf7abc7635f1)
+taxonomy, as applied in the
+[QQQ Aug 13 2026 $732 Call — PPI Band-Walk Scalp](https://app.notion.com/p/3bb3c519147b81cfa485cb7b026771e7)
+retrospective (13-minute hold, +18.39%, classified working copper; holding
+toward $733 would have been a new wager). The taxonomy classifies time inside
+a convex position by what the held interval actually converted risk into, not
+by duration and not by the move after exit. This drilldown applies it to
+option *flow*, descriptively only: it carries no option premium repricing, so
+there is no theta, convexity payoff, or entry friction to measure, and the
+label is not a trading signal.
+
+Inputs, all from the owned interval only: the first-to-last observed quote
+midpoint displacement inside the bin, the bin's last observed quote spread
+(ask − bid) as the friction unit, and the bin's signed contract pressure.
+Threshold comparisons allow only floating-point roundoff at the quote price
+scale so exact decimal boundaries retain their intended class. Non-finite
+midpoints are unclassified. Lead includes a visible reason distinguishing
+balanced signed flow, adverse movement and movement below one spread.
+Thresholds, in spread units, with signed pressure agreeing in sign with the
+displacement: golden time at 5 spreads or more, working copper at 1 to under
+5 spreads, lead time below 1 spread — or whenever the signed flow did not
+agree with the displacement, since displacement against the flow is
+non-conversion, not a separate adverse class in this preliminary scheme. The
+interval is unclassified when no midpoint was observed, when it holds no
+option prints, when the spread is not finite and positive, or when a recorded
+gap overlaps it. The midpoint change one second later is shown separately as
+a next-interval observation and is never an input to the classification:
+later acceleration belongs to a different interval and cannot retroactively
+reclassify the owned one, so gold appearing after the exit does not turn a
+correct copper exit into a mistake.
