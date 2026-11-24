@@ -22,17 +22,21 @@ function schedule(now) {
 function artifact(url, cadence, fetchImpl, clock) {
   let next = 0, cached = null, etag = null;
   return async function read() {
-    if (clock() < next) return cached;
-    next = clock() + cadence;
+    const requestedAt = clock();
+    if (requestedAt < next) return cached;
+    next = requestedAt + cadence;
     const response = await fetchImpl(url, {
       headers: etag ? { 'If-None-Match': etag, 'Cache-Control': 'no-cache' } : { 'Cache-Control': 'no-cache' },
       signal: AbortSignal.timeout(8000)
     });
-    if (response.status === 304 && cached) return cached;
-    if (!response.ok) throw Error('HTTP ' + response.status);
-    const body = await response.json();
-    cached = { body, receivedAt: clock() };
-    etag = response.headers.get('etag');
+    const revalidated = response.status === 304 && cached && etag;
+    if (!revalidated && !response.ok) throw Error('HTTP ' + response.status);
+    const body = revalidated ? cached.body : await response.json();
+    const sampledAt = clock();
+    if (sampledAt < requestedAt || (cached && sampledAt < cached.sampledAt)) throw Error('artifact clock regressed');
+    const receivedAt = revalidated ? cached.receivedAt : sampledAt;
+    cached = { body, receivedAt, requestedAt, sampledAt };
+    if (!revalidated) etag = response.headers.get('etag');
     return cached;
   };
 }
@@ -94,12 +98,13 @@ function createService({ db, paper, feeds, fetchQuote, createOpeningOiReader, fe
     const observedAt = clock();
     const observation = await attempt('frames', () => current.feed.observe({
       flow: flow?.body || null, chain: chain?.body || null,
-      chainReceivedAt: chain?.receivedAt ?? null, spotQuote: current.lastQuote,
+      flowReceivedAt: flow?.receivedAt ?? null, flowSampledAt: flow?.sampledAt ?? null,
+      flowRequestedAt: flow?.requestedAt ?? null, chainReceivedAt: chain?.receivedAt ?? null, spotQuote: current.lastQuote,
       receivedAt: observedAt, ...current.restored, openingOi: current.oi, ...bounds
     }));
     const flowSession = flow?.body?.session;
     const watermark = flowSession?.day === bounds.session && Number.isSafeInteger(flowSession.last) &&
-      flowSession.last <= observedAt ? flowSession.last : null;
+      flowSession.last <= flow.receivedAt && flow.sampledAt<=observedAt ? flowSession.last : null;
     // Expiration uses the instant the adapter saw the packet. A frame that
     // reaches its inclusive deadline can be committed before any later poll.
     const observed = observation?.frames ?? [];

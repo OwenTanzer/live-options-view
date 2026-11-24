@@ -151,6 +151,12 @@ def publish(client, bucket, feed, candidate, now, *, crypto_receipts=None):
     stamp = crypto_time(candidate.get("started_at"))
     completed = crypto_time(candidate.get("completed_at"))
     if not stamp or not completed or not stamp <= completed <= now or (now - stamp).total_seconds() > 55:
+        print(json.dumps({
+            "feed": feed, "outcome": "rejected_capture_time",
+            "started_at": candidate.get("started_at"), "completed_at": candidate.get("completed_at"),
+            "linux_checked_at": now.isoformat(), "calls": candidate.get("calls", {}),
+            "failures": candidate.get("failures", {}), "retry_after": candidate.get("retry_after", {}),
+        }), flush=True)
         raise ValueError("Expired or future minute capture")
     if not 0 < len(candidate["prices"]) <= (50 if feed == "crypto" else 150):
         raise ValueError("Bad coverage")
@@ -239,7 +245,8 @@ def main():
     outcome = publish(client, os.environ["NASDAQ_R2_BUCKET"], feed, candidate, utcnow(),
                       crypto_receipts=root / "private" / "crypto-spot.sqlite3")
     report = dict(feed=feed, outcome=outcome, completed_at=candidate["completed_at"],
-                  coverage=candidate["coverage"], calls=candidate["calls"])
+                  coverage=candidate["coverage"], calls=candidate["calls"],
+                  failures=candidate["failures"], retry_after=candidate["retry_after"])
     if outcome == "published" and feed == "crypto":
         report["freshness_summary"] = candidate["freshness_summary"]
     print(json.dumps(report), flush=True)

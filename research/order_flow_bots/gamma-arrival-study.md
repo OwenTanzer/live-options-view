@@ -1,0 +1,39 @@
+# QQQ gamma strategies at chain availability and at the next minute boundary
+
+On November 24, 2026, 70 distinct QQQ chain updates reached the public latest feed between 09:30 and 10:40 Eastern. For each update we evaluated slots 1, 4, and 5 twice, first when the publisher confirmed the update available and then at the next whole minute. Both arms and the actual paper runner abstained on all 210 paired rule decisions. Timing changed the recorded abstention reason on 17 updates for gamma-regime breakout/fade, two for frozen-wall rejection, and eight for pressure-divergent breakout failure. These observations support a faster decision opportunity. The session segment supplied no entry for measuring fill, exit or P&L improvement.
+
+The median chain capture-to-confirmed-publication delay was 9.733 seconds. Confirmed publication led the next minute by 50.265 seconds at the median (46.627–50.965 seconds). The first eligible two-sided QQQ quote in the paper ledger was received a median 8.317 seconds after publication and 8.749 seconds after the boundary. Comparing those two quote receipt times within each pair, the earlier arm had a median 50.979 seconds of lead. Every pair had a qualifying quote in both arms. This measures the availability of a displayed bid and ask without assuming an order or execution.
+
+The [decision and quote comparisons](gamma-arrival-20261124.csv) contain the immutable publication sequence and capture key for every row. All 70 production frames reported the same chain timestamp used in the paired comparison. The final chain at 10:40 had no subsequent minute by the fixed 10:40:30 cutoff and was excluded. The opening eight-strike ladder was 636–643, with a put and call at each strike. In slot 1, 41 arrival evaluations lacked the full three-dollar band and 29 had a gamma interval containing zero. For slot 4, 65 saw no positive wall. For slot 5, 31 arrival evaluations had insufficient breakout history, and the paper runner recorded that reason on 65 of its 70 matched decisions. The production runner's captured-minute completeness, spot source and polling cadence differ from a dense archive reconstruction; production reasons are retained alongside the two controlled arms.
+
+## Clocks and evidence
+
+The chain reader verifies the QQQ immutable One Clock entry against its final provenance receipt and the exact SHA-256 of the archived JSON payload. Each arm sees only chains that had completed publication to the public latest object by its own decision instant. Publishing occurs after capture. Fractional-millisecond timestamps are rounded up for availability using the runner's own parser. The paired baseline is the next whole-minute instant with the same latest chain. It is distinct from the actual runner's recorded evaluation time, which is included in the CSV.
+
+Both arms reconstruct the same original rule functions on equal-length rolling minutes ending at their own decision instant. Each historical minute uses its own as-of chain, not the new chain projected backward. The tape uses the archive's collector receipt clock, preserves the legacy buy/sell/unknown signing basis, deduplicates by contract and sequence, and accumulates volume and dollar premium across the intervening prints. The most recent valid QQQ Tradier bid/ask supplies spot, subject to a 15-second freshness bound on both sides. Gaps, missing minutes, stale quotes, changed ladders and superseded captures are excluded or render historical windows incomplete. A hypothetical receipt-level observer has access to those inputs by the collector clock. The tape truncates fractional milliseconds. For every decision and each prior rolling minute, the reconstructed flow and spot use only receipt buckets strictly below the endpoint. In particular a receipt labelled exactly at the boundary can still be in flight. A reported gap at an ambiguous cutoff vetoes that evaluation conservatively. This correction changes the boundary spot for publications 655, 667 and 691, affecting nine CSV rows. All rule signals, abstention reasons and timing statistics reproduce. The HTTP paper process sees its own publication and polling delays.
+
+The 72 provisional tape objects fetched for this run contained 159,360 distinct option prints on the fixed ladder, zero duplicate identities and zero recorded gaps. This total describes the fetched archive through 10:42, including the small unscored tail. The raw-byte manifest SHA-256 was `7560d4206153a5c04f25baa9be21eccb38759d917bdeda4ace498685174aa342`. Finalized archive objects can differ from their provisional bytes. The session ledger was read in a single read-only SQLite snapshot with a 15:40:30Z cutoff. Post-decision quotes require both recorded sides strictly later than the arm decision and a receipt within two minutes and the analysis cutoff. The quote tape is the actual paper sampling schedule, not a fill simulator.
+
+A separate read-only HTTP watcher on the Linux host recorded new updates. Taking its first five fresh captures after discarding the startup observation gave sequences 715–719 at 10:41–10:45 Eastern. The five chain fetches completed 1.704, 0.401, 2.688, 1.583 and 0.466 seconds after the confirmed public writes (median 1.583 seconds). The watcher obtained the current flow projection and a fresh two-sided quote in an additional 0.551–0.645 seconds. It discarded the preexisting chain on startup for this latency comparison. These five direct observations measure subscriber delivery on a three-second poll after the paired sample. They do not establish subscriber receipt times for the preceding 70 updates.
+
+## Reproduction
+
+With Node 24, run the following command from the repository root. It verifies the committed file digests, reruns the original three rules at every historical anchor, verifies the publication and quote receipts, checks the subscriber latency sample and writes a byte-for-byte reproduction of the committed CSV to a new path.
+
+```sh
+node research/order_flow_bots/gamma-arrival-replicate.cjs verify /tmp/reproduced-gamma-arrival.csv
+```
+
+The compact [evidence manifest](gamma-arrival-evidence/files.json) covers sparse cumulative public option quantities, premiums and counts at the adjacent sampled receipt cutoffs, public QQQ quotes, the fixed ladder and its as-of Greeks, and the recorded paper decision timestamps, signals and reasons. The tape manifest retains the original per-object hashes and row counts. The chain receipt index retains capture and publication timestamps and hashes for each archived payload, immutable One Clock entry and provenance object. The separate watcher extract retains the receipt times, fresh two-sided QQQ quotes and publication join for its first five updates. Each part is bounded to this study; no account or position data is required for replication.
+
+To reconstruct from the original sources, use Node 24, Python 3 and a copy of the paper runner SQLite ledger including its committed WAL. Run these commands from the repository root. The input bundle and analysis outputs use new paths, and the evaluator opens the ledger read-only.
+
+```sh
+cd research/order_flow_bots
+python3 gamma-arrival-archive.py 2026-11-24 630 714 /tmp/qqq-chain-evidence.jsonl
+python3 gamma-arrival-tape.py 1795530600000 1795534920000 /tmp/qqq-receipt-tape
+node gamma-arrival-study.cjs /path/to/paper.sqlite 2026-11-24 /tmp/qqq-chain-evidence.jsonl /tmp/qqq-receipt-tape 2026-11-24T15:40:30Z /tmp/qqq-gamma-pairs.json
+node --test gamma-arrival-study.test.cjs
+```
+
+To measure delivery during another session, run `node gamma-arrival-watch.cjs /tmp/new-shadow.jsonl 10`. It polls public artifacts, retains the first local receipt and subsequent observation for each distinct chain in a separate file, and exits after ten minutes. The experiment does not change the production trigger, runner, accounts, collector, or order route.
