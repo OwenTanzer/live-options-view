@@ -17,3 +17,16 @@ const gap=row('gap',900,{start:minute+400,reason:'stream_reconnect_resumed'});
 assert.equal(flowResponse(model([...rows,gap],opts),0,100,minute,opts.cutoff).response,null);
 assert.equal(model(rows,{...opts,cutoff:minute+79}).calls,0);
 console.log('Intraminute signing, receipts, strike scope, gaps, response and duplicate checks passed');
+const carried=row('gap',0,{reason:'stream_disconnect',start:minute});
+const resume=row('gap',100,{reason:'stream_reconnect_resumed',start:minute-100});
+const recovered=[carried,resume,quote(120,671)];
+assert.deepEqual(model(recovered,{...opts,cutoff:minute+50}).gaps,[[minute,minute+50]]);
+const after=model(recovered,{...opts,cutoff:minute+125});
+assert.equal(after.bins[1].mid,671);
+assert.deepEqual(after.gaps,[[minute-100,minute+100]]);
+const original=row('stock',5,{t:minute+5,seq:123,flag:'@',price:700,size:2});
+const amendments=model([original,{...original,at:minute+10,cancel:true},
+  {...original,at:minute+11,correction:true},{...original,at:minute+12,correction:true,price:701}],opts);
+assert.equal(amendments.inspected.length,4);
+assert.equal(amendments.bins[0].shares,2);
+assert.equal(amendments.bins[0].high,700);

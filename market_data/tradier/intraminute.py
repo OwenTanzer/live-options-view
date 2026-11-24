@@ -31,9 +31,10 @@ def project(event, signed=None):
         if 0 < bid <= ask and math.isfinite(ask):
             return dict(kind="quote", at=at, bid=bid, ask=ask,
                         bidAt=int(event["biddate"]), askAt=int(event["askdate"]))
-    if kind == "timesale" and not event.get("duplicate_in_run"):
+    amendment = event.get("cancel") or event.get("correction")
+    if kind == "timesale" and (amendment or not event.get("duplicate_in_run")):
         price, size = float(event["last"]), int(event["size"])
-        if price > 0 and math.isfinite(price) and size > 0:
+        if math.isfinite(price) and (amendment or (price > 0 and size > 0)):
             return dict(kind="stock", at=at, t=int(event["date"]), seq=int(event["seq"]),
                         price=price, size=size, flag=event.get("flag"), cancel=bool(event.get("cancel")),
                         correction=bool(event.get("correction")))
@@ -47,25 +48,56 @@ def safe_project(event, signed=None):
         return None
 
 
+class GapState:
+    """Carry an already-observed disconnect into a separately readable minute."""
+    def __init__(self):
+        self.open = False
+
+    def observe(self, row):
+        if row["kind"] == "gap":
+            self.open = row["reason"] == "stream_disconnect"
+
+    def prefix(self, minute):
+        if self.open:
+            return [dict(kind="gap", at=minute, start=minute, reason="stream_disconnect")]
+        return []
+
+
 def collect(segments, start, stop):
     """Segments in receipt order, including prior segments for signing warmup."""
     signer = RecentPrints()
     minutes = defaultdict(list)
     seen = set()
+    gap = GapState()
+    minute = start
     for path in segments:
         with gzip.open(path, "rt") as stream:
             for line in stream:
                 event = json.loads(line)
                 signed = signer.observe(event)
                 row = safe_project(event, signed)
-                if not row or not start <= row["at"] < stop:
+                if not row:
                     continue
-                if row["kind"] == "stock":
+                if row["at"] < start:
+                    gap.observe(row)
+                    continue
+                if row["at"] >= stop:
+                    continue
+                while minute <= row["at"] // 60000 * 60000:
+                    prefix = gap.prefix(minute)
+                    if prefix:
+                        minutes[minute].extend(prefix)
+                    minute += 60000
+                gap.observe(row)
+                if row["kind"] == "stock" and not (row["cancel"] or row["correction"]):
                     identity = (row["seq"], row["cancel"], row["correction"])
                     if identity in seen:
                         continue
                     seen.add(identity)
                 minutes[row["at"] // 60000 * 60000].append(row)
+    while gap.open and minute < stop:
+        minutes[minute].extend(gap.prefix(minute))
+        minute += 60000
     return minutes
 
 

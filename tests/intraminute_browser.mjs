@@ -17,9 +17,10 @@ try {
     const contentType=url.pathname.endsWith('.js')?'text/javascript':url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.json')?'application/json':'text/html';
     await route.fulfill({body:await readFile(new URL('../site'+url.pathname,import.meta.url)),contentType});
   });
-  await page.goto(origin+'/intraminute.html?at='+(sample+30500));
+  await page.goto(origin+'/intraminute.html?at='+(sample+22699));
   await page.waitForFunction(()=>document.querySelector('#state').textContent.startsWith('Archived'));
-  assert.equal(await page.locator('#cursor').inputValue(),'30500');
+  assert.equal(await page.locator('#cursor').inputValue(),'22699');
+  assert.match(await page.locator('#response').textContent(),/At 22\.6 s · net -350 directional contracts/);
   assert.ok(await page.locator('#rows tr').count()>0);
   await page.locator('#width').selectOption('1000');
   await page.locator('#strike').selectOption({index:1});

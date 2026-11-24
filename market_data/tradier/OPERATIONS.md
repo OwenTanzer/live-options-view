@@ -108,13 +108,15 @@ window. Quote side times retain their original provider precision.
 
 A background reader writes provisionally closed minutes under
 order-flow/qqq/intraminute/v1/<UTC epoch milliseconds>.json. On finalization,
-a complete single-owner QQQ summary is replayed in segment order; each compressed
+a single-owner QQQ summary that is complete or partial solely due to reconnects
+is replayed in segment order; each compressed
 input is checked against its recorded SHA-256. A failed derived write can be
 retried independently with the following command using the existing R2 settings:
 
     python -m market_data.tradier.intraminute_archive moo144/tradier/YYYY-MM-DD/summary-OWNER.json
 
-Multiple-owner and partial summaries require reconciliation before final replay.
+Each affected minute carries an open disconnect marker from its first instant until
+the recorded resume. Other partial summaries and multiple-owner summaries require reconciliation.
 The UI reports absent minutes. A last trade and a midpoint can differ; the
 underlying curve uses quote midpoints, while the optional trade range uses
 as-received regular-sale prints. Cancel/correction messages stay in the stock

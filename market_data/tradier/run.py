@@ -663,9 +663,9 @@ def finalize_run(
             + "; ".join(f"{name}: {', '.join(r['partial_reasons']) or 'incomplete coverage'}"
                         for name, r in lane_results.items())
         )
+    from .intraminute_archive import publish, replayable
     if (os.getenv("QQQ_TAPE_ARCHIVE") == "1" and primary.underlying == "QQQ"
-            and lane_results["QQQ"]["status"] == "complete"):
-        from .intraminute_archive import publish
+            and replayable(lane_results["QQQ"])):
         try:
             minutes = publish(r2, bucket, f"{primary.prefix}/summary-{owner_id}.json")
             print(json.dumps({"event": "qqq_intraminute_archived", "minutes": minutes}), flush=True)

@@ -2,6 +2,7 @@
 import json
 import logging
 
+from .intraminute import GapState
 from .intraminute_archive import PREFIX
 
 
@@ -9,17 +10,20 @@ def publish_closed(tape, client, bucket, stop, lost):
     cursor, epoch, minute = 0, "", None
     rows = []
     complete = False
-    gap = False
+    gap = GapState()
     while not stop.is_set() and not lost.is_set():
         batch = tape.read(cursor, epoch)
         if batch["reset"]:
-            minute, rows, complete, gap = None, [], False, False
+            minute, rows, complete, gap = None, [], False, GapState()
         for row in batch["rows"]:
             current = row["at"] // 60000 * 60000
-            if current != minute:
-                if minute is not None and current < minute:
-                    complete = False
-                    continue
+            if minute is None:
+                minute = current
+                complete = not batch["truncated"] and tape.started <= current
+            if current < minute:
+                complete = False
+                continue
+            while current > minute:
                 if complete and rows and not lost.is_set() and not stop.is_set():
                     body = dict(version=1, minute=minute, rows=rows, source="session-provisional")
                     try:
@@ -28,11 +32,10 @@ def publish_closed(tape, client, bucket, stop, lost):
                                           IfNoneMatch="*", Body=json.dumps(body,separators=(",", ":")).encode())
                     except Exception as exc:
                         logging.warning("QQQ provisional minute %s: %s", minute,type(exc).__name__)
-                complete = (minute is not None or
-                            (not batch["truncated"] and tape.started <= current)) and not gap
-                minute, rows = current, []
-            if row["kind"] == "gap":
-                gap = row["reason"] == "stream_disconnect"
+                minute += 60000
+                rows = gap.prefix(minute)
+                complete = True
+            gap.observe(row)
             # If a burst exceeds the bounded buffer, defer repair to raw replay.
             if len(rows) >= tape.rows.maxlen:
                 complete = False

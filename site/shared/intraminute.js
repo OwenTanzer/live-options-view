@@ -8,13 +8,13 @@ export function model(rows,{minute,cutoff,width,strike=null}) {
     if(row.at>cutoff) continue;
     if(row.kind==='gap') {
       if(row.reason==='stream_disconnect') opened=row.at;
-      else { gaps.push([row.start,row.at]); opened=null; }
+      else { gaps.push([Math.min(opened??row.start,row.start),row.at]); opened=null; }
       continue;
     }
     const bin=bins[Math.floor((row.at-minute)/width)];
     if(!bin) continue;
     if(row.kind==='option' && strike!==null && row.strike!==strike) continue;
-    if(row.kind==='option' || row.kind==='stock') {
+    if(row.kind==='option' || (row.kind==='stock' && !row.cancel && !row.correction)) {
       const id=[row.symbol??'QQQ',row.seq,row.cancel??false,row.correction??false].join('/');
       if(seen.has(id)) continue;
       seen.add(id);
