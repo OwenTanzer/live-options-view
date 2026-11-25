@@ -132,7 +132,7 @@ export function csvLine(line) {
   return out;
 }
 
-function snapshotRow(text, occ) {
+export function snapshotRow(text, occ) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) return { underlying: null, quote: null };
   const head = csvLine(lines[0]);

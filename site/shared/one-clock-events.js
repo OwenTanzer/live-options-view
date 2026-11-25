@@ -1,3 +1,4 @@
+import {journalTransition,validateJournalRule} from './one-clock-owen-trades.js';
 import {headlineEvents,validateHeadlineRule} from './one-clock-headlines.js';
 import {candleEvents,validateCandleRule} from './one-clock-candle-breach.js';
 import { validateDecisionRule, decisionEvents } from './one-clock-decision-events.js';
@@ -28,7 +29,7 @@ export function eventRule(input) {
   if (!Array.isArray(rule.instruments) || !rule.instruments.length) throw new Error('choose instruments');
   rule.instruments.forEach(v => text(v, 'instrument'));
   if (!['all', 'any'].includes(rule.combine)) throw new Error('choose all or any conditions');
-  if (!['rising', 'once-per-session', 'per-decision','per-candle-pair','per-headline'].includes(rule.transition)) throw new Error('invalid transition');
+  if (!['rising', 'once-per-session', 'per-decision','per-candle-pair','per-headline',journalTransition].includes(rule.transition)) throw new Error('invalid transition');
   if (!['hold', 'reset'].includes(rule.missingInput)) throw new Error('choose missing-input policy');
   if (!Array.isArray(rule.conditions) || !rule.conditions.length || rule.conditions.length > 20) throw new Error('one to twenty conditions required');
   rule.conditions.forEach(c => {
@@ -51,6 +52,7 @@ export function eventRule(input) {
         !['return', 'change', 'value', 'category'].includes(o.measure)) throw new Error('invalid measure');
     integer(o.horizonMs, 'horizon', 1); integer(o.toleranceMs, 'tolerance'); integer(o.maxAgeMs, 'baseline age');
   });
+  if (rule.transition === journalTransition) validateJournalRule(rule);
   if (rule.transition === 'per-headline') validateHeadlineRule(rule);
   if (rule.transition === 'per-candle-pair') validateCandleRule(rule);
   if (rule.transition === 'per-decision') validateDecisionRule(rule);
@@ -83,6 +85,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   const cutoff = instant(selection.cutoff);
   const close = instant(sessionClose);
   if (!rule.instruments.includes(selection.instrument)) return [];
+  if (rule.transition === journalTransition) return []; // Journal fills are resolved only by the private replay route.
   const rows = observations.map(observation).filter(r => r.session === selection.session &&
     r.instrument === selection.instrument && r.origin === selection.origin &&
     r.availableAt !== null && r.availableAt <= cutoff && r.eventAt <= cutoff);
@@ -187,7 +190,7 @@ export function evaluateEvents({ rule: input, observations, selection, sessionCl
   })));
 }
 
-function measureOutcome(event, outcome, rows, selection, close) {
+export function measureOutcome(event, outcome, rows, selection, close) {
   const targetAt = (event.encounter?.upperTime ?? event.triggeredAt) + outcome.horizonMs;
   const deadline = Math.min(targetAt + outcome.toleranceMs, close);
   const cutoff = instant(selection.cutoff);

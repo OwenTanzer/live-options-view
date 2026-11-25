@@ -70,7 +70,7 @@ export function createResultsView({container,stats,ledger,onInspect,onReplay,onF
           outcome?outcome.state==='measured'?number(outcome.value)+(view.spec?.measure==='return'?'%':'')+(event.headline?' · '+number(outcome.elapsedMs/60000)+' min elapsed'+(outcome.baseStale?' · stale base':''):''):outcome.state:'No compatible outcome'])tr.append(el('td',value));
         const cell=el('td'),inspect=el('button','Inspect receipt');inspect.onclick=()=>onInspect(event);cell.append(inspect);
         if(onReplay) {
-          const replay = el('button', event.decisionAt === undefined ? 'Replay trigger' : event.breach?'Replay evidence':'Replay publication');
+          const replay = el('button', event.journalFill ? 'Open fill in journal replay' : event.decisionAt === undefined ? 'Replay trigger' : event.breach?'Replay evidence':'Replay publication');
           replay.onclick = () => onReplay(event, event.triggeredAt);
           cell.append(replay);
           if(event.headline && outcome?.availableAt){
