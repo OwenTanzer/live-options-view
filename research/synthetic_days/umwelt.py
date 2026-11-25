@@ -12,7 +12,7 @@ from statistics import fmean
 
 
 def simulate(sessions, seed, shared, impact_bp, bogdanoff):
-    """Run paired worlds using identical exogenous shocks and decision times."""
+    """Run paired worlds using identical exogenous shocks and opportunities to act."""
     rng = random.Random(seed)
     days = []
     for _ in range(sessions):
