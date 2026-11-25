@@ -1,0 +1,20 @@
+name: Full chain coverage
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  coverage:
+    name: QQQ full-chain collection
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests websocket-client boto3
+      - run: python -m unittest discover -s tests -p test_full_chain_coverage.py -v
