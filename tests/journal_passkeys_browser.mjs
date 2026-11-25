@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { chromium } from 'playwright';
+import {journalFillReplayHref} from '../site/shared/one-clock-journal-replay.js';
 import worker from '../backend/index.js';
 import { FakeD1 } from './helpers/d1_shim.mjs';
 
@@ -11,6 +12,14 @@ const db = new FakeD1();
 db.db.exec(FakeD1.schemaSql());
 db.db.exec(readFileSync(new URL('../backend/migrations/0003_trade_journal.sql',import.meta.url),'utf8'));
 db.db.exec(readFileSync(new URL('../backend/migrations/0009_one_clock_journal.sql',import.meta.url),'utf8'));
+const session = '2026-11-09', fillAt = Date.parse(session+'T15:12:05Z'), asOf=Date.parse('2026-11-11T17:00:00Z');
+const positionId='pos:0123456789abcdef', executionId='notion:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:order:7203';
+const instrument={instrument_type:'option',underlying:'QQQ',option_type:'put',strike:600,multiplier:100,occ_symbol:'QQQ261109P00600000'};
+const fill={execution_id:executionId,ts:new Date(fillAt).toISOString(),ts_kind:'execution_alert',side:'buy',qty:1,price:2,
+  instrument,fee:.5,fee_basis:'estimated',order_ref:'7203'};
+const pos={position_id:positionId,owner:'Owen',supported:true,contract:instrument,executions:[fill]};
+await db.prepare('INSERT INTO trade_journal_history(page_id,position_id,source_status,revision,content_hash,position_json,recorded_at) VALUES(?,?,?,?,?,?,?)')
+  .bind('synthetic-journal',positionId,'active',1,'test',JSON.stringify(pos),asOf-1000).run();
 const browser = await chromium.launch({channel:'chromium',headless:true});
 try {
   for (const member of ['Owen','Jayden','Jacob']) {
@@ -28,9 +37,18 @@ try {
       const r=route.request(), url=new URL(r.url());
       assert.equal(url.origin,origin);
       if (!url.pathname.startsWith('/api/')) {
+        if(url.pathname==='/trade-journal')return route.fulfill({path:'site/trade-journal.html',contentType:'text/html'});
         if (!['/trade-journal.html','/js/trade-journal-loads.js','/js/journal-passkeys.js',
-          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js','/shared/one-clock-replay-link.js'].includes(url.pathname)) return route.abort();
+          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js','/shared/one-clock-replay-link.js',
+          '/shared/one-clock-journal-replay.js','/shared/one-clock-chain-source.js'].includes(url.pathname)) return route.abort();
         return route.fulfill({path:'site'+url.pathname});
+      }
+      if(url.pathname==='/api/one-clock/chain') {
+        const t=Number(url.searchParams.get('cutoff'));
+        assert.ok(!r.url().includes(executionId));
+        return route.fulfill({json:{rows:[{source:'chain',id:'chain-'+t,revision:1,instrument:'QQQ',session,
+          origin:'recorded',eventAt:t-1000,availableAt:t,evidence:'fixture',value:{underlying_price:600,
+            rows:[{OptionSymbol:instrument.occ_symbol,Bid:2,Ask:2.1}]}}]}});
       }
       const headers=await r.allHeaders();
       const req=new Request(r.url(),{method:r.method(),headers,body:r.postData() ?? undefined});
@@ -64,6 +82,19 @@ try {
     await page.click('#unlock');
     await page.locator('#journal:not([hidden]) #restore').waitFor({timeout:12000});
     assert.deepEqual(journalReads.slice(beforeSignIn),[linkedRead]);
+    if(member==='Owen'){
+      const href=journalFillReplayHref({journalFill:{positionId,executionId,fillAt}},asOf);
+      await page.goto(origin+href);
+      await page.getByText('Selected fill',{exact:true}).waitFor();
+      await page.getByText(/5 underlying and 5 exact-contract observations/).waitFor();
+      assert.equal(await page.locator('#journal-asof-date').inputValue(),'2026-11-11');
+      assert.equal(await page.locator('#day').inputValue(),session);
+      assert.equal(await page.locator('#lanes svg').count(),2);
+      const wrong=journalFillReplayHref({journalFill:{positionId,executionId:executionId+'0',fillAt}},asOf);
+      await page.goto('about:blank'); await page.goto(origin+wrong);
+      await page.getByText(/This execution was unavailable/).waitFor();
+      assert.equal(await page.locator('#lanes svg').count(),0);
+    }
     const beforeInvalid = journalReads.length;
     await page.goto(origin+'/trade-journal.html?one_clock_session=2026-11-09');
     await page.getByText('Invalid event replay link.',{exact:true}).waitFor();

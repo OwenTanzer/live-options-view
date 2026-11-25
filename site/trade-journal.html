@@ -105,6 +105,7 @@ svg{display:block;width:100%}
 <script src="js/trade-journal-loads.js?v=06f9691b764c09a6"></script>
 <script type="module">
 import { createClock,createSourceRegistry } from './shared/one-clock.js';
+import { journalFillReplayTarget, locateJournalFill, journalFillMarketContext } from './shared/one-clock-journal-replay.js';
 import { replaySelection } from './shared/one-clock-replay-link.js';
 import { journalSource } from './shared/one-clock-journal-source.js';
 import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
@@ -122,7 +123,20 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   // Day-list and context responses are tied to their requested date and load
   // generation (js/trade-journal-loads.js), so a late response for another day
   // or an earlier load can never replace the current selection.
-  let journalBody;
+  let journalBody, fillTarget, focusedFill, marketController;
+  function endFocus() {
+    marketController?.abort();
+    fillTarget = null;
+    focusedFill = null;
+    loads.reset();
+    history.replaceState(null,'',location.pathname+location.search);
+    $('msg').textContent = '';
+    if (win === 'fill') setWindow('session');
+  }
+  function setWindow(choice) {
+    win = choice;
+    document.querySelectorAll('[data-w]').forEach(b => b.classList.toggle('on', b.dataset.w === choice));
+  }
   const registry=createSourceRegistry();registry.register(journalSource({onBody:body=>{journalBody=body;}}));
   const clock=createClock({registry,initial:{mode:'replay',origin:'recorded',session:sessionAt(Date.now()),instrument:'JOURNAL',cutoff:Date.now()}});
   const loads = createTradeJournalLoads(async url => {
@@ -132,6 +146,11 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
         if(result.discarded)return {ok:false,status:409,body:{error:'Selection changed'}};
         return {ok:true,status:200,body:{...journalBody,positions:result.rows.map(row=>row.value)}};
       } catch(error){return {ok:false,status:error.status??503,body:{error:error.message}};}
+    }
+    if (focusedFill && fillTarget && url.startsWith('/api/trade-journal/context?') &&
+        new URL(url,location.origin).searchParams.get('position_id') === fillTarget.positionId) {
+      const body = await journalFillMarketContext(focusedFill.fill, fillTarget, marketController.signal);
+      return {ok:true,status:200,body};
     }
     const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});
     return {ok:response.ok,status:response.status,body:await response.json().catch(()=>({}))};
@@ -143,10 +162,12 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   $('day').addEventListener('change',()=>{$('journal-asof-date').value=$('day').value;});
   let linkedSelection, linkedTime;
   try {
-    linkedSelection = replaySelection(location.search);
+    fillTarget = journalFillReplayTarget(location.hash);
+    linkedSelection = fillTarget ?? replaySelection(location.search);
     if (linkedSelection) {
       const {session, cutoff} = linkedSelection;
-      $('day').value = $('journal-asof-date').value = session;
+      $('day').value = session;
+      $('journal-asof-date').value = sessionAt(cutoff);
       $('journal-view').value = 'recorded';
       const format = new Intl.DateTimeFormat('en-GB', {timeZone: TZ, hourCycle: 'h23',
         hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3});
@@ -183,7 +204,7 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
         if(parts.length<2)throw new Error('Choose a cutoff time');
         const day = $('journal-asof-date').value, seconds = parts[2] ?? 0;
         // Preserve the exact instant even in the repeated hour at the DST boundary.
-        cutoff = linkedSelection?.session === day && $('journal-cutoff').value === linkedTime
+        cutoff = linkedSelection && sessionAt(linkedSelection.cutoff) === day && $('journal-cutoff').value === linkedTime
           ? linkedSelection.cutoff
           : sessionInstant(day,parts[0],parts[1],Math.floor(seconds),Math.round((seconds % 1)*1000));
       }
@@ -191,6 +212,10 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
       // switch back to the explicit full retrospective.
       clock.select({session:$('day').value,instrument:'JOURNAL',mode:'replay',origin:'recorded',cutoff:cutoff??sessionInstant($('day').value,16)});
     } catch(error){$('msg').textContent=error.message;return false;}
+    if (fillTarget && (fillTarget.session !== $('day').value || fillTarget.cutoff !== cutoff)) endFocus();
+    marketController?.abort();
+    marketController = new AbortController();
+    focusedFill = null;
     const res = await loads.loadDay($('day').value,cutoff);
     if (res.stale) return false;                                       // a later day load superseded this one
     if (res.status === 401) { $('access').hidden = false; $('journal').hidden = true; return false; }
@@ -200,6 +225,14 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
     data = { ...body, date: res.date };
     $('sync').disabled=cutoff!==null;
     selected = new Set(data.positions.map(p => p.position_id));       // open with every position selected
+    if (fillTarget) {
+      focusedFill = locateJournalFill(data.positions, fillTarget);
+      selected = new Set(focusedFill ? [fillTarget.positionId] : []);
+      setWindow(focusedFill ? 'fill' : 'session');
+      $('msg').textContent = focusedFill
+        ? `One Clock fill · ${fT.format(fillTarget.fillAt)} ET · ${focusedFill.fill.ts_kind}. Sampled market context spans four minutes on either side, up to the selected cutoff.`
+        : 'This execution was unavailable at the selected cutoff. No substitute fill was selected.';
+    }
     showSync(data.sync);
     if(data.view==='retrospective')$('syncinfo').textContent+=' · Full retrospective: later fills and revisions included.';
     render();
@@ -265,7 +298,7 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
     $('unsup').innerHTML = data.unsupported.map(u => `<div>${esc(u.report || u.contract_text)}: ${esc(u.unsupported_reason)} · <a href="${esc(u.journal_url)}" target="_blank" rel="noopener">row</a></div>`).join('');
     $('fills').innerHTML = '<tr><th>Contract</th><th>Side</th><th class="n">Qty</th><th class="n">Price</th><th>Time ET</th><th>Time kind</th><th class="n">Fee</th><th>ID</th></tr>' +
       sel.flatMap(p => fillsOnDay(p).map(e => ({ p, e }))).sort((a, b) => (a.e.ts < b.e.ts ? -1 : 1)).map(({ p, e }) =>
-        `<tr><td>${esc(label({ contract: e.instrument }))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
+        `<tr><td>${focusedFill && e.execution_id === fillTarget.executionId ? '<b>Selected fill</b> · ' : ''}${esc(label({ contract: e.instrument }))}</td><td class="${e.side === 'buy' ? 'ok' : 'bad'}">${e.side}</td><td class="n">${e.qty}</td><td class="n">${e.price}</td>
          <td>${fT.format(T(e.ts))}</td><td class="note">${esc(e.ts_kind)}</td><td class="n">$${e.fee.toFixed(2)} <span class="note">${esc(e.fee_basis)}</span></td>
          <td class="note"><code>${esc(e.execution_id.replace(/^notion:[0-9a-f]+:/, ''))}</code></td></tr>`).join('');
     loadContexts(sel);
@@ -276,6 +309,7 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   const W = 900, H = 120, PADL = 56, PADR = 12, PADT = 22, PADB = 18;
   function domain() {
     const sel = data.positions.filter(p => selected.has(p.position_id));
+    if (win === 'fill' && focusedFill) return [fillTarget.fillAt - 4 * 60e3, fillTarget.fillAt + 4 * 60e3];
     if (win === 'session' || !sel.length) return [etMs(9, 30), etMs(16, 15)];
     const ts = (win === 'fills' ? data.positions : sel).flatMap(p => fillsOnDay(p).map(e => T(e.ts)));
     if (!ts.length) return [etMs(9, 30), etMs(16, 15)];
@@ -325,7 +359,14 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
   function renderLanes() {
     const el = $('lanes'); laneData = [];
     if (!data) return;
-    const sel = data.positions.filter(p => selected.has(p.position_id)).flatMap(p => p.legs ? p.legs.map((leg, i) => ({ ...leg, legContext: ctxOf(p).legs?.[i] || { loading: ctxOf(p).loading, error: ctxOf(p).error } })) : [p]);
+    const sel = data.positions.filter(p => selected.has(p.position_id)).flatMap(p => {
+      if (focusedFill && p.position_id === fillTarget.positionId) {
+        const contract = focusedFill.fill.instrument;
+        const leg = p.legs?.find(l => l.contract.occ_symbol === contract.occ_symbol) ?? p;
+        return [{...leg, legContext:ctxOf(p)}];
+      }
+      return p.legs ? p.legs.map((leg, i) => ({ ...leg, legContext: ctxOf(p).legs?.[i] || { loading: ctxOf(p).loading, error: ctxOf(p).error } })) : [p];
+    });
     if (!sel.length) { el.innerHTML = '<div class="note">Nothing selected. Use “Restore all”.</div>'; return; }
     let html = '';
     const unds = [...new Set(sel.map(p => p.contract.underlying))];
@@ -376,13 +417,15 @@ import { sessionAt,sessionInstant } from './shared/one-clock-session.js';
 
   $('plist').addEventListener('click', ev => {
     const only = ev.target.closest('[data-only]');
+    if (only && fillTarget) endFocus();
     if (only) { selected = new Set([only.dataset.only]); render(); return; }
     if (ev.target.closest('a')) return;
     const row = ev.target.closest('.pos'); if (!row) return;
+    if (fillTarget) endFocus();
     selected.has(row.dataset.id) ? selected.delete(row.dataset.id) : selected.add(row.dataset.id); render();
   });
-  $('restore').onclick = () => { if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
-  document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { win = b.dataset.w; document.querySelectorAll('[data-w]').forEach(x => x.classList.toggle('on', x === b)); renderLanes(); });
+  $('restore').onclick = () => { if (fillTarget) endFocus(); if (data) { selected = new Set(data.positions.map(p => p.position_id)); render(); } };
+  document.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { setWindow(b.dataset.w); renderLanes(); });
   async function unlock(enroll) {
     const invite = enroll ? $('invitation').value.trim() : undefined;
     if (enroll && !invite) { $('authstatus').textContent='Enter your invitation code.'; return; }
