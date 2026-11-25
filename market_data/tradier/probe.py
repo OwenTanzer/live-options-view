@@ -127,7 +127,7 @@ class Tradier:
 
 def select_symbols(
     client: Tradier,
-    strike_count: int,
+    strike_count: int | None,
     duration_seconds: int,
     run_date: str | None,
     now_et: datetime | None = None,
@@ -246,20 +246,27 @@ def select_symbols(
                 "option_type": kind,
             }
 
-    complete_strikes = [
-        strike
-        for strike, legs in by_strike.items()
-        if {"call", "put"}.issubset(legs)
-    ]
-    nearest = sorted(
-        complete_strikes, key=lambda strike: abs(strike - spot)
-    )[:strike_count]
-    selected = [
-        by_strike[strike][kind]
-        for strike in sorted(nearest)
-        for kind in ("call", "put")
-        if kind in by_strike[strike]
-    ]
+    if strike_count is None:
+        # Keep every listed contract, including one-sided and adjusted strikes.
+        if len(metadata) != len(chain):
+            raise RuntimeError("Incomplete or duplicate provider contract in full chain")
+        nearest = sorted(by_strike)
+        selected = sorted(metadata, key=lambda sym: (metadata[sym]["strike"], sym))
+    else:
+        complete_strikes = [
+            strike
+            for strike, legs in by_strike.items()
+            if {"call", "put"}.issubset(legs)
+        ]
+        nearest = sorted(
+            complete_strikes, key=lambda strike: abs(strike - spot)
+        )[:strike_count]
+        selected = [
+            by_strike[strike][kind]
+            for strike in sorted(nearest)
+            for kind in ("call", "put")
+            if kind in by_strike[strike]
+        ]
     if len(selected) < 4:
         raise RuntimeError(f"Too few usable {days_to_expiration}DTE contracts: {len(selected)}")
 
@@ -270,6 +277,8 @@ def select_symbols(
         "days_to_expiration": days_to_expiration,
         "spot": spot,
         "strikes": sorted(nearest),
+        "selection_policy": "full_chain" if strike_count is None else "nearest_strikes",
+        "listed_contracts": len(chain),
         "option_symbols": selected,
         "option_metadata": {symbol: metadata[symbol] for symbol in selected},
         "clock": clock,

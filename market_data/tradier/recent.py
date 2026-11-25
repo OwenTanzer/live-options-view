@@ -98,7 +98,12 @@ class Session:
 
 
 class RecentPrints:
-    def __init__(self):
+    def __init__(self, universe=None):
+        universe = universe or {}
+        self.opening = dict.fromkeys(universe.get("option_symbols", ()))
+        prior = universe.get("previous_selection")
+        self.widening = ({"selected_at": universe["selected_at"],
+                          "previous_symbols": prior["option_symbols"]} if prior else None)
         self.quotes = {}
         self.previous = {}
         self.history = {}   # symbol -> deque of (receipt_ms, oldest_date, newest_date, bid, ask), ten-thousandths
@@ -145,6 +150,10 @@ class RecentPrints:
         option = OPTION.fullmatch(symbol)
         if not option:
             return
+        if receipt and symbol in self.opening and self.opening[symbol] is None and event["type"] in ("quote", "timesale"):
+            with self.lock:
+                self.opening[symbol] = _ms(receipt)
+                self.version += 1
         if event["type"] == "quote":
             self.quotes[symbol] = event
             self._remember(symbol, event)
@@ -283,6 +292,13 @@ class RecentPrints:
         with self.lock:
             rows = list(self.rows)
             session = self.session.snapshot() if self.session else None
+            if session is not None and self.opening:
+                session["opening"] = self.opening.copy()
+                if self.widening:
+                    session["widening"] = self.widening
+                    session["gaps"].append(dict(start=session["rebuilt"]["session_open"],
+                                                end=_ms(self.widening["selected_at"]),
+                                                reason="partial_strike_coverage_before_widening"))
         return dict(lastReceived=rows[-1]["t"] if rows else None, cap=self.rows.maxlen, rows=rows, session=session)
 
     def publish(self, client, bucket, stop, lost):

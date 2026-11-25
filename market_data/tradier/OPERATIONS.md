@@ -55,7 +55,7 @@ receipt cannot substitute for the final session evidence.
 ## Settings and optional underlyings
 
 [load_settings](run.py) is the authoritative parser for `TRADIER_TOKEN` and
-`MOO144_*`; storage credentials remain in service secrets. Defaults include eight
+`MOO144_*`; storage credentials remain in service secrets. The primary QQQ collector subscribes to every listed option for its same-day expiration. The bounded probe and optional lanes default to eight
 strikes, 180-second checkpoints, five reconnects, a 300-second lease lifetime and
 512 MiB primary spool cap. `MOO144_SPOOL_DIR` must point to persistent storage.
 
