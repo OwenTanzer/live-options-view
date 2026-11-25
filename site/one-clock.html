@@ -42,8 +42,9 @@
       <label>Combine conditions<select id="combine"><option value="all">All conditions</option><option value="any">Any condition</option></select></label>
       <label>Count a new occurrence<select id="transition"><option value="rising">When false becomes true</option><option value="per-decision">Each distinct paper decision (bot identity)</option><option value="once-per-session">First match each session</option></select></label>
       <label>When input is missing<select id="missing"><option value="hold">Keep previous state</option><option value="reset">Reset to non-matching</option></select></label></div>
-      <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option><option value="candle">QQQ opposite-color candle breach</option><option value="headline">Mapped company headline</option></select></label>
+      <label>Study type<select id="study-kind"><option value="scalar">Field comparison</option><option value="level">Calibrated open-interest strike encounter</option><option value="candle">QQQ opposite-color candle breach</option><option value="headline">Mapped company headline</option><option value="journal">Owen Trades (private journal fills)</option></select></label>
       <label id="headline-fields" hidden>Company<select id="headline-instrument"></select>Archived headlines across each New York trading date, including premarket and after hours. Measure the same instrument after 5 minutes, 30 minutes, 1 hour and 1 day using retained price-strip observations. Delayed endpoints are shown separately.</label>
+      <p id="journal-help" hidden>Measure underlying price around each journal fill. Sign in to Options View and <a href="/trade-journal">Owen’s journal</a>, save the definition to your account, then replay a trading date.</p>
       <p id="candle-description" hidden>Compare each pair of consecutive one-minute candles. A green candle must exceed the preceding red high, or a red candle must break the preceding green low. Measure the signed change to the close exactly five minutes later. <a href="?dataset=2026-10-29">Replay the October 29 reference session</a>.</p>
       <fieldset id="level-fields" hidden><legend>Strike encounters</legend>
       <p>The session opening map sets each strike’s group using settled open interest and the opening ATM. Encounters qualify once the opening map was available. A fresh approach after leaving the strike can count again.</p>
@@ -54,7 +55,7 @@
       <label>Outcome horizons (minutes, comma separated)<input id="level-horizons" value="1, 3, 9, 27"></label><label>Endpoint tolerance after horizon (seconds)<input id="level-tolerance" type="number" min="0" max="86400" value="30"></label></div>
       <label><input id="put-only" type="checkbox" checked> Puts only</label> <label><input id="call-only" type="checkbox" checked> Calls only</label> <label><input id="both" type="checkbox" checked> Both</label>
       <p>The first eligible endpoint beyond the strike in the approach direction counts as continuation. An endpoint on the approach side counts as rejection. A price exactly at the strike counts as a tie.</p></fieldset>
-      <div id="scalar-fields"><h3>Conditions</h3><div id="conditions"></div><button type="button" id="add-condition">+ Add condition</button>
+      <div id="scalar-fields"><div id="condition-fields"><h3>Conditions</h3><div id="conditions"></div><button type="button" id="add-condition">+ Add condition</button></div>
       <h3>Outcomes <small>Optional — you can track without predicting</small></h3><div id="outcomes"></div><button type="button" id="add-outcome">+ Add outcome</button></div>
       <div class="actions"><button type="button" id="preview-rule">Preview</button><button class="primary" type="submit" id="save-rule">Save new version</button></div>
     </form>

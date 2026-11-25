@@ -1,4 +1,7 @@
 import {headlineDay} from '../site/shared/one-clock-headlines.js';
+import {authorizeJournalViewer} from './journal-passkeys.js';
+import {replayJournalFills} from './one-clock-owen-trades.js';
+import {journalTransition} from '../site/shared/one-clock-owen-trades.js';
 import {replayHeadlines} from './one-clock-headline-ingestion.js';
 import {replayCandleSession} from './one-clock-candle-ingestion.js';
 import {replayEncounter} from './one-clock-encounter-replay.js';
@@ -20,6 +23,10 @@ export const researchFields=Object.freeze(Object.assign({},...nativePublicationS
 const instruments=[...new Set([...publicIngestionSources,...nativePublicationSources].flatMap(source=>source.instruments))];
 function validatedRule(input) {
   const rule=eventRule(input);
+  if(rule.transition===journalTransition) {
+    if(rule.id.length>100 || rule.name.length>120)throw new Error('Invalid journal rule');
+    return rule;
+  }
   if(rule.id.length>100||rule.name.length>120||rule.instruments.length>3||rule.instruments.some(i=>!instruments.includes(i)))throw new Error('unsupported rule scope');
   for(const c of [...rule.conditions,...rule.outcomes]) {
     if(rule.transition!=='per-headline' && ['company-quote','company-headline'].includes(c.source))
@@ -71,6 +78,12 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     if(await cutoverFenceActive(env))return jsonResponse({error:'Writes are paused; try again shortly.'},503);
     const parsed=await readJsonBody(request);if(parsed.error)return parsed.error;
     const body=parsed.body,now=Date.now();
+    const privateReplay=body?.action==='replay-journal';
+    if(privateReplay || (body?.action==='save' && body.rule?.transition===journalTransition)) {
+      const journal=await authorizeJournalViewer(request,env);
+      if(journal.session?.member!=='Owen')return jsonResponse({error:'Owen’s journal passkey session is required.'},403);
+      if(privateReplay)return jsonResponse(await replayJournalFills(env,namespace,body,now));
+    }
     if(body?.action==='replay-headlines')return jsonResponse(await replayHeadlines(db,namespace,body,now));
     if(body?.action==='replay-candles')return jsonResponse(await replayCandleSession(db,namespace,body,now));
     if(body?.action==='replay-encounters')return jsonResponse(await replayEncounter(env,namespace,body,now));
@@ -82,7 +95,8 @@ export async function handleOneClockResearch(request,env,url=new URL(request.url
     if(!['activate','deactivate'].includes(body?.action)||typeof body.ruleId!=='string'||body.ruleId.length>100||!Number.isSafeInteger(body.version))throw new Error('invalid rule action');
     const saved=await stmt(db,'SELECT payload FROM one_clock_rules WHERE namespace=? AND rule_id=? AND version=?',namespace,body.ruleId,body.version).first();
     if(!saved)return jsonResponse({error:'Saved definition not found.'},404);
-    validatedRule(JSON.parse(saved.payload));
+    if(validatedRule(JSON.parse(saved.payload)).transition===journalTransition)
+      return jsonResponse({error:'Owen Trades uses private historical replay. Choose Replay saved study.'},400);
     // Read the generation first: any action interleaving with the subsequent
     // interval read makes the entire mutation fail its transactional CAS.
     const activationState=await stmt(db,'SELECT generation FROM one_clock_activation_state WHERE namespace=? AND rule_id=?',namespace,body.ruleId).first();

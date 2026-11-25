@@ -1,3 +1,4 @@
+import {journalDefinition,journalTransition} from '../shared/one-clock-owen-trades.js';
 import {loadStockStudy} from './stock-candle-replay.js';
 import {gapReport} from './candle-cache-one-clock.js';
 import {candleTrials} from '../shared/one-clock-candle-breach.js';
@@ -68,7 +69,13 @@ const fixtureResults=createResultsView({container:$('stats'),stats:$('stats'),le
 const retainedResults=createResultsView({container:$('observed-stats'),stats:$('observed-stats'),ledger:$('observed-ledger'),
   onFilter:()=>{$('observed-evidence').hidden=true;},
   onInspect:event=>renderReceipt($('observed-evidence'),event),
-  onReplay:(event,at)=>{
+  onReplay:async(event,at)=>{
+    if(event.journalFill){
+      const {journalFillReplayHref}=await import('../shared/one-clock-journal-replay.js');
+      const href=journalFillReplayHref(event,event.evaluationCutoff);
+      if(href)location.assign(href);
+      return;
+    }
     if(event.headline){showHeadlineReplay({session:event.session,ruleId:event.ruleId,version:event.ruleVersion,
       revisionId:event.headline.revisionId,itemId:event.headline.itemId},at);return;}
     location.href='/?'+new URLSearchParams({one_clock_session:event.session,one_clock_instrument:event.instrument,one_clock_at:String(at)})+'#history-clock';}});
@@ -122,6 +129,24 @@ function outcome(o = { id: `outcome-${crypto.randomUUID()}`, source: 'price', fi
     inputControl('Tolerance (seconds)', 'toleranceMs', o.toleranceMs / 1000, 'number'), removeButton(row),
     inputControl('Baseline maximum age (seconds)', 'maxAgeMs', o.maxAgeMs / 1000, 'number'));
   $('outcomes').append(row);
+  restrictJournalOutcome(row);
+}
+function restrictJournalOutcome(row) {
+  const journal=$('study-kind').value==='journal';
+  const control=key=>row.querySelector('[data-field="'+key+'"]');
+  if(journal) {
+    control('source').value='price';
+    control('source').onchange();
+    control('field').value='spot';
+    if(control('measure').value==='category')control('measure').value='return';
+  }
+  control('source').disabled=control('field').disabled=journal;
+  control('measure').querySelector('[value="category"]').disabled=journal;
+}
+function journalControls() {
+  const journal=$('study-kind').value==='journal';
+  for(const id of ['account-activate','account-pause','preview-rule'])$(id).disabled=journal;
+  for(const row of $('outcomes').children)restrictJournalOutcome(row);
 }
 function get(row, field) { return row.querySelector(`[data-field="${field}"]`).value; }
 function comparisonValue(value) {
@@ -132,14 +157,20 @@ function comparisonValue(value) {
 function formRule() {
   const level=levelForm.definition();
   if(level)return eventRule({id:editing.id,version:editing.version,name:$('rule-name').value,...level});
+  const outcomes = formOutcomes();
+  if($('study-kind').value==='journal')return eventRule({id:editing.id,version:editing.version,name:$('rule-name').value,
+    ...journalDefinition($('instrument').value,outcomes)});
   return eventRule({ ...(editing.archiveHandoff ? {archiveHandoff:editing.archiveHandoff} : {}), id: editing.id, version: editing.version, name: $('rule-name').value,
     instruments: [$('instrument').value], combine: $('combine').value, transition: $('transition').value, missingInput: $('missing').value,
     conditions: [...$('conditions').children].map(row => ({ source: get(row,'source'), field: get(row,'field'), op: get(row,'op'),
       value: comparisonValue(get(row,'value')), relativeToAnchor: get(row,'relativeToAnchor') === 'true', maxAgeMs: Number(get(row,'maxAgeMs')) * 1000 })),
-    outcomes: [...$('outcomes').children].map(row => ({ id: row.dataset.id, source: get(row,'source'), field: get(row,'field'),
-      measure: get(row,'measure'), horizonMs: Number(get(row,'horizonMs')) * 60000, toleranceMs: Number(get(row,'toleranceMs')) * 1000,
-      maxAgeMs: Number(get(row,'maxAgeMs')) * 1000 })),
+    outcomes,
   });
+}
+function formOutcomes() {
+  return [...$('outcomes').children].map(row => ({ id: row.dataset.id, source: get(row,'source'), field: get(row,'field'),
+      measure: get(row,'measure'), horizonMs: Number(get(row,'horizonMs')) * 60000, toleranceMs: Number(get(row,'toleranceMs')) * 1000,
+      maxAgeMs: Number(get(row,'maxAgeMs')) * 1000 }));
 }
 const key = rule => JSON.stringify([rule.id, rule.version]);
 function choose(value) { return versions.find(v => key(v) === value); }
@@ -152,7 +183,7 @@ function versionOptions() {
 function openRule(rule) {
   editing = rule;
   levelForm.open(rule);
-  $('archive-encounter-controls').hidden=(!rule.levelEncounter && !['per-headline','per-candle-pair'].includes(rule.transition)) || archiveMode;
+  $('archive-encounter-controls').hidden=(!rule.levelEncounter && !['per-headline','per-candle-pair',journalTransition].includes(rule.transition)) || archiveMode;
   $('rule-origin').hidden=!rule.archiveHandoff;
   $('rule-origin').textContent=rule.archiveHandoff ? 'Strategy version '+rule.archiveHandoff.version+' · hypothesis '+rule.archiveHandoff.id : '';
   if (rule.conditions.length) { currentRule = rule; previewing = false; }
@@ -164,7 +195,7 @@ function openRule(rule) {
   $('conditions').replaceChildren(); rule.conditions.forEach(condition);
   $('outcomes').replaceChildren(); rule.outcomes.forEach(outcome);
   $('rule-json').textContent = JSON.stringify(rule,null,2);
-  updateOutcomes(); render();
+  journalControls(); updateOutcomes(); render();
 }
 function updateOutcomes() {
   $('result-instrument').replaceChildren(...currentRule.instruments.map(v => option(v)));
@@ -228,6 +259,13 @@ function render() {
 function setCursor(ms) { $('cursor').value = String((ms-studyStart)/1000); clock.select({ ...studySelection, mode:'replay', cutoff:ms }); render(); }
 $('cursor').oninput = () => setCursor(studyStart + Number($('cursor').value)*1000);
 $('show-builder').onclick = () => showResults(false); $('show-results').onclick = () => { showResults(true); render(); };
+$('study-kind').addEventListener('change',()=>{
+  if($('study-kind').value==='journal') {
+    if(!$('rule-name').value.trim())$('rule-name').value='Owen Trades';
+    if(!$('outcomes').children.length)outcome({id:'underlying-5m',source:'price',field:'spot',measure:'return',horizonMs:300000,toleranceMs:90000,maxAgeMs:90000});
+  }
+  journalControls();
+});
 $('add-condition').onclick = () => condition(); $('add-outcome').onclick = () => outcome();
 $('reopen').onclick = () => { openRule(choose($('versions').value)); $('result-version').value = key(currentRule); status('Saved definition reopened.'); };
 $('oi-skew-audit').hidden = archiveMode;
@@ -271,7 +309,7 @@ function refreshSourceChoices() {
 }
 function updateAccountControls(state) {
   accountState = state;
-  if (!archiveMode) refreshSourceChoices();
+  if (!archiveMode) {refreshSourceChoices();journalControls();}
   for (const id of archiveMode ? ['observed-instrument'] : ['instrument','observed-instrument']) {
     const choices = accountState.instruments.map(value => [value,value]);
     if (id === 'observed-instrument') choices.unshift(['ALL','All instruments']);
@@ -289,7 +327,7 @@ $('account-save').onclick=async()=>{
     const {rule}=await accountRequest({action:'save',rule:{...draft,version}});
     versions.push(rule);currentRule=rule;versionOptions();openRule(rule);
     try{localStorage.setItem(storageKey,JSON.stringify(versions));}catch{/* account save remains durable */}
-    status(`Saved ${rule.name} v${rule.version} to your account. Choose Observe saved version to activate it.`);
+    status(`Saved ${rule.name} v${rule.version} to your account. `+(rule.transition===journalTransition?'Choose a trading date and Replay saved study.':'Choose Observe saved version to activate it.'));
   }catch(error){status(error.message,true);}
 };
 for(const [id,action] of [['account-activate','activate'],['account-pause','deactivate']])$(id).onclick=async()=>{
@@ -378,6 +416,15 @@ $('encounter-run').onclick=async()=>{
     const draft=formRule();
     const fields=['transition','conditions','name','instruments','levelEncounter','minimumBucket','groups','approach','contact','maxGapMs','outcomes','id','source','field','measure','horizonMs','toleranceMs','maxAgeMs'];
     if(JSON.stringify(draft,fields)!==JSON.stringify(eventRule(rule),fields))throw new Error('Save your edited study to your account before replaying it.');
+    if(rule.transition===journalTransition) {
+      const body=await accountRequest({action:'replay-journal',session,ruleId:rule.id,version:rule.version});
+      if(generation!==observedGeneration || editing!==rule)return;
+      showObservedPanel();retainedResults.clear({forget:true});
+      $('observed-status').textContent=session+' · '+body.instrument+' · '+body.events.length+' private journal fills';
+      $('observed-coverage').textContent=body.coverage.reason+' Evaluation cutoff '+new Date(body.cutoff).toISOString();
+      retainedResults.update({events:body.events.map(e=>({...e,evaluationCutoff:body.cutoff})),rules:[body.rule],origin:'recorded',cutoff:body.cutoff});
+      return;
+    }
     if(rule.transition==='per-headline'){
       await showHeadlineReplay({session,ruleId:rule.id,version:rule.version},Date.now());return;
     }

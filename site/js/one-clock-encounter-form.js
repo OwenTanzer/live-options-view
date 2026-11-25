@@ -12,11 +12,14 @@ export function encounterForm(root) {
   ticker.value='NVDA';
   function visibility() {
     const level=mode.value==='level';
+    const journal=mode.value==='journal';
     const candle=mode.value==='candle', headline=mode.value==='headline', specialized=level || candle || headline;
+    read('journal-help').hidden=!journal;
+    read('condition-fields').hidden=journal;
     read('headline-fields').hidden=!headline;
     read('candle-description').hidden=!candle;
     fieldset.hidden=!level;
-    for(const id of ['combine','transition','missing'])read(id).closest('label').hidden=specialized;
+    for(const id of ['combine','transition','missing'])read(id).closest('label').hidden=specialized || journal;
     read('scalar-fields').hidden=specialized;
     read('instrument').disabled=specialized;
     if(specialized)read('instrument').value=headline?ticker.value:'QQQ';
@@ -27,7 +30,7 @@ export function encounterForm(root) {
     open(rule) {
       const config=rule.levelEncounter;
       if(rule.transition==='per-headline')ticker.value=rule.instruments[0];
-      mode.value=rule.transition==='per-headline'?'headline':config?'level':rule.transition==='per-candle-pair'?'candle':'scalar';
+      mode.value=rule.transition==='per-journal-fill'?'journal':rule.transition==='per-headline'?'headline':config?'level':rule.transition==='per-candle-pair'?'candle':'scalar';
       read('level-bucket').value=String(config?.minimumBucket??5);
       read('level-contact').value=config?.contact??'exact-or-bracketed';
       read('level-approach').value=config?.approach??'either';

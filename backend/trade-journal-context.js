@@ -132,7 +132,7 @@ export function csvLine(line) {
   return out;
 }
 
-function snapshotRow(text, occ) {
+export function snapshotRow(text, occ, expectedUnderlying=null) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) return { underlying: null, quote: null };
   const head = csvLine(lines[0]);
@@ -142,6 +142,10 @@ function snapshotRow(text, occ) {
   let underlying = null, quote = null;
   for (let i = 1; i < lines.length; i++) {
     const row = csvLine(lines[i]);
+    if (expectedUnderlying) {
+      const root = row[iSym]?.replaceAll(' ','').match(/^([A-Z]+)\d{6}[CP]\d{8}$/)?.[1];
+      if (root !== expectedUnderlying || (ix('Symbol') >= 0 && row[ix('Symbol')] !== expectedUnderlying)) continue;
+    }
     if (underlying == null && iUnd >= 0 && row[iUnd] !== '' && Number.isFinite(+row[iUnd])) underlying = +row[iUnd];
     if (row[iSym] === occ && row[iBid] !== '' && row[iAsk] !== '' && Number.isFinite(+row[iBid]) && Number.isFinite(+row[iAsk])) {
       quote = [+row[iBid], +row[iAsk]];
