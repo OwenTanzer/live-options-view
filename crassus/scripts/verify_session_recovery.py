@@ -28,9 +28,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "crassus"))
@@ -338,10 +342,100 @@ class RuntimeReauthTests(unittest.TestCase):
         self.assertEqual(session.count("POST", "/api/login"), 1)  # startup login only
 
 
+class DroppedAccountReadTests(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+        self.responses = []
+        calls, responses = self.requests, self.responses
+
+        class Handler(BaseHTTPRequestHandler):
+            def respond(self):
+                calls.append((self.command, self.path, self.headers.get("Cookie")))
+                status = responses.pop(0) if responses else 500
+                if status is None:  # EOF before the HTTP status line
+                    self.close_connection = True
+                    return
+                body = b'{"username":"crassus_a","balance_cash":9800,"trades":[]}'
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = respond
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        self.session = AccountSession(Account("A", "crassus_a", "pw", "smoke_atm_roundtrip"),
+                                      base_url=f"http://127.0.0.1:{server.server_port}",
+                                      rate_limiter=Mock(), bot_registration_key="test-key")
+        self.addCleanup(self.session.http.close)
+        self.session.http.cookies.set("session", "fixture")
+
+    def test_disconnect_recovers_in_same_visit(self):
+        self.responses.extend([None, 200])
+        with patch.object(self.session.http, "request", wraps=self.session.http.request) as sends:
+            state = self.session.me()
+        self.assertEqual((state.username, state.balance_cash), ("crassus_a", 9800))
+        self.assertEqual(self.requests, [("GET", "/api/me", "session=fixture")] * 2)
+        self.assertEqual(self.session.rate_limiter.acquire.call_count, 2)
+        self.assertEqual([call.kwargs["timeout"] for call in sends.call_args_list], [20.0, 3.0])
+
+    def test_runner_reaches_decision_on_the_original_account_visit(self):
+        from verify_runner_flatten_attribution import make_runner, last_ledger_record, make_snapshot
+        from crassus.client import AccountState
+
+        self.responses.extend([None, 200])
+        account = Account("A", "crassus_a", "pw", "max_pain_qqq")
+        with TemporaryDirectory() as folder:
+            runner, executor = make_runner(account, state=AccountState(account.username, 9800, []),
+                                           ledger_dir=Path(folder))
+            runner.sessions[account.alias] = self.session
+            runner._run_account(account, make_snapshot(), "afterhours")
+            row = last_ledger_record(Path(folder))
+        self.assertEqual(row["outcome_class"], "no_trade")
+        self.assertEqual(row["decision"]["strategy_id"], account.strategy_id)
+        self.assertEqual(row["account_state_before"]["balance_cash"], 9800)
+        self.assertEqual(len(self.requests), 2)
+        self.assertFalse(executor.submit_calls)
+
+    def test_repeated_disconnect_remains_a_failed_read(self):
+        self.responses.extend([None, None, 200])
+        with self.assertRaises(TransportError):
+            self.session.me()
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(len(self.responses), 1)
+
+    def test_reauth_does_not_reset_the_disconnect_budget(self):
+        self.responses.extend([None, 401, 200, 200, None, 200])
+        with self.assertRaises(TransportError):
+            self.session.me()
+        self.assertEqual([r[:2] for r in self.requests], [
+            ("GET", "/api/me"), ("GET", "/api/me"), ("POST", "/api/login"),
+            ("POST", "/api/bot-metadata"), ("GET", "/api/me"),
+        ])
+        self.assertEqual(len(self.responses), 1)
+
+    def test_post_and_http_status_do_not_use_disconnect_retry(self):
+        self.responses.extend([None, 503, 200])
+        with self.assertRaises(TransportError):
+            self.session._request("POST", "/api/paper-trade", json={})
+        with self.assertRaises(TransportError):
+            self.session.me()
+        self.assertEqual([r[:2] for r in self.requests], [("POST", "/api/paper-trade"), ("GET", "/api/me")])
+        self.assertEqual(len(self.responses), 1)
+
+
 if __name__ == "__main__":
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
-    for case in (LoginClassificationTests, ProvisionBackoffTests, RuntimeReauthTests):
+    for case in (LoginClassificationTests, ProvisionBackoffTests, RuntimeReauthTests, DroppedAccountReadTests):
         suite.addTests(loader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print("=" * 66)

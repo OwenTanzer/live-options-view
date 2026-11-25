@@ -11,6 +11,12 @@ Both names refer to the same system and are interchangeable.
 
 The loop is: **observe → decide → validate → submit → reconcile → record → repeat.**
 
+If the peer closes an authenticated account-state GET before returning a response,
+Crassus retries that read once on the same visit, using another shared rate-limit
+token. The retry caps the connect/read timeouts at three seconds. Runner logs
+record `account_read_retry` and the received `account_read_retry_response`
+status, so remaining failures and their effect on decisions can be measured.
+
 Fake-capital loss, absurd positions and account liquidation are all permitted
 experimental outcomes. The one unacceptable failure is losing the causal
 record of what the bot saw, decided, and did.
