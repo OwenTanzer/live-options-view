@@ -305,7 +305,7 @@ def main(
     health_thread = threading.Thread(target=health_publisher, daemon=True)
     health_thread.start()
 
-    recent = RecentPrints()
+    recent = RecentPrints(primary.universe)
     # Restore this session's order-flow accumulation from the archive before new
     # prints arrive; overlaps deduplicate by identity and gaps stay visible.
     recent.rebuild(r2, bucket, primary.prefix, local_segments=primary.reconciliation.get("resume", ()),

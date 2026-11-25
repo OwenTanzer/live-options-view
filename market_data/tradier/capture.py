@@ -13,16 +13,52 @@ import os
 import threading
 import time
 from collections import Counter
+from contextlib import closing, contextmanager
 from datetime import datetime
 from typing import Callable
 
 import requests
+import websocket
 
 from . import config
 from ._probe import STREAM, Tradier, is_retryable, parse_epoch_ms, stream_payload, utc_now
 from .config import ET
 from .spool import SegmentSpool, SpoolExhausted
 from .stats import BoundedStats
+
+
+@contextmanager
+def market_lines(client, symbols, session_id):
+    payload = stream_payload(symbols, session_id)
+    request = requests.Request("GET", STREAM, params=payload).prepare()
+    if len(request.path_url) <= 6000:
+        with client.session.get(STREAM, params=payload, stream=True, timeout=(15, 10)) as response:
+            response.raise_for_status()
+            yield response.iter_lines(chunk_size=1, decode_unicode=True)
+        return
+
+    # Large subscriptions travel in a WebSocket frame, outside URL size limits.
+    def messages(sock):
+        while True:
+            frame = sock.recv()
+            if not frame:
+                raise requests.ConnectionError("Tradier WebSocket closed")
+            if isinstance(frame, bytes):
+                frame = frame.decode("utf-8", errors="replace")
+            for line in frame.splitlines():
+                if line.lstrip().startswith('{"error"'):
+                    raise requests.ConnectionError("Tradier rejected WebSocket subscription")
+                yield line
+
+    try:
+        with closing(websocket.create_connection("wss://ws.tradier.com/v1/markets/events", timeout=15)) as sock:
+            sock.settimeout(10)
+            sock.send(json.dumps({"symbols": symbols, "sessionid": session_id,
+                                  "filter": ["quote", "timesale"], "linebreak": True,
+                                  "validOnly": False, "advancedDetails": True}))
+            yield messages(sock)
+    except websocket.WebSocketException as exc:
+        raise requests.ConnectionError("Tradier WebSocket transport failure") from exc
 
 
 class CaptureResult:
@@ -86,12 +122,8 @@ def capture_session(
         phase = "create_session"
         try:
             session_id = client.create_market_session()
-            payload = stream_payload(symbols, session_id)
             phase = "connect"
-            with client.session.get(
-                STREAM, params=payload, stream=True, timeout=(15, 10)
-            ) as response:
-                response.raise_for_status()
+            with market_lines(client, symbols, session_id) as lines:
                 phase = "read"
                 connected_at = now_et() if session_open is not None else None
                 if result.stream_connected_at is None:
@@ -101,7 +133,7 @@ def capture_session(
                 connection_ready_at = None
                 # Do not wait for requests' default 512-byte buffer to fill at
                 # the boundary; process each complete provider line immediately.
-                for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+                for line in lines:
                     observed_at = now_et()
                     if stop_requested() or observed_at >= session_close:
                         break

@@ -567,6 +567,25 @@ class LeaseDeadlineWatchdogTests(unittest.TestCase):
         self.assertEqual(loss_reason["reason"], "ownership_uncertain")
 
 
+class FullSubscriptionTransportTests(unittest.TestCase):
+    def test_large_symbol_list_uses_single_websocket_and_preserves_filters(self):
+        from market_data.tradier.capture import market_lines
+        symbols = ["QQQ"] + [f"QQQ261125C{strike * 1000:08d}" for strike in range(450, 904)]
+        client, sock = Mock(), Mock()
+        sock.recv.return_value = '{"type":"quote"}\n{"type":"timesale"}'
+        with patch("market_data.tradier.capture.websocket.create_connection", return_value=sock) as connect:
+            with market_lines(client, symbols, "fixture") as lines:
+                self.assertEqual([next(lines), next(lines)], ['{"type":"quote"}', '{"type":"timesale"}'])
+        connect.assert_called_once()
+        client.session.get.assert_not_called()
+        request = json.loads(sock.send.call_args.args[0])
+        self.assertEqual(request["symbols"], symbols)
+        self.assertEqual(request["filter"], ["quote", "timesale"])
+        self.assertFalse(request["validOnly"])
+        self.assertTrue(request["advancedDetails"])
+        sock.close.assert_called_once()
+
+
 class UniverseTests(unittest.TestCase):
     def test_full_chain_upgrade_preserves_opening_evidence_and_survives_restart(self):
         client, r2 = FakeTradier(), FakeR2()

@@ -41,6 +41,20 @@ class RecentTests(unittest.TestCase):
         self.assertEqual(saved["rows"],list(feed.rows))
         self.assertEqual(saved["lastReceived"],ts+2000)
 
+    def test_subscribed_quiet_contract_and_widening_survive_rebuild(self):
+        old, new = "QQQ261125C00614000", "QQQ261125P00613000"
+        widened = "2026-11-25T15:00:00+00:00"
+        feed = recent.RecentPrints(dict(option_symbols=[old, new], selected_at=widened,
+                                       previous_selection={"option_symbols": [old]}))
+        client = Mock()
+        client.list_objects_v2.return_value = {"Contents": []}
+        feed.rebuild(client, "bucket", "prefix", now=datetime.fromisoformat(widened))
+        feed.observe(dict(type="quote", symbol=old, collector_receipt_timestamp=widened))
+        session = feed.payload()["session"]
+        self.assertEqual(session["opening"], {old: recent._ms(widened), new: None})
+        self.assertEqual(session["widening"]["previous_symbols"], [old])
+        self.assertEqual(session["gaps"][-1]["end"], recent._ms(widened))
+
     def test_sequence_set_is_exact_out_of_order(self):
         seen = recent.SeqSet()
         self.assertEqual([seen.add(n) for n in (5, 3, 4, 6, 5, 3, 9, 7, 8, 2)],
