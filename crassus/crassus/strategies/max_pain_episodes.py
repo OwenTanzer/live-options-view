@@ -15,7 +15,7 @@ from ..strategy import Decision, register
 from . import max_pain
 
 THRESHOLDS = {"max_pain_mouse_qqq": 0.15, "max_pain_rat_qqq": 0.25}
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAX_BOARD_AGE_SECONDS = 360
 
 
@@ -111,6 +111,7 @@ def _valid_state(state):
         "last_board",
         "blocked",
         "blocked_at",
+        "neutral_count",
     }:
         return False
     times = state.get("cooldowns", {})
@@ -126,12 +127,16 @@ def _valid_state(state):
         state["blocked"] not in ("call", "put") or not _number(state["blocked_at"])
     ):
         return False
+    if type(state.get("neutral_count", 0)) is not int or state.get("neutral_count", 0) not in (0, 1):
+        return False
     if "pending" not in state:
         return True
     p = state["pending"]
     return (
         isinstance(p, dict)
-        and set(p) == {"id", "symbol", "quantity", "block_side"}
+        and set(p) in ({"id", "symbol", "quantity", "block_side"},
+                       {"id", "symbol", "quantity", "block_side", "cooldown"})
+        and type(p.get("cooldown", True)) is bool
         and isinstance(p["id"], str)
         and bool(p["id"])
         and isinstance(p["symbol"], str)
@@ -158,10 +163,12 @@ def _apply_confirmed_sale(state, trades):
     filled_at = _timestamp(fill.get("ts"))
     if filled_at is None:
         raise ValueError("Max Pain exit fill has no timestamp")
-    state.setdefault("cooldowns", {})[pending["symbol"]] = filled_at + 900
+    if pending.get("cooldown", True):
+        state.setdefault("cooldowns", {})[pending["symbol"]] = filled_at + 900
     if pending["block_side"]:
         state["blocked"] = pending["block_side"]
         state["blocked_at"] = filled_at
+        state["neutral_count"] = 0
 
 
 def _decide(ctx, strategy_id):
@@ -199,16 +206,23 @@ def _decide(ctx, strategy_id):
     if degraded and ctx.book.is_flat:
         return no("Episode state unavailable; new entries disabled for this session.")
     now = ctx.now_et.timestamp()
-    observed, reading, bias = _reading(ctx, state.get("last_board", 0))
+    last_board = state.get("last_board", 0)
+    observed, reading, bias = _reading(ctx, last_board)
     if observed is not None:
         state["last_board"] = observed
-    if (
-        state.get("blocked")
-        and bias is not None
-        and bias != state["blocked"]
-        and observed > state["blocked_at"]
-    ):
-        del state["blocked"], state["blocked_at"]
+    if state.get("blocked"):
+        # Only distinct qualified boards strictly after the fill can rearm.
+        # A duplicate is not another observation; a quality gap breaks a run.
+        if bias is None:
+            state["neutral_count"] = 0
+        elif observed > max(last_board, state["blocked_at"]):
+            if bias == state["blocked"]:
+                state["neutral_count"] = 0
+            elif bias == "neutral" and state.get("neutral_count", 0) == 0:
+                state["neutral_count"] = 1
+            else:
+                del state["blocked"], state["blocked_at"]
+                state.pop("neutral_count", None)
 
     positions = list(ctx.book.positions.values())
     quotes = {}
@@ -244,7 +258,8 @@ def _decide(ctx, strategy_id):
                 "id": ctx.decision_id,
                 "symbol": pos.symbol,
                 "quantity": 1,
-                "block_side": side if bias is None or bias == side else None,
+                "block_side": side,
+                "cooldown": True,
             }
             trigger = "stop" if stop else "target"
             return finish(
@@ -283,6 +298,14 @@ def _decide(ctx, strategy_id):
     decision = max_pain._decide_core(
         replace(ctx, snapshot=snapshot, quotes=executable), pin_reading=reading
     )
+    if decision.action == "sell":
+        state["pending"] = {
+            "id": ctx.decision_id,
+            "symbol": decision.symbol,
+            "quantity": 1,
+            "block_side": max_pain._option_type_from_symbol(decision.symbol),
+            "cooldown": False,
+        }
     if decision.action == "buy" and now < state.get("cooldowns", {}).get(
         decision.symbol, 0
     ):

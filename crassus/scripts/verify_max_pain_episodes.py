@@ -183,7 +183,7 @@ class Episodes(unittest.TestCase):
             self.assertEqual(self.act(minute, spot, **kw).action, "no_trade")
         self.assertEqual(self.act(12, 400).action, "no_trade")
         self.assertEqual(
-            self.act(13, 399).action, "no_trade"
+            self.act(13, 400).action, "no_trade"
         )  # original contract still on timer
         self.assertEqual(
             self.act(16, 399).action, "buy"
@@ -195,17 +195,54 @@ class Episodes(unittest.TestCase):
         self.assertEqual(self.act(7, 399, age=180).action, "no_trade")
         self.assertEqual(self.act(8, 399).action, "buy")
 
-    def test_qualified_exit_observation_already_opposite(self):
+    def test_exit_board_never_rearms(self):
         self.assertEqual(self.act(0).action, "buy")
         self.assertEqual(self.act(1, 401, bid=0.85).action, "sell")
         self.assertEqual(
-            self.act(2, 398).action, "buy"
-        )  # different call strike is already rearmed
+            self.act(2, 398).action, "no_trade"
+        )
+        self.assertEqual(self.act(3, 401).action, "buy")
 
-    def test_signal_exit_has_no_episode_or_contract_cooldown(self):
+    def test_signal_exit_requires_reset_without_adding_contract_cooldown(self):
         self.assertEqual(self.act(0).action, "buy")
         self.assertEqual(self.act(1, 400).action, "sell")
-        self.assertEqual(self.act(2, 399).action, "buy")
+        self.assertEqual(self.act(2, 399).action, "no_trade")
+        self.assertEqual(self.act(3, 400).action, "no_trade")
+        self.assertEqual(self.act(4, 400).action, "no_trade")
+        self.assertEqual(self.act(5, 399).action, "buy")
+
+    def test_distinct_post_exit_boards_for_both_bots(self):
+        for strategy in (MOUSE, RAT):
+            with self.subTest(strategy=strategy):
+                self.fills.clear()
+                self.tearDownState()
+                self.assertEqual(self.act(0, strategy=strategy).action, "buy")
+                self.assertEqual(self.act(1, 400, bid=1.25, strategy=strategy).action, "sell")
+                # The exit's neutral board, including a later duplicate, is zero.
+                self.assertEqual(self.act(2, 400, age=60, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(3, 400, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(4, 400, age=60, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(5, 398, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(6, 400, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(7, 400, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(8, 399, strategy=strategy).action, "no_trade")
+                self.assertEqual(self.act(16, 399, strategy=strategy).action, "buy")
+
+    def test_interrupted_neutral_sequences_for_both_bots(self):
+        for strategy in (MOUSE, RAT):
+            for spot, kw in ((None, {}), (400, {"rows": 3}),
+                             (400, {"age": 421}), (398, {})):
+                with self.subTest(strategy=strategy, spot=spot, kw=kw):
+                    self.fills.clear()
+                    self.tearDownState()
+                    self.assertEqual(self.act(0, strategy=strategy).action, "buy")
+                    self.assertEqual(self.act(1, bid=1.25, strategy=strategy).action, "sell")
+                    self.act(2, 400, strategy=strategy)
+                    self.act(10, spot, strategy=strategy, **kw)
+                    self.act(11, 400, strategy=strategy)
+                    self.assertEqual(self.act(12, 398, strategy=strategy).action, "no_trade")
+                    # An opposite board alone unlocks; its new contract is free.
+                    self.assertEqual(self.act(13, 401, strategy=strategy).action, "buy")
 
     def test_traded_side_clock_and_malformed_board(self):
         self.assertEqual(self.act(0, ask=0.99).action, "no_trade")

@@ -252,10 +252,12 @@ not just as an exit-timing floor.
 Max Pain account. Mouse exits at a 15% premium loss or gain and Rat at 25%,
 using the held option's executable bid and the reconciled opening fill.
 After a confirmed threshold sale that contract cools down for 15 minutes.
-Changing ATM strikes cannot bypass the same-direction lock. A qualified
-neutral or opposite Max Pain observation releases the lock, including one
-already observed at the threshold exit. A missing, stale or sparse board
-cannot release it. An ordinary signal exit starts neither restriction.
+Changing ATM strikes cannot bypass the directional lock after any confirmed
+sale. Only distinct qualified boards strictly after the sale can release it:
+one opposite-direction reading, or two consecutive neutral readings. The exit
+board cannot count. Duplicate boards do not advance the count; missing, stale,
+sparse or invalid readings and same-direction readings break a neutral run.
+Ordinary signal exits start the episode lock but add no contract cooldown.
 Each session uses fresh episode state, retained per account across restarts.
 Both accounts are initially inactive. Each requires its own paper credential
 and explicit runtime roster activation. They have no broker route.
