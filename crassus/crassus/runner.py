@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin
 
+from .strategies.max_pain_episodes import THRESHOLDS as PIN_EPISODES
 from .strategies.me_bots import IDS as ME_BOTS, price_for as me_limit_price
 from .strategies.me_bots_inputs import Inputs as MeBotInputs
 from .strategies.oi_associator import IDS as OI_ASSOCIATORS, checked_flatten as oi_share_flatten
@@ -616,6 +617,8 @@ class Runner:
             quotes=quotes_for_decision,
             params=account.params,
             account_alias=alias,
+            state_dir=self.state_dir if account.strategy_id in PIN_EPISODES else None,
+            decision_id=decision_id,
         )
 
         if account.strategy_id in ME_BOTS:
@@ -640,6 +643,8 @@ class Runner:
                                                      decision.strategy_id, decision.strategy_version)
                     else:
                         decision.limit_price = limit
+            elif account.strategy_id in PIN_EPISODES:
+                decision = strategy(ctx)
             elif arm and arm != "baseline":
                 decision = forward_skew.decide(ctx, account, arm, forward_bars,
                                                self.forward_directory, decision_id)
@@ -816,7 +821,7 @@ class Runner:
 
         try:
             result = executor.submit(
-                **({"execution_request_id": decision_id} if arm else {}),
+                **({"execution_request_id": decision_id} if arm or account.strategy_id in PIN_EPISODES else {}),
                 symbol=decision.symbol,
                 side=decision.action,
                 quantity=decision.quantity,

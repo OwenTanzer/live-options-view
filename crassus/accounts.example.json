@@ -534,6 +534,20 @@
       "active": false
     },
     {
+      "alias": "Max_Pain_mouse",
+      "username": "crassus_mp_mouse",
+      "password_env": "CRASSUS_PW_MAX_PAIN_MOUSE",
+      "strategy_id": "max_pain_mouse_qqq",
+      "active": false
+    },
+    {
+      "alias": "Max_Pain_rat",
+      "username": "crassus_mp_rat",
+      "password_env": "CRASSUS_PW_MAX_PAIN_RAT",
+      "strategy_id": "max_pain_rat_qqq",
+      "active": false
+    },
+    {
       "alias": "Bowman Max Pain",
       "username": "crassus_bowman_pin",
       "password_env": "CRASSUS_PW_BOWMAN_MAX_PAIN",

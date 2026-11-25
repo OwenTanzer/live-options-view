@@ -111,7 +111,7 @@ def _compute_max_pain(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
     return max_pain_strike, strikes_with_oi_both_sides
 
 
-def _decide_core(ctx: StrategyContext) -> Decision:
+def _decide_core(ctx: StrategyContext, *, pin_reading: tuple[float | None, int] | None = None) -> Decision:
     def no(reason: str, **meta: Any) -> Decision:
         return Decision.no_trade(
             reason=reason,
@@ -162,7 +162,7 @@ def _decide_core(ctx: StrategyContext) -> Decision:
     min_strikes_with_oi = params.get("min_strikes_with_oi", DEFAULT_MIN_STRIKES_WITH_OI)
 
     underlying_price = ctx.snapshot.underlying_price
-    max_pain_strike, strikes_with_oi_both_sides = _compute_max_pain(ctx.snapshot.rows)
+    max_pain_strike, strikes_with_oi_both_sides = pin_reading if pin_reading is not None else _compute_max_pain(ctx.snapshot.rows)
 
     deviation_pct: float | None = None
     if max_pain_strike is not None and underlying_price:

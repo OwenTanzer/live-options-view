@@ -12,6 +12,7 @@ Fixed by `strategy_output_contract` in MOO-24.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 ACTIONS = frozenset({"no_trade", "buy", "sell"})
@@ -94,6 +95,8 @@ class StrategyContext:
     # be keyed by account (`oi_skew_qqq`). None for hand-built or backtest
     # contexts, where one implicit account is assumed.
     account_alias: str | None = None
+    state_dir: Path | None = None
+    decision_id: str | None = None
 
 
 class Strategy(Protocol):

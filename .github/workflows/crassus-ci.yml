@@ -105,6 +105,11 @@ jobs:
       - name: Run canopus_down_day_14 strategy suite
         working-directory: crassus
         run: python scripts/verify_canopus_down_day.py
+      - name: Verify baseline Max Pain and Mouse/Rat paper episodes
+        working-directory: crassus
+        run: |
+          python scripts/verify_max_pain.py
+          python scripts/verify_max_pain_episodes.py
       - name: Run Guideline Phelps suite
         working-directory: crassus
         run: python scripts/verify_phelps.py
