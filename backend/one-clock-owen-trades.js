@@ -54,19 +54,26 @@ export async function replayJournalFills(env,namespace,body,now) {
     if (!object?.body || object.etag!==file.etag || object.uploaded?.getTime()!==uploaded)
       throw new Error('Archived input changed during replay; retry');
     bytes += file.size;
-    const spot = snapshotRow(await object.text(),null).underlying;
+    const spot = snapshotRow(await object.text(),null,instrument).underlying;
     const row = Number.isFinite(spot) && spot>0 ? {source:'price',id:file.key,revision:1,
       eventAt:at,availableAt:Math.max(uploaded,at),evidence:file.key+'@'+file.etag,value:{spot}} : null;
     cache.set(file.key,row);
     return row;
   }
+  async function firstPrice(entries) {
+    for (const entry of entries) {
+      const value = await price(entry);
+      if (value) return value;
+    }
+    return null;
+  }
   for (const event of events) {
     for (const o of rule.outcomes) {
       const start = event.triggeredAt, target = start+o.horizonMs;
-      const recent = index.findLast(x=>x.at<=start && start-x.at<=o.maxAgeMs);
-      const baseline = o.measure==='value' ? null : await price(recent);
+      const recent = index.filter(x=>x.at<=start && start-x.at<=o.maxAgeMs).reverse();
+      const baseline = o.measure==='value' ? null : await firstPrice(recent);
       event.baselines[o.id] = {value:baseline?.value.spot??null,evidence:baseline};
-      const endpoint = await price(index.find(x=>x.at>=target && x.at<=Math.min(bounds.close,target+o.toleranceMs)));
+      const endpoint = await firstPrice(index.filter(x=>x.at>=target && x.at<=Math.min(bounds.close,target+o.toleranceMs)));
       event.outcomes.push(measureOutcome(event,o,endpoint?[endpoint]:[],{cutoff},bounds.close));
     }
   }

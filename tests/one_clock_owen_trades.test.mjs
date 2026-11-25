@@ -39,9 +39,9 @@ test('owner saves a historical fill rule and measures only the visible journal r
   }
   await insert(position,recorded);
   await insert({...position,position_id:'bot',actor_kind:'bot',mode:'paper'},recorded);
-  const objects=new Map(['101200','101800'].map((h,i)=>{
-    const key='intraday/20261113/snapshot_'+h+'000000.csv',value=100+i,
-      csv='OptionSymbol,Bid,Ask,UnderlyingPrice\nFAKE,1,2,'+value+'\n';
+  const objects=new Map(['101150','101200','101750','101800'].map((h,i)=>{
+    const key='intraday/20261113/snapshot_'+h+'000000.csv',value=i===0?100:i===3?101:0,
+      csv='Symbol,OptionSymbol,Bid,Ask,UnderlyingPrice\nSPY,SPY261113P00600000,1,2,999\nQQQ,QQQ261113P00600000,1,2,'+value+'\n';
     return [key,{key,size:csv.length,body:true,uploaded:new Date(start+(i?360000:0)),etag:'v',text:async()=>csv}];
   }));
   env.PAPER_TRADES={list:async()=>({objects:[...objects.values()],truncated:false}),get:async k=>objects.get(k)};
