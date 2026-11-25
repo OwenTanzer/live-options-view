@@ -165,8 +165,11 @@ def _apply_confirmed_sale(state, trades):
         raise ValueError("Max Pain exit fill has no timestamp")
     if pending.get("cooldown", True):
         state.setdefault("cooldowns", {})[pending["symbol"]] = filled_at + 900
-    if pending["block_side"]:
-        state["blocked"] = pending["block_side"]
+    # A pending v1 sale may have pre-armed on its exit board. Do not carry
+    # that old shortcut across a restart into the stricter policy.
+    side = pending["block_side"] or max_pain._option_type_from_symbol(pending["symbol"])
+    if side:
+        state["blocked"] = side
         state["blocked_at"] = filled_at
         state["neutral_count"] = 0
 

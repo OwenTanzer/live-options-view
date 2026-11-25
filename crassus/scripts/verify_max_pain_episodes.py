@@ -244,6 +244,17 @@ class Episodes(unittest.TestCase):
                     # An opposite board alone unlocks; its new contract is free.
                     self.assertEqual(self.act(13, 401, strategy=strategy).action, "buy")
 
+    def test_legacy_pending_exit_does_not_preserve_exit_board_reset(self):
+        self.assertEqual(self.act(0).action, "buy")
+        self.assertEqual(self.act(1, 401, bid=1.25).action, "sell")
+        path = next(self.folder.rglob("*.json"))
+        state = json.loads(path.read_text())
+        state["pending"].pop("cooldown")
+        state["pending"]["block_side"] = None
+        path.write_text(json.dumps(state))
+        self.assertEqual(self.act(2, 398).action, "no_trade")
+        self.assertEqual(self.act(3, 401).action, "buy")
+
     def test_traded_side_clock_and_malformed_board(self):
         self.assertEqual(self.act(0, ask=0.99).action, "no_trade")
         self.assertEqual(self.act(0, ask_age=20).action, "no_trade")
