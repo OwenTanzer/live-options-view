@@ -118,6 +118,7 @@ class ReplaySession:
         self.id = session_id or secrets.token_urlsafe(9)
         self.pack = pack
         self.snaps = pack["snapshots"]
+        self.spot_by_key = {s["key"]: s["spot"] for s in self.snaps if s.get("ok")}
         self.source = TrainerSource(pack, SYMBOL)
         self.open_s, self.close_s = pack["open_s"], pack["close_s"]
         rng = rng or random.Random()
@@ -238,6 +239,14 @@ class ReplaySession:
         series = [[s["t"], s["spot"]] for s in eligible
                   if s["ok"] and self.open_s - 300 <= s["t"] <= self.clock]
         nxt = self._next_bar_after(self.clock)
+        chart_cutoff = self.close_s if self.revealed else self.clock
+        bar_seconds = 5 if self.pack.get("event_tape") else self.pack.get("chart_interval", 60)
+        if self.pack.get("event_tape"):
+            chart_bars = [[s["t"], *s["ohlc"]] for s in (self.snaps if self.revealed else eligible)
+                          if s.get("ohlc")]
+        else:
+            chart_bars = [[end, *ohlc] for end, available, *ohlc in self.pack.get("chart_minutes", ())
+                          if self.open_s < end <= chart_cutoff and available <= chart_cutoff]
         return {
             "session": {
                 "id": self.id,
@@ -265,15 +274,16 @@ class ReplaySession:
                        "detail": detail, "age_s": age,
                        "since": hhmmss(current_dark["start"]) if current_dark else None,
                        "snapshot_time": hhmmss(snap["t"]) if snap else None},
-            "sample_candles": [[sn["t"], *sn["ohlc"]] for sn in (self.snaps if self.revealed else eligible) if sn.get("ohlc")] if self.pack.get("event_tape") else [],
+            "sample_candles": chart_bars,
             "symbol": SYMBOL,
             "volume": [[s["t"], s["volume"]] for s in eligible if s.get("volume") is not None],
             "volume_unit": self.pack.get("volume_unit", "option contracts"),
-            "spot": {"now": spot, "last": self._last_consistent_spot(self.clock), "series": series},
+            "spot": {"bar_seconds": bar_seconds if chart_bars else None, "now": spot, "last": self._last_consistent_spot(self.clock), "series": series},
             "dark": dark,
             "board": rows,
             "positions": self._positions(snap, code),
-            "fills": [{k: v for k, v in f.items() if k != "source_key"} for f in self.fills],
+            "fills": [{**{k: v for k, v in f.items() if k != "source_key"},
+                       "underlying_at_fill": self.spot_by_key.get(f.get("source_key"))} for f in self.fills],
             "undoable_fill_id": (lambda f: (f.get("saved") or {}).get("fill_id") if f else None)(self.undoable_fill()),
             "account": {"cash": round(self.cash, 2), "cash_start": self.cash_start,
                         "realized_net": round(self.realized, 2), "fees_paid": round(self.fees, 2)},
