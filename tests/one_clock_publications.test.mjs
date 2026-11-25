@@ -129,3 +129,15 @@ test('large session pages use an index tuple seek without sorting; identity chec
   assert.throws(()=>db.raw('UPDATE one_clock_publication_records SET received_at=available_at-1'),/immutable/);
   assert.throws(()=>db.raw('UPDATE one_clock_publication_entries SET payload=?','{}'),/immutable/);
 });
+
+test('preopen burst drains within the shared budget and preserves idle lanes',async t=>{
+  const db=await setup(t),b=bucket(),instruments=['QQQ','SPY','IBIT','SLV','DRAM','NVDA'];
+  const counts=[51,6,7,15,15,15];
+  for(const [i,instrument] of instruments.entries())
+    for(let n=0;n<counts[i];n++)await b.add([input('tick'+n)],{instrument});
+  const now=(Math.floor(T/5400000)+1)*5400000+900000;
+  const read=()=>ingestRegisteredPublications(db,b,[{...descriptor,instruments}],{now});
+  assert.deepEqual((await read()).map(r=>r.processed),counts);
+  assert.ok(b.gets<=192);
+  assert.ok((await read()).every(r=>r.processed===0));
+});
