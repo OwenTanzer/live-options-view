@@ -61,10 +61,30 @@ export async function ingestRegisteredPublications(db,bucket,descriptors,{now=Da
   if(!streams.length)return [];
   // Every registered stream receives a fair share on each invocation. Neither
   // tenant count nor an indefinitely busy first stream can starve another.
-  const maxGets=Math.floor(PUBLICATION_LIMITS.gets/streams.length),maxBytes=Math.floor(PUBLICATION_LIMITS.bytes/streams.length),results=[];
-  for(const {descriptor,instrument,stream} of streams) {
-    try {results.push(await ingestPublicationStream(db,bucket,descriptor,{instrument,now,maxGets,maxBytes}));}
-    catch {results.push({stream,reason:'transaction-failed',final:false});}
+  const count=streams.length;
+  const fairGets=Math.floor(PUBLICATION_LIMITS.gets/count);
+  const fairBytes=Math.floor(PUBLICATION_LIMITS.bytes/count);
+  const results=new Array(count);
+  let spareGets=0,spareBytes=0;
+  // Rotate first service each quarter hour so any stream can borrow unused
+  // capacity. Each stream still commits once, preserving its receipt cutoff.
+  const start=Math.floor(now/900000)%count;
+  for(let offset=0;offset<count;offset++) {
+    const index=(start+offset)%count;
+    const {descriptor,instrument,stream}=streams[index];
+    const maxGets=fairGets+Math.min(spareGets,fairGets);
+    const maxBytes=fairBytes+Math.min(spareBytes,fairBytes);
+    spareGets+=fairGets-maxGets;
+    spareBytes+=fairBytes-maxBytes;
+    try {
+      const result=await ingestPublicationStream(db,bucket,descriptor,{instrument,now,maxGets,maxBytes});
+      results[index]=result;
+      // A failed read can consume unreported bytes. Reclaim only clean reads.
+      if(result.reason==='tail-at-check'||result.reason==='budget') {
+        spareGets+=maxGets-result.gets;
+        spareBytes+=maxBytes-result.bytes;
+      }
+    } catch {results[index]={stream,reason:'transaction-failed',final:false};}
   }
   return results;
 }
