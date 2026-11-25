@@ -259,6 +259,8 @@ board cannot count. Duplicate boards do not advance the count; missing, stale,
 sparse or invalid readings and same-direction readings break a neutral run.
 Ordinary signal exits start the episode lock but add no contract cooldown.
 Each session uses fresh episode state, retained per account across restarts.
+The [fresh-entry regression](docs/max-pain-fresh-regression.md) includes the
+frozen 67-session fixture, paired ledgers and offline reproduction command.
 Both accounts are initially inactive. Each requires its own paper credential
 and explicit runtime roster activation. They have no broker route.
 
