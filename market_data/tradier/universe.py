@@ -19,7 +19,7 @@ def load_or_select_universe(
     r2: Any,
     bucket: str,
     prefix: str,
-    strike_count: int,
+    strike_count: int | None,
     run_date: str,
     now_et: datetime,
     session_open: datetime | None = None,
@@ -33,13 +33,32 @@ def load_or_select_universe(
     stay fixed for the whole session.
     """
     loaded = load_persisted_universe(r2, bucket, prefix)
-    if loaded is not None:
+    full_chain = strike_count is None
+    if loaded is not None and (not full_chain or loaded[1].get("selection_policy") == "full_chain"):
         return loaded
     symbols, universe = select_symbols(
         client, strike_count, 0, run_date, now_et, session_open=session_open,
         underlying=underlying, expiration_policy=expiration_policy,
     )
-    return persist_universe(r2, bucket, prefix, symbols, universe)
+    if loaded is not None:
+        # Read the value and its ETag together. Keep the opening selection as
+        # provenance and atomically widen it under the existing collector lease.
+        key = universe_key(prefix)
+        previous = r2.get_object(Bucket=bucket, Key=key)
+        payload = json.loads(previous["Body"].read())
+        if payload["universe"].get("selection_policy") == "full_chain":
+            return payload["symbols"], payload["universe"]
+        if not set(payload["symbols"]).issubset(symbols):
+            raise RuntimeError("Full chain would drop previously subscribed contracts")
+        universe["previous_selection"] = payload["universe"]
+        body = json.dumps({"symbols": symbols, "universe": universe}).encode()
+        r2.put_object(Bucket=bucket, Key=key, Body=body, IfMatch=previous["ETag"],
+                      ContentType="application/json")
+        return symbols, universe
+    saved = persist_universe(r2, bucket, prefix, symbols, universe)
+    if full_chain and saved[1].get("selection_policy") != "full_chain":
+        raise RuntimeError("Persisted QQQ universe does not satisfy full-chain selection")
+    return saved
 
 
 def load_persisted_universe(r2: Any, bucket: str, prefix: str) -> tuple[list[str], dict[str, Any]] | None:

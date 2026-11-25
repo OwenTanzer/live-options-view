@@ -203,7 +203,7 @@ def main(
     # The primary follows the single-underlying startup path unchanged,
     # concurrently with any optional lane preparation.
     primary.symbols, primary.universe = load_or_select_universe(
-        client, r2, bucket, primary.prefix, settings.strike_count, run_date, clock_et(), session_open=session_open,
+        client, r2, bucket, primary.prefix, None if primary.underlying == "QQQ" else settings.strike_count, run_date, clock_et(), session_open=session_open,
         underlying=primary.underlying, expiration_policy=primary.expiration_policy,
     )
     primary.stale_recovery = recover_stale_sessions(
@@ -528,6 +528,8 @@ def finalize_run(
 
         attempt_event_counts = dict(stats.counts)
         partial_reasons = list(stream_reasons)
+        if lane.universe and lane.universe.get("previous_selection"):
+            partial_reasons.append("full_chain_started_after_initial_selection")
         if stats.excluded_timesales.get("missing_or_invalid_provider_time"):
             partial_reasons.append("unclassifiable_timesale_provider_time")
         if not uploader.fully_drained():

@@ -88,7 +88,7 @@ class FakeR2:
     def get_object(self, *, Bucket, Key):
         if (Bucket, Key) not in self.objects:
             raise self.exceptions.NoSuchKey("missing")
-        return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+        return {"Body": io.BytesIO(self.objects[(Bucket, Key)]), "ETag": self.etags[(Bucket, Key)]}
 
     def upload_file(self, filename, bucket, key, ExtraArgs=None):
         self.objects[(bucket, key)] = Path(filename).read_bytes()
@@ -568,6 +568,24 @@ class LeaseDeadlineWatchdogTests(unittest.TestCase):
 
 
 class UniverseTests(unittest.TestCase):
+    def test_full_chain_upgrade_preserves_opening_evidence_and_survives_restart(self):
+        client, r2 = FakeTradier(), FakeR2()
+        prefix = "moo144/tradier/2026-09-08"
+        opening = {"strikes": [600], "option_symbols": ["QQQ-C600", "QQQ-P600"]}
+        key = prefix + "/universe.json"
+        r2.put_object(Bucket="bucket", Key=key, Body=json.dumps({
+            "symbols": ["QQQ", *opening["option_symbols"]], "universe": opening,
+        }).encode())
+        args = (client, r2, "bucket", prefix, None, "2026-09-08",
+                datetime(2026, 9, 8, 10, 0, tzinfo=ET))
+        symbols, universe = collector.load_or_select_universe(*args)
+        self.assertEqual(set(symbols), {"QQQ", "QQQ-C600", "QQQ-P600", "QQQ-C601", "QQQ-P601"})
+        self.assertEqual(universe["previous_selection"], opening)
+        self.assertEqual(universe["selection_policy"], "full_chain")
+        calls = len(client.calls)
+        self.assertEqual(collector.load_or_select_universe(*args), (symbols, universe))
+        self.assertEqual(len(client.calls), calls)
+
     def test_first_call_selects_and_persists(self):
         r2 = FakeR2()
         client = FakeTradier()
@@ -2241,7 +2259,7 @@ class SharedStreamMainTests(unittest.TestCase):
             for underlying, policy, prefix in (("QQQ", "same_day", QQQ_PREFIX),
                                                ("IBIT", "nearest", IBIT_PREFIX)):
                 collector.load_or_select_universe(
-                    first, r2, "bucket", prefix, 2, "2026-09-08", self.open,
+                    first, r2, "bucket", prefix, None if underlying == "QQQ" else 2, "2026-09-08", self.open,
                     underlying=underlying, expiration_policy=policy,
                 )
             orphans = {
