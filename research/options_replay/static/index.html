@@ -451,7 +451,7 @@ function drawChart() {
   const sampled = native > 0 && V.sample_candles?.length && requested >= native;
   const bar = sampled ? Math.ceil(requested / native) * native : requested;
   const bucket = t => s.open_s + Math.floor((Math.max(t, s.open_s) - s.open_s) / bar) * bar;
-  const fit = span === "auto" && buy && (V.reveal || tradeEnd === until);
+  const fit = span === "auto" && buy;
   const end = fit ? Math.min(until, tradeEnd + 3 * bar) : until;
   const right = Math.min(s.close_s, bucket(end === s.close_s ? end - 1 : end) + bar);
   const fromOpen = span === "all" || (span === "auto" && V.reveal && !buy);
@@ -519,7 +519,7 @@ function drawChart() {
   }
   const overlay = drawFillOverlay({ fills: V.fills, focus: trade, anchor, left, right, until, x, y, width });
   g += overlay.svg;
-  $("replay-fills").textContent = [values.length ? (bar / 60) + "-minute candles" : "Observed price path", overlay.caption].filter(Boolean).join(" · ");
+  $("replay-fills").textContent = [values.length ? (bar / 60) + "-minute candles" : (native > requested ? "Observed prices · source bars are " + native / 60 + " min" : "Observed prices · OHLC unavailable"), overlay.caption].filter(Boolean).join(" · ");
   g += `<g id="last-price"><title>Last chart price ${px(lastPrice)}</title>
     <rect x="${plotW+4}" y="${priceY-9}" width="49" height="18" rx="3" fill="#302b1d"/>
     <text x="${plotW+28.5}" y="${priceY+4}" text-anchor="middle" font-size="12" font-weight="700" fill="#ffdf60">${px(lastPrice)}</text></g>`;
