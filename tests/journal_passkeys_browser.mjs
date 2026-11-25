@@ -29,7 +29,8 @@ try {
       assert.equal(url.origin,origin);
       if (!url.pathname.startsWith('/api/')) {
         if (!['/trade-journal.html','/js/trade-journal-loads.js','/js/journal-passkeys.js',
-          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js','/shared/one-clock-replay-link.js'].includes(url.pathname)) return route.abort();
+          '/shared/one-clock.js','/shared/one-clock-session.js','/shared/one-clock-journal-source.js','/shared/one-clock-replay-link.js',
+          '/shared/one-clock-journal-replay.js','/shared/one-clock-chain-source.js'].includes(url.pathname)) return route.abort();
         return route.fulfill({path:'site'+url.pathname});
       }
       const headers=await r.allHeaders();

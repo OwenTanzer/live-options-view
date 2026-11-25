@@ -20,7 +20,7 @@ export function projectJournalPosition(position,cutoff) {
   if(position.legs) {
     const legs=position.legs.map(p=>projectJournalPosition(p,cutoff)).filter(Boolean);
     if(!legs.length)return null;
-    const executions=legs.flatMap(p=>p.executions).sort((a,b)=>a.ts.localeCompare(b.ts)||a.execution_id.localeCompare(b.execution_id));
+    const executions=legs.flatMap(p=>p.executions.map(e=>({...e,execution_id:e.execution_id+':'+p.contract.occ_symbol}))).sort((a,b)=>a.ts.localeCompare(b.ts)||a.execution_id.localeCompare(b.execution_id));
     const closed=legs.every(p=>p.closed),sum=field=>round(legs.reduce((n,p)=>n+(p[field]??0),0),6);
     const closeDay=closed?legs.map(p=>p.expired_on??sessionAt(Date.parse(p.closed_ts))).sort().at(-1):null;
     const expired=closed&&legs.some(p=>p.expired_on===closeDay);
