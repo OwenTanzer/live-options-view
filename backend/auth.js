@@ -187,9 +187,13 @@ export async function handleLogout(request, env) {
 export async function handleMe(request, env) {
   const session = await requireSession(request, env);
   if (!session) return jsonResponse({ error: 'Not logged in' }, 401);
+  const trades = await btcAllowed(env, session, request) ? session.record.trades : session.record.trades.filter(t => t.instrument_type !== 'futures_option');
   return jsonResponse(
     { username: session.username, balance_cash: session.record.balance_cash,
-      trades: await btcAllowed(env, session, request) ? session.record.trades : session.record.trades.filter(t => t.instrument_type !== 'futures_option'),
+      starting_balance: session.record.starting_balance ?? null,
+      is_bot: session.record.is_bot === true,
+      trade_history_complete: trades.length === session.record.trades.length,
+      trades,
       account_closed: session.record.account_closed === true,
       closed_at: session.record.closed_at ?? null, closure_reason: session.record.closure_reason ?? null },
     200,

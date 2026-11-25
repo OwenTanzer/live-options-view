@@ -33,6 +33,7 @@ from typing import Any
 
 from . import clock, strategies  # noqa: F401  (import registers strategies)
 from .audit import DecisionLedger, Outcome
+from .retirement import LossRetirement, verified_value, reduces_only
 from .archive import from_environment as archive_from_environment
 from .oi_skew_publisher import from_environment as oi_skew_publisher_from_environment
 from .bs_edge import annotate_buy_decision
@@ -257,6 +258,7 @@ class Runner:
         self.quotes = QuoteReader(base_url, rate_limiter=self.rate_limiter)
 
         self.sessions: dict[str, AccountSession] = {}
+        self.loss_retirement = LossRetirement(self.state_dir, base_url)
         self.executors: dict[str, ExecutionClient] = {}
         for account in accounts:
             session = AccountSession(
@@ -266,6 +268,7 @@ class Runner:
                 bot_registration_key=key,
             )
             self.sessions[account.alias] = session
+            session.registration_allowed = self.loss_retirement.read(account.username) is None
             self.executors[account.alias] = ExecutionClient(session, self.state_dir)
 
         self._stop = threading.Event()
@@ -545,6 +548,9 @@ class Runner:
     def _run_account(self, account: Any, snapshot: Any, phase: str) -> None:
         alias = account.alias
         session = self.sessions[alias]
+        loss_store = getattr(self, "loss_retirement", None)
+        if loss_store is not None and loss_store.read(account.username) is not None:
+            session.registration_allowed = False
         executor = self.executors[alias]
         decision_id = self.ledger.new_decision_id()
         strategy = get_strategy(account.strategy_id)
@@ -596,6 +602,30 @@ class Runner:
 
         book = Book(state.trades)
         state_before = {**state.summary(), **book.summary()}
+
+        retirement = None
+        if loss_store is not None:
+            retirement = loss_store.read(account.username)
+            if retirement is None and state.username == account.username:
+                try:
+                    value = verified_value(state, book, self.quotes.quotes)
+                except Exception as exc:
+                    # A mark outage must not prevent an already-authorized exit.
+                    base["retirement_valuation_error"] = type(exc).__name__
+                    value = None
+                if value is not None and value["below_threshold"]:
+                    retirement = ({"valuation": value, "dry_run": True} if self.dry_run
+                                  else loss_store.record(account.username, value))
+            if retirement is not None:
+                session.registration_allowed = False
+                base["loss_retirement"] = retirement
+                if (book.is_flat and state.username == account.username
+                        and verified_value(state, book, lambda _: {}) is not None):
+                    self.ledger.record(**base, outcome_class=Outcome.NO_TRADE,
+                                       account_state_before=state_before,
+                                       reason="Account return below -99%; permanently retired, flat.")
+                    self._retire(account, "Verified return below -99%; flat.")
+                    return
 
         observed_quotes: dict[str, Any] = {}
 
@@ -722,6 +752,10 @@ class Runner:
                 account_state_before=state_before,
             )
             return
+
+        if retirement is not None and decision.is_trade and not reduces_only(decision, book):
+            decision = Decision.no_trade("Loss retirement blocks new or increased exposure.",
+                                         decision.strategy_id, decision.strategy_version)
 
         if arm:
             if arm == "baseline" and decision.action == "buy":

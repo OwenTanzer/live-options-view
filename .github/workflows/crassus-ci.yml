@@ -161,6 +161,9 @@ jobs:
       - name: Run operational logging and cycle-completion suite
         working-directory: crassus
         run: python scripts/verify_observability.py
+      - name: Verify persistent paper account loss retirement
+        working-directory: crassus
+        run: python scripts/verify_loss_retirement.py
       - name: Run runner reliability failure-injection suite
         working-directory: crassus
         run: python scripts/verify_reliability.py
