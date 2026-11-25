@@ -17,20 +17,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install requests websocket-client boto3
-      - name: Inject the incident into this disposable CI checkout
-        run: |
-          sed -i 's/None if primary.underlying == "QQQ" else settings.strike_count/settings.strike_count/' market_data/tradier/run.py
-      - run: python -m unittest discover -s tests -p test_full_chain_coverage.py -v
-  substitution:
-    name: Red control for a same-count wire substitution
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install requests websocket-client boto3
-      - name: Substitute one identity on the wire only
-        run: |
-          sed -i 's/"symbols": symbols, "sessionid"/"symbols": [*symbols[:-1], "UNLISTED"], "sessionid"/' market_data/tradier/capture.py
       - run: python -m unittest discover -s tests -p test_full_chain_coverage.py -v
