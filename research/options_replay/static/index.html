@@ -392,39 +392,37 @@ function render() {
 // daylight-saving time outside the market session, so market hours differ by 3h.
 const pacificClock = seconds => hms(seconds - 3 * 3600);
 
-function drawFillOverlay({ fills, candles, bucket, bar, left, right, until, x, y, width }) {
+function drawFillOverlay({ fills, anchor, left, right, until, x, y, width }) {
   const visible = [];
   for (const fill of fills) {
     if (fill.kind !== "fill" || fill.voided) continue;
     const [hh, mm, ss] = fill.time_of_day.split(":").map(Number);
     const at = hh * 3600 + mm * 60 + ss;
     if (at < left || at > until || at > right) continue;
-    const key = bucket(at === right ? at - 1 : at);
-    visible.push({fill, at, key});
+    visible.push({fill, at, spot: anchor(at)});
   }
   visible.sort((a, b) => a.at - b.at);
   const featured = visible.slice(-2);
   let marks = "", labels = "";
   for (const entry of visible) {
-    const {fill, at, key} = entry;
-    const candle = candles.get(key);
+    const {fill, at, spot} = entry;
     const color = fill.side === "buy" ? "#a1f3ce" : "#ffcf80";
     const title = esc(fill.side.toUpperCase() + " " + fill.qty + " × " + fill.label +
       " · " + pacificClock(at) + " PT · option $" + px(fill.price));
     // Anchor to the candle on the underlying axis. Premium belongs in the label.
-    const cx = x(key + bar / 2), cy = candle ? y(candle.close) : null;
-    if (candle) marks += `<circle cx="${cx}" cy="${cy}" r="4" fill="#141819" stroke="${color}" stroke-width="2"><title>${title}</title></circle>`;
+    const cx = x(at), cy = spot !== null ? y(spot) : null;
+    if (spot !== null) marks += `<circle cx="${cx}" cy="${cy}" r="4" fill="#141819" stroke="${color}" stroke-width="2"><title>${title}</title></circle>`;
     const index = featured.indexOf(entry);
     if (index < 0) continue;
     const boxW = Math.min(162, (width - 18) / 2);
     const bx = index === 0 ? 4 : width - boxW - 4;
-    if (candle) labels += `<path d="M${bx+boxW/2} 48 L${cx} 59 V${cy}" fill="none" stroke="${color}" opacity=".8"/>`;
+    if (spot !== null) labels += `<path d="M${bx+boxW/2} 48 L${cx} 59 V${cy}" fill="none" stroke="${color}" opacity=".8"/>`;
     labels += `<g><title>${title}</title><rect x="${bx}" y="2" width="${boxW}" height="46" rx="5" fill="#141819" stroke="${color}"/>
       <text x="${bx+7}" y="19" fill="${color}" font-size="12" font-weight="700">${esc(fill.side.toUpperCase())} · ${pacificClock(at)}</text>
       <text x="${bx+7}" y="37" fill="#edf3f1" font-size="12">Option $${px(fill.price)}</text></g>`;
   }
-  const caption = featured.map(({fill, key}) => fill.side.toUpperCase() + " " + fill.qty + " × " + fill.label +
-    (candles.has(key) ? "" : " (underlying candle unavailable)")).join(" · ");
+  const caption = featured.map(({fill, spot}) => fill.side.toUpperCase() + " " + fill.qty + " × " + fill.label +
+    (spot !== null ? "" : " (underlying price unavailable)")).join(" · ");
   return {svg: labels + marks, caption: visible.length > 2 ? "Latest two of " + visible.length + " visible fills · " + caption : caption};
 }
 
@@ -437,34 +435,49 @@ function drawChart() {
   $("replay-fills").textContent = "";
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const size = $("candle-size").value, span = $("chart-span").value;
-  const bar = 60 * (size === "auto" ? (s.event_tape ? 1 : 5) : Number(size));
-  const bucket = t => s.open_s + Math.floor((Math.max(t, s.open_s) - s.open_s) / bar) * bar;
-  const points = V.reveal ? V.reveal.full_day_spot : V.spot.series;
   const until = V.reveal ? s.close_s : s.clock_s;
+  const active = V.fills.filter(f => f.kind === "fill" && !f.voided && f.time_of_day <= hms(until));
+  const last = active.at(-1);
+  const buy = last && active.findLast(f => f.side === "buy" && f.contract === last.contract);
+  const seconds = fill => fill.time_of_day.split(":").reduce((n, part) => 60 * n + Number(part), 0);
+  const held = buy ? Math.max(0, (last.side === "sell" ? seconds(last) : until) - seconds(buy)) : 0;
+  const autoBar = held <= 20 * 60 ? 60 : held <= 75 * 60 ? 180 : 300;
+  const requested = size === "auto" ? autoBar : Number(size) * 60;
+  const native = V.spot.bar_seconds || (s.event_tape ? 5 : 0);
+  const sampled = native > 0 && V.sample_candles?.length && requested >= native;
+  const bar = sampled ? Math.ceil(requested / native) * native : requested;
+  const bucket = t => s.open_s + Math.floor((Math.max(t, s.open_s) - s.open_s) / bar) * bar;
   const right = bucket(until === s.close_s ? until - 1 : until) + bar;
   const fromOpen = span === "all" || (span === "auto" && V.reveal);
-  const count = span === "auto" ? 24 : Math.ceil(Number(span) * 60 / bar);
-  const left = fromOpen ? s.open_s : Math.max(s.open_s, right - count * bar);
+  const windowSeconds = span === "auto" ? Math.max(15 * 60, held + 6 * bar) : Number(span) * 60;
+  const left = fromOpen ? s.open_s : Math.max(s.open_s, bucket(right - windowSeconds));
+  const allPoints = V.reveal ? V.reveal.full_day_spot : V.spot.series;
+  const points = allPoints.filter(([t,p]) => t >= left && t <= until && Number.isFinite(p));
   const candles = new Map();
-  const sampled = s.event_tape && V.sample_candles?.length;
-  for (const row of (sampled ? V.sample_candles : points)) {
-    const [t, price] = row;
-    if (t < left || (!V.reveal && t > until) || !Number.isFinite(price)) continue;
-    const key = bucket(sampled || t === s.close_s ? t - 1 : t);
-    if (key < left) continue;
-    const c = candles.get(key) || {open: price, high: price, low: price, close: price};
-    c.high = Math.max(c.high, sampled ? row[2] : price); c.low = Math.min(c.low, sampled ? row[3] : price); c.close = sampled ? row[4] : price;
+  if (sampled) for (const [t, open, high, low, close] of V.sample_candles) {
+    if (t <= left || t > until || ![open, high, low, close].every(Number.isFinite)) continue;
+    const key = bucket(t - 1);
+    const c = candles.get(key) || {open, high, low, close};
+    c.high = Math.max(c.high, high); c.low = Math.min(c.low, low); c.close = close;
     candles.set(key, c);
   }
-  if (!candles.size) { $("volume").innerHTML = ""; $("volume-label").textContent = ""; svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable spot price</text>'; return; }
+  const anchor = at => {
+    const point = points.findLast(([t]) => t <= at);
+    if (point && at - point[0] <= 90) return point[1];
+    return null;
+  };
   const values = [...candles.values()];
-  const high = Math.max(...values.map(c => c.high)), low = Math.min(...values.map(c => c.low));
+  const prices = points.map(p => p[1]);
+  if (!values.length && !prices.length) { $("volume").innerHTML = ""; $("volume-label").textContent = ""; svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable price</text>'; return; }
+  const high = Math.max(...prices, ...values.map(c => c.high)), low = Math.min(...prices, ...values.map(c => c.low));
   const margin = Math.max(.04, (high - low) * .1), top = high + margin, bottom = low - margin;
   const plotW = width - 54, plotH = height - 95;
   const x = t => 4 + plotW * (t - left) / Math.max(bar, right - left);
   const y = p => 66 + plotH * (top - p) / (top - bottom);
   const candleW = Math.min(16, Math.max(.5, (x(left + bar) - x(left)) * .68));
-  const lastPrice = values.at(-1).close;
+  const lastBar = [...candles.keys()].at(-1);
+  const lastPrice = points.length && (lastBar === undefined || points.at(-1)[0] >= lastBar + bar)
+    ? points.at(-1)[1] : values.at(-1)?.close ?? points.at(-1)[1];
   const priceY = y(lastPrice);
   let g = "";
   for (const d of V.reveal ? V.reveal.full_day_dark : V.dark) {
@@ -480,6 +493,15 @@ function drawChart() {
   const interval = [60, 300, 600, 900, 1800, 3600, 7200].find(n => n >= minInterval) || 10800;
   for (let t = Math.ceil(left/interval)*interval; t < right; t += interval)
     g += `<text x="${Math.max(18,x(t))}" y="${height-5}" text-anchor="middle" font-size="11" fill="var(--muted)">${pacificClock(t).slice(0,5)}</text>`;
+  if (!values.length) {
+    let prev = null, path = "";
+    for (const [t,p] of points) {
+      path += (prev === null || t - prev > 360 ? " M" : " L") + x(t) + " " + y(p);
+      g += `<circle cx="${x(t)}" cy="${y(p)}" r="2" fill="#a1f3ce"/>`;
+      prev = t;
+    }
+    g += `<path d="${path}" fill="none" stroke="#a1f3ce" stroke-width="1.8"/>`;
+  }
   for (const [t,c] of candles) {
     const mid = x(t+bar/2), color = c.close >= c.open ? "var(--up)" : "var(--down)";
     g += `<g class="candle"><title>${pacificClock(t).slice(0,5)} PT · O ${px(c.open)} H ${px(c.high)} L ${px(c.low)} C ${px(c.close)}</title><line x1="${mid}" x2="${mid}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}" stroke-width="1.4"/><rect x="${mid-candleW/2}" width="${candleW}" y="${Math.min(y(c.open),y(c.close))-0.5}" height="${Math.max(1.5,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
@@ -487,9 +509,9 @@ function drawChart() {
   for (const [t,label] of [[s.start_s,"Landing"],[s.clock_s,"Clock"]]) {
     if (t>=left && t<right) g += `<path d="M${x(t)} 66v${plotH}" stroke="var(--warn)" stroke-dasharray="2 3"><title>${label}</title></path>`;
   }
-  const overlay = drawFillOverlay({ fills: V.fills, candles, bucket, bar, left, right, until, x, y, width });
+  const overlay = drawFillOverlay({ fills: V.fills, anchor, left, right, until, x, y, width });
   g += overlay.svg;
-  $("replay-fills").textContent = overlay.caption;
+  $("replay-fills").textContent = [values.length ? (bar / 60) + "-minute candles" : "Observed price path", overlay.caption].filter(Boolean).join(" · ");
   g += `<g id="last-price"><title>Last chart price ${px(lastPrice)}</title>
     <rect x="${plotW+4}" y="${priceY-9}" width="49" height="18" rx="3" fill="#302b1d"/>
     <text x="${plotW+28.5}" y="${priceY+4}" text-anchor="middle" font-size="12" font-weight="700" fill="#ffdf60">${px(lastPrice)}</text></g>`;
