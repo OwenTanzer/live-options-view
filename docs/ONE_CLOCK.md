@@ -437,6 +437,8 @@ manual daily index is part of the extension contract.
 
 ## Private journal recorded replay
 
+Owen Trades occurrences can open the signed-in journal at one fill. The trading day and the Results evaluation cutoff travel separately, so a later import can qualify an earlier execution. The browser resolves the position and execution against the journal revision visible at the cutoff. It shows the supported underlying and exact option quotes sampled at two-minute intervals around the fill, within four minutes either side. Each sample uses the existing publication-qualified chain reader. Missing and stale snapshots leave gaps, and the Results cutoff bounds the latest eligible observation. The fragment carries the private identity within the browser. Ordinary journal links and full retrospective context remain available.
+
 The journal retains its dedicated passkey authorization on every data route.
 `cutoff` selects the latest private D1 payload committed by that instant before
 any fill filtering, totals, context sampling or response. Additive migration
