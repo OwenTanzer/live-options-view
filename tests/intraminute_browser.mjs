@@ -26,6 +26,17 @@ try {
   assert.match(await page.locator('#response').textContent(),/Alkalus \(preliminary, flow only\) · /);
   assert.match(await page.locator('#next-second').textContent(),/Next-second observation — not part of this interval’s classification: midpoint change one second later /);
   assert.ok(await page.locator('#rows tr').count()>0);
+  await page.locator('#regime-panel summary').click();
+  await page.locator('#regime-low').fill('685.7');
+  await page.locator('#regime-high').fill('686');
+  await page.locator('#regime-sigma').fill('0.22');
+  await page.locator('#regime-known').fill('2026-11-13T14:35:00');
+  await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.startsWith('Below '));
+  const probabilities=await page.locator('#regime-result').textContent();
+  assert.match(probabilities, /Inside [\d.]+% · Above [\d.]+%/);
+  await page.locator('#regime-known').fill('2026-11-13T14:37:00');
+  await page.waitForFunction(()=>document.querySelector('#regime-result').textContent.includes('known by the cursor'));
+  await page.locator('#regime-panel summary').click();
   await page.locator('#width').selectOption('1000');
   await page.locator('#strike').selectOption({index:1});
   await page.locator('#next').click();

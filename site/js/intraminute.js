@@ -1,17 +1,20 @@
 import {model,receiptMinute,flowResponse,alkalusFlow} from '../shared/intraminute.js';
 
+import {regimeNowcast} from '../shared/intraminute-regime.js';
+
 const $=id=>document.getElementById(id);
 const sample=1794580560000, api='/api/one-clock/intraminute';
 const time=at=>new Date(at).toISOString().slice(11,23);
 const params=new URLSearchParams(location.search);
 let minute=sample, rows=[], generation=0, timer, playback, live=false, data=null;
+let regimeAvailability='';
 let detailOffset=0;
 let selected=params.has('strike')?Number(params.get('strike')):null;
 const isoMinute=at=>new Date(at).toISOString().slice(0,16);
 
 function reset() {
   generation++; clearTimeout(timer); clearInterval(playback); playback=null; live=false;
-  rows=[]; $('play').textContent='Play replay'; $('live').disabled=false;
+  rows=[]; regimeAvailability=''; $('play').textContent='Play replay'; $('live').disabled=false;
 }
 function strikes() {
   const cutoff=minute+Number($('cursor').value);
@@ -27,6 +30,7 @@ function paint() {
   const width=Number($('width').value), cutoff=minute+Number($('cursor').value);
   const result=model(rows,{minute,cutoff,width,strike:selected});
   data=result;strikes();
+  if ($('regime-panel').open) renderRegime(result);
   const {bins,gaps}=result;
   const canvas=$('plot'), w=Math.max(320,canvas.clientWidth), h=390, scale=devicePixelRatio||1;
   canvas.width=w*scale; canvas.height=h*scale;
@@ -84,6 +88,25 @@ function paint() {
   $('summary').textContent=result.calls.toLocaleString()+' call contracts · '+result.puts.toLocaleString()+' put contracts · '+result.signed.toLocaleString()+' quote-signed · '+result.unknown.toLocaleString()+' unclassified';
   inspect(sec);
 }
+function renderRegime(result) {
+  if (regimeAvailability) {
+    $('regime-result').textContent = regimeAvailability;
+    return;
+  }
+  const estimate = regimeNowcast(result.inspected, result.gaps, {
+    minute, cutoff: minute + Number($('cursor').value),
+    low: $('regime-low').valueAsNumber, high: $('regime-high').valueAsNumber,
+    sigma: $('regime-sigma').valueAsNumber, knownAt: $('regime-known').valueAsNumber,
+  });
+  const pct = p => (100 * p).toFixed(1) + '%';
+  $('regime-result').textContent = estimate.reason ||
+    'Below ' + pct(estimate.below) + ' · Inside ' + pct(estimate.inside) + ' · Above ' + pct(estimate.above) +
+    ' · as of ' + time(minute + Number($('cursor').value)) + ' UTC';
+}
+$('regime-panel').ontoggle = () => { if ($('regime-panel').open && data) renderRegime(data); };
+for (const id of ['regime-low', 'regime-high', 'regime-sigma', 'regime-known']) {
+  $(id).oninput = () => { if (data) renderRegime(data); };
+}
 function inspect(second) {
   const slice=data.inspected.filter(row=>Math.floor((row.at-minute)/1000)===second);
   $('detail-summary').textContent='Second '+second+' · '+slice.length+' observed events through the cutoff';
@@ -132,7 +155,7 @@ async function replay(at,offset=59999) {
   } catch(e){if(id===generation)$('state').textContent=e.message;}
 }
 function follow(){
-  reset();live=true;$('live').disabled=true;
+  reset();regimeAvailability='Awaiting a live tape update.';live=true;$('live').disabled=true;
   const id=generation;let cursor=0,epoch='',delay=250,partial=false,started=null,disconnectedAt=null,lastReceipt=null;
   minute=receiptMinute(Date.now());$('minute').value=isoMinute(minute);paint();
   async function poll(){
@@ -158,8 +181,11 @@ function follow(){
         const connection=disconnectedAt===null?'Live':'Disconnected since '+time(disconnectedAt)+' UTC';
         const freshness=lastReceipt===null?'awaiting QQQ receipt':'last receipt '+time(lastReceipt)+' UTC · age '+Math.max(0,(Date.now()-lastReceipt)/1000).toFixed(1)+' s';
         $('state').textContent=connection+' · '+freshness+(partial || (started && started>minute)?' · partial minute coverage':'');
+        regimeAvailability=disconnectedAt!==null || partial || (started && started>minute) ?
+          'Unavailable during disconnected or partial live minute coverage.' : '';
         strikes();paint();delay=body.more?0:250;
-      } catch(e){if(id!==generation)return;$('state').textContent=e.message;delay=Math.min(8000,Math.max(1000,delay*2));}
+      } catch(e){if(id!==generation)return;regimeAvailability='Waiting for live tape to recover.';
+        if(data)renderRegime(data);$('state').textContent=e.message;delay=Math.min(8000,Math.max(1000,delay*2));}
     }
     if(generation===id)timer=setTimeout(poll,document.hidden?2000:delay);
   }
@@ -181,6 +207,9 @@ $('play').onclick=()=>{
   playback=setInterval(()=>{$('cursor').value=Math.min(59999,performance.now()-start);paint();
     if(Number($('cursor').value)>=59999)$('play').click();},100);
 };
+document.addEventListener('visibilitychange',()=>{
+  if(live){regimeAvailability='Waiting for a fresh live tape update.';if(data)renderRegime(data);}
+});
 window.addEventListener('resize',()=>{if(data)paint();});
 const at=Number(params.get('at'));
 if(params.has('at') && Number.isSafeInteger(at) && at>0 && at<4102444800000){
