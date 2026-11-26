@@ -97,6 +97,28 @@ class Session:
                     gaps=[dict(g) for g in self.gaps], rebuilt=dict(self.rebuilt) if self.rebuilt else None)
 
 
+def minute_flow(session, captured_at):
+    """Freeze cumulative q1/q5 direction from the existing public session projection."""
+    if not session or not isinstance(session.get("last"), int):
+        return None
+    session_day = datetime.fromtimestamp(captured_at / 1000, ET).date().isoformat()
+    if session["day"] != session_day or session["last"] > captured_at:
+        return None
+    bull = bear = unclassified = 0
+    for symbol, contract in session["contracts"].items():
+        match = OPTION.fullmatch(symbol)
+        if not match:
+            return None
+        label = contract["label"]
+        buy, sell = (sum(label[tier][i] for tier in ("q1", "q5")) for i in (0, 1))
+        bull += buy if match[1] == "C" else sell
+        bear += sell if match[1] == "C" else buy
+        unclassified += sum(label["low"]) + label["U"]
+    return dict(session=session_day, capturedAt=captured_at, lastPrintAt=session["last"],
+                bullish=bull, bearish=bear, unclassified=unclassified,
+                partial=bool(session["gaps"]) or (session.get("rebuilt") or {}).get("status") != "rebuilt")
+
+
 class RecentPrints:
     def __init__(self, universe=None):
         universe = universe or {}
@@ -303,12 +325,14 @@ class RecentPrints:
 
     def publish(self, client, bucket, stop, lost):
         sent = 0
+        saved_minute = None
         while not stop.wait(3) and not lost.is_set():
             with self.lock:
                 version = self.version
             if version == sent:
                 continue
             body = self.payload()
+            captured_at = int(datetime.now(timezone.utc).timestamp() * 1000)
             if not body["rows"] and not body["session"]:
                 continue
             try:
@@ -317,3 +341,23 @@ class RecentPrints:
                 sent = version
             except Exception as exc:
                 logging.warning("Recent QQQ snapshot failed: %s", type(exc).__name__)
+
+            # A fixed key and conditional creation keep the first published sample
+            # immutable across concurrent collectors and restarts. The recent.json
+            # sink and the archive intake remain independent of this best-effort write.
+            minute = captured_at // 60000 * 60000
+            if sent != version or minute == saved_minute:
+                continue
+            try:
+                sample = minute_flow(body["session"], captured_at)
+                if sample is None:
+                    continue
+                client.put_object(Bucket=bucket, Key=f"order-flow/qqq/regime/v1/{minute}.json",
+                                  Body=json.dumps(sample, separators=(",", ":")).encode(),
+                                  ContentType="application/json", IfNoneMatch="*")
+                saved_minute = minute
+            except Exception as exc:
+                if getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode") == 412:
+                    saved_minute = minute
+                else:
+                    logging.warning("QQQ regime sample failed: %s", type(exc).__name__)

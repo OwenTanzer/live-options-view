@@ -1,3 +1,5 @@
+import {mountRegime} from './one-clock-regime.js';
+import {regimeFlowSource} from '../shared/one-clock-regime.js';
 import { createClock,createSourceRegistry } from '../shared/one-clock.js';
 import { archivedChainSource } from '../shared/one-clock-chain-source.js';
 import { botLedgerSource,botInventory } from '../shared/one-clock-bot-source.js';
@@ -16,9 +18,11 @@ let decisionCoverage=null;
 registry.register(botDecisionSource({getBot:()=>el('history-clock-bot').value,onCoverage:value=>{decisionCoverage=value;}}));
 let shortlistCoverage=null;
 registry.register(squeezeSource({onCoverage:value=>{shortlistCoverage=value;}}));
+registry.register(regimeFlowSource);
 const today=sessionAt(Date.now());
 el('history-clock-date').value=today;
 const clock=createClock({registry,initial:{mode:'live',origin:'recorded',session:today,instrument:'QQQ',cutoff:sessionInstant(today,10)}});
+mountRegime(clock);
 function clearBot(message) {
   el('history-clock-bot-status').textContent=message;
   el('history-clock-bot-rows').replaceChildren();el('history-clock-bot-inventory').textContent='';
