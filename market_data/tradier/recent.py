@@ -323,41 +323,41 @@ class RecentPrints:
                                                 reason="partial_strike_coverage_before_widening"))
         return dict(lastReceived=rows[-1]["t"] if rows else None, cap=self.rows.maxlen, rows=rows, session=session)
 
-    def publish(self, client, bucket, stop, lost):
+
+    def publish(self, client, bucket, stop, lost, *, now_ms=None):
+        now_ms = now_ms or (lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
         sent = 0
-        saved_minute = None
+        captured_minute = None
+        pending = deque(maxlen=2)
         while not stop.wait(3) and not lost.is_set():
             with self.lock:
                 version = self.version
-            if version == sent:
-                continue
-            body = self.payload()
-            captured_at = int(datetime.now(timezone.utc).timestamp() * 1000)
-            if not body["rows"] and not body["session"]:
-                continue
-            try:
-                client.put_object(Bucket=bucket, Key=KEY, ContentType="application/json",
-                                  CacheControl="no-store", Body=json.dumps(body, separators=(",", ":")).encode())
-                sent = version
-            except Exception as exc:
-                logging.warning("Recent QQQ snapshot failed: %s", type(exc).__name__)
-
-            # A fixed key and conditional creation keep the first published sample
-            # immutable across concurrent collectors and restarts. The recent.json
-            # sink and the archive intake remain independent of this best-effort write.
-            minute = captured_at // 60000 * 60000
-            if sent != version or minute == saved_minute:
-                continue
-            try:
-                sample = minute_flow(body["session"], captured_at)
-                if sample is None:
-                    continue
-                client.put_object(Bucket=bucket, Key=f"order-flow/qqq/regime/v1/{minute}.json",
-                                  Body=json.dumps(sample, separators=(",", ":")).encode(),
-                                  ContentType="application/json", IfNoneMatch="*")
-                saved_minute = minute
-            except Exception as exc:
-                if getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode") == 412:
-                    saved_minute = minute
-                else:
-                    logging.warning("QQQ regime sample failed: %s", type(exc).__name__)
+            if version != sent:
+                body = self.payload()
+                captured_at = now_ms()
+                if body["rows"] or body["session"]:
+                    try:
+                        client.put_object(Bucket=bucket, Key=KEY, ContentType="application/json",
+                                          CacheControl="no-store", Body=json.dumps(body, separators=(",", ":")).encode())
+                        sent = version
+                    except Exception as exc:
+                        logging.warning("Recent QQQ snapshot failed: %s", type(exc).__name__)
+                    minute = captured_at // 60000 * 60000
+                    if sent == version and minute != captured_minute:
+                        sample = minute_flow(body["session"], captured_at)
+                        if sample is not None:
+                            pending.append((minute, json.dumps(sample, separators=(",", ":")).encode(), 0))
+                            captured_minute = minute
+            # Retry the same frozen bytes and minute even when no new print
+            # arrives. Keep retries bounded and independent of the recent sink.
+            if pending:
+                minute, data, attempts = pending.popleft()
+                try:
+                    client.put_object(Bucket=bucket, Key=f"order-flow/qqq/regime/v1/{minute}.json",
+                                      Body=data, ContentType="application/json", IfNoneMatch="*")
+                except Exception as exc:
+                    status = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+                    if status != 412:
+                        if attempts < 3:
+                            pending.append((minute, data, attempts + 1))
+                        logging.warning("QQQ regime sample failed: %s", type(exc).__name__)

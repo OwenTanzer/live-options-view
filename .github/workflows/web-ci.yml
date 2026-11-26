@@ -247,6 +247,7 @@ jobs:
           fi
       - name: One Clock dashboard and Order Flow desktop/mobile fixture workflows
         run: |
+          node tests/one_clock_regime.test.mjs
           node tests/one_clock_dashboard_browser.test.cjs
           node tests/one_clock_encounter_browser.mjs
           node tests/one_clock_candle_browser.mjs

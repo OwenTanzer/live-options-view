@@ -12,6 +12,7 @@ export function mountRegime(clock) {
   const table = panel.querySelector('tbody');
   let pending;
   let displayed;
+  let lastLiveMinute = null;
   const symbol = () => typeof btcOptions !== 'undefined' && btcOptions.active ? 'BTC' : chainSelection.symbol;
   function clear() {
     pending?.abort();
@@ -27,6 +28,7 @@ export function mountRegime(clock) {
     const live=selected.mode==='live';
     const scope = live ? {session:sessionAt(now),instrument:symbol(),cutoff:now,origin:'recorded'} : selected;
     displayed={mode:selected.mode,instrument:scope.instrument,session:scope.session};
+    if (live) lastLiveMinute = Math.floor(now / 60000);
     const description=scope.instrument+' · '+scope.session+' '+time.format(scope.cutoff)+' ET';
     status.textContent=description+' · loading';
     async function read(source) {
@@ -49,7 +51,14 @@ export function mountRegime(clock) {
       table.append(tr);
     }
   }
+  // Follow the existing completed live chain refresh at most once per minute
+  // while visible. Replay and closed panels create no periodic traffic.
+  new MutationObserver(()=>{
+    if (panel.open && panel.getClientRects().length && !document.hidden && clock.snapshot().mode==='live' &&
+        Math.floor(Date.now()/60000)!==lastLiveMinute) render();
+  }).observe(document.getElementById('price-age'),{childList:true});
   panel.addEventListener('toggle',render);
+  if (location.hash==='#clock-regime') panel.open=true;
   panel.querySelector('button').addEventListener('click',render);
   clock.subscribe(s=>{
     if (panel.open && (s.mode==='replay' || displayed?.mode!==s.mode ||

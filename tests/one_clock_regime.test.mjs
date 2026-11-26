@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import {regimeFlow} from '../backend/one-clock-regime-flow.js';
 import {regimeComponents} from '../site/shared/one-clock-regime.js';
+import {API_PATHS} from '../frontend/preview-policy.mjs';
+assert.ok(API_PATHS.has('/api/one-clock/regime-flow'));
+assert.ok(!API_PATHS.has('/api/one-clock/regime-flow/arbitrary'));
 const t=Date.parse('2026-11-25T15:00:00Z'), session='2026-11-25';
 const sample={session,capturedAt:t+1,lastPrintAt:t-100,bullish:30,bearish:10,unclassified:5,partial:false};
 const objects=new Map();

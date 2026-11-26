@@ -17,6 +17,12 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
         const url = new URL(route.request().url());
         requests.push(url);
         const json = body=>route.fulfill({json:body});
+        if(url.pathname==='/api/one-clock/regime-flow'){
+          const at=Number(url.searchParams.get('cutoff')), published=cutoff+377;
+          return json({rows:at<published ? [] : [{source:'regime-flow',id:'regime-fixture',revision:1,
+            session,instrument:'QQQ',origin:'recorded',eventAt:published-15,valueAt:published-20,
+            availableAt:published,evidence:'immutable-flow-fixture',value:{bullish:30,bearish:10,unclassified:5,partial:true}}]});
+        }
         if(url.pathname==='/api/one-clock/opening-oi')return json({session,availableAt:cutoff-5000,
           calibration:{openingAtm:700,settledSession:'2026-11-06'},levels:[{strike:700,call:5,put:2,callOI:480,putOI:15}]});
         if(url.pathname==='/api/one-clock/chain'){
@@ -96,6 +102,15 @@ const params = new URLSearchParams({one_clock_session:session,one_clock_instrume
         if(expected!=='unavailable')assert.match(await page.locator('#history-clock-rows .atm-row .strike-cell').innerText(),new RegExp(expected.slice(1)));
         assert.equal(await page.locator('#history-clock-rows .atm').count(),expected==='unavailable'?0:1);
       }
+      assert.equal(requests.filter(u=>u.pathname==='/api/one-clock/regime-flow').length,0);
+      await enter('10:00:00.500','QQQ');
+      await page.locator('#clock-regime summary').click();
+      const flowRow=page.locator('#clock-regime tr').filter({has:page.getByRole('rowheader',{name:'Session signed flow'})});
+      await flowRow.getByText(/\+50.0%/).waitFor();
+      assert.match(await flowRow.innerText(),/partial coverage/);
+      await enter('10:00:00.499','QQQ');
+      await flowRow.getByText('Unavailable').waitFor();
+      await page.locator('#clock-regime summary').click();
       // The Live and dated Historical renderers consume that identical map
       // even while spot moves and every current-chain count disagrees.
       const surfaces=await page.evaluate(async({session,cutoff})=>{

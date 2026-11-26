@@ -228,6 +228,22 @@ class LabelTests(unittest.TestCase):
         self.quote(feed, 1.2, 1.2, t - 100, t - 90)
         self.assertEqual(self.trade(feed, 1, 1.2, t)["basis"], "locked")
 
+    def test_regime_publish_retries_frozen_minute_after_quiet_rollover(self):
+        feed = recent.RecentPrints()
+        self.trade(feed, 1, 1.00, self.T0 + 1000)
+        stop = Mock()
+        stop.wait.side_effect = [False, False, False, True]
+        client = Mock()
+        client.put_object.side_effect = [None, OSError("minute write interrupted"), None]
+        # First sample lies just before rollover. No successor print arrives.
+        clock = Mock(side_effect=[self.T0 + 59999, self.T0 + 63000])
+        feed.publish(client, "bucket", stop, Event(), now_ms=clock)
+        writes = [c.kwargs for c in client.put_object.call_args_list]
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(writes[1], writes[2])
+        self.assertEqual(writes[2]["IfNoneMatch"], "*")
+        self.assertEqual(json.loads(writes[2]["Body"])["capturedAt"], self.T0 + 59999)
+
     def test_regime_flow_uses_only_quote_signed_contracts_and_marks_incomplete_history(self):
         now = self.T0 + 5000
         session = {"day":datetime.fromtimestamp(now/1000, recent.ET).date().isoformat(), "last":now-5,

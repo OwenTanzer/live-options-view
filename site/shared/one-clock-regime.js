@@ -39,8 +39,8 @@ export function regimeComponents(selection, chain, flow, findPin) {
     m?.status === 'warming_up' ? 'warming up' : '');
   const volume = data?.rows?.length && data.rows.every(r=>Number.isSafeInteger(r.Volume) && r.Volume>=0)
     ? data.rows.reduce((sum,r)=>sum+r.Volume,0) : null;
-  add('Chain option volume', Number.isSafeInteger(volume) ? count(volume)+' contracts' : null,
-    row?.eventAt,row?.availableAt,'expiry '+(data?.expiration ?? 'unknown'));
+  add('Reported chain option volume', Number.isSafeInteger(volume) ? count(volume)+' contracts' : null,
+    row?.eventAt,row?.availableAt,'expiry '+(data?.expiration ?? 'unknown')+' · missing provider counts can be stored as zero');
   const skew = data?.market_readings?.find(r=>r.reading_id==='reference_oi_skew' && r.symbol===selection.instrument);
   const ratio = skew?.values?.imbalance_ratio;
   const published = at(skew?.published_at);
