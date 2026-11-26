@@ -80,8 +80,8 @@
   .quote-card .momentum-strip { display: grid; grid-template-columns: repeat(3,auto); gap: 2px 4px; font-size: .58rem; }
   .quote-card .momentum-caption { grid-column: 1 / -1; }
   @media (max-width: 600px) {
-    #momentum.momentum-strip, #history-clock-momentum.momentum-strip { display: grid; grid-template-columns: repeat(3,max-content); }
-    #momentum .momentum-caption, #history-clock-momentum .momentum-caption { grid-column: 1 / -1; }
+    #momentum.momentum-strip, #history-clock-momentum.momentum-strip { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; }
+    #momentum .momentum-caption, #history-clock-momentum .momentum-caption { flex-basis: 100%; }
   }
 
   /* ── status bar ──────────────────────────────────────────────────────── */
