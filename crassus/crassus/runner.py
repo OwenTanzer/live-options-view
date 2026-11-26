@@ -54,6 +54,7 @@ from .config import (
 )
 from . import forward_skew
 from .skew_bars import ForwardBars
+from .exchange_calendar import is_holiday, session_close
 from .flatten import maybe_flatten
 from .exits import (
     ExitConfigError,
@@ -73,6 +74,33 @@ log = logging.getLogger("crassus")
 
 # Strategies that read a non-QQQ snapshot, by root.
 REFERENCE_ROOTS = {**_OI_REFERENCE_ROOTS, **_TRUMP_OI_SKEW_ROOTS}
+
+
+# The four November 26 paper comparisons use a completed regular-session
+# board. Other accounts retain their existing execution policies.
+SESSION_BOARD_ACCOUNTS = frozenset({
+    "crassus_oiskew_absolute", "crassus_newton_pin",
+    "crassus_mp_mouse_cheap", "crassus_mp_rat_cheap",
+})
+
+
+def _entry_board_hold(username, ctx, strategy):
+    if username not in SESSION_BOARD_ACCOUNTS or not ctx.book.is_flat:
+        return None
+    now = ctx.now_et
+    day = now.date()
+    if (day.weekday() >= 5 or is_holiday(day)
+            or not clock.MARKET_OPEN <= now.time() < session_close(day)):
+        reason = "New entry requires an open NYSE regular session."
+    else:
+        stamp = forward_skew.snap_time(getattr(ctx.snapshot, "timestamp", None))
+        if stamp is not None:
+            stamp = stamp.astimezone(clock.ET)
+        if (stamp is not None and stamp.date() == day
+                and stamp.time() >= clock.MARKET_OPEN and stamp <= now):
+            return None
+        reason = "New entry requires a timestamped board observed in this regular session."
+    return Decision.no_trade(reason, strategy.strategy_id, strategy.strategy_version)
 
 
 def _validate_strategy_ids(accounts: list[Any]) -> None:
@@ -643,6 +671,8 @@ class Runner:
                                                      decision.strategy_id, decision.strategy_version)
                     else:
                         decision.limit_price = limit
+            elif (entry_hold := _entry_board_hold(account.username, ctx, strategy)) is not None:
+                decision = entry_hold
             elif account.strategy_id in PIN_EPISODES:
                 decision = strategy(ctx)
             elif arm and arm != "baseline":

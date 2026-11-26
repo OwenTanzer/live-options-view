@@ -808,6 +808,57 @@ class RunnerWiringTests(unittest.TestCase):
         runner._recover_pending = lambda acct: pending is not None
         return runner, account, submitted
 
+    def test_four_paper_accounts_reject_holiday_and_prior_session_before_quote_lookup(self):
+        accounts = {
+            "crassus_oiskew_absolute": "oi_skew_qqq",
+            "crassus_newton_pin": "max_pain_newton_qqq",
+            "crassus_mp_mouse_cheap": "max_pain_mouse_cheaper_qqq",
+            "crassus_mp_rat_cheap": "max_pain_rat_cheaper_qqq",
+        }
+        for day, reason in ((26, "open NYSE"), (27, "this regular session")):
+            self._clock.now_et = lambda: datetime(2026, 11, day, 11, tzinfo=self._clock.ET)
+            for username, strategy_id in accounts.items():
+                with self.subTest(day=day, username=username):
+                    directory = _tmpdir()
+                    runner, account, submitted = self._runner(directory, trades=[])
+                    runner.state_dir = directory
+                    account.username, account.strategy_id = username, strategy_id
+                    runner.quotes.quotes = mock.Mock()
+                    runner._run_account(account, self._snapshot(), "open")
+                    runner.quotes.quotes.assert_not_called()
+                    self.assertEqual(submitted, [])
+                    path = next(directory.glob("decisions-*.jsonl"))
+                    decision = json.loads(path.read_text().splitlines()[-1])
+                    self.assertEqual(decision["outcome_class"], "no_trade")
+                    self.assertIn(reason, decision["reason"])
+
+    def test_four_paper_entry_session_boundaries_and_existing_positions(self):
+        from crassus.runner import _entry_board_hold, get_strategy
+
+        username = "crassus_oiskew_absolute"
+        strategy = get_strategy("oi_skew_qqq")
+        ctx = SimpleNamespace(now_et=datetime(2026, 11, 27, 11, tzinfo=self._clock.ET),
+                              book=SimpleNamespace(is_flat=True), snapshot=SimpleNamespace())
+        for timestamp in (None, "bad", "2026-11-27T10:00:00", "2026-11-27T14:29:59Z",
+                          "2026-11-27T16:00:01Z"):
+            ctx.snapshot.timestamp = timestamp
+            self.assertIsNotNone(_entry_board_hold(username, ctx, strategy))
+        ctx.snapshot.timestamp = "2026-11-27T14:30:00Z"
+        self.assertIsNone(_entry_board_hold(username, ctx, strategy))
+        ctx.now_et = ctx.now_et.replace(hour=13)
+        self.assertIsNotNone(_entry_board_hold(username, ctx, strategy))
+        self.assertIsNone(_entry_board_hold("crassus_luigi", ctx, strategy))
+        ctx.book.is_flat = False
+        self.assertIsNone(_entry_board_hold(username, ctx, strategy))
+
+    def test_absolute_stop_can_sell_on_closed_session_with_retained_board(self):
+        self._clock.now_et = lambda: datetime(2026, 11, 26, 11, tzinfo=self._clock.ET)
+        runner, account, submitted = self._runner(_tmpdir(), params=OiSkewStop35RunnerTests.PARAMS)
+        account.username, account.strategy_id = "crassus_oiskew_absolute", "oi_skew_qqq"
+        runner._run_account(account, self._snapshot(), "open")
+        self.assertEqual([(s["side"], s["strategy_id"]) for s in submitted],
+                         [("sell", "exit_policy")])
+
     def test_exit_becomes_a_sell_attributed_to_the_exit_policy(self):
         directory = _tmpdir()
         runner, account, submitted = self._runner(directory)
