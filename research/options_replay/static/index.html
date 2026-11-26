@@ -87,15 +87,6 @@ details summary { cursor: pointer; }
 .recon td, .recon th { font-size: 12px; text-align: left; }
 .legend { font-size: 11px; color: var(--muted); }
 .legend i { display: inline-block; width: 10px; height: 10px; background: var(--dark-band); border: 1px solid var(--warn-line); vertical-align: -1px; }
-.replay-frame { margin: 10px 0 4px; padding: 12px 8px 8px; background: #141819; color: #eff4f3;
-  border-radius: 8px; --muted: #b3c3c6; --line: #354346; --ink: #edf3f1; --up: #a1f3ce; --down: #ed9998;
-  --warn: #ffcf80; --dark-band: rgba(255,207,128,.12); }
-.replay-heading { display: flex; justify-content: space-between; margin: 0 4px 8px; }
-.replay-heading div:last-child { text-align: right; }
-.replay-heading strong, .replay-heading small { display: block; }
-.replay-heading strong { font-size: clamp(18px, 3vw, 27px); }
-.replay-heading small, #replay-fills { color: var(--muted); font-size: 12px; }
-#replay-fills { margin: 4px; }
 </style>
 </head>
 <body>
@@ -135,12 +126,7 @@ details summary { cursor: pointer; }
             <option value="120">2 hours</option><option value="all">Since open</option>
           </select></label>
         </div>
-        <div class="replay-frame">
-          <header class="replay-heading"><div><strong id="replay-symbol"></strong><small>Underlying price · Pacific time</small></div>
-            <div><strong id="replay-net"></strong><small>Session realized net</small></div></header>
-          <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Candlesticks from observed spot prices"></svg>
-          <p id="replay-fills"></p>
-        </div>
+        <svg id="chart" viewBox="0 0 600 210" preserveAspectRatio="none" role="img" aria-label="Candlesticks from observed spot prices"></svg>
         <svg id="volume" style="height:50px" aria-label="Volume by candle"></svg><small id="volume-label"></small>
         <div class="legend"><i></i> past stretches where trading was disabled (hover for the reason)</div>
         <div class="controls" style="margin-top:8px">
@@ -388,109 +374,44 @@ function render() {
   if (nf !== lastFillCount || V.session.revealed !== lastRevealed) { lastFillCount = nf; lastRevealed = V.session.revealed; loadTrades(); loadRecords(); }
 }
 
-// The trainer clock is seconds since midnight Eastern. Both US zones change
-// daylight-saving time outside the market session, so market hours differ by 3h.
-const pacificClock = seconds => hms(seconds - 3 * 3600);
-
-function drawFillOverlay({ fills, focus, anchor, left, right, until, x, y, width }) {
-  const visible = [];
-  for (const fill of fills) {
-    if (fill.kind !== "fill" || fill.voided) continue;
-    const [hh, mm, ss] = fill.time_of_day.split(":").map(Number);
-    const at = hh * 3600 + mm * 60 + ss;
-    if (at < left || at > until || at > right) continue;
-    visible.push({fill, at, spot: Number.isFinite(fill.underlying_at_fill) ? fill.underlying_at_fill : anchor(at)});
-  }
-  visible.sort((a, b) => a.at - b.at);
-  const participating = visible.filter(({fill}) => focus.includes(fill));
-  const featured = participating.length > 1 ? [participating[0], participating.at(-1)] : participating;
-  let marks = "", labels = "";
-  for (const entry of visible) {
-    const {fill, at, spot} = entry;
-    const color = fill.side === "buy" ? "#a1f3ce" : "#ffcf80";
-    const title = esc(fill.side.toUpperCase() + " " + fill.qty + " × " + fill.label +
-      " · " + pacificClock(at) + " PT · option $" + px(fill.price));
-    // Anchor to the candle on the underlying axis. Premium belongs in the label.
-    const cx = x(at), cy = spot !== null ? y(spot) : null;
-    if (spot !== null) marks += `<circle cx="${cx}" cy="${cy}" r="4" fill="#141819" stroke="${color}" stroke-width="2"><title>${title}</title></circle>`;
-    const index = featured.indexOf(entry);
-    if (index < 0) continue;
-    const boxW = Math.min(162, (width - 18) / 2);
-    const bx = index === 0 ? 4 : width - boxW - 4;
-    if (spot !== null) labels += `<path d="M${bx+boxW/2} 48 L${cx} 59 V${cy}" fill="none" stroke="${color}" opacity=".8"/>`;
-    labels += `<g><title>${title}</title><rect x="${bx}" y="2" width="${boxW}" height="46" rx="5" fill="#141819" stroke="${color}"/>
-      <text x="${bx+7}" y="19" fill="${color}" font-size="12" font-weight="700">${esc(fill.side.toUpperCase())} · ${pacificClock(at)}</text>
-      <text x="${bx+7}" y="37" fill="#edf3f1" font-size="12">Option $${px(fill.price)}</text></g>`;
-  }
-  const caption = featured.map(({fill, spot}) => fill.side.toUpperCase() + " " + fill.qty + " × " + fill.label +
-    (spot !== null ? "" : " (underlying price unavailable)")).join(" · ");
-  return {svg: labels + marks, caption: visible.length > 2 ? "Trade endpoints · " + caption : caption};
-}
-
 function drawChart() {
   const svg = $("chart"), s = V.session;
-  const width = Math.max(280, Math.round(svg.getBoundingClientRect().width)), height = 286;
-  svg.style.height = height + "px";
-  $("replay-symbol").textContent = [V.symbol, V.reveal?.date || (s.mode === "simulation" ? "simulation" : "replay")].join(" · ");
-  $("replay-net").textContent = money(V.account.realized_net);
-  $("replay-fills").textContent = "";
+  const width = Math.max(280, Math.round(svg.getBoundingClientRect().width)), height = 210;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const size = $("candle-size").value, span = $("chart-span").value;
-  const until = V.reveal ? s.close_s : s.clock_s;
-  const active = V.fills.filter(f => f.kind === "fill" && !f.voided && f.time_of_day <= hms(until));
-  const last = active.at(-1);
-  const trade = last ? active.filter(f => last.trade_id ? f.trade_id === last.trade_id : f === last) : [];
-  const buy = trade.find(f => f.side === "buy");
-  const seconds = fill => fill.time_of_day.split(":").reduce((n, part) => 60 * n + Number(part), 0);
-  const remaining = trade.reduce((qty, f) => qty + (f.side === "buy" ? f.qty : -f.qty), 0);
-  const tradeEnd = last && remaining === 0 ? seconds(last) : until;
-  const held = buy ? Math.max(0, tradeEnd - seconds(buy)) : 0;
-  const autoBar = held <= 20 * 60 ? 60 : held <= 75 * 60 ? 180 : 300;
-  const requested = size === "auto" ? autoBar : Number(size) * 60;
-  const native = V.spot.bar_seconds || (s.event_tape ? 5 : 0);
-  const sampled = native > 0 && V.sample_candles?.length && requested >= native;
-  const bar = sampled ? Math.ceil(requested / native) * native : requested;
+  const bar = 60 * (size === "auto" ? (s.event_tape ? 1 : 5) : Number(size));
   const bucket = t => s.open_s + Math.floor((Math.max(t, s.open_s) - s.open_s) / bar) * bar;
-  const fit = span === "auto" && buy;
-  const end = fit ? Math.min(until, tradeEnd + 3 * bar) : until;
-  const right = Math.min(s.close_s, bucket(end === s.close_s ? end - 1 : end) + bar);
-  const fromOpen = span === "all" || (span === "auto" && V.reveal && !buy);
-  const windowSeconds = span === "auto" ? Math.max(15 * 60, held + 6 * bar) : Number(span) * 60;
-  const left = fromOpen ? s.open_s : Math.max(s.open_s, (fit ? bucket(seconds(buy) - 3 * bar) : bucket(right - windowSeconds)));
-  const allPoints = V.reveal ? V.reveal.full_day_spot : V.spot.series;
-  const points = allPoints.filter(([t,p]) => t >= left && t <= Math.min(until,right) && Number.isFinite(p));
+  const points = V.reveal ? V.reveal.full_day_spot : V.spot.series;
+  const until = V.reveal ? s.close_s : s.clock_s;
+  const right = bucket(until === s.close_s ? until - 1 : until) + bar;
+  const fromOpen = span === "all" || (span === "auto" && V.reveal);
+  const count = span === "auto" ? 24 : Math.ceil(Number(span) * 60 / bar);
+  const left = fromOpen ? s.open_s : Math.max(s.open_s, right - count * bar);
   const candles = new Map();
-  if (sampled) for (const [t, open, high, low, close] of V.sample_candles) {
-    if (t <= left || t > Math.min(until,right) || ![open, high, low, close].every(Number.isFinite)) continue;
-    const key = bucket(t - 1);
-    const c = candles.get(key) || {open, high, low, close};
-    c.high = Math.max(c.high, high); c.low = Math.min(c.low, low); c.close = close;
+  const sampled = s.event_tape && V.sample_candles?.length;
+  for (const row of (sampled ? V.sample_candles : points)) {
+    const [t, price] = row;
+    if (t < left || (!V.reveal && t > until) || !Number.isFinite(price)) continue;
+    const key = bucket(sampled || t === s.close_s ? t - 1 : t);
+    if (key < left) continue;
+    const c = candles.get(key) || {open: price, high: price, low: price, close: price};
+    c.high = Math.max(c.high, sampled ? row[2] : price); c.low = Math.min(c.low, sampled ? row[3] : price); c.close = sampled ? row[4] : price;
     candles.set(key, c);
   }
-  const observations = points;
-  const anchor = at => {
-    const point = observations.findLast(([t]) => t <= at);
-    if (point && at - point[0] <= 90) return point[1];
-    return null;
-  };
+  if (!candles.size) { $("volume").innerHTML = ""; $("volume-label").textContent = ""; svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable spot price</text>'; return; }
   const values = [...candles.values()];
-  const prices = points.map(p => p[1]);
-  for (const fill of active) if (seconds(fill) >= left && seconds(fill) <= right && Number.isFinite(fill.underlying_at_fill)) prices.push(fill.underlying_at_fill);
-  if (!values.length && !prices.length) { $("volume").innerHTML = ""; $("volume-label").textContent = ""; svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="var(--muted)">Waiting for the first usable price</text>'; return; }
-  const high = Math.max(...prices, ...values.map(c => c.high)), low = Math.min(...prices, ...values.map(c => c.low));
+  const high = Math.max(...values.map(c => c.high)), low = Math.min(...values.map(c => c.low));
   const margin = Math.max(.04, (high - low) * .1), top = high + margin, bottom = low - margin;
-  const plotW = width - 54, plotH = height - 95;
+  const plotW = width - 54, plotH = height - 36;
   const x = t => 4 + plotW * (t - left) / Math.max(bar, right - left);
-  const y = p => 66 + plotH * (top - p) / (top - bottom);
+  const y = p => 10 + plotH * (top - p) / (top - bottom);
   const candleW = Math.min(16, Math.max(.5, (x(left + bar) - x(left)) * .68));
-  const lastBar = [...candles.keys()].at(-1);
-  const lastPrice = !points.length && !values.length ? prices.at(-1) : points.length && (lastBar === undefined || points.at(-1)[0] >= lastBar + bar)
-    ? points.at(-1)[1] : values.at(-1)?.close ?? points.at(-1)[1];
+  const lastPrice = values.at(-1).close;
   const priceY = y(lastPrice);
   let g = "";
   for (const d of V.reveal ? V.reveal.full_day_dark : V.dark) {
     const a = Math.max(left, d.start), b = Math.min(right, d.end);
-    if (a < b) g += `<rect x="${x(a)}" y="66" width="${x(b)-x(a)}" height="${plotH}" fill="var(--dark-band)"><title>${esc(d.label)}</title></rect>`;
+    if (a < b) g += `<rect x="${x(a)}" y="10" width="${x(b)-x(a)}" height="${plotH}" fill="var(--dark-band)"><title>${esc(d.label)}</title></rect>`;
   }
   for (let i = 0; i < 4; i++) {
     const p = bottom + (top-bottom)*i/3;
@@ -500,26 +421,21 @@ function drawChart() {
   const minInterval = (right - left) * 55 / plotW;
   const interval = [60, 300, 600, 900, 1800, 3600, 7200].find(n => n >= minInterval) || 10800;
   for (let t = Math.ceil(left/interval)*interval; t < right; t += interval)
-    g += `<text x="${Math.max(18,x(t))}" y="${height-5}" text-anchor="middle" font-size="11" fill="var(--muted)">${pacificClock(t).slice(0,5)}</text>`;
-  if (!values.length) {
-    let prev = null, path = "";
-    for (const [t,p] of points) {
-      path += (prev === null || t - prev > 360 ? " M" : " L") + x(t) + " " + y(p);
-      g += `<circle cx="${x(t)}" cy="${y(p)}" r="2" fill="#a1f3ce"/>`;
-      prev = t;
-    }
-    g += `<path d="${path}" fill="none" stroke="#a1f3ce" stroke-width="1.8"/>`;
-  }
+    g += `<text x="${Math.max(18,x(t))}" y="205" text-anchor="middle" font-size="11" fill="var(--muted)">${hms(t).slice(0,5)}</text>`;
   for (const [t,c] of candles) {
     const mid = x(t+bar/2), color = c.close >= c.open ? "var(--up)" : "var(--down)";
-    g += `<g class="candle"><title>${pacificClock(t).slice(0,5)} PT · O ${px(c.open)} H ${px(c.high)} L ${px(c.low)} C ${px(c.close)}</title><line x1="${mid}" x2="${mid}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}" stroke-width="1.4"/><rect x="${mid-candleW/2}" width="${candleW}" y="${Math.min(y(c.open),y(c.close))-0.5}" height="${Math.max(1.5,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
+    g += `<g class="candle"><title>${hms(t).slice(0,5)} · O ${px(c.open)} H ${px(c.high)} L ${px(c.low)} C ${px(c.close)}</title><line x1="${mid}" x2="${mid}" y1="${y(c.high)}" y2="${y(c.low)}" stroke="${color}" stroke-width="1.4"/><rect x="${mid-candleW/2}" width="${candleW}" y="${Math.min(y(c.open),y(c.close))-0.5}" height="${Math.max(1.5,Math.abs(y(c.open)-y(c.close)))}" fill="${color}"/></g>`;
   }
   for (const [t,label] of [[s.start_s,"Landing"],[s.clock_s,"Clock"]]) {
-    if (t>=left && t<right) g += `<path d="M${x(t)} 66v${plotH}" stroke="var(--warn)" stroke-dasharray="2 3"><title>${label}</title></path>`;
+    if (t>=left && t<right) g += `<path d="M${x(t)} 10v${plotH}" stroke="var(--warn)" stroke-dasharray="2 3"><title>${label}</title></path>`;
   }
-  const overlay = drawFillOverlay({ fills: V.fills, focus: trade, anchor, left, right, until, x, y, width });
-  g += overlay.svg;
-  $("replay-fills").textContent = [values.length ? (bar / 60) + "-minute candles" : (native > requested ? "Observed prices · source bars are " + native / 60 + " min" : "Observed prices · OHLC unavailable"), overlay.caption].filter(Boolean).join(" · ");
+  for (const f of V.fills) {
+    if (f.kind !== "fill") continue;
+    const [hh,mm,ss] = f.time_of_day.split(":").map(Number), t = hh*3600+mm*60+ss;
+    if(t<left || t>until) continue;
+    const sample = V.spot.series.filter(p => p[0]<=t).at(-1);
+    if(sample) g += `<circle cx="${x(t)}" cy="${y(sample[1])}" r="3.5" stroke="var(--ink)" fill="${f.side==="buy"?"var(--up)":"var(--down)"}"><title>${esc(f.side)} ${esc(f.label)} @ ${f.price}</title></circle>`;
+  }
   g += `<g id="last-price"><title>Last chart price ${px(lastPrice)}</title>
     <rect x="${plotW+4}" y="${priceY-9}" width="49" height="18" rx="3" fill="#302b1d"/>
     <text x="${plotW+28.5}" y="${priceY+4}" text-anchor="middle" font-size="12" font-weight="700" fill="#ffdf60">${px(lastPrice)}</text></g>`;
@@ -777,7 +693,6 @@ $("play").addEventListener("click", togglePlay);
 $("step").addEventListener("click", () => { pause(); step(); });
 $("skip5").addEventListener("click", () => skipMinutes(5));
 $("speed").addEventListener("change", () => { if (playing) { pause(); play(); } });
-window.addEventListener("resize", () => V && drawChart());
 for (const id of ["candle-size", "chart-span"]) $(id).addEventListener("change", () => V && drawChart());
 $("width").addEventListener("change", () => V && render());
 $("wide-replay").addEventListener("click", async () => {
