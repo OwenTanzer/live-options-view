@@ -26,6 +26,8 @@ try {
   assert.match(await page.locator('#response').textContent(),/Alkalus \(preliminary, flow only\) · /);
   assert.match(await page.locator('#next-second').textContent(),/Next-second observation — not part of this interval’s classification: midpoint change one second later /);
   assert.ok(await page.locator('#rows tr').count()>0);
+  assert.match(await page.locator('#premium').textContent(),/^Premium in this interval — observed print repricing, not a position payoff or an Alkalus input · calls: /);
+  assert.equal(await page.locator('#plot').evaluate(el=>el.height/devicePixelRatio),500);
   await page.locator('#width').selectOption('1000');
   await page.locator('#strike').selectOption({index:1});
   await page.locator('#next').click();
@@ -77,6 +79,7 @@ try {
     return probe.locator('#response').textContent();
   }
   const first=await open();assert.match(first,/golden time/);
+  assert.match(await probe.locator('#premium').textContent(),/calls: 10 contracts · mean Δ \+0\.000 .*\$1,000 premium · last QQQ261113C00670000 @ 1\.00 · puts: no priced prints/);
   const next=await probe.locator('#next-second').textContent();
   later=668;
   assert.equal(await open(),first);
@@ -93,7 +96,7 @@ try {
   await probe.setViewportSize({width:390,height:844});
   await probe.locator('#response').scrollIntoViewIfNeeded();
   assert.equal(await probe.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  for(const id of ['response','next-second']) {
+  for(const id of ['response','next-second','premium']) {
     const box=await probe.locator('#'+id).boundingBox();assert.ok(box.x>=0 && box.x+box.width<=390);
   }
   if(process.env.REVIEW_SCREENSHOT) await probe.screenshot({path:process.env.REVIEW_SCREENSHOT,fullPage:true});

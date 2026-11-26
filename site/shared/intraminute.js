@@ -1,8 +1,15 @@
 export const receiptMinute = at => Math.floor(at/60000)*60000;
 
+// Option premium per bin. Each print's change is measured against the first
+// print of the same contract (symbol) received in this minute through the
+// cutoff, so a later print can never move an earlier anchor. All prints with a
+// finite positive price count, signed or not: premium is a price observation,
+// not a direction. Contracts differ in level, so bins hold size-weighted
+// changes, never mixed premium levels.
+const premiumBin=()=>({contracts:0,weighted:0,notional:0,min:Infinity,max:-Infinity,last:null});
 export function model(rows,{minute,cutoff,width,strike=null}) {
-  const bins=Array.from({length:60000/width},()=>({C:[0,0,0],P:[0,0,0],shares:0,prints:0}));
-  const gaps=[], inspected=[], seen=new Set();
+  const bins=Array.from({length:60000/width},()=>({C:[0,0,0],P:[0,0,0],shares:0,prints:0,premium:{C:premiumBin(),P:premiumBin()}}));
+  const gaps=[], inspected=[], seen=new Set(), anchors=new Map();
   let opened=null, signed=0, unknown=0, calls=0, puts=0;
   for(const row of rows) {
     if(row.at>cutoff) continue;
@@ -40,10 +47,24 @@ export function model(rows,{minute,cutoff,width,strike=null}) {
       bin[row.type][side]+=row.size;
       if(side===2) unknown+=row.size; else signed+=row.size;
       if(row.type==='C') calls+=row.size; else puts+=row.size;
+      if(Number.isFinite(row.price) && row.price>0 && row.size>0 && row.at>=minute) {
+        if(!anchors.has(row.symbol)) anchors.set(row.symbol,row.price);
+        const change=row.price-anchors.get(row.symbol), p=bin.premium[row.type];
+        p.contracts+=row.size; p.weighted+=change*row.size; p.notional+=row.price*row.size*100;
+        p.min=Math.min(p.min,change); p.max=Math.max(p.max,change);
+        p.last={symbol:row.symbol,price:row.price,change};
+      }
     }
   }
   if(opened!==null) gaps.push([opened,cutoff]);
-  return {bins,gaps,inspected,signed,unknown,calls,puts};
+  return {bins,gaps,inspected,signed,unknown,calls,puts,anchors};
+}
+
+// Size-weighted mean premium change (dollars per share) for one side of a bin,
+// or null when the bin holds no priced print of that type.
+export function premiumChange(bin,type) {
+  const p=bin?.premium?.[type];
+  return p?.contracts ? p.weighted/p.contracts : null;
 }
 
 // Positive values represent call buying and put selling, in signed contracts.
@@ -63,9 +84,11 @@ export function flowResponse(data, index, width, minute, cutoff) {
 // Preliminary Alkalus flow classification of one owned bin.
 //
 // This is a FLOW classification, descriptive only — not a full option-payoff
-// classification and not a trading signal. The drilldown carries no option
-// premium repricing, so there is no theta, no convexity payoff and no entry
-// friction to measure; it classifies only whether the bin's signed flow
+// classification and not a trading signal. The drilldown now displays observed
+// option premium change (model().bins[i].premium), but that is print-level
+// repricing across mixed contracts, not a held position's payoff, so it is
+// deliberately NOT an input here: there is still no theta, no convexity payoff
+// and no entry friction to measure; it classifies only whether the bin's signed flow
 // converted into midpoint displacement in its own direction, following the
 // Preliminary Guideline — Alkalus taxonomy (golden time / working copper /
 // lead time). Thresholds below are preliminary.

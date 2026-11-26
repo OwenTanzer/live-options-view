@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {model,flowResponse,alkalusFlow,ALKALUS} from '../site/shared/intraminute.js';
+import {model,flowResponse,alkalusFlow,ALKALUS,premiumChange} from '../site/shared/intraminute.js';
 const minute=1794580560000;
 const row=(kind,offset,rest)=>({kind,at:minute+offset,...rest});
 const quote=(at,mid)=>row('quote',at,{bid:mid-.01,ask:mid+.01});
@@ -97,3 +97,32 @@ const isolated=exact(.04);
 Object.defineProperty(isolated.bins,1,{get(){throw Error('Later bin read');}});
 assert.equal(alkalusFlow(isolated,0,1000,minute).kind,'copper');
 console.log('Exact boundaries, missing/invalid inputs, gap edges and forbidden later-bin access passed');
+
+// Premium lane: change from each contract's own first print this minute,
+// size-weighted per bin, duplicates ignored, no look-ahead past the cutoff.
+const priced=(seq,at,type,strike,price,size,label='buy',basis='q1')=>row('option',at,
+  {seq,type,size,price,label,basis,strike,symbol:'QQQ261113'+type+'00'+strike+'000'});
+const premiumRows=[priced(1,100,'C',670,1.00,2),priced(2,150,'C',671,0.50,1),
+  priced(3,1100,'C',670,1.10,1),priced(4,1200,'C',670,1.20,3),priced(4,1200,'C',670,1.20,3),
+  priced(5,1300,'C',671,0.40,2,'unknown','tick'),priced(6,1400,'P',670,2.00,1),
+  priced(7,1500,'P',670,0,5),priced(8,2100,'C',670,0.90,1)];
+const prem=model(premiumRows,{minute,cutoff:minute+1999,width:1000});
+assert.equal(premiumChange(prem.bins[0],'C'),0);
+assert.deepEqual([prem.bins[0].premium.C.contracts,prem.bins[0].premium.C.notional],[3,250]);
+// Bin 1: 1×(+0.10) + 3×(+0.20) on 670, 2×(-0.10) on 671 (unsigned still counts).
+assert.ok(Math.abs(premiumChange(prem.bins[1],'C')-(.1+.6-.2)/6)<1e-12);
+assert.ok(Math.abs(prem.bins[1].premium.C.min+.1)<1e-12 && Math.abs(prem.bins[1].premium.C.max-.2)<1e-12);
+assert.equal(prem.bins[1].premium.C.last.price,.4);
+// The put's first print is its own anchor; a zero price is not a premium observation.
+assert.deepEqual([premiumChange(prem.bins[1],'P'),prem.bins[1].premium.P.contracts],[0,1]);
+assert.equal(premiumChange(prem.bins[2],'C'),null);
+assert.equal(premiumChange(prem.bins[3],'C'),null);
+// Strike scope narrows the lane; the cutoff cannot change an earlier bin.
+assert.ok(Math.abs(premiumChange(model(premiumRows,{minute,cutoff:minute+1999,width:1000,strike:670}).bins[1],'C')-.7/4)<1e-12);
+const later=model(premiumRows,{minute,cutoff:minute+2999,width:1000});
+assert.deepEqual(later.bins[1].premium,prem.bins[1].premium);
+assert.ok(Math.abs(premiumChange(later.bins[2],'C')+.1)<1e-12);
+// Premium is not an Alkalus input: repricing an interval leaves its class unchanged.
+const withPremium=price=>model([quote(10,670),priced(1,80,'C',670,price,10),quote(900,670.12)],alkOpts);
+assert.deepEqual(alkalusFlow(withPremium(1),0,1000,minute),alkalusFlow(withPremium(9),0,1000,minute));
+console.log('Premium lane anchoring, weighting, duplicates, strike scope, cutoff and Alkalus independence passed');
