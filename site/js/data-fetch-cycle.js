@@ -57,6 +57,7 @@ async function fetchLatest() {
     if (typeof updateOiSkewMeter === 'function') updateOiSkewMeter(qqq.data);
   } else {
     chainState.QQQ = { data: chainState.QQQ?.data ?? null, error: qqq.error || 'No QQQ rows in the latest snapshot.' };
+    updateQqqMomentumLine(chainState.QQQ.data?.underlying_market, true);
     // A failed/empty refresh must not leave the OI skew meter labelled live.
     if (typeof noteOiSkewRefreshFailure === 'function') noteOiSkewRefreshFailure(chainState.QQQ.error);
   }
@@ -178,7 +179,7 @@ function renderSelectedChain() {
   document.getElementById('max-pain').textContent = pin == null
     ? 'Max pain unavailable'
     : `Max pain $${pin.toFixed(2)}${retained ? ' · retained' : ''}`;
-  renderHeatmap(data, symbol);
+  renderHeatmap(data, symbol, {retained:!!state.error});
   if (!data.underlying_price) return;  // renderHeatmap already marked it stale
   const hasBids = data.rows.some(r => r.Bid != null);
   // Dot color carries live/stale; text is just a small timestamp note —

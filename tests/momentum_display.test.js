@@ -86,3 +86,26 @@ function um(overrides = {}) {
 }
 
 console.log('PASS momentum display formatting -- unavailable/closed/live/stale/up/down/flat/warming_up/stale_anchor/no_data all render explicitly');
+
+// Exercise the actual cell renderer with a controlled clock and a minimal DOM.
+const fs = require('node:fs'), vm = require('node:vm');
+const render = vm.runInNewContext(fs.readFileSync(require.resolve('../site/js/momentum-strip.js'),'utf8') +
+  '\npaintMomentumStrip', {formatMomentum});
+function element() {
+  return {dataset:{}, children:[], ownerDocument:{createElement:element},
+    replaceChildren(...items){this.children=items;}, appendChild(item){this.children.push(item);},
+    removeAttribute(name){delete this[name];}, setAttribute(name,value){this[name]=value;}};
+}
+const market = um({momentum_windows:{observed_at:new Date(NOW).toISOString(), readings:{
+  '5m':{status:'ok',direction:'down',return_pct:-1.75},
+  '9m':{status:'ok',direction:'flat',return_pct:0}, '15m':{status:'warming_up'}}}});
+const strip = element(), card = element();
+render(strip,market,{at:NOW}); render(card,market,{at:NOW,compact:true});
+assert.equal(strip.children.length,7);
+assert.equal(strip.children[1].textContent,'5m ▼ -1.75%');
+assert.equal(strip.children[2].textContent,'9m → +0.00%');
+assert.equal(strip.children[3].textContent,'15m warming');
+assert.equal(card.children[1]['aria-label'],'5m down -1.75%');
+assert.equal(card.children[1].textContent,'5m ▼');
+render(strip,market,{at:NOW+150001});assert.equal(strip.dataset.state,'retained');
+render(strip,market,{at:NOW-1});assert.equal(strip.children[1].textContent,'5m —');

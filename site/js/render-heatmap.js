@@ -1,10 +1,11 @@
-function renderHeatmap(data, symbol = 'QQQ') {
+function renderHeatmap(data, symbol = 'QQQ', {retained = false} = {}) {
   const { underlying_price, tier, snapshot_time, underlying_market } = data;
   const spot = underlying_price;
   const isQqq = symbol === 'QQQ';
 
   if (!spot) {
     setStatus('stale', snapshot_time);
+    if (isQqq) document.getElementById('momentum').textContent = 'Momentum unavailable';
     // A non-QQQ chain without its own spot is cleared, not left showing rows
     // it can't center -- and never filled with another underlying's price.
     if (!isQqq) clearChain(`${symbol} spot price unavailable in the latest snapshot.`);
@@ -59,10 +60,14 @@ function renderHeatmap(data, symbol = 'QQQ') {
   vrEl.textContent = vr.text;
   vrEl.dataset.state = vr.state;
 
-  const mo = formatMomentum(underlying_market);
   const moEl = document.getElementById('momentum');
-  moEl.textContent = mo.text;
-  moEl.dataset.state = mo.state;
+  if (isQqq && underlying_market?.momentum_windows) {
+    paintMomentumStrip(moEl, underlying_market, {retained:retained || freshness.state === 'retained'});
+  } else {
+    const mo = formatMomentum(underlying_market);
+    moEl.textContent = mo.text;
+    moEl.dataset.state = mo.state;
+  }
 
   document.getElementById('no-data').classList.add('hidden');
   document.getElementById('heatmap-wrap').classList.remove('hidden');

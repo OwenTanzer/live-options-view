@@ -145,7 +145,9 @@ function updateQqqVwapRvolLine(underlyingMarket) {
 
 // Same 60s cadence and rationale as updateQqqVwapRvolLine above -- see
 // docs/plans/2026-07-momentum-indicator.md.
-function updateQqqMomentumLine(underlyingMarket) {
+function updateQqqMomentumLine(underlyingMarket, retained = false) {
+  const card = document.getElementById('qqq-card-momentum');
+  if (card) paintMomentumStrip(card, underlyingMarket, {compact:true, retained});
   const el = document.getElementById('tk-QQQ');
   if (!el) return;
   const lineEl = el.querySelector('.momentum-line');
