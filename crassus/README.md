@@ -266,6 +266,16 @@ Each session uses fresh episode state, retained per account across restarts.
 Both accounts are initially inactive. Each requires its own paper credential
 and explicit runtime roster activation. They have no broker route.
 
+**Max_Pain_mouse_cheaper** and **Max_Pain_rat_cheaper** are separate QQQ paper
+siblings. Each compares its parent’s selected ATM ask with the immediately
+higher listed call strike or lower listed put strike, in the same 0DTE
+chain. It requests both executable asks together and skips an absent,
+stale, crossed or equally priced alternative. The paper buy limit is the
+cheaper ask observed, so a higher execution ask cannot increase the debit.
+The decision records both symbols, strikes, asks and ask timestamps. Mouse
+keeps its 15% premium thresholds and Rat 25%, using the actual held contract
+and fill. Both accounts are initially inactive and require separate credentials.
+
 **Bowman Max Pain** (`bowman_max_pain_qqq`) is a separate, initially inactive
 QQQ paper account. Its Bowman displacement must point toward the Max Pain
 strike for entry. It uses the base pin distance (strictly over 0.15% of spot)

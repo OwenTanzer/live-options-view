@@ -15,6 +15,11 @@ from ..strategy import Decision, register
 from . import max_pain
 
 THRESHOLDS = {"max_pain_mouse_qqq": 0.15, "max_pain_rat_qqq": 0.25}
+CHEAPER_PARENTS = {
+    "max_pain_mouse_cheaper_qqq": "max_pain_mouse_qqq",
+    "max_pain_rat_cheaper_qqq": "max_pain_rat_qqq",
+}
+THRESHOLDS.update({sibling: THRESHOLDS[parent] for sibling, parent in CHEAPER_PARENTS.items()})
 VERSION = "1.0.0"
 MAX_BOARD_AGE_SECONDS = 360
 
@@ -164,6 +169,46 @@ def _apply_confirmed_sale(state, trades):
         state["blocked_at"] = filled_at
 
 
+def _cheaper_entry(ctx, strategy_id, parent, executable):
+    """Compare the parent contract with exactly one outward strike on this board."""
+    direction = 1 if parent["Type"] == "call" else -1
+    outward = (
+        row for row in ctx.snapshot.rows
+        if row["Type"] == parent["Type"] and direction * (row["Strike"] - parent["Strike"]) > 0
+    )
+    child = min(outward, key=lambda row: direction * row["Strike"], default=None)
+    symbols = [parent["OptionSymbol"]]
+    if child:
+        symbols.append(child["OptionSymbol"])
+    live = executable(symbols)
+    parent_quote = live.get(symbols[0])
+    child_quote = live.get(child["OptionSymbol"]) if child else None
+    meta = {
+        "parent_symbol": symbols[0],
+        "parent_strike": parent["Strike"],
+        "parent_ask": parent_quote.ask if parent_quote else None,
+        "parent_ask_ts": parent_quote.ask_ts if parent_quote else None,
+        "candidate_symbol": child["OptionSymbol"] if child else None,
+        "candidate_strike": child["Strike"] if child else None,
+        "candidate_ask": child_quote.ask if child_quote else None,
+        "candidate_ask_ts": child_quote.ask_ts if child_quote else None,
+    }
+    if not parent_quote or not child_quote:
+        reason = "Waiting for executable asks on the parent and its adjacent outward strike."
+    elif child_quote.ask >= parent_quote.ask:
+        reason = "Adjacent outward strike is not cheaper than the parent."
+    elif abs(child_quote.ask * 100 - round(child_quote.ask * 100)) > 1e-7:
+        reason = "Adjacent ask cannot be submitted as a cent-priced paper limit."
+    else:
+        return Decision(
+            "buy", "Adjacent outward strike has a cheaper executable ask.", strategy_id, VERSION,
+            child["OptionSymbol"], 1, limit_price=round(child_quote.ask, 2),
+            metadata={**meta, "strike": child["Strike"], "bid": child_quote.bid,
+                      "ask": child_quote.ask, "quote_age_seconds": child_quote.age_seconds},
+        )
+    return Decision.no_trade(reason, strategy_id, VERSION, metadata=meta)
+
+
 def _decide(ctx, strategy_id):
     def no(reason):
         return Decision.no_trade(reason, strategy_id, VERSION)
@@ -280,14 +325,22 @@ def _decide(ctx, strategy_id):
             and 0 < row["Bid"] <= row["Ask"]
         ]
         snapshot = replace(snapshot, rows=eligible)
+    comparison = None
+    if strategy_id in CHEAPER_PARENTS and not positions and bias in ("call", "put"):
+        parent = snapshot.atm(bias)
+        if parent:
+            comparison = _cheaper_entry(ctx, strategy_id, parent, executable)
     decision = max_pain._decide_core(
         replace(ctx, snapshot=snapshot, quotes=executable), pin_reading=reading
     )
+    if comparison is not None and (decision.action == "buy" or comparison.action == "no_trade"):
+        decision = replace(comparison, metadata={**(decision.metadata or {}), **comparison.metadata})
     if decision.action == "buy" and now < state.get("cooldowns", {}).get(
         decision.symbol, 0
     ):
         return finish(
-            no("Same contract is inside its 15-minute premium-exit cooldown.")
+            Decision.no_trade("Same contract is inside its 15-minute premium-exit cooldown.",
+                              strategy_id, VERSION, metadata=decision.metadata if comparison else None)
         )
     return finish(decision)
 
