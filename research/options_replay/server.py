@@ -36,6 +36,7 @@ import archive as A  # noqa: E402
 from engine import (DEFAULT_FEE, DwellError, NotSavedError, ReplayError, ReplaySession,  # noqa: E402
                     StaleError, hhmmss, label)
 from store import ConflictError, StoreError, TrainerStore, body_digest  # noqa: E402
+import chart_minutes
 import event_tape
 import simulate  # noqa: E402
 
@@ -98,7 +99,8 @@ class Games:
                 self.refused[iso_day] = why
             print(f"[replay] refused a day at load: {why}", flush=True)  # no date in logs either
             return None
-        return pack
+        interval, rows = chart_minutes.read_bars(self.arc.cache_dir, A.SYMBOL, iso_day)
+        return dict(pack, chart_minutes=rows, chart_interval=interval)
 
     def prefetch(self):
         if self.force_day:

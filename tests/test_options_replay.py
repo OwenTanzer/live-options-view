@@ -67,6 +67,19 @@ DATE_PATTERNS = [r"2026", r"20260901", r"260901", r"09-01", r"Tuesday", r"\bSep"
 
 
 class HiddenDateAndClock(unittest.TestCase):
+    def test_archive_chart_waits_for_completed_available_minute(self):
+        pack = minute_pack()
+        bar = [OPEN+60, OPEN+62, 700, 701, 699, 700.5]
+        pack["chart_minutes"] = [bar]
+        session = RS(pack, start_s=OPEN+61)
+        self.assertEqual(session.view()["sample_candles"], [])
+        session.clock += 1
+        view = session.view()
+        self.assertEqual(view["sample_candles"], [[OPEN+60, *bar[2:]]])
+        self.assertEqual(view["spot"]["bar_seconds"], 60)
+        session.order("buy", "C700", 1)
+        self.assertEqual(session.view()["fills"][0]["underlying_at_fill"], view["spot"]["now"])
+
     def test_view_has_no_date_bearing_values(self):
         s = RS(minute_pack(), start_s=OPEN + 3600)
         s.order("buy", "C700", 1)
